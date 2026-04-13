@@ -1,0 +1,248 @@
+@inject IDbContextFactory<AppDbContext> DbFactory
+
+@* Bootstrap Modal *@
+<div class="modal fade @(IsOpen ? "show" : "")" tabindex="-1"
+     style="display: @(IsOpen ? "block" : "none");"
+     @onclick="HandleBackdropClick" @onclick:stopPropagation="false">
+    <div class="modal-dialog" @onclick:stopPropagation="true">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">Add @(itemType == FeatureType ? "Feature" : "Task")</h5>
+                <button type="button" class="btn-close" @onclick="Close"></button>
+            </div>
+            <div class="modal-body">
+                @if (errorMessage is not null)
+                {
+                    <div class="alert alert-danger alert-dismissible fade show py-2 small" role="alert">
+                        @errorMessage
+                        <button type="button" class="btn-close btn-close-sm" @onclick="() => errorMessage = null"></button>
+                    </div>
+                }
+
+                @* Type toggle *@
+                <div class="mb-3">
+                    <label class="form-label small text-muted mb-1">Type</label>
+                    <div class="btn-group w-100" role="group">
+                        <input type="radio" class="btn-check" id="typeFeature" value="feature"
+                               checked="@(itemType == FeatureType)" @onchange="SelectFeatureType" />
+                        <label class="btn btn-outline-primary btn-sm" for="typeFeature">Feature</label>
+
+                        <input type="radio" class="btn-check" id="typeTask" value="task"
+                               checked="@(itemType == TaskType)" @onchange="SelectTaskType" />
+                        <label class="btn btn-outline-primary btn-sm" for="typeTask">Task</label>
+                    </div>
+                </div>
+
+                @* Name *@
+                <div class="mb-3">
+                    <label class="form-label small text-muted mb-1">Name</label>
+                    <input type="text" class="form-control" placeholder="@(itemType == FeatureType ? "Feature name" : "Task name")"
+                           @bind="itemName" @bind:event="oninput"
+                           @onkeydown="HandleKeyDown" />
+                </div>
+
+                @* Parent feature (for tasks: which feature; for sub-features: parent feature) *@
+                @if (itemType == TaskType || (itemType == FeatureType && Features is not null && Features.Count > 0))
+                {
+                    <div class="mb-3">
+                        <label class="form-label small text-muted mb-1">
+                            @(itemType == TaskType ? "Feature" : "Parent Feature (optional)")
+                        </label>
+                        <select class="form-select form-select-sm" @bind="selectedFeatureId">
+                            @if (itemType == FeatureType)
+                            {
+                                <option value="0">None (top-level)</option>
+                            }
+                            @if (Features is not null)
+                            {
+                                @foreach (var f in Features.OrderBy(f => f.SortOrder))
+                                {
+                                    var prefix = f.ParentFeatureId.HasValue ? "  " : "";
+                                    <option value="@f.Id">@prefix@f.Name</option>
+                                }
+                            }
+                        </select>
+                    </div>
+                }
+
+                @* Task-only fields *@
+                @if (itemType == TaskType)
+                {
+                    <div class="row mb-3">
+                        <div class="col-6">
+                            <label class="form-label small text-muted mb-1">Status</label>
+                            <select class="form-select form-select-sm" @bind="selectedStatus">
+                                @foreach (var status in Enum.GetValues<WorkStatus>())
+                                {
+                                    <option value="@((int)status)">@GetStatusDisplayName(status)</option>
+                                }
+                            </select>
+                        </div>
+                        <div class="col-6">
+                            <label class="form-label small text-muted mb-1">Priority</label>
+                            <select class="form-select form-select-sm" @bind="selectedPriority">
+                                @foreach (var priority in Enum.GetValues<TaskPriority>())
+                                {
+                                    <option value="@((int)priority)">@priority</option>
+                                }
+                            </select>
+                        </div>
+                    </div>
+                }
+
+                @* Description *@
+                <div class="mb-3">
+                    <label class="form-label small text-muted mb-1">Description (optional)</label>
+                    <textarea class="form-control form-control-sm" rows="3"
+                              placeholder="Add a description..."
+                              @bind="itemDescription"></textarea>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary btn-sm" @onclick="Close">Cancel</button>
+                <button type="button" class="btn btn-primary btn-sm" @onclick="SaveItem"
+                        disabled="@(string.IsNullOrWhiteSpace(itemName) || (itemType == TaskType && selectedFeatureId == 0))">
+                    Create @(itemType == FeatureType ? "Feature" : "Task")
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+@if (IsOpen)
+{
+    <div class="modal-backdrop fade show"></div>
+}
+
+@code {
+    [Parameter] public bool IsOpen { get; set; }
+    [Parameter] public int ProjectId { get; set; }
+    [Parameter] public List<Feature>? Features { get; set; }
+    [Parameter] public EventCallback OnClose { get; set; }
+    [Parameter] public EventCallback OnItemCreated { get; set; }
+
+    // Pre-selection context
+    [Parameter] public string DefaultType { get; set; } = "task";
+    [Parameter] public int? DefaultFeatureId { get; set; }
+    [Parameter] public WorkStatus? DefaultStatus { get; set; }
+
+    private string itemType = "task";
+    private string? itemName;
+    private string? itemDescription;
+    private int selectedFeatureId;
+    private int selectedStatus;
+    private int selectedPriority = (int)TaskPriority.Medium;
+    private string? errorMessage;
+
+    protected override void OnParametersSet()
+    {
+        if (IsOpen)
+        {
+            // Apply defaults from context when modal opens
+            itemType = DefaultType;
+            selectedFeatureId = DefaultFeatureId ?? Features?.FirstOrDefault()?.Id ?? 0;
+            selectedStatus = DefaultStatus.HasValue ? (int)DefaultStatus.Value : (int)WorkStatus.Backlog;
+            selectedPriority = (int)TaskPriority.Medium;
+            itemName = null;
+            itemDescription = null;
+            errorMessage = null;
+        }
+    }
+
+    private const string FeatureType = "feature";
+    private const string TaskType = "task";
+
+    private void SelectFeatureType() => itemType = FeatureType;
+    private void SelectTaskType() => itemType = TaskType;
+
+    private async Task HandleBackdropClick()
+    {
+        await Close();
+    }
+
+    private async Task HandleKeyDown(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter" && !string.IsNullOrWhiteSpace(itemName))
+            await SaveItem();
+        else if (e.Key == "Escape")
+            await Close();
+    }
+
+    private async Task Close()
+    {
+        await OnClose.InvokeAsync();
+    }
+
+    private async Task SaveItem()
+    {
+        if (string.IsNullOrWhiteSpace(itemName)) return;
+        errorMessage = null;
+
+        try
+        {
+            using var db = await DbFactory.CreateDbContextAsync();
+
+            if (itemType == FeatureType)
+            {
+                int? parentId = selectedFeatureId == 0 ? null : selectedFeatureId;
+                var siblingQuery = parentId.HasValue
+                    ? db.Features.Where(f => f.ParentFeatureId == parentId.Value)
+                    : db.Features.Where(f => f.ProjectId == ProjectId && f.ParentFeatureId == null);
+                var maxSort = await siblingQuery.MaxAsync(f => (int?)f.SortOrder) ?? -1;
+
+                var feature = new Feature
+                {
+                    ProjectId = ProjectId,
+                    ParentFeatureId = parentId,
+                    Name = itemName.Trim(),
+                    Description = string.IsNullOrWhiteSpace(itemDescription) ? null : itemDescription.Trim(),
+                    SortOrder = maxSort + 1
+                };
+                db.Features.Add(feature);
+                await db.SaveChangesAsync();
+            }
+            else
+            {
+                if (selectedFeatureId == 0)
+                {
+                    errorMessage = "Please select a feature for the task.";
+                    return;
+                }
+
+                var maxSort = await db.Tasks
+                    .Where(t => t.FeatureId == selectedFeatureId)
+                    .MaxAsync(t => (int?)t.SortOrder) ?? -1;
+
+                var task = new TaskItem
+                {
+                    FeatureId = selectedFeatureId,
+                    Name = itemName.Trim(),
+                    Description = string.IsNullOrWhiteSpace(itemDescription) ? null : itemDescription.Trim(),
+                    Status = (WorkStatus)selectedStatus,
+                    Priority = (TaskPriority)selectedPriority,
+                    SortOrder = maxSort + 1,
+                    CompletedAt = (WorkStatus)selectedStatus == WorkStatus.Done ? DateTime.UtcNow : null
+                };
+                db.Tasks.Add(task);
+                await db.SaveChangesAsync();
+            }
+
+            await OnItemCreated.InvokeAsync();
+            await OnClose.InvokeAsync();
+        }
+        catch (Exception ex)
+        {
+            errorMessage = ex.Message;
+        }
+    }
+
+    private static string GetStatusDisplayName(WorkStatus status) => status switch
+    {
+        WorkStatus.Backlog => "Backlog",
+        WorkStatus.Todo => "To Do",
+        WorkStatus.InProgress => "In Progress",
+        WorkStatus.Review => "Review",
+        WorkStatus.Done => "Done",
+        _ => status.ToString()
+    };
+}
