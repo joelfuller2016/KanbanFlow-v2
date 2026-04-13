@@ -11,6 +11,7 @@ public class AppDbContext : DbContext
     public DbSet<Feature> Features => Set<Feature>();
     public DbSet<TaskItem> Tasks => Set<TaskItem>();
     public DbSet<Subtask> Subtasks => Set<Subtask>();
+    public DbSet<Requirement> Requirements => Set<Requirement>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -33,6 +34,13 @@ public class AppDbContext : DbContext
         modelBuilder.Entity<Subtask>(e =>
         {
             e.HasMany(s => s.ChildSubtasks).WithOne(s => s.ParentSubtask).HasForeignKey(s => s.ParentSubtaskId).OnDelete(DeleteBehavior.Restrict);
+        });
+
+        modelBuilder.Entity<Requirement>(e =>
+        {
+            e.HasOne(r => r.Project).WithMany(p => p.Requirements).HasForeignKey(r => r.ProjectId).OnDelete(DeleteBehavior.Cascade);
+            e.HasOne(r => r.Feature).WithMany().HasForeignKey(r => r.FeatureId).OnDelete(DeleteBehavior.SetNull);
+            e.HasOne(r => r.TaskItem).WithMany().HasForeignKey(r => r.TaskItemId).OnDelete(DeleteBehavior.SetNull);
         });
     }
 }

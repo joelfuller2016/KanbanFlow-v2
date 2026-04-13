@@ -53,5 +53,16 @@ public static class SeedData
         var pwdValidation = new Subtask { TaskItemId = regTask.Id, ParentSubtaskId = validationSubtask.Id, Text = "Password strength check", SortOrder = 1 };
         db.Subtasks.AddRange(emailValidation, pwdValidation);
         db.SaveChanges();
+
+        // Set project readme
+        project.Readme = "# Sample Project\n\nThis is a demo project for KanbanFlow.\n\n## Getting Started\n\n1. Create features to organize work\n2. Add tasks to features\n3. Track progress on the kanban board";
+        db.SaveChanges();
+
+        // Requirements
+        var req1 = new Requirement { ProjectId = project.Id, Text = "User can log in with email and password", Priority = RequirementPriority.P0, Status = RequirementStatus.Done, FeatureId = authFeature.Id, SortOrder = 0 };
+        var req2 = new Requirement { ProjectId = project.Id, Text = "Dashboard shows KPI metrics", Priority = RequirementPriority.P1, Status = RequirementStatus.Open, FeatureId = dashboard.Id, SortOrder = 1 };
+        var req3 = new Requirement { ProjectId = project.Id, Text = "Password must meet complexity requirements", Priority = RequirementPriority.P0, Status = RequirementStatus.InProgress, FeatureId = profileFeature.Id, SortOrder = 2 };
+        db.Requirements.AddRange(req1, req2, req3);
+        db.SaveChanges();
     }
 }

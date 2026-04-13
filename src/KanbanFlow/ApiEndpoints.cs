@@ -12,6 +12,7 @@ public static class ApiEndpoints
         app.MapFeatureEndpoints();
         app.MapTaskEndpoints();
         app.MapSubtaskEndpoints();
+        app.MapRequirementEndpoints();
         return app;
     }
 
@@ -34,6 +35,7 @@ public static class ApiEndpoints
                 p.Name,
                 p.Description,
                 p.Goals,
+                p.Readme,
                 p.CreatedAt,
                 p.UpdatedAt,
                 FeatureCount = p.Features.Count,
@@ -59,6 +61,7 @@ public static class ApiEndpoints
                 project.Name,
                 project.Description,
                 project.Goals,
+                project.Readme,
                 project.CreatedAt,
                 project.UpdatedAt,
                 Features = project.Features.OrderBy(f => f.SortOrder).Select(f => new
@@ -86,7 +89,8 @@ public static class ApiEndpoints
             {
                 Name = dto.Name.Trim(),
                 Description = dto.Description?.Trim(),
-                Goals = dto.Goals?.Trim()
+                Goals = dto.Goals?.Trim(),
+                Readme = dto.Readme?.Trim()
             };
 
             db.Projects.Add(project);
@@ -98,6 +102,7 @@ public static class ApiEndpoints
                 project.Name,
                 project.Description,
                 project.Goals,
+                project.Readme,
                 project.CreatedAt,
                 project.UpdatedAt
             });
@@ -116,6 +121,7 @@ public static class ApiEndpoints
             project.Name = dto.Name.Trim();
             project.Description = dto.Description?.Trim();
             project.Goals = dto.Goals?.Trim();
+            project.Readme = dto.Readme?.Trim();
             project.UpdatedAt = DateTime.UtcNow;
 
             await db.SaveChangesAsync();
@@ -126,6 +132,7 @@ public static class ApiEndpoints
                 project.Name,
                 project.Description,
                 project.Goals,
+                project.Readme,
                 project.CreatedAt,
                 project.UpdatedAt
             });
@@ -758,6 +765,225 @@ public static class ApiEndpoints
         });
     }
 
+    // ── Requirement Endpoints ─────────────────────────────────────────
+
+    private static void MapRequirementEndpoints(this WebApplication app)
+    {
+        // GET /api/projects/{projectId}/requirements — list all requirements for a project
+        app.MapGet("/api/projects/{projectId:int}/requirements", async (int projectId, AppDbContext db) =>
+        {
+            var projectExists = await db.Projects.AnyAsync(p => p.Id == projectId);
+            if (!projectExists)
+                return Results.NotFound(new { message = $"Project {projectId} not found." });
+
+            var requirements = await db.Requirements
+                .Where(r => r.ProjectId == projectId)
+                .Include(r => r.Feature)
+                .Include(r => r.TaskItem)
+                .AsNoTracking()
+                .OrderBy(r => r.SortOrder)
+                .ToListAsync();
+
+            return Results.Ok(requirements.Select(r => new
+            {
+                r.Id,
+                r.ProjectId,
+                r.Text,
+                r.Description,
+                Priority = r.Priority.ToString(),
+                Status = r.Status.ToString(),
+                r.FeatureId,
+                FeatureName = r.Feature?.Name,
+                r.TaskItemId,
+                TaskItemName = r.TaskItem?.Name,
+                r.SortOrder,
+                r.CreatedAt,
+                r.UpdatedAt
+            }));
+        });
+
+        // POST /api/projects/{projectId}/requirements — create
+        app.MapPost("/api/projects/{projectId:int}/requirements", async (int projectId, RequirementDto dto, AppDbContext db) =>
+        {
+            var projectExists = await db.Projects.AnyAsync(p => p.Id == projectId);
+            if (!projectExists)
+                return Results.NotFound(new { message = $"Project {projectId} not found." });
+
+            if (string.IsNullOrWhiteSpace(dto.Text))
+                return Results.UnprocessableEntity(new { message = "Text is required." });
+
+            RequirementPriority priority = RequirementPriority.P1;
+            if (dto.Priority is not null)
+            {
+                if (!Enum.TryParse<RequirementPriority>(dto.Priority, ignoreCase: true, out priority))
+                    return Results.UnprocessableEntity(new { message = $"Invalid priority: {dto.Priority}. Valid values: {string.Join(", ", Enum.GetNames<RequirementPriority>())}" });
+            }
+
+            RequirementStatus status = RequirementStatus.Open;
+            if (dto.Status is not null)
+            {
+                if (!Enum.TryParse<RequirementStatus>(dto.Status, ignoreCase: true, out status))
+                    return Results.UnprocessableEntity(new { message = $"Invalid status: {dto.Status}. Valid values: {string.Join(", ", Enum.GetNames<RequirementStatus>())}" });
+            }
+
+            // Validate feature if provided
+            if (dto.FeatureId.HasValue)
+            {
+                var featureExists = await db.Features.AnyAsync(f => f.Id == dto.FeatureId.Value);
+                if (!featureExists)
+                    return Results.NotFound(new { message = $"Feature {dto.FeatureId.Value} not found." });
+            }
+
+            // Validate task if provided
+            if (dto.TaskItemId.HasValue)
+            {
+                var taskExists = await db.Tasks.AnyAsync(t => t.Id == dto.TaskItemId.Value);
+                if (!taskExists)
+                    return Results.NotFound(new { message = $"Task {dto.TaskItemId.Value} not found." });
+            }
+
+            var maxSort = await db.Requirements
+                .Where(r => r.ProjectId == projectId)
+                .MaxAsync(r => (int?)r.SortOrder) ?? -1;
+
+            var requirement = new Requirement
+            {
+                ProjectId = projectId,
+                Text = dto.Text.Trim(),
+                Description = dto.Description?.Trim(),
+                Priority = priority,
+                Status = status,
+                FeatureId = dto.FeatureId,
+                TaskItemId = dto.TaskItemId,
+                SortOrder = dto.SortOrder ?? maxSort + 1
+            };
+
+            db.Requirements.Add(requirement);
+            await db.SaveChangesAsync();
+
+            return Results.Created($"/api/requirements/{requirement.Id}", new
+            {
+                requirement.Id,
+                requirement.ProjectId,
+                requirement.Text,
+                requirement.Description,
+                Priority = requirement.Priority.ToString(),
+                Status = requirement.Status.ToString(),
+                requirement.FeatureId,
+                requirement.TaskItemId,
+                requirement.SortOrder,
+                requirement.CreatedAt,
+                requirement.UpdatedAt
+            });
+        });
+
+        // PUT /api/requirements/{id} — update
+        app.MapPut("/api/requirements/{id:int}", async (int id, RequirementDto dto, AppDbContext db) =>
+        {
+            var requirement = await db.Requirements.FindAsync(id);
+            if (requirement is null)
+                return Results.NotFound(new { message = $"Requirement {id} not found." });
+
+            if (string.IsNullOrWhiteSpace(dto.Text))
+                return Results.UnprocessableEntity(new { message = "Text is required." });
+
+            if (dto.Priority is not null && !Enum.TryParse<RequirementPriority>(dto.Priority, ignoreCase: true, out _))
+                return Results.UnprocessableEntity(new { message = $"Invalid priority: {dto.Priority}. Valid values: {string.Join(", ", Enum.GetNames<RequirementPriority>())}" });
+
+            if (dto.Status is not null && !Enum.TryParse<RequirementStatus>(dto.Status, ignoreCase: true, out _))
+                return Results.UnprocessableEntity(new { message = $"Invalid status: {dto.Status}. Valid values: {string.Join(", ", Enum.GetNames<RequirementStatus>())}" });
+
+            requirement.Text = dto.Text.Trim();
+            requirement.Description = dto.Description?.Trim();
+            requirement.Priority = dto.Priority is not null ? Enum.Parse<RequirementPriority>(dto.Priority, ignoreCase: true) : requirement.Priority;
+            requirement.Status = dto.Status is not null ? Enum.Parse<RequirementStatus>(dto.Status, ignoreCase: true) : requirement.Status;
+            if (dto.FeatureId.HasValue) requirement.FeatureId = dto.FeatureId.Value == 0 ? null : dto.FeatureId;
+            if (dto.TaskItemId.HasValue) requirement.TaskItemId = dto.TaskItemId.Value == 0 ? null : dto.TaskItemId;
+            if (dto.SortOrder.HasValue) requirement.SortOrder = dto.SortOrder.Value;
+            requirement.UpdatedAt = DateTime.UtcNow;
+
+            await db.SaveChangesAsync();
+
+            return Results.Ok(new
+            {
+                requirement.Id,
+                requirement.ProjectId,
+                requirement.Text,
+                requirement.Description,
+                Priority = requirement.Priority.ToString(),
+                Status = requirement.Status.ToString(),
+                requirement.FeatureId,
+                requirement.TaskItemId,
+                requirement.SortOrder,
+                requirement.CreatedAt,
+                requirement.UpdatedAt
+            });
+        });
+
+        // DELETE /api/requirements/{id} — delete
+        app.MapDelete("/api/requirements/{id:int}", async (int id, AppDbContext db) =>
+        {
+            var requirement = await db.Requirements.FindAsync(id);
+            if (requirement is null)
+                return Results.NotFound(new { message = $"Requirement {id} not found." });
+
+            db.Requirements.Remove(requirement);
+            await db.SaveChangesAsync();
+            return Results.NoContent();
+        });
+
+        // PATCH /api/requirements/{id}/assign — assign to feature or task
+        app.MapPatch("/api/requirements/{id:int}/assign", async (int id, RequirementAssignDto dto, AppDbContext db) =>
+        {
+            var requirement = await db.Requirements.FindAsync(id);
+            if (requirement is null)
+                return Results.NotFound(new { message = $"Requirement {id} not found." });
+
+            if (dto.FeatureId.HasValue)
+            {
+                if (dto.FeatureId.Value == 0)
+                {
+                    requirement.FeatureId = null;
+                }
+                else
+                {
+                    var featureExists = await db.Features.AnyAsync(f => f.Id == dto.FeatureId.Value);
+                    if (!featureExists)
+                        return Results.NotFound(new { message = $"Feature {dto.FeatureId.Value} not found." });
+                    requirement.FeatureId = dto.FeatureId.Value;
+                }
+            }
+
+            if (dto.TaskItemId.HasValue)
+            {
+                if (dto.TaskItemId.Value == 0)
+                {
+                    requirement.TaskItemId = null;
+                }
+                else
+                {
+                    var taskExists = await db.Tasks.AnyAsync(t => t.Id == dto.TaskItemId.Value);
+                    if (!taskExists)
+                        return Results.NotFound(new { message = $"Task {dto.TaskItemId.Value} not found." });
+                    requirement.TaskItemId = dto.TaskItemId.Value;
+                }
+            }
+
+            requirement.UpdatedAt = DateTime.UtcNow;
+            await db.SaveChangesAsync();
+
+            return Results.Ok(new
+            {
+                requirement.Id,
+                requirement.ProjectId,
+                requirement.Text,
+                requirement.FeatureId,
+                requirement.TaskItemId,
+                requirement.UpdatedAt
+            });
+        });
+    }
+
     // ── Helper ─────────────────────────────────────────────────────────
 
     private static object MapTaskSummary(TaskItem t) => new
@@ -780,7 +1006,7 @@ public static class ApiEndpoints
 
 // ── DTOs ───────────────────────────────────────────────────────────────
 
-public record ProjectDto(string? Name, string? Description, string? Goals);
+public record ProjectDto(string? Name, string? Description, string? Goals, string? Readme);
 
 public record FeatureDto(string? Name, string? Description, int? SortOrder, int? ParentFeatureId);
 
@@ -797,3 +1023,7 @@ public record StatusDto(string? Status);
 public record ReassignDto(int FeatureId);
 
 public record SubtaskDto(string? Text, bool? Completed, int? SortOrder, int? ParentSubtaskId);
+
+public record RequirementDto(string? Text, string? Description, string? Priority, string? Status, int? FeatureId, int? TaskItemId, int? SortOrder);
+
+public record RequirementAssignDto(int? FeatureId, int? TaskItemId);

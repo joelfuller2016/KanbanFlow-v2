@@ -1,0 +1,265 @@
+@inject IDbContextFactory<AppDbContext> DbFactory
+
+@* Bootstrap Modal for editing Projects, Features, and Tasks *@
+<div class="modal fade @(IsOpen ? "show" : "")" tabindex="-1"
+     style="display: @(IsOpen ? "block" : "none");"
+     @onclick="HandleBackdropClick" @onclick:stopPropagation="false">
+    <div class="modal-dialog modal-lg" @onclick:stopPropagation="true">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">Edit @GetItemTypeName()</h5>
+                <button type="button" class="btn-close" @onclick="Close"></button>
+            </div>
+            <div class="modal-body">
+                @if (errorMessage is not null)
+                {
+                    <div class="alert alert-danger alert-dismissible fade show py-2 small" role="alert">
+                        @errorMessage
+                        <button type="button" class="btn-close btn-close-sm" @onclick="() => errorMessage = null"></button>
+                    </div>
+                }
+
+                @* Name *@
+                <div class="mb-3">
+                    <label class="form-label small text-muted mb-1">Name</label>
+                    <input type="text" class="form-control" @bind="editName" @bind:event="oninput" />
+                </div>
+
+                @* Description *@
+                <div class="mb-3">
+                    <label class="form-label small text-muted mb-1">Description</label>
+                    <textarea class="form-control form-control-sm" rows="3"
+                              placeholder="Add a description..."
+                              @bind="editDescription"></textarea>
+                </div>
+
+                @* Project-only fields *@
+                @if (EditMode == EditItemType.Project)
+                {
+                    <div class="mb-3">
+                        <label class="form-label small text-muted mb-1">Goals</label>
+                        <textarea class="form-control form-control-sm" rows="3"
+                                  placeholder="Project goals (markdown)..."
+                                  @bind="editGoals"></textarea>
+                    </div>
+
+                    <div class="mb-3">
+                        <label class="form-label small text-muted mb-1">README</label>
+                        <textarea class="form-control form-control-sm" rows="8"
+                                  placeholder="Project documentation (markdown)..."
+                                  @bind="editReadme" style="font-family: monospace; font-size: 0.85rem;"></textarea>
+                    </div>
+                }
+
+                @* Feature-only fields *@
+                @if (EditMode == EditItemType.Feature)
+                {
+                    <div class="mb-3">
+                        <label class="form-label small text-muted mb-1">Parent Feature</label>
+                        <select class="form-select form-select-sm" @bind="editParentFeatureId">
+                            <option value="0">None (top-level)</option>
+                            @if (AllFeatures is not null)
+                            {
+                                @foreach (var f in AllFeatures.Where(f => f.Id != EditFeatureId).OrderBy(f => f.SortOrder))
+                                {
+                                    var prefix = f.ParentFeatureId.HasValue ? "  " : "";
+                                    <option value="@f.Id">@prefix@f.Name</option>
+                                }
+                            }
+                        </select>
+                    </div>
+                }
+
+                @* Task-only fields *@
+                @if (EditMode == EditItemType.Task)
+                {
+                    <div class="mb-3">
+                        <label class="form-label small text-muted mb-1">Feature</label>
+                        <select class="form-select form-select-sm" @bind="editFeatureId">
+                            @if (AllFeatures is not null)
+                            {
+                                @foreach (var f in AllFeatures.OrderBy(f => f.SortOrder))
+                                {
+                                    var prefix = f.ParentFeatureId.HasValue ? "  " : "";
+                                    <option value="@f.Id">@prefix@f.Name</option>
+                                }
+                            }
+                        </select>
+                    </div>
+
+                    <div class="row mb-3">
+                        <div class="col-6">
+                            <label class="form-label small text-muted mb-1">Status</label>
+                            <select class="form-select form-select-sm" @bind="editStatus">
+                                @foreach (var status in Enum.GetValues<WorkStatus>())
+                                {
+                                    <option value="@((int)status)">@GetStatusDisplayName(status)</option>
+                                }
+                            </select>
+                        </div>
+                        <div class="col-6">
+                            <label class="form-label small text-muted mb-1">Priority</label>
+                            <select class="form-select form-select-sm" @bind="editPriority">
+                                @foreach (var priority in Enum.GetValues<TaskPriority>())
+                                {
+                                    <option value="@((int)priority)">@priority</option>
+                                }
+                            </select>
+                        </div>
+                    </div>
+
+                    <div class="mb-3">
+                        <label class="form-label small text-muted mb-1">Assignee</label>
+                        <input type="text" class="form-control form-control-sm" placeholder="Unassigned" @bind="editAssignee" />
+                    </div>
+                }
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary btn-sm" @onclick="Close">Cancel</button>
+                <button type="button" class="btn btn-primary btn-sm" @onclick="SaveChanges"
+                        disabled="@string.IsNullOrWhiteSpace(editName)">
+                    Save Changes
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+@if (IsOpen)
+{
+    <div class="modal-backdrop fade show"></div>
+}
+
+@code {
+    [Parameter] public bool IsOpen { get; set; }
+    [Parameter] public EditItemType EditMode { get; set; }
+    [Parameter] public int EditProjectId { get; set; }
+    [Parameter] public int? EditFeatureId { get; set; }
+    [Parameter] public int? EditTaskId { get; set; }
+    [Parameter] public List<Feature>? AllFeatures { get; set; }
+
+    // Pre-populated values
+    [Parameter] public string? InitialName { get; set; }
+    [Parameter] public string? InitialDescription { get; set; }
+    [Parameter] public string? InitialGoals { get; set; }
+    [Parameter] public string? InitialReadme { get; set; }
+    [Parameter] public int? InitialParentFeatureId { get; set; }
+    [Parameter] public int? InitialFeatureId { get; set; }
+    [Parameter] public int? InitialStatus { get; set; }
+    [Parameter] public int? InitialPriority { get; set; }
+    [Parameter] public string? InitialAssignee { get; set; }
+
+    [Parameter] public EventCallback OnClose { get; set; }
+    [Parameter] public EventCallback OnSaved { get; set; }
+
+    private string? editName;
+    private string? editDescription;
+    private string? editGoals;
+    private string? editReadme;
+    private int editParentFeatureId;
+    private int editFeatureId;
+    private int editStatus;
+    private int editPriority;
+    private string? editAssignee;
+    private string? errorMessage;
+
+    protected override void OnParametersSet()
+    {
+        if (IsOpen)
+        {
+            editName = InitialName;
+            editDescription = InitialDescription;
+            editGoals = InitialGoals;
+            editReadme = InitialReadme;
+            editParentFeatureId = InitialParentFeatureId ?? 0;
+            editFeatureId = InitialFeatureId ?? 0;
+            editStatus = InitialStatus ?? 0;
+            editPriority = InitialPriority ?? 0;
+            editAssignee = InitialAssignee;
+            errorMessage = null;
+        }
+    }
+
+    private async Task HandleBackdropClick() => await Close();
+
+    private async Task Close() => await OnClose.InvokeAsync();
+
+    private string GetItemTypeName() => EditMode switch
+    {
+        EditItemType.Project => "Project",
+        EditItemType.Feature => "Feature",
+        EditItemType.Task => "Task",
+        _ => "Item"
+    };
+
+    private async Task SaveChanges()
+    {
+        if (string.IsNullOrWhiteSpace(editName)) return;
+        errorMessage = null;
+
+        try
+        {
+            using var db = await DbFactory.CreateDbContextAsync();
+
+            switch (EditMode)
+            {
+                case EditItemType.Project:
+                    var project = await db.Projects.FindAsync(EditProjectId);
+                    if (project is null) { errorMessage = "Project not found."; return; }
+                    project.Name = editName.Trim();
+                    project.Description = string.IsNullOrWhiteSpace(editDescription) ? null : editDescription.Trim();
+                    project.Goals = string.IsNullOrWhiteSpace(editGoals) ? null : editGoals.Trim();
+                    project.Readme = string.IsNullOrWhiteSpace(editReadme) ? null : editReadme.Trim();
+                    project.UpdatedAt = DateTime.UtcNow;
+                    break;
+
+                case EditItemType.Feature:
+                    if (EditFeatureId is null) return;
+                    var feature = await db.Features.FindAsync(EditFeatureId.Value);
+                    if (feature is null) { errorMessage = "Feature not found."; return; }
+                    feature.Name = editName.Trim();
+                    feature.Description = string.IsNullOrWhiteSpace(editDescription) ? null : editDescription.Trim();
+                    feature.ParentFeatureId = editParentFeatureId == 0 ? null : editParentFeatureId;
+                    feature.UpdatedAt = DateTime.UtcNow;
+                    break;
+
+                case EditItemType.Task:
+                    if (EditTaskId is null) return;
+                    var task = await db.Tasks.FindAsync(EditTaskId.Value);
+                    if (task is null) { errorMessage = "Task not found."; return; }
+                    var oldStatus = task.Status;
+                    var newStatus = (WorkStatus)editStatus;
+                    task.Name = editName.Trim();
+                    task.Description = string.IsNullOrWhiteSpace(editDescription) ? null : editDescription.Trim();
+                    task.FeatureId = editFeatureId;
+                    task.Status = newStatus;
+                    task.Priority = (TaskPriority)editPriority;
+                    task.Assignee = string.IsNullOrWhiteSpace(editAssignee) ? null : editAssignee.Trim();
+                    task.UpdatedAt = DateTime.UtcNow;
+                    if (newStatus == WorkStatus.Done && oldStatus != WorkStatus.Done)
+                        task.CompletedAt = DateTime.UtcNow;
+                    else if (newStatus != WorkStatus.Done)
+                        task.CompletedAt = null;
+                    break;
+            }
+
+            await db.SaveChangesAsync();
+            await OnSaved.InvokeAsync();
+            await OnClose.InvokeAsync();
+        }
+        catch (Exception ex)
+        {
+            errorMessage = ex.Message;
+        }
+    }
+
+    private static string GetStatusDisplayName(WorkStatus status) => status switch
+    {
+        WorkStatus.Backlog => "Backlog",
+        WorkStatus.Todo => "To Do",
+        WorkStatus.InProgress => "In Progress",
+        WorkStatus.Review => "Review",
+        WorkStatus.Done => "Done",
+        _ => status.ToString()
+    };
+}
