@@ -331,22 +331,26 @@ else
         var hasChildren = childFeatures.Count > 0 || feature.Tasks.Count > 0;
         var progressPct = totalCount > 0 ? (int)(100.0 * doneCount / totalCount) : 0;
 
-        @* Feature card — same card treatment as tasks *@
+        @* Feature card — click opens edit, chevron toggles collapse *@
         <div class="card mb-1" style="margin-left: @(depth * 16)px; border-left: 3px solid #0d6efd; cursor: pointer;"
-             role="button" @onclick="() => ToggleFeature(feature.Id)">
+             role="button" @onclick="() => OpenEditModalForFeature(feature)">
             <div class="card-body p-2">
                 <div class="d-flex align-items-center">
-                    @* Chevron for expand/collapse *@
+                    @* Chevron for expand/collapse — larger for easy clicking *@
                     @if (hasChildren)
                     {
-                        <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" fill="currentColor" class="me-1 flex-shrink-0 text-muted"
-                             viewBox="0 0 16 16" style="transition: transform 0.15s; transform: rotate(@(isExpanded ? "90" : "0")deg);">
-                            <path fill-rule="evenodd" d="M4.646 1.646a.5.5 0 0 1 .708 0l6 6a.5.5 0 0 1 0 .708l-6 6a.5.5 0 0 1-.708-.708L10.293 8 4.646 2.354a.5.5 0 0 1 0-.708"/>
-                        </svg>
+                        <span class="me-1 flex-shrink-0 d-flex align-items-center justify-content-center"
+                              style="width: 20px; height: 20px; cursor: pointer;"
+                              @onclick="() => ToggleFeature(feature.Id)" @onclick:stopPropagation="true">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" class="text-muted"
+                                 viewBox="0 0 16 16" style="transition: transform 0.15s; transform: rotate(@(isExpanded ? "90" : "0")deg);">
+                                <path fill-rule="evenodd" d="M4.646 1.646a.5.5 0 0 1 .708 0l6 6a.5.5 0 0 1 0 .708l-6 6a.5.5 0 0 1-.708-.708L10.293 8 4.646 2.354a.5.5 0 0 1 0-.708"/>
+                            </svg>
+                        </span>
                     }
                     else
                     {
-                        <span class="me-1" style="width: 12px; display: inline-block;"></span>
+                        <span class="me-1" style="width: 20px; display: inline-block;"></span>
                     }
                     @* Folder icon *@
                     <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="#0d6efd" class="me-2 flex-shrink-0" viewBox="0 0 16 16">
@@ -354,20 +358,11 @@ else
                     </svg>
                     <span class="small fw-medium text-truncate" title="@feature.Name">@feature.Name</span>
                     <span class="ms-auto badge bg-secondary rounded-pill" style="font-size: 0.65rem;">@doneCount/@totalCount</span>
-                    <button class="btn btn-link text-muted p-0 ms-1 d-flex align-items-center" style="line-height: 1;"
-                            @onclick="() => OpenEditModalForFeature(feature)"
-                            @onclick:stopPropagation="true"
-                            title="Edit feature">
-                        <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" fill="currentColor" viewBox="0 0 16 16">
-                            <path d="M15.502 1.94a.5.5 0 0 1 0 .706L14.459 3.69l-2-2L13.502.646a.5.5 0 0 1 .707 0l1.293 1.293zm-1.75 2.456-2-2L4.939 9.21a.5.5 0 0 0-.121.196l-.805 2.414a.25.25 0 0 0 .316.316l2.414-.805a.5.5 0 0 0 .196-.12l6.813-6.814z"/>
-                            <path fill-rule="evenodd" d="M1 13.5A1.5 1.5 0 0 0 2.5 15h11a1.5 1.5 0 0 0 1.5-1.5v-6a.5.5 0 0 0-1 0v6a.5.5 0 0 1-.5.5h-11a.5.5 0 0 1-.5-.5v-11a.5.5 0 0 1 .5-.5H9a.5.5 0 0 0 0-1H2.5A1.5 1.5 0 0 0 1 2.5z"/>
-                        </svg>
-                    </button>
                     <button class="btn btn-link text-primary p-0 ms-1 d-flex align-items-center" style="line-height: 1;"
                             @onclick="() => OpenAddModalForFeature(feature.Id)"
                             @onclick:stopPropagation="true"
                             title="Add item">
-                        <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" fill="currentColor" viewBox="0 0 16 16">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="currentColor" viewBox="0 0 16 16">
                             <path fill-rule="evenodd" d="M8 2a.5.5 0 0 1 .5.5v5h5a.5.5 0 0 1 0 1h-5v5a.5.5 0 0 1-1 0v-5h-5a.5.5 0 0 1 0-1h5v-5A.5.5 0 0 1 8 2"/>
                         </svg>
                     </button>
@@ -393,22 +388,25 @@ else
                 var taskIsExpanded = expandedTasks.Contains(task.Id);
                 var taskIsDone = task.Status == WorkStatus.Done;
 
-                <div class="card mb-1" style="margin-left: @((depth + 1) * 16)px; border-left: 3px solid @GetPriorityBorderColor(task.Priority); @(taskIsDone ? "opacity: 0.6;" : "")"
-                     data-task-id="@task.Id">
+                <div class="card mb-1" style="margin-left: @((depth + 1) * 16)px; border-left: 3px solid @GetPriorityBorderColor(task.Priority); @(taskIsDone ? "opacity: 0.6;" : "") cursor: pointer;"
+                     data-task-id="@task.Id" role="button" @onclick="() => OpenEditModalForTask(task)">
                     <div class="card-body p-2">
                         <div class="d-flex align-items-center">
-                            @* Chevron for subtask expand/collapse *@
+                            @* Chevron for subtask expand/collapse — larger *@
                             @if (taskHasSubtasks)
                             {
-                                <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" fill="currentColor" class="me-1 flex-shrink-0 text-muted"
-                                     viewBox="0 0 16 16" style="transition: transform 0.15s; transform: rotate(@(taskIsExpanded ? "90" : "0")deg); cursor: pointer;"
-                                     @onclick="() => ToggleTask(task.Id)" @onclick:stopPropagation="true">
-                                    <path fill-rule="evenodd" d="M4.646 1.646a.5.5 0 0 1 .708 0l6 6a.5.5 0 0 1 0 .708l-6 6a.5.5 0 0 1-.708-.708L10.293 8 4.646 2.354a.5.5 0 0 1 0-.708"/>
-                                </svg>
+                                <span class="me-1 flex-shrink-0 d-flex align-items-center justify-content-center"
+                                      style="width: 20px; height: 20px; cursor: pointer;"
+                                      @onclick="() => ToggleTask(task.Id)" @onclick:stopPropagation="true">
+                                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" class="text-muted"
+                                         viewBox="0 0 16 16" style="transition: transform 0.15s; transform: rotate(@(taskIsExpanded ? "90" : "0")deg);">
+                                        <path fill-rule="evenodd" d="M4.646 1.646a.5.5 0 0 1 .708 0l6 6a.5.5 0 0 1 0 .708l-6 6a.5.5 0 0 1-.708-.708L10.293 8 4.646 2.354a.5.5 0 0 1 0-.708"/>
+                                    </svg>
+                                </span>
                             }
                             else
                             {
-                                <span class="me-1" style="width: 10px; display: inline-block;"></span>
+                                <span class="me-1" style="width: 20px; display: inline-block;"></span>
                             }
                             @* Checkbox for done status *@
                             <input type="checkbox" class="form-check-input me-2 flex-shrink-0" style="margin-top: 0; cursor: pointer;"
@@ -416,9 +414,16 @@ else
                                    @onchange="() => ToggleTaskDone(task)"
                                    @onclick:stopPropagation="true" />
                             <span class="small text-truncate @(taskIsDone ? "text-decoration-line-through text-muted" : "")"
-                                  style="cursor: pointer;" role="button"
-                                  @onclick="() => OpenTaskDetail(task)" title="@task.Name">@task.Name</span>
+                                  title="@task.Name">@task.Name</span>
                             <span class="ms-auto @GetPriorityBadgeClass(task.Priority)" style="font-size: 0.6rem;">@task.Priority</span>
+                            <button class="btn btn-link text-primary p-0 ms-1 d-flex align-items-center" style="line-height: 1;"
+                                    @onclick="() => OpenAddModalForFeature(task.FeatureId)"
+                                    @onclick:stopPropagation="true"
+                                    title="Add item">
+                                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="currentColor" viewBox="0 0 16 16">
+                                    <path fill-rule="evenodd" d="M8 2a.5.5 0 0 1 .5.5v5h5a.5.5 0 0 1 0 1h-5v5a.5.5 0 0 1-1 0v-5h-5a.5.5 0 0 1 0-1h5v-5A.5.5 0 0 1 8 2"/>
+                                </svg>
+                            </button>
                         </div>
                     </div>
                 </div>
@@ -455,19 +460,22 @@ else
         var children = parentTask.Subtasks.Where(s => s.ParentSubtaskId == subtask.Id).OrderBy(s => s.SortOrder).ToList();
         var hasChildren = children.Count > 0;
 
-        <div class="card mb-1" style="margin-left: @(depth * 16)px; border-left: 3px solid #6c757d; @(subtask.Completed ? "opacity: 0.6;" : "")">
+        <div class="card mb-1" style="margin-left: @(depth * 16)px; border-left: 3px solid #6c757d; @(subtask.Completed ? "opacity: 0.6;" : "") cursor: pointer;"
+             role="button" @onclick="() => OpenTaskDetail(parentTask)">
             <div class="card-body p-2">
                 <div class="d-flex align-items-center">
                     @if (hasChildren)
                     {
-                        <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" fill="currentColor" class="me-1 flex-shrink-0 text-muted"
-                             viewBox="0 0 16 16">
-                            <path fill-rule="evenodd" d="M4.646 1.646a.5.5 0 0 1 .708 0l6 6a.5.5 0 0 1 0 .708l-6 6a.5.5 0 0 1-.708-.708L10.293 8 4.646 2.354a.5.5 0 0 1 0-.708"/>
-                        </svg>
+                        <span class="me-1 flex-shrink-0 d-flex align-items-center justify-content-center" style="width: 20px; height: 20px;">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="currentColor" class="text-muted"
+                                 viewBox="0 0 16 16">
+                                <path fill-rule="evenodd" d="M4.646 1.646a.5.5 0 0 1 .708 0l6 6a.5.5 0 0 1 0 .708l-6 6a.5.5 0 0 1-.708-.708L10.293 8 4.646 2.354a.5.5 0 0 1 0-.708"/>
+                            </svg>
+                        </span>
                     }
                     else
                     {
-                        <span class="me-1" style="width: 10px; display: inline-block;"></span>
+                        <span class="me-1" style="width: 20px; display: inline-block;"></span>
                     }
                     <input type="checkbox" class="form-check-input me-2 flex-shrink-0" style="margin-top: 0; cursor: pointer;"
                            checked="@subtask.Completed"
@@ -475,6 +483,14 @@ else
                            @onclick:stopPropagation="true" />
                     <span class="small text-truncate @(subtask.Completed ? "text-decoration-line-through text-muted" : "")"
                           title="@subtask.Text">@subtask.Text</span>
+                    <button class="btn btn-link text-primary p-0 ms-auto d-flex align-items-center" style="line-height: 1;"
+                            @onclick="() => OpenAddModalForFeature(parentTask.FeatureId)"
+                            @onclick:stopPropagation="true"
+                            title="Add item">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" fill="currentColor" viewBox="0 0 16 16">
+                            <path fill-rule="evenodd" d="M8 2a.5.5 0 0 1 .5.5v5h5a.5.5 0 0 1 0 1h-5v5a.5.5 0 0 1-1 0v-5h-5a.5.5 0 0 1 0-1h5v-5A.5.5 0 0 1 8 2"/>
+                        </svg>
+                    </button>
                 </div>
             </div>
         </div>
