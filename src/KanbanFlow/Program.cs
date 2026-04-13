@@ -1,3 +1,4 @@
+using KanbanFlow;
 using KanbanFlow.Components;
 using KanbanFlow.Data;
 using Microsoft.EntityFrameworkCore;
@@ -36,5 +37,7 @@ app.UseAntiforgery();
 app.MapStaticAssets();
 app.MapRazorComponents<App>()
     .AddInteractiveServerRenderMode();
+
+app.MapApiEndpoints();
 
 app.Run();
