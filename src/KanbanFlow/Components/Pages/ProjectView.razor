@@ -103,12 +103,20 @@ else
                     <div class="flex-grow-1 overflow-auto board-column-cards" data-status="@status">
                         @foreach (var task in tasksInColumn.OrderBy(t => t.SortOrder))
                         {
+                            var boardTaskDone = task.Status == WorkStatus.Done;
                             <div class="card mb-2 board-card" data-task-id="@task.Id"
-                                 style="border-left: 3px solid @GetPriorityBorderColor(task.Priority); cursor: pointer;"
-                                 @onclick="() => OpenTaskDetail(task)">
+                                 style="border-left: 3px solid @GetPriorityBorderColor(task.Priority); @(boardTaskDone ? "opacity: 0.6;" : "")">
                                 <div class="card-body p-2">
-                                    <div class="fw-medium small">@task.Name</div>
-                                    <div class="d-flex justify-content-between align-items-center mt-1">
+                                    <div class="d-flex align-items-center">
+                                        <input type="checkbox" class="form-check-input me-2 flex-shrink-0" style="margin-top: 0; cursor: pointer;"
+                                               checked="@boardTaskDone"
+                                               @onchange="() => ToggleTaskDone(task)"
+                                               @onclick:stopPropagation="true" />
+                                        <span class="fw-medium small @(boardTaskDone ? "text-decoration-line-through text-muted" : "")"
+                                              style="cursor: pointer;" role="button"
+                                              @onclick="() => OpenTaskDetail(task)">@task.Name</span>
+                                    </div>
+                                    <div class="d-flex justify-content-between align-items-center mt-1 ps-4">
                                         <span class="@GetPriorityBadgeClass(task.Priority)">@task.Priority</span>
                                         <small class="text-muted fst-italic" style="font-size: 0.7rem;">@task.Feature.Name</small>
                                     </div>
@@ -201,8 +209,9 @@ else
     }
     private CancellationTokenSource _cts = new();
 
-    // Feature collapse state
+    // Feature/Task collapse state
     private HashSet<int> expandedFeatures = [];
+    private HashSet<int> expandedTasks = [];
 
     // Add Item modal state
     private bool addModalOpen;
@@ -274,10 +283,14 @@ else
             project = loaded;
             allTasks = project.Features.SelectMany(f => f.Tasks).ToList();
 
-            // Expand all features by default
+            // Expand all features and tasks by default
             foreach (var f in project.Features)
             {
                 expandedFeatures.Add(f.Id);
+            }
+            foreach (var t in allTasks.Where(t => t.Subtasks.Count > 0))
+            {
+                expandedTasks.Add(t.Id);
             }
 
             loadError = null;
@@ -376,19 +389,49 @@ else
             <div class="feature-tasks" data-feature-id="@feature.Id">
             @foreach (var task in feature.Tasks.OrderBy(t => t.SortOrder))
             {
-                <div class="card mb-1" style="margin-left: @((depth + 1) * 16)px; border-left: 3px solid @GetPriorityBorderColor(task.Priority); cursor: pointer;"
-                     data-task-id="@task.Id" role="button" @onclick="() => OpenTaskDetail(task)">
+                var taskHasSubtasks = task.Subtasks.Count > 0;
+                var taskIsExpanded = expandedTasks.Contains(task.Id);
+                var taskIsDone = task.Status == WorkStatus.Done;
+
+                <div class="card mb-1" style="margin-left: @((depth + 1) * 16)px; border-left: 3px solid @GetPriorityBorderColor(task.Priority); @(taskIsDone ? "opacity: 0.6;" : "")"
+                     data-task-id="@task.Id">
                     <div class="card-body p-2">
                         <div class="d-flex align-items-center">
-                            <span class="me-1" style="width: 12px; display: inline-block;"></span>
-                            @* Status dot icon *@
-                            <span class="me-2 flex-shrink-0" style="width: 10px; height: 10px; border-radius: 50%; display: inline-block; background-color: @GetStatusDotColor(task.Status);"
-                                  title="@GetStatusDisplayName(task.Status)"></span>
-                            <span class="small text-truncate" title="@task.Name">@task.Name</span>
+                            @* Chevron for subtask expand/collapse *@
+                            @if (taskHasSubtasks)
+                            {
+                                <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" fill="currentColor" class="me-1 flex-shrink-0 text-muted"
+                                     viewBox="0 0 16 16" style="transition: transform 0.15s; transform: rotate(@(taskIsExpanded ? "90" : "0")deg); cursor: pointer;"
+                                     @onclick="() => ToggleTask(task.Id)" @onclick:stopPropagation="true">
+                                    <path fill-rule="evenodd" d="M4.646 1.646a.5.5 0 0 1 .708 0l6 6a.5.5 0 0 1 0 .708l-6 6a.5.5 0 0 1-.708-.708L10.293 8 4.646 2.354a.5.5 0 0 1 0-.708"/>
+                                </svg>
+                            }
+                            else
+                            {
+                                <span class="me-1" style="width: 10px; display: inline-block;"></span>
+                            }
+                            @* Checkbox for done status *@
+                            <input type="checkbox" class="form-check-input me-2 flex-shrink-0" style="margin-top: 0; cursor: pointer;"
+                                   checked="@taskIsDone"
+                                   @onchange="() => ToggleTaskDone(task)"
+                                   @onclick:stopPropagation="true" />
+                            <span class="small text-truncate @(taskIsDone ? "text-decoration-line-through text-muted" : "")"
+                                  style="cursor: pointer;" role="button"
+                                  @onclick="() => OpenTaskDetail(task)" title="@task.Name">@task.Name</span>
                             <span class="ms-auto @GetPriorityBadgeClass(task.Priority)" style="font-size: 0.6rem;">@task.Priority</span>
                         </div>
                     </div>
                 </div>
+
+                @* Collapsible subtasks under this task *@
+                @if (taskIsExpanded && taskHasSubtasks)
+                {
+                    var rootSubtasks = task.Subtasks.Where(s => s.ParentSubtaskId == null).OrderBy(s => s.SortOrder).ToList();
+                    @foreach (var subtask in rootSubtasks)
+                    {
+                        @RenderOutlineSubtask(subtask, task, depth + 2)
+                    }
+                }
             }
             </div>
 
@@ -405,7 +448,54 @@ else
         Nav.NavigateTo("/");
     }
 
-    // ── Feature collapse/expand ──
+    // ── Outline subtask rendering ──
+
+    private RenderFragment RenderOutlineSubtask(Subtask subtask, TaskItem parentTask, int depth) => __builder =>
+    {
+        var children = parentTask.Subtasks.Where(s => s.ParentSubtaskId == subtask.Id).OrderBy(s => s.SortOrder).ToList();
+
+        <div class="d-flex align-items-center py-1" style="margin-left: @(depth * 16)px;">
+            @if (children.Count > 0)
+            {
+                <svg xmlns="http://www.w3.org/2000/svg" width="8" height="8" fill="currentColor" class="me-1 flex-shrink-0 text-muted"
+                     viewBox="0 0 16 16">
+                    <path fill-rule="evenodd" d="M4.646 1.646a.5.5 0 0 1 .708 0l6 6a.5.5 0 0 1 0 .708l-6 6a.5.5 0 0 1-.708-.708L10.293 8 4.646 2.354a.5.5 0 0 1 0-.708"/>
+                </svg>
+            }
+            else
+            {
+                <span class="me-1" style="width: 8px; display: inline-block;"></span>
+            }
+            <input type="checkbox" class="form-check-input me-2 flex-shrink-0" style="margin-top: 0; width: 14px; height: 14px; cursor: pointer;"
+                   checked="@subtask.Completed"
+                   @onchange="() => ToggleOutlineSubtask(subtask)"
+                   @onclick:stopPropagation="true" />
+            <span class="@(subtask.Completed ? "text-decoration-line-through text-muted" : "")"
+                  style="font-size: 0.75rem;">@subtask.Text</span>
+        </div>
+
+        @foreach (var child in children)
+        {
+            @RenderOutlineSubtask(child, parentTask, depth + 1)
+        }
+    };
+
+    private async Task ToggleOutlineSubtask(Subtask subtask)
+    {
+        subtask.Completed = !subtask.Completed;
+        try
+        {
+            using var db = await DbFactory.CreateDbContextAsync(_cts.Token);
+            db.Subtasks.Attach(subtask);
+            db.Entry(subtask).Property(s => s.Completed).IsModified = true;
+            await db.SaveChangesAsync(_cts.Token);
+            StateHasChanged();
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception ex) { loadError = ex.Message; }
+    }
+
+    // ── Feature/Task collapse/expand ──
 
     private void ToggleFeature(int featureId)
     {
@@ -413,6 +503,37 @@ else
         {
             expandedFeatures.Add(featureId);
         }
+    }
+
+    private void ToggleTask(int taskId)
+    {
+        if (!expandedTasks.Remove(taskId))
+        {
+            expandedTasks.Add(taskId);
+        }
+    }
+
+    // ── Task checkbox toggle ──
+
+    private async Task ToggleTaskDone(TaskItem task)
+    {
+        var newStatus = task.Status == WorkStatus.Done ? WorkStatus.Todo : WorkStatus.Done;
+        try
+        {
+            using var db = await DbFactory.CreateDbContextAsync(_cts.Token);
+            var entity = await db.Tasks.FindAsync(new object[] { task.Id }, _cts.Token);
+            if (entity is null) return;
+
+            entity.Status = newStatus;
+            entity.UpdatedAt = DateTime.UtcNow;
+            entity.CompletedAt = newStatus == WorkStatus.Done ? DateTime.UtcNow : null;
+            await db.SaveChangesAsync(_cts.Token);
+
+            await LoadProject();
+            await ReinitializeSortables();
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception ex) { loadError = ex.Message; }
     }
 
     // ── Add Item Modal ──
