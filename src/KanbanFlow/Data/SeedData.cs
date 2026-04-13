@@ -54,6 +54,15 @@ public static class SeedData
         db.Subtasks.AddRange(emailValidation, pwdValidation);
         db.SaveChanges();
 
+        // Activity timeline for Registration form task
+        db.TaskComments.AddRange(
+            new TaskComment { TaskItemId = regTask.Id, Text = "Task created", Author = "System", Type = CommentType.Created, CreatedAt = DateTime.UtcNow.AddDays(-5) },
+            new TaskComment { TaskItemId = regTask.Id, Text = "Started working on the form layout", Author = "Joel", Type = CommentType.Comment, CreatedAt = DateTime.UtcNow.AddDays(-3) },
+            new TaskComment { TaskItemId = regTask.Id, Text = "Status changed from Backlog to InProgress", Author = "System", Type = CommentType.StatusChange, CreatedAt = DateTime.UtcNow.AddDays(-2) },
+            new TaskComment { TaskItemId = regTask.Id, Text = "Need to add email validation before review", Author = "Claude", Type = CommentType.Comment, CreatedAt = DateTime.UtcNow.AddDays(-1) }
+        );
+        db.SaveChanges();
+
         // Set project readme
         project.Readme = "# Sample Project\n\nThis is a demo project for KanbanFlow.\n\n## Getting Started\n\n1. Create features to organize work\n2. Add tasks to features\n3. Track progress on the kanban board";
         db.SaveChanges();

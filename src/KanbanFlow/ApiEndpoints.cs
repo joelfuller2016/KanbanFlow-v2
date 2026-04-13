@@ -13,6 +13,7 @@ public static class ApiEndpoints
         app.MapTaskEndpoints();
         app.MapSubtaskEndpoints();
         app.MapRequirementEndpoints();
+        app.MapTaskCommentEndpoints();
         return app;
     }
 
@@ -504,6 +505,16 @@ public static class ApiEndpoints
             db.Tasks.Add(task);
             await db.SaveChangesAsync();
 
+            var createdComment = new TaskComment
+            {
+                TaskItemId = task.Id,
+                Text = "Task created",
+                Author = "System",
+                Type = CommentType.Created
+            };
+            db.TaskComments.Add(createdComment);
+            await db.SaveChangesAsync();
+
             return Results.Created($"/api/tasks/{task.Id}", new
             {
                 task.Id,
@@ -605,6 +616,16 @@ public static class ApiEndpoints
             else if (newStatus != WorkStatus.Done)
                 task.CompletedAt = null;
 
+            await db.SaveChangesAsync();
+
+            var statusComment = new TaskComment
+            {
+                TaskItemId = task.Id,
+                Text = $"Status changed from {oldStatus} to {newStatus}",
+                Author = "System",
+                Type = CommentType.StatusChange
+            };
+            db.TaskComments.Add(statusComment);
             await db.SaveChangesAsync();
 
             return Results.Ok(new
@@ -984,6 +1005,80 @@ public static class ApiEndpoints
         });
     }
 
+    // ── TaskComment Endpoints ────────────────────────────────────────────
+
+    private static void MapTaskCommentEndpoints(this WebApplication app)
+    {
+        // GET /api/tasks/{taskId}/comments — list comments/activity
+        app.MapGet("/api/tasks/{taskId:int}/comments", async (int taskId, AppDbContext db) =>
+        {
+            var taskExists = await db.Tasks.AnyAsync(t => t.Id == taskId);
+            if (!taskExists)
+                return Results.NotFound(new { message = $"Task {taskId} not found." });
+
+            var comments = await db.TaskComments
+                .Where(c => c.TaskItemId == taskId)
+                .AsNoTracking()
+                .OrderBy(c => c.CreatedAt)
+                .Select(c => new
+                {
+                    c.Id,
+                    c.TaskItemId,
+                    c.Text,
+                    c.Author,
+                    Type = c.Type.ToString(),
+                    c.CreatedAt
+                })
+                .ToListAsync();
+
+            return Results.Ok(comments);
+        });
+
+        // POST /api/tasks/{taskId}/comments — add comment
+        app.MapPost("/api/tasks/{taskId:int}/comments", async (int taskId, TaskCommentDto dto, AppDbContext db) =>
+        {
+            var taskExists = await db.Tasks.AnyAsync(t => t.Id == taskId);
+            if (!taskExists)
+                return Results.NotFound(new { message = $"Task {taskId} not found." });
+
+            if (string.IsNullOrWhiteSpace(dto.Text))
+                return Results.UnprocessableEntity(new { message = "Text is required." });
+
+            var comment = new TaskComment
+            {
+                TaskItemId = taskId,
+                Text = dto.Text.Trim(),
+                Author = dto.Author?.Trim(),
+                Type = CommentType.Comment
+            };
+
+            db.TaskComments.Add(comment);
+            await db.SaveChangesAsync();
+
+            return Results.Created($"/api/tasks/{taskId}/comments/{comment.Id}", new
+            {
+                comment.Id,
+                comment.TaskItemId,
+                comment.Text,
+                comment.Author,
+                Type = comment.Type.ToString(),
+                comment.CreatedAt
+            });
+        });
+
+        // DELETE /api/comments/{id}
+        app.MapDelete("/api/comments/{id:int}", async (int id, AppDbContext db) =>
+        {
+            var comment = await db.TaskComments.FindAsync(id);
+            if (comment is null)
+                return Results.NotFound(new { message = $"Comment {id} not found." });
+
+            db.TaskComments.Remove(comment);
+            await db.SaveChangesAsync();
+            return Results.NoContent();
+        });
+    }
+
     // ── Helper ─────────────────────────────────────────────────────────
 
     private static object MapTaskSummary(TaskItem t) => new
@@ -1027,3 +1122,5 @@ public record SubtaskDto(string? Text, bool? Completed, int? SortOrder, int? Par
 public record RequirementDto(string? Text, string? Description, string? Priority, string? Status, int? FeatureId, int? TaskItemId, int? SortOrder);
 
 public record RequirementAssignDto(int? FeatureId, int? TaskItemId);
+
+public record TaskCommentDto(string? Text, string? Author);

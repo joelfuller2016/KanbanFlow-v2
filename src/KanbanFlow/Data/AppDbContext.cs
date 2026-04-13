@@ -12,6 +12,7 @@ public class AppDbContext : DbContext
     public DbSet<TaskItem> Tasks => Set<TaskItem>();
     public DbSet<Subtask> Subtasks => Set<Subtask>();
     public DbSet<Requirement> Requirements => Set<Requirement>();
+    public DbSet<TaskComment> TaskComments => Set<TaskComment>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -34,6 +35,11 @@ public class AppDbContext : DbContext
         modelBuilder.Entity<Subtask>(e =>
         {
             e.HasMany(s => s.ChildSubtasks).WithOne(s => s.ParentSubtask).HasForeignKey(s => s.ParentSubtaskId).OnDelete(DeleteBehavior.Restrict);
+        });
+
+        modelBuilder.Entity<TaskComment>(e =>
+        {
+            e.HasOne(c => c.TaskItem).WithMany(t => t.Comments).HasForeignKey(c => c.TaskItemId).OnDelete(DeleteBehavior.Cascade);
         });
 
         modelBuilder.Entity<Requirement>(e =>
