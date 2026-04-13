@@ -3,6 +3,8 @@
 @rendermode InteractiveServer
 @inject IDbContextFactory<AppDbContext> DbFactory
 @inject NavigationManager Nav
+@inject IJSRuntime JS
+@implements IAsyncDisposable
 
 <PageTitle>@(project?.Name ?? "Project") - KanbanFlow</PageTitle>
 
@@ -93,9 +95,10 @@ else
                     @* Tasks (mini-cards) *@
                     @if (isExpanded)
                     {
+                        <div class="feature-tasks" data-feature-id="@feature.Id">
                         @foreach (var task in feature.Tasks.OrderBy(t => t.SortOrder))
                         {
-                            <div class="card mb-1 shadow-sm" role="button" style="cursor: pointer;">
+                            <div class="card mb-1 shadow-sm" role="button" style="cursor: pointer;" data-task-id="@task.Id">
                                 <div class="card-body p-2">
                                     <div class="d-flex align-items-center">
                                         <span class="me-2" style="width: 10px; height: 10px; border-radius: 50%; display: inline-block; background-color: @GetStatusDotColor(task.Status);"
@@ -108,6 +111,7 @@ else
                                 </div>
                             </div>
                         }
+                        </div>
 
                         @* Add Task inline form *@
                         @if (addingTaskToFeatureId == feature.Id)
@@ -160,25 +164,18 @@ else
                     </h6>
 
                     @* Cards *@
-                    <div class="flex-grow-1 overflow-auto">
-                        @if (tasksInColumn.Count == 0)
+                    <div class="flex-grow-1 overflow-auto board-column-cards" data-status="@status">
+                        @foreach (var task in tasksInColumn.OrderBy(t => t.SortOrder))
                         {
-                            <div class="text-center text-muted small py-3">No tasks</div>
-                        }
-                        else
-                        {
-                            @foreach (var task in tasksInColumn.OrderBy(t => t.SortOrder))
-                            {
-                                <div class="card mb-2 shadow-sm">
-                                    <div class="card-body p-2">
-                                        <div class="fw-medium small">@task.Name</div>
-                                        <div class="d-flex justify-content-between align-items-center mt-1">
-                                            <span class="@GetPriorityBadgeClass(task.Priority)">@task.Priority</span>
-                                            <small class="text-muted">@task.Feature.Name</small>
-                                        </div>
+                            <div class="card mb-2 shadow-sm" data-task-id="@task.Id">
+                                <div class="card-body p-2">
+                                    <div class="fw-medium small">@task.Name</div>
+                                    <div class="d-flex justify-content-between align-items-center mt-1">
+                                        <span class="@GetPriorityBadgeClass(task.Priority)">@task.Priority</span>
+                                        <small class="text-muted">@task.Feature.Name</small>
                                     </div>
                                 </div>
-                            }
+                            </div>
                         }
                     </div>
 
@@ -230,6 +227,8 @@ else
     private Project? project;
     private List<TaskItem> allTasks = [];
     private bool notFound;
+    private DotNetObjectReference<ProjectView>? dotNetRef;
+    private bool sortablesInitialized;
 
     // Feature collapse state
     private HashSet<int> expandedFeatures = [];
@@ -250,6 +249,17 @@ else
     protected override async Task OnInitializedAsync()
     {
         await LoadProject();
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (project is not null && !sortablesInitialized)
+        {
+            sortablesInitialized = true;
+            dotNetRef = DotNetObjectReference.Create(this);
+            await JS.InvokeVoidAsync("KanbanFlow.initBoardDragDrop", dotNetRef);
+            await JS.InvokeVoidAsync("KanbanFlow.initLeftNavDragDrop", dotNetRef);
+        }
     }
 
     private async Task LoadProject()
@@ -436,6 +446,108 @@ else
         newColumnTaskName = null;
         newColumnTaskFeatureId = 0;
         await LoadProject();
+    }
+
+    // ── Drag-and-Drop Handlers ──
+
+    [JSInvokable]
+    public async Task OnCardMoved(int taskId, string newStatus, int newIndex)
+    {
+        if (!Enum.TryParse<WorkStatus>(newStatus, out var status)) return;
+
+        using var db = await DbFactory.CreateDbContextAsync();
+        var task = await db.Tasks.FindAsync(taskId);
+        if (task is null) return;
+
+        var oldStatus = task.Status;
+        task.Status = status;
+        task.UpdatedAt = DateTime.UtcNow;
+
+        // Set CompletedAt when moved to Done, clear if moved away
+        if (status == WorkStatus.Done && oldStatus != WorkStatus.Done)
+        {
+            task.CompletedAt = DateTime.UtcNow;
+        }
+        else if (status != WorkStatus.Done)
+        {
+            task.CompletedAt = null;
+        }
+
+        await db.SaveChangesAsync();
+
+        // Reindex all tasks in the target column
+        var columnTasks = await db.Tasks
+            .Include(t => t.Feature)
+            .Where(t => t.Status == status && t.Feature.ProjectId == Id)
+            .OrderBy(t => t.SortOrder)
+            .ToListAsync();
+
+        // Remove the moved task and insert at the new index
+        columnTasks.Remove(task);
+        var insertIndex = Math.Min(newIndex, columnTasks.Count);
+        columnTasks.Insert(insertIndex, task);
+
+        for (int i = 0; i < columnTasks.Count; i++)
+        {
+            columnTasks[i].SortOrder = i;
+        }
+
+        await db.SaveChangesAsync();
+        await LoadProject();
+        await ReinitializeSortables();
+    }
+
+    [JSInvokable]
+    public async Task OnTaskReordered(int taskId, int newFeatureId, int newIndex)
+    {
+        using var db = await DbFactory.CreateDbContextAsync();
+        var task = await db.Tasks.FindAsync(taskId);
+        if (task is null) return;
+
+        task.FeatureId = newFeatureId;
+        task.UpdatedAt = DateTime.UtcNow;
+        await db.SaveChangesAsync();
+
+        // Reindex all tasks in the target feature
+        var featureTasks = await db.Tasks
+            .Where(t => t.FeatureId == newFeatureId)
+            .OrderBy(t => t.SortOrder)
+            .ToListAsync();
+
+        featureTasks.Remove(task);
+        var insertIndex = Math.Min(newIndex, featureTasks.Count);
+        featureTasks.Insert(insertIndex, task);
+
+        for (int i = 0; i < featureTasks.Count; i++)
+        {
+            featureTasks[i].SortOrder = i;
+        }
+
+        await db.SaveChangesAsync();
+        await LoadProject();
+        await ReinitializeSortables();
+    }
+
+    private async Task ReinitializeSortables()
+    {
+        StateHasChanged();
+        await Task.Yield();
+        if (dotNetRef is not null)
+        {
+            await JS.InvokeVoidAsync("KanbanFlow.initBoardDragDrop", dotNetRef);
+            await JS.InvokeVoidAsync("KanbanFlow.initLeftNavDragDrop", dotNetRef);
+        }
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        try
+        {
+            await JS.InvokeVoidAsync("KanbanFlow.destroySortables");
+        }
+        catch (JSDisconnectedException) { }
+
+        dotNetRef?.Dispose();
     }
 
     // ── Helpers ──
