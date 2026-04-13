@@ -1,0 +1,14 @@
+bin/
+obj/
+*.db
+*.db-shm
+*.db-wal
+.vs/
+*.user
+.gsd-*/
+.worktrees/
+*.png
+.playwright-mcp/
+notes.md
+task_plan.md
+plan_review.md
