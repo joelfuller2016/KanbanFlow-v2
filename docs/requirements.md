@@ -15,6 +15,8 @@
 | CSS | Bootstrap 5.3 | Standard, well-documented, no build step |
 | Icons | Bootstrap Icons or Font Awesome | Included via CDN |
 | API | Minimal APIs | Lightweight, fast to build |
+| DnD | SortableJS via JS interop | 8KB, proven in Ticky v1 |
+| Markdown | Markdig | .NET markdown rendering |
 | Auth | None (auto-login) | Single-user local tool |
 
 ---
@@ -31,7 +33,7 @@ Board = virtual view of Tasks grouped by Status column
 Card = visual representation of a Task on the Board
 ```
 
-**Key relationship:** A Card on the Kanban board is NOT a separate entity — it IS the Task, rendered visually. Moving a card changes the Task's `Status` field. Clicking a card navigates to the Task in the Project outline.
+**Key relationship:** A Card on the Kanban board is NOT a separate entity — it IS the Task, rendered visually. Moving a card changes the Task's `Status` field. Clicking a card opens the detail slide-out panel (R-11).
 
 ---
 
@@ -44,8 +46,8 @@ Card = visual representation of a Task on the Board
 **Entity fields:**
 - `Id` (int, PK, auto-increment)
 - `Name` (string, required, max 200 chars)
-- `Description` (string, optional, markdown)
-- `Goals` (string, optional, markdown — high-level project objectives)
+- `Description` (string, optional, markdown — stored as-is, rendered in detail panel (R-11) only; board cards and left nav mini-cards show plain truncated text)
+- `Goals` (string, optional, markdown — stored as-is, rendered in detail panel (R-11) only)
 - `CreatedAt` (DateTime)
 - `UpdatedAt` (DateTime)
 
@@ -80,6 +82,7 @@ Card = visual representation of a Task on the Board
 - `Description` (string, optional)
 - `SortOrder` (int — for ordering in the left nav)
 - `CreatedAt` (DateTime)
+- `UpdatedAt` (DateTime)
 
 **UI:**
 - Shown in the left nav under the Project name
@@ -89,13 +92,14 @@ Card = visual representation of a Task on the Board
 
 **API:**
 - `GET /api/projects/{projectId}/features` — list features for a project
+- `GET /api/features/{id}` — get a single feature with task counts
 - `POST /api/projects/{projectId}/features` — create
 - `PUT /api/features/{id}` — update
 - `DELETE /api/features/{id}` — delete (cascades tasks)
 
 **Acceptance criteria:**
 - [ ] Features appear under their parent Project in the left nav
-- [ ] Deleting a feature removes all its tasks from the board
+- [ ] Deleting a feature shows a confirmation dialog with task count before cascade deletion
 - [ ] Features can be reordered via drag-and-drop
 - [ ] Progress indicator shows X/Y tasks complete per feature
 
@@ -109,9 +113,9 @@ Card = visual representation of a Task on the Board
 - `Id` (int, PK)
 - `FeatureId` (int, FK → Feature, required)
 - `Name` (string, required, max 500 chars)
-- `Description` (string, optional, markdown)
+- `Description` (string, optional, markdown — stored as-is, rendered in detail panel (R-11) only; board cards and left nav mini-cards show plain truncated text)
 - `Status` (enum: Backlog, Todo, InProgress, Review, Done)
-- `Priority` (enum: Normal, Medium, High, Critical)
+- `Priority` (enum: Low, Medium, High, Critical)
 - `Assignee` (string, optional — free text, not linked to users)
 - `SortOrder` (int — ordering within the same status column)
 - `CreatedAt` (DateTime)
@@ -132,6 +136,11 @@ Card = visual representation of a Task on the Board
 - `PUT /api/tasks/{id}` — update (including status change)
 - `DELETE /api/tasks/{id}` — delete
 - `PATCH /api/tasks/{id}/status` — change status only (used by board drag-and-drop)
+- `PATCH /api/tasks/{id}/feature` — reassign task to a different Feature (body: `{ featureId: int }`)
+
+Tasks can be reassigned to a different Feature via drag-and-drop in the left nav or via the Feature dropdown in the detail panel.
+
+If Status is omitted in POST body, defaults to Backlog.
 
 **Acceptance criteria:**
 - [ ] Creating a task with Status=Backlog places it in the Backlog column
@@ -161,15 +170,21 @@ Card = visual representation of a Task on the Board
 - Each column shows a header with name + task count
 - Cards show: task name, priority badge, feature name (small text), assignee
 - Drag-and-drop a card between columns changes the Task's Status
-- Click a card to navigate to the Task in the left nav (highlight + scroll to it)
+- Click a card to open the detail slide-out panel (R-11)
 - "New Task" button at the bottom of each column (creates task with that status)
+
+A filter dropdown in the board header allows filtering by Feature ("All" by default). Selecting a Feature shows only that feature's tasks on the board.
+
+Board auto-polls every 30 seconds for changes. A manual refresh button in the board header forces immediate sync. No SignalR.
 
 **Acceptance criteria:**
 - [ ] Board shows exactly 5 columns matching the Status enum
 - [ ] Moving a card updates the Task.Status in the database
-- [ ] Board reflects task changes made via the API (refresh or real-time)
+- [ ] Board reflects task changes made via the API (auto-polls every 30s)
+- [ ] Manual refresh button forces immediate sync
 - [ ] Empty columns show a helpful empty state message
 - [ ] Card count badge on each column header
+- [ ] Feature filter dropdown filters board cards by Feature
 
 ---
 
@@ -194,16 +209,17 @@ Card = visual representation of a Task on the Board
 
 ### R-06: Card ↔ Project Outline Link
 
-**Description:** Clicking a card on the board navigates to the corresponding Task in the left nav Project outline. Clicking a mini-card in the left nav highlights the corresponding card on the board.
+**Description:** Clicking a card on the board opens the detail slide-out panel (R-11). The detail panel includes a "Show in outline" button that highlights the task in the left nav. Clicking a mini-card in the left nav also opens the detail panel and highlights the corresponding card on the board.
 
 **Behavior:**
-- Board card click → left nav scrolls to the Task, expands parent Feature, highlights the mini-card briefly
-- Left nav mini-card click → board scrolls to the card's column, highlights the card briefly
-- Both directions use smooth scroll + a 2-second highlight animation
+- Board card click → opens the detail slide-out panel (R-11)
+- Detail panel "Show in outline" button → left nav scrolls to the Task, expands parent Feature, highlights the mini-card briefly (smooth scroll + 2-second highlight animation)
+- Left nav mini-card click → opens the detail panel + board scrolls to the card's column, highlights the card briefly (smooth scroll + 2-second highlight animation)
 
 **Acceptance criteria:**
-- [ ] Clicking a board card highlights and scrolls to the task in the left nav
-- [ ] Clicking a left nav mini-card highlights and scrolls to the card on the board
+- [ ] Clicking a board card opens the detail panel
+- [ ] "Show in outline" button in detail panel highlights and scrolls to the task in the left nav
+- [ ] Clicking a left nav mini-card opens the detail panel and highlights the card on the board
 - [ ] Parent Feature expands automatically if collapsed
 
 ---
@@ -255,6 +271,7 @@ Card = visual representation of a Task on the Board
 | PUT | `/api/projects/{id}` | Update project |
 | DELETE | `/api/projects/{id}` | Delete project + cascade |
 | GET | `/api/projects/{id}/features` | List features |
+| GET | `/api/features/{id}` | Get single feature with task counts |
 | POST | `/api/projects/{id}/features` | Create feature |
 | PUT | `/api/features/{id}` | Update feature |
 | DELETE | `/api/features/{id}` | Delete feature + cascade |
@@ -266,6 +283,39 @@ Card = visual representation of a Task on the Board
 | PUT | `/api/tasks/{id}` | Update task |
 | DELETE | `/api/tasks/{id}` | Delete task |
 | PATCH | `/api/tasks/{id}/status` | Change status only |
+| PATCH | `/api/tasks/{id}/feature` | Reassign task to different feature |
+| GET | `/api/tasks/{id}/subtasks` | List subtasks for a task |
+| POST | `/api/tasks/{id}/subtasks` | Create subtask |
+| PUT | `/api/subtasks/{id}` | Update subtask |
+| DELETE | `/api/subtasks/{id}` | Delete subtask |
+
+**Pagination:** Not required. All list endpoints return full results.
+
+**Concurrency:** Last-write-wins. No optimistic locking for P0.
+
+**CORS:** Enabled for all origins (no auth, local tool).
+
+### Validation Rules
+
+- Name: required (1+ char trimmed)
+- Description: max 10,000 chars
+- Status and Priority must be valid enum values
+- Unknown JSON fields are ignored
+
+### Error Response Schema
+
+All 400/422 responses use this shape:
+
+```json
+{
+  "message": "string",
+  "errors": {
+    "fieldName": ["error message 1", "error message 2"]
+  }
+}
+```
+
+The `errors` field is optional and only present for validation errors.
 
 **Acceptance criteria:**
 - [ ] All endpoints return proper JSON with correct status codes
@@ -283,7 +333,16 @@ Card = visual representation of a Task on the Board
 - Database file: `kanbanflow.db` in the app directory
 - EF Core with `Microsoft.EntityFrameworkCore.Sqlite`
 - Code-first migrations (or `EnsureCreated` for simplicity)
-- Seed data: one sample project with 2 features and 5 tasks
+- Default URL: `http://localhost:5000`
+- Seed data:
+  - Project: "Sample Project"
+  - Feature 1: "User Management" (3 tasks)
+    - "Login page" — Status: Done
+    - "Registration form" — Status: InProgress
+    - "Password reset" — Status: Todo
+  - Feature 2: "Dashboard" (2 tasks)
+    - "KPI cards" — Status: Backlog
+    - "Activity feed" — Status: Backlog
 
 **Acceptance criteria:**
 - [ ] `dotnet run` creates the database automatically if it doesn't exist
@@ -313,23 +372,25 @@ Card = visual representation of a Task on the Board
 
 ### R-11: Task Detail Panel
 
-**Description:** Clicking a task (mini-card or board card) opens a slide-out panel showing full task details with inline editing.
+**Description:** Clicking a task (mini-card or board card) opens a slide-out panel showing full task details with inline editing. Changes auto-save with 500ms debounce. No explicit Save button.
 
 **Panel contents:**
 - Task name (editable inline)
 - Status dropdown
 - Priority dropdown
+- Feature dropdown (reassign task to a different Feature)
 - Assignee text field
-- Description (markdown editor or textarea)
+- Description (markdown editor or textarea — rendered as markdown via Markdig)
 - Subtask list (R-13)
 - Feature breadcrumb (Project > Feature > Task)
 - Created/Updated timestamps
+- "Show in outline" button (highlights the task in the left nav, see R-06)
 - "Delete" button with confirmation
 
 **Acceptance criteria:**
 - [ ] Panel slides in from the right
 - [ ] All fields are editable inline
-- [ ] Changes save automatically (debounced) or via Save button
+- [ ] Changes auto-save with 500ms debounce (no explicit Save button)
 - [ ] Close via X button or clicking outside
 
 ---
@@ -343,7 +404,7 @@ Card = visual representation of a Task on the Board
 | Critical | Red | `Critical` |
 | High | Orange | `High` |
 | Medium | Yellow | `Medium` |
-| Normal | Gray | `Normal` |
+| Low | Gray | `Low` |
 
 **Acceptance criteria:**
 - [ ] Badge visible on board cards
@@ -362,6 +423,7 @@ Card = visual representation of a Task on the Board
 - `Text` (string, required)
 - `Completed` (bool)
 - `SortOrder` (int)
+- `CreatedAt` (DateTime)
 
 **UI:**
 - Checkbox list in the task detail panel
@@ -412,6 +474,8 @@ Card = visual representation of a Task on the Board
 ### R-16: Board Column WIP Limits
 
 **Description:** Columns can have optional WIP (Work In Progress) limits. When the limit is reached, the column header shows a warning and adding more cards is blocked.
+
+WIP limits are stored in `appsettings.json` as a dictionary of status to max count. Default: unlimited for all columns.
 
 **Acceptance criteria:**
 - [ ] WIP limit configurable per column (default: unlimited)
@@ -465,7 +529,7 @@ Card = visual representation of a Task on the Board
 3. Home page shows project list
 4. Selecting a project shows left nav (Project → Features → Tasks) + Kanban board
 5. Dragging a card on the board updates the task status
-6. Clicking a board card highlights the task in the left nav
+6. Clicking a board card opens the detail panel; "Show in outline" highlights the task in the left nav
 7. All API endpoints return correct JSON
 8. Bootstrap CSS renders cleanly — no custom CSS hacks
 9. No login page, no accounts — immediate access
