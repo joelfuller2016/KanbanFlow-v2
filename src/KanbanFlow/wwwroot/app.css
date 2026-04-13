@@ -77,3 +77,25 @@ h1:focus {
 .feature-tasks {
     min-height: 20px;
 }
+
+/* ── Board card hover effect ── */
+.board-card {
+    transition: box-shadow 0.15s ease-in-out, transform 0.1s ease-in-out;
+    box-shadow: 0 .125rem .25rem rgba(0, 0, 0, .075); /* shadow-sm */
+}
+
+.board-card:hover {
+    box-shadow: 0 .5rem 1rem rgba(0, 0, 0, .15); /* shadow */
+    transform: translateY(-1px);
+}
+
+/* ── Mini-card hover effect (left nav) ── */
+.mini-card {
+    transition: box-shadow 0.15s ease-in-out, background-color 0.15s ease-in-out;
+    box-shadow: 0 .125rem .25rem rgba(0, 0, 0, .075);
+}
+
+.mini-card:hover {
+    box-shadow: 0 .25rem .5rem rgba(0, 0, 0, .1);
+    background-color: rgba(0, 0, 0, .02);
+}

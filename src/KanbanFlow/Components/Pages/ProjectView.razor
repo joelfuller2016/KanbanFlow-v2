@@ -8,7 +8,15 @@
 
 <PageTitle>@(project?.Name ?? "Project") - KanbanFlow</PageTitle>
 
-@if (project is null)
+@if (loadError is not null)
+{
+    <div class="text-center py-5">
+        <h4 class="text-danger">Something went wrong</h4>
+        <p class="text-muted">@loadError</p>
+        <button class="btn btn-primary mt-3" @onclick="GoHome">Back to Projects</button>
+    </div>
+}
+else if (project is null)
 {
     <div class="text-center py-5">
         @if (notFound)
@@ -68,13 +76,20 @@ else
             }
 
             @* Feature tree *@
-            @foreach (var feature in project.Features.OrderBy(f => f.SortOrder))
+            @{ var orderedFeatures = project.Features.OrderBy(f => f.SortOrder).ToList(); }
+            @for (var fi = 0; fi < orderedFeatures.Count; fi++)
             {
+                var feature = orderedFeatures[fi];
                 var doneCount = feature.Tasks.Count(t => t.Status == WorkStatus.Done);
                 var totalCount = feature.Tasks.Count;
                 var isExpanded = expandedFeatures.Contains(feature.Id);
 
-                <div class="mb-3">
+                @if (fi > 0)
+                {
+                    <hr class="my-1 opacity-25" />
+                }
+
+                <div class="mb-2">
                     @* Feature header *@
                     <div class="d-flex align-items-center mb-1" role="button" @onclick="() => ToggleFeature(feature.Id)">
                         <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" fill="currentColor" class="me-1"
@@ -86,8 +101,8 @@ else
                     </div>
 
                     @* Progress bar *@
-                    <div class="progress mb-2" style="height: 4px;">
-                        <div class="progress-bar bg-success" role="progressbar"
+                    <div class="progress mb-2" style="height: 3px;">
+                        <div class="progress-bar bg-success opacity-75" role="progressbar"
                              style="width: @(totalCount > 0 ? (int)(100.0 * doneCount / totalCount) : 0)%">
                         </div>
                     </div>
@@ -98,7 +113,7 @@ else
                         <div class="feature-tasks" data-feature-id="@feature.Id">
                         @foreach (var task in feature.Tasks.OrderBy(t => t.SortOrder))
                         {
-                            <div class="card mb-1 shadow-sm" role="button" style="cursor: pointer;" data-task-id="@task.Id">
+                            <div class="card mb-1 mini-card" role="button" style="cursor: pointer;" data-task-id="@task.Id" @onclick="() => OpenTaskDetail(task)">
                                 <div class="card-body p-2">
                                     <div class="d-flex align-items-center">
                                         <span class="me-2" style="width: 10px; height: 10px; border-radius: 50%; display: inline-block; background-color: @GetStatusDotColor(task.Status);"
@@ -151,12 +166,12 @@ else
         </div>
 
         @* ── Right Panel: Kanban Board ── *@
-        <div class="flex-grow-1 d-flex overflow-auto p-3 gap-3">
+        <div class="flex-grow-1 d-flex overflow-auto p-3 gap-3" style="min-width: 0;">
             @foreach (var status in Enum.GetValues<WorkStatus>())
             {
                 var tasksInColumn = allTasks.Where(t => t.Status == status).ToList();
 
-                <div class="d-flex flex-column bg-body-secondary rounded p-2" style="min-width: 250px; width: 250px;">
+                <div class="d-flex flex-column bg-body-secondary rounded p-2" style="min-width: 250px; width: 250px; flex-shrink: 0;">
                     @* Column header *@
                     <h6 class="fw-semibold mb-2">
                         @GetStatusDisplayName(status)
@@ -167,12 +182,14 @@ else
                     <div class="flex-grow-1 overflow-auto board-column-cards" data-status="@status">
                         @foreach (var task in tasksInColumn.OrderBy(t => t.SortOrder))
                         {
-                            <div class="card mb-2 shadow-sm" data-task-id="@task.Id">
+                            <div class="card mb-2 board-card" data-task-id="@task.Id"
+                                 style="border-left: 3px solid @GetPriorityBorderColor(task.Priority); cursor: pointer;"
+                                 @onclick="() => OpenTaskDetail(task)">
                                 <div class="card-body p-2">
                                     <div class="fw-medium small">@task.Name</div>
                                     <div class="d-flex justify-content-between align-items-center mt-1">
                                         <span class="@GetPriorityBadgeClass(task.Priority)">@task.Priority</span>
-                                        <small class="text-muted">@task.Feature.Name</small>
+                                        <small class="text-muted fst-italic" style="font-size: 0.7rem;">@task.Feature.Name</small>
                                     </div>
                                 </div>
                             </div>
@@ -220,6 +237,14 @@ else
     </div>
 }
 
+<KanbanFlow.Components.Shared.TaskDetailPanel
+    Task="selectedTask"
+    Features="project?.Features?.ToList()"
+    IsOpen="detailPanelOpen"
+    OnClose="OnDetailClose"
+    OnTaskUpdated="OnTaskUpdated"
+    OnTaskDeleted="OnTaskDeleted" />
+
 @code {
     [Parameter]
     public int Id { get; set; }
@@ -227,8 +252,40 @@ else
     private Project? project;
     private List<TaskItem> allTasks = [];
     private bool notFound;
+    private string? loadError;
     private DotNetObjectReference<ProjectView>? dotNetRef;
     private bool sortablesInitialized;
+
+    // Detail panel state
+    private TaskItem? selectedTask;
+    private bool detailPanelOpen;
+
+    private void OpenTaskDetail(TaskItem task)
+    {
+        selectedTask = task;
+        detailPanelOpen = true;
+        StateHasChanged();
+    }
+
+    private async Task OnDetailClose()
+    {
+        detailPanelOpen = false;
+        selectedTask = null;
+        await LoadProject();
+    }
+
+    private async Task OnTaskUpdated()
+    {
+        await LoadProject();
+    }
+
+    private async Task OnTaskDeleted(int taskId)
+    {
+        detailPanelOpen = false;
+        selectedTask = null;
+        await LoadProject();
+    }
+    private CancellationTokenSource _cts = new();
 
     // Feature collapse state
     private HashSet<int> expandedFeatures = [];
@@ -257,31 +314,56 @@ else
         {
             sortablesInitialized = true;
             dotNetRef = DotNetObjectReference.Create(this);
-            await JS.InvokeVoidAsync("KanbanFlow.initBoardDragDrop", dotNetRef);
-            await JS.InvokeVoidAsync("KanbanFlow.initLeftNavDragDrop", dotNetRef);
+            try
+            {
+                // Small delay to ensure DOM is fully rendered before SortableJS init
+                await Task.Delay(100);
+                await JS.InvokeVoidAsync("KanbanFlow.initBoardDragDrop", dotNetRef);
+                await JS.InvokeVoidAsync("KanbanFlow.initLeftNavDragDrop", dotNetRef);
+            }
+            catch (JSDisconnectedException) { }
+            catch (ObjectDisposedException) { }
+            catch (InvalidOperationException) { }
         }
     }
 
     private async Task LoadProject()
     {
-        using var db = await DbFactory.CreateDbContextAsync();
-        project = await db.Projects
-            .Include(p => p.Features)
-            .ThenInclude(f => f.Tasks)
-            .FirstOrDefaultAsync(p => p.Id == Id);
-
-        if (project is null)
+        try
         {
-            notFound = true;
-            return;
+            using var db = await DbFactory.CreateDbContextAsync(_cts.Token);
+            var loaded = await db.Projects
+                .Include(p => p.Features)
+                .ThenInclude(f => f.Tasks)
+                .AsSplitQuery()
+                .FirstOrDefaultAsync(p => p.Id == Id, _cts.Token);
+
+            if (_cts.IsCancellationRequested) return;
+
+            if (loaded is null)
+            {
+                notFound = true;
+                return;
+            }
+
+            project = loaded;
+            allTasks = project.Features.SelectMany(f => f.Tasks).ToList();
+
+            // Expand all features by default
+            foreach (var f in project.Features)
+            {
+                expandedFeatures.Add(f.Id);
+            }
+
+            loadError = null;
         }
-
-        allTasks = project.Features.SelectMany(f => f.Tasks).ToList();
-
-        // Expand all features by default
-        foreach (var f in project.Features)
+        catch (OperationCanceledException)
         {
-            expandedFeatures.Add(f.Id);
+            // Component disposed during load - expected
+        }
+        catch (Exception ex)
+        {
+            loadError = ex.Message;
         }
     }
 
@@ -330,19 +412,27 @@ else
     {
         if (string.IsNullOrWhiteSpace(newFeatureName) || project is null) return;
 
-        using var db = await DbFactory.CreateDbContextAsync();
-        var feature = new Feature
+        try
         {
-            ProjectId = project.Id,
-            Name = newFeatureName.Trim(),
-            SortOrder = project.Features.Count
-        };
-        db.Features.Add(feature);
-        await db.SaveChangesAsync();
+            using var db = await DbFactory.CreateDbContextAsync(_cts.Token);
+            var feature = new Feature
+            {
+                ProjectId = project.Id,
+                Name = newFeatureName.Trim(),
+                SortOrder = project.Features.Count
+            };
+            db.Features.Add(feature);
+            await db.SaveChangesAsync(_cts.Token);
 
-        showAddFeatureForm = false;
-        newFeatureName = null;
-        await LoadProject();
+            showAddFeatureForm = false;
+            newFeatureName = null;
+            await LoadProject();
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception ex)
+        {
+            loadError = ex.Message;
+        }
     }
 
     // ── Add Task (left panel) ──
@@ -378,21 +468,29 @@ else
         var feature = project?.Features.FirstOrDefault(f => f.Id == addingTaskToFeatureId.Value);
         if (feature is null) return;
 
-        using var db = await DbFactory.CreateDbContextAsync();
-        var task = new TaskItem
+        try
         {
-            FeatureId = feature.Id,
-            Name = newTaskName.Trim(),
-            Status = WorkStatus.Backlog,
-            Priority = TaskPriority.Medium,
-            SortOrder = feature.Tasks.Count
-        };
-        db.Tasks.Add(task);
-        await db.SaveChangesAsync();
+            using var db = await DbFactory.CreateDbContextAsync(_cts.Token);
+            var task = new TaskItem
+            {
+                FeatureId = feature.Id,
+                Name = newTaskName.Trim(),
+                Status = WorkStatus.Backlog,
+                Priority = TaskPriority.Medium,
+                SortOrder = feature.Tasks.Count
+            };
+            db.Tasks.Add(task);
+            await db.SaveChangesAsync(_cts.Token);
 
-        addingTaskToFeatureId = null;
-        newTaskName = null;
-        await LoadProject();
+            addingTaskToFeatureId = null;
+            newTaskName = null;
+            await LoadProject();
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception ex)
+        {
+            loadError = ex.Message;
+        }
     }
 
     // ── Add Task (board column) ──
@@ -430,22 +528,30 @@ else
         var feature = project?.Features.FirstOrDefault(f => f.Id == newColumnTaskFeatureId);
         if (feature is null) return;
 
-        using var db = await DbFactory.CreateDbContextAsync();
-        var task = new TaskItem
+        try
         {
-            FeatureId = feature.Id,
-            Name = newColumnTaskName.Trim(),
-            Status = addingTaskToColumnStatus.Value,
-            Priority = TaskPriority.Medium,
-            SortOrder = feature.Tasks.Count
-        };
-        db.Tasks.Add(task);
-        await db.SaveChangesAsync();
+            using var db = await DbFactory.CreateDbContextAsync(_cts.Token);
+            var task = new TaskItem
+            {
+                FeatureId = feature.Id,
+                Name = newColumnTaskName.Trim(),
+                Status = addingTaskToColumnStatus.Value,
+                Priority = TaskPriority.Medium,
+                SortOrder = feature.Tasks.Count
+            };
+            db.Tasks.Add(task);
+            await db.SaveChangesAsync(_cts.Token);
 
-        addingTaskToColumnStatus = null;
-        newColumnTaskName = null;
-        newColumnTaskFeatureId = 0;
-        await LoadProject();
+            addingTaskToColumnStatus = null;
+            newColumnTaskName = null;
+            newColumnTaskFeatureId = 0;
+            await LoadProject();
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception ex)
+        {
+            loadError = ex.Message;
+        }
     }
 
     // ── Drag-and-Drop Handlers ──
@@ -455,77 +561,93 @@ else
     {
         if (!Enum.TryParse<WorkStatus>(newStatus, out var status)) return;
 
-        using var db = await DbFactory.CreateDbContextAsync();
-        var task = await db.Tasks.FindAsync(taskId);
-        if (task is null) return;
-
-        var oldStatus = task.Status;
-        task.Status = status;
-        task.UpdatedAt = DateTime.UtcNow;
-
-        // Set CompletedAt when moved to Done, clear if moved away
-        if (status == WorkStatus.Done && oldStatus != WorkStatus.Done)
+        try
         {
-            task.CompletedAt = DateTime.UtcNow;
+            using var db = await DbFactory.CreateDbContextAsync(_cts.Token);
+            var task = await db.Tasks.FindAsync(new object[] { taskId }, _cts.Token);
+            if (task is null) return;
+
+            var oldStatus = task.Status;
+            task.Status = status;
+            task.UpdatedAt = DateTime.UtcNow;
+
+            // Set CompletedAt when moved to Done, clear if moved away
+            if (status == WorkStatus.Done && oldStatus != WorkStatus.Done)
+            {
+                task.CompletedAt = DateTime.UtcNow;
+            }
+            else if (status != WorkStatus.Done)
+            {
+                task.CompletedAt = null;
+            }
+
+            await db.SaveChangesAsync(_cts.Token);
+
+            // Reindex all tasks in the target column
+            var columnTasks = await db.Tasks
+                .Include(t => t.Feature)
+                .Where(t => t.Status == status && t.Feature.ProjectId == Id)
+                .OrderBy(t => t.SortOrder)
+                .ToListAsync(_cts.Token);
+
+            // Remove the moved task and insert at the new index
+            columnTasks.Remove(task);
+            var insertIndex = Math.Min(newIndex, columnTasks.Count);
+            columnTasks.Insert(insertIndex, task);
+
+            for (int i = 0; i < columnTasks.Count; i++)
+            {
+                columnTasks[i].SortOrder = i;
+            }
+
+            await db.SaveChangesAsync(_cts.Token);
+            await LoadProject();
+            await ReinitializeSortables();
         }
-        else if (status != WorkStatus.Done)
+        catch (OperationCanceledException) { }
+        catch (Exception ex)
         {
-            task.CompletedAt = null;
+            loadError = ex.Message;
         }
-
-        await db.SaveChangesAsync();
-
-        // Reindex all tasks in the target column
-        var columnTasks = await db.Tasks
-            .Include(t => t.Feature)
-            .Where(t => t.Status == status && t.Feature.ProjectId == Id)
-            .OrderBy(t => t.SortOrder)
-            .ToListAsync();
-
-        // Remove the moved task and insert at the new index
-        columnTasks.Remove(task);
-        var insertIndex = Math.Min(newIndex, columnTasks.Count);
-        columnTasks.Insert(insertIndex, task);
-
-        for (int i = 0; i < columnTasks.Count; i++)
-        {
-            columnTasks[i].SortOrder = i;
-        }
-
-        await db.SaveChangesAsync();
-        await LoadProject();
-        await ReinitializeSortables();
     }
 
     [JSInvokable]
     public async Task OnTaskReordered(int taskId, int newFeatureId, int newIndex)
     {
-        using var db = await DbFactory.CreateDbContextAsync();
-        var task = await db.Tasks.FindAsync(taskId);
-        if (task is null) return;
-
-        task.FeatureId = newFeatureId;
-        task.UpdatedAt = DateTime.UtcNow;
-        await db.SaveChangesAsync();
-
-        // Reindex all tasks in the target feature
-        var featureTasks = await db.Tasks
-            .Where(t => t.FeatureId == newFeatureId)
-            .OrderBy(t => t.SortOrder)
-            .ToListAsync();
-
-        featureTasks.Remove(task);
-        var insertIndex = Math.Min(newIndex, featureTasks.Count);
-        featureTasks.Insert(insertIndex, task);
-
-        for (int i = 0; i < featureTasks.Count; i++)
+        try
         {
-            featureTasks[i].SortOrder = i;
-        }
+            using var db = await DbFactory.CreateDbContextAsync(_cts.Token);
+            var task = await db.Tasks.FindAsync(new object[] { taskId }, _cts.Token);
+            if (task is null) return;
 
-        await db.SaveChangesAsync();
-        await LoadProject();
-        await ReinitializeSortables();
+            task.FeatureId = newFeatureId;
+            task.UpdatedAt = DateTime.UtcNow;
+            await db.SaveChangesAsync(_cts.Token);
+
+            // Reindex all tasks in the target feature
+            var featureTasks = await db.Tasks
+                .Where(t => t.FeatureId == newFeatureId)
+                .OrderBy(t => t.SortOrder)
+                .ToListAsync(_cts.Token);
+
+            featureTasks.Remove(task);
+            var insertIndex = Math.Min(newIndex, featureTasks.Count);
+            featureTasks.Insert(insertIndex, task);
+
+            for (int i = 0; i < featureTasks.Count; i++)
+            {
+                featureTasks[i].SortOrder = i;
+            }
+
+            await db.SaveChangesAsync(_cts.Token);
+            await LoadProject();
+            await ReinitializeSortables();
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception ex)
+        {
+            loadError = ex.Message;
+        }
     }
 
     private async Task ReinitializeSortables()
@@ -534,13 +656,20 @@ else
         await Task.Yield();
         if (dotNetRef is not null)
         {
-            await JS.InvokeVoidAsync("KanbanFlow.initBoardDragDrop", dotNetRef);
-            await JS.InvokeVoidAsync("KanbanFlow.initLeftNavDragDrop", dotNetRef);
+            try
+            {
+                await JS.InvokeVoidAsync("KanbanFlow.initBoardDragDrop", dotNetRef);
+                await JS.InvokeVoidAsync("KanbanFlow.initLeftNavDragDrop", dotNetRef);
+            }
+            catch (JSDisconnectedException) { }
         }
     }
 
     public async ValueTask DisposeAsync()
     {
+        _cts.Cancel();
+        _cts.Dispose();
+
         try
         {
             await JS.InvokeVoidAsync("KanbanFlow.destroySortables");
@@ -588,5 +717,14 @@ else
         TaskPriority.High => "text-danger",
         TaskPriority.Critical => "text-danger fw-bold",
         _ => "text-secondary"
+    };
+
+    private static string GetPriorityBorderColor(TaskPriority priority) => priority switch
+    {
+        TaskPriority.Low => "#6c757d",
+        TaskPriority.Medium => "#ffc107",
+        TaskPriority.High => "#fd7e14",
+        TaskPriority.Critical => "#dc3545",
+        _ => "#6c757d"
     };
 }
