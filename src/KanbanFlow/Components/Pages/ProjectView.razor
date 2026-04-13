@@ -453,25 +453,30 @@ else
     private RenderFragment RenderOutlineSubtask(Subtask subtask, TaskItem parentTask, int depth) => __builder =>
     {
         var children = parentTask.Subtasks.Where(s => s.ParentSubtaskId == subtask.Id).OrderBy(s => s.SortOrder).ToList();
+        var hasChildren = children.Count > 0;
 
-        <div class="d-flex align-items-center py-1" style="margin-left: @(depth * 16)px;">
-            @if (children.Count > 0)
-            {
-                <svg xmlns="http://www.w3.org/2000/svg" width="8" height="8" fill="currentColor" class="me-1 flex-shrink-0 text-muted"
-                     viewBox="0 0 16 16">
-                    <path fill-rule="evenodd" d="M4.646 1.646a.5.5 0 0 1 .708 0l6 6a.5.5 0 0 1 0 .708l-6 6a.5.5 0 0 1-.708-.708L10.293 8 4.646 2.354a.5.5 0 0 1 0-.708"/>
-                </svg>
-            }
-            else
-            {
-                <span class="me-1" style="width: 8px; display: inline-block;"></span>
-            }
-            <input type="checkbox" class="form-check-input me-2 flex-shrink-0" style="margin-top: 0; width: 14px; height: 14px; cursor: pointer;"
-                   checked="@subtask.Completed"
-                   @onchange="() => ToggleOutlineSubtask(subtask)"
-                   @onclick:stopPropagation="true" />
-            <span class="@(subtask.Completed ? "text-decoration-line-through text-muted" : "")"
-                  style="font-size: 0.75rem;">@subtask.Text</span>
+        <div class="card mb-1" style="margin-left: @(depth * 16)px; border-left: 3px solid #6c757d; @(subtask.Completed ? "opacity: 0.6;" : "")">
+            <div class="card-body p-2">
+                <div class="d-flex align-items-center">
+                    @if (hasChildren)
+                    {
+                        <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" fill="currentColor" class="me-1 flex-shrink-0 text-muted"
+                             viewBox="0 0 16 16">
+                            <path fill-rule="evenodd" d="M4.646 1.646a.5.5 0 0 1 .708 0l6 6a.5.5 0 0 1 0 .708l-6 6a.5.5 0 0 1-.708-.708L10.293 8 4.646 2.354a.5.5 0 0 1 0-.708"/>
+                        </svg>
+                    }
+                    else
+                    {
+                        <span class="me-1" style="width: 10px; display: inline-block;"></span>
+                    }
+                    <input type="checkbox" class="form-check-input me-2 flex-shrink-0" style="margin-top: 0; cursor: pointer;"
+                           checked="@subtask.Completed"
+                           @onchange="() => ToggleOutlineSubtask(subtask)"
+                           @onclick:stopPropagation="true" />
+                    <span class="small text-truncate @(subtask.Completed ? "text-decoration-line-through text-muted" : "")"
+                          title="@subtask.Text">@subtask.Text</span>
+                </div>
+            </div>
         </div>
 
         @foreach (var child in children)
@@ -518,15 +523,23 @@ else
     private async Task ToggleTaskDone(TaskItem task)
     {
         var newStatus = task.Status == WorkStatus.Done ? WorkStatus.Todo : WorkStatus.Done;
+        var markSubtasksCompleted = newStatus == WorkStatus.Done;
         try
         {
             using var db = await DbFactory.CreateDbContextAsync(_cts.Token);
-            var entity = await db.Tasks.FindAsync(new object[] { task.Id }, _cts.Token);
+            var entity = await db.Tasks.Include(t => t.Subtasks).FirstOrDefaultAsync(t => t.Id == task.Id, _cts.Token);
             if (entity is null) return;
 
             entity.Status = newStatus;
             entity.UpdatedAt = DateTime.UtcNow;
             entity.CompletedAt = newStatus == WorkStatus.Done ? DateTime.UtcNow : null;
+
+            // Cascade: mark all subtasks completed/uncompleted
+            foreach (var subtask in entity.Subtasks)
+            {
+                subtask.Completed = markSubtasksCompleted;
+            }
+
             await db.SaveChangesAsync(_cts.Token);
 
             await LoadProject();
