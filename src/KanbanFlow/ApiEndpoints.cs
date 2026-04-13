@@ -64,6 +64,7 @@ public static class ApiEndpoints
                 Features = project.Features.OrderBy(f => f.SortOrder).Select(f => new
                 {
                     f.Id,
+                    f.ParentFeatureId,
                     f.Name,
                     f.Description,
                     f.SortOrder,
@@ -165,6 +166,7 @@ public static class ApiEndpoints
             {
                 f.Id,
                 f.ProjectId,
+                f.ParentFeatureId,
                 f.Name,
                 f.Description,
                 f.SortOrder,
@@ -175,11 +177,12 @@ public static class ApiEndpoints
             }));
         });
 
-        // GET /api/features/{id} — get one with task counts
+        // GET /api/features/{id} — get one with task counts and children
         app.MapGet("/api/features/{id:int}", async (int id, AppDbContext db) =>
         {
             var feature = await db.Features
                 .Include(f => f.Tasks)
+                .Include(f => f.ChildFeatures)
                 .AsNoTracking()
                 .FirstOrDefaultAsync(f => f.Id == id);
 
@@ -190,6 +193,7 @@ public static class ApiEndpoints
             {
                 feature.Id,
                 feature.ProjectId,
+                feature.ParentFeatureId,
                 feature.Name,
                 feature.Description,
                 feature.SortOrder,
@@ -208,11 +212,17 @@ public static class ApiEndpoints
                     t.CreatedAt,
                     t.UpdatedAt,
                     t.CompletedAt
+                }),
+                ChildFeatures = feature.ChildFeatures.OrderBy(c => c.SortOrder).Select(c => new
+                {
+                    c.Id,
+                    c.Name,
+                    c.SortOrder
                 })
             });
         });
 
-        // POST /api/projects/{projectId}/features — create
+        // POST /api/projects/{projectId}/features — create (optionally nested under parentFeatureId)
         app.MapPost("/api/projects/{projectId:int}/features", async (int projectId, FeatureDto dto, AppDbContext db) =>
         {
             var projectExists = await db.Projects.AnyAsync(p => p.Id == projectId);
@@ -222,13 +232,24 @@ public static class ApiEndpoints
             if (string.IsNullOrWhiteSpace(dto.Name))
                 return Results.UnprocessableEntity(new { message = "Name is required." });
 
-            var maxSort = await db.Features
-                .Where(f => f.ProjectId == projectId)
-                .MaxAsync(f => (int?)f.SortOrder) ?? -1;
+            // Validate parent feature if provided
+            if (dto.ParentFeatureId.HasValue)
+            {
+                var parentExists = await db.Features.AnyAsync(f => f.Id == dto.ParentFeatureId.Value && f.ProjectId == projectId);
+                if (!parentExists)
+                    return Results.NotFound(new { message = $"Parent feature {dto.ParentFeatureId.Value} not found in project {projectId}." });
+            }
+
+            var siblingQuery = dto.ParentFeatureId.HasValue
+                ? db.Features.Where(f => f.ParentFeatureId == dto.ParentFeatureId.Value)
+                : db.Features.Where(f => f.ProjectId == projectId && f.ParentFeatureId == null);
+
+            var maxSort = await siblingQuery.MaxAsync(f => (int?)f.SortOrder) ?? -1;
 
             var feature = new Feature
             {
                 ProjectId = projectId,
+                ParentFeatureId = dto.ParentFeatureId,
                 Name = dto.Name.Trim(),
                 Description = dto.Description?.Trim(),
                 SortOrder = dto.SortOrder ?? maxSort + 1
@@ -241,6 +262,7 @@ public static class ApiEndpoints
             {
                 feature.Id,
                 feature.ProjectId,
+                feature.ParentFeatureId,
                 feature.Name,
                 feature.Description,
                 feature.SortOrder,
@@ -262,6 +284,7 @@ public static class ApiEndpoints
             feature.Name = dto.Name.Trim();
             feature.Description = dto.Description?.Trim();
             if (dto.SortOrder.HasValue) feature.SortOrder = dto.SortOrder.Value;
+            if (dto.ParentFeatureId.HasValue) feature.ParentFeatureId = dto.ParentFeatureId.Value == 0 ? null : dto.ParentFeatureId;
             feature.UpdatedAt = DateTime.UtcNow;
 
             await db.SaveChangesAsync();
@@ -270,6 +293,7 @@ public static class ApiEndpoints
             {
                 feature.Id,
                 feature.ProjectId,
+                feature.ParentFeatureId,
                 feature.Name,
                 feature.Description,
                 feature.SortOrder,
@@ -419,6 +443,7 @@ public static class ApiEndpoints
                 Subtasks = task.Subtasks.Select(s => new
                 {
                     s.Id,
+                    s.ParentSubtaskId,
                     s.Text,
                     s.Completed,
                     s.SortOrder,
@@ -632,6 +657,7 @@ public static class ApiEndpoints
                 {
                     s.Id,
                     s.TaskItemId,
+                    s.ParentSubtaskId,
                     s.Text,
                     s.Completed,
                     s.SortOrder,
@@ -642,7 +668,7 @@ public static class ApiEndpoints
             return Results.Ok(subtasks);
         });
 
-        // POST /api/tasks/{taskId}/subtasks — create
+        // POST /api/tasks/{taskId}/subtasks — create (optionally nested under parentSubtaskId)
         app.MapPost("/api/tasks/{taskId:int}/subtasks", async (int taskId, SubtaskDto dto, AppDbContext db) =>
         {
             var taskExists = await db.Tasks.AnyAsync(t => t.Id == taskId);
@@ -652,13 +678,24 @@ public static class ApiEndpoints
             if (string.IsNullOrWhiteSpace(dto.Text))
                 return Results.UnprocessableEntity(new { message = "Text is required." });
 
-            var maxSort = await db.Subtasks
-                .Where(s => s.TaskItemId == taskId)
-                .MaxAsync(s => (int?)s.SortOrder) ?? -1;
+            // Validate parent subtask if provided
+            if (dto.ParentSubtaskId.HasValue)
+            {
+                var parentExists = await db.Subtasks.AnyAsync(s => s.Id == dto.ParentSubtaskId.Value && s.TaskItemId == taskId);
+                if (!parentExists)
+                    return Results.NotFound(new { message = $"Parent subtask {dto.ParentSubtaskId.Value} not found in task {taskId}." });
+            }
+
+            var siblingQuery = dto.ParentSubtaskId.HasValue
+                ? db.Subtasks.Where(s => s.ParentSubtaskId == dto.ParentSubtaskId.Value)
+                : db.Subtasks.Where(s => s.TaskItemId == taskId && s.ParentSubtaskId == null);
+
+            var maxSort = await siblingQuery.MaxAsync(s => (int?)s.SortOrder) ?? -1;
 
             var subtask = new Subtask
             {
                 TaskItemId = taskId,
+                ParentSubtaskId = dto.ParentSubtaskId,
                 Text = dto.Text.Trim(),
                 Completed = dto.Completed ?? false,
                 SortOrder = dto.SortOrder ?? maxSort + 1
@@ -671,6 +708,7 @@ public static class ApiEndpoints
             {
                 subtask.Id,
                 subtask.TaskItemId,
+                subtask.ParentSubtaskId,
                 subtask.Text,
                 subtask.Completed,
                 subtask.SortOrder,
@@ -691,6 +729,7 @@ public static class ApiEndpoints
             subtask.Text = dto.Text.Trim();
             if (dto.Completed.HasValue) subtask.Completed = dto.Completed.Value;
             if (dto.SortOrder.HasValue) subtask.SortOrder = dto.SortOrder.Value;
+            if (dto.ParentSubtaskId.HasValue) subtask.ParentSubtaskId = dto.ParentSubtaskId.Value == 0 ? null : dto.ParentSubtaskId;
 
             await db.SaveChangesAsync();
 
@@ -698,6 +737,7 @@ public static class ApiEndpoints
             {
                 subtask.Id,
                 subtask.TaskItemId,
+                subtask.ParentSubtaskId,
                 subtask.Text,
                 subtask.Completed,
                 subtask.SortOrder,
@@ -742,7 +782,7 @@ public static class ApiEndpoints
 
 public record ProjectDto(string? Name, string? Description, string? Goals);
 
-public record FeatureDto(string? Name, string? Description, int? SortOrder);
+public record FeatureDto(string? Name, string? Description, int? SortOrder, int? ParentFeatureId);
 
 public record TaskDto(
     string? Name,
@@ -756,4 +796,4 @@ public record StatusDto(string? Status);
 
 public record ReassignDto(int FeatureId);
 
-public record SubtaskDto(string? Text, bool? Completed, int? SortOrder);
+public record SubtaskDto(string? Text, bool? Completed, int? SortOrder, int? ParentSubtaskId);

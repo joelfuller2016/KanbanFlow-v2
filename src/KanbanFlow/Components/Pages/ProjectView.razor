@@ -75,88 +75,15 @@ else
                 </button>
             }
 
-            @* Feature tree *@
-            @{ var orderedFeatures = project.Features.OrderBy(f => f.SortOrder).ToList(); }
-            @for (var fi = 0; fi < orderedFeatures.Count; fi++)
+            @* Feature tree (recursive) *@
+            @{ var rootFeatures = project.Features.Where(f => f.ParentFeatureId == null).OrderBy(f => f.SortOrder).ToList(); }
+            @for (var fi = 0; fi < rootFeatures.Count; fi++)
             {
-                var feature = orderedFeatures[fi];
-                var doneCount = feature.Tasks.Count(t => t.Status == WorkStatus.Done);
-                var totalCount = feature.Tasks.Count;
-                var isExpanded = expandedFeatures.Contains(feature.Id);
-
                 @if (fi > 0)
                 {
                     <hr class="my-1 opacity-25" />
                 }
-
-                <div class="mb-2">
-                    @* Feature header *@
-                    <div class="d-flex align-items-center mb-1" role="button" @onclick="() => ToggleFeature(feature.Id)">
-                        <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" fill="currentColor" class="me-1"
-                             viewBox="0 0 16 16" style="transition: transform 0.15s; transform: rotate(@(isExpanded ? "90" : "0")deg);">
-                            <path fill-rule="evenodd" d="M4.646 1.646a.5.5 0 0 1 .708 0l6 6a.5.5 0 0 1 0 .708l-6 6a.5.5 0 0 1-.708-.708L10.293 8 4.646 2.354a.5.5 0 0 1 0-.708"/>
-                        </svg>
-                        <span class="fw-semibold small text-truncate" title="@feature.Name">@feature.Name</span>
-                        <span class="ms-auto badge bg-secondary rounded-pill small">@doneCount/@totalCount</span>
-                    </div>
-
-                    @* Progress bar *@
-                    <div class="progress mb-2" style="height: 3px;">
-                        <div class="progress-bar bg-success opacity-75" role="progressbar"
-                             style="width: @(totalCount > 0 ? (int)(100.0 * doneCount / totalCount) : 0)%">
-                        </div>
-                    </div>
-
-                    @* Tasks (mini-cards) *@
-                    @if (isExpanded)
-                    {
-                        <div class="feature-tasks" data-feature-id="@feature.Id">
-                        @foreach (var task in feature.Tasks.OrderBy(t => t.SortOrder))
-                        {
-                            <div class="card mb-1 mini-card" role="button" style="cursor: pointer;" data-task-id="@task.Id" @onclick="() => OpenTaskDetail(task)">
-                                <div class="card-body p-2">
-                                    <div class="d-flex align-items-center">
-                                        <span class="me-2" style="width: 10px; height: 10px; border-radius: 50%; display: inline-block; background-color: @GetStatusDotColor(task.Status);"
-                                              title="@GetStatusDisplayName(task.Status)"></span>
-                                        <span class="small text-truncate" title="@task.Name">@task.Name</span>
-                                    </div>
-                                    <div class="ps-4">
-                                        <small class="@GetPriorityTextClass(task.Priority)">@task.Priority</small>
-                                    </div>
-                                </div>
-                            </div>
-                        }
-                        </div>
-
-                        @* Add Task inline form *@
-                        @if (addingTaskToFeatureId == feature.Id)
-                        {
-                            <div class="mt-1">
-                                <div class="input-group input-group-sm">
-                                    <input type="text" class="form-control" placeholder="Task name"
-                                           @bind="newTaskName" @bind:event="oninput"
-                                           @onkeydown="HandleTaskKeyDown" />
-                                    <button class="btn btn-success" @onclick="SaveNewTask" disabled="@string.IsNullOrWhiteSpace(newTaskName)">
-                                        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="currentColor" viewBox="0 0 16 16">
-                                            <path d="M12.736 3.97a.733.733 0 0 1 1.047 0c.286.289.29.756.01 1.05L7.88 12.01a.733.733 0 0 1-1.065.02L3.217 8.384a.757.757 0 0 1 0-1.06.733.733 0 0 1 1.047 0l3.052 3.093 5.4-6.425z"/>
-                                        </svg>
-                                    </button>
-                                    <button class="btn btn-outline-secondary" @onclick="CancelAddTask">
-                                        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="currentColor" viewBox="0 0 16 16">
-                                            <path d="M4.646 4.646a.5.5 0 0 1 .708 0L8 7.293l2.646-2.647a.5.5 0 0 1 .708.708L8.707 8l2.647 2.646a.5.5 0 0 1-.708.708L8 8.707l-2.646 2.647a.5.5 0 0 1-.708-.708L7.293 8 4.646 5.354a.5.5 0 0 1 0-.708"/>
-                                        </svg>
-                                    </button>
-                                </div>
-                            </div>
-                        }
-                        else
-                        {
-                            <button class="btn btn-sm btn-link text-primary p-0 mt-1" @onclick="() => ShowAddTaskForm(feature.Id)">
-                                + Add Task
-                            </button>
-                        }
-                    }
-                </div>
+                @RenderFeatureNode(rootFeatures[fi], 0)
             }
 
             @if (project.Features.Count == 0)
@@ -298,6 +225,10 @@ else
     private int? addingTaskToFeatureId;
     private string? newTaskName;
 
+    // Add Sub-Feature form
+    private int? addingSubFeatureToId;
+    private string? newSubFeatureName;
+
     // Add Task (board column) form
     private WorkStatus? addingTaskToColumnStatus;
     private string? newColumnTaskName;
@@ -334,7 +265,10 @@ else
             using var db = await DbFactory.CreateDbContextAsync(_cts.Token);
             var loaded = await db.Projects
                 .Include(p => p.Features)
-                .ThenInclude(f => f.Tasks)
+                    .ThenInclude(f => f.Tasks)
+                        .ThenInclude(t => t.Subtasks)
+                .Include(p => p.Features)
+                    .ThenInclude(f => f.ChildFeatures)
                 .AsSplitQuery()
                 .FirstOrDefaultAsync(p => p.Id == Id, _cts.Token);
 
@@ -366,6 +300,135 @@ else
             loadError = ex.Message;
         }
     }
+
+    // ── Recursive feature tree rendering ──
+
+    private (int done, int total) GetFeatureTaskCounts(Feature feature)
+    {
+        var done = feature.Tasks.Count(t => t.Status == WorkStatus.Done);
+        var total = feature.Tasks.Count;
+
+        // Recurse into child features
+        var children = project?.Features.Where(f => f.ParentFeatureId == feature.Id).ToList() ?? [];
+        foreach (var child in children)
+        {
+            var (childDone, childTotal) = GetFeatureTaskCounts(child);
+            done += childDone;
+            total += childTotal;
+        }
+        return (done, total);
+    }
+
+    private RenderFragment RenderFeatureNode(Feature feature, int depth) => __builder =>
+    {
+        var (doneCount, totalCount) = GetFeatureTaskCounts(feature);
+        var isExpanded = expandedFeatures.Contains(feature.Id);
+        var childFeatures = project?.Features.Where(f => f.ParentFeatureId == feature.Id).OrderBy(f => f.SortOrder).ToList() ?? [];
+        var indent = depth * 16;
+
+        <div class="mb-2" style="margin-left: @(indent)px;">
+            @* Feature header *@
+            <div class="d-flex align-items-center mb-1" role="button" @onclick="() => ToggleFeature(feature.Id)">
+                <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" fill="currentColor" class="me-1 flex-shrink-0"
+                     viewBox="0 0 16 16" style="transition: transform 0.15s; transform: rotate(@(isExpanded ? "90" : "0")deg);">
+                    <path fill-rule="evenodd" d="M4.646 1.646a.5.5 0 0 1 .708 0l6 6a.5.5 0 0 1 0 .708l-6 6a.5.5 0 0 1-.708-.708L10.293 8 4.646 2.354a.5.5 0 0 1 0-.708"/>
+                </svg>
+                <span class="@(depth == 0 ? "fw-semibold" : "fw-normal") small text-truncate" title="@feature.Name">@feature.Name</span>
+                <span class="ms-auto badge bg-secondary rounded-pill small">@doneCount/@totalCount</span>
+            </div>
+
+            @* Progress bar *@
+            <div class="progress mb-2" style="height: 3px;">
+                <div class="progress-bar bg-success opacity-75" role="progressbar"
+                     style="width: @(totalCount > 0 ? (int)(100.0 * doneCount / totalCount) : 0)%">
+                </div>
+            </div>
+
+            @if (isExpanded)
+            {
+                @* Direct tasks under this feature *@
+                <div class="feature-tasks" data-feature-id="@feature.Id">
+                @foreach (var task in feature.Tasks.OrderBy(t => t.SortOrder))
+                {
+                    <div class="card mb-1 mini-card" role="button" style="cursor: pointer;" data-task-id="@task.Id" @onclick="() => OpenTaskDetail(task)">
+                        <div class="card-body p-2">
+                            <div class="d-flex align-items-center">
+                                <span class="me-2" style="width: 10px; height: 10px; border-radius: 50%; display: inline-block; background-color: @GetStatusDotColor(task.Status);"
+                                      title="@GetStatusDisplayName(task.Status)"></span>
+                                <span class="small text-truncate" title="@task.Name">@task.Name</span>
+                            </div>
+                            <div class="ps-4">
+                                <small class="@GetPriorityTextClass(task.Priority)">@task.Priority</small>
+                            </div>
+                        </div>
+                    </div>
+                }
+                </div>
+
+                @* Add Task inline form *@
+                @if (addingTaskToFeatureId == feature.Id)
+                {
+                    <div class="mt-1">
+                        <div class="input-group input-group-sm">
+                            <input type="text" class="form-control" placeholder="Task name"
+                                   @bind="newTaskName" @bind:event="oninput"
+                                   @onkeydown="HandleTaskKeyDown" />
+                            <button class="btn btn-success" @onclick="SaveNewTask" disabled="@string.IsNullOrWhiteSpace(newTaskName)">
+                                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="currentColor" viewBox="0 0 16 16">
+                                    <path d="M12.736 3.97a.733.733 0 0 1 1.047 0c.286.289.29.756.01 1.05L7.88 12.01a.733.733 0 0 1-1.065.02L3.217 8.384a.757.757 0 0 1 0-1.06.733.733 0 0 1 1.047 0l3.052 3.093 5.4-6.425z"/>
+                                </svg>
+                            </button>
+                            <button class="btn btn-outline-secondary" @onclick="CancelAddTask">
+                                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="currentColor" viewBox="0 0 16 16">
+                                    <path d="M4.646 4.646a.5.5 0 0 1 .708 0L8 7.293l2.646-2.647a.5.5 0 0 1 .708.708L8.707 8l2.647 2.646a.5.5 0 0 1-.708.708L8 8.707l-2.646 2.647a.5.5 0 0 1-.708-.708L7.293 8 4.646 5.354a.5.5 0 0 1 0-.708"/>
+                                </svg>
+                            </button>
+                        </div>
+                    </div>
+                }
+                else
+                {
+                    <button class="btn btn-sm btn-link text-primary p-0 mt-1" @onclick="() => ShowAddTaskForm(feature.Id)">
+                        + Add Task
+                    </button>
+                }
+
+                @* Add Sub-Feature inline form *@
+                @if (addingSubFeatureToId == feature.Id)
+                {
+                    <div class="mt-1">
+                        <div class="input-group input-group-sm">
+                            <input type="text" class="form-control" placeholder="Sub-feature name"
+                                   @bind="newSubFeatureName" @bind:event="oninput"
+                                   @onkeydown="HandleSubFeatureKeyDown" />
+                            <button class="btn btn-success" @onclick="SaveNewSubFeature" disabled="@string.IsNullOrWhiteSpace(newSubFeatureName)">
+                                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="currentColor" viewBox="0 0 16 16">
+                                    <path d="M12.736 3.97a.733.733 0 0 1 1.047 0c.286.289.29.756.01 1.05L7.88 12.01a.733.733 0 0 1-1.065.02L3.217 8.384a.757.757 0 0 1 0-1.06.733.733 0 0 1 1.047 0l3.052 3.093 5.4-6.425z"/>
+                                </svg>
+                            </button>
+                            <button class="btn btn-outline-secondary" @onclick="CancelAddSubFeature">
+                                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="currentColor" viewBox="0 0 16 16">
+                                    <path d="M4.646 4.646a.5.5 0 0 1 .708 0L8 7.293l2.646-2.647a.5.5 0 0 1 .708.708L8.707 8l2.647 2.646a.5.5 0 0 1-.708.708L8 8.707l-2.646 2.647a.5.5 0 0 1-.708-.708L7.293 8 4.646 5.354a.5.5 0 0 1 0-.708"/>
+                                </svg>
+                            </button>
+                        </div>
+                    </div>
+                }
+                else
+                {
+                    <button class="btn btn-sm btn-link text-muted p-0 mt-0 ms-2" @onclick="() => ShowAddSubFeatureForm(feature.Id)">
+                        + Sub-feature
+                    </button>
+                }
+
+                @* Render child features recursively *@
+                @foreach (var child in childFeatures)
+                {
+                    @RenderFeatureNode(child, depth + 1)
+                }
+            }
+        </div>
+    };
 
     private void GoHome()
     {
@@ -426,6 +489,62 @@ else
 
             showAddFeatureForm = false;
             newFeatureName = null;
+            await LoadProject();
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception ex)
+        {
+            loadError = ex.Message;
+        }
+    }
+
+    // ── Add Sub-Feature ──
+
+    private void ShowAddSubFeatureForm(int parentFeatureId)
+    {
+        addingSubFeatureToId = parentFeatureId;
+        newSubFeatureName = null;
+    }
+
+    private void CancelAddSubFeature()
+    {
+        addingSubFeatureToId = null;
+        newSubFeatureName = null;
+    }
+
+    private async Task HandleSubFeatureKeyDown(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter" && !string.IsNullOrWhiteSpace(newSubFeatureName))
+        {
+            await SaveNewSubFeature();
+        }
+        else if (e.Key == "Escape")
+        {
+            CancelAddSubFeature();
+        }
+    }
+
+    private async Task SaveNewSubFeature()
+    {
+        if (string.IsNullOrWhiteSpace(newSubFeatureName) || addingSubFeatureToId is null || project is null) return;
+
+        try
+        {
+            using var db = await DbFactory.CreateDbContextAsync(_cts.Token);
+            var siblingCount = await db.Features.CountAsync(f => f.ParentFeatureId == addingSubFeatureToId.Value, _cts.Token);
+
+            var feature = new Feature
+            {
+                ProjectId = project.Id,
+                ParentFeatureId = addingSubFeatureToId.Value,
+                Name = newSubFeatureName.Trim(),
+                SortOrder = siblingCount
+            };
+            db.Features.Add(feature);
+            await db.SaveChangesAsync(_cts.Token);
+
+            addingSubFeatureToId = null;
+            newSubFeatureName = null;
             await LoadProject();
         }
         catch (OperationCanceledException) { }

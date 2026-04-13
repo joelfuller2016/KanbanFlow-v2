@@ -26,8 +26,10 @@
 ```
 Project (1)
   └── Feature (many)
+        ├── Feature (many, recursive — sub-features via ParentFeatureId)
         └── Task (many)
               └── Subtask (many)
+                    └── Subtask (many, recursive — sub-subtasks via ParentSubtaskId)
 
 Board = virtual view of Tasks grouped by Status column
 Card = visual representation of a Task on the Board
@@ -507,6 +509,46 @@ WIP limits are stored in `appsettings.json` as a dictionary of status to max cou
 ### R-20: Dark Mode
 
 **Description:** Toggle between light and dark Bootstrap themes.
+
+---
+
+### R-21: Recursive Hierarchy (Nested Features & Subtasks)
+
+**Description:** Features can contain child features (sub-features), and subtasks can contain child subtasks (sub-subtasks), to arbitrary depth. This enables breaking down complex work into an outline-style hierarchy displayed in the left nav and detail panel.
+
+**Data model changes:**
+- `Feature.ParentFeatureId` (int?, FK → Feature, nullable) — null means top-level
+- `Feature.ChildFeatures` — navigation property to child features
+- `Subtask.ParentSubtaskId` (int?, FK → Subtask, nullable) — null means top-level
+- `Subtask.ChildSubtasks` — navigation property to child subtasks
+- Both use `DeleteBehavior.Restrict` (must delete children first to prevent orphans)
+
+**UI — Left Nav:**
+- Features render recursively as an indented tree (16px indent per level)
+- Each feature shows "+ Add Task" and "+ Sub-feature" buttons when expanded
+- Task counts aggregate recursively (parent shows sum of own + all descendant tasks)
+- Progress bar reflects aggregate done/total across the entire subtree
+
+**UI — Detail Panel:**
+- Subtasks render recursively as an indented checkbox tree (20px indent per level)
+- Each subtask has a `+` button to add a child sub-item inline
+- Subtask count badge (e.g., "0/4") includes all descendants
+
+**API:**
+- `POST /api/projects/{id}/features` — accepts optional `parentFeatureId` in body
+- `PUT /api/features/{id}` — can update `parentFeatureId` (set to 0 or null to make top-level)
+- `POST /api/tasks/{id}/subtasks` — accepts optional `parentSubtaskId` in body
+- `PUT /api/subtasks/{id}` — can update `parentSubtaskId`
+- All GET responses include `parentFeatureId` / `parentSubtaskId` fields
+
+**Acceptance criteria:**
+- [ ] Creating a feature with `parentFeatureId` nests it under the parent in the left nav
+- [ ] Creating a subtask with `parentSubtaskId` nests it under the parent in the detail panel
+- [ ] Parent feature task counts aggregate across all descendant features
+- [ ] Deleting a parent feature with children returns an error (Restrict, not Cascade)
+- [ ] Sub-features are visually indented in the left nav
+- [ ] Sub-subtasks are visually indented in the detail panel
+- [ ] Seed data includes at least one sub-feature and one nested subtask
 
 ---
 
