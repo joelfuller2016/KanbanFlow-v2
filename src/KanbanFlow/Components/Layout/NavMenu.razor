@@ -1,5 +1,15 @@
 <nav class="navbar navbar-expand navbar-dark bg-dark">
     <div class="container">
         <a class="navbar-brand fw-bold" href="/">KanbanFlow</a>
+        @if (!string.IsNullOrEmpty(ProjectName))
+        {
+            <span class="text-secondary mx-1">/</span>
+            <span class="navbar-text text-light small text-truncate" style="max-width: 300px;" title="@ProjectName">@ProjectName</span>
+        }
     </div>
 </nav>
+
+@code {
+    [Parameter]
+    public string? ProjectName { get; set; }
+}

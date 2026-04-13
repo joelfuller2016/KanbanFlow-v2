@@ -1,6 +1,9 @@
 @inherits LayoutComponentBase
+@implements IDisposable
+@inject IDbContextFactory<AppDbContext> DbFactory
+@inject NavigationManager Nav
 
-<NavMenu />
+<NavMenu ProjectName="@projectName" />
 
 @Body
 
@@ -9,3 +12,54 @@
     <a href="." class="reload">Reload</a>
     <span class="dismiss">&#x1F5D9;</span>
 </div>
+
+@code {
+    private string? projectName;
+
+    protected override void OnInitialized()
+    {
+        Nav.LocationChanged += OnLocationChanged;
+        LoadProjectName(Nav.Uri);
+    }
+
+    private void OnLocationChanged(object? sender, Microsoft.AspNetCore.Components.Routing.LocationChangedEventArgs e)
+    {
+        LoadProjectName(e.Location);
+    }
+
+    private void LoadProjectName(string uri)
+    {
+        var relativePath = Nav.ToBaseRelativePath(uri);
+        if (relativePath.StartsWith("project/", StringComparison.OrdinalIgnoreCase))
+        {
+            var idPart = relativePath["project/".Length..];
+            if (int.TryParse(idPart, out var id))
+            {
+                _ = LoadProjectNameAsync(id);
+            }
+        }
+    }
+
+    private async Task LoadProjectNameAsync(int id)
+    {
+        try
+        {
+            using var db = await DbFactory.CreateDbContextAsync();
+            var name = await db.Projects
+                .Where(p => p.Id == id)
+                .Select(p => p.Name)
+                .FirstOrDefaultAsync();
+            projectName = name;
+            StateHasChanged();
+        }
+        catch
+        {
+            // Silently fail - breadcrumb is non-critical
+        }
+    }
+
+    public void Dispose()
+    {
+        Nav.LocationChanged -= OnLocationChanged;
+    }
+}

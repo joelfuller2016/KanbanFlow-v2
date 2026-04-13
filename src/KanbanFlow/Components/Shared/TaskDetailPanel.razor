@@ -1,0 +1,497 @@
+@inject IDbContextFactory<AppDbContext> DbFactory
+@inject IJSRuntime JS
+
+<div class="offcanvas offcanvas-end @(IsOpen ? "show" : "")"
+     tabindex="-1"
+     style="visibility: @(IsOpen ? "visible" : "hidden"); width: 480px;"
+     @onclick:stopPropagation="true">
+
+    <div class="offcanvas-header border-bottom">
+        @if (Task is not null)
+        {
+            @if (isEditingName)
+            {
+                <input type="text" class="form-control form-control-lg fw-bold border-0 p-0"
+                       @bind="editingName" @bind:event="oninput"
+                       @onblur="SaveNameAsync"
+                       @onkeydown="HandleNameKeyDown"
+                       style="font-size: 1.15rem;" />
+            }
+            else
+            {
+                <h5 class="offcanvas-title fw-bold text-break mb-0" role="button"
+                    @onclick="StartEditingName" title="Click to edit">
+                    @Task.Name
+                </h5>
+            }
+        }
+        <button type="button" class="btn-close" @onclick="ClosePanel"></button>
+    </div>
+
+    @if (Task is not null)
+    {
+        <div class="offcanvas-body">
+
+            @* Show in outline *@
+            <div class="mb-3">
+                <button class="btn btn-link btn-sm p-0 text-decoration-none"
+                        @onclick="ScrollToOutline">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="currentColor" class="me-1" viewBox="0 0 16 16">
+                        <path fill-rule="evenodd" d="M15 2a1 1 0 0 0-1-1H2a1 1 0 0 0-1 1v12a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1zM0 2a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H2a2 2 0 0 1-2-2zm4.5 5.5a.5.5 0 0 0 0 1h7a.5.5 0 0 0 0-1zm0-2a.5.5 0 0 0 0 1h7a.5.5 0 0 0 0-1zm0 4a.5.5 0 0 0 0 1h4a.5.5 0 0 0 0-1z"/>
+                    </svg>
+                    Show in outline
+                </button>
+            </div>
+
+            @* Feature reassignment *@
+            <div class="mb-3">
+                <label class="form-label small text-muted mb-1">Feature</label>
+                <select class="form-select form-select-sm" value="@Task.FeatureId"
+                        @onchange="OnFeatureChanged">
+                    @if (Features is not null)
+                    {
+                        @foreach (var f in Features.OrderBy(f => f.SortOrder))
+                        {
+                            <option value="@f.Id">@f.Name</option>
+                        }
+                    }
+                </select>
+            </div>
+
+            @* Status *@
+            <div class="mb-3">
+                <label class="form-label small text-muted mb-1">Status</label>
+                <select class="form-select form-select-sm" value="@((int)Task.Status)"
+                        @onchange="OnStatusChanged">
+                    @foreach (var status in Enum.GetValues<WorkStatus>())
+                    {
+                        <option value="@((int)status)">@GetStatusDisplayName(status)</option>
+                    }
+                </select>
+            </div>
+
+            @* Priority *@
+            <div class="mb-3">
+                <label class="form-label small text-muted mb-1">Priority</label>
+                <select class="form-select form-select-sm" value="@((int)Task.Priority)"
+                        @onchange="OnPriorityChanged">
+                    @foreach (var priority in Enum.GetValues<TaskPriority>())
+                    {
+                        <option value="@((int)priority)">@priority</option>
+                    }
+                </select>
+            </div>
+
+            @* Assignee *@
+            <div class="mb-3">
+                <label class="form-label small text-muted mb-1">Assignee</label>
+                <input type="text" class="form-control form-control-sm"
+                       placeholder="Unassigned"
+                       value="@Task.Assignee"
+                       @onchange="OnAssigneeChanged" />
+            </div>
+
+            @* Description *@
+            <div class="mb-3">
+                <label class="form-label small text-muted mb-1">Description</label>
+                <textarea class="form-control form-control-sm" rows="4"
+                          placeholder="Add a description..."
+                          @bind="editingDescription"
+                          @bind:event="oninput"
+                          @onblur="SaveDescriptionAsync"
+                          @onfocus="StartEditingDescription"></textarea>
+            </div>
+
+            @* Subtasks *@
+            <div class="mb-3">
+                <div class="d-flex align-items-center mb-2">
+                    <label class="form-label small text-muted mb-0">Subtasks</label>
+                    @{
+                        var completedCount = Task.Subtasks.Count(s => s.Completed);
+                        var totalCount = Task.Subtasks.Count;
+                    }
+                    @if (totalCount > 0)
+                    {
+                        <span class="ms-2 badge bg-secondary small">@completedCount/@totalCount</span>
+                    }
+                </div>
+
+                @if (totalCount > 0)
+                {
+                    <div class="progress mb-2" style="height: 4px;">
+                        <div class="progress-bar bg-success" role="progressbar"
+                             style="width: @(totalCount > 0 ? (int)(100.0 * completedCount / totalCount) : 0)%">
+                        </div>
+                    </div>
+                }
+
+                <div class="list-group list-group-flush mb-2">
+                    @foreach (var subtask in Task.Subtasks.OrderBy(s => s.SortOrder))
+                    {
+                        <div class="list-group-item px-0 py-1 d-flex align-items-center border-0">
+                            <div class="form-check flex-grow-1 mb-0">
+                                <input class="form-check-input" type="checkbox"
+                                       checked="@subtask.Completed"
+                                       @onchange="() => ToggleSubtaskAsync(subtask)" />
+                                <label class="form-check-label small @(subtask.Completed ? "text-decoration-line-through text-muted" : "")">
+                                    @subtask.Text
+                                </label>
+                            </div>
+                            <button class="btn btn-sm text-danger p-0 ms-1" title="Delete subtask"
+                                    @onclick="() => DeleteSubtaskAsync(subtask)">
+                                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="currentColor" viewBox="0 0 16 16">
+                                    <path d="M4.646 4.646a.5.5 0 0 1 .708 0L8 7.293l2.646-2.647a.5.5 0 0 1 .708.708L8.707 8l2.647 2.646a.5.5 0 0 1-.708.708L8 8.707l-2.646 2.647a.5.5 0 0 1-.708-.708L7.293 8 4.646 5.354a.5.5 0 0 1 0-.708"/>
+                                </svg>
+                            </button>
+                        </div>
+                    }
+                </div>
+
+                @* Add subtask *@
+                <div class="input-group input-group-sm">
+                    <input type="text" class="form-control" placeholder="Add a subtask..."
+                           @bind="newSubtaskText" @bind:event="oninput"
+                           @onkeydown="HandleSubtaskKeyDown" />
+                    <button class="btn btn-outline-secondary" @onclick="AddSubtaskAsync"
+                            disabled="@string.IsNullOrWhiteSpace(newSubtaskText)">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="currentColor" viewBox="0 0 16 16">
+                            <path fill-rule="evenodd" d="M8 2a.5.5 0 0 1 .5.5v5h5a.5.5 0 0 1 0 1h-5v5a.5.5 0 0 1-1 0v-5h-5a.5.5 0 0 1 0-1h5v-5A.5.5 0 0 1 8 2"/>
+                        </svg>
+                    </button>
+                </div>
+            </div>
+
+            @* Timestamps *@
+            <div class="mb-4 pt-2 border-top">
+                <small class="text-muted d-block">Created: @Task.CreatedAt.ToString("MMM d, yyyy h:mm tt")</small>
+                <small class="text-muted d-block">Updated: @Task.UpdatedAt.ToString("MMM d, yyyy h:mm tt")</small>
+                @if (Task.CompletedAt.HasValue)
+                {
+                    <small class="text-muted d-block">Completed: @Task.CompletedAt.Value.ToString("MMM d, yyyy h:mm tt")</small>
+                }
+            </div>
+
+            @* Delete task *@
+            <div class="mb-3">
+                @if (confirmingDelete)
+                {
+                    <div class="d-flex align-items-center gap-2">
+                        <span class="small text-danger">Delete this task?</span>
+                        <button class="btn btn-danger btn-sm" @onclick="ConfirmDeleteAsync">Yes, delete</button>
+                        <button class="btn btn-outline-secondary btn-sm" @onclick="() => confirmingDelete = false">Cancel</button>
+                    </div>
+                }
+                else
+                {
+                    <button class="btn btn-outline-danger btn-sm" @onclick="() => confirmingDelete = true">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="currentColor" class="me-1" viewBox="0 0 16 16">
+                            <path d="M5.5 5.5A.5.5 0 0 1 6 6v6a.5.5 0 0 1-1 0V6a.5.5 0 0 1 .5-.5m2.5 0a.5.5 0 0 1 .5.5v6a.5.5 0 0 1-1 0V6a.5.5 0 0 1 .5-.5m3 .5a.5.5 0 0 0-1 0v6a.5.5 0 0 0 1 0z"/>
+                            <path d="M14.5 3a1 1 0 0 1-1 1H13v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V4h-.5a1 1 0 0 1-1-1V2a1 1 0 0 1 1-1H6a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1h3.5a1 1 0 0 1 1 1zM4.118 4 4 4.059V13a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1V4.059L11.882 4zM2.5 3h11V2h-11z"/>
+                        </svg>
+                        Delete Task
+                    </button>
+                }
+            </div>
+        </div>
+    }
+</div>
+
+@* Backdrop *@
+@if (IsOpen)
+{
+    <div class="offcanvas-backdrop fade show" @onclick="ClosePanel"></div>
+}
+
+@code {
+    [Parameter] public TaskItem? Task { get; set; }
+    [Parameter] public List<Feature>? Features { get; set; }
+    [Parameter] public bool IsOpen { get; set; }
+    [Parameter] public EventCallback OnClose { get; set; }
+    [Parameter] public EventCallback OnTaskUpdated { get; set; }
+    [Parameter] public EventCallback<int> OnTaskDeleted { get; set; }
+
+    // Inline name editing
+    private bool isEditingName;
+    private string? editingName;
+
+    // Description editing
+    private string? editingDescription;
+
+    // Subtask input
+    private string? newSubtaskText;
+
+    // Delete confirmation
+    private bool confirmingDelete;
+
+    protected override void OnParametersSet()
+    {
+        // Reset editing state when task changes
+        isEditingName = false;
+        confirmingDelete = false;
+        editingDescription = Task?.Description;
+        newSubtaskText = null;
+    }
+
+    // ── Panel close ──
+
+    private async Task ClosePanel()
+    {
+        isEditingName = false;
+        confirmingDelete = false;
+        await OnClose.InvokeAsync();
+    }
+
+    // ── Name editing ──
+
+    private void StartEditingName()
+    {
+        if (Task is null) return;
+        editingName = Task.Name;
+        isEditingName = true;
+    }
+
+    private async Task HandleNameKeyDown(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter")
+        {
+            await SaveNameAsync();
+        }
+        else if (e.Key == "Escape")
+        {
+            isEditingName = false;
+            editingName = Task?.Name;
+        }
+    }
+
+    private async Task SaveNameAsync()
+    {
+        isEditingName = false;
+        if (Task is null || string.IsNullOrWhiteSpace(editingName) || editingName.Trim() == Task.Name)
+            return;
+
+        Task.Name = editingName.Trim();
+        Task.UpdatedAt = DateTime.UtcNow;
+
+        using var db = await DbFactory.CreateDbContextAsync();
+        db.Tasks.Attach(Task);
+        db.Entry(Task).Property(t => t.Name).IsModified = true;
+        db.Entry(Task).Property(t => t.UpdatedAt).IsModified = true;
+        await db.SaveChangesAsync();
+
+        await OnTaskUpdated.InvokeAsync();
+    }
+
+    // ── Feature change ──
+
+    private async Task OnFeatureChanged(ChangeEventArgs e)
+    {
+        if (Task is null || e.Value is null) return;
+        if (!int.TryParse(e.Value.ToString(), out var featureId)) return;
+        if (featureId == Task.FeatureId) return;
+
+        Task.FeatureId = featureId;
+        Task.Feature = Features?.FirstOrDefault(f => f.Id == featureId) ?? Task.Feature;
+        Task.UpdatedAt = DateTime.UtcNow;
+
+        using var db = await DbFactory.CreateDbContextAsync();
+        db.Tasks.Attach(Task);
+        db.Entry(Task).Property(t => t.FeatureId).IsModified = true;
+        db.Entry(Task).Property(t => t.UpdatedAt).IsModified = true;
+        await db.SaveChangesAsync();
+
+        await OnTaskUpdated.InvokeAsync();
+    }
+
+    // ── Status change ──
+
+    private async Task OnStatusChanged(ChangeEventArgs e)
+    {
+        if (Task is null || e.Value is null) return;
+        if (!int.TryParse(e.Value.ToString(), out var statusInt)) return;
+
+        var newStatus = (WorkStatus)statusInt;
+        if (newStatus == Task.Status) return;
+
+        Task.Status = newStatus;
+        Task.UpdatedAt = DateTime.UtcNow;
+
+        if (newStatus == WorkStatus.Done && !Task.CompletedAt.HasValue)
+            Task.CompletedAt = DateTime.UtcNow;
+        else if (newStatus != WorkStatus.Done)
+            Task.CompletedAt = null;
+
+        using var db = await DbFactory.CreateDbContextAsync();
+        db.Tasks.Attach(Task);
+        db.Entry(Task).Property(t => t.Status).IsModified = true;
+        db.Entry(Task).Property(t => t.UpdatedAt).IsModified = true;
+        db.Entry(Task).Property(t => t.CompletedAt).IsModified = true;
+        await db.SaveChangesAsync();
+
+        await OnTaskUpdated.InvokeAsync();
+    }
+
+    // ── Priority change ──
+
+    private async Task OnPriorityChanged(ChangeEventArgs e)
+    {
+        if (Task is null || e.Value is null) return;
+        if (!int.TryParse(e.Value.ToString(), out var priorityInt)) return;
+
+        var newPriority = (TaskPriority)priorityInt;
+        if (newPriority == Task.Priority) return;
+
+        Task.Priority = newPriority;
+        Task.UpdatedAt = DateTime.UtcNow;
+
+        using var db = await DbFactory.CreateDbContextAsync();
+        db.Tasks.Attach(Task);
+        db.Entry(Task).Property(t => t.Priority).IsModified = true;
+        db.Entry(Task).Property(t => t.UpdatedAt).IsModified = true;
+        await db.SaveChangesAsync();
+
+        await OnTaskUpdated.InvokeAsync();
+    }
+
+    // ── Assignee change ──
+
+    private async Task OnAssigneeChanged(ChangeEventArgs e)
+    {
+        if (Task is null) return;
+        var newAssignee = e.Value?.ToString()?.Trim();
+        if (newAssignee == Task.Assignee) return;
+
+        Task.Assignee = string.IsNullOrWhiteSpace(newAssignee) ? null : newAssignee;
+        Task.UpdatedAt = DateTime.UtcNow;
+
+        using var db = await DbFactory.CreateDbContextAsync();
+        db.Tasks.Attach(Task);
+        db.Entry(Task).Property(t => t.Assignee).IsModified = true;
+        db.Entry(Task).Property(t => t.UpdatedAt).IsModified = true;
+        await db.SaveChangesAsync();
+
+        await OnTaskUpdated.InvokeAsync();
+    }
+
+    // ── Description ──
+
+    private void StartEditingDescription()
+    {
+        editingDescription = Task?.Description;
+    }
+
+    private async Task SaveDescriptionAsync()
+    {
+        if (Task is null) return;
+        var newDesc = string.IsNullOrWhiteSpace(editingDescription) ? null : editingDescription.Trim();
+        if (newDesc == Task.Description) return;
+
+        Task.Description = newDesc;
+        Task.UpdatedAt = DateTime.UtcNow;
+
+        using var db = await DbFactory.CreateDbContextAsync();
+        db.Tasks.Attach(Task);
+        db.Entry(Task).Property(t => t.Description).IsModified = true;
+        db.Entry(Task).Property(t => t.UpdatedAt).IsModified = true;
+        await db.SaveChangesAsync();
+
+        await OnTaskUpdated.InvokeAsync();
+    }
+
+    // ── Subtasks ──
+
+    private async Task ToggleSubtaskAsync(Subtask subtask)
+    {
+        subtask.Completed = !subtask.Completed;
+
+        using var db = await DbFactory.CreateDbContextAsync();
+        db.Subtasks.Attach(subtask);
+        db.Entry(subtask).Property(s => s.Completed).IsModified = true;
+        await db.SaveChangesAsync();
+
+        await OnTaskUpdated.InvokeAsync();
+    }
+
+    private async Task DeleteSubtaskAsync(Subtask subtask)
+    {
+        if (Task is null) return;
+
+        Task.Subtasks.Remove(subtask);
+
+        using var db = await DbFactory.CreateDbContextAsync();
+        db.Subtasks.Remove(db.Subtasks.Attach(subtask).Entity);
+        await db.SaveChangesAsync();
+
+        await OnTaskUpdated.InvokeAsync();
+    }
+
+    private async Task HandleSubtaskKeyDown(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter" && !string.IsNullOrWhiteSpace(newSubtaskText))
+        {
+            await AddSubtaskAsync();
+        }
+    }
+
+    private async Task AddSubtaskAsync()
+    {
+        if (Task is null || string.IsNullOrWhiteSpace(newSubtaskText)) return;
+
+        var subtask = new Subtask
+        {
+            TaskItemId = Task.Id,
+            Text = newSubtaskText.Trim(),
+            SortOrder = Task.Subtasks.Count
+        };
+
+        using var db = await DbFactory.CreateDbContextAsync();
+        db.Subtasks.Add(subtask);
+        await db.SaveChangesAsync();
+
+        Task.Subtasks.Add(subtask);
+        newSubtaskText = null;
+
+        await OnTaskUpdated.InvokeAsync();
+    }
+
+    // ── Delete task ──
+
+    private async Task ConfirmDeleteAsync()
+    {
+        if (Task is null) return;
+
+        var taskId = Task.Id;
+
+        using var db = await DbFactory.CreateDbContextAsync();
+        var entity = await db.Tasks.FindAsync(taskId);
+        if (entity is not null)
+        {
+            db.Tasks.Remove(entity);
+            await db.SaveChangesAsync();
+        }
+
+        confirmingDelete = false;
+        await OnTaskDeleted.InvokeAsync(taskId);
+    }
+
+    // ── Show in outline ──
+
+    private async Task ScrollToOutline()
+    {
+        if (Task is not null)
+        {
+            await JS.InvokeVoidAsync("eval", $"document.querySelector('[data-task-id=\"{Task.Id}\"]')?.scrollIntoView({{behavior:'smooth',block:'center'}})");
+        }
+    }
+
+    // ── Helpers ──
+
+    private static string GetStatusDisplayName(WorkStatus status) => status switch
+    {
+        WorkStatus.Backlog => "Backlog",
+        WorkStatus.Todo => "To Do",
+        WorkStatus.InProgress => "In Progress",
+        WorkStatus.Review => "Review",
+        WorkStatus.Done => "Done",
+        _ => status.ToString()
+    };
+}
