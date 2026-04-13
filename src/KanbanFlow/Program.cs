@@ -7,7 +7,7 @@ var builder = WebApplication.CreateBuilder(args);
 
 // Database
 var dbPath = Path.Combine(Environment.CurrentDirectory, "kanbanflow.db");
-builder.Services.AddDbContext<AppDbContext>(options => options.UseSqlite($"Data Source={dbPath}"));
+builder.Services.AddDbContextFactory<AppDbContext>(options => options.UseSqlite($"Data Source={dbPath}"));
 
 // Blazor
 builder.Services.AddRazorComponents()

@@ -1,7 +1,353 @@
-﻿@page "/"
+@page "/"
+@rendermode InteractiveServer
+@inject IDbContextFactory<AppDbContext> DbFactory
+@inject NavigationManager Nav
 
-<PageTitle>Home</PageTitle>
+<PageTitle>KanbanFlow</PageTitle>
 
-<h1>Hello, world!</h1>
+<div class="d-flex justify-content-between align-items-center mb-4">
+    <h1 class="mb-0">Projects</h1>
+    <button class="btn btn-primary" @onclick="OpenCreateModal">
+        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" class="bi bi-plus-lg me-1" viewBox="0 0 16 16">
+            <path fill-rule="evenodd" d="M8 2a.5.5 0 0 1 .5.5v5h5a.5.5 0 0 1 0 1h-5v5a.5.5 0 0 1-1 0v-5h-5a.5.5 0 0 1 0-1h5v-5A.5.5 0 0 1 8 2"/>
+        </svg>
+        New Project
+    </button>
+</div>
 
-Welcome to your new app.
+@if (projects is null)
+{
+    <div class="text-center py-5">
+        <div class="spinner-border text-primary" role="status">
+            <span class="visually-hidden">Loading...</span>
+        </div>
+    </div>
+}
+else if (projects.Count == 0)
+{
+    <div class="text-center py-5">
+        <div class="text-muted mb-3">
+            <svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" fill="currentColor" class="bi bi-kanban" viewBox="0 0 16 16">
+                <path d="M13.5 1a1 1 0 0 1 1 1v12a1 1 0 0 1-1 1h-11a1 1 0 0 1-1-1V2a1 1 0 0 1 1-1zm-11-1a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h11a2 2 0 0 0 2-2V2a2 2 0 0 0-2-2zM6.5 3a.5.5 0 0 0-.5.5v3a.5.5 0 0 0 .5.5h1a.5.5 0 0 0 .5-.5v-3a.5.5 0 0 0-.5-.5zM11 3a.5.5 0 0 0-.5.5v7a.5.5 0 0 0 .5.5h1a.5.5 0 0 0 .5-.5v-7a.5.5 0 0 0-.5-.5zM3.5 3a.5.5 0 0 0-.5.5v5a.5.5 0 0 0 .5.5h1a.5.5 0 0 0 .5-.5v-5A.5.5 0 0 0 4.5 3z"/>
+            </svg>
+        </div>
+        <h4 class="text-muted">No projects yet</h4>
+        <p class="text-muted">Create your first project to get started.</p>
+        <button class="btn btn-primary" @onclick="OpenCreateModal">New Project</button>
+    </div>
+}
+else
+{
+    <div class="row g-4">
+        @foreach (var p in projects)
+        {
+            <div class="col-md-4">
+                <div class="card h-100 shadow-sm">
+                    <div class="card-body d-flex flex-column">
+                        <div class="d-flex justify-content-between align-items-start mb-2">
+                            <h5 class="card-title mb-0">@p.Name</h5>
+                            <div class="dropdown">
+                                <button class="btn btn-sm btn-link text-muted p-0" data-bs-toggle="dropdown" aria-expanded="false">
+                                    <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" fill="currentColor" class="bi bi-three-dots-vertical" viewBox="0 0 16 16">
+                                        <path d="M9.5 13a1.5 1.5 0 1 1-3 0 1.5 1.5 0 0 1 3 0m0-5a1.5 1.5 0 1 1-3 0 1.5 1.5 0 0 1 3 0m0-5a1.5 1.5 0 1 1-3 0 1.5 1.5 0 0 1 3 0"/>
+                                    </svg>
+                                </button>
+                                <ul class="dropdown-menu dropdown-menu-end">
+                                    <li><button class="dropdown-item" @onclick="() => OpenEditModal(p)">Edit</button></li>
+                                    <li><hr class="dropdown-divider" /></li>
+                                    <li><button class="dropdown-item text-danger" @onclick="() => OpenDeleteModal(p)">Delete</button></li>
+                                </ul>
+                            </div>
+                        </div>
+                        @if (!string.IsNullOrWhiteSpace(p.Description))
+                        {
+                            <p class="card-text text-muted small" style="display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;">
+                                @p.Description
+                            </p>
+                        }
+                        <div class="mt-auto">
+                            <div class="d-flex gap-2 mb-3">
+                                <span class="badge bg-primary">@p.FeatureCount features</span>
+                                <span class="badge bg-secondary">@p.TaskCount tasks</span>
+                            </div>
+                            <button class="btn btn-outline-primary btn-sm w-100" @onclick="() => NavigateToProject(p.Id)">
+                                Open
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        }
+    </div>
+}
+
+@* ── Create / Edit Project Modal ── *@
+@if (showEditModal)
+{
+    <div class="modal fade show d-block" tabindex="-1" style="background-color: rgba(0,0,0,0.5);">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">@(editingProject.Id == 0 ? "New Project" : "Edit Project")</h5>
+                    <button type="button" class="btn-close" @onclick="CloseEditModal"></button>
+                </div>
+                <EditForm Model="editingProject" OnValidSubmit="SaveProject" FormName="projectForm">
+                    <div class="modal-body">
+                        @if (saveError is not null)
+                        {
+                            <div class="alert alert-danger">@saveError</div>
+                        }
+                        <div class="mb-3">
+                            <label class="form-label">Name <span class="text-danger">*</span></label>
+                            <InputText @bind-Value="editingProject.Name" class="form-control" placeholder="Project name" />
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">Description</label>
+                            <InputTextArea @bind-Value="editingProject.Description" class="form-control" rows="3" placeholder="What is this project about?" />
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">Goals</label>
+                            <InputTextArea @bind-Value="editingProject.Goals" class="form-control" rows="3" placeholder="- Goal 1&#10;- Goal 2" />
+                        </div>
+                    </div>
+                    <div class="modal-footer">
+                        <button type="button" class="btn btn-secondary" @onclick="CloseEditModal">Cancel</button>
+                        <button type="submit" class="btn btn-primary" disabled="@isSaving">
+                            @if (isSaving)
+                            {
+                                <span class="spinner-border spinner-border-sm me-1" role="status" aria-hidden="true"></span>
+                            }
+                            Save
+                        </button>
+                    </div>
+                </EditForm>
+            </div>
+        </div>
+    </div>
+}
+
+@* ── Delete Confirmation Modal ── *@
+@if (showDeleteModal && deletingProject is not null)
+{
+    <div class="modal fade show d-block" tabindex="-1" style="background-color: rgba(0,0,0,0.5);">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">Confirm Delete</h5>
+                    <button type="button" class="btn-close" @onclick="CloseDeleteModal"></button>
+                </div>
+                <div class="modal-body">
+                    <p>Delete <strong>@deletingProject.Name</strong> and all its features and tasks?</p>
+                    <p class="text-muted small mb-0">This action cannot be undone.</p>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" @onclick="CloseDeleteModal">Cancel</button>
+                    <button type="button" class="btn btn-danger" @onclick="ConfirmDelete" disabled="@isDeleting">
+                        @if (isDeleting)
+                        {
+                            <span class="spinner-border spinner-border-sm me-1" role="status" aria-hidden="true"></span>
+                        }
+                        Delete
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+}
+
+@code {
+    // ── Project list data ──
+    private List<ProjectListItem>? projects;
+
+    // ── Edit modal state ──
+    private bool showEditModal;
+    private ProjectFormModel editingProject = new();
+    private bool isSaving;
+    private string? saveError;
+
+    // ── Delete modal state ──
+    private bool showDeleteModal;
+    private ProjectListItem? deletingProject;
+    private bool isDeleting;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadProjects();
+    }
+
+    private async Task LoadProjects()
+    {
+        using var db = await DbFactory.CreateDbContextAsync();
+        projects = await db.Projects
+            .AsNoTracking()
+            .OrderByDescending(p => p.UpdatedAt)
+            .Select(p => new ProjectListItem
+            {
+                Id = p.Id,
+                Name = p.Name,
+                Description = p.Description,
+                FeatureCount = p.Features.Count,
+                TaskCount = p.Features.SelectMany(f => f.Tasks).Count()
+            })
+            .ToListAsync();
+    }
+
+    private void NavigateToProject(int id)
+    {
+        Nav.NavigateTo($"/project/{id}");
+    }
+
+    // ── Create / Edit ──
+
+    private void OpenCreateModal()
+    {
+        editingProject = new ProjectFormModel();
+        saveError = null;
+        showEditModal = true;
+    }
+
+    private void OpenEditModal(ProjectListItem p)
+    {
+        editingProject = new ProjectFormModel { Id = p.Id };
+        // Load full project data for editing
+        _ = LoadProjectForEdit(p.Id);
+    }
+
+    private async Task LoadProjectForEdit(int id)
+    {
+        using var db = await DbFactory.CreateDbContextAsync();
+        var project = await db.Projects.AsNoTracking().FirstOrDefaultAsync(p => p.Id == id);
+        if (project is not null)
+        {
+            editingProject = new ProjectFormModel
+            {
+                Id = project.Id,
+                Name = project.Name,
+                Description = project.Description,
+                Goals = project.Goals
+            };
+            saveError = null;
+            showEditModal = true;
+            StateHasChanged();
+        }
+    }
+
+    private void CloseEditModal()
+    {
+        showEditModal = false;
+        saveError = null;
+    }
+
+    private async Task SaveProject()
+    {
+        if (string.IsNullOrWhiteSpace(editingProject.Name))
+        {
+            saveError = "Name is required.";
+            return;
+        }
+
+        isSaving = true;
+        saveError = null;
+
+        try
+        {
+            using var db = await DbFactory.CreateDbContextAsync();
+
+            if (editingProject.Id == 0)
+            {
+                // Create
+                var project = new Project
+                {
+                    Name = editingProject.Name.Trim(),
+                    Description = editingProject.Description?.Trim(),
+                    Goals = editingProject.Goals?.Trim()
+                };
+                db.Projects.Add(project);
+                await db.SaveChangesAsync();
+            }
+            else
+            {
+                // Update
+                var project = await db.Projects.FindAsync(editingProject.Id);
+                if (project is not null)
+                {
+                    project.Name = editingProject.Name.Trim();
+                    project.Description = editingProject.Description?.Trim();
+                    project.Goals = editingProject.Goals?.Trim();
+                    project.UpdatedAt = DateTime.UtcNow;
+                    await db.SaveChangesAsync();
+                }
+            }
+
+            showEditModal = false;
+            await LoadProjects();
+        }
+        catch (Exception ex)
+        {
+            saveError = $"Failed to save: {ex.Message}";
+        }
+        finally
+        {
+            isSaving = false;
+        }
+    }
+
+    // ── Delete ──
+
+    private void OpenDeleteModal(ProjectListItem p)
+    {
+        deletingProject = p;
+        showDeleteModal = true;
+    }
+
+    private void CloseDeleteModal()
+    {
+        showDeleteModal = false;
+        deletingProject = null;
+    }
+
+    private async Task ConfirmDelete()
+    {
+        if (deletingProject is null) return;
+
+        isDeleting = true;
+
+        try
+        {
+            using var db = await DbFactory.CreateDbContextAsync();
+            var project = await db.Projects.FindAsync(deletingProject.Id);
+            if (project is not null)
+            {
+                db.Projects.Remove(project);
+                await db.SaveChangesAsync();
+            }
+
+            showDeleteModal = false;
+            deletingProject = null;
+            await LoadProjects();
+        }
+        finally
+        {
+            isDeleting = false;
+        }
+    }
+
+    // ── View models ──
+
+    private class ProjectListItem
+    {
+        public int Id { get; set; }
+        public string Name { get; set; } = "";
+        public string? Description { get; set; }
+        public int FeatureCount { get; set; }
+        public int TaskCount { get; set; }
+    }
+
+    private class ProjectFormModel
+    {
+        public int Id { get; set; }
+        public string? Name { get; set; }
+        public string? Description { get; set; }
+        public string? Goals { get; set; }
+    }
+}
