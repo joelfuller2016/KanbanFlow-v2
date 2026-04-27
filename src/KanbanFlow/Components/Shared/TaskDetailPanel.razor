@@ -277,6 +277,8 @@
 
     // Comments
     private int? loadedCommentsTaskId;
+    private long commentLoadVersion;
+    private long commentSaveVersion;
     private List<TaskComment> comments = [];
     private bool commentsLoading;
     private bool addingComment;
@@ -297,13 +299,17 @@
         if (taskId != loadedCommentsTaskId)
         {
             loadedCommentsTaskId = taskId;
+            commentSaveVersion++;
+            var loadVersion = ++commentLoadVersion;
+            addingComment = false;
+            commentsLoading = false;
             newCommentText = null;
             comments = [];
             commentsError = null;
 
             if (taskId is int id)
             {
-                await LoadCommentsAsync(id);
+                await LoadCommentsAsync(id, loadVersion);
             }
         }
     }
@@ -636,7 +642,7 @@
 
     // ── Comments ──
 
-    private async Task LoadCommentsAsync(int taskId)
+    private async Task LoadCommentsAsync(int taskId, long loadVersion)
     {
         commentsLoading = true;
         commentsError = null;
@@ -651,14 +657,14 @@
                 .ThenBy(c => c.Id)
                 .ToListAsync();
 
-            if (loadedCommentsTaskId == taskId)
+            if (IsCurrentCommentLoad(taskId, loadVersion))
             {
                 comments = loadedComments;
             }
         }
         catch
         {
-            if (loadedCommentsTaskId == taskId)
+            if (IsCurrentCommentLoad(taskId, loadVersion))
             {
                 commentsError = "Unable to load comments.";
                 comments = [];
@@ -666,7 +672,7 @@
         }
         finally
         {
-            if (loadedCommentsTaskId == taskId)
+            if (IsCurrentCommentLoad(taskId, loadVersion))
             {
                 commentsLoading = false;
             }
@@ -678,6 +684,7 @@
         if (Task is null || string.IsNullOrWhiteSpace(newCommentText)) return;
 
         var taskId = Task.Id;
+        var saveVersion = ++commentSaveVersion;
         addingComment = true;
         commentsError = null;
 
@@ -696,7 +703,7 @@
             db.TaskComments.Add(comment);
             await db.SaveChangesAsync();
 
-            if (Task?.Id == taskId && loadedCommentsTaskId == taskId)
+            if (IsCurrentCommentSave(taskId, saveVersion))
             {
                 comments.Add(comment);
                 comments = comments.OrderBy(c => c.CreatedAt).ThenBy(c => c.Id).ToList();
@@ -707,19 +714,25 @@
         }
         catch
         {
-            if (Task?.Id == taskId && loadedCommentsTaskId == taskId)
+            if (IsCurrentCommentSave(taskId, saveVersion))
             {
                 commentsError = "Unable to add comment.";
             }
         }
         finally
         {
-            if (Task?.Id == taskId && loadedCommentsTaskId == taskId)
+            if (IsCurrentCommentSave(taskId, saveVersion))
             {
                 addingComment = false;
             }
         }
     }
+
+    private bool IsCurrentCommentLoad(int taskId, long loadVersion) =>
+        loadedCommentsTaskId == taskId && commentLoadVersion == loadVersion;
+
+    private bool IsCurrentCommentSave(int taskId, long saveVersion) =>
+        Task?.Id == taskId && loadedCommentsTaskId == taskId && commentSaveVersion == saveVersion;
 
     // ── Delete task ──
 
