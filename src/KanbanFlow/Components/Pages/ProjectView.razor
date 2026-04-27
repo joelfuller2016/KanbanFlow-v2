@@ -36,50 +36,19 @@ else
 {
     <div class="d-flex" style="height: calc(100vh - 56px);">
 
-        @* ── Left Panel: Project Outline ── *@
-        <div class="border-end bg-light p-3" style="width: 300px; min-width: 300px; overflow-y: auto;" data-testid="project-outline">
-            <div class="d-flex align-items-center mb-3">
-                <button class="btn btn-sm btn-outline-secondary me-2" @onclick="GoHome" title="Back to Projects" aria-label="Back to projects" data-testid="back-to-projects-button">
-                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16">
-                        <path fill-rule="evenodd" d="M15 8a.5.5 0 0 0-.5-.5H2.707l3.147-3.146a.5.5 0 1 0-.708-.708l-4 4a.5.5 0 0 0 0 .708l4 4a.5.5 0 0 0 .708-.708L2.707 8.5H14.5A.5.5 0 0 0 15 8"/>
-                    </svg>
-                </button>
-                <h6 class="fw-bold mb-0 text-truncate" title="@project.Name">@project.Name</h6>
-                <button class="btn btn-sm btn-link text-muted ms-auto p-0 d-flex align-items-center justify-content-center"
-                        style="width: 24px; height: 24px;"
-                        @onclick="OpenEditModalForProject"
-                        title="Edit project"
-                        aria-label="Edit project"
-                        data-testid="edit-project-button">
-                    <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" fill="currentColor" viewBox="0 0 16 16">
-                        <path d="M15.502 1.94a.5.5 0 0 1 0 .706L14.459 3.69l-2-2L13.502.646a.5.5 0 0 1 .707 0l1.293 1.293zm-1.75 2.456-2-2L4.939 9.21a.5.5 0 0 0-.121.196l-.805 2.414a.25.25 0 0 0 .316.316l2.414-.805a.5.5 0 0 0 .196-.12l6.813-6.814z"/>
-                        <path fill-rule="evenodd" d="M1 13.5A1.5 1.5 0 0 0 2.5 15h11a1.5 1.5 0 0 0 1.5-1.5v-6a.5.5 0 0 0-1 0v6a.5.5 0 0 1-.5.5h-11a.5.5 0 0 1-.5-.5v-11a.5.5 0 0 1 .5-.5H9a.5.5 0 0 0 0-1H2.5A1.5 1.5 0 0 0 1 2.5z"/>
-                    </svg>
-                </button>
-                <button class="btn btn-sm btn-outline-primary p-0 d-flex align-items-center justify-content-center ms-1"
-                        style="width: 24px; height: 24px;"
-                        @onclick="OpenAddModalForProject"
-                        title="Add feature or task"
-                        aria-label="Add feature or task to project"
-                        data-testid="add-project-item-button">
-                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="currentColor" viewBox="0 0 16 16">
-                        <path fill-rule="evenodd" d="M8 2a.5.5 0 0 1 .5.5v5h5a.5.5 0 0 1 0 1h-5v5a.5.5 0 0 1-1 0v-5h-5a.5.5 0 0 1 0-1h5v-5A.5.5 0 0 1 8 2"/>
-                    </svg>
-                </button>
-            </div>
-
-            @* Feature tree (recursive) *@
-            @{ var rootFeatures = project.Features.Where(f => f.ParentFeatureId == null).OrderBy(f => f.SortOrder).ToList(); }
-            @foreach (var rootFeature in rootFeatures)
-            {
-                @RenderFeatureNode(rootFeature, 0)
-            }
-
-            @if (project.Features.Count == 0)
-            {
-                <p class="text-muted small text-center">No features yet. Add one to get started.</p>
-            }
-        </div>
+        <ProjectOutline Project="project"
+                        ExpandedFeatures="expandedFeatures"
+                        ExpandedTasks="expandedTasks"
+                        OnGoHome="GoHome"
+                        OnOpenEditProject="OpenEditModalForProject"
+                        OnOpenAddProject="OpenAddModalForProject"
+                        OnOpenEditFeature="OpenEditModalForFeature"
+                        OnOpenAddFeature="OpenAddModalForFeature"
+                        OnOpenEditTask="OpenEditModalForTask"
+                        OnToggleFeature="ToggleFeature"
+                        OnToggleTask="ToggleTask"
+                        OnToggleTaskDone="ToggleTaskDone"
+                        OnToggleOutlineSubtask="ToggleOutlineSubtask" />
 
         @* ── Right Panel: AI Action Bar + Kanban Board ── *@
         <div class="flex-grow-1 d-flex flex-column overflow-hidden" style="min-width: 0;">
@@ -186,66 +155,10 @@ else
                 }
             </div>
 
-            <div class="flex-grow-1 d-flex overflow-auto p-2 gap-2" style="min-width: 0;" data-testid="kanban-board">
-                @foreach (var status in Enum.GetValues<WorkStatus>())
-                {
-                    var tasksInColumn = allTasks.Where(t => t.Status == status).ToList();
-
-                    <div class="d-flex flex-column bg-body-secondary rounded p-2" style="min-width: 180px; flex: 1 1 0; max-width: 260px;" data-testid="board-column-@status" aria-label="@GetStatusDisplayName(status) column">
-                        @* Column header *@
-                        <div class="d-flex align-items-center mb-2">
-                            <h6 class="fw-semibold mb-0">
-                                @GetStatusDisplayName(status)
-                                <span class="badge bg-secondary">@tasksInColumn.Count</span>
-                            </h6>
-                            <button class="btn btn-link text-secondary p-0 ms-auto d-flex align-items-center" style="line-height: 1;"
-                                    @onclick="() => OpenAddModalForColumn(status)"
-                                    title="Add task to @GetStatusDisplayName(status)"
-                                    aria-label="Add task to @GetStatusDisplayName(status)"
-                                    data-testid="add-task-@status-button">
-                                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16">
-                                    <path fill-rule="evenodd" d="M8 2a.5.5 0 0 1 .5.5v5h5a.5.5 0 0 1 0 1h-5v5a.5.5 0 0 1-1 0v-5h-5a.5.5 0 0 1 0-1h5v-5A.5.5 0 0 1 8 2"/>
-                                </svg>
-                            </button>
-                        </div>
-
-                        @* Cards *@
-                        <div class="flex-grow-1 overflow-auto board-column-cards" data-status="@status" data-testid="board-column-@status-cards">
-                            @foreach (var task in tasksInColumn.OrderBy(t => t.SortOrder))
-                            {
-                                var boardTaskDone = task.Status == WorkStatus.Done;
-                                <div class="card mb-2 board-card" data-testid="board-card-@task.Id" data-task-id="@task.Id"
-                                     style="border-left: 3px solid @GetPriorityBorderColor(task.Priority); @(boardTaskDone ? "opacity: 0.6;" : "")">
-                                    <div class="card-body p-2">
-                                        <div class="d-flex align-items-center">
-                                            <input type="checkbox" class="form-check-input me-2 flex-shrink-0" style="margin-top: 0; cursor: pointer;"
-                                                   checked="@boardTaskDone"
-                                                   @onchange="() => ToggleTaskDone(task)"
-                                                   @onclick:stopPropagation="true"
-                                                   aria-label="Mark @task.Name as @(boardTaskDone ? "not done" : "done")"
-                                                   data-testid="board-card-@task.Id-done-checkbox" />
-                                            <span class="fw-medium small @(boardTaskDone ? "text-decoration-line-through text-muted" : "")"
-                                                  style="cursor: pointer;" role="button"
-                                                  data-testid="board-card-@task.Id-title"
-                                                  @onclick="() => OpenTaskDetail(task)">@task.Name</span>
-                                        </div>
-                                        <div class="d-flex justify-content-between align-items-center mt-1 ps-4">
-                                            <span class="@GetPriorityBadgeClass(task.Priority)">@task.Priority</span>
-                                            <small class="text-muted fst-italic text-truncate ms-1" style="font-size: 0.7rem;" title="@task.Feature.Name">@task.Feature.Name</small>
-                                        </div>
-                                    </div>
-                                </div>
-                            }
-                            @if (tasksInColumn.Count == 0)
-                            {
-                                <div class="border border-dashed rounded bg-white text-muted small text-center p-3" data-testid="empty-column-@status">
-                                    No tasks in @GetStatusDisplayName(status). Use + to add one here.
-                                </div>
-                            }
-                        </div>
-                    </div>
-                }
-            </div>
+            <KanbanBoard AllTasks="allTasks"
+                         OnAddTask="OpenAddModalForColumn"
+                         OnToggleTaskDone="ToggleTaskDone"
+                         OnOpenTaskDetail="OpenTaskDetail" />
         </div>
     </div>
 }
@@ -490,213 +403,10 @@ else
         }
     }
 
-    // ── Recursive feature tree rendering ──
-
-    private (int done, int total) GetFeatureTaskCounts(Feature feature)
-    {
-        var done = feature.Tasks.Count(t => t.Status == WorkStatus.Done);
-        var total = feature.Tasks.Count;
-
-        // Recurse into child features
-        var children = project?.Features.Where(f => f.ParentFeatureId == feature.Id).ToList() ?? [];
-        foreach (var child in children)
-        {
-            var (childDone, childTotal) = GetFeatureTaskCounts(child);
-            done += childDone;
-            total += childTotal;
-        }
-        return (done, total);
-    }
-
-    private RenderFragment RenderFeatureNode(Feature feature, int depth) => __builder =>
-    {
-        var (doneCount, totalCount) = GetFeatureTaskCounts(feature);
-        var isExpanded = expandedFeatures.Contains(feature.Id);
-        var childFeatures = project?.Features.Where(f => f.ParentFeatureId == feature.Id).OrderBy(f => f.SortOrder).ToList() ?? [];
-        var hasChildren = childFeatures.Count > 0 || feature.Tasks.Count > 0;
-        var progressPct = totalCount > 0 ? (int)(100.0 * doneCount / totalCount) : 0;
-
-        @* Feature card — click opens edit, chevron toggles collapse, color by depth *@
-        <div class="card mb-1" style="border-left: 4px solid @GetDepthColor(depth); cursor: pointer;"
-             role="button" data-testid="outline-feature-@feature.Id" @onclick="() => OpenEditModalForFeature(feature)">
-            <div class="card-body p-2">
-                <div class="d-flex align-items-center">
-                    @* Chevron for expand/collapse — larger for easy clicking *@
-                    @if (hasChildren)
-                    {
-                        <span class="me-1 flex-shrink-0 d-flex align-items-center justify-content-center"
-                              style="width: 20px; height: 20px; cursor: pointer;"
-                              role="button" aria-label="Toggle @feature.Name" data-testid="outline-feature-@feature.Id-toggle"
-                              @onclick="() => ToggleFeature(feature.Id)" @onclick:stopPropagation="true">
-                            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" class="text-muted"
-                                 viewBox="0 0 16 16" style="transition: transform 0.15s; transform: rotate(@(isExpanded ? "90" : "0")deg);">
-                                <path fill-rule="evenodd" d="M4.646 1.646a.5.5 0 0 1 .708 0l6 6a.5.5 0 0 1 0 .708l-6 6a.5.5 0 0 1-.708-.708L10.293 8 4.646 2.354a.5.5 0 0 1 0-.708"/>
-                            </svg>
-                        </span>
-                    }
-                    else
-                    {
-                        <span class="me-1" style="width: 20px; display: inline-block;"></span>
-                    }
-                    @* Folder icon — color matches depth *@
-                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="@GetDepthColor(depth)" class="me-2 flex-shrink-0" viewBox="0 0 16 16">
-                        <path d="M1 3.5A1.5 1.5 0 0 1 2.5 2h2.764c.958 0 1.76.56 2.311 1.184C7.985 3.648 8.48 4 9 4h4.5A1.5 1.5 0 0 1 15 5.5v7a1.5 1.5 0 0 1-1.5 1.5h-11A1.5 1.5 0 0 1 1 12.5z"/>
-                    </svg>
-                    <span class="small fw-medium text-truncate" title="@feature.Name">@feature.Name</span>
-                    <span class="ms-auto badge bg-secondary rounded-pill" style="font-size: 0.65rem;">@doneCount/@totalCount</span>
-                    <button class="btn btn-link text-primary p-0 ms-1 d-flex align-items-center" style="line-height: 1;"
-                            @onclick="() => OpenAddModalForFeature(feature.Id)"
-                            @onclick:stopPropagation="true"
-                            title="Add item under @feature.Name"
-                            aria-label="Add item under @feature.Name"
-                            data-testid="outline-feature-@feature.Id-add-button">
-                        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="currentColor" viewBox="0 0 16 16">
-                            <path fill-rule="evenodd" d="M8 2a.5.5 0 0 1 .5.5v5h5a.5.5 0 0 1 0 1h-5v5a.5.5 0 0 1-1 0v-5h-5a.5.5 0 0 1 0-1h5v-5A.5.5 0 0 1 8 2"/>
-                        </svg>
-                    </button>
-                </div>
-                @* Inline progress bar *@
-                @if (totalCount > 0)
-                {
-                    <div class="progress mt-1" style="height: 2px;">
-                        <div class="progress-bar @(progressPct == 100 ? "bg-success" : "bg-primary") opacity-75" role="progressbar"
-                             style="width: @(progressPct)%"></div>
-                    </div>
-                }
-            </div>
-        </div>
-
-        @if (isExpanded)
-        {
-            @* Direct tasks under this feature *@
-            <div class="feature-tasks" data-testid="outline-feature-@feature.Id-tasks" data-feature-id="@feature.Id">
-            @foreach (var task in feature.Tasks.OrderBy(t => t.SortOrder))
-            {
-                var taskHasSubtasks = task.Subtasks.Count > 0;
-                var taskIsExpanded = expandedTasks.Contains(task.Id);
-                var taskIsDone = task.Status == WorkStatus.Done;
-
-                <div class="card mb-1" style="border-left: 4px solid @GetDepthColor(depth + 1); @(taskIsDone ? "opacity: 0.6;" : "") cursor: pointer;"
-                     data-testid="outline-task-@task.Id" data-task-id="@task.Id" role="button" @onclick="() => OpenEditModalForTask(task)">
-                    <div class="card-body p-2">
-                        <div class="d-flex align-items-center">
-                            @* Chevron for subtask expand/collapse — larger *@
-                            @if (taskHasSubtasks)
-                            {
-                                <span class="me-1 flex-shrink-0 d-flex align-items-center justify-content-center"
-                                      style="width: 20px; height: 20px; cursor: pointer;"
-                                      role="button" aria-label="Toggle subtasks for @task.Name" data-testid="outline-task-@task.Id-toggle"
-                                      @onclick="() => ToggleTask(task.Id)" @onclick:stopPropagation="true">
-                                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" class="text-muted"
-                                         viewBox="0 0 16 16" style="transition: transform 0.15s; transform: rotate(@(taskIsExpanded ? "90" : "0")deg);">
-                                        <path fill-rule="evenodd" d="M4.646 1.646a.5.5 0 0 1 .708 0l6 6a.5.5 0 0 1 0 .708l-6 6a.5.5 0 0 1-.708-.708L10.293 8 4.646 2.354a.5.5 0 0 1 0-.708"/>
-                                    </svg>
-                                </span>
-                            }
-                            else
-                            {
-                                <span class="me-1" style="width: 20px; display: inline-block;"></span>
-                            }
-                            @* Checkbox for done status *@
-                            <input type="checkbox" class="form-check-input me-2 flex-shrink-0" style="margin-top: 0; cursor: pointer;"
-                                   checked="@taskIsDone"
-                                   @onchange="() => ToggleTaskDone(task)"
-                                   @onclick:stopPropagation="true"
-                                   aria-label="Mark @task.Name as @(taskIsDone ? "not done" : "done")"
-                                   data-testid="outline-task-@task.Id-done-checkbox" />
-                            <span class="small text-truncate @(taskIsDone ? "text-decoration-line-through text-muted" : "")"
-                                  title="@task.Name">@task.Name</span>
-                            <span class="ms-auto @GetPriorityBadgeClass(task.Priority)" style="font-size: 0.6rem;">@task.Priority</span>
-                            <button class="btn btn-link text-primary p-0 ms-1 d-flex align-items-center" style="line-height: 1;"
-                                    @onclick="() => OpenAddModalForFeature(task.FeatureId)"
-                                    @onclick:stopPropagation="true"
-                                    title="Add item under @task.Name"
-                                    aria-label="Add item under @task.Name"
-                                    data-testid="outline-task-@task.Id-add-button">
-                                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="currentColor" viewBox="0 0 16 16">
-                                    <path fill-rule="evenodd" d="M8 2a.5.5 0 0 1 .5.5v5h5a.5.5 0 0 1 0 1h-5v5a.5.5 0 0 1-1 0v-5h-5a.5.5 0 0 1 0-1h5v-5A.5.5 0 0 1 8 2"/>
-                                </svg>
-                            </button>
-                        </div>
-                    </div>
-                </div>
-
-                @* Collapsible subtasks under this task *@
-                @if (taskIsExpanded && taskHasSubtasks)
-                {
-                    var rootSubtasks = task.Subtasks.Where(s => s.ParentSubtaskId == null).OrderBy(s => s.SortOrder).ToList();
-                    @foreach (var subtask in rootSubtasks)
-                    {
-                        @RenderOutlineSubtask(subtask, task, depth + 2)
-                    }
-                }
-            }
-            </div>
-
-            @* Render child features recursively *@
-            @foreach (var child in childFeatures)
-            {
-                @RenderFeatureNode(child, depth + 1)
-            }
-        }
-    };
-
     private void GoHome()
     {
         Nav.NavigateTo("/");
     }
-
-    // ── Outline subtask rendering ──
-
-    private RenderFragment RenderOutlineSubtask(Subtask subtask, TaskItem parentTask, int depth) => __builder =>
-    {
-        var children = parentTask.Subtasks.Where(s => s.ParentSubtaskId == subtask.Id).OrderBy(s => s.SortOrder).ToList();
-        var hasChildren = children.Count > 0;
-
-        <div class="card mb-1" style="border-left: 4px solid @GetDepthColor(depth); @(subtask.Completed ? "opacity: 0.6;" : "") cursor: pointer;"
-             role="button" data-testid="outline-subtask-@subtask.Id" @onclick="() => OpenEditModalForTask(parentTask)">
-            <div class="card-body p-2">
-                <div class="d-flex align-items-center">
-                    @if (hasChildren)
-                    {
-                        <span class="me-1 flex-shrink-0 d-flex align-items-center justify-content-center" style="width: 20px; height: 20px;">
-                            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="currentColor" class="text-muted"
-                                 viewBox="0 0 16 16">
-                                <path fill-rule="evenodd" d="M4.646 1.646a.5.5 0 0 1 .708 0l6 6a.5.5 0 0 1 0 .708l-6 6a.5.5 0 0 1-.708-.708L10.293 8 4.646 2.354a.5.5 0 0 1 0-.708"/>
-                            </svg>
-                        </span>
-                    }
-                    else
-                    {
-                        <span class="me-1" style="width: 20px; display: inline-block;"></span>
-                    }
-                    <input type="checkbox" class="form-check-input me-2 flex-shrink-0" style="margin-top: 0; cursor: pointer;"
-                           checked="@subtask.Completed"
-                           @onchange="() => ToggleOutlineSubtask(subtask)"
-                           @onclick:stopPropagation="true"
-                           aria-label="Mark @subtask.Text as @(subtask.Completed ? "not done" : "done")"
-                           data-testid="outline-subtask-@subtask.Id-done-checkbox" />
-                    <span class="small text-truncate @(subtask.Completed ? "text-decoration-line-through text-muted" : "")"
-                          title="@subtask.Text">@subtask.Text</span>
-                    <button class="btn btn-link text-primary p-0 ms-auto d-flex align-items-center" style="line-height: 1;"
-                            @onclick="() => OpenAddModalForFeature(parentTask.FeatureId)"
-                            @onclick:stopPropagation="true"
-                            title="Add item under @parentTask.Name"
-                            aria-label="Add item under @parentTask.Name"
-                            data-testid="outline-subtask-@subtask.Id-add-button">
-                        <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" fill="currentColor" viewBox="0 0 16 16">
-                            <path fill-rule="evenodd" d="M8 2a.5.5 0 0 1 .5.5v5h5a.5.5 0 0 1 0 1h-5v5a.5.5 0 0 1-1 0v-5h-5a.5.5 0 0 1 0-1h5v-5A.5.5 0 0 1 8 2"/>
-                        </svg>
-                    </button>
-                </div>
-            </div>
-        </div>
-
-        @foreach (var child in children)
-        {
-            @RenderOutlineSubtask(child, parentTask, depth + 1)
-        }
-    };
 
     private async Task ToggleOutlineSubtask(Subtask subtask)
     {
@@ -1006,15 +716,6 @@ else
         _ => "text-secondary"
     };
 
-    private static string GetPriorityBorderColor(TaskPriority priority) => priority switch
-    {
-        TaskPriority.Low => "#6c757d",
-        TaskPriority.Medium => "#ffc107",
-        TaskPriority.High => "#fd7e14",
-        TaskPriority.Critical => "#dc3545",
-        _ => "#6c757d"
-    };
-
     private static TaskPriority ParsePriority(string? priority) =>
         Enum.TryParse<TaskPriority>(priority, ignoreCase: true, out var parsed) ? parsed : TaskPriority.Low;
 
@@ -1061,7 +762,4 @@ else
         public string Reason { get; set; } = string.Empty;
     }
 
-    // Cycling depth colors: blue, teal, purple, orange, pink — then repeat
-    private static readonly string[] DepthColors = ["#0d6efd", "#0dcaf0", "#6f42c1", "#fd7e14", "#d63384"];
-    private static string GetDepthColor(int depth) => DepthColors[depth % DepthColors.Length];
 }

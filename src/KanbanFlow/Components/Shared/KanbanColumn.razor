@@ -1,0 +1,50 @@
+<div class="d-flex flex-column bg-body-secondary rounded p-2" style="min-width: 180px; flex: 1 1 0; max-width: 260px;" data-testid="board-column-@Status" aria-label="@StatusDisplayName column">
+    <div class="d-flex align-items-center mb-2">
+        <h6 class="fw-semibold mb-0">
+            @StatusDisplayName
+            <span class="badge bg-secondary">@Tasks.Count</span>
+        </h6>
+        <button class="btn btn-link text-secondary p-0 ms-auto d-flex align-items-center" style="line-height: 1;"
+                @onclick="() => OnAddTask.InvokeAsync(Status)"
+                title="Add task to @StatusDisplayName"
+                aria-label="Add task to @StatusDisplayName"
+                data-testid="add-task-@Status-button">
+            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16">
+                <path fill-rule="evenodd" d="M8 2a.5.5 0 0 1 .5.5v5h5a.5.5 0 0 1 0 1h-5v5a.5.5 0 0 1-1 0v-5h-5a.5.5 0 0 1 0-1h5v-5A.5.5 0 0 1 8 2"/>
+            </svg>
+        </button>
+    </div>
+
+    <div class="flex-grow-1 overflow-auto board-column-cards" data-status="@Status" data-testid="board-column-@Status-cards">
+        @foreach (var task in Tasks.OrderBy(t => t.SortOrder))
+        {
+            <KanbanCard Task="task" OnToggleTaskDone="OnToggleTaskDone" OnOpenTaskDetail="OnOpenTaskDetail" />
+        }
+        @if (Tasks.Count == 0)
+        {
+            <div class="border rounded bg-white text-muted small text-center p-3" style="border-style: dashed !important;" data-testid="empty-column-@Status">
+                No tasks in @StatusDisplayName. Use + to add one here.
+            </div>
+        }
+    </div>
+</div>
+
+@code {
+    [Parameter, EditorRequired] public WorkStatus Status { get; set; }
+    [Parameter, EditorRequired] public IReadOnlyList<TaskItem> Tasks { get; set; } = [];
+    [Parameter] public EventCallback<WorkStatus> OnAddTask { get; set; }
+    [Parameter] public EventCallback<TaskItem> OnToggleTaskDone { get; set; }
+    [Parameter] public EventCallback<TaskItem> OnOpenTaskDetail { get; set; }
+
+    private string StatusDisplayName => GetStatusDisplayName(Status);
+
+    private static string GetStatusDisplayName(WorkStatus status) => status switch
+    {
+        WorkStatus.Backlog => "Backlog",
+        WorkStatus.Todo => "To Do",
+        WorkStatus.InProgress => "In Progress",
+        WorkStatus.Review => "Review",
+        WorkStatus.Done => "Done",
+        _ => status.ToString()
+    };
+}
