@@ -80,6 +80,145 @@ public static class ApiEndpoints
             });
         });
 
+        // GET /api/projects/{id}/context — full AI-readable project context bundle
+        app.MapGet("/api/projects/{id:int}/context", async (int id, AppDbContext db) =>
+        {
+            var project = await db.Projects
+                .Include(p => p.Features)
+                    .ThenInclude(f => f.Tasks)
+                        .ThenInclude(t => t.Subtasks)
+                .Include(p => p.Features)
+                    .ThenInclude(f => f.Tasks)
+                        .ThenInclude(t => t.Comments)
+                .Include(p => p.Requirements)
+                    .ThenInclude(r => r.Feature)
+                .Include(p => p.Requirements)
+                    .ThenInclude(r => r.TaskItem)
+                .AsSplitQuery()
+                .AsNoTracking()
+                .FirstOrDefaultAsync(p => p.Id == id);
+
+            if (project is null)
+                return Results.NotFound(new { message = $"Project {id} not found." });
+
+            var allTasks = project.Features
+                .SelectMany(f => f.Tasks.Select(t => new { Task = t, Feature = f }))
+                .OrderBy(x => x.Feature.SortOrder)
+                    .ThenBy(x => x.Task.SortOrder)
+                .ToList();
+
+            object MapSubtaskContext(Subtask subtask, IReadOnlyCollection<Subtask> allSubtasks) => new
+            {
+                subtask.Id,
+                subtask.ParentSubtaskId,
+                subtask.Text,
+                subtask.Completed,
+                subtask.SortOrder,
+                subtask.CreatedAt,
+                Children = allSubtasks
+                    .Where(s => s.ParentSubtaskId == subtask.Id)
+                    .OrderBy(s => s.SortOrder)
+                    .Select(child => MapSubtaskContext(child, allSubtasks))
+            };
+
+            object MapTaskContext(TaskItem task, Feature feature) => new
+            {
+                task.Id,
+                task.FeatureId,
+                FeatureName = feature.Name,
+                task.Name,
+                task.Description,
+                Status = task.Status.ToString(),
+                Priority = task.Priority.ToString(),
+                task.Assignee,
+                task.SortOrder,
+                task.CreatedAt,
+                task.UpdatedAt,
+                task.CompletedAt,
+                Subtasks = task.Subtasks
+                    .Where(s => s.ParentSubtaskId == null)
+                    .OrderBy(s => s.SortOrder)
+                    .Select(subtask => MapSubtaskContext(subtask, task.Subtasks)),
+                Comments = task.Comments
+                    .OrderBy(c => c.CreatedAt)
+                    .Select(c => new
+                    {
+                        c.Id,
+                        c.Text,
+                        c.Author,
+                        Type = c.Type.ToString(),
+                        c.CreatedAt
+                    })
+            };
+
+            object MapFeatureContext(Feature feature) => new
+            {
+                feature.Id,
+                feature.ParentFeatureId,
+                feature.Name,
+                feature.Description,
+                feature.SortOrder,
+                feature.CreatedAt,
+                feature.UpdatedAt,
+                TaskCount = feature.Tasks.Count,
+                DoneCount = feature.Tasks.Count(t => t.Status == WorkStatus.Done),
+                Tasks = feature.Tasks
+                    .OrderBy(t => t.SortOrder)
+                    .Select(task => MapTaskContext(task, feature)),
+                Children = project.Features
+                    .Where(f => f.ParentFeatureId == feature.Id)
+                    .OrderBy(f => f.SortOrder)
+                    .Select(MapFeatureContext)
+            };
+
+            return Results.Ok(new
+            {
+                GeneratedAt = DateTime.UtcNow,
+                Project = new
+                {
+                    project.Id,
+                    project.Name,
+                    project.Description,
+                    project.Goals,
+                    project.Readme,
+                    project.CreatedAt,
+                    project.UpdatedAt
+                },
+                Summary = new
+                {
+                    FeatureCount = project.Features.Count,
+                    TaskCount = allTasks.Count,
+                    RequirementCount = project.Requirements.Count,
+                    ByStatus = Enum.GetValues<WorkStatus>()
+                        .ToDictionary(status => status.ToString(), status => allTasks.Count(x => x.Task.Status == status)),
+                    ByPriority = Enum.GetValues<TaskPriority>()
+                        .ToDictionary(priority => priority.ToString(), priority => allTasks.Count(x => x.Task.Priority == priority))
+                },
+                Requirements = project.Requirements
+                    .OrderBy(r => r.SortOrder)
+                    .Select(r => new
+                    {
+                        r.Id,
+                        r.Text,
+                        r.Description,
+                        Priority = r.Priority.ToString(),
+                        Status = r.Status.ToString(),
+                        r.FeatureId,
+                        FeatureName = r.Feature?.Name,
+                        r.TaskItemId,
+                        TaskItemName = r.TaskItem?.Name,
+                        r.SortOrder,
+                        r.CreatedAt,
+                        r.UpdatedAt
+                    }),
+                Features = project.Features
+                    .Where(f => f.ParentFeatureId == null)
+                    .OrderBy(f => f.SortOrder)
+                    .Select(MapFeatureContext),
+                Tasks = allTasks.Select(x => MapTaskContext(x.Task, x.Feature))
+            });
+        });
+
         // POST /api/projects — create
         app.MapPost("/api/projects", async (ProjectDto dto, AppDbContext db) =>
         {
