@@ -145,6 +145,9 @@ try {
   if (fetchedTask?.id !== task.id) {
     throw new Error(`get_task returned unexpected task: ${JSON.stringify(fetchedTask)}`);
   }
+  if (!Array.isArray(fetchedTask.comments)) {
+    throw new Error("get_task did not include a comments array.");
+  }
 
   await callTool("get_next_tasks", { projectId, limit: 3 });
   await callTool("claim_task", { taskId: task.id, actor: "mcp-smoke" });

@@ -25,7 +25,7 @@ const tools = [
     inputSchema: {
       type: "object",
       properties: {
-        projectId: { type: "integer", description: "Project id to inspect." }
+        projectId: { type: "integer", minimum: 1, description: "Project id to inspect." }
       },
       required: ["projectId"]
     }
@@ -36,18 +36,18 @@ const tools = [
     inputSchema: {
       type: "object",
       properties: {
-        projectId: { type: "integer", description: "Project id to inspect." }
+        projectId: { type: "integer", minimum: 1, description: "Project id to inspect." }
       },
       required: ["projectId"]
     }
   },
   {
     name: "get_task",
-    description: "Get one task with feature information and subtasks."
+    description: "Get one task with feature information, subtasks, and comments.",
     inputSchema: {
       type: "object",
       properties: {
-        taskId: { type: "integer", description: "Task id to inspect." }
+        taskId: { type: "integer", minimum: 1, description: "Task id to inspect." }
       },
       required: ["taskId"]
     }
@@ -58,7 +58,7 @@ const tools = [
     inputSchema: {
       type: "object",
       properties: {
-        projectId: { type: "integer", description: "Project id to inspect." }
+        projectId: { type: "integer", minimum: 1, description: "Project id to inspect." }
       },
       required: ["projectId"]
     }
@@ -301,13 +301,17 @@ async function callTool(toolName, args) {
     case "list_projects":
       return restJson("/api/projects");
     case "get_project":
-      return restJson(`/api/projects/${requiredInt(args, "projectId")}`);
+      return restJson(`/api/projects/${requiredInt(args, "projectId", { min: 1 })}`);
     case "list_project_tasks":
-      return restJson(`/api/projects/${requiredInt(args, "projectId")}/tasks`);
-    case "get_task":
-      return restJson(`/api/tasks/${requiredInt(args, "taskId")}`);
+      return restJson(`/api/projects/${requiredInt(args, "projectId", { min: 1 })}/tasks`);
+    case "get_task": {
+      const taskId = requiredInt(args, "taskId", { min: 1 });
+      const task = await restJson(`/api/tasks/${taskId}`);
+      const comments = await restJson(`/api/tasks/${taskId}/comments`);
+      return { ...task, comments };
+    }
     case "get_project_board":
-      return restJson(`/api/projects/${requiredInt(args, "projectId")}/board`);
+      return restJson(`/api/projects/${requiredInt(args, "projectId", { min: 1 })}/board`);
     case "get_project_context":
       return restJson(`/api/projects/${requiredInt(args, "projectId")}/context`);
     case "get_next_tasks": {
@@ -393,10 +397,16 @@ function parseJsonOrText(text) {
   }
 }
 
-function requiredInt(args, name) {
+function requiredInt(args, name, { min = undefined, max = undefined } = {}) {
   const value = Number(args[name]);
   if (!Number.isInteger(value)) {
     throw new McpError(-32602, `${name} must be an integer.`);
+  }
+  if (min !== undefined && value < min) {
+    throw new McpError(-32602, `${name} must be greater than or equal to ${min}.`);
+  }
+  if (max !== undefined && value > max) {
+    throw new McpError(-32602, `${name} must be less than or equal to ${max}.`);
   }
   return value;
 }
