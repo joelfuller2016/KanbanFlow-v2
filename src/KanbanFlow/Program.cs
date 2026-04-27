@@ -24,6 +24,7 @@ using (var scope = app.Services.CreateScope())
 {
     var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
     db.Database.EnsureCreated();
+    EnsureTaskClaimColumns(db);
     SeedData.Initialize(db);
 }
 
@@ -41,3 +42,43 @@ app.MapRazorComponents<App>()
 app.MapApiEndpoints();
 
 app.Run();
+
+static void EnsureTaskClaimColumns(AppDbContext db)
+{
+    var connection = db.Database.GetDbConnection();
+    var shouldClose = connection.State != System.Data.ConnectionState.Open;
+    if (shouldClose) connection.Open();
+
+    try
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = "PRAGMA table_info('Tasks')";
+
+        var columns = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        using (var reader = command.ExecuteReader())
+        {
+            while (reader.Read())
+            {
+                columns.Add(reader.GetString(1));
+            }
+        }
+
+        if (!columns.Contains("ClaimedBy"))
+        {
+            using var addClaimedBy = connection.CreateCommand();
+            addClaimedBy.CommandText = "ALTER TABLE Tasks ADD COLUMN ClaimedBy TEXT";
+            addClaimedBy.ExecuteNonQuery();
+        }
+
+        if (!columns.Contains("ClaimedAt"))
+        {
+            using var addClaimedAt = connection.CreateCommand();
+            addClaimedAt.CommandText = "ALTER TABLE Tasks ADD COLUMN ClaimedAt TEXT";
+            addClaimedAt.ExecuteNonQuery();
+        }
+    }
+    finally
+    {
+        if (shouldClose) connection.Close();
+    }
+}
