@@ -45,118 +45,30 @@ else
                     </svg>
                 </button>
                 <h6 class="fw-bold mb-0 text-truncate" title="@project.Name">@project.Name</h6>
+                <button class="btn btn-sm btn-link text-muted ms-auto p-0 d-flex align-items-center justify-content-center"
+                        style="width: 24px; height: 24px;"
+                        @onclick="OpenEditModalForProject"
+                        title="Edit project">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" fill="currentColor" viewBox="0 0 16 16">
+                        <path d="M15.502 1.94a.5.5 0 0 1 0 .706L14.459 3.69l-2-2L13.502.646a.5.5 0 0 1 .707 0l1.293 1.293zm-1.75 2.456-2-2L4.939 9.21a.5.5 0 0 0-.121.196l-.805 2.414a.25.25 0 0 0 .316.316l2.414-.805a.5.5 0 0 0 .196-.12l6.813-6.814z"/>
+                        <path fill-rule="evenodd" d="M1 13.5A1.5 1.5 0 0 0 2.5 15h11a1.5 1.5 0 0 0 1.5-1.5v-6a.5.5 0 0 0-1 0v6a.5.5 0 0 1-.5.5h-11a.5.5 0 0 1-.5-.5v-11a.5.5 0 0 1 .5-.5H9a.5.5 0 0 0 0-1H2.5A1.5 1.5 0 0 0 1 2.5z"/>
+                    </svg>
+                </button>
+                <button class="btn btn-sm btn-outline-primary p-0 d-flex align-items-center justify-content-center ms-1"
+                        style="width: 24px; height: 24px;"
+                        @onclick="OpenAddModalForProject"
+                        title="Add feature or task">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="currentColor" viewBox="0 0 16 16">
+                        <path fill-rule="evenodd" d="M8 2a.5.5 0 0 1 .5.5v5h5a.5.5 0 0 1 0 1h-5v5a.5.5 0 0 1-1 0v-5h-5a.5.5 0 0 1 0-1h5v-5A.5.5 0 0 1 8 2"/>
+                    </svg>
+                </button>
             </div>
 
-            @* Add Feature button *@
-            @if (showAddFeatureForm)
+            @* Feature tree (recursive) *@
+            @{ var rootFeatures = project.Features.Where(f => f.ParentFeatureId == null).OrderBy(f => f.SortOrder).ToList(); }
+            @foreach (var rootFeature in rootFeatures)
             {
-                <div class="mb-3">
-                    <div class="input-group input-group-sm">
-                        <input type="text" class="form-control" placeholder="Feature name"
-                               @bind="newFeatureName" @bind:event="oninput"
-                               @onkeydown="HandleFeatureKeyDown" />
-                        <button class="btn btn-success" @onclick="SaveNewFeature" disabled="@string.IsNullOrWhiteSpace(newFeatureName)">
-                            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="currentColor" viewBox="0 0 16 16">
-                                <path d="M12.736 3.97a.733.733 0 0 1 1.047 0c.286.289.29.756.01 1.05L7.88 12.01a.733.733 0 0 1-1.065.02L3.217 8.384a.757.757 0 0 1 0-1.06.733.733 0 0 1 1.047 0l3.052 3.093 5.4-6.425z"/>
-                            </svg>
-                        </button>
-                        <button class="btn btn-outline-secondary" @onclick="CancelAddFeature">
-                            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="currentColor" viewBox="0 0 16 16">
-                                <path d="M4.646 4.646a.5.5 0 0 1 .708 0L8 7.293l2.646-2.647a.5.5 0 0 1 .708.708L8.707 8l2.647 2.646a.5.5 0 0 1-.708.708L8 8.707l-2.646 2.647a.5.5 0 0 1-.708-.708L7.293 8 4.646 5.354a.5.5 0 0 1 0-.708"/>
-                            </svg>
-                        </button>
-                    </div>
-                </div>
-            }
-            else
-            {
-                <button class="btn btn-sm btn-outline-primary w-100 mb-3" @onclick="ShowAddFeatureForm">
-                    + Add Feature
-                </button>
-            }
-
-            @* Feature tree *@
-            @{ var orderedFeatures = project.Features.OrderBy(f => f.SortOrder).ToList(); }
-            @for (var fi = 0; fi < orderedFeatures.Count; fi++)
-            {
-                var feature = orderedFeatures[fi];
-                var doneCount = feature.Tasks.Count(t => t.Status == WorkStatus.Done);
-                var totalCount = feature.Tasks.Count;
-                var isExpanded = expandedFeatures.Contains(feature.Id);
-
-                @if (fi > 0)
-                {
-                    <hr class="my-1 opacity-25" />
-                }
-
-                <div class="mb-2">
-                    @* Feature header *@
-                    <div class="d-flex align-items-center mb-1" role="button" @onclick="() => ToggleFeature(feature.Id)">
-                        <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" fill="currentColor" class="me-1"
-                             viewBox="0 0 16 16" style="transition: transform 0.15s; transform: rotate(@(isExpanded ? "90" : "0")deg);">
-                            <path fill-rule="evenodd" d="M4.646 1.646a.5.5 0 0 1 .708 0l6 6a.5.5 0 0 1 0 .708l-6 6a.5.5 0 0 1-.708-.708L10.293 8 4.646 2.354a.5.5 0 0 1 0-.708"/>
-                        </svg>
-                        <span class="fw-semibold small text-truncate" title="@feature.Name">@feature.Name</span>
-                        <span class="ms-auto badge bg-secondary rounded-pill small">@doneCount/@totalCount</span>
-                    </div>
-
-                    @* Progress bar *@
-                    <div class="progress mb-2" style="height: 3px;">
-                        <div class="progress-bar bg-success opacity-75" role="progressbar"
-                             style="width: @(totalCount > 0 ? (int)(100.0 * doneCount / totalCount) : 0)%">
-                        </div>
-                    </div>
-
-                    @* Tasks (mini-cards) *@
-                    @if (isExpanded)
-                    {
-                        <div class="feature-tasks" data-feature-id="@feature.Id">
-                        @foreach (var task in feature.Tasks.OrderBy(t => t.SortOrder))
-                        {
-                            <div class="card mb-1 mini-card" role="button" style="cursor: pointer;" data-task-id="@task.Id" @onclick="() => OpenTaskDetail(task)">
-                                <div class="card-body p-2">
-                                    <div class="d-flex align-items-center">
-                                        <span class="me-2" style="width: 10px; height: 10px; border-radius: 50%; display: inline-block; background-color: @GetStatusDotColor(task.Status);"
-                                              title="@GetStatusDisplayName(task.Status)"></span>
-                                        <span class="small text-truncate" title="@task.Name">@task.Name</span>
-                                    </div>
-                                    <div class="ps-4">
-                                        <small class="@GetPriorityTextClass(task.Priority)">@task.Priority</small>
-                                    </div>
-                                </div>
-                            </div>
-                        }
-                        </div>
-
-                        @* Add Task inline form *@
-                        @if (addingTaskToFeatureId == feature.Id)
-                        {
-                            <div class="mt-1">
-                                <div class="input-group input-group-sm">
-                                    <input type="text" class="form-control" placeholder="Task name"
-                                           @bind="newTaskName" @bind:event="oninput"
-                                           @onkeydown="HandleTaskKeyDown" />
-                                    <button class="btn btn-success" @onclick="SaveNewTask" disabled="@string.IsNullOrWhiteSpace(newTaskName)">
-                                        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="currentColor" viewBox="0 0 16 16">
-                                            <path d="M12.736 3.97a.733.733 0 0 1 1.047 0c.286.289.29.756.01 1.05L7.88 12.01a.733.733 0 0 1-1.065.02L3.217 8.384a.757.757 0 0 1 0-1.06.733.733 0 0 1 1.047 0l3.052 3.093 5.4-6.425z"/>
-                                        </svg>
-                                    </button>
-                                    <button class="btn btn-outline-secondary" @onclick="CancelAddTask">
-                                        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="currentColor" viewBox="0 0 16 16">
-                                            <path d="M4.646 4.646a.5.5 0 0 1 .708 0L8 7.293l2.646-2.647a.5.5 0 0 1 .708.708L8.707 8l2.647 2.646a.5.5 0 0 1-.708.708L8 8.707l-2.646 2.647a.5.5 0 0 1-.708-.708L7.293 8 4.646 5.354a.5.5 0 0 1 0-.708"/>
-                                        </svg>
-                                    </button>
-                                </div>
-                            </div>
-                        }
-                        else
-                        {
-                            <button class="btn btn-sm btn-link text-primary p-0 mt-1" @onclick="() => ShowAddTaskForm(feature.Id)">
-                                + Add Task
-                            </button>
-                        }
-                    }
-                </div>
+                @RenderFeatureNode(rootFeature, 0)
             }
 
             @if (project.Features.Count == 0)
@@ -173,21 +85,38 @@ else
 
                 <div class="d-flex flex-column bg-body-secondary rounded p-2" style="min-width: 250px; width: 250px; flex-shrink: 0;">
                     @* Column header *@
-                    <h6 class="fw-semibold mb-2">
-                        @GetStatusDisplayName(status)
-                        <span class="badge bg-secondary">@tasksInColumn.Count</span>
-                    </h6>
+                    <div class="d-flex align-items-center mb-2">
+                        <h6 class="fw-semibold mb-0">
+                            @GetStatusDisplayName(status)
+                            <span class="badge bg-secondary">@tasksInColumn.Count</span>
+                        </h6>
+                        <button class="btn btn-link text-secondary p-0 ms-auto d-flex align-items-center" style="line-height: 1;"
+                                @onclick="() => OpenAddModalForColumn(status)"
+                                title="Add task">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16">
+                                <path fill-rule="evenodd" d="M8 2a.5.5 0 0 1 .5.5v5h5a.5.5 0 0 1 0 1h-5v5a.5.5 0 0 1-1 0v-5h-5a.5.5 0 0 1 0-1h5v-5A.5.5 0 0 1 8 2"/>
+                            </svg>
+                        </button>
+                    </div>
 
                     @* Cards *@
                     <div class="flex-grow-1 overflow-auto board-column-cards" data-status="@status">
                         @foreach (var task in tasksInColumn.OrderBy(t => t.SortOrder))
                         {
+                            var boardTaskDone = task.Status == WorkStatus.Done;
                             <div class="card mb-2 board-card" data-task-id="@task.Id"
-                                 style="border-left: 3px solid @GetPriorityBorderColor(task.Priority); cursor: pointer;"
-                                 @onclick="() => OpenTaskDetail(task)">
+                                 style="border-left: 3px solid @GetPriorityBorderColor(task.Priority); @(boardTaskDone ? "opacity: 0.6;" : "")">
                                 <div class="card-body p-2">
-                                    <div class="fw-medium small">@task.Name</div>
-                                    <div class="d-flex justify-content-between align-items-center mt-1">
+                                    <div class="d-flex align-items-center">
+                                        <input type="checkbox" class="form-check-input me-2 flex-shrink-0" style="margin-top: 0; cursor: pointer;"
+                                               checked="@boardTaskDone"
+                                               @onchange="() => ToggleTaskDone(task)"
+                                               @onclick:stopPropagation="true" />
+                                        <span class="fw-medium small @(boardTaskDone ? "text-decoration-line-through text-muted" : "")"
+                                              style="cursor: pointer;" role="button"
+                                              @onclick="() => OpenTaskDetail(task)">@task.Name</span>
+                                    </div>
+                                    <div class="d-flex justify-content-between align-items-center mt-1 ps-4">
                                         <span class="@GetPriorityBadgeClass(task.Priority)">@task.Priority</span>
                                         <small class="text-muted fst-italic" style="font-size: 0.7rem;">@task.Feature.Name</small>
                                     </div>
@@ -195,42 +124,6 @@ else
                             </div>
                         }
                     </div>
-
-                    @* Add task to column *@
-                    @if (addingTaskToColumnStatus == status)
-                    {
-                        <div class="mt-2">
-                            <select class="form-select form-select-sm mb-1" @bind="newColumnTaskFeatureId">
-                                <option value="0" disabled>Select feature...</option>
-                                @foreach (var f in project.Features.OrderBy(f => f.SortOrder))
-                                {
-                                    <option value="@f.Id">@f.Name</option>
-                                }
-                            </select>
-                            <div class="input-group input-group-sm">
-                                <input type="text" class="form-control" placeholder="Task name"
-                                       @bind="newColumnTaskName" @bind:event="oninput"
-                                       @onkeydown="HandleColumnTaskKeyDown" />
-                                <button class="btn btn-success" @onclick="SaveNewColumnTask"
-                                        disabled="@(string.IsNullOrWhiteSpace(newColumnTaskName) || newColumnTaskFeatureId == 0)">
-                                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="currentColor" viewBox="0 0 16 16">
-                                        <path d="M12.736 3.97a.733.733 0 0 1 1.047 0c.286.289.29.756.01 1.05L7.88 12.01a.733.733 0 0 1-1.065.02L3.217 8.384a.757.757 0 0 1 0-1.06.733.733 0 0 1 1.047 0l3.052 3.093 5.4-6.425z"/>
-                                    </svg>
-                                </button>
-                                <button class="btn btn-outline-secondary" @onclick="CancelAddColumnTask">
-                                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="currentColor" viewBox="0 0 16 16">
-                                        <path d="M4.646 4.646a.5.5 0 0 1 .708 0L8 7.293l2.646-2.647a.5.5 0 0 1 .708.708L8.707 8l2.647 2.646a.5.5 0 0 1-.708.708L8 8.707l-2.646 2.647a.5.5 0 0 1-.708-.708L7.293 8 4.646 5.354a.5.5 0 0 1 0-.708"/>
-                                    </svg>
-                                </button>
-                            </div>
-                        </div>
-                    }
-                    else
-                    {
-                        <button class="btn btn-sm btn-outline-secondary w-100 mt-2" @onclick="() => ShowAddColumnTaskForm(status)">
-                            + New Task
-                        </button>
-                    }
                 </div>
             }
         </div>
@@ -244,6 +137,35 @@ else
     OnClose="OnDetailClose"
     OnTaskUpdated="OnTaskUpdated"
     OnTaskDeleted="OnTaskDeleted" />
+
+<KanbanFlow.Components.Shared.EditItemModal
+    IsOpen="editModalOpen"
+    EditMode="editModalMode"
+    EditProjectId="Id"
+    EditFeatureId="editModalFeatureId"
+    EditTaskId="editModalTaskId"
+    AllFeatures="project?.Features?.ToList()"
+    InitialName="@editModalName"
+    InitialDescription="@editModalDescription"
+    InitialGoals="@editModalGoals"
+    InitialReadme="@editModalReadme"
+    InitialParentFeatureId="editModalParentFeatureId"
+    InitialFeatureId="editModalTaskFeatureId"
+    InitialStatus="editModalStatus"
+    InitialPriority="editModalPriority"
+    InitialAssignee="@editModalAssignee"
+    OnClose="OnEditModalClose"
+    OnSaved="OnEditSaved" />
+
+<KanbanFlow.Components.Shared.AddItemModal
+    IsOpen="addModalOpen"
+    ProjectId="Id"
+    Features="project?.Features?.ToList()"
+    DefaultType="@addModalDefaultType"
+    DefaultFeatureId="addModalDefaultFeatureId"
+    DefaultStatus="addModalDefaultStatus"
+    OnClose="OnAddModalClose"
+    OnItemCreated="OnItemCreated" />
 
 @code {
     [Parameter]
@@ -287,21 +209,30 @@ else
     }
     private CancellationTokenSource _cts = new();
 
-    // Feature collapse state
+    // Feature/Task collapse state
     private HashSet<int> expandedFeatures = [];
+    private HashSet<int> expandedTasks = [];
 
-    // Add Feature form
-    private bool showAddFeatureForm;
-    private string? newFeatureName;
+    // Add Item modal state
+    private bool addModalOpen;
+    private string addModalDefaultType = "task";
+    private int? addModalDefaultFeatureId;
+    private WorkStatus? addModalDefaultStatus;
 
-    // Add Task (left panel) form
-    private int? addingTaskToFeatureId;
-    private string? newTaskName;
-
-    // Add Task (board column) form
-    private WorkStatus? addingTaskToColumnStatus;
-    private string? newColumnTaskName;
-    private int newColumnTaskFeatureId;
+    // Edit Item modal state
+    private bool editModalOpen;
+    private EditItemType editModalMode;
+    private int? editModalFeatureId;
+    private int? editModalTaskId;
+    private string? editModalName;
+    private string? editModalDescription;
+    private string? editModalGoals;
+    private string? editModalReadme;
+    private int? editModalParentFeatureId;
+    private int? editModalTaskFeatureId;
+    private int? editModalStatus;
+    private int? editModalPriority;
+    private string? editModalAssignee;
 
     protected override async Task OnInitializedAsync()
     {
@@ -334,7 +265,10 @@ else
             using var db = await DbFactory.CreateDbContextAsync(_cts.Token);
             var loaded = await db.Projects
                 .Include(p => p.Features)
-                .ThenInclude(f => f.Tasks)
+                    .ThenInclude(f => f.Tasks)
+                        .ThenInclude(t => t.Subtasks)
+                .Include(p => p.Features)
+                    .ThenInclude(f => f.ChildFeatures)
                 .AsSplitQuery()
                 .FirstOrDefaultAsync(p => p.Id == Id, _cts.Token);
 
@@ -349,10 +283,14 @@ else
             project = loaded;
             allTasks = project.Features.SelectMany(f => f.Tasks).ToList();
 
-            // Expand all features by default
+            // Expand all features and tasks by default
             foreach (var f in project.Features)
             {
                 expandedFeatures.Add(f.Id);
+            }
+            foreach (var t in allTasks.Where(t => t.Subtasks.Count > 0))
+            {
+                expandedTasks.Add(t.Id);
             }
 
             loadError = null;
@@ -367,12 +305,218 @@ else
         }
     }
 
+    // ── Recursive feature tree rendering ──
+
+    private (int done, int total) GetFeatureTaskCounts(Feature feature)
+    {
+        var done = feature.Tasks.Count(t => t.Status == WorkStatus.Done);
+        var total = feature.Tasks.Count;
+
+        // Recurse into child features
+        var children = project?.Features.Where(f => f.ParentFeatureId == feature.Id).ToList() ?? [];
+        foreach (var child in children)
+        {
+            var (childDone, childTotal) = GetFeatureTaskCounts(child);
+            done += childDone;
+            total += childTotal;
+        }
+        return (done, total);
+    }
+
+    private RenderFragment RenderFeatureNode(Feature feature, int depth) => __builder =>
+    {
+        var (doneCount, totalCount) = GetFeatureTaskCounts(feature);
+        var isExpanded = expandedFeatures.Contains(feature.Id);
+        var childFeatures = project?.Features.Where(f => f.ParentFeatureId == feature.Id).OrderBy(f => f.SortOrder).ToList() ?? [];
+        var hasChildren = childFeatures.Count > 0 || feature.Tasks.Count > 0;
+        var progressPct = totalCount > 0 ? (int)(100.0 * doneCount / totalCount) : 0;
+
+        @* Feature card — click opens edit, chevron toggles collapse, color by depth *@
+        <div class="card mb-1" style="border-left: 4px solid @GetDepthColor(depth); cursor: pointer;"
+             role="button" @onclick="() => OpenEditModalForFeature(feature)">
+            <div class="card-body p-2">
+                <div class="d-flex align-items-center">
+                    @* Chevron for expand/collapse — larger for easy clicking *@
+                    @if (hasChildren)
+                    {
+                        <span class="me-1 flex-shrink-0 d-flex align-items-center justify-content-center"
+                              style="width: 20px; height: 20px; cursor: pointer;"
+                              @onclick="() => ToggleFeature(feature.Id)" @onclick:stopPropagation="true">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" class="text-muted"
+                                 viewBox="0 0 16 16" style="transition: transform 0.15s; transform: rotate(@(isExpanded ? "90" : "0")deg);">
+                                <path fill-rule="evenodd" d="M4.646 1.646a.5.5 0 0 1 .708 0l6 6a.5.5 0 0 1 0 .708l-6 6a.5.5 0 0 1-.708-.708L10.293 8 4.646 2.354a.5.5 0 0 1 0-.708"/>
+                            </svg>
+                        </span>
+                    }
+                    else
+                    {
+                        <span class="me-1" style="width: 20px; display: inline-block;"></span>
+                    }
+                    @* Folder icon — color matches depth *@
+                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="@GetDepthColor(depth)" class="me-2 flex-shrink-0" viewBox="0 0 16 16">
+                        <path d="M1 3.5A1.5 1.5 0 0 1 2.5 2h2.764c.958 0 1.76.56 2.311 1.184C7.985 3.648 8.48 4 9 4h4.5A1.5 1.5 0 0 1 15 5.5v7a1.5 1.5 0 0 1-1.5 1.5h-11A1.5 1.5 0 0 1 1 12.5z"/>
+                    </svg>
+                    <span class="small fw-medium text-truncate" title="@feature.Name">@feature.Name</span>
+                    <span class="ms-auto badge bg-secondary rounded-pill" style="font-size: 0.65rem;">@doneCount/@totalCount</span>
+                    <button class="btn btn-link text-primary p-0 ms-1 d-flex align-items-center" style="line-height: 1;"
+                            @onclick="() => OpenAddModalForFeature(feature.Id)"
+                            @onclick:stopPropagation="true"
+                            title="Add item">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="currentColor" viewBox="0 0 16 16">
+                            <path fill-rule="evenodd" d="M8 2a.5.5 0 0 1 .5.5v5h5a.5.5 0 0 1 0 1h-5v5a.5.5 0 0 1-1 0v-5h-5a.5.5 0 0 1 0-1h5v-5A.5.5 0 0 1 8 2"/>
+                        </svg>
+                    </button>
+                </div>
+                @* Inline progress bar *@
+                @if (totalCount > 0)
+                {
+                    <div class="progress mt-1" style="height: 2px;">
+                        <div class="progress-bar @(progressPct == 100 ? "bg-success" : "bg-primary") opacity-75" role="progressbar"
+                             style="width: @(progressPct)%"></div>
+                    </div>
+                }
+            </div>
+        </div>
+
+        @if (isExpanded)
+        {
+            @* Direct tasks under this feature *@
+            <div class="feature-tasks" data-feature-id="@feature.Id">
+            @foreach (var task in feature.Tasks.OrderBy(t => t.SortOrder))
+            {
+                var taskHasSubtasks = task.Subtasks.Count > 0;
+                var taskIsExpanded = expandedTasks.Contains(task.Id);
+                var taskIsDone = task.Status == WorkStatus.Done;
+
+                <div class="card mb-1" style="border-left: 4px solid @GetDepthColor(depth + 1); @(taskIsDone ? "opacity: 0.6;" : "") cursor: pointer;"
+                     data-task-id="@task.Id" role="button" @onclick="() => OpenEditModalForTask(task)">
+                    <div class="card-body p-2">
+                        <div class="d-flex align-items-center">
+                            @* Chevron for subtask expand/collapse — larger *@
+                            @if (taskHasSubtasks)
+                            {
+                                <span class="me-1 flex-shrink-0 d-flex align-items-center justify-content-center"
+                                      style="width: 20px; height: 20px; cursor: pointer;"
+                                      @onclick="() => ToggleTask(task.Id)" @onclick:stopPropagation="true">
+                                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" class="text-muted"
+                                         viewBox="0 0 16 16" style="transition: transform 0.15s; transform: rotate(@(taskIsExpanded ? "90" : "0")deg);">
+                                        <path fill-rule="evenodd" d="M4.646 1.646a.5.5 0 0 1 .708 0l6 6a.5.5 0 0 1 0 .708l-6 6a.5.5 0 0 1-.708-.708L10.293 8 4.646 2.354a.5.5 0 0 1 0-.708"/>
+                                    </svg>
+                                </span>
+                            }
+                            else
+                            {
+                                <span class="me-1" style="width: 20px; display: inline-block;"></span>
+                            }
+                            @* Checkbox for done status *@
+                            <input type="checkbox" class="form-check-input me-2 flex-shrink-0" style="margin-top: 0; cursor: pointer;"
+                                   checked="@taskIsDone"
+                                   @onchange="() => ToggleTaskDone(task)"
+                                   @onclick:stopPropagation="true" />
+                            <span class="small text-truncate @(taskIsDone ? "text-decoration-line-through text-muted" : "")"
+                                  title="@task.Name">@task.Name</span>
+                            <span class="ms-auto @GetPriorityBadgeClass(task.Priority)" style="font-size: 0.6rem;">@task.Priority</span>
+                            <button class="btn btn-link text-primary p-0 ms-1 d-flex align-items-center" style="line-height: 1;"
+                                    @onclick="() => OpenAddModalForFeature(task.FeatureId)"
+                                    @onclick:stopPropagation="true"
+                                    title="Add item">
+                                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="currentColor" viewBox="0 0 16 16">
+                                    <path fill-rule="evenodd" d="M8 2a.5.5 0 0 1 .5.5v5h5a.5.5 0 0 1 0 1h-5v5a.5.5 0 0 1-1 0v-5h-5a.5.5 0 0 1 0-1h5v-5A.5.5 0 0 1 8 2"/>
+                                </svg>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                @* Collapsible subtasks under this task *@
+                @if (taskIsExpanded && taskHasSubtasks)
+                {
+                    var rootSubtasks = task.Subtasks.Where(s => s.ParentSubtaskId == null).OrderBy(s => s.SortOrder).ToList();
+                    @foreach (var subtask in rootSubtasks)
+                    {
+                        @RenderOutlineSubtask(subtask, task, depth + 2)
+                    }
+                }
+            }
+            </div>
+
+            @* Render child features recursively *@
+            @foreach (var child in childFeatures)
+            {
+                @RenderFeatureNode(child, depth + 1)
+            }
+        }
+    };
+
     private void GoHome()
     {
         Nav.NavigateTo("/");
     }
 
-    // ── Feature collapse/expand ──
+    // ── Outline subtask rendering ──
+
+    private RenderFragment RenderOutlineSubtask(Subtask subtask, TaskItem parentTask, int depth) => __builder =>
+    {
+        var children = parentTask.Subtasks.Where(s => s.ParentSubtaskId == subtask.Id).OrderBy(s => s.SortOrder).ToList();
+        var hasChildren = children.Count > 0;
+
+        <div class="card mb-1" style="border-left: 4px solid @GetDepthColor(depth); @(subtask.Completed ? "opacity: 0.6;" : "") cursor: pointer;"
+             role="button" @onclick="() => OpenEditModalForTask(parentTask)">
+            <div class="card-body p-2">
+                <div class="d-flex align-items-center">
+                    @if (hasChildren)
+                    {
+                        <span class="me-1 flex-shrink-0 d-flex align-items-center justify-content-center" style="width: 20px; height: 20px;">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="currentColor" class="text-muted"
+                                 viewBox="0 0 16 16">
+                                <path fill-rule="evenodd" d="M4.646 1.646a.5.5 0 0 1 .708 0l6 6a.5.5 0 0 1 0 .708l-6 6a.5.5 0 0 1-.708-.708L10.293 8 4.646 2.354a.5.5 0 0 1 0-.708"/>
+                            </svg>
+                        </span>
+                    }
+                    else
+                    {
+                        <span class="me-1" style="width: 20px; display: inline-block;"></span>
+                    }
+                    <input type="checkbox" class="form-check-input me-2 flex-shrink-0" style="margin-top: 0; cursor: pointer;"
+                           checked="@subtask.Completed"
+                           @onchange="() => ToggleOutlineSubtask(subtask)"
+                           @onclick:stopPropagation="true" />
+                    <span class="small text-truncate @(subtask.Completed ? "text-decoration-line-through text-muted" : "")"
+                          title="@subtask.Text">@subtask.Text</span>
+                    <button class="btn btn-link text-primary p-0 ms-auto d-flex align-items-center" style="line-height: 1;"
+                            @onclick="() => OpenAddModalForFeature(parentTask.FeatureId)"
+                            @onclick:stopPropagation="true"
+                            title="Add item">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" fill="currentColor" viewBox="0 0 16 16">
+                            <path fill-rule="evenodd" d="M8 2a.5.5 0 0 1 .5.5v5h5a.5.5 0 0 1 0 1h-5v5a.5.5 0 0 1-1 0v-5h-5a.5.5 0 0 1 0-1h5v-5A.5.5 0 0 1 8 2"/>
+                        </svg>
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        @foreach (var child in children)
+        {
+            @RenderOutlineSubtask(child, parentTask, depth + 1)
+        }
+    };
+
+    private async Task ToggleOutlineSubtask(Subtask subtask)
+    {
+        subtask.Completed = !subtask.Completed;
+        try
+        {
+            using var db = await DbFactory.CreateDbContextAsync(_cts.Token);
+            db.Subtasks.Attach(subtask);
+            db.Entry(subtask).Property(s => s.Completed).IsModified = true;
+            await db.SaveChangesAsync(_cts.Token);
+            StateHasChanged();
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception ex) { loadError = ex.Message; }
+    }
+
+    // ── Feature/Task collapse/expand ──
 
     private void ToggleFeature(int featureId)
     {
@@ -382,176 +526,122 @@ else
         }
     }
 
-    // ── Add Feature ──
-
-    private void ShowAddFeatureForm()
+    private void ToggleTask(int taskId)
     {
-        showAddFeatureForm = true;
-        newFeatureName = null;
-    }
-
-    private void CancelAddFeature()
-    {
-        showAddFeatureForm = false;
-        newFeatureName = null;
-    }
-
-    private async Task HandleFeatureKeyDown(KeyboardEventArgs e)
-    {
-        if (e.Key == "Enter" && !string.IsNullOrWhiteSpace(newFeatureName))
+        if (!expandedTasks.Remove(taskId))
         {
-            await SaveNewFeature();
-        }
-        else if (e.Key == "Escape")
-        {
-            CancelAddFeature();
+            expandedTasks.Add(taskId);
         }
     }
 
-    private async Task SaveNewFeature()
-    {
-        if (string.IsNullOrWhiteSpace(newFeatureName) || project is null) return;
+    // ── Task checkbox toggle ──
 
+    private async Task ToggleTaskDone(TaskItem task)
+    {
+        var newStatus = task.Status == WorkStatus.Done ? WorkStatus.Todo : WorkStatus.Done;
+        var markSubtasksCompleted = newStatus == WorkStatus.Done;
         try
         {
             using var db = await DbFactory.CreateDbContextAsync(_cts.Token);
-            var feature = new Feature
+            var entity = await db.Tasks.Include(t => t.Subtasks).FirstOrDefaultAsync(t => t.Id == task.Id, _cts.Token);
+            if (entity is null) return;
+
+            entity.Status = newStatus;
+            entity.UpdatedAt = DateTime.UtcNow;
+            entity.CompletedAt = newStatus == WorkStatus.Done ? DateTime.UtcNow : null;
+
+            // Cascade: mark all subtasks completed/uncompleted
+            foreach (var subtask in entity.Subtasks)
             {
-                ProjectId = project.Id,
-                Name = newFeatureName.Trim(),
-                SortOrder = project.Features.Count
-            };
-            db.Features.Add(feature);
+                subtask.Completed = markSubtasksCompleted;
+            }
+
             await db.SaveChangesAsync(_cts.Token);
 
-            showAddFeatureForm = false;
-            newFeatureName = null;
             await LoadProject();
+            await ReinitializeSortables();
         }
         catch (OperationCanceledException) { }
-        catch (Exception ex)
-        {
-            loadError = ex.Message;
-        }
+        catch (Exception ex) { loadError = ex.Message; }
     }
 
-    // ── Add Task (left panel) ──
+    // ── Add Item Modal ──
 
-    private void ShowAddTaskForm(int featureId)
+    private void OpenAddModalForProject() => OpenAddModal("feature", null, null);
+    private void OpenAddModalForFeature(int featureId) => OpenAddModal("task", featureId, null);
+    private void OpenAddModalForColumn(WorkStatus status) => OpenAddModal("task", null, status);
+
+    private void OpenAddModal(string defaultType, int? featureId, WorkStatus? status)
     {
-        addingTaskToFeatureId = featureId;
-        newTaskName = null;
+        addModalDefaultType = defaultType;
+        addModalDefaultFeatureId = featureId;
+        addModalDefaultStatus = status;
+        addModalOpen = true;
     }
 
-    private void CancelAddTask()
+    private async Task OnAddModalClose()
     {
-        addingTaskToFeatureId = null;
-        newTaskName = null;
+        addModalOpen = false;
+        StateHasChanged();
+        await Task.CompletedTask;
     }
 
-    private async Task HandleTaskKeyDown(KeyboardEventArgs e)
+    private async Task OnItemCreated()
     {
-        if (e.Key == "Enter" && !string.IsNullOrWhiteSpace(newTaskName))
-        {
-            await SaveNewTask();
-        }
-        else if (e.Key == "Escape")
-        {
-            CancelAddTask();
-        }
+        await LoadProject();
+        await ReinitializeSortables();
     }
 
-    private async Task SaveNewTask()
+    // ── Edit Item Modal ──
+
+    private void OpenEditModalForProject()
     {
-        if (string.IsNullOrWhiteSpace(newTaskName) || addingTaskToFeatureId is null) return;
-
-        var feature = project?.Features.FirstOrDefault(f => f.Id == addingTaskToFeatureId.Value);
-        if (feature is null) return;
-
-        try
-        {
-            using var db = await DbFactory.CreateDbContextAsync(_cts.Token);
-            var task = new TaskItem
-            {
-                FeatureId = feature.Id,
-                Name = newTaskName.Trim(),
-                Status = WorkStatus.Backlog,
-                Priority = TaskPriority.Medium,
-                SortOrder = feature.Tasks.Count
-            };
-            db.Tasks.Add(task);
-            await db.SaveChangesAsync(_cts.Token);
-
-            addingTaskToFeatureId = null;
-            newTaskName = null;
-            await LoadProject();
-        }
-        catch (OperationCanceledException) { }
-        catch (Exception ex)
-        {
-            loadError = ex.Message;
-        }
+        if (project is null) return;
+        editModalMode = EditItemType.Project;
+        editModalFeatureId = null;
+        editModalTaskId = null;
+        editModalName = project.Name;
+        editModalDescription = project.Description;
+        editModalGoals = project.Goals;
+        editModalReadme = project.Readme;
+        editModalOpen = true;
     }
 
-    // ── Add Task (board column) ──
-
-    private void ShowAddColumnTaskForm(WorkStatus status)
+    private void OpenEditModalForFeature(Feature feature)
     {
-        addingTaskToColumnStatus = status;
-        newColumnTaskName = null;
-        newColumnTaskFeatureId = project?.Features.FirstOrDefault()?.Id ?? 0;
+        editModalMode = EditItemType.Feature;
+        editModalFeatureId = feature.Id;
+        editModalTaskId = null;
+        editModalName = feature.Name;
+        editModalDescription = feature.Description;
+        editModalParentFeatureId = feature.ParentFeatureId.HasValue ? feature.ParentFeatureId.Value : 0;
+        editModalOpen = true;
     }
 
-    private void CancelAddColumnTask()
+    private void OpenEditModalForTask(TaskItem task)
     {
-        addingTaskToColumnStatus = null;
-        newColumnTaskName = null;
-        newColumnTaskFeatureId = 0;
+        editModalMode = EditItemType.Task;
+        editModalFeatureId = null;
+        editModalTaskId = task.Id;
+        editModalName = task.Name;
+        editModalDescription = task.Description;
+        editModalTaskFeatureId = task.FeatureId;
+        editModalStatus = (int)task.Status;
+        editModalPriority = (int)task.Priority;
+        editModalAssignee = task.Assignee;
+        editModalOpen = true;
     }
 
-    private async Task HandleColumnTaskKeyDown(KeyboardEventArgs e)
+    private async Task OnEditModalClose()
     {
-        if (e.Key == "Enter" && !string.IsNullOrWhiteSpace(newColumnTaskName) && newColumnTaskFeatureId != 0)
-        {
-            await SaveNewColumnTask();
-        }
-        else if (e.Key == "Escape")
-        {
-            CancelAddColumnTask();
-        }
+        editModalOpen = false;
+        StateHasChanged();
+        await Task.CompletedTask;
     }
 
-    private async Task SaveNewColumnTask()
+    private async Task OnEditSaved()
     {
-        if (string.IsNullOrWhiteSpace(newColumnTaskName) || addingTaskToColumnStatus is null || newColumnTaskFeatureId == 0) return;
-
-        var feature = project?.Features.FirstOrDefault(f => f.Id == newColumnTaskFeatureId);
-        if (feature is null) return;
-
-        try
-        {
-            using var db = await DbFactory.CreateDbContextAsync(_cts.Token);
-            var task = new TaskItem
-            {
-                FeatureId = feature.Id,
-                Name = newColumnTaskName.Trim(),
-                Status = addingTaskToColumnStatus.Value,
-                Priority = TaskPriority.Medium,
-                SortOrder = feature.Tasks.Count
-            };
-            db.Tasks.Add(task);
-            await db.SaveChangesAsync(_cts.Token);
-
-            addingTaskToColumnStatus = null;
-            newColumnTaskName = null;
-            newColumnTaskFeatureId = 0;
-            await LoadProject();
-        }
-        catch (OperationCanceledException) { }
-        catch (Exception ex)
-        {
-            loadError = ex.Message;
-        }
+        await LoadProject();
     }
 
     // ── Drag-and-Drop Handlers ──
@@ -727,4 +817,8 @@ else
         TaskPriority.Critical => "#dc3545",
         _ => "#6c757d"
     };
+
+    // Cycling depth colors: blue, teal, purple, orange, pink — then repeat
+    private static readonly string[] DepthColors = ["#0d6efd", "#0dcaf0", "#6f42c1", "#fd7e14", "#d63384"];
+    private static string GetDepthColor(int depth) => DepthColors[depth % DepthColors.Length];
 }

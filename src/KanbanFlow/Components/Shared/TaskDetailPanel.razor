@@ -102,7 +102,7 @@
                           @onfocus="StartEditingDescription"></textarea>
             </div>
 
-            @* Subtasks *@
+            @* Subtasks (recursive) *@
             <div class="mb-3">
                 <div class="d-flex align-items-center mb-2">
                     <label class="form-label small text-muted mb-0">Subtasks</label>
@@ -126,28 +126,14 @@
                 }
 
                 <div class="list-group list-group-flush mb-2">
-                    @foreach (var subtask in Task.Subtasks.OrderBy(s => s.SortOrder))
+                    @{ var rootSubtasks = Task.Subtasks.Where(s => s.ParentSubtaskId == null).OrderBy(s => s.SortOrder).ToList(); }
+                    @foreach (var subtask in rootSubtasks)
                     {
-                        <div class="list-group-item px-0 py-1 d-flex align-items-center border-0">
-                            <div class="form-check flex-grow-1 mb-0">
-                                <input class="form-check-input" type="checkbox"
-                                       checked="@subtask.Completed"
-                                       @onchange="() => ToggleSubtaskAsync(subtask)" />
-                                <label class="form-check-label small @(subtask.Completed ? "text-decoration-line-through text-muted" : "")">
-                                    @subtask.Text
-                                </label>
-                            </div>
-                            <button class="btn btn-sm text-danger p-0 ms-1" title="Delete subtask"
-                                    @onclick="() => DeleteSubtaskAsync(subtask)">
-                                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="currentColor" viewBox="0 0 16 16">
-                                    <path d="M4.646 4.646a.5.5 0 0 1 .708 0L8 7.293l2.646-2.647a.5.5 0 0 1 .708.708L8.707 8l2.647 2.646a.5.5 0 0 1-.708.708L8 8.707l-2.646 2.647a.5.5 0 0 1-.708-.708L7.293 8 4.646 5.354a.5.5 0 0 1 0-.708"/>
-                                </svg>
-                            </button>
-                        </div>
+                        @RenderSubtaskNode(subtask, 0)
                     }
                 </div>
 
-                @* Add subtask *@
+                @* Add top-level subtask *@
                 <div class="input-group input-group-sm">
                     <input type="text" class="form-control" placeholder="Add a subtask..."
                            @bind="newSubtaskText" @bind:event="oninput"
@@ -220,6 +206,10 @@
     // Subtask input
     private string? newSubtaskText;
 
+    // Add child subtask
+    private int? addingChildSubtaskToId;
+    private string? newChildSubtaskText;
+
     // Delete confirmation
     private bool confirmingDelete;
 
@@ -230,6 +220,8 @@
         confirmingDelete = false;
         editingDescription = Task?.Description;
         newSubtaskText = null;
+        addingChildSubtaskToId = null;
+        newChildSubtaskText = null;
     }
 
     // ── Panel close ──
@@ -393,6 +385,111 @@
         db.Entry(Task).Property(t => t.Description).IsModified = true;
         db.Entry(Task).Property(t => t.UpdatedAt).IsModified = true;
         await db.SaveChangesAsync();
+
+        await OnTaskUpdated.InvokeAsync();
+    }
+
+    // ── Subtask recursive rendering ──
+
+    private RenderFragment RenderSubtaskNode(Subtask subtask, int depth) => __builder =>
+    {
+        var indent = depth * 20;
+        var children = Task?.Subtasks.Where(s => s.ParentSubtaskId == subtask.Id).OrderBy(s => s.SortOrder).ToList() ?? [];
+
+        <div class="list-group-item px-0 py-1 border-0" style="margin-left: @(indent)px;">
+            <div class="d-flex align-items-center">
+                <div class="form-check flex-grow-1 mb-0">
+                    <input class="form-check-input" type="checkbox"
+                           checked="@subtask.Completed"
+                           @onchange="() => ToggleSubtaskAsync(subtask)" />
+                    <label class="form-check-label small @(subtask.Completed ? "text-decoration-line-through text-muted" : "")">
+                        @subtask.Text
+                    </label>
+                </div>
+                <button class="btn btn-sm text-primary p-0 ms-1" title="Add sub-item"
+                        @onclick="() => ShowAddChildSubtask(subtask.Id)">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" fill="currentColor" viewBox="0 0 16 16">
+                        <path fill-rule="evenodd" d="M8 2a.5.5 0 0 1 .5.5v5h5a.5.5 0 0 1 0 1h-5v5a.5.5 0 0 1-1 0v-5h-5a.5.5 0 0 1 0-1h5v-5A.5.5 0 0 1 8 2"/>
+                    </svg>
+                </button>
+                <button class="btn btn-sm text-danger p-0 ms-1" title="Delete subtask"
+                        @onclick="() => DeleteSubtaskAsync(subtask)">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="currentColor" viewBox="0 0 16 16">
+                        <path d="M4.646 4.646a.5.5 0 0 1 .708 0L8 7.293l2.646-2.647a.5.5 0 0 1 .708.708L8.707 8l2.647 2.646a.5.5 0 0 1-.708.708L8 8.707l-2.646 2.647a.5.5 0 0 1-.708-.708L7.293 8 4.646 5.354a.5.5 0 0 1 0-.708"/>
+                    </svg>
+                </button>
+            </div>
+
+            @* Add child subtask inline *@
+            @if (addingChildSubtaskToId == subtask.Id)
+            {
+                <div class="mt-1" style="margin-left: 20px;">
+                    <div class="input-group input-group-sm">
+                        <input type="text" class="form-control" placeholder="Sub-item..."
+                               @bind="newChildSubtaskText" @bind:event="oninput"
+                               @onkeydown="HandleChildSubtaskKeyDown" />
+                        <button class="btn btn-success" @onclick="SaveChildSubtask"
+                                disabled="@string.IsNullOrWhiteSpace(newChildSubtaskText)">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="currentColor" viewBox="0 0 16 16">
+                                <path d="M12.736 3.97a.733.733 0 0 1 1.047 0c.286.289.29.756.01 1.05L7.88 12.01a.733.733 0 0 1-1.065.02L3.217 8.384a.757.757 0 0 1 0-1.06.733.733 0 0 1 1.047 0l3.052 3.093 5.4-6.425z"/>
+                            </svg>
+                        </button>
+                        <button class="btn btn-outline-secondary" @onclick="CancelAddChildSubtask">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="currentColor" viewBox="0 0 16 16">
+                                <path d="M4.646 4.646a.5.5 0 0 1 .708 0L8 7.293l2.646-2.647a.5.5 0 0 1 .708.708L8.707 8l2.647 2.646a.5.5 0 0 1-.708.708L8 8.707l-2.646 2.647a.5.5 0 0 1-.708-.708L7.293 8 4.646 5.354a.5.5 0 0 1 0-.708"/>
+                            </svg>
+                        </button>
+                    </div>
+                </div>
+            }
+        </div>
+
+        @* Render children recursively *@
+        @foreach (var child in children)
+        {
+            @RenderSubtaskNode(child, depth + 1)
+        }
+    };
+
+    private void ShowAddChildSubtask(int parentId)
+    {
+        addingChildSubtaskToId = parentId;
+        newChildSubtaskText = null;
+    }
+
+    private void CancelAddChildSubtask()
+    {
+        addingChildSubtaskToId = null;
+        newChildSubtaskText = null;
+    }
+
+    private async Task HandleChildSubtaskKeyDown(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter" && !string.IsNullOrWhiteSpace(newChildSubtaskText))
+            await SaveChildSubtask();
+        else if (e.Key == "Escape")
+            CancelAddChildSubtask();
+    }
+
+    private async Task SaveChildSubtask()
+    {
+        if (Task is null || addingChildSubtaskToId is null || string.IsNullOrWhiteSpace(newChildSubtaskText)) return;
+
+        var subtask = new Subtask
+        {
+            TaskItemId = Task.Id,
+            ParentSubtaskId = addingChildSubtaskToId.Value,
+            Text = newChildSubtaskText.Trim(),
+            SortOrder = Task.Subtasks.Count(s => s.ParentSubtaskId == addingChildSubtaskToId.Value)
+        };
+
+        using var db = await DbFactory.CreateDbContextAsync();
+        db.Subtasks.Add(subtask);
+        await db.SaveChangesAsync();
+
+        Task.Subtasks.Add(subtask);
+        addingChildSubtaskToId = null;
+        newChildSubtaskText = null;
 
         await OnTaskUpdated.InvokeAsync();
     }
