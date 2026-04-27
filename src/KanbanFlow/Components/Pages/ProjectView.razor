@@ -37,9 +37,9 @@ else
     <div class="d-flex" style="height: calc(100vh - 56px);">
 
         @* ── Left Panel: Project Outline ── *@
-        <div class="border-end bg-light p-3" style="width: 300px; min-width: 300px; overflow-y: auto;">
+        <div class="border-end bg-light p-3" style="width: 300px; min-width: 300px; overflow-y: auto;" data-testid="project-outline">
             <div class="d-flex align-items-center mb-3">
-                <button class="btn btn-sm btn-outline-secondary me-2" @onclick="GoHome" title="Back to Projects">
+                <button class="btn btn-sm btn-outline-secondary me-2" @onclick="GoHome" title="Back to Projects" aria-label="Back to projects" data-testid="back-to-projects-button">
                     <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16">
                         <path fill-rule="evenodd" d="M15 8a.5.5 0 0 0-.5-.5H2.707l3.147-3.146a.5.5 0 1 0-.708-.708l-4 4a.5.5 0 0 0 0 .708l4 4a.5.5 0 0 0 .708-.708L2.707 8.5H14.5A.5.5 0 0 0 15 8"/>
                     </svg>
@@ -48,7 +48,9 @@ else
                 <button class="btn btn-sm btn-link text-muted ms-auto p-0 d-flex align-items-center justify-content-center"
                         style="width: 24px; height: 24px;"
                         @onclick="OpenEditModalForProject"
-                        title="Edit project">
+                        title="Edit project"
+                        aria-label="Edit project"
+                        data-testid="edit-project-button">
                     <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" fill="currentColor" viewBox="0 0 16 16">
                         <path d="M15.502 1.94a.5.5 0 0 1 0 .706L14.459 3.69l-2-2L13.502.646a.5.5 0 0 1 .707 0l1.293 1.293zm-1.75 2.456-2-2L4.939 9.21a.5.5 0 0 0-.121.196l-.805 2.414a.25.25 0 0 0 .316.316l2.414-.805a.5.5 0 0 0 .196-.12l6.813-6.814z"/>
                         <path fill-rule="evenodd" d="M1 13.5A1.5 1.5 0 0 0 2.5 15h11a1.5 1.5 0 0 0 1.5-1.5v-6a.5.5 0 0 0-1 0v6a.5.5 0 0 1-.5.5h-11a.5.5 0 0 1-.5-.5v-11a.5.5 0 0 1 .5-.5H9a.5.5 0 0 0 0-1H2.5A1.5 1.5 0 0 0 1 2.5z"/>
@@ -57,7 +59,9 @@ else
                 <button class="btn btn-sm btn-outline-primary p-0 d-flex align-items-center justify-content-center ms-1"
                         style="width: 24px; height: 24px;"
                         @onclick="OpenAddModalForProject"
-                        title="Add feature or task">
+                        title="Add feature or task"
+                        aria-label="Add feature or task to project"
+                        data-testid="add-project-item-button">
                     <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="currentColor" viewBox="0 0 16 16">
                         <path fill-rule="evenodd" d="M8 2a.5.5 0 0 1 .5.5v5h5a.5.5 0 0 1 0 1h-5v5a.5.5 0 0 1-1 0v-5h-5a.5.5 0 0 1 0-1h5v-5A.5.5 0 0 1 8 2"/>
                     </svg>
@@ -182,12 +186,12 @@ else
                 }
             </div>
 
-            <div class="flex-grow-1 d-flex overflow-auto p-3 gap-3" style="min-width: 0;">
+            <div class="flex-grow-1 d-flex overflow-auto p-2 gap-2" style="min-width: 0;" data-testid="kanban-board">
                 @foreach (var status in Enum.GetValues<WorkStatus>())
                 {
                     var tasksInColumn = allTasks.Where(t => t.Status == status).ToList();
 
-                    <div class="d-flex flex-column bg-body-secondary rounded p-2" style="min-width: 250px; width: 250px; flex-shrink: 0;">
+                    <div class="d-flex flex-column bg-body-secondary rounded p-2" style="min-width: 180px; flex: 1 1 0; max-width: 260px;" data-testid="board-column-@status" aria-label="@GetStatusDisplayName(status) column">
                         @* Column header *@
                         <div class="d-flex align-items-center mb-2">
                             <h6 class="fw-semibold mb-0">
@@ -196,7 +200,9 @@ else
                             </h6>
                             <button class="btn btn-link text-secondary p-0 ms-auto d-flex align-items-center" style="line-height: 1;"
                                     @onclick="() => OpenAddModalForColumn(status)"
-                                    title="Add task">
+                                    title="Add task to @GetStatusDisplayName(status)"
+                                    aria-label="Add task to @GetStatusDisplayName(status)"
+                                    data-testid="add-task-@status-button">
                                 <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16">
                                     <path fill-rule="evenodd" d="M8 2a.5.5 0 0 1 .5.5v5h5a.5.5 0 0 1 0 1h-5v5a.5.5 0 0 1-1 0v-5h-5a.5.5 0 0 1 0-1h5v-5A.5.5 0 0 1 8 2"/>
                                 </svg>
@@ -204,27 +210,36 @@ else
                         </div>
 
                         @* Cards *@
-                        <div class="flex-grow-1 overflow-auto board-column-cards" data-status="@status">
+                        <div class="flex-grow-1 overflow-auto board-column-cards" data-status="@status" data-testid="board-column-@status-cards">
                             @foreach (var task in tasksInColumn.OrderBy(t => t.SortOrder))
                             {
                                 var boardTaskDone = task.Status == WorkStatus.Done;
-                                <div class="card mb-2 board-card" data-task-id="@task.Id"
+                                <div class="card mb-2 board-card" data-testid="board-card-@task.Id" data-task-id="@task.Id"
                                      style="border-left: 3px solid @GetPriorityBorderColor(task.Priority); @(boardTaskDone ? "opacity: 0.6;" : "")">
                                     <div class="card-body p-2">
                                         <div class="d-flex align-items-center">
                                             <input type="checkbox" class="form-check-input me-2 flex-shrink-0" style="margin-top: 0; cursor: pointer;"
                                                    checked="@boardTaskDone"
                                                    @onchange="() => ToggleTaskDone(task)"
-                                                   @onclick:stopPropagation="true" />
+                                                   @onclick:stopPropagation="true"
+                                                   aria-label="Mark @task.Name as @(boardTaskDone ? "not done" : "done")"
+                                                   data-testid="board-card-@task.Id-done-checkbox" />
                                             <span class="fw-medium small @(boardTaskDone ? "text-decoration-line-through text-muted" : "")"
                                                   style="cursor: pointer;" role="button"
+                                                  data-testid="board-card-@task.Id-title"
                                                   @onclick="() => OpenTaskDetail(task)">@task.Name</span>
                                         </div>
                                         <div class="d-flex justify-content-between align-items-center mt-1 ps-4">
                                             <span class="@GetPriorityBadgeClass(task.Priority)">@task.Priority</span>
-                                            <small class="text-muted fst-italic" style="font-size: 0.7rem;">@task.Feature.Name</small>
+                                            <small class="text-muted fst-italic text-truncate ms-1" style="font-size: 0.7rem;" title="@task.Feature.Name">@task.Feature.Name</small>
                                         </div>
                                     </div>
+                                </div>
+                            }
+                            @if (tasksInColumn.Count == 0)
+                            {
+                                <div class="border border-dashed rounded bg-white text-muted small text-center p-3" data-testid="empty-column-@status">
+                                    No tasks in @GetStatusDisplayName(status). Use + to add one here.
                                 </div>
                             }
                         </div>
@@ -503,7 +518,7 @@ else
 
         @* Feature card — click opens edit, chevron toggles collapse, color by depth *@
         <div class="card mb-1" style="border-left: 4px solid @GetDepthColor(depth); cursor: pointer;"
-             role="button" @onclick="() => OpenEditModalForFeature(feature)">
+             role="button" data-testid="outline-feature-@feature.Id" @onclick="() => OpenEditModalForFeature(feature)">
             <div class="card-body p-2">
                 <div class="d-flex align-items-center">
                     @* Chevron for expand/collapse — larger for easy clicking *@
@@ -511,6 +526,7 @@ else
                     {
                         <span class="me-1 flex-shrink-0 d-flex align-items-center justify-content-center"
                               style="width: 20px; height: 20px; cursor: pointer;"
+                              role="button" aria-label="Toggle @feature.Name" data-testid="outline-feature-@feature.Id-toggle"
                               @onclick="() => ToggleFeature(feature.Id)" @onclick:stopPropagation="true">
                             <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" class="text-muted"
                                  viewBox="0 0 16 16" style="transition: transform 0.15s; transform: rotate(@(isExpanded ? "90" : "0")deg);">
@@ -531,7 +547,9 @@ else
                     <button class="btn btn-link text-primary p-0 ms-1 d-flex align-items-center" style="line-height: 1;"
                             @onclick="() => OpenAddModalForFeature(feature.Id)"
                             @onclick:stopPropagation="true"
-                            title="Add item">
+                            title="Add item under @feature.Name"
+                            aria-label="Add item under @feature.Name"
+                            data-testid="outline-feature-@feature.Id-add-button">
                         <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="currentColor" viewBox="0 0 16 16">
                             <path fill-rule="evenodd" d="M8 2a.5.5 0 0 1 .5.5v5h5a.5.5 0 0 1 0 1h-5v5a.5.5 0 0 1-1 0v-5h-5a.5.5 0 0 1 0-1h5v-5A.5.5 0 0 1 8 2"/>
                         </svg>
@@ -551,7 +569,7 @@ else
         @if (isExpanded)
         {
             @* Direct tasks under this feature *@
-            <div class="feature-tasks" data-feature-id="@feature.Id">
+            <div class="feature-tasks" data-testid="outline-feature-@feature.Id-tasks" data-feature-id="@feature.Id">
             @foreach (var task in feature.Tasks.OrderBy(t => t.SortOrder))
             {
                 var taskHasSubtasks = task.Subtasks.Count > 0;
@@ -559,7 +577,7 @@ else
                 var taskIsDone = task.Status == WorkStatus.Done;
 
                 <div class="card mb-1" style="border-left: 4px solid @GetDepthColor(depth + 1); @(taskIsDone ? "opacity: 0.6;" : "") cursor: pointer;"
-                     data-task-id="@task.Id" role="button" @onclick="() => OpenEditModalForTask(task)">
+                     data-testid="outline-task-@task.Id" data-task-id="@task.Id" role="button" @onclick="() => OpenEditModalForTask(task)">
                     <div class="card-body p-2">
                         <div class="d-flex align-items-center">
                             @* Chevron for subtask expand/collapse — larger *@
@@ -567,6 +585,7 @@ else
                             {
                                 <span class="me-1 flex-shrink-0 d-flex align-items-center justify-content-center"
                                       style="width: 20px; height: 20px; cursor: pointer;"
+                                      role="button" aria-label="Toggle subtasks for @task.Name" data-testid="outline-task-@task.Id-toggle"
                                       @onclick="() => ToggleTask(task.Id)" @onclick:stopPropagation="true">
                                     <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" class="text-muted"
                                          viewBox="0 0 16 16" style="transition: transform 0.15s; transform: rotate(@(taskIsExpanded ? "90" : "0")deg);">
@@ -582,14 +601,18 @@ else
                             <input type="checkbox" class="form-check-input me-2 flex-shrink-0" style="margin-top: 0; cursor: pointer;"
                                    checked="@taskIsDone"
                                    @onchange="() => ToggleTaskDone(task)"
-                                   @onclick:stopPropagation="true" />
+                                   @onclick:stopPropagation="true"
+                                   aria-label="Mark @task.Name as @(taskIsDone ? "not done" : "done")"
+                                   data-testid="outline-task-@task.Id-done-checkbox" />
                             <span class="small text-truncate @(taskIsDone ? "text-decoration-line-through text-muted" : "")"
                                   title="@task.Name">@task.Name</span>
                             <span class="ms-auto @GetPriorityBadgeClass(task.Priority)" style="font-size: 0.6rem;">@task.Priority</span>
                             <button class="btn btn-link text-primary p-0 ms-1 d-flex align-items-center" style="line-height: 1;"
                                     @onclick="() => OpenAddModalForFeature(task.FeatureId)"
                                     @onclick:stopPropagation="true"
-                                    title="Add item">
+                                    title="Add item under @task.Name"
+                                    aria-label="Add item under @task.Name"
+                                    data-testid="outline-task-@task.Id-add-button">
                                 <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="currentColor" viewBox="0 0 16 16">
                                     <path fill-rule="evenodd" d="M8 2a.5.5 0 0 1 .5.5v5h5a.5.5 0 0 1 0 1h-5v5a.5.5 0 0 1-1 0v-5h-5a.5.5 0 0 1 0-1h5v-5A.5.5 0 0 1 8 2"/>
                                 </svg>
@@ -631,7 +654,7 @@ else
         var hasChildren = children.Count > 0;
 
         <div class="card mb-1" style="border-left: 4px solid @GetDepthColor(depth); @(subtask.Completed ? "opacity: 0.6;" : "") cursor: pointer;"
-             role="button" @onclick="() => OpenEditModalForTask(parentTask)">
+             role="button" data-testid="outline-subtask-@subtask.Id" @onclick="() => OpenEditModalForTask(parentTask)">
             <div class="card-body p-2">
                 <div class="d-flex align-items-center">
                     @if (hasChildren)
@@ -650,13 +673,17 @@ else
                     <input type="checkbox" class="form-check-input me-2 flex-shrink-0" style="margin-top: 0; cursor: pointer;"
                            checked="@subtask.Completed"
                            @onchange="() => ToggleOutlineSubtask(subtask)"
-                           @onclick:stopPropagation="true" />
+                           @onclick:stopPropagation="true"
+                           aria-label="Mark @subtask.Text as @(subtask.Completed ? "not done" : "done")"
+                           data-testid="outline-subtask-@subtask.Id-done-checkbox" />
                     <span class="small text-truncate @(subtask.Completed ? "text-decoration-line-through text-muted" : "")"
                           title="@subtask.Text">@subtask.Text</span>
                     <button class="btn btn-link text-primary p-0 ms-auto d-flex align-items-center" style="line-height: 1;"
                             @onclick="() => OpenAddModalForFeature(parentTask.FeatureId)"
                             @onclick:stopPropagation="true"
-                            title="Add item">
+                            title="Add item under @parentTask.Name"
+                            aria-label="Add item under @parentTask.Name"
+                            data-testid="outline-subtask-@subtask.Id-add-button">
                         <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" fill="currentColor" viewBox="0 0 16 16">
                             <path fill-rule="evenodd" d="M8 2a.5.5 0 0 1 .5.5v5h5a.5.5 0 0 1 0 1h-5v5a.5.5 0 0 1-1 0v-5h-5a.5.5 0 0 1 0-1h5v-5A.5.5 0 0 1 8 2"/>
                         </svg>

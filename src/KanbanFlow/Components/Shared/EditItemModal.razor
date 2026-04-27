@@ -2,14 +2,14 @@
 @inject IDbContextFactory<AppDbContext> DbFactory
 
 @* Bootstrap Modal for editing Projects, Features, and Tasks *@
-<div class="modal fade @(IsOpen ? "show" : "")" tabindex="-1"
+<div class="modal fade @(IsOpen ? "show" : "")" tabindex="-1" data-testid="edit-item-modal"
      style="display: @(IsOpen ? "block" : "none");"
      @onclick="HandleBackdropClick" @onclick:stopPropagation="false">
     <div class="modal-dialog modal-lg modal-dialog-scrollable" @onclick:stopPropagation="true">
         <div class="modal-content">
             <div class="modal-header">
                 <h5 class="modal-title">Edit @GetItemTypeName()</h5>
-                <button type="button" class="btn-close" @onclick="Close"></button>
+                <button type="button" class="btn-close" @onclick="Close" aria-label="Close edit item modal" data-testid="edit-item-close-button"></button>
             </div>
             <div class="modal-body">
                 @if (errorMessage is not null)
@@ -195,8 +195,9 @@
                 }
             </div>
             <div class="modal-footer">
-                <button type="button" class="btn btn-secondary btn-sm" @onclick="Close">Cancel</button>
+                <button type="button" class="btn btn-secondary btn-sm" @onclick="Close" data-testid="edit-item-cancel-button">Cancel</button>
                 <button type="button" class="btn btn-primary btn-sm" @onclick="SaveChanges"
+                        data-testid="edit-item-save-button"
                         disabled="@string.IsNullOrWhiteSpace(editName)">
                     Save Changes
                 </button>
