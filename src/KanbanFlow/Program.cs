@@ -45,12 +45,13 @@ app.Run();
 
 static void EnsureTaskClaimColumns(AppDbContext db)
 {
-    var connection = db.Database.GetDbConnection();
-    var shouldClose = connection.State != System.Data.ConnectionState.Open;
-    if (shouldClose) connection.Open();
+    if (!db.Database.IsSqlite())
+        return;
 
+    db.Database.OpenConnection();
     try
     {
+        var connection = db.Database.GetDbConnection();
         using var command = connection.CreateCommand();
         command.CommandText = "PRAGMA table_info('Tasks')";
 
@@ -79,6 +80,6 @@ static void EnsureTaskClaimColumns(AppDbContext db)
     }
     finally
     {
-        if (shouldClose) connection.Close();
+        db.Database.CloseConnection();
     }
 }
