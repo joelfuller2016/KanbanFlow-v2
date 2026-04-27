@@ -13,6 +13,7 @@ if (!Number.isInteger(projectId)) {
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const serverPath = path.join(scriptDir, "mcp-server.mjs");
 const apiBaseUrl = (process.env.KANBANFLOW_API_URL || "http://127.0.0.1:5123").replace(/\/$/, "");
+const restTimeoutMs = Number.parseInt(process.env.KANBANFLOW_MCP_SMOKE_TIMEOUT_MS || "10000", 10);
 const server = spawn(process.execPath, [serverPath], {
   stdio: ["pipe", "pipe", "inherit"],
   env: { ...process.env }
@@ -118,12 +119,18 @@ try {
 } finally {
   try {
     if (tempFeatureId !== undefined) {
-      await restJson(`/api/features/${tempFeatureId}`, { method: "DELETE", expectNoContent: true });
-      console.log(`Cleaned up MCP smoke feature ${tempFeatureId}.`);
-      const contextAfterCleanup = await restJson(`/api/projects/${projectId}/context`);
-      const serializedContext = JSON.stringify(contextAfterCleanup);
-      if (serializedContext.includes(runMarker)) {
-        throw new Error(`MCP smoke cleanup failed; project context still contains ${runMarker}.`);
+      try {
+        await restJson(`/api/features/${tempFeatureId}`, { method: "DELETE", expectNoContent: true });
+        console.log(`Cleaned up MCP smoke feature ${tempFeatureId}.`);
+        const contextAfterCleanup = await restJson(`/api/projects/${projectId}/context`);
+        const serializedContext = JSON.stringify(contextAfterCleanup);
+        if (serializedContext.includes(runMarker)) {
+          console.error(`MCP smoke cleanup failed; project context still contains ${runMarker}.`);
+          process.exitCode = 1;
+        }
+      } catch (error) {
+        console.error(`MCP smoke cleanup failed for feature ${tempFeatureId}: ${error.message}`);
+        process.exitCode = 1;
       }
     }
   } finally {
@@ -256,9 +263,12 @@ async function callTool(name, args) {
 }
 
 async function restJson(path, options = {}) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), restTimeoutMs);
   const requestOptions = {
     method: options.method || "GET",
-    headers: { Accept: "application/json" }
+    headers: { Accept: "application/json" },
+    signal: controller.signal
   };
 
   if (options.body !== undefined) {
@@ -266,8 +276,20 @@ async function restJson(path, options = {}) {
     requestOptions.body = JSON.stringify(options.body);
   }
 
-  const response = await fetch(`${apiBaseUrl}${path}`, requestOptions);
-  const text = await response.text();
+  let response;
+  let text;
+  try {
+    response = await fetch(`${apiBaseUrl}${path}`, requestOptions);
+    text = await response.text();
+  } catch (error) {
+    if (error.name === "AbortError") {
+      throw new Error(`REST ${requestOptions.method} ${path} timed out after ${restTimeoutMs}ms.`);
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+  }
+
   const payload = text.length > 0 ? parseJsonOrText(text) : null;
 
   if (!response.ok) {
