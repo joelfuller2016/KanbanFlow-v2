@@ -46,12 +46,20 @@ try {
   notify("notifications/initialized");
 
   await expectJsonRpcError({ jsonrpc: "2.0", id: 9001, params: {} }, -32600);
+  await expectJsonRpcError({ jsonrpc: "1.0", id: 9002, method: "tools/list", params: {} }, -32600);
   await expectJsonRpcError({
     jsonrpc: "2.0",
-    id: 9002,
+    id: 9003,
+    method: "unknown/method",
+    params: {}
+  }, -32601);
+  await expectJsonRpcError({
+    jsonrpc: "2.0",
+    id: 9004,
     method: "tools/call",
     params: { name: "get_project_context", arguments: {} }
   }, -32602, { chunked: true });
+  await expectRawJsonRpcError('{"jsonrpc":"2.0","id":9005,"method":', -32700);
   await expectNoResponse({ jsonrpc: "2.0", method: "tools/list", params: {} });
 
   const list = await request("tools/list", {});
@@ -63,6 +71,19 @@ try {
   }
 
   const context = await callTool("get_project_context", { projectId });
+  await expectJsonRpcError({
+    jsonrpc: "2.0",
+    id: 9006,
+    method: "tools/call",
+    params: { name: "get_project_context", arguments: { projectId: -1 } }
+  }, -32000, {
+    assertError: error => {
+      if (typeof error.data?.status !== "number" || !error.data.path?.includes("/api/projects/-1/context")) {
+        throw new Error(`Expected REST status/path error data, received: ${JSON.stringify(error.data)}`);
+      }
+    }
+  });
+
   const task = findFirstTask(context.features || []);
   if (!task) {
     throw new Error(`No task found in project ${projectId}; cannot run MCP mutation smoke.`);
@@ -119,10 +140,24 @@ async function expectJsonRpcError(message, expectedCode, options = {}) {
       throw new Error(`Expected JSON-RPC error ${expectedCode}, received ${error.code ?? "unknown"}: ${error.message}`);
     }
 
+    options.assertError?.(error);
+
     return;
   }
 
   throw new Error(`Expected JSON-RPC error ${expectedCode}, but request succeeded.`);
+}
+
+async function expectRawJsonRpcError(rawBody, expectedCode) {
+  const unexpectedStart = unexpectedMessages.length;
+  writeRawFrame(rawBody);
+  const message = await waitForUnexpectedMessage(unexpectedStart, 1000);
+  if (!message?.error) {
+    throw new Error(`Expected raw JSON-RPC error ${expectedCode}, received: ${JSON.stringify(message)}`);
+  }
+  if (message.error.code !== expectedCode) {
+    throw new Error(`Expected raw JSON-RPC error ${expectedCode}, received ${message.error.code}: ${message.error.message}`);
+  }
 }
 
 async function expectNoResponse(message, timeoutMs = 300) {
@@ -175,6 +210,10 @@ async function callTool(name, args) {
 
 function writeMessage(message, options = {}) {
   const body = JSON.stringify(message);
+  writeRawFrame(body, options);
+}
+
+function writeRawFrame(body, options = {}) {
   const framed = `Content-Length: ${Buffer.byteLength(body, "utf8")}\r\n\r\n${body}`;
   if (options.chunked) {
     const splitAt = Math.max(1, Math.floor(framed.length / 2));

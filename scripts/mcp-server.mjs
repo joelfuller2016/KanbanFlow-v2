@@ -290,8 +290,10 @@ async function restJson(path, options = {}) {
   }
 
   let response;
+  let text;
   try {
     response = await fetch(`${apiBaseUrl}${path}`, requestOptions);
+    text = await response.text();
   } catch (error) {
     if (error.name === "AbortError") {
       throw new McpError(-32000, `REST request timed out after ${restTimeoutMs}ms.`, { path, timeoutMs: restTimeoutMs });
@@ -301,7 +303,6 @@ async function restJson(path, options = {}) {
     clearTimeout(timeout);
   }
 
-  const text = await response.text();
   const payload = text.length > 0 ? parseJsonOrText(text) : null;
 
   if (!response.ok) {
