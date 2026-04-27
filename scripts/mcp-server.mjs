@@ -43,7 +43,7 @@ const tools = [
   },
   {
     name: "get_task",
-    description: "Get one task with feature information, subtasks, and comments.",
+    description: "Get one task with feature information and subtasks."
     inputSchema: {
       type: "object",
       properties: {
