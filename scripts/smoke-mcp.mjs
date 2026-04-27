@@ -59,6 +59,7 @@ try {
     method: "tools/call",
     params: { name: "get_project_context", arguments: {} }
   }, -32602, { chunked: true });
+  await expectUnexpectedJsonRpcError({ jsonrpc: "2.0", params: {} }, -32600, null);
   await expectRawJsonRpcError('{"jsonrpc":"2.0","id":9005,"method":', -32700);
   await expectNoResponse({ jsonrpc: "2.0", method: "tools/list", params: {} });
 
@@ -167,6 +168,22 @@ async function expectNoResponse(message, timeoutMs = 300) {
   const unexpected = await waitForUnexpectedMessage(unexpectedStart, timeoutMs);
   if (unexpected) {
     throw new Error(`Expected no response for notification, but received: ${JSON.stringify(unexpected)}`);
+  }
+}
+
+async function expectUnexpectedJsonRpcError(message, expectedCode, expectedId, timeoutMs = 1000) {
+  const unexpectedStart = unexpectedMessages.length;
+  writeMessage(message);
+
+  const response = await waitForUnexpectedMessage(unexpectedStart, timeoutMs);
+  if (!response?.error) {
+    throw new Error(`Expected JSON-RPC error ${expectedCode}, received: ${JSON.stringify(response)}`);
+  }
+  if (response.id !== expectedId) {
+    throw new Error(`Expected JSON-RPC error id ${expectedId}, received: ${JSON.stringify(response.id)}`);
+  }
+  if (response.error.code !== expectedCode) {
+    throw new Error(`Expected JSON-RPC error ${expectedCode}, received ${response.error.code}: ${response.error.message}`);
   }
 }
 

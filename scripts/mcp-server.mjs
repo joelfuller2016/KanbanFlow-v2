@@ -1,7 +1,12 @@
 #!/usr/bin/env node
 
 const apiBaseUrl = (process.env.KANBANFLOW_API_URL || "http://127.0.0.1:5123").replace(/\/$/, "");
-const restTimeoutMs = Number.parseInt(process.env.KANBANFLOW_MCP_TIMEOUT_MS || "10000", 10);
+const defaultRestTimeoutMs = 10000;
+const minRestTimeoutMs = 1;
+const parsedRestTimeoutMs = Number.parseInt(process.env.KANBANFLOW_MCP_TIMEOUT_MS || String(defaultRestTimeoutMs), 10);
+const restTimeoutMs = Number.isFinite(parsedRestTimeoutMs) && parsedRestTimeoutMs >= minRestTimeoutMs
+  ? parsedRestTimeoutMs
+  : defaultRestTimeoutMs;
 const protocolVersion = "2024-11-05";
 let inputBuffer = Buffer.alloc(0);
 
@@ -201,8 +206,8 @@ async function handleMessage(message) {
 }
 
 function validateRequest(message) {
-  const id = isPlainObject(message) && hasRequestId(message) ? message.id : null;
-  const shouldRespond = isPlainObject(message) ? hasRequestId(message) : true;
+  const id = isPlainObject(message) && hasRequestId(message) && isValidJsonRpcId(message.id) ? message.id : null;
+  const shouldRespond = true;
 
   if (!isPlainObject(message)) {
     return { ok: false, id, shouldRespond, message: "Invalid request: message must be an object." };
