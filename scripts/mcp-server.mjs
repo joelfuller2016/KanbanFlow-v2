@@ -12,6 +12,58 @@ let inputBuffer = Buffer.alloc(0);
 
 const tools = [
   {
+    name: "list_projects",
+    description: "List all projects with feature and task counts.",
+    inputSchema: {
+      type: "object",
+      properties: {}
+    }
+  },
+  {
+    name: "get_project",
+    description: "Get one project with ordered features and task counts.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        projectId: { type: "integer", description: "Project id to inspect." }
+      },
+      required: ["projectId"]
+    }
+  },
+  {
+    name: "list_project_tasks",
+    description: "List all tasks in a project as a flat ordered list.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        projectId: { type: "integer", description: "Project id to inspect." }
+      },
+      required: ["projectId"]
+    }
+  },
+  {
+    name: "get_task",
+    description: "Get one task with feature information, subtasks, and comments.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        taskId: { type: "integer", description: "Task id to inspect." }
+      },
+      required: ["taskId"]
+    }
+  },
+  {
+    name: "get_project_board",
+    description: "Get project tasks grouped by Kanban status.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        projectId: { type: "integer", description: "Project id to inspect." }
+      },
+      required: ["projectId"]
+    }
+  },
+  {
     name: "get_project_context",
     description: "Get AI-readable project metadata, summary counts, requirements, nested features, tasks, subtasks, and comments.",
     inputSchema: {
@@ -246,6 +298,16 @@ function isPlainObject(value) {
 
 async function callTool(toolName, args) {
   switch (toolName) {
+    case "list_projects":
+      return restJson("/api/projects");
+    case "get_project":
+      return restJson(`/api/projects/${requiredInt(args, "projectId")}`);
+    case "list_project_tasks":
+      return restJson(`/api/projects/${requiredInt(args, "projectId")}/tasks`);
+    case "get_task":
+      return restJson(`/api/tasks/${requiredInt(args, "taskId")}`);
+    case "get_project_board":
+      return restJson(`/api/projects/${requiredInt(args, "projectId")}/board`);
     case "get_project_context":
       return restJson(`/api/projects/${requiredInt(args, "projectId")}/context`);
     case "get_next_tasks": {
