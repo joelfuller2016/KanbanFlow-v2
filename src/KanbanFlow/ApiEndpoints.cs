@@ -219,6 +219,50 @@ public static class ApiEndpoints
             });
         });
 
+        // GET /api/projects/{id}/next-tasks — small ranked list of recommended next work
+        app.MapGet("/api/projects/{id:int}/next-tasks", async (int id, int? limit, AppDbContext db) =>
+        {
+            var projectExists = await db.Projects.AnyAsync(p => p.Id == id);
+            if (!projectExists)
+                return Results.NotFound(new { message = $"Project {id} not found." });
+
+            var take = Math.Clamp(limit ?? 5, 1, 25);
+
+            var candidates = await db.Tasks
+                .Include(t => t.Feature)
+                .Where(t => t.Feature.ProjectId == id && t.Status != WorkStatus.Done)
+                .AsNoTracking()
+                .ToListAsync();
+
+            var recommendations = candidates
+                .OrderByDescending(t => PriorityRank(t.Priority))
+                .ThenByDescending(t => StatusRank(t.Status))
+                .ThenBy(t => t.UpdatedAt)
+                .Take(take)
+                .Select((task, index) => new
+                {
+                    Rank = index + 1,
+                    task.Id,
+                    task.FeatureId,
+                    FeatureName = task.Feature.Name,
+                    task.Name,
+                    task.Description,
+                    Status = task.Status.ToString(),
+                    Priority = task.Priority.ToString(),
+                    task.Assignee,
+                    task.UpdatedAt,
+                    Reason = BuildNextTaskReason(task)
+                });
+
+            return Results.Ok(new
+            {
+                ProjectId = id,
+                GeneratedAt = DateTime.UtcNow,
+                Count = recommendations.Count(),
+                Recommendations = recommendations
+            });
+        });
+
         // POST /api/projects — create
         app.MapPost("/api/projects", async (ProjectDto dto, AppDbContext db) =>
         {
@@ -1388,6 +1432,39 @@ public static class ApiEndpoints
             current = parent;
         }
         return depth;
+    }
+
+    private static int PriorityRank(TaskPriority priority) => priority switch
+    {
+        TaskPriority.Critical => 4,
+        TaskPriority.High => 3,
+        TaskPriority.Medium => 2,
+        TaskPriority.Low => 1,
+        _ => 0
+    };
+
+    private static int StatusRank(WorkStatus status) => status switch
+    {
+        WorkStatus.InProgress => 3,
+        WorkStatus.Todo => 2,
+        WorkStatus.Backlog => 1,
+        WorkStatus.Review => 0,
+        WorkStatus.Done => -1,
+        _ => 0
+    };
+
+    private static string BuildNextTaskReason(TaskItem task)
+    {
+        var status = task.Status switch
+        {
+            WorkStatus.InProgress => "already in progress",
+            WorkStatus.Todo => "ready to start",
+            WorkStatus.Backlog => "available in the backlog",
+            WorkStatus.Review => "waiting for review attention",
+            _ => task.Status.ToString().ToLowerInvariant()
+        };
+
+        return $"{task.Priority} priority task that is {status}; last updated {task.UpdatedAt:u}.";
     }
 }
 
