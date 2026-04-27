@@ -129,3 +129,18 @@ h1:focus {
 .requirement-row {
     border-color: rgba(0, 0, 0, .08) !important;
 }
+
+/* ── Task detail comments ── */
+.task-comments-list {
+    max-height: 16rem;
+    overflow-y: auto;
+}
+
+.task-comment-note {
+    border-left: 0.25rem solid #0d6efd !important;
+}
+
+.task-comment-system {
+    border-left: 0.25rem solid #6c757d !important;
+    background: rgba(108, 117, 125, .06);
+}

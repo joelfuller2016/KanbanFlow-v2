@@ -148,6 +148,61 @@
                 </div>
             </div>
 
+            @* Comments / activity notes *@
+            <section class="mb-4 pt-3 border-top" data-testid="task-comments-section" aria-labelledby="task-comments-heading">
+                <div class="d-flex align-items-center mb-2">
+                    <h6 id="task-comments-heading" class="form-label small text-muted mb-0">Comments</h6>
+                    <span class="ms-2 badge bg-secondary small" data-testid="task-comments-count">@comments.Count</span>
+                </div>
+
+                @if (commentsLoading)
+                {
+                    <div class="small text-muted" data-testid="task-comments-loading">Loading comments...</div>
+                }
+                else if (commentsError is not null)
+                {
+                    <div class="alert alert-danger py-2 small" data-testid="task-comments-error">@commentsError</div>
+                }
+                else if (comments.Count == 0)
+                {
+                    <div class="text-muted small border rounded p-2 mb-2" data-testid="task-comments-empty-state">
+                        No comments yet. Add a note for the next human or AI agent.
+                    </div>
+                }
+                else
+                {
+                    <div class="task-comments-list d-flex flex-column gap-2 mb-2" data-testid="task-comments-list">
+                        @foreach (var comment in comments)
+                        {
+                            <article class="task-comment border rounded p-2 @GetCommentBorderClass(comment.Type)" data-testid="@($"task-comment-row-{comment.Id}")">
+                                <div class="d-flex flex-wrap align-items-center gap-2 mb-1">
+                                    <span class="@GetCommentTypeBadgeClass(comment.Type)" data-testid="@($"task-comment-type-{comment.Id}")">@GetCommentTypeDisplayName(comment.Type)</span>
+                                    <span class="small fw-semibold">@(!string.IsNullOrWhiteSpace(comment.Author) ? comment.Author : "Anonymous")</span>
+                                    <span class="small text-muted ms-auto">@comment.CreatedAt.ToString("MMM d, yyyy h:mm tt")</span>
+                                </div>
+                                <div class="small text-break">@comment.Text</div>
+                            </article>
+                        }
+                    </div>
+                }
+
+                <div class="mt-2">
+                    <label class="form-label small text-muted mb-1" for="task-comment-input">Add comment</label>
+                    <textarea id="task-comment-input" class="form-control form-control-sm" rows="3"
+                              placeholder="Write a handoff note or update..."
+                              data-testid="task-comment-input"
+                              @bind="newCommentText"
+                              @bind:event="oninput"></textarea>
+                    <div class="d-flex justify-content-end mt-2">
+                        <button class="btn btn-sm btn-primary" data-testid="task-comment-add-button"
+                                @onclick="AddCommentAsync"
+                                disabled="@(addingComment || string.IsNullOrWhiteSpace(newCommentText))">
+                            @(addingComment ? "Adding..." : "Add Comment")
+                        </button>
+                    </div>
+                </div>
+            </section>
+
             @* Timestamps *@
             <div class="mb-4 pt-2 border-top">
                 <small class="text-muted d-block">Created: @Task.CreatedAt.ToString("MMM d, yyyy h:mm tt")</small>
@@ -214,7 +269,15 @@
     // Delete confirmation
     private bool confirmingDelete;
 
-    protected override void OnParametersSet()
+    // Comments
+    private int? loadedCommentsTaskId;
+    private List<TaskComment> comments = [];
+    private bool commentsLoading;
+    private bool addingComment;
+    private string? commentsError;
+    private string? newCommentText;
+
+    protected override async Task OnParametersSetAsync()
     {
         // Reset editing state when task changes
         isEditingName = false;
@@ -223,6 +286,20 @@
         newSubtaskText = null;
         addingChildSubtaskToId = null;
         newChildSubtaskText = null;
+
+        var taskId = IsOpen ? Task?.Id : null;
+        if (taskId != loadedCommentsTaskId)
+        {
+            loadedCommentsTaskId = taskId;
+            newCommentText = null;
+            comments = [];
+            commentsError = null;
+
+            if (taskId is int id)
+            {
+                await LoadCommentsAsync(id);
+            }
+        }
     }
 
     // ── Panel close ──
@@ -551,6 +628,72 @@
         await OnTaskUpdated.InvokeAsync();
     }
 
+    // ── Comments ──
+
+    private async Task LoadCommentsAsync(int taskId)
+    {
+        commentsLoading = true;
+        commentsError = null;
+
+        try
+        {
+            using var db = await DbFactory.CreateDbContextAsync();
+            comments = await db.TaskComments
+                .Where(c => c.TaskItemId == taskId)
+                .AsNoTracking()
+                .OrderBy(c => c.CreatedAt)
+                .ThenBy(c => c.Id)
+                .ToListAsync();
+        }
+        catch (Exception ex)
+        {
+            commentsError = ex.Message;
+            comments = [];
+        }
+        finally
+        {
+            commentsLoading = false;
+        }
+    }
+
+    private async Task AddCommentAsync()
+    {
+        if (Task is null || string.IsNullOrWhiteSpace(newCommentText)) return;
+
+        addingComment = true;
+        commentsError = null;
+
+        try
+        {
+            var comment = new TaskComment
+            {
+                TaskItemId = Task.Id,
+                Text = newCommentText.Trim(),
+                Author = "Human",
+                Type = CommentType.Comment,
+                CreatedAt = DateTime.UtcNow
+            };
+
+            using var db = await DbFactory.CreateDbContextAsync();
+            db.TaskComments.Add(comment);
+            await db.SaveChangesAsync();
+
+            comments.Add(comment);
+            comments = comments.OrderBy(c => c.CreatedAt).ThenBy(c => c.Id).ToList();
+            newCommentText = null;
+
+            await OnTaskUpdated.InvokeAsync();
+        }
+        catch (Exception ex)
+        {
+            commentsError = ex.Message;
+        }
+        finally
+        {
+            addingComment = false;
+        }
+    }
+
     // ── Delete task ──
 
     private async Task ConfirmDeleteAsync()
@@ -592,4 +735,24 @@
         WorkStatus.Done => "Done",
         _ => status.ToString()
     };
+
+    private static string GetCommentTypeDisplayName(CommentType type) => type switch
+    {
+        CommentType.StatusChange => "Status",
+        CommentType.FeatureChange => "Feature",
+        CommentType.PriorityChange => "Priority",
+        CommentType.AssigneeChange => "Assignee",
+        _ => type.ToString()
+    };
+
+    private static string GetCommentTypeBadgeClass(CommentType type) => type switch
+    {
+        CommentType.Comment => "badge text-bg-primary",
+        CommentType.Created => "badge text-bg-success",
+        _ => "badge text-bg-secondary"
+    };
+
+    private static string GetCommentBorderClass(CommentType type) => type == CommentType.Comment
+        ? "task-comment-note"
+        : "task-comment-system";
 }
