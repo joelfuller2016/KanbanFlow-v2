@@ -4,10 +4,22 @@ A super simple .NET 10 Blazor Server kanban board with project management. AI ag
 
 ## Quick Start
 
-```bash
-dotnet run
-# Open http://localhost:5000
+Run from the repo root with the checked-in launch profile:
+
+```powershell
+dotnet run --project src/KanbanFlow/KanbanFlow.csproj
+# Open the HTTP URL printed by dotnet run, for example http://localhost:5043
 ```
+
+For a fixed local URL that is convenient for UI testing:
+
+```powershell
+$env:ASPNETCORE_ENVIRONMENT = "Development"
+dotnet run --project src/KanbanFlow/KanbanFlow.csproj --urls http://127.0.0.1:5123
+# Open http://127.0.0.1:5123
+```
+
+Avoid running the local UI with `--no-launch-profile` unless you also set `ASPNETCORE_ENVIRONMENT=Development`. Without the Development environment, Blazor static web assets such as `_framework/blazor.web.js` may not be served from an unpackaged local build.
 
 ## Smoke Tests
 
