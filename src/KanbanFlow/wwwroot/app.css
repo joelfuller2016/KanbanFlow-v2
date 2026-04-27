@@ -99,6 +99,7 @@ h1:focus {
 
 /* ── Board card hover effect ── */
 .board-card {
+    cursor: pointer;
     transition: box-shadow 0.15s ease-in-out, transform 0.1s ease-in-out;
     box-shadow: 0 .125rem .25rem rgba(0, 0, 0, .075); /* shadow-sm */
 }
