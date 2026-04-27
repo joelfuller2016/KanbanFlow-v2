@@ -1,0 +1,47 @@
+<div class="card mb-2 board-card" data-testid="board-card-@Task.Id" data-task-id="@Task.Id"
+     style="border-left: 3px solid @GetPriorityBorderColor(Task.Priority); @(IsDone ? "opacity: 0.6;" : "")">
+    <div class="card-body p-2">
+        <div class="d-flex align-items-center">
+            <input type="checkbox" class="form-check-input me-2 flex-shrink-0" style="margin-top: 0; cursor: pointer;"
+                   checked="@IsDone"
+                   @onchange="() => OnToggleTaskDone.InvokeAsync(Task)"
+                   @onclick:stopPropagation="true"
+                   aria-label="Mark @Task.Name as @(IsDone ? "not done" : "done")"
+                   data-testid="board-card-@Task.Id-done-checkbox" />
+            <span class="fw-medium small @(IsDone ? "text-decoration-line-through text-muted" : "")"
+                  style="cursor: pointer;" role="button"
+                  data-testid="board-card-@Task.Id-title"
+                  @onclick="() => OnOpenTaskDetail.InvokeAsync(Task)">@Task.Name</span>
+        </div>
+        <div class="d-flex justify-content-between align-items-center mt-1 ps-4">
+            <span class="@GetPriorityBadgeClass(Task.Priority)">@Task.Priority</span>
+            <small class="text-muted fst-italic text-truncate ms-1" style="font-size: 0.7rem;" title="@Task.Feature.Name">@Task.Feature.Name</small>
+        </div>
+    </div>
+</div>
+
+@code {
+    [Parameter, EditorRequired] public TaskItem Task { get; set; } = default!;
+    [Parameter] public EventCallback<TaskItem> OnToggleTaskDone { get; set; }
+    [Parameter] public EventCallback<TaskItem> OnOpenTaskDetail { get; set; }
+
+    private bool IsDone => Task.Status == WorkStatus.Done;
+
+    private static string GetPriorityBadgeClass(TaskPriority priority) => priority switch
+    {
+        TaskPriority.Low => "badge bg-secondary",
+        TaskPriority.Medium => "badge bg-warning text-dark",
+        TaskPriority.High => "badge bg-orange text-white",
+        TaskPriority.Critical => "badge bg-danger",
+        _ => "badge bg-secondary"
+    };
+
+    private static string GetPriorityBorderColor(TaskPriority priority) => priority switch
+    {
+        TaskPriority.Low => "#6c757d",
+        TaskPriority.Medium => "#ffc107",
+        TaskPriority.High => "#fd7e14",
+        TaskPriority.Critical => "#dc3545",
+        _ => "#6c757d"
+    };
+}
