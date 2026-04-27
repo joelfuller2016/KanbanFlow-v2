@@ -69,10 +69,42 @@ try {
 
   const list = await request("tools/list", {});
   const toolNames = new Set(list.tools.map(tool => tool.name));
-  for (const requiredTool of ["get_project_context", "get_next_tasks", "claim_task", "release_task", "update_task_status", "add_task_comment"]) {
+  for (const requiredTool of [
+    "list_projects",
+    "get_project",
+    "list_project_tasks",
+    "get_task",
+    "get_project_board",
+    "get_project_context",
+    "get_next_tasks",
+    "claim_task",
+    "release_task",
+    "update_task_status",
+    "add_task_comment"
+  ]) {
     if (!toolNames.has(requiredTool)) {
       throw new Error(`Missing MCP tool: ${requiredTool}`);
     }
+  }
+
+  const projects = await callTool("list_projects", {});
+  if (!Array.isArray(projects) || !projects.some(project => project.id === projectId)) {
+    throw new Error(`list_projects did not include project ${projectId}.`);
+  }
+
+  const project = await callTool("get_project", { projectId });
+  if (project?.id !== projectId) {
+    throw new Error(`get_project returned unexpected project: ${JSON.stringify(project)}`);
+  }
+
+  const projectTasks = await callTool("list_project_tasks", { projectId });
+  if (!Array.isArray(projectTasks)) {
+    throw new Error("list_project_tasks did not return an array.");
+  }
+
+  const board = await callTool("get_project_board", { projectId });
+  if (board === null || typeof board !== "object") {
+    throw new Error("get_project_board did not return an object.");
   }
 
   await callTool("get_project_context", { projectId });
@@ -109,9 +141,25 @@ try {
     }
   });
 
+  const fetchedTask = await callTool("get_task", { taskId: task.id });
+  if (fetchedTask?.id !== task.id) {
+    throw new Error(`get_task returned unexpected task: ${JSON.stringify(fetchedTask)}`);
+  }
+  if (typeof fetchedTask.featureName !== "string" || !Array.isArray(fetchedTask.subtasks)) {
+    throw new Error(`get_task did not return expected inspection fields: ${JSON.stringify(fetchedTask)}`);
+  }
+  if (!Array.isArray(fetchedTask.comments)) {
+    throw new Error("get_task did not include a comments array.");
+  }
+
   await callTool("get_next_tasks", { projectId, limit: 3 });
   await callTool("claim_task", { taskId: task.id, actor: "mcp-smoke" });
-  await callTool("add_task_comment", { taskId: task.id, text: `MCP smoke test comment ${runMarker}`, author: "mcp-smoke" });
+  const commentText = `MCP smoke test comment ${runMarker}`;
+  await callTool("add_task_comment", { taskId: task.id, text: commentText, author: "mcp-smoke" });
+  const fetchedTaskWithComment = await callTool("get_task", { taskId: task.id });
+  if (!Array.isArray(fetchedTaskWithComment.comments) || !fetchedTaskWithComment.comments.some(comment => comment?.text === commentText)) {
+    throw new Error(`get_task did not return the newly added comment: ${JSON.stringify(fetchedTaskWithComment)}`);
+  }
   await callTool("update_task_status", { taskId: task.id, status: "Review" });
   await callTool("release_task", { taskId: task.id, actor: "mcp-smoke" });
 

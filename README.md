@@ -42,6 +42,11 @@ node ./scripts/mcp-server.mjs
 
 The server exposes these REST-backed MCP tools:
 
+- `list_projects`
+- `get_project`
+- `list_project_tasks`
+- `get_task`
+- `get_project_board`
 - `get_project_context`
 - `get_next_tasks`
 - `claim_task`
