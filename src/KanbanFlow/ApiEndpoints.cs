@@ -250,6 +250,8 @@ public static class ApiEndpoints
                     Status = task.Status.ToString(),
                     Priority = task.Priority.ToString(),
                     task.Assignee,
+                    task.ClaimedBy,
+                    task.ClaimedAt,
                     task.UpdatedAt,
                     Reason = BuildNextTaskReason(task)
                 });
@@ -554,6 +556,8 @@ public static class ApiEndpoints
                 Status = t.Status.ToString(),
                 Priority = t.Priority.ToString(),
                 t.Assignee,
+                t.ClaimedBy,
+                t.ClaimedAt,
                 t.SortOrder,
                 t.CreatedAt,
                 t.UpdatedAt,
@@ -593,6 +597,8 @@ public static class ApiEndpoints
                             Status = t.Status.ToString(),
                             Priority = t.Priority.ToString(),
                             t.Assignee,
+                            t.ClaimedBy,
+                            t.ClaimedAt,
                             t.SortOrder,
                             t.CreatedAt,
                             t.UpdatedAt,
@@ -628,6 +634,8 @@ public static class ApiEndpoints
                 Status = task.Status.ToString(),
                 Priority = task.Priority.ToString(),
                 task.Assignee,
+                task.ClaimedBy,
+                task.ClaimedAt,
                 task.SortOrder,
                 task.CreatedAt,
                 task.UpdatedAt,
@@ -708,6 +716,8 @@ public static class ApiEndpoints
                 Status = task.Status.ToString(),
                 Priority = task.Priority.ToString(),
                 task.Assignee,
+                task.ClaimedBy,
+                task.ClaimedAt,
                 task.SortOrder,
                 task.CreatedAt,
                 task.UpdatedAt,
@@ -759,10 +769,88 @@ public static class ApiEndpoints
                 Status = task.Status.ToString(),
                 Priority = task.Priority.ToString(),
                 task.Assignee,
+                task.ClaimedBy,
+                task.ClaimedAt,
                 task.SortOrder,
                 task.CreatedAt,
                 task.UpdatedAt,
                 task.CompletedAt
+            });
+        });
+
+        // POST /api/tasks/{id}/claim — lightweight task claim for AI agents
+        app.MapPost("/api/tasks/{id:int}/claim", async (int id, ClaimDto dto, AppDbContext db) =>
+        {
+            var actor = dto.Actor?.Trim();
+            if (string.IsNullOrWhiteSpace(actor))
+                return Results.UnprocessableEntity(new { message = "Actor is required." });
+
+            var task = await db.Tasks.FindAsync(id);
+            if (task is null)
+                return Results.NotFound(new { message = $"Task {id} not found." });
+
+            if (!string.IsNullOrWhiteSpace(task.ClaimedBy) &&
+                !string.Equals(task.ClaimedBy, actor, StringComparison.OrdinalIgnoreCase))
+            {
+                return Results.Conflict(new
+                {
+                    message = $"Task {id} is already claimed by {task.ClaimedBy}.",
+                    task.ClaimedBy,
+                    task.ClaimedAt
+                });
+            }
+
+            task.ClaimedBy = actor;
+            task.ClaimedAt ??= DateTime.UtcNow;
+            task.UpdatedAt = DateTime.UtcNow;
+            await db.SaveChangesAsync();
+
+            return Results.Ok(new
+            {
+                task.Id,
+                task.Name,
+                task.ClaimedBy,
+                task.ClaimedAt,
+                task.UpdatedAt
+            });
+        });
+
+        // POST /api/tasks/{id}/release — release a task claimed by the same actor
+        app.MapPost("/api/tasks/{id:int}/release", async (int id, ClaimDto dto, AppDbContext db) =>
+        {
+            var actor = dto.Actor?.Trim();
+            if (string.IsNullOrWhiteSpace(actor))
+                return Results.UnprocessableEntity(new { message = "Actor is required." });
+
+            var task = await db.Tasks.FindAsync(id);
+            if (task is null)
+                return Results.NotFound(new { message = $"Task {id} not found." });
+
+            if (string.IsNullOrWhiteSpace(task.ClaimedBy))
+                return Results.Ok(new { task.Id, task.Name, task.ClaimedBy, task.ClaimedAt, task.UpdatedAt });
+
+            if (!string.Equals(task.ClaimedBy, actor, StringComparison.OrdinalIgnoreCase))
+            {
+                return Results.Conflict(new
+                {
+                    message = $"Task {id} is claimed by {task.ClaimedBy}; only that actor can release it.",
+                    task.ClaimedBy,
+                    task.ClaimedAt
+                });
+            }
+
+            task.ClaimedBy = null;
+            task.ClaimedAt = null;
+            task.UpdatedAt = DateTime.UtcNow;
+            await db.SaveChangesAsync();
+
+            return Results.Ok(new
+            {
+                task.Id,
+                task.Name,
+                task.ClaimedBy,
+                task.ClaimedAt,
+                task.UpdatedAt
             });
         });
 
@@ -1483,6 +1571,8 @@ public record TaskDto(
     int? SortOrder);
 
 public record StatusDto(string? Status);
+
+public record ClaimDto(string? Actor);
 
 public record ReassignDto(int FeatureId);
 

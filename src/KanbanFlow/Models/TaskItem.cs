@@ -9,6 +9,8 @@ public class TaskItem
     public WorkStatus Status { get; set; } = WorkStatus.Backlog;
     public TaskPriority Priority { get; set; } = TaskPriority.Low;
     public string? Assignee { get; set; }
+    public string? ClaimedBy { get; set; }
+    public DateTime? ClaimedAt { get; set; }
     public int SortOrder { get; set; }
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
     public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
