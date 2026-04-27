@@ -20,6 +20,8 @@ const server = spawn(process.execPath, [serverPath], {
 let nextId = 1;
 let buffer = Buffer.alloc(0);
 const pending = new Map();
+const unexpectedMessages = [];
+const unexpectedWaiters = [];
 
 server.stdout.on("data", chunk => {
   buffer = Buffer.concat([buffer, chunk]);
@@ -43,6 +45,24 @@ try {
   });
   notify("notifications/initialized");
 
+  await expectJsonRpcError({ jsonrpc: "2.0", id: 9001, params: {} }, -32600);
+  await expectJsonRpcError({ jsonrpc: "1.0", id: 9002, method: "tools/list", params: {} }, -32600);
+  await expectJsonRpcError({
+    jsonrpc: "2.0",
+    id: 9003,
+    method: "unknown/method",
+    params: {}
+  }, -32601);
+  await expectJsonRpcError({
+    jsonrpc: "2.0",
+    id: 9004,
+    method: "tools/call",
+    params: { name: "get_project_context", arguments: {} }
+  }, -32602, { chunked: true });
+  await expectUnexpectedJsonRpcError({ jsonrpc: "2.0", params: {} }, -32600, null);
+  await expectRawJsonRpcError('{"jsonrpc":"2.0","id":9005,"method":', -32700);
+  await expectNoResponse({ jsonrpc: "2.0", method: "tools/list", params: {} });
+
   const list = await request("tools/list", {});
   const toolNames = new Set(list.tools.map(tool => tool.name));
   for (const requiredTool of ["get_project_context", "get_next_tasks", "claim_task", "release_task", "update_task_status", "add_task_comment"]) {
@@ -52,6 +72,19 @@ try {
   }
 
   const context = await callTool("get_project_context", { projectId });
+  await expectJsonRpcError({
+    jsonrpc: "2.0",
+    id: 9006,
+    method: "tools/call",
+    params: { name: "get_project_context", arguments: { projectId: -1 } }
+  }, -32000, {
+    assertError: error => {
+      if (typeof error.data?.status !== "number" || !error.data.path?.includes("/api/projects/-1/context")) {
+        throw new Error(`Expected REST status/path error data, received: ${JSON.stringify(error.data)}`);
+      }
+    }
+  });
+
   const task = findFirstTask(context.features || []);
   if (!task) {
     throw new Error(`No task found in project ${projectId}; cannot run MCP mutation smoke.`);
@@ -70,8 +103,16 @@ try {
 
 function request(method, params) {
   const id = nextId++;
-  const message = { jsonrpc: "2.0", id, method, params };
-  writeMessage(message);
+  return requestMessage({ jsonrpc: "2.0", id, method, params });
+}
+
+function requestMessage(message, options = {}) {
+  if (message.id === undefined || message.id === null) {
+    throw new Error("requestMessage requires a JSON-RPC id.");
+  }
+
+  const { id, method = `message ${message.id}` } = message;
+  writeMessage(message, options);
 
   return new Promise((resolve, reject) => {
     const timeout = setTimeout(() => {
@@ -92,6 +133,87 @@ function request(method, params) {
   });
 }
 
+async function expectJsonRpcError(message, expectedCode, options = {}) {
+  try {
+    await requestMessage(message, options);
+  } catch (error) {
+    if (error.code !== expectedCode) {
+      throw new Error(`Expected JSON-RPC error ${expectedCode}, received ${error.code ?? "unknown"}: ${error.message}`);
+    }
+
+    options.assertError?.(error);
+
+    return;
+  }
+
+  throw new Error(`Expected JSON-RPC error ${expectedCode}, but request succeeded.`);
+}
+
+async function expectRawJsonRpcError(rawBody, expectedCode) {
+  const unexpectedStart = unexpectedMessages.length;
+  writeRawFrame(rawBody);
+  const message = await waitForUnexpectedMessage(unexpectedStart, 1000);
+  if (!message?.error) {
+    throw new Error(`Expected raw JSON-RPC error ${expectedCode}, received: ${JSON.stringify(message)}`);
+  }
+  if (message.error.code !== expectedCode) {
+    throw new Error(`Expected raw JSON-RPC error ${expectedCode}, received ${message.error.code}: ${message.error.message}`);
+  }
+}
+
+async function expectNoResponse(message, timeoutMs = 300) {
+  const unexpectedStart = unexpectedMessages.length;
+  writeMessage(message);
+
+  const unexpected = await waitForUnexpectedMessage(unexpectedStart, timeoutMs);
+  if (unexpected) {
+    throw new Error(`Expected no response for notification, but received: ${JSON.stringify(unexpected)}`);
+  }
+}
+
+async function expectUnexpectedJsonRpcError(message, expectedCode, expectedId, timeoutMs = 1000) {
+  const unexpectedStart = unexpectedMessages.length;
+  writeMessage(message);
+
+  const response = await waitForUnexpectedMessage(unexpectedStart, timeoutMs);
+  if (!response?.error) {
+    throw new Error(`Expected JSON-RPC error ${expectedCode}, received: ${JSON.stringify(response)}`);
+  }
+  if (response.id !== expectedId) {
+    throw new Error(`Expected JSON-RPC error id ${expectedId}, received: ${JSON.stringify(response.id)}`);
+  }
+  if (response.error.code !== expectedCode) {
+    throw new Error(`Expected JSON-RPC error ${expectedCode}, received ${response.error.code}: ${response.error.message}`);
+  }
+}
+
+function waitForUnexpectedMessage(startIndex, timeoutMs) {
+  if (unexpectedMessages.length > startIndex) {
+    return Promise.resolve(unexpectedMessages[startIndex]);
+  }
+
+  return new Promise(resolve => {
+    const timeout = setTimeout(() => {
+      removeUnexpectedWaiter(waiter);
+      resolve(null);
+    }, timeoutMs);
+
+    const waiter = message => {
+      clearTimeout(timeout);
+      resolve(message);
+    };
+
+    unexpectedWaiters.push(waiter);
+  });
+}
+
+function removeUnexpectedWaiter(waiter) {
+  const index = unexpectedWaiters.indexOf(waiter);
+  if (index >= 0) {
+    unexpectedWaiters.splice(index, 1);
+  }
+}
+
 function notify(method, params = {}) {
   writeMessage({ jsonrpc: "2.0", method, params });
 }
@@ -103,9 +225,21 @@ async function callTool(name, args) {
   return JSON.parse(text);
 }
 
-function writeMessage(message) {
+function writeMessage(message, options = {}) {
   const body = JSON.stringify(message);
-  server.stdin.write(`Content-Length: ${Buffer.byteLength(body, "utf8")}\r\n\r\n${body}`);
+  writeRawFrame(body, options);
+}
+
+function writeRawFrame(body, options = {}) {
+  const framed = `Content-Length: ${Buffer.byteLength(body, "utf8")}\r\n\r\n${body}`;
+  if (options.chunked) {
+    const splitAt = Math.max(1, Math.floor(framed.length / 2));
+    server.stdin.write(framed.slice(0, splitAt));
+    setTimeout(() => server.stdin.write(framed.slice(splitAt)), 10);
+    return;
+  }
+
+  server.stdin.write(framed);
 }
 
 function readMessages() {
@@ -129,11 +263,21 @@ function readMessages() {
     buffer = buffer.subarray(messageEnd);
     const message = JSON.parse(rawMessage);
     const deferred = pending.get(message.id);
-    if (!deferred) continue;
+    if (!deferred) {
+      unexpectedMessages.push(message);
+      while (unexpectedWaiters.length > 0) {
+        const waiter = unexpectedWaiters.shift();
+        waiter(message);
+      }
+      continue;
+    }
     pending.delete(message.id);
 
     if (message.error) {
-      deferred.reject(new Error(message.error.message));
+      const error = new Error(message.error.message);
+      error.code = message.error.code;
+      error.data = message.error.data;
+      deferred.reject(error);
     } else {
       deferred.resolve(message.result);
     }

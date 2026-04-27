@@ -1,6 +1,12 @@
 #!/usr/bin/env node
 
 const apiBaseUrl = (process.env.KANBANFLOW_API_URL || "http://127.0.0.1:5123").replace(/\/$/, "");
+const defaultRestTimeoutMs = 10000;
+const minRestTimeoutMs = 1;
+const parsedRestTimeoutMs = Number.parseInt(process.env.KANBANFLOW_MCP_TIMEOUT_MS || String(defaultRestTimeoutMs), 10);
+const restTimeoutMs = Number.isFinite(parsedRestTimeoutMs) && parsedRestTimeoutMs >= minRestTimeoutMs
+  ? parsedRestTimeoutMs
+  : defaultRestTimeoutMs;
 const protocolVersion = "2024-11-05";
 let inputBuffer = Buffer.alloc(0);
 
@@ -91,18 +97,19 @@ process.stdin.on("data", chunk => {
 process.stdin.on("end", () => process.exit(0));
 process.stdin.resume();
 
+class McpError extends Error {
+  constructor(code, message, data = undefined) {
+    super(message);
+    this.code = code;
+    this.data = data;
+  }
+}
+
 function readMessages() {
   while (inputBuffer.length > 0) {
     const headerEnd = inputBuffer.indexOf("\r\n\r\n");
     if (headerEnd === -1) {
-      const newlineEnd = inputBuffer.indexOf("\n");
-      if (newlineEnd === -1) return;
-
-      const line = inputBuffer.subarray(0, newlineEnd).toString("utf8").trim();
-      inputBuffer = inputBuffer.subarray(newlineEnd + 1);
-      if (line.length === 0) continue;
-      handleRawMessage(line);
-      continue;
+      return;
     }
 
     const header = inputBuffer.subarray(0, headerEnd).toString("utf8");
@@ -133,16 +140,26 @@ function handleRawMessage(rawMessage) {
   }
 
   handleMessage(message).catch(error => {
-    if (message.id !== undefined) {
-      writeError(message.id, -32000, error.message);
+    if (hasRequestId(message)) {
+      writeError(message.id, error.code || -32000, error.message, error.data);
     }
   });
 }
 
 async function handleMessage(message) {
+  const validation = validateRequest(message);
+  if (!validation.ok) {
+    if (validation.shouldRespond) {
+      writeError(validation.id, -32600, validation.message);
+    }
+    return;
+  }
+
   const { id, method, params } = message;
+  const shouldRespond = hasRequestId(message);
 
   if (method === "initialize") {
+    if (!shouldRespond) return;
     writeResult(id, {
       protocolVersion,
       capabilities: { tools: {} },
@@ -156,13 +173,21 @@ async function handleMessage(message) {
   }
 
   if (method === "tools/list") {
+    if (!shouldRespond) return;
     writeResult(id, { tools });
     return;
   }
 
   if (method === "tools/call") {
-    const toolName = params?.name;
-    const args = params?.arguments || {};
+    if (!shouldRespond) return;
+    if (!isPlainObject(params) || typeof params.name !== "string") {
+      throw new McpError(-32602, "tools/call params must include a string name.");
+    }
+    const toolName = params.name;
+    const args = params.arguments ?? {};
+    if (!isPlainObject(args)) {
+      throw new McpError(-32602, "tools/call arguments must be an object.");
+    }
     const result = await callTool(toolName, args);
     writeResult(id, {
       content: [
@@ -175,9 +200,48 @@ async function handleMessage(message) {
     return;
   }
 
-  if (id !== undefined) {
+  if (shouldRespond) {
     writeError(id, -32601, `Method not found: ${method}`);
   }
+}
+
+function validateRequest(message) {
+  const id = isPlainObject(message) && hasRequestId(message) && isValidJsonRpcId(message.id) ? message.id : null;
+  const shouldRespond = true;
+
+  if (!isPlainObject(message)) {
+    return { ok: false, id, shouldRespond, message: "Invalid request: message must be an object." };
+  }
+
+  if (message.jsonrpc !== "2.0") {
+    return { ok: false, id, shouldRespond, message: "Invalid request: jsonrpc must be \"2.0\"." };
+  }
+
+  if (hasRequestId(message) && !isValidJsonRpcId(message.id)) {
+    return { ok: false, id: null, shouldRespond, message: "Invalid request: id must be a string, number, or null." };
+  }
+
+  if (typeof message.method !== "string" || message.method.trim().length === 0) {
+    return { ok: false, id, shouldRespond, message: "Invalid request: method must be a non-empty string." };
+  }
+
+  if (message.params !== undefined && !isPlainObject(message.params) && !Array.isArray(message.params)) {
+    return { ok: false, id, shouldRespond, message: "Invalid request: params must be an object or array when provided." };
+  }
+
+  return { ok: true };
+}
+
+function hasRequestId(message) {
+  return Object.prototype.hasOwnProperty.call(message, "id");
+}
+
+function isValidJsonRpcId(id) {
+  return id === null || typeof id === "string" || typeof id === "number";
+}
+
+function isPlainObject(value) {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
 async function callTool(toolName, args) {
@@ -186,7 +250,7 @@ async function callTool(toolName, args) {
       return restJson(`/api/projects/${requiredInt(args, "projectId")}/context`);
     case "get_next_tasks": {
       const projectId = requiredInt(args, "projectId");
-      const limit = optionalInt(args, "limit");
+      const limit = optionalInt(args, "limit", { min: 1, max: 25 });
       const query = limit === undefined ? "" : `?limit=${encodeURIComponent(limit)}`;
       return restJson(`/api/projects/${projectId}/next-tasks${query}`);
     }
@@ -201,9 +265,10 @@ async function callTool(toolName, args) {
         body: { actor: requiredString(args, "actor") }
       });
     case "update_task_status":
+      assertEnum(args, "status", ["Backlog", "Todo", "InProgress", "Review", "Done"]);
       return restJson(`/api/tasks/${requiredInt(args, "taskId")}/status`, {
         method: "PATCH",
-        body: { status: requiredString(args, "status") }
+        body: { status: args.status }
       });
     case "add_task_comment":
       return restJson(`/api/tasks/${requiredInt(args, "taskId")}/comments`, {
@@ -211,14 +276,17 @@ async function callTool(toolName, args) {
         body: { text: requiredString(args, "text"), author: args.author ?? "MCP" }
       });
     default:
-      throw new Error(`Unknown tool: ${toolName}`);
+      throw new McpError(-32601, `Unknown tool: ${toolName}`);
   }
 }
 
 async function restJson(path, options = {}) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), restTimeoutMs);
   const requestOptions = {
     method: options.method || "GET",
-    headers: { Accept: "application/json" }
+    headers: { Accept: "application/json" },
+    signal: controller.signal
   };
 
   if (options.body !== undefined) {
@@ -226,13 +294,30 @@ async function restJson(path, options = {}) {
     requestOptions.body = JSON.stringify(options.body);
   }
 
-  const response = await fetch(`${apiBaseUrl}${path}`, requestOptions);
-  const text = await response.text();
+  let response;
+  let text;
+  try {
+    response = await fetch(`${apiBaseUrl}${path}`, requestOptions);
+    text = await response.text();
+  } catch (error) {
+    if (error.name === "AbortError") {
+      throw new McpError(-32000, `REST request timed out after ${restTimeoutMs}ms.`, { path, timeoutMs: restTimeoutMs });
+    }
+    throw new McpError(-32000, `REST request failed: ${error.message}`, { path });
+  } finally {
+    clearTimeout(timeout);
+  }
+
   const payload = text.length > 0 ? parseJsonOrText(text) : null;
 
   if (!response.ok) {
     const detail = typeof payload === "string" ? payload : JSON.stringify(payload);
-    throw new Error(`REST ${response.status} ${response.statusText}: ${detail}`);
+    throw new McpError(-32000, `REST ${response.status} ${response.statusText}: ${detail}`, {
+      status: response.status,
+      statusText: response.statusText,
+      path,
+      payload
+    });
   }
 
   return payload;
@@ -249,16 +334,22 @@ function parseJsonOrText(text) {
 function requiredInt(args, name) {
   const value = Number(args[name]);
   if (!Number.isInteger(value)) {
-    throw new Error(`${name} must be an integer.`);
+    throw new McpError(-32602, `${name} must be an integer.`);
   }
   return value;
 }
 
-function optionalInt(args, name) {
+function optionalInt(args, name, { min = undefined, max = undefined } = {}) {
   if (args[name] === undefined || args[name] === null || args[name] === "") return undefined;
   const value = Number(args[name]);
   if (!Number.isInteger(value)) {
-    throw new Error(`${name} must be an integer.`);
+    throw new McpError(-32602, `${name} must be an integer.`);
+  }
+  if (min !== undefined && value < min) {
+    throw new McpError(-32602, `${name} must be greater than or equal to ${min}.`);
+  }
+  if (max !== undefined && value > max) {
+    throw new McpError(-32602, `${name} must be less than or equal to ${max}.`);
   }
   return value;
 }
@@ -266,17 +357,24 @@ function optionalInt(args, name) {
 function requiredString(args, name) {
   const value = args[name];
   if (typeof value !== "string" || value.trim().length === 0) {
-    throw new Error(`${name} is required.`);
+    throw new McpError(-32602, `${name} is required.`);
   }
   return value.trim();
+}
+
+function assertEnum(args, name, allowedValues) {
+  if (!allowedValues.includes(args[name])) {
+    throw new McpError(-32602, `${name} must be one of: ${allowedValues.join(", ")}.`);
+  }
 }
 
 function writeResult(id, result) {
   writeMessage({ jsonrpc: "2.0", id, result });
 }
 
-function writeError(id, code, message) {
-  writeMessage({ jsonrpc: "2.0", id, error: { code, message } });
+function writeError(id, code, message, data = undefined) {
+  const error = data === undefined ? { code, message } : { code, message, data };
+  writeMessage({ jsonrpc: "2.0", id, error });
 }
 
 function writeMessage(message) {
