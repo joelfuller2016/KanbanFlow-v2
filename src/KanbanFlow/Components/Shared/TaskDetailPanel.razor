@@ -152,16 +152,22 @@
             <section class="mb-4 pt-3 border-top" data-testid="task-comments-section" aria-labelledby="task-comments-heading">
                 <div class="d-flex align-items-center mb-2">
                     <h6 id="task-comments-heading" class="form-label small text-muted mb-0">Comments</h6>
-                    <span class="ms-2 badge bg-secondary small" data-testid="task-comments-count">@comments.Count</span>
+                    @if (!commentsLoading)
+                    {
+                        <span class="ms-2 badge bg-secondary small" data-testid="task-comments-count">@comments.Count</span>
+                    }
                 </div>
 
                 @if (commentsLoading)
                 {
-                    <div class="small text-muted" data-testid="task-comments-loading">Loading comments...</div>
+                    <div class="d-flex align-items-center small text-muted" data-testid="task-comments-loading">
+                        <div class="spinner-border spinner-border-sm me-2" role="status" aria-hidden="true"></div>
+                        Loading comments...
+                    </div>
                 }
                 else if (commentsError is not null)
                 {
-                    <div class="alert alert-danger py-2 small" data-testid="task-comments-error">@commentsError</div>
+                    <div class="alert alert-danger py-2 small" data-testid="task-comments-error">We couldn't load comments right now. Please try reopening the task.</div>
                 }
                 else if (comments.Count == 0)
                 {
@@ -178,7 +184,7 @@
                                 <div class="d-flex flex-wrap align-items-center gap-2 mb-1">
                                     <span class="@GetCommentTypeBadgeClass(comment.Type)" data-testid="@($"task-comment-type-{comment.Id}")">@GetCommentTypeDisplayName(comment.Type)</span>
                                     <span class="small fw-semibold">@(!string.IsNullOrWhiteSpace(comment.Author) ? comment.Author : "Anonymous")</span>
-                                    <span class="small text-muted ms-auto">@comment.CreatedAt.ToString("MMM d, yyyy h:mm tt")</span>
+                                    <span class="small text-muted ms-auto" title="@($"UTC: {comment.CreatedAt:O}")">@comment.CreatedAt.ToLocalTime().ToString("MMM d, yyyy h:mm tt")</span>
                                 </div>
                                 <div class="small text-break">@comment.Text</div>
                             </article>
@@ -638,21 +644,32 @@
         try
         {
             using var db = await DbFactory.CreateDbContextAsync();
-            comments = await db.TaskComments
+            var loadedComments = await db.TaskComments
                 .Where(c => c.TaskItemId == taskId)
                 .AsNoTracking()
                 .OrderBy(c => c.CreatedAt)
                 .ThenBy(c => c.Id)
                 .ToListAsync();
+
+            if (loadedCommentsTaskId == taskId)
+            {
+                comments = loadedComments;
+            }
         }
-        catch (Exception ex)
+        catch
         {
-            commentsError = ex.Message;
-            comments = [];
+            if (loadedCommentsTaskId == taskId)
+            {
+                commentsError = "Unable to load comments.";
+                comments = [];
+            }
         }
         finally
         {
-            commentsLoading = false;
+            if (loadedCommentsTaskId == taskId)
+            {
+                commentsLoading = false;
+            }
         }
     }
 
@@ -660,6 +677,7 @@
     {
         if (Task is null || string.IsNullOrWhiteSpace(newCommentText)) return;
 
+        var taskId = Task.Id;
         addingComment = true;
         commentsError = null;
 
@@ -667,9 +685,9 @@
         {
             var comment = new TaskComment
             {
-                TaskItemId = Task.Id,
+                TaskItemId = taskId,
                 Text = newCommentText.Trim(),
-                Author = "Human",
+                Author = "You",
                 Type = CommentType.Comment,
                 CreatedAt = DateTime.UtcNow
             };
@@ -678,19 +696,28 @@
             db.TaskComments.Add(comment);
             await db.SaveChangesAsync();
 
-            comments.Add(comment);
-            comments = comments.OrderBy(c => c.CreatedAt).ThenBy(c => c.Id).ToList();
-            newCommentText = null;
+            if (Task?.Id == taskId && loadedCommentsTaskId == taskId)
+            {
+                comments.Add(comment);
+                comments = comments.OrderBy(c => c.CreatedAt).ThenBy(c => c.Id).ToList();
+                newCommentText = null;
+            }
 
             await OnTaskUpdated.InvokeAsync();
         }
-        catch (Exception ex)
+        catch
         {
-            commentsError = ex.Message;
+            if (Task?.Id == taskId && loadedCommentsTaskId == taskId)
+            {
+                commentsError = "Unable to add comment.";
+            }
         }
         finally
         {
-            addingComment = false;
+            if (Task?.Id == taskId && loadedCommentsTaskId == taskId)
+            {
+                addingComment = false;
+            }
         }
     }
 
