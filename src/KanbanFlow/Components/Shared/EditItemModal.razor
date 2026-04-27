@@ -61,7 +61,7 @@
                             <option value="0">None (top-level)</option>
                             @if (AllFeatures is not null)
                             {
-                                @foreach (var f in AllFeatures.Where(f => f.Id != EditFeatureId).OrderBy(f => f.SortOrder))
+                                @foreach (var f in AllFeatures.Where(CanUseAsParentFeature).OrderBy(f => f.SortOrder))
                                 {
                                     var prefix = f.ParentFeatureId.HasValue ? "  " : "";
                                     <option value="@f.Id">@prefix@f.Name</option>
@@ -274,6 +274,40 @@
         }
     }
 
+    private bool CanUseAsParentFeature(Feature feature)
+    {
+        if (EditFeatureId is not int editFeatureId)
+            return true;
+
+        return feature.Id != editFeatureId && !WouldCreateFeatureCycle(editFeatureId, feature.Id);
+    }
+
+    private bool WouldCreateFeatureCycle(int featureId, int proposedParentFeatureId)
+    {
+        if (featureId == proposedParentFeatureId)
+            return true;
+
+        if (AllFeatures is null)
+            return false;
+
+        var visited = new HashSet<int>();
+        var currentParentId = proposedParentFeatureId;
+
+        while (visited.Add(currentParentId))
+        {
+            if (currentParentId == featureId)
+                return true;
+
+            var current = AllFeatures.FirstOrDefault(f => f.Id == currentParentId);
+            if (current?.ParentFeatureId is not int nextParentId)
+                return false;
+
+            currentParentId = nextParentId;
+        }
+
+        return false;
+    }
+
     private async Task LoadTaskDetails()
     {
         if (EditTaskId is null) return;
@@ -362,6 +396,12 @@
                     if (EditFeatureId is null) return;
                     var feature = await db.Features.FindAsync(EditFeatureId.Value);
                     if (feature is null) { errorMessage = "Feature not found."; return; }
+                    if (editParentFeatureId != 0 && WouldCreateFeatureCycle(EditFeatureId.Value, editParentFeatureId))
+                    {
+                        errorMessage = "A feature cannot be moved under itself or one of its descendants.";
+                        return;
+                    }
+
                     feature.Name = editName.Trim();
                     feature.Description = string.IsNullOrWhiteSpace(editDescription) ? null : editDescription.Trim();
                     feature.ParentFeatureId = editParentFeatureId == 0 ? null : editParentFeatureId;

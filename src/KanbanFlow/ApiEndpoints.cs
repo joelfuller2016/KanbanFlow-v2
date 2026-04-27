@@ -480,7 +480,29 @@ public static class ApiEndpoints
             feature.Name = dto.Name.Trim();
             feature.Description = dto.Description?.Trim();
             if (dto.SortOrder.HasValue) feature.SortOrder = dto.SortOrder.Value;
-            if (dto.ParentFeatureId.HasValue) feature.ParentFeatureId = dto.ParentFeatureId.Value == 0 ? null : dto.ParentFeatureId;
+            if (dto.ParentFeatureId.HasValue)
+            {
+                var newParentFeatureId = dto.ParentFeatureId.Value == 0 ? (int?)null : dto.ParentFeatureId.Value;
+                if (newParentFeatureId == id)
+                    return Results.UnprocessableEntity(new { message = "A feature cannot be its own parent." });
+
+                if (newParentFeatureId.HasValue)
+                {
+                    var allProjectFeatures = await db.Features
+                        .Where(f => f.ProjectId == feature.ProjectId)
+                        .AsNoTracking()
+                        .ToListAsync();
+
+                    var parentExists = allProjectFeatures.Any(f => f.Id == newParentFeatureId.Value);
+                    if (!parentExists)
+                        return Results.NotFound(new { message = $"Parent feature {newParentFeatureId.Value} not found in project {feature.ProjectId}." });
+
+                    if (WouldCreateFeatureCycle(id, newParentFeatureId.Value, allProjectFeatures))
+                        return Results.UnprocessableEntity(new { message = "A feature cannot be moved under one of its descendants." });
+                }
+
+                feature.ParentFeatureId = newParentFeatureId;
+            }
             feature.UpdatedAt = DateTime.UtcNow;
 
             await db.SaveChangesAsync();
@@ -1040,7 +1062,29 @@ public static class ApiEndpoints
             subtask.Text = dto.Text.Trim();
             if (dto.Completed.HasValue) subtask.Completed = dto.Completed.Value;
             if (dto.SortOrder.HasValue) subtask.SortOrder = dto.SortOrder.Value;
-            if (dto.ParentSubtaskId.HasValue) subtask.ParentSubtaskId = dto.ParentSubtaskId.Value == 0 ? null : dto.ParentSubtaskId;
+            if (dto.ParentSubtaskId.HasValue)
+            {
+                var newParentSubtaskId = dto.ParentSubtaskId.Value == 0 ? (int?)null : dto.ParentSubtaskId.Value;
+                if (newParentSubtaskId == id)
+                    return Results.UnprocessableEntity(new { message = "A subtask cannot be its own parent." });
+
+                if (newParentSubtaskId.HasValue)
+                {
+                    var allTaskSubtasks = await db.Subtasks
+                        .Where(s => s.TaskItemId == subtask.TaskItemId)
+                        .AsNoTracking()
+                        .ToListAsync();
+
+                    var parentExists = allTaskSubtasks.Any(s => s.Id == newParentSubtaskId.Value);
+                    if (!parentExists)
+                        return Results.NotFound(new { message = $"Parent subtask {newParentSubtaskId.Value} not found in task {subtask.TaskItemId}." });
+
+                    if (WouldCreateSubtaskCycle(id, newParentSubtaskId.Value, allTaskSubtasks))
+                        return Results.UnprocessableEntity(new { message = "A subtask cannot be moved under one of its descendants." });
+                }
+
+                subtask.ParentSubtaskId = newParentSubtaskId;
+            }
 
             await db.SaveChangesAsync();
 
@@ -1380,6 +1424,46 @@ public static class ApiEndpoints
         SubtaskCount = t.Subtasks.Count,
         SubtaskDoneCount = t.Subtasks.Count(s => s.Completed)
     };
+
+    private static bool WouldCreateFeatureCycle(int featureId, int proposedParentFeatureId, IReadOnlyCollection<Feature> allProjectFeatures)
+    {
+        var visited = new HashSet<int>();
+        var currentParentId = proposedParentFeatureId;
+
+        while (visited.Add(currentParentId))
+        {
+            if (currentParentId == featureId)
+                return true;
+
+            var current = allProjectFeatures.FirstOrDefault(f => f.Id == currentParentId);
+            if (current?.ParentFeatureId is not int nextParentId)
+                return false;
+
+            currentParentId = nextParentId;
+        }
+
+        return false;
+    }
+
+    private static bool WouldCreateSubtaskCycle(int subtaskId, int proposedParentSubtaskId, IReadOnlyCollection<Subtask> allTaskSubtasks)
+    {
+        var visited = new HashSet<int>();
+        var currentParentId = proposedParentSubtaskId;
+
+        while (visited.Add(currentParentId))
+        {
+            if (currentParentId == subtaskId)
+                return true;
+
+            var current = allTaskSubtasks.FirstOrDefault(s => s.Id == currentParentId);
+            if (current?.ParentSubtaskId is not int nextParentId)
+                return false;
+
+            currentParentId = nextParentId;
+        }
+
+        return false;
+    }
 
     private static async Task DeleteProjectChildrenAsync(AppDbContext db, int projectId)
     {
