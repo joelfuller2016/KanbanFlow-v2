@@ -20,6 +20,8 @@ const server = spawn(process.execPath, [serverPath], {
 let nextId = 1;
 let buffer = Buffer.alloc(0);
 const pending = new Map();
+const unexpectedMessages = [];
+const unexpectedWaiters = [];
 
 server.stdout.on("data", chunk => {
   buffer = Buffer.concat([buffer, chunk]);
@@ -42,6 +44,15 @@ try {
     clientInfo: { name: "kanbanflow-smoke", version: "0.1.0" }
   });
   notify("notifications/initialized");
+
+  await expectJsonRpcError({ jsonrpc: "2.0", id: 9001, params: {} }, -32600);
+  await expectJsonRpcError({
+    jsonrpc: "2.0",
+    id: 9002,
+    method: "tools/call",
+    params: { name: "get_project_context", arguments: {} }
+  }, -32602, { chunked: true });
+  await expectNoResponse({ jsonrpc: "2.0", method: "tools/list", params: {} });
 
   const list = await request("tools/list", {});
   const toolNames = new Set(list.tools.map(tool => tool.name));
@@ -70,8 +81,16 @@ try {
 
 function request(method, params) {
   const id = nextId++;
-  const message = { jsonrpc: "2.0", id, method, params };
-  writeMessage(message);
+  return requestMessage({ jsonrpc: "2.0", id, method, params });
+}
+
+function requestMessage(message, options = {}) {
+  if (message.id === undefined || message.id === null) {
+    throw new Error("requestMessage requires a JSON-RPC id.");
+  }
+
+  const { id, method = `message ${message.id}` } = message;
+  writeMessage(message, options);
 
   return new Promise((resolve, reject) => {
     const timeout = setTimeout(() => {
@@ -92,6 +111,57 @@ function request(method, params) {
   });
 }
 
+async function expectJsonRpcError(message, expectedCode, options = {}) {
+  try {
+    await requestMessage(message, options);
+  } catch (error) {
+    if (error.code !== expectedCode) {
+      throw new Error(`Expected JSON-RPC error ${expectedCode}, received ${error.code ?? "unknown"}: ${error.message}`);
+    }
+
+    return;
+  }
+
+  throw new Error(`Expected JSON-RPC error ${expectedCode}, but request succeeded.`);
+}
+
+async function expectNoResponse(message, timeoutMs = 300) {
+  const unexpectedStart = unexpectedMessages.length;
+  writeMessage(message);
+
+  const unexpected = await waitForUnexpectedMessage(unexpectedStart, timeoutMs);
+  if (unexpected) {
+    throw new Error(`Expected no response for notification, but received: ${JSON.stringify(unexpected)}`);
+  }
+}
+
+function waitForUnexpectedMessage(startIndex, timeoutMs) {
+  if (unexpectedMessages.length > startIndex) {
+    return Promise.resolve(unexpectedMessages[startIndex]);
+  }
+
+  return new Promise(resolve => {
+    const timeout = setTimeout(() => {
+      removeUnexpectedWaiter(waiter);
+      resolve(null);
+    }, timeoutMs);
+
+    const waiter = message => {
+      clearTimeout(timeout);
+      resolve(message);
+    };
+
+    unexpectedWaiters.push(waiter);
+  });
+}
+
+function removeUnexpectedWaiter(waiter) {
+  const index = unexpectedWaiters.indexOf(waiter);
+  if (index >= 0) {
+    unexpectedWaiters.splice(index, 1);
+  }
+}
+
 function notify(method, params = {}) {
   writeMessage({ jsonrpc: "2.0", method, params });
 }
@@ -103,9 +173,17 @@ async function callTool(name, args) {
   return JSON.parse(text);
 }
 
-function writeMessage(message) {
+function writeMessage(message, options = {}) {
   const body = JSON.stringify(message);
-  server.stdin.write(`Content-Length: ${Buffer.byteLength(body, "utf8")}\r\n\r\n${body}`);
+  const framed = `Content-Length: ${Buffer.byteLength(body, "utf8")}\r\n\r\n${body}`;
+  if (options.chunked) {
+    const splitAt = Math.max(1, Math.floor(framed.length / 2));
+    server.stdin.write(framed.slice(0, splitAt));
+    setTimeout(() => server.stdin.write(framed.slice(splitAt)), 10);
+    return;
+  }
+
+  server.stdin.write(framed);
 }
 
 function readMessages() {
@@ -129,11 +207,21 @@ function readMessages() {
     buffer = buffer.subarray(messageEnd);
     const message = JSON.parse(rawMessage);
     const deferred = pending.get(message.id);
-    if (!deferred) continue;
+    if (!deferred) {
+      unexpectedMessages.push(message);
+      while (unexpectedWaiters.length > 0) {
+        const waiter = unexpectedWaiters.shift();
+        waiter(message);
+      }
+      continue;
+    }
     pending.delete(message.id);
 
     if (message.error) {
-      deferred.reject(new Error(message.error.message));
+      const error = new Error(message.error.message);
+      error.code = message.error.code;
+      error.data = message.error.data;
+      deferred.reject(error);
     } else {
       deferred.resolve(message.result);
     }
