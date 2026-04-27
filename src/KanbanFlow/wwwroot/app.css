@@ -119,3 +119,13 @@ h1:focus {
     box-shadow: 0 .25rem .5rem rgba(0, 0, 0, .1);
     background-color: rgba(0, 0, 0, .02);
 }
+
+/* ── Requirements panel ── */
+.requirements-list {
+    max-height: 14rem;
+    overflow-y: auto;
+}
+
+.requirement-row {
+    border-color: rgba(0, 0, 0, .08) !important;
+}
