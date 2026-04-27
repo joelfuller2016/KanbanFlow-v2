@@ -131,6 +131,8 @@ public static class ApiEndpoints
                 Status = task.Status.ToString(),
                 Priority = task.Priority.ToString(),
                 task.Assignee,
+                task.ClaimedBy,
+                task.ClaimedAt,
                 task.SortOrder,
                 task.CreatedAt,
                 task.UpdatedAt,
@@ -778,80 +780,88 @@ public static class ApiEndpoints
             });
         });
 
-        // POST /api/tasks/{id}/claim — lightweight task claim for AI agents
+        // POST /api/tasks/{id}/claim — lightweight atomic task claim for AI agents
         app.MapPost("/api/tasks/{id:int}/claim", async (int id, ClaimDto dto, AppDbContext db) =>
         {
             var actor = dto.Actor?.Trim();
             if (string.IsNullOrWhiteSpace(actor))
                 return Results.UnprocessableEntity(new { message = "Actor is required." });
 
-            var task = await db.Tasks.FindAsync(id);
-            if (task is null)
-                return Results.NotFound(new { message = $"Task {id} not found." });
+            var now = DateTime.UtcNow;
+            var normalizedActor = actor.ToUpperInvariant();
 
-            if (!string.IsNullOrWhiteSpace(task.ClaimedBy) &&
-                !string.Equals(task.ClaimedBy, actor, StringComparison.OrdinalIgnoreCase))
+            var affectedRows = await db.Tasks
+                .Where(task => task.Id == id &&
+                    (task.ClaimedBy == null ||
+                     task.ClaimedBy.Trim() == string.Empty ||
+                     task.ClaimedBy.ToUpper() == normalizedActor))
+                .ExecuteUpdateAsync(setters => setters
+                    .SetProperty(task => task.ClaimedBy, actor)
+                    .SetProperty(task => task.ClaimedAt, task => task.ClaimedAt ?? now)
+                    .SetProperty(task => task.UpdatedAt, now));
+
+            if (affectedRows == 0)
             {
+                var existingTask = await db.Tasks
+                    .Where(task => task.Id == id)
+                    .Select(task => new { task.ClaimedBy, task.ClaimedAt })
+                    .SingleOrDefaultAsync();
+
+                if (existingTask is null)
+                    return Results.NotFound(new { message = $"Task {id} not found." });
+
                 return Results.Conflict(new
                 {
-                    message = $"Task {id} is already claimed by {task.ClaimedBy}.",
-                    task.ClaimedBy,
-                    task.ClaimedAt
+                    message = $"Task {id} is already claimed by {existingTask.ClaimedBy}.",
+                    existingTask.ClaimedBy,
+                    existingTask.ClaimedAt
                 });
             }
 
-            task.ClaimedBy = actor;
-            task.ClaimedAt ??= DateTime.UtcNow;
-            task.UpdatedAt = DateTime.UtcNow;
-            await db.SaveChangesAsync();
-
-            return Results.Ok(new
-            {
-                task.Id,
-                task.Name,
-                task.ClaimedBy,
-                task.ClaimedAt,
-                task.UpdatedAt
-            });
+            var task = await GetTaskClaimStateAsync(db, id);
+            return Results.Ok(task);
         });
 
-        // POST /api/tasks/{id}/release — release a task claimed by the same actor
+        // POST /api/tasks/{id}/release — atomically release a task claimed by the same actor
         app.MapPost("/api/tasks/{id:int}/release", async (int id, ClaimDto dto, AppDbContext db) =>
         {
             var actor = dto.Actor?.Trim();
             if (string.IsNullOrWhiteSpace(actor))
                 return Results.UnprocessableEntity(new { message = "Actor is required." });
 
-            var task = await db.Tasks.FindAsync(id);
-            if (task is null)
-                return Results.NotFound(new { message = $"Task {id} not found." });
+            var normalizedActor = actor.ToUpperInvariant();
+            var now = DateTime.UtcNow;
 
-            if (string.IsNullOrWhiteSpace(task.ClaimedBy))
-                return Results.Ok(new { task.Id, task.Name, task.ClaimedBy, task.ClaimedAt, task.UpdatedAt });
+            var affectedRows = await db.Tasks
+                .Where(task => task.Id == id &&
+                    (task.ClaimedBy == null ||
+                     task.ClaimedBy.Trim() == string.Empty ||
+                     task.ClaimedBy.ToUpper() == normalizedActor))
+                .ExecuteUpdateAsync(setters => setters
+                    .SetProperty(task => task.ClaimedBy, (string?)null)
+                    .SetProperty(task => task.ClaimedAt, (DateTime?)null)
+                    .SetProperty(task => task.UpdatedAt, now));
 
-            if (!string.Equals(task.ClaimedBy, actor, StringComparison.OrdinalIgnoreCase))
+            if (affectedRows == 0)
             {
+                var existingTask = await db.Tasks
+                    .Where(task => task.Id == id)
+                    .Select(task => new { task.ClaimedBy, task.ClaimedAt })
+                    .SingleOrDefaultAsync();
+
+                if (existingTask is null)
+                    return Results.NotFound(new { message = $"Task {id} not found." });
+
                 return Results.Conflict(new
                 {
-                    message = $"Task {id} is claimed by {task.ClaimedBy}; only that actor can release it.",
-                    task.ClaimedBy,
-                    task.ClaimedAt
+                    message = $"Task {id} is claimed by {existingTask.ClaimedBy}; only that actor can release it.",
+                    existingTask.ClaimedBy,
+                    existingTask.ClaimedAt
                 });
             }
 
-            task.ClaimedBy = null;
-            task.ClaimedAt = null;
-            task.UpdatedAt = DateTime.UtcNow;
-            await db.SaveChangesAsync();
-
-            return Results.Ok(new
-            {
-                task.Id,
-                task.Name,
-                task.ClaimedBy,
-                task.ClaimedAt,
-                task.UpdatedAt
-            });
+            var task = await GetTaskClaimStateAsync(db, id);
+            return Results.Ok(task);
         });
 
         // DELETE /api/tasks/{id} — delete
@@ -1520,6 +1530,21 @@ public static class ApiEndpoints
             current = parent;
         }
         return depth;
+    }
+
+    private static async Task<object> GetTaskClaimStateAsync(AppDbContext db, int id)
+    {
+        return await db.Tasks
+            .Where(task => task.Id == id)
+            .Select(task => new
+            {
+                task.Id,
+                task.Name,
+                task.ClaimedBy,
+                task.ClaimedAt,
+                task.UpdatedAt
+            })
+            .SingleAsync();
     }
 
     private static int PriorityRank(TaskPriority priority) => priority switch
