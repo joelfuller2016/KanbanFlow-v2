@@ -77,55 +77,160 @@ else
             }
         </div>
 
-        @* ── Right Panel: Kanban Board ── *@
-        <div class="flex-grow-1 d-flex overflow-auto p-3 gap-3" style="min-width: 0;">
-            @foreach (var status in Enum.GetValues<WorkStatus>())
-            {
-                var tasksInColumn = allTasks.Where(t => t.Status == status).ToList();
-
-                <div class="d-flex flex-column bg-body-secondary rounded p-2" style="min-width: 250px; width: 250px; flex-shrink: 0;">
-                    @* Column header *@
-                    <div class="d-flex align-items-center mb-2">
-                        <h6 class="fw-semibold mb-0">
-                            @GetStatusDisplayName(status)
-                            <span class="badge bg-secondary">@tasksInColumn.Count</span>
-                        </h6>
-                        <button class="btn btn-link text-secondary p-0 ms-auto d-flex align-items-center" style="line-height: 1;"
-                                @onclick="() => OpenAddModalForColumn(status)"
-                                title="Add task">
-                            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16">
-                                <path fill-rule="evenodd" d="M8 2a.5.5 0 0 1 .5.5v5h5a.5.5 0 0 1 0 1h-5v5a.5.5 0 0 1-1 0v-5h-5a.5.5 0 0 1 0-1h5v-5A.5.5 0 0 1 8 2"/>
-                            </svg>
-                        </button>
+        @* ── Right Panel: AI Action Bar + Kanban Board ── *@
+        <div class="flex-grow-1 d-flex flex-column overflow-hidden" style="min-width: 0;">
+            <div class="border-bottom bg-white p-3">
+                <div class="d-flex flex-wrap align-items-center gap-2">
+                    <div class="me-auto">
+                        <div class="text-uppercase text-primary fw-bold small">AI project controls</div>
+                        <div class="text-muted small">Inspect context, choose next work, and prepare agent actions.</div>
                     </div>
+                    <button class="btn btn-sm btn-outline-primary" data-testid="ai-project-context-button" @onclick="ShowProjectContextAsync">
+                        Project Context
+                    </button>
+                    <button class="btn btn-sm btn-outline-primary" data-testid="ai-next-tasks-button" @onclick="ShowNextTasksAsync">
+                        Next Tasks
+                    </button>
+                    <button class="btn btn-sm btn-outline-secondary" data-testid="ai-generate-tasks-button" disabled title="Coming soon: create tasks from project context">
+                        Generate Tasks
+                    </button>
+                    <button class="btn btn-sm btn-outline-secondary" data-testid="ai-assign-button" disabled title="Coming soon: claim and assign selected work to an AI agent">
+                        Assign to AI
+                    </button>
+                </div>
 
-                    @* Cards *@
-                    <div class="flex-grow-1 overflow-auto board-column-cards" data-status="@status">
-                        @foreach (var task in tasksInColumn.OrderBy(t => t.SortOrder))
-                        {
-                            var boardTaskDone = task.Status == WorkStatus.Done;
-                            <div class="card mb-2 board-card" data-task-id="@task.Id"
-                                 style="border-left: 3px solid @GetPriorityBorderColor(task.Priority); @(boardTaskDone ? "opacity: 0.6;" : "")">
-                                <div class="card-body p-2">
-                                    <div class="d-flex align-items-center">
-                                        <input type="checkbox" class="form-check-input me-2 flex-shrink-0" style="margin-top: 0; cursor: pointer;"
-                                               checked="@boardTaskDone"
-                                               @onchange="() => ToggleTaskDone(task)"
-                                               @onclick:stopPropagation="true" />
-                                        <span class="fw-medium small @(boardTaskDone ? "text-decoration-line-through text-muted" : "")"
-                                              style="cursor: pointer;" role="button"
-                                              @onclick="() => OpenTaskDetail(task)">@task.Name</span>
+                @if (aiPanelOpen)
+                {
+                    <div class="card mt-3 shadow-sm" data-testid="ai-action-panel">
+                        <div class="card-header d-flex align-items-center py-2">
+                            <strong>@aiPanelTitle</strong>
+                            <button class="btn btn-sm btn-link text-muted ms-auto" @onclick="CloseAiPanel">Close</button>
+                        </div>
+                        <div class="card-body">
+                            @if (aiLoading)
+                            {
+                                <div class="d-flex align-items-center text-muted">
+                                    <div class="spinner-border spinner-border-sm me-2" role="status"></div>
+                                    Loading AI project data...
+                                </div>
+                            }
+                            else if (aiPanelError is not null)
+                            {
+                                <div class="alert alert-danger mb-0">@aiPanelError</div>
+                            }
+                            else if (aiContext is not null)
+                            {
+                                <div class="row g-3">
+                                    <div class="col-md-4">
+                                        <div class="border rounded p-3 h-100">
+                                            <div class="text-muted small">Project</div>
+                                            <div class="fw-semibold">@aiContext.Project.Name</div>
+                                            <p class="small mb-0 text-muted">@(!string.IsNullOrWhiteSpace(aiContext.Project.Description) ? aiContext.Project.Description : "No description yet.")</p>
+                                        </div>
                                     </div>
-                                    <div class="d-flex justify-content-between align-items-center mt-1 ps-4">
-                                        <span class="@GetPriorityBadgeClass(task.Priority)">@task.Priority</span>
-                                        <small class="text-muted fst-italic" style="font-size: 0.7rem;">@task.Feature.Name</small>
+                                    <div class="col-md-8">
+                                        <div class="row g-2">
+                                            <div class="col-6 col-lg-3"><div class="border rounded p-2 text-center"><div class="fw-bold">@aiContext.Summary.FeatureCount</div><div class="small text-muted">Features</div></div></div>
+                                            <div class="col-6 col-lg-3"><div class="border rounded p-2 text-center"><div class="fw-bold">@aiContext.Summary.TaskCount</div><div class="small text-muted">Tasks</div></div></div>
+                                            <div class="col-6 col-lg-3"><div class="border rounded p-2 text-center"><div class="fw-bold">@aiContext.Summary.RequirementCount</div><div class="small text-muted">Requirements</div></div></div>
+                                            <div class="col-6 col-lg-3"><div class="border rounded p-2 text-center"><div class="fw-bold">@CountOpenAiTasks()</div><div class="small text-muted">Open Tasks</div></div></div>
+                                        </div>
                                     </div>
                                 </div>
-                            </div>
-                        }
+                                <div class="mt-3">
+                                    <h6 class="mb-2">Current task snapshot</h6>
+                                    <div class="list-group list-group-flush border rounded">
+                                        @foreach (var task in aiContext.Tasks.Take(6))
+                                        {
+                                            <div class="list-group-item d-flex align-items-center gap-2">
+                                                <span class="@GetPriorityBadgeClass(ParsePriority(task.Priority))">@task.Priority</span>
+                                                <span class="fw-medium">@task.Name</span>
+                                                <span class="text-muted small">@task.Status</span>
+                                                @if (!string.IsNullOrWhiteSpace(task.ClaimedBy))
+                                                {
+                                                    <span class="badge text-bg-info ms-auto">Claimed by @task.ClaimedBy</span>
+                                                }
+                                            </div>
+                                        }
+                                    </div>
+                                </div>
+                            }
+                            else if (aiNextTasks.Count > 0)
+                            {
+                                <div class="list-group" data-testid="ai-next-tasks-list">
+                                    @foreach (var recommendation in aiNextTasks)
+                                    {
+                                        <div class="list-group-item">
+                                            <div class="d-flex align-items-center gap-2">
+                                                <span class="badge text-bg-primary">#@recommendation.Rank</span>
+                                                <strong>@recommendation.Name</strong>
+                                                <span class="@GetPriorityBadgeClass(ParsePriority(recommendation.Priority))">@recommendation.Priority</span>
+                                                <span class="text-muted small">@recommendation.Status</span>
+                                            </div>
+                                            <div class="small text-muted mt-1">@recommendation.Reason</div>
+                                            <div class="small mt-1">Feature: @recommendation.FeatureName</div>
+                                        </div>
+                                    }
+                                </div>
+                            }
+                            else
+                            {
+                                <p class="text-muted mb-0">No AI data to display yet.</p>
+                            }
+                        </div>
                     </div>
-                </div>
-            }
+                }
+            </div>
+
+            <div class="flex-grow-1 d-flex overflow-auto p-3 gap-3" style="min-width: 0;">
+                @foreach (var status in Enum.GetValues<WorkStatus>())
+                {
+                    var tasksInColumn = allTasks.Where(t => t.Status == status).ToList();
+
+                    <div class="d-flex flex-column bg-body-secondary rounded p-2" style="min-width: 250px; width: 250px; flex-shrink: 0;">
+                        @* Column header *@
+                        <div class="d-flex align-items-center mb-2">
+                            <h6 class="fw-semibold mb-0">
+                                @GetStatusDisplayName(status)
+                                <span class="badge bg-secondary">@tasksInColumn.Count</span>
+                            </h6>
+                            <button class="btn btn-link text-secondary p-0 ms-auto d-flex align-items-center" style="line-height: 1;"
+                                    @onclick="() => OpenAddModalForColumn(status)"
+                                    title="Add task">
+                                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16">
+                                    <path fill-rule="evenodd" d="M8 2a.5.5 0 0 1 .5.5v5h5a.5.5 0 0 1 0 1h-5v5a.5.5 0 0 1-1 0v-5h-5a.5.5 0 0 1 0-1h5v-5A.5.5 0 0 1 8 2"/>
+                                </svg>
+                            </button>
+                        </div>
+
+                        @* Cards *@
+                        <div class="flex-grow-1 overflow-auto board-column-cards" data-status="@status">
+                            @foreach (var task in tasksInColumn.OrderBy(t => t.SortOrder))
+                            {
+                                var boardTaskDone = task.Status == WorkStatus.Done;
+                                <div class="card mb-2 board-card" data-task-id="@task.Id"
+                                     style="border-left: 3px solid @GetPriorityBorderColor(task.Priority); @(boardTaskDone ? "opacity: 0.6;" : "")">
+                                    <div class="card-body p-2">
+                                        <div class="d-flex align-items-center">
+                                            <input type="checkbox" class="form-check-input me-2 flex-shrink-0" style="margin-top: 0; cursor: pointer;"
+                                                   checked="@boardTaskDone"
+                                                   @onchange="() => ToggleTaskDone(task)"
+                                                   @onclick:stopPropagation="true" />
+                                            <span class="fw-medium small @(boardTaskDone ? "text-decoration-line-through text-muted" : "")"
+                                                  style="cursor: pointer;" role="button"
+                                                  @onclick="() => OpenTaskDetail(task)">@task.Name</span>
+                                        </div>
+                                        <div class="d-flex justify-content-between align-items-center mt-1 ps-4">
+                                            <span class="@GetPriorityBadgeClass(task.Priority)">@task.Priority</span>
+                                            <small class="text-muted fst-italic" style="font-size: 0.7rem;">@task.Feature.Name</small>
+                                        </div>
+                                    </div>
+                                </div>
+                            }
+                        </div>
+                    </div>
+                }
+            </div>
         </div>
     </div>
 }
@@ -234,6 +339,14 @@ else
     private int? editModalPriority;
     private string? editModalAssignee;
 
+    // AI action bar state
+    private bool aiPanelOpen;
+    private bool aiLoading;
+    private string aiPanelTitle = string.Empty;
+    private string? aiPanelError;
+    private AiProjectContext? aiContext;
+    private List<AiTaskRecommendation> aiNextTasks = [];
+
     protected override async Task OnInitializedAsync()
     {
         await LoadProject();
@@ -257,6 +370,63 @@ else
             catch (InvalidOperationException) { }
         }
     }
+
+    private async Task ShowProjectContextAsync()
+    {
+        await LoadAiPanelAsync("Project Context", async client =>
+        {
+            aiContext = await client.GetFromJsonAsync<AiProjectContext>(Nav.ToAbsoluteUri($"/api/projects/{Id}/context"), _cts.Token);
+            aiNextTasks = [];
+        });
+    }
+
+    private async Task ShowNextTasksAsync()
+    {
+        await LoadAiPanelAsync("Next Tasks", async client =>
+        {
+            var response = await client.GetFromJsonAsync<AiNextTasksResponse>(Nav.ToAbsoluteUri($"/api/projects/{Id}/next-tasks"), _cts.Token);
+            aiNextTasks = response?.Recommendations ?? [];
+            aiContext = null;
+        });
+    }
+
+    private async Task LoadAiPanelAsync(string title, Func<HttpClient, Task> load)
+    {
+        aiPanelTitle = title;
+        aiPanelOpen = true;
+        aiLoading = true;
+        aiPanelError = null;
+        aiContext = null;
+        aiNextTasks = [];
+
+        try
+        {
+            using var client = new HttpClient();
+            await load(client);
+        }
+        catch (OperationCanceledException)
+        {
+            // Component disposed during load - expected
+        }
+        catch (Exception ex)
+        {
+            aiPanelError = ex.Message;
+        }
+        finally
+        {
+            aiLoading = false;
+        }
+    }
+
+    private void CloseAiPanel()
+    {
+        aiPanelOpen = false;
+        aiPanelError = null;
+        aiContext = null;
+        aiNextTasks = [];
+    }
+
+    private int CountOpenAiTasks() => aiContext?.Tasks.Count(t => t.Status != "Done") ?? 0;
 
     private async Task LoadProject()
     {
@@ -817,6 +987,52 @@ else
         TaskPriority.Critical => "#dc3545",
         _ => "#6c757d"
     };
+
+    private static TaskPriority ParsePriority(string? priority) =>
+        Enum.TryParse<TaskPriority>(priority, ignoreCase: true, out var parsed) ? parsed : TaskPriority.Low;
+
+    private sealed class AiProjectContext
+    {
+        public AiProject Project { get; set; } = new();
+        public AiContextSummary Summary { get; set; } = new();
+        public List<AiContextTask> Tasks { get; set; } = [];
+    }
+
+    private sealed class AiProject
+    {
+        public string Name { get; set; } = string.Empty;
+        public string? Description { get; set; }
+    }
+
+    private sealed class AiContextSummary
+    {
+        public int FeatureCount { get; set; }
+        public int TaskCount { get; set; }
+        public int RequirementCount { get; set; }
+    }
+
+    private sealed class AiContextTask
+    {
+        public string Name { get; set; } = string.Empty;
+        public string Status { get; set; } = string.Empty;
+        public string Priority { get; set; } = string.Empty;
+        public string? ClaimedBy { get; set; }
+    }
+
+    private sealed class AiNextTasksResponse
+    {
+        public List<AiTaskRecommendation> Recommendations { get; set; } = [];
+    }
+
+    private sealed class AiTaskRecommendation
+    {
+        public int Rank { get; set; }
+        public string Name { get; set; } = string.Empty;
+        public string FeatureName { get; set; } = string.Empty;
+        public string Status { get; set; } = string.Empty;
+        public string Priority { get; set; } = string.Empty;
+        public string Reason { get; set; } = string.Empty;
+    }
 
     // Cycling depth colors: blue, teal, purple, orange, pink — then repeat
     private static readonly string[] DepthColors = ["#0d6efd", "#0dcaf0", "#6f42c1", "#fd7e14", "#d63384"];
