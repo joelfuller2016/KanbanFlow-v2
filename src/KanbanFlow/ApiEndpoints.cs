@@ -146,6 +146,7 @@ public static class ApiEndpoints
             if (project is null)
                 return Results.NotFound(new { message = $"Project {id} not found." });
 
+            await DeleteProjectChildrenAsync(db, id);
             db.Projects.Remove(project);
             await db.SaveChangesAsync();
             return Results.NoContent();
@@ -313,11 +314,11 @@ public static class ApiEndpoints
         // DELETE /api/features/{id} — cascade delete
         app.MapDelete("/api/features/{id:int}", async (int id, AppDbContext db) =>
         {
-            var feature = await db.Features.FindAsync(id);
-            if (feature is null)
+            var exists = await db.Features.AnyAsync(f => f.Id == id);
+            if (!exists)
                 return Results.NotFound(new { message = $"Feature {id} not found." });
 
-            db.Features.Remove(feature);
+            await DeleteFeatureTreeAsync(db, id);
             await db.SaveChangesAsync();
             return Results.NoContent();
         });
@@ -589,6 +590,7 @@ public static class ApiEndpoints
             if (task is null)
                 return Results.NotFound(new { message = $"Task {id} not found." });
 
+            await DeleteSubtasksForTasksAsync(db, [id]);
             db.Tasks.Remove(task);
             await db.SaveChangesAsync();
             return Results.NoContent();
@@ -776,11 +778,11 @@ public static class ApiEndpoints
         // DELETE /api/subtasks/{id} — delete
         app.MapDelete("/api/subtasks/{id:int}", async (int id, AppDbContext db) =>
         {
-            var subtask = await db.Subtasks.FindAsync(id);
-            if (subtask is null)
+            var exists = await db.Subtasks.AnyAsync(s => s.Id == id);
+            if (!exists)
                 return Results.NotFound(new { message = $"Subtask {id} not found." });
 
-            db.Subtasks.Remove(subtask);
+            await DeleteSubtaskTreeAsync(db, id);
             await db.SaveChangesAsync();
             return Results.NoContent();
         });
@@ -1097,6 +1099,157 @@ public static class ApiEndpoints
         SubtaskCount = t.Subtasks.Count,
         SubtaskDoneCount = t.Subtasks.Count(s => s.Completed)
     };
+
+    private static async Task DeleteProjectChildrenAsync(AppDbContext db, int projectId)
+    {
+        var projectFeatureIds = await db.Features
+            .Where(f => f.ProjectId == projectId)
+            .Select(f => f.Id)
+            .ToListAsync();
+
+        await DeleteFeatureTreesAsync(db, projectFeatureIds);
+
+        var requirements = await db.Requirements
+            .Where(r => r.ProjectId == projectId)
+            .ToListAsync();
+        db.Requirements.RemoveRange(requirements);
+    }
+
+    private static async Task DeleteFeatureTreeAsync(AppDbContext db, int rootFeatureId)
+    {
+        await DeleteFeatureTreesAsync(db, [rootFeatureId]);
+    }
+
+    private static async Task DeleteFeatureTreesAsync(AppDbContext db, List<int> rootFeatureIds)
+    {
+        if (rootFeatureIds.Count == 0) return;
+
+        var allFeatures = await db.Features.ToListAsync();
+        var featureIds = new HashSet<int>();
+
+        void CollectFeatureAndChildren(int featureId)
+        {
+            if (!featureIds.Add(featureId)) return;
+
+            foreach (var child in allFeatures.Where(f => f.ParentFeatureId == featureId))
+            {
+                CollectFeatureAndChildren(child.Id);
+            }
+        }
+
+        foreach (var rootFeatureId in rootFeatureIds)
+        {
+            CollectFeatureAndChildren(rootFeatureId);
+        }
+
+        var tasks = await db.Tasks
+            .Where(t => featureIds.Contains(t.FeatureId))
+            .ToListAsync();
+        var taskIds = tasks.Select(t => t.Id).ToList();
+
+        var requirements = await db.Requirements
+            .Where(r => (r.FeatureId.HasValue && featureIds.Contains(r.FeatureId.Value)) ||
+                        (r.TaskItemId.HasValue && taskIds.Contains(r.TaskItemId.Value)))
+            .ToListAsync();
+
+        foreach (var requirement in requirements)
+        {
+            if (requirement.FeatureId.HasValue && featureIds.Contains(requirement.FeatureId.Value))
+                requirement.FeatureId = null;
+            if (requirement.TaskItemId.HasValue && taskIds.Contains(requirement.TaskItemId.Value))
+                requirement.TaskItemId = null;
+        }
+
+        if (taskIds.Count > 0)
+        {
+            await DeleteSubtasksForTasksAsync(db, taskIds);
+
+            var comments = await db.TaskComments
+                .Where(c => taskIds.Contains(c.TaskItemId))
+                .ToListAsync();
+            db.TaskComments.RemoveRange(comments);
+            db.Tasks.RemoveRange(tasks);
+        }
+
+        var featuresToRemove = allFeatures
+            .Where(f => featureIds.Contains(f.Id))
+            .OrderByDescending(f => GetFeatureDepth(f, allFeatures))
+            .ToList();
+        db.Features.RemoveRange(featuresToRemove);
+    }
+
+    private static int GetFeatureDepth(Feature feature, List<Feature> allFeatures)
+    {
+        var depth = 0;
+        var current = feature;
+        while (current.ParentFeatureId.HasValue)
+        {
+            var parent = allFeatures.FirstOrDefault(f => f.Id == current.ParentFeatureId.Value);
+            if (parent is null) break;
+            depth++;
+            current = parent;
+        }
+        return depth;
+    }
+
+    private static async Task DeleteSubtaskTreeAsync(AppDbContext db, int rootSubtaskId)
+    {
+        var root = await db.Subtasks.FindAsync(rootSubtaskId);
+        if (root is null) return;
+
+        var allSubtasksForTask = await db.Subtasks
+            .Where(s => s.TaskItemId == root.TaskItemId)
+            .ToListAsync();
+
+        var subtaskIds = new HashSet<int>();
+        CollectSubtaskAndChildren(rootSubtaskId, allSubtasksForTask, subtaskIds);
+
+        var subtasksToRemove = allSubtasksForTask
+            .Where(s => subtaskIds.Contains(s.Id))
+            .OrderByDescending(s => GetSubtaskDepth(s, allSubtasksForTask))
+            .ToList();
+
+        db.Subtasks.RemoveRange(subtasksToRemove);
+    }
+
+    private static async Task DeleteSubtasksForTasksAsync(AppDbContext db, List<int> taskIds)
+    {
+        if (taskIds.Count == 0) return;
+
+        var subtasks = await db.Subtasks
+            .Where(s => taskIds.Contains(s.TaskItemId))
+            .ToListAsync();
+
+        var orderedSubtasks = subtasks
+            .OrderByDescending(s => GetSubtaskDepth(s, subtasks))
+            .ToList();
+
+        db.Subtasks.RemoveRange(orderedSubtasks);
+    }
+
+    private static void CollectSubtaskAndChildren(int subtaskId, List<Subtask> allSubtasks, HashSet<int> subtaskIds)
+    {
+        if (!subtaskIds.Add(subtaskId)) return;
+
+        foreach (var child in allSubtasks.Where(s => s.ParentSubtaskId == subtaskId))
+        {
+            CollectSubtaskAndChildren(child.Id, allSubtasks, subtaskIds);
+        }
+    }
+
+    private static int GetSubtaskDepth(Subtask subtask, List<Subtask> allSubtasks)
+    {
+        var depth = 0;
+        var current = subtask;
+        while (current.ParentSubtaskId.HasValue)
+        {
+            var parent = allSubtasks.FirstOrDefault(s => s.Id == current.ParentSubtaskId.Value);
+            if (parent is null) break;
+            depth++;
+            current = parent;
+        }
+        return depth;
+    }
 }
 
 // ── DTOs ───────────────────────────────────────────────────────────────
