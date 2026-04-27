@@ -12,6 +12,7 @@ if (!Number.isInteger(projectId)) {
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const serverPath = path.join(scriptDir, "mcp-server.mjs");
+const apiBaseUrl = (process.env.KANBANFLOW_API_URL || "http://127.0.0.1:5123").replace(/\/$/, "");
 const server = spawn(process.execPath, [serverPath], {
   stdio: ["pipe", "pipe", "inherit"],
   env: { ...process.env }
@@ -22,6 +23,8 @@ let buffer = Buffer.alloc(0);
 const pending = new Map();
 const unexpectedMessages = [];
 const unexpectedWaiters = [];
+const runMarker = `mcp-smoke-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+let tempFeatureId;
 
 server.stdout.on("data", chunk => {
   buffer = Buffer.concat([buffer, chunk]);
@@ -71,7 +74,7 @@ try {
     }
   }
 
-  const context = await callTool("get_project_context", { projectId });
+  await callTool("get_project_context", { projectId });
   await expectJsonRpcError({
     jsonrpc: "2.0",
     id: 9006,
@@ -85,20 +88,47 @@ try {
     }
   });
 
-  const task = findFirstTask(context.features || []);
-  if (!task) {
-    throw new Error(`No task found in project ${projectId}; cannot run MCP mutation smoke.`);
-  }
+  const tempFeature = await restJson(`/api/projects/${projectId}/features`, {
+    method: "POST",
+    body: {
+      name: `MCP smoke temp feature ${Date.now()}`,
+      description: `Temporary feature ${runMarker} created by scripts/smoke-mcp.mjs and deleted during cleanup.`,
+      sortOrder: 999999
+    }
+  });
+  tempFeatureId = tempFeature.id;
+
+  const task = await restJson(`/api/features/${tempFeatureId}/tasks`, {
+    method: "POST",
+    body: {
+      name: `MCP smoke temp task ${runMarker}`,
+      description: `Temporary task ${runMarker} created by scripts/smoke-mcp.mjs and deleted during cleanup.`,
+      status: "Backlog",
+      priority: "Low"
+    }
+  });
 
   await callTool("get_next_tasks", { projectId, limit: 3 });
   await callTool("claim_task", { taskId: task.id, actor: "mcp-smoke" });
-  await callTool("add_task_comment", { taskId: task.id, text: "MCP smoke test comment", author: "mcp-smoke" });
+  await callTool("add_task_comment", { taskId: task.id, text: `MCP smoke test comment ${runMarker}`, author: "mcp-smoke" });
   await callTool("update_task_status", { taskId: task.id, status: "Review" });
   await callTool("release_task", { taskId: task.id, actor: "mcp-smoke" });
 
   console.log(`MCP smoke tests passed for project ${projectId}, task ${task.id}.`);
 } finally {
-  server.kill();
+  try {
+    if (tempFeatureId !== undefined) {
+      await restJson(`/api/features/${tempFeatureId}`, { method: "DELETE", expectNoContent: true });
+      console.log(`Cleaned up MCP smoke feature ${tempFeatureId}.`);
+      const contextAfterCleanup = await restJson(`/api/projects/${projectId}/context`);
+      const serializedContext = JSON.stringify(contextAfterCleanup);
+      if (serializedContext.includes(runMarker)) {
+        throw new Error(`MCP smoke cleanup failed; project context still contains ${runMarker}.`);
+      }
+    }
+  } finally {
+    server.kill();
+  }
 }
 
 function request(method, params) {
@@ -225,6 +255,41 @@ async function callTool(name, args) {
   return JSON.parse(text);
 }
 
+async function restJson(path, options = {}) {
+  const requestOptions = {
+    method: options.method || "GET",
+    headers: { Accept: "application/json" }
+  };
+
+  if (options.body !== undefined) {
+    requestOptions.headers["Content-Type"] = "application/json";
+    requestOptions.body = JSON.stringify(options.body);
+  }
+
+  const response = await fetch(`${apiBaseUrl}${path}`, requestOptions);
+  const text = await response.text();
+  const payload = text.length > 0 ? parseJsonOrText(text) : null;
+
+  if (!response.ok) {
+    const detail = typeof payload === "string" ? payload : JSON.stringify(payload);
+    throw new Error(`REST ${response.status} ${response.statusText}: ${detail}`);
+  }
+
+  if (options.expectNoContent) {
+    return null;
+  }
+
+  return payload;
+}
+
+function parseJsonOrText(text) {
+  try {
+    return JSON.parse(text);
+  } catch {
+    return text;
+  }
+}
+
 function writeMessage(message, options = {}) {
   const body = JSON.stringify(message);
   writeRawFrame(body, options);
@@ -282,17 +347,4 @@ function readMessages() {
       deferred.resolve(message.result);
     }
   }
-}
-
-function findFirstTask(features) {
-  for (const feature of features) {
-    if (Array.isArray(feature.tasks) && feature.tasks.length > 0) {
-      return feature.tasks[0];
-    }
-
-    const childTask = findFirstTask(feature.childFeatures || feature.children || []);
-    if (childTask) return childTask;
-  }
-
-  return null;
 }
