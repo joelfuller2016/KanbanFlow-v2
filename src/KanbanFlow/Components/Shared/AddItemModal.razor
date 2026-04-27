@@ -1,14 +1,14 @@
 @inject IDbContextFactory<AppDbContext> DbFactory
 
 @* Bootstrap Modal *@
-<div class="modal fade @(IsOpen ? "show" : "")" tabindex="-1"
+<div class="modal fade @(IsOpen ? "show" : "")" tabindex="-1" data-testid="add-item-modal"
      style="display: @(IsOpen ? "block" : "none");"
      @onclick="HandleBackdropClick" @onclick:stopPropagation="false">
     <div class="modal-dialog" @onclick:stopPropagation="true">
         <div class="modal-content">
             <div class="modal-header">
                 <h5 class="modal-title">Add @(itemType == FeatureType ? "Feature" : "Task")</h5>
-                <button type="button" class="btn-close" @onclick="Close"></button>
+                <button type="button" class="btn-close" @onclick="Close" aria-label="Close add item modal" data-testid="add-item-close-button"></button>
             </div>
             <div class="modal-body">
                 @if (errorMessage is not null)
@@ -25,11 +25,11 @@
                     <div class="btn-group w-100" role="group">
                         <input type="radio" class="btn-check" id="typeFeature" value="feature"
                                checked="@(itemType == FeatureType)" @onchange="SelectFeatureType" />
-                        <label class="btn btn-outline-primary btn-sm" for="typeFeature">Feature</label>
+                        <label class="btn btn-outline-primary btn-sm" for="typeFeature" data-testid="add-item-feature-toggle">Feature</label>
 
                         <input type="radio" class="btn-check" id="typeTask" value="task"
                                checked="@(itemType == TaskType)" @onchange="SelectTaskType" />
-                        <label class="btn btn-outline-primary btn-sm" for="typeTask">Task</label>
+                        <label class="btn btn-outline-primary btn-sm" for="typeTask" data-testid="add-item-task-toggle">Task</label>
                     </div>
                 </div>
 
@@ -99,8 +99,9 @@
                 </div>
             </div>
             <div class="modal-footer">
-                <button type="button" class="btn btn-secondary btn-sm" @onclick="Close">Cancel</button>
+                <button type="button" class="btn btn-secondary btn-sm" @onclick="Close" data-testid="add-item-cancel-button">Cancel</button>
                 <button type="button" class="btn btn-primary btn-sm" @onclick="SaveItem"
+                        data-testid="add-item-create-button"
                         disabled="@(string.IsNullOrWhiteSpace(itemName) || (itemType == TaskType && selectedFeatureId == 0))">
                     Create @(itemType == FeatureType ? "Feature" : "Task")
                 </button>
