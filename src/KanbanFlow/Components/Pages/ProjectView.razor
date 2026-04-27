@@ -155,6 +155,61 @@ else
                 }
             </div>
 
+            <section class="requirements-panel border-bottom bg-light p-3" data-testid="requirements-panel" aria-labelledby="requirements-heading">
+                <div class="d-flex flex-wrap align-items-center gap-2 mb-2">
+                    <div class="me-auto">
+                        <h2 id="requirements-heading" class="h6 mb-0">Requirements</h2>
+                        <div class="text-muted small">Project-level requirements visible to humans and AI agents.</div>
+                    </div>
+                    <span class="badge text-bg-secondary" data-testid="requirements-count">@GetOrderedRequirements().Count</span>
+                </div>
+
+                @if (GetOrderedRequirements().Count == 0)
+                {
+                    <div class="text-muted small border rounded bg-white p-3" data-testid="requirements-empty-state">
+                        No requirements yet. Requirements added through the API will appear here.
+                    </div>
+                }
+                else
+                {
+                    <div class="requirements-list d-flex flex-column gap-2">
+                        @foreach (var requirement in GetOrderedRequirements())
+                        {
+                            <article class="requirement-row border rounded bg-white p-2" data-testid="@($"requirement-row-{requirement.Id}")">
+                                <div class="d-flex flex-wrap align-items-start gap-2">
+                                    <div class="fw-semibold me-auto">@requirement.Text</div>
+                                    <span class="@GetRequirementPriorityBadgeClass(requirement.Priority)" data-testid="@($"requirement-priority-{requirement.Id}")">@requirement.Priority</span>
+                                    <span class="@GetRequirementStatusBadgeClass(requirement.Status)" data-testid="@($"requirement-status-{requirement.Id}")">@GetRequirementStatusDisplayName(requirement.Status)</span>
+                                </div>
+
+                                @if (!string.IsNullOrWhiteSpace(requirement.Description))
+                                {
+                                    <p class="small text-muted mb-1 mt-1">@requirement.Description</p>
+                                }
+
+                                @if (requirement.Feature is not null || requirement.TaskItem is not null)
+                                {
+                                    <div class="small text-muted mt-1">
+                                        @if (requirement.Feature is not null)
+                                        {
+                                            <span>Feature: @requirement.Feature.Name</span>
+                                        }
+                                        @if (requirement.Feature is not null && requirement.TaskItem is not null)
+                                        {
+                                            <span class="mx-1">•</span>
+                                        }
+                                        @if (requirement.TaskItem is not null)
+                                        {
+                                            <span>Task: @requirement.TaskItem.Name</span>
+                                        }
+                                    </div>
+                                }
+                            </article>
+                        }
+                    </div>
+                }
+            </section>
+
             <KanbanBoard AllTasks="allTasks"
                          OnAddTask="OpenAddModalForColumn"
                          OnToggleTaskDone="ToggleTaskDone"
@@ -370,6 +425,10 @@ else
                         .ThenInclude(t => t.Subtasks)
                 .Include(p => p.Features)
                     .ThenInclude(f => f.ChildFeatures)
+                .Include(p => p.Requirements)
+                    .ThenInclude(r => r.Feature)
+                .Include(p => p.Requirements)
+                    .ThenInclude(r => r.TaskItem)
                 .AsSplitQuery()
                 .FirstOrDefaultAsync(p => p.Id == Id, _cts.Token);
 
@@ -728,6 +787,33 @@ else
 
     private static TaskPriority ParsePriority(string? priority) =>
         Enum.TryParse<TaskPriority>(priority, ignoreCase: true, out var parsed) ? parsed : TaskPriority.Low;
+
+    private List<Requirement> GetOrderedRequirements() => project?.Requirements
+        .OrderBy(r => r.SortOrder)
+        .ThenBy(r => r.Id)
+        .ToList() ?? [];
+
+    private static string GetRequirementPriorityBadgeClass(RequirementPriority priority) => priority switch
+    {
+        RequirementPriority.P0 => "badge text-bg-danger",
+        RequirementPriority.P1 => "badge text-bg-warning",
+        RequirementPriority.P2 => "badge text-bg-secondary",
+        _ => "badge text-bg-secondary"
+    };
+
+    private static string GetRequirementStatusBadgeClass(RequirementStatus status) => status switch
+    {
+        RequirementStatus.Open => "badge text-bg-primary",
+        RequirementStatus.InProgress => "badge text-bg-info",
+        RequirementStatus.Done => "badge text-bg-success",
+        _ => "badge text-bg-secondary"
+    };
+
+    private static string GetRequirementStatusDisplayName(RequirementStatus status) => status switch
+    {
+        RequirementStatus.InProgress => "In Progress",
+        _ => status.ToString()
+    };
 
     private sealed class AiProjectContext
     {
