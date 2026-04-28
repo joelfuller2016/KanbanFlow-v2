@@ -1371,12 +1371,21 @@ public static class ApiEndpoints
             if (string.IsNullOrWhiteSpace(dto.Text))
                 return Results.UnprocessableEntity(new { message = "Text is required." });
 
+            if (!TryParseCommentType(dto.Type, out var commentType))
+            {
+                return Results.UnprocessableEntity(new
+                {
+                    message = $"Invalid comment type '{dto.Type}'. Allowed values: {string.Join(", ", AllowedUserCommentTypes)}.",
+                    allowedTypes = AllowedUserCommentTypes
+                });
+            }
+
             var comment = new TaskComment
             {
                 TaskItemId = taskId,
                 Text = dto.Text.Trim(),
                 Author = dto.Author?.Trim(),
-                Type = CommentType.Comment
+                Type = commentType
             };
 
             db.TaskComments.Add(comment);
@@ -1424,6 +1433,36 @@ public static class ApiEndpoints
         SubtaskCount = t.Subtasks.Count,
         SubtaskDoneCount = t.Subtasks.Count(s => s.Completed)
     };
+
+    private static readonly string[] AllowedUserCommentTypes =
+    [
+        nameof(CommentType.Note),
+        nameof(CommentType.Decision),
+        nameof(CommentType.Question),
+        nameof(CommentType.Blocked),
+        nameof(CommentType.Handoff),
+        nameof(CommentType.Verification),
+        nameof(CommentType.Comment)
+    ];
+
+    private static bool TryParseCommentType(string? value, out CommentType commentType)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            commentType = CommentType.Note;
+            return true;
+        }
+
+        if (Enum.TryParse<CommentType>(value.Trim(), ignoreCase: true, out var parsed) &&
+            AllowedUserCommentTypes.Any(type => string.Equals(type, parsed.ToString(), StringComparison.Ordinal)))
+        {
+            commentType = parsed;
+            return true;
+        }
+
+        commentType = default;
+        return false;
+    }
 
     private static bool WouldCreateFeatureCycle(int featureId, int proposedParentFeatureId, IReadOnlyCollection<Feature> allProjectFeatures)
     {
@@ -1691,4 +1730,4 @@ public record RequirementDto(string? Text, string? Description, string? Priority
 
 public record RequirementAssignDto(int? FeatureId, int? TaskItemId);
 
-public record TaskCommentDto(string? Text, string? Author);
+public record TaskCommentDto(string? Text, string? Author, string? Type);

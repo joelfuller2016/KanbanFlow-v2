@@ -15,6 +15,25 @@ function Invoke-SmokeGet([string]$Path) {
     Invoke-RestMethod -Method Get -Uri "$BaseUrl$Path" -TimeoutSec 5
 }
 
+function Invoke-SmokePost([string]$Path, $Body) {
+    Invoke-RestMethod -Method Post -Uri "$BaseUrl$Path" -ContentType "application/json" -Body ($Body | ConvertTo-Json -Depth 10) -TimeoutSec 5
+}
+
+function Invoke-SmokePostExpectFailure([string]$Path, $Body, [int]$ExpectedStatusCode) {
+    try {
+        Invoke-SmokePost $Path $Body | Out-Null
+        throw "POST $Path succeeded but expected HTTP $ExpectedStatusCode."
+    }
+    catch {
+        $response = $_.Exception.Response
+        if ($null -eq $response) { throw }
+        $statusCode = [int]$response.StatusCode
+        if ($statusCode -ne $ExpectedStatusCode) {
+            throw "POST $Path returned HTTP $statusCode but expected HTTP $ExpectedStatusCode."
+        }
+    }
+}
+
 function Assert-Truthy($Value, [string]$Message) {
     if (-not $Value) { throw $Message }
 }
@@ -82,6 +101,22 @@ try {
     $nextTasks = Invoke-SmokeGet "/api/projects/$projectId/next-tasks"
     Assert-Truthy ($null -ne $nextTasks.recommendations) "GET /api/projects/$projectId/next-tasks is missing recommendations."
 
+    $tasks = Invoke-SmokeGet "/api/projects/$projectId/tasks"
+    Assert-Truthy ($tasks.Count -gt 0) "GET /api/projects/$projectId/tasks returned no seeded tasks."
+    $taskId = $tasks[0].id
+
+    $handoffText = "API smoke typed handoff $([Guid]::NewGuid().ToString("N"))"
+    $handoff = Invoke-SmokePost "/api/tasks/$taskId/comments" @{ text = $handoffText; author = "api-smoke"; type = "Handoff" }
+    Assert-Truthy ($handoff.type -eq "Handoff") "POST /api/tasks/$taskId/comments did not preserve type Handoff."
+
+    $comments = Invoke-SmokeGet "/api/tasks/$taskId/comments"
+    Assert-Truthy ($comments | Where-Object { $_.text -eq $handoffText -and $_.type -eq "Handoff" }) "GET /api/tasks/$taskId/comments did not return typed handoff comment."
+
+    $defaultComment = Invoke-SmokePost "/api/tasks/$taskId/comments" @{ text = "API smoke default note $([Guid]::NewGuid().ToString("N"))"; author = "api-smoke" }
+    Assert-Truthy ($defaultComment.type -eq "Note") "POST /api/tasks/$taskId/comments without type should default to Note."
+
+    Invoke-SmokePostExpectFailure "/api/tasks/$taskId/comments" @{ text = "bad type"; type = "NotAType" } 422
+
     Write-Host "API smoke tests passed."
 }
 finally {
@@ -90,7 +125,12 @@ finally {
         $appProcess.WaitForExit(5000) | Out-Null
     }
 
+    if ($appProcess) {
+        $appProcess.Dispose()
+    }
+
     if (Test-Path $runDir) {
-        Remove-Item $runDir -Recurse -Force
+        Start-Sleep -Milliseconds 250
+        Remove-Item $runDir -Recurse -Force -ErrorAction SilentlyContinue
     }
 }

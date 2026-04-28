@@ -134,7 +134,12 @@ const tools = [
       properties: {
         taskId: { type: "integer", description: "Task id to comment on." },
         text: { type: "string", description: "Comment text." },
-        author: { type: "string", description: "Optional comment author." }
+        author: { type: "string", description: "Optional comment author." },
+        type: {
+          type: "string",
+          enum: ["Note", "Decision", "Question", "Blocked", "Handoff", "Verification", "Comment"],
+          description: "Optional typed handoff comment kind. Defaults to Note. Comment is accepted for backwards compatibility."
+        }
       },
       required: ["taskId", "text"]
     }
@@ -339,11 +344,17 @@ async function callTool(toolName, args) {
     case "add_task_comment":
       return restJson(`/api/tasks/${requiredInt(args, "taskId")}/comments`, {
         method: "POST",
-        body: { text: requiredString(args, "text"), author: args.author ?? "MCP" }
+        body: { text: requiredString(args, "text"), author: args.author ?? "MCP", type: optionalCommentType(args) }
       });
     default:
       throw new McpError(-32601, `Unknown tool: ${toolName}`);
   }
+}
+
+function optionalCommentType(args) {
+  if (args.type === undefined || args.type === null || args.type === "") return undefined;
+  assertEnum(args, "type", ["Note", "Decision", "Question", "Blocked", "Handoff", "Verification", "Comment"]);
+  return args.type;
 }
 
 async function restJson(path, options = {}) {

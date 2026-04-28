@@ -177,10 +177,23 @@
                 }
                 else
                 {
+                    var latestHandoff = GetLatestHandoffComment();
+                    @if (latestHandoff is not null)
+                    {
+                        <div class="alert alert-warning py-2 mb-2" data-testid="latest-handoff-comment">
+                            <div class="d-flex flex-wrap align-items-center gap-2 mb-1">
+                                <span class="badge text-bg-warning" data-testid="latest-handoff-comment-badge">Latest Handoff</span>
+                                <span class="small fw-semibold">@(!string.IsNullOrWhiteSpace(latestHandoff.Author) ? latestHandoff.Author : "Anonymous")</span>
+                                <span class="small text-muted ms-auto" title="@($"UTC: {latestHandoff.CreatedAt:O}")">@latestHandoff.CreatedAt.ToLocalTime().ToString("MMM d, yyyy h:mm tt")</span>
+                            </div>
+                            <div class="small text-break" data-testid="latest-handoff-comment-text">@latestHandoff.Text</div>
+                        </div>
+                    }
+
                     <div class="task-comments-list d-flex flex-column gap-2 mb-2" data-testid="task-comments-list">
                         @foreach (var comment in comments)
                         {
-                            <article class="task-comment border rounded p-2 @GetCommentBorderClass(comment.Type)" data-testid="@($"task-comment-row-{comment.Id}")">
+                            <article class="task-comment border rounded p-2 @GetCommentBorderClass(comment.Type) @(comment.Id == latestHandoff?.Id ? "task-comment-latest-handoff" : null)" data-testid="@($"task-comment-row-{comment.Id}")">
                                 <div class="d-flex flex-wrap align-items-center gap-2 mb-1">
                                     <span class="@GetCommentTypeBadgeClass(comment.Type)" data-testid="@($"task-comment-type-{comment.Id}")">@GetCommentTypeDisplayName(comment.Type)</span>
                                     <span class="small fw-semibold">@(!string.IsNullOrWhiteSpace(comment.Author) ? comment.Author : "Anonymous")</span>
@@ -199,7 +212,13 @@
                               data-testid="task-comment-input"
                               @bind="newCommentText"
                               @bind:event="oninput"></textarea>
-                    <div class="d-flex justify-content-end mt-2">
+                    <div class="d-flex justify-content-between align-items-center gap-2 mt-2">
+                        <select class="form-select form-select-sm w-auto" aria-label="Comment type" data-testid="task-comment-type-select" @bind="newCommentType">
+                            @foreach (var type in UserCommentTypes)
+                            {
+                                <option value="@type">@GetCommentTypeDisplayName(type)</option>
+                            }
+                        </select>
                         <button class="btn btn-sm btn-primary" data-testid="task-comment-add-button"
                                 @onclick="AddCommentAsync"
                                 disabled="@(addingComment || string.IsNullOrWhiteSpace(newCommentText))">
@@ -284,6 +303,7 @@
     private bool addingComment;
     private string? commentsError;
     private string? newCommentText;
+    private CommentType newCommentType = CommentType.Note;
 
     protected override async Task OnParametersSetAsync()
     {
@@ -304,6 +324,7 @@
             addingComment = false;
             commentsLoading = false;
             newCommentText = null;
+            newCommentType = CommentType.Note;
             comments = [];
             commentsError = null;
 
@@ -695,7 +716,7 @@
                 TaskItemId = taskId,
                 Text = newCommentText.Trim(),
                 Author = "You",
-                Type = CommentType.Comment,
+                Type = newCommentType,
                 CreatedAt = DateTime.UtcNow
             };
 
@@ -708,6 +729,7 @@
                 comments.Add(comment);
                 comments = comments.OrderBy(c => c.CreatedAt).ThenBy(c => c.Id).ToList();
                 newCommentText = null;
+                newCommentType = CommentType.Note;
             }
 
             await OnTaskUpdated.InvokeAsync();
@@ -778,6 +800,7 @@
 
     private static string GetCommentTypeDisplayName(CommentType type) => type switch
     {
+        CommentType.Comment => "Comment",
         CommentType.StatusChange => "Status",
         CommentType.FeatureChange => "Feature",
         CommentType.PriorityChange => "Priority",
@@ -785,14 +808,43 @@
         _ => type.ToString()
     };
 
+    private static readonly CommentType[] UserCommentTypes =
+    [
+        CommentType.Note,
+        CommentType.Decision,
+        CommentType.Question,
+        CommentType.Blocked,
+        CommentType.Handoff,
+        CommentType.Verification
+    ];
+
     private static string GetCommentTypeBadgeClass(CommentType type) => type switch
     {
         CommentType.Comment => "badge text-bg-primary",
+        CommentType.Note => "badge text-bg-primary",
+        CommentType.Decision => "badge text-bg-info",
+        CommentType.Question => "badge text-bg-light border text-dark",
+        CommentType.Blocked => "badge text-bg-danger",
+        CommentType.Handoff => "badge text-bg-warning",
+        CommentType.Verification => "badge text-bg-success",
         CommentType.Created => "badge text-bg-success",
         _ => "badge text-bg-secondary"
     };
 
-    private static string GetCommentBorderClass(CommentType type) => type == CommentType.Comment
-        ? "task-comment-note"
-        : "task-comment-system";
+    private static string GetCommentBorderClass(CommentType type) => type switch
+    {
+        CommentType.Comment or CommentType.Note => "task-comment-note",
+        CommentType.Decision => "border-info",
+        CommentType.Question => "border-dark-subtle",
+        CommentType.Blocked => "border-danger",
+        CommentType.Handoff => "border-warning bg-warning-subtle",
+        CommentType.Verification => "border-success",
+        _ => "task-comment-system"
+    };
+
+    private TaskComment? GetLatestHandoffComment() => comments
+        .Where(comment => comment.Type == CommentType.Handoff)
+        .OrderByDescending(comment => comment.CreatedAt)
+        .ThenByDescending(comment => comment.Id)
+        .FirstOrDefault();
 }
