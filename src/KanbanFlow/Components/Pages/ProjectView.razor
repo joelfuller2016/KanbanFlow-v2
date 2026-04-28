@@ -62,8 +62,18 @@ else
         <div class="project-main flex-grow-1 d-flex flex-column overflow-hidden" style="min-width: 0;">
             <div class="border-bottom bg-white px-3 py-2">
                 <div class="d-lg-none mb-3">
-                    <button class="btn btn-sm btn-outline-secondary" @onclick="ToggleOutline" aria-expanded="@outlineOpen" aria-controls="project-outline" data-testid="toggle-project-outline-button">
-                        ? Project outline
+                    <button class="btn btn-sm btn-outline-secondary" @onclick="ToggleOutline" aria-expanded="@outlineOpen" aria-controls="project-outline" data-testid="toggle-project-outline-button" style="width: 44px; height: 44px; min-width: 44px; min-height: 44px;">
+                        @if (!outlineOpen) {
+                            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16" class="me-1">
+                                <path fill-rule="evenodd" d="M1 3h14v1H1V3zm0 4h14v1H1V7zm0 4h14v1H1v-1z"/>
+                            </svg>
+                            <span>Project outline</span>
+                        } else {
+                            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16" class="me-1">
+                                <path fill-rule="evenodd" d="M2 2l12 12M14 2L2 14" stroke="currentColor" stroke-width="2"/> <!-- simple X -->
+                            </svg>
+                            <span>Close outline</span>
+                        }
                     </button>
                 </div>
                 <div class="d-flex flex-wrap align-items-center gap-2">
@@ -227,7 +237,7 @@ else
                                             }
                                             @if (requirement.Feature is not null && requirement.TaskItem is not null)
                                             {
-                                                <span class="mx-1">•</span>
+                                                <span class="mx-1">ï¿½</span>
                                             }
                                             @if (requirement.TaskItem is not null)
                                             {
