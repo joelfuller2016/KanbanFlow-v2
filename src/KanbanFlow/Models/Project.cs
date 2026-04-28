@@ -12,4 +12,5 @@ public class Project
 
     public List<Feature> Features { get; set; } = [];
     public List<Requirement> Requirements { get; set; } = [];
+    public List<TaskDependency> TaskDependencies { get; set; } = [];
 }
