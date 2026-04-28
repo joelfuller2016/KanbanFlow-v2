@@ -257,6 +257,7 @@
     [Parameter] public TaskItem? Task { get; set; }
     [Parameter] public List<Feature>? Features { get; set; }
     [Parameter] public bool IsOpen { get; set; }
+    [Parameter] public int? AddSubtaskParentId { get; set; }
     [Parameter] public EventCallback OnClose { get; set; }
     [Parameter] public EventCallback OnTaskUpdated { get; set; }
     [Parameter] public EventCallback<int> OnTaskDeleted { get; set; }
@@ -295,7 +296,7 @@
         confirmingDelete = false;
         editingDescription = Task?.Description;
         newSubtaskText = null;
-        addingChildSubtaskToId = null;
+        addingChildSubtaskToId = AddSubtaskParentId;
         newChildSubtaskText = null;
 
         var taskId = IsOpen ? Task?.Id : null;
