@@ -301,6 +301,7 @@ else
     // Feature/Task collapse state
     private HashSet<int> expandedFeatures = [];
     private HashSet<int> expandedTasks = [];
+    private bool outlineExpansionInitialized;
 
     // Add Item modal state
     private bool addModalOpen;
@@ -443,15 +444,7 @@ else
             project = loaded;
             allTasks = project.Features.SelectMany(f => f.Tasks).ToList();
 
-            // Expand all features and tasks by default
-            foreach (var f in project.Features)
-            {
-                expandedFeatures.Add(f.Id);
-            }
-            foreach (var t in allTasks.Where(t => t.Subtasks.Count > 0))
-            {
-                expandedTasks.Add(t.Id);
-            }
+            InitializeOutlineExpansion();
 
             loadError = null;
         }
@@ -463,6 +456,28 @@ else
         {
             loadError = ex.Message;
         }
+    }
+
+    private void InitializeOutlineExpansion()
+    {
+        if (project is null || outlineExpansionInitialized)
+        {
+            return;
+        }
+
+        // Expand all features and tasks on initial page load only. Subsequent reloads
+        // refresh the data model without overwriting the user's collapse choices.
+        foreach (var f in project.Features)
+        {
+            expandedFeatures.Add(f.Id);
+        }
+
+        foreach (var t in allTasks.Where(t => t.Subtasks.Count > 0))
+        {
+            expandedTasks.Add(t.Id);
+        }
+
+        outlineExpansionInitialized = true;
     }
 
     private void GoHome()
