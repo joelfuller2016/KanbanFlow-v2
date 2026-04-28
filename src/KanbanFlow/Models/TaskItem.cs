@@ -19,6 +19,8 @@ public class TaskItem
     public Feature Feature { get; set; } = null!;
     public List<Subtask> Subtasks { get; set; } = [];
     public List<TaskComment> Comments { get; set; } = [];
+    public List<TaskDependency> Dependencies { get; set; } = [];
+    public List<TaskDependency> BlockingDependencies { get; set; } = [];
 }
 
 public enum WorkStatus

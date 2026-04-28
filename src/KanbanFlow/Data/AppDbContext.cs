@@ -13,6 +13,7 @@ public class AppDbContext : DbContext
     public DbSet<Subtask> Subtasks => Set<Subtask>();
     public DbSet<Requirement> Requirements => Set<Requirement>();
     public DbSet<TaskComment> TaskComments => Set<TaskComment>();
+    public DbSet<TaskDependency> TaskDependencies => Set<TaskDependency>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -30,6 +31,8 @@ public class AppDbContext : DbContext
         modelBuilder.Entity<TaskItem>(e =>
         {
             e.HasMany(t => t.Subtasks).WithOne(s => s.TaskItem).HasForeignKey(s => s.TaskItemId).OnDelete(DeleteBehavior.Cascade);
+            e.HasMany(t => t.Dependencies).WithOne(d => d.TaskItem).HasForeignKey(d => d.TaskItemId).OnDelete(DeleteBehavior.Cascade);
+            e.HasMany(t => t.BlockingDependencies).WithOne(d => d.DependsOnTaskItem).HasForeignKey(d => d.DependsOnTaskItemId).OnDelete(DeleteBehavior.Cascade);
         });
 
         modelBuilder.Entity<Subtask>(e =>
@@ -47,6 +50,12 @@ public class AppDbContext : DbContext
             e.HasOne(r => r.Project).WithMany(p => p.Requirements).HasForeignKey(r => r.ProjectId).OnDelete(DeleteBehavior.Cascade);
             e.HasOne(r => r.Feature).WithMany().HasForeignKey(r => r.FeatureId).OnDelete(DeleteBehavior.SetNull);
             e.HasOne(r => r.TaskItem).WithMany().HasForeignKey(r => r.TaskItemId).OnDelete(DeleteBehavior.SetNull);
+        });
+
+        modelBuilder.Entity<TaskDependency>(e =>
+        {
+            e.HasIndex(d => new { d.TaskItemId, d.DependsOnTaskItemId }).IsUnique();
+            e.HasOne(d => d.Project).WithMany(p => p.TaskDependencies).HasForeignKey(d => d.ProjectId).OnDelete(DeleteBehavior.Cascade);
         });
     }
 }
