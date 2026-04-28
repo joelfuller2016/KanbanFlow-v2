@@ -20,7 +20,8 @@
             else
             {
                 <h5 class="offcanvas-title fw-bold text-break mb-0" role="button"
-                    @onclick="StartEditingName" title="Click to edit">
+                    tabindex="0" aria-label="Edit task name @Task.Name"
+                    @onclick="StartEditingName" @onkeydown="HandleNameActivationKeyDown" title="Click to edit">
                     @Task.Name
                 </h5>
             }
@@ -334,6 +335,14 @@
         isEditingName = true;
     }
 
+    private void HandleNameActivationKeyDown(KeyboardEventArgs e)
+    {
+        if (IsActivationKey(e.Key))
+        {
+            StartEditingName();
+        }
+    }
+
     private async Task HandleNameKeyDown(KeyboardEventArgs e)
     {
         if (e.Key == "Enter")
@@ -346,6 +355,8 @@
             editingName = Task?.Name;
         }
     }
+
+    private static bool IsActivationKey(string key) => key is "Enter" or " " or "Spacebar";
 
     private async Task SaveNameAsync()
     {
