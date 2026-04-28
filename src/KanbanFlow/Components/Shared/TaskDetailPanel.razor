@@ -3,7 +3,7 @@
 
 <div class="offcanvas offcanvas-end @(IsOpen ? "show" : "")"
      tabindex="-1" data-testid="task-detail-panel"
-     style="visibility: @(IsOpen ? "visible" : "hidden"); width: 480px;"
+     style="visibility: @(IsOpen ? "visible" : "hidden"); width: min(480px, 100vw);"
      @onclick:stopPropagation="true">
 
     <div class="offcanvas-header border-bottom">
@@ -20,7 +20,8 @@
             else
             {
                 <h5 class="offcanvas-title fw-bold text-break mb-0" role="button"
-                    @onclick="StartEditingName" title="Click to edit">
+                    tabindex="0" aria-label="Edit task name @Task.Name"
+                    @onclick="StartEditingName" @onkeydown="HandleNameActivationKeyDown" title="Click to edit">
                     @Task.Name
                 </h5>
             }
@@ -138,12 +139,14 @@
                     <input type="text" class="form-control" placeholder="Add a subtask..."
                            @bind="newSubtaskText" @bind:event="oninput"
                            @onkeydown="HandleSubtaskKeyDown" />
-                    <button class="btn btn-outline-secondary" @onclick="AddSubtaskAsync"
-                            aria-label="Add subtask" data-testid="task-detail-add-subtask-button"
+                    <button class="btn btn-outline-secondary d-flex align-items-center gap-1" @onclick="AddSubtaskAsync"
+                            title="Add subtask to @Task.Name"
+                            aria-label="Add subtask to @Task.Name" data-testid="task-detail-add-subtask-button"
                             disabled="@string.IsNullOrWhiteSpace(newSubtaskText)">
-                        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="currentColor" viewBox="0 0 16 16">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="currentColor" viewBox="0 0 16 16" aria-hidden="true">
                             <path fill-rule="evenodd" d="M8 2a.5.5 0 0 1 .5.5v5h5a.5.5 0 0 1 0 1h-5v5a.5.5 0 0 1-1 0v-5h-5a.5.5 0 0 1 0-1h5v-5A.5.5 0 0 1 8 2"/>
                         </svg>
+                        <span>Add subtask</span>
                     </button>
                 </div>
             </div>
@@ -254,6 +257,7 @@
     [Parameter] public TaskItem? Task { get; set; }
     [Parameter] public List<Feature>? Features { get; set; }
     [Parameter] public bool IsOpen { get; set; }
+    [Parameter] public int? AddSubtaskParentId { get; set; }
     [Parameter] public EventCallback OnClose { get; set; }
     [Parameter] public EventCallback OnTaskUpdated { get; set; }
     [Parameter] public EventCallback<int> OnTaskDeleted { get; set; }
@@ -292,7 +296,7 @@
         confirmingDelete = false;
         editingDescription = Task?.Description;
         newSubtaskText = null;
-        addingChildSubtaskToId = null;
+        addingChildSubtaskToId = AddSubtaskParentId;
         newChildSubtaskText = null;
 
         var taskId = IsOpen ? Task?.Id : null;
@@ -332,6 +336,14 @@
         isEditingName = true;
     }
 
+    private void HandleNameActivationKeyDown(KeyboardEventArgs e)
+    {
+        if (IsActivationKey(e.Key))
+        {
+            StartEditingName();
+        }
+    }
+
     private async Task HandleNameKeyDown(KeyboardEventArgs e)
     {
         if (e.Key == "Enter")
@@ -344,6 +356,8 @@
             editingName = Task?.Name;
         }
     }
+
+    private static bool IsActivationKey(string key) => key is "Enter" or " " or "Spacebar";
 
     private async Task SaveNameAsync()
     {
@@ -496,15 +510,19 @@
                         @subtask.Text
                     </label>
                 </div>
-                <button class="btn btn-sm text-primary p-0 ms-1" title="Add sub-item"
+                <button class="btn btn-sm text-primary p-0 ms-1 d-flex align-items-center gap-1"
+                        title="Add child subtask under @subtask.Text"
+                        aria-label="Add child subtask under @subtask.Text"
                         @onclick="() => ShowAddChildSubtask(subtask.Id)">
-                    <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" fill="currentColor" viewBox="0 0 16 16">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" fill="currentColor" viewBox="0 0 16 16" aria-hidden="true">
                         <path fill-rule="evenodd" d="M8 2a.5.5 0 0 1 .5.5v5h5a.5.5 0 0 1 0 1h-5v5a.5.5 0 0 1-1 0v-5h-5a.5.5 0 0 1 0-1h5v-5A.5.5 0 0 1 8 2"/>
                     </svg>
+                    <span class="small">Child subtask</span>
                 </button>
                 <button class="btn btn-sm text-danger p-0 ms-1" title="Delete subtask"
+                        aria-label="Delete subtask @subtask.Text"
                         @onclick="() => DeleteSubtaskAsync(subtask)">
-                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="currentColor" viewBox="0 0 16 16">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="currentColor" viewBox="0 0 16 16" aria-hidden="true">
                         <path d="M4.646 4.646a.5.5 0 0 1 .708 0L8 7.293l2.646-2.647a.5.5 0 0 1 .708.708L8.707 8l2.647 2.646a.5.5 0 0 1-.708.708L8 8.707l-2.646 2.647a.5.5 0 0 1-.708-.708L7.293 8 4.646 5.354a.5.5 0 0 1 0-.708"/>
                     </svg>
                 </button>
@@ -515,17 +533,23 @@
             {
                 <div class="mt-1" style="margin-left: 20px;">
                     <div class="input-group input-group-sm">
-                        <input type="text" class="form-control" placeholder="Sub-item..."
+                        <input type="text" class="form-control" placeholder="Child subtask..."
+                               aria-label="Child subtask text"
                                @bind="newChildSubtaskText" @bind:event="oninput"
                                @onkeydown="HandleChildSubtaskKeyDown" />
-                        <button class="btn btn-success" @onclick="SaveChildSubtask"
+                        <button class="btn btn-success d-flex align-items-center gap-1" @onclick="SaveChildSubtask"
+                                title="Create child subtask"
+                                aria-label="Create child subtask"
                                 disabled="@string.IsNullOrWhiteSpace(newChildSubtaskText)">
-                            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="currentColor" viewBox="0 0 16 16">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="currentColor" viewBox="0 0 16 16" aria-hidden="true">
                                 <path d="M12.736 3.97a.733.733 0 0 1 1.047 0c.286.289.29.756.01 1.05L7.88 12.01a.733.733 0 0 1-1.065.02L3.217 8.384a.757.757 0 0 1 0-1.06.733.733 0 0 1 1.047 0l3.052 3.093 5.4-6.425z"/>
                             </svg>
+                            <span>Create child subtask</span>
                         </button>
-                        <button class="btn btn-outline-secondary" @onclick="CancelAddChildSubtask">
-                            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="currentColor" viewBox="0 0 16 16">
+                        <button class="btn btn-outline-secondary" @onclick="CancelAddChildSubtask"
+                                title="Cancel child subtask"
+                                aria-label="Cancel creating child subtask">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="currentColor" viewBox="0 0 16 16" aria-hidden="true">
                                 <path d="M4.646 4.646a.5.5 0 0 1 .708 0L8 7.293l2.646-2.647a.5.5 0 0 1 .708.708L8.707 8l2.647 2.646a.5.5 0 0 1-.708.708L8 8.707l-2.646 2.647a.5.5 0 0 1-.708-.708L7.293 8 4.646 5.354a.5.5 0 0 1 0-.708"/>
                             </svg>
                         </button>

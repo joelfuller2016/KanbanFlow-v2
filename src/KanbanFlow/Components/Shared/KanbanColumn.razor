@@ -1,17 +1,18 @@
-<div class="d-flex flex-column bg-body-secondary rounded p-2" style="min-width: 180px; flex: 1 1 0; max-width: 260px;" data-testid="board-column-@Status" aria-label="@StatusDisplayName column">
+<div class="kanban-column d-flex flex-column bg-body-secondary rounded p-2" data-testid="board-column-@Status" aria-label="@StatusDisplayName column">
     <div class="d-flex align-items-center mb-2">
         <h6 class="fw-semibold mb-0">
             @StatusDisplayName
             <span class="badge bg-secondary">@Tasks.Count</span>
         </h6>
-        <button class="btn btn-link text-secondary p-0 ms-auto d-flex align-items-center" style="line-height: 1;"
+        <button class="btn btn-sm btn-outline-secondary py-0 px-2 ms-auto d-flex align-items-center gap-1" style="line-height: 1;"
                 @onclick="() => OnAddTask.InvokeAsync(Status)"
                 title="Add task to @StatusDisplayName"
                 aria-label="Add task to @StatusDisplayName"
                 data-testid="add-task-@Status-button">
-            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16">
+            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="currentColor" viewBox="0 0 16 16" aria-hidden="true">
                 <path fill-rule="evenodd" d="M8 2a.5.5 0 0 1 .5.5v5h5a.5.5 0 0 1 0 1h-5v5a.5.5 0 0 1-1 0v-5h-5a.5.5 0 0 1 0-1h5v-5A.5.5 0 0 1 8 2"/>
             </svg>
+            <span class="small">Task</span>
         </button>
     </div>
 
@@ -23,7 +24,7 @@
         @if (Tasks.Count == 0)
         {
             <div class="border rounded bg-white text-muted small text-center p-3" style="border-style: dashed !important;" data-testid="empty-column-@Status">
-                No tasks in @StatusDisplayName. Use + to add one here.
+                No tasks in @StatusDisplayName. Use “Task” to add one here.
             </div>
         }
     </div>

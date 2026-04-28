@@ -11,9 +11,11 @@ public class AppDbContext : DbContext
     public DbSet<Feature> Features => Set<Feature>();
     public DbSet<TaskItem> Tasks => Set<TaskItem>();
     public DbSet<Subtask> Subtasks => Set<Subtask>();
+    public DbSet<AcceptanceCriterion> AcceptanceCriteria => Set<AcceptanceCriterion>();
     public DbSet<Requirement> Requirements => Set<Requirement>();
     public DbSet<TaskComment> TaskComments => Set<TaskComment>();
     public DbSet<TaskDependency> TaskDependencies => Set<TaskDependency>();
+    public DbSet<ActivityEvent> ActivityEvents => Set<ActivityEvent>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -31,6 +33,7 @@ public class AppDbContext : DbContext
         modelBuilder.Entity<TaskItem>(e =>
         {
             e.HasMany(t => t.Subtasks).WithOne(s => s.TaskItem).HasForeignKey(s => s.TaskItemId).OnDelete(DeleteBehavior.Cascade);
+            e.HasMany(t => t.AcceptanceCriteria).WithOne(c => c.TaskItem).HasForeignKey(c => c.TaskItemId).OnDelete(DeleteBehavior.Cascade);
             e.HasMany(t => t.Dependencies).WithOne(d => d.TaskItem).HasForeignKey(d => d.TaskItemId).OnDelete(DeleteBehavior.Cascade);
             e.HasMany(t => t.BlockingDependencies).WithOne(d => d.DependsOnTaskItem).HasForeignKey(d => d.DependsOnTaskItemId).OnDelete(DeleteBehavior.Cascade);
         });
@@ -56,6 +59,15 @@ public class AppDbContext : DbContext
         {
             e.HasIndex(d => new { d.TaskItemId, d.DependsOnTaskItemId }).IsUnique();
             e.HasOne(d => d.Project).WithMany(p => p.TaskDependencies).HasForeignKey(d => d.ProjectId).OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<ActivityEvent>(e =>
+        {
+            // Activity rows are an audit trail. Keep ProjectId as historical attribution,
+            // but do not enforce a FK that would cascade-delete or block project deletion.
+            e.Ignore(a => a.Project);
+            e.HasIndex(a => new { a.ProjectId, a.CreatedAt });
+            e.HasIndex(a => new { a.EntityType, a.EntityId, a.CreatedAt });
         });
     }
 }
