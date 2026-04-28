@@ -141,6 +141,68 @@
                           @onfocus="StartEditingDescription"></textarea>
             </div>
 
+            @* Acceptance criteria *@
+            <section class="mb-3 pt-3 border-top" data-testid="task-acceptance-criteria-section" aria-labelledby="task-acceptance-criteria-heading">
+                <div class="d-flex align-items-center mb-2">
+                    <h6 id="task-acceptance-criteria-heading" class="form-label small text-muted mb-0">Acceptance criteria</h6>
+                    @{
+                        var completedCriteriaCount = Task.AcceptanceCriteria.Count(c => c.Completed);
+                        var totalCriteriaCount = Task.AcceptanceCriteria.Count;
+                    }
+                    @if (totalCriteriaCount > 0)
+                    {
+                        <span class="ms-2 badge bg-secondary small" data-testid="task-acceptance-criteria-count">@completedCriteriaCount/@totalCriteriaCount</span>
+                    }
+                </div>
+
+                @if (totalCriteriaCount == 0)
+                {
+                    <div class="text-muted small border rounded p-2 mb-2" data-testid="task-acceptance-criteria-empty-state">
+                        No acceptance criteria yet. Add a checklist item to define done for this task.
+                    </div>
+                }
+                else
+                {
+                    <div class="list-group list-group-flush mb-2" data-testid="task-acceptance-criteria-list">
+                        @foreach (var criterion in Task.AcceptanceCriteria.OrderBy(c => c.SortOrder).ThenBy(c => c.Id))
+                        {
+                            <div class="list-group-item px-0 py-1 border-0 d-flex align-items-start gap-2" data-testid="@($"task-acceptance-criterion-{criterion.Id}")">
+                                <input id="@($"task-acceptance-criterion-toggle-{criterion.Id}")" class="form-check-input mt-1" type="checkbox"
+                                       checked="@criterion.Completed"
+                                       data-testid="@($"task-acceptance-criterion-toggle-{criterion.Id}")"
+                                       @onchange="() => ToggleAcceptanceCriterionAsync(criterion)" />
+                                <label class="small flex-grow-1 text-break @(criterion.Completed ? "text-decoration-line-through text-muted" : null)" for="@($"task-acceptance-criterion-toggle-{criterion.Id}")">@criterion.Text</label>
+                                <button class="btn btn-sm text-danger p-0 ms-1" title="Delete acceptance criterion"
+                                        aria-label="Delete acceptance criterion @criterion.Text"
+                                        data-testid="@($"task-acceptance-criterion-delete-{criterion.Id}")"
+                                        @onclick="() => DeleteAcceptanceCriterionAsync(criterion)">
+                                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="currentColor" viewBox="0 0 16 16" aria-hidden="true">
+                                        <path d="M4.646 4.646a.5.5 0 0 1 .708 0L8 7.293l2.646-2.647a.5.5 0 0 1 .708.708L8.707 8l2.647 2.646a.5.5 0 0 1-.708.708L8 8.707l-2.646 2.647a.5.5 0 0 1-.708-.708L7.293 8 4.646 5.354a.5.5 0 0 1 0-.708"/>
+                                    </svg>
+                                </button>
+                            </div>
+                        }
+                    </div>
+                }
+
+                <label class="visually-hidden" for="task-acceptance-criterion-input">Acceptance criterion text</label>
+                <div class="input-group input-group-sm">
+                    <input id="task-acceptance-criterion-input" type="text" class="form-control" placeholder="Add acceptance criterion..."
+                           data-testid="task-acceptance-criterion-input"
+                           @bind="newAcceptanceCriterionText" @bind:event="oninput"
+                           @onkeydown="HandleAcceptanceCriterionKeyDown" />
+                    <button class="btn btn-outline-secondary d-flex align-items-center gap-1" @onclick="AddAcceptanceCriterionAsync"
+                            title="Add acceptance criterion to @Task.Name"
+                            aria-label="Add acceptance criterion to @Task.Name" data-testid="task-acceptance-criterion-add-button"
+                            disabled="@string.IsNullOrWhiteSpace(newAcceptanceCriterionText)">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="currentColor" viewBox="0 0 16 16" aria-hidden="true">
+                            <path fill-rule="evenodd" d="M8 2a.5.5 0 0 1 .5.5v5h5a.5.5 0 0 1 0 1h-5v5a.5.5 0 0 1-1 0v-5h-5a.5.5 0 0 1 0-1h5v-5A.5.5 0 0 1 8 2"/>
+                        </svg>
+                        <span>Add criterion</span>
+                    </button>
+                </div>
+            </section>
+
             @* Subtasks (recursive) *@
             <div class="mb-3">
                 <div class="d-flex align-items-center mb-2">
@@ -335,6 +397,9 @@
     // Subtask input
     private string? newSubtaskText;
 
+    // Acceptance criteria input
+    private string? newAcceptanceCriterionText;
+
     // Add child subtask
     private int? addingChildSubtaskToId;
     private string? newChildSubtaskText;
@@ -360,6 +425,7 @@
         confirmingDelete = false;
         editingDescription = Task?.Description;
         newSubtaskText = null;
+        newAcceptanceCriterionText = null;
         addingChildSubtaskToId = AddSubtaskParentId;
         newChildSubtaskText = null;
 
@@ -725,6 +791,64 @@
 
         Task.Subtasks.Add(subtask);
         newSubtaskText = null;
+
+        await OnTaskUpdated.InvokeAsync();
+    }
+
+    // ── Acceptance criteria ──
+
+    private async Task HandleAcceptanceCriterionKeyDown(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter" && !string.IsNullOrWhiteSpace(newAcceptanceCriterionText))
+        {
+            await AddAcceptanceCriterionAsync();
+        }
+    }
+
+    private async Task AddAcceptanceCriterionAsync()
+    {
+        if (Task is null || string.IsNullOrWhiteSpace(newAcceptanceCriterionText)) return;
+
+        var criterion = new AcceptanceCriterion
+        {
+            TaskItemId = Task.Id,
+            Text = newAcceptanceCriterionText.Trim(),
+            SortOrder = Task.AcceptanceCriteria.Count
+        };
+
+        using var db = await DbFactory.CreateDbContextAsync();
+        db.AcceptanceCriteria.Add(criterion);
+        await db.SaveChangesAsync();
+
+        Task.AcceptanceCriteria.Add(criterion);
+        newAcceptanceCriterionText = null;
+
+        await OnTaskUpdated.InvokeAsync();
+    }
+
+    private async Task ToggleAcceptanceCriterionAsync(AcceptanceCriterion criterion)
+    {
+        criterion.Completed = !criterion.Completed;
+        criterion.UpdatedAt = DateTime.UtcNow;
+
+        using var db = await DbFactory.CreateDbContextAsync();
+        db.AcceptanceCriteria.Attach(criterion);
+        db.Entry(criterion).Property(c => c.Completed).IsModified = true;
+        db.Entry(criterion).Property(c => c.UpdatedAt).IsModified = true;
+        await db.SaveChangesAsync();
+
+        await OnTaskUpdated.InvokeAsync();
+    }
+
+    private async Task DeleteAcceptanceCriterionAsync(AcceptanceCriterion criterion)
+    {
+        if (Task is null) return;
+
+        Task.AcceptanceCriteria.Remove(criterion);
+
+        using var db = await DbFactory.CreateDbContextAsync();
+        db.AcceptanceCriteria.Remove(db.AcceptanceCriteria.Attach(criterion).Entity);
+        await db.SaveChangesAsync();
 
         await OnTaskUpdated.InvokeAsync();
     }
