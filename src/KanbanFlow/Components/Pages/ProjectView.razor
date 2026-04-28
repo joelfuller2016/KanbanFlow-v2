@@ -178,7 +178,14 @@ else
                     @if (GetOrderedRequirements().Count == 0)
                     {
                         <div class="text-muted small border rounded bg-white p-3 mt-2" data-testid="requirements-empty-state">
-                            No requirements yet. Requirements added through the API will appear here.
+                            <div class="fw-semibold text-body mb-1">No requirements captured yet.</div>
+                            <div>
+                                Requirements describe the project rules, constraints, and must-have outcomes that keep the board aligned.
+                                They are shown here for people reviewing the project and included in the context AI agents use.
+                            </div>
+                            <div class="mt-2">
+                                Requirement editing is API-only for now; any requirements added by your team or automation will appear here.
+                            </div>
                         </div>
                     }
                     else
@@ -207,7 +214,7 @@ else
                                             }
                                             @if (requirement.Feature is not null && requirement.TaskItem is not null)
                                             {
-                                                <span class="mx-1">â€¢</span>
+                                                <span class="mx-1">•</span>
                                             }
                                             @if (requirement.TaskItem is not null)
                                             {
@@ -221,7 +228,6 @@ else
                     }
                 </div>
             </section>
-
             <KanbanBoard AllTasks="allTasks"
                          OnAddTask="OpenAddModalForColumn"
                          OnToggleTaskDone="ToggleTaskDone"
@@ -313,6 +319,7 @@ else
     // Feature/Task collapse state
     private HashSet<int> expandedFeatures = [];
     private HashSet<int> expandedTasks = [];
+    private bool outlineExpansionInitialized;
 
     // Add Item modal state
     private bool addModalOpen;
@@ -472,15 +479,7 @@ else
             project = loaded;
             allTasks = project.Features.SelectMany(f => f.Tasks).ToList();
 
-            // Expand all features and tasks by default
-            foreach (var f in project.Features)
-            {
-                expandedFeatures.Add(f.Id);
-            }
-            foreach (var t in allTasks.Where(t => t.Subtasks.Count > 0))
-            {
-                expandedTasks.Add(t.Id);
-            }
+            InitializeOutlineExpansion();
 
             loadError = null;
         }
@@ -492,6 +491,28 @@ else
         {
             loadError = ex.Message;
         }
+    }
+
+    private void InitializeOutlineExpansion()
+    {
+        if (project is null || outlineExpansionInitialized)
+        {
+            return;
+        }
+
+        // Expand all features and tasks on initial page load only. Subsequent reloads
+        // refresh the data model without overwriting the user's collapse choices.
+        foreach (var f in project.Features)
+        {
+            expandedFeatures.Add(f.Id);
+        }
+
+        foreach (var t in allTasks.Where(t => t.Subtasks.Count > 0))
+        {
+            expandedTasks.Add(t.Id);
+        }
+
+        outlineExpansionInitialized = true;
     }
 
     private void GoHome()
