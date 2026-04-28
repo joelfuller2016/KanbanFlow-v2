@@ -3,7 +3,7 @@
 
 <div class="offcanvas offcanvas-end @(IsOpen ? "show" : "")"
      tabindex="-1" data-testid="task-detail-panel"
-     style="visibility: @(IsOpen ? "visible" : "hidden"); width: 480px;"
+     style="visibility: @(IsOpen ? "visible" : "hidden"); width: min(480px, 100vw);"
      @onclick:stopPropagation="true">
 
     <div class="offcanvas-header border-bottom">

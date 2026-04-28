@@ -21,7 +21,6 @@
         }
     </div>
 </section>
-
 @code {
     [Parameter, EditorRequired] public IReadOnlyList<TaskItem> AllTasks { get; set; } = [];
     [Parameter] public EventCallback<WorkStatus> OnAddTask { get; set; }
