@@ -101,6 +101,7 @@ public static class ApiEndpoints
                     .ThenInclude(r => r.Feature)
                 .Include(p => p.Requirements)
                     .ThenInclude(r => r.TaskItem)
+                .Include(p => p.TaskDependencies)
                 .AsSplitQuery()
                 .AsNoTracking()
                 .FirstOrDefaultAsync(p => p.Id == id);
@@ -128,23 +129,72 @@ public static class ApiEndpoints
                     .Select(child => MapSubtaskContext(child, allSubtasks))
             };
 
-            object MapTaskContext(TaskItem task, Feature feature) => new
+            var tasksById = allTasks.ToDictionary(x => x.Task.Id, x => x);
+            var dependenciesByBlockedTask = project.TaskDependencies.ToLookup(d => d.TaskItemId);
+            var dependenciesByBlockingTask = project.TaskDependencies.ToLookup(d => d.DependsOnTaskItemId);
+
+            object MapDependencyContext(TaskDependency dependency)
             {
-                task.Id,
-                task.FeatureId,
-                FeatureName = feature.Name,
-                task.Name,
-                task.Description,
-                Status = task.Status.ToString(),
-                Priority = task.Priority.ToString(),
-                task.Assignee,
-                task.ClaimedBy,
-                task.ClaimedAt,
-                task.SortOrder,
-                task.CreatedAt,
-                task.UpdatedAt,
-                task.CompletedAt,
-                Subtasks = task.Subtasks
+                var blocked = tasksById.GetValueOrDefault(dependency.TaskItemId);
+                var blocker = tasksById.GetValueOrDefault(dependency.DependsOnTaskItemId);
+
+                return new
+                {
+                    dependency.Id,
+                    dependency.ProjectId,
+                    dependency.TaskItemId,
+                    TaskName = blocked?.Task.Name,
+                    TaskStatus = blocked?.Task.Status.ToString(),
+                    dependency.DependsOnTaskItemId,
+                    DependsOnTaskName = blocker?.Task.Name,
+                    DependsOnTaskStatus = blocker?.Task.Status.ToString(),
+                    BlockedTaskId = dependency.TaskItemId,
+                    BlockedTaskName = blocked?.Task.Name,
+                    BlockedTaskStatus = blocked?.Task.Status.ToString(),
+                    BlockingTaskId = dependency.DependsOnTaskItemId,
+                    BlockingTaskName = blocker?.Task.Name,
+                    BlockingTaskStatus = blocker?.Task.Status.ToString(),
+                    IsBlockingTaskDone = blocker?.Task.Status == WorkStatus.Done,
+                    IsBlockingTaskUnfinished = blocker is not null && blocker.Task.Status != WorkStatus.Done,
+                    Type = dependency.Type.ToString(),
+                    dependency.CreatedAt
+                };
+            }
+
+            object MapTaskContext(TaskItem task, Feature feature)
+            {
+                var dependencies = dependenciesByBlockedTask[task.Id]
+                    .OrderBy(d => d.CreatedAt)
+                    .ToList();
+                var blocking = dependenciesByBlockingTask[task.Id]
+                    .OrderBy(d => d.CreatedAt)
+                    .ToList();
+                var unfinishedBlockers = dependencies
+                    .Where(d => tasksById.TryGetValue(d.DependsOnTaskItemId, out var blocker) && blocker.Task.Status != WorkStatus.Done)
+                    .ToList();
+
+                return new
+                {
+                    task.Id,
+                    task.FeatureId,
+                    FeatureName = feature.Name,
+                    task.Name,
+                    task.Description,
+                    Status = task.Status.ToString(),
+                    Priority = task.Priority.ToString(),
+                    task.Assignee,
+                    task.ClaimedBy,
+                    task.ClaimedAt,
+                    task.SortOrder,
+                    task.CreatedAt,
+                    task.UpdatedAt,
+                    task.CompletedAt,
+                    IsBlocked = unfinishedBlockers.Count > 0,
+                    BlockedByUnfinishedTasks = unfinishedBlockers.Count > 0,
+                    Dependencies = dependencies.Select(MapDependencyContext),
+                    Blocks = blocking.Select(MapDependencyContext),
+                    UnfinishedBlockers = unfinishedBlockers.Select(MapDependencyContext),
+                    Subtasks = task.Subtasks
                     .Where(s => s.ParentSubtaskId == null)
                     .OrderBy(s => s.SortOrder)
                     .Select(subtask => MapSubtaskContext(subtask, task.Subtasks)),
@@ -159,17 +209,18 @@ public static class ApiEndpoints
                         c.CreatedAt,
                         c.UpdatedAt
                     }),
-                Comments = task.Comments
-                    .OrderBy(c => c.CreatedAt)
-                    .Select(c => new
-                    {
-                        c.Id,
-                        c.Text,
-                        c.Author,
-                        Type = c.Type.ToString(),
-                        c.CreatedAt
-                    })
-            };
+                    Comments = task.Comments
+                        .OrderBy(c => c.CreatedAt)
+                        .Select(c => new
+                        {
+                            c.Id,
+                            c.Text,
+                            c.Author,
+                            Type = c.Type.ToString(),
+                            c.CreatedAt
+                        })
+                };
+            }
 
             object MapFeatureContext(Feature feature) => new
             {
@@ -214,6 +265,9 @@ public static class ApiEndpoints
                     ByPriority = Enum.GetValues<TaskPriority>()
                         .ToDictionary(priority => priority.ToString(), priority => allTasks.Count(x => x.Task.Priority == priority))
                 },
+                Dependencies = project.TaskDependencies
+                    .OrderBy(d => d.CreatedAt)
+                    .Select(MapDependencyContext),
                 Requirements = project.Requirements
                     .OrderBy(r => r.SortOrder)
                     .Select(r => new
@@ -248,13 +302,37 @@ public static class ApiEndpoints
 
             var take = Math.Clamp(limit ?? 5, 1, 25);
 
-            var candidates = await db.Tasks
+            var projectTasks = await db.Tasks
                 .Include(t => t.Feature)
-                .Where(t => t.Feature.ProjectId == id && t.Status != WorkStatus.Done)
+                .Where(t => t.Feature.ProjectId == id)
                 .AsNoTracking()
                 .ToListAsync();
 
-            var recommendations = candidates
+            var taskIds = projectTasks.Select(t => t.Id).ToList();
+            var tasksById = projectTasks.ToDictionary(t => t.Id);
+            var dependencies = await db.TaskDependencies
+                .Where(d => d.ProjectId == id && taskIds.Contains(d.TaskItemId) && taskIds.Contains(d.DependsOnTaskItemId))
+                .AsNoTracking()
+                .ToListAsync();
+            var dependenciesByBlockedTask = dependencies.ToLookup(d => d.TaskItemId);
+
+            var blockedCandidates = projectTasks
+                .Where(t => t.Status != WorkStatus.Done)
+                .Select(task => new
+                {
+                    Task = task,
+                    UnfinishedBlockers = dependenciesByBlockedTask[task.Id]
+                        .Where(d => tasksById.TryGetValue(d.DependsOnTaskItemId, out var blocker) && blocker.Status != WorkStatus.Done)
+                        .Select(d => tasksById[d.DependsOnTaskItemId])
+                        .OrderBy(t => t.SortOrder)
+                        .ToList()
+                })
+                .Where(x => x.UnfinishedBlockers.Count > 0)
+                .ToList();
+
+            var recommendations = projectTasks
+                .Where(t => t.Status != WorkStatus.Done && !dependenciesByBlockedTask[t.Id]
+                    .Any(d => tasksById.TryGetValue(d.DependsOnTaskItemId, out var blocker) && blocker.Status != WorkStatus.Done))
                 .OrderByDescending(t => PriorityRank(t.Priority))
                 .ThenByDescending(t => StatusRank(t.Status))
                 .ThenBy(t => t.UpdatedAt)
@@ -273,15 +351,39 @@ public static class ApiEndpoints
                     task.ClaimedBy,
                     task.ClaimedAt,
                     task.UpdatedAt,
+                    IsBlocked = false,
+                    BlockedByUnfinishedTasks = false,
                     Reason = BuildNextTaskReason(task)
-                });
+                })
+                .ToList();
 
             return Results.Ok(new
             {
                 ProjectId = id,
                 GeneratedAt = DateTime.UtcNow,
-                Count = recommendations.Count(),
-                Recommendations = recommendations
+                Count = recommendations.Count,
+                Recommendations = recommendations,
+                BlockedTaskCount = blockedCandidates.Count,
+                BlockedTasks = blockedCandidates.Select(x => new
+                {
+                    x.Task.Id,
+                    x.Task.FeatureId,
+                    FeatureName = x.Task.Feature.Name,
+                    x.Task.Name,
+                    Status = x.Task.Status.ToString(),
+                    Priority = x.Task.Priority.ToString(),
+                    IsBlocked = true,
+                    BlockedByUnfinishedTasks = true,
+                    UnfinishedBlockers = x.UnfinishedBlockers.Select(blocker => new
+                    {
+                        blocker.Id,
+                        blocker.Name,
+                        Status = blocker.Status.ToString(),
+                        Priority = blocker.Priority.ToString(),
+                        blocker.UpdatedAt
+                    }),
+                    Reason = BuildBlockedTaskReason(x.Task, x.UnfinishedBlockers)
+                })
             });
         });
 
@@ -2187,6 +2289,15 @@ public static class ApiEndpoints
         };
 
         return $"{task.Priority} priority task that is {status}; last updated {task.UpdatedAt:u}.";
+    }
+
+    private static string BuildBlockedTaskReason(TaskItem task, IReadOnlyCollection<TaskItem> unfinishedBlockers)
+    {
+        var blockerNames = unfinishedBlockers
+            .OrderBy(t => t.SortOrder)
+            .Select(t => $"{t.Name} ({t.Status})");
+
+        return $"{task.Priority} priority task is blocked until {string.Join(", ", blockerNames)} is Done.";
     }
 }
 
