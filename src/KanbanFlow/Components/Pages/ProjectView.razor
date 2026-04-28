@@ -372,6 +372,17 @@ else
             catch (ObjectDisposedException) { }
             catch (InvalidOperationException) { }
         }
+
+        if (project is not null)
+        {
+            try
+            {
+                await JS.InvokeVoidAsync("KanbanFlow.initProjectOutlineAccessibility");
+            }
+            catch (JSDisconnectedException) { }
+            catch (ObjectDisposedException) { }
+            catch (InvalidOperationException) { }
+        }
     }
 
     private async Task ShowProjectContextAsync()
@@ -767,6 +778,7 @@ else
             if (hasRenderedInteractively)
             {
                 await JS.InvokeVoidAsync("KanbanFlow.destroySortables");
+                await JS.InvokeVoidAsync("KanbanFlow.destroyProjectOutlineAccessibility");
             }
         }
         catch (JSDisconnectedException) { }
