@@ -108,13 +108,13 @@
                     <button class="btn btn-link text-primary p-0 ms-1 d-flex align-items-center gap-1" style="line-height: 1;"
                             @onclick="() => OnOpenAddFeature.InvokeAsync(feature.Id)"
                             @onclick:stopPropagation="true"
-                            title="Add task to feature @feature.Name"
-                            aria-label="Add task to feature @feature.Name"
+                            title="Add a feature or task under @feature.Name"
+                            aria-label="Add a feature or task under @feature.Name"
                             data-testid="outline-feature-@feature.Id-add-button">
                         <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="currentColor" viewBox="0 0 16 16" aria-hidden="true">
                             <path fill-rule="evenodd" d="M8 2a.5.5 0 0 1 .5.5v5h5a.5.5 0 0 1 0 1h-5v5a.5.5 0 0 1-1 0v-5h-5a.5.5 0 0 1 0-1h5v-5A.5.5 0 0 1 8 2"/>
                         </svg>
-                        <span class="small">Task</span>
+                        <span class="small">Item</span>
                     </button>
                 </div>
                 @if (totalCount > 0)
@@ -168,13 +168,13 @@
                             <button class="btn btn-link text-primary p-0 ms-1 d-flex align-items-center gap-1" style="line-height: 1;"
                                     @onclick="() => OnOpenAddFeature.InvokeAsync(task.FeatureId)"
                                     @onclick:stopPropagation="true"
-                                    title="Add another task to this feature"
-                                    aria-label="Add another task to the feature containing @task.Name"
+                                    title="Add another feature or task to this feature"
+                                    aria-label="Add another feature or task to the feature containing @task.Name"
                                     data-testid="outline-task-@task.Id-add-button">
                                 <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="currentColor" viewBox="0 0 16 16" aria-hidden="true">
                                     <path fill-rule="evenodd" d="M8 2a.5.5 0 0 1 .5.5v5h5a.5.5 0 0 1 0 1h-5v5a.5.5 0 0 1-1 0v-5h-5a.5.5 0 0 1 0-1h5v-5A.5.5 0 0 1 8 2"/>
                                 </svg>
-                                <span class="small">Task</span>
+                                <span class="small">Item</span>
                             </button>
                         </div>
                     </div>
@@ -231,13 +231,13 @@
                     <button class="btn btn-link text-primary p-0 ms-auto d-flex align-items-center gap-1" style="line-height: 1;"
                             @onclick="() => OnOpenAddFeature.InvokeAsync(parentTask.FeatureId)"
                             @onclick:stopPropagation="true"
-                            title="Add another task to this feature"
-                            aria-label="Add another task to the feature containing @parentTask.Name"
+                            title="Add another feature or task to this feature"
+                            aria-label="Add another feature or task to the feature containing @parentTask.Name"
                             data-testid="outline-subtask-@subtask.Id-add-button">
                         <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" fill="currentColor" viewBox="0 0 16 16" aria-hidden="true">
                             <path fill-rule="evenodd" d="M8 2a.5.5 0 0 1 .5.5v5h5a.5.5 0 0 1 0 1h-5v5a.5.5 0 0 1-1 0v-5h-5a.5.5 0 0 1 0-1h5v-5A.5.5 0 0 1 8 2"/>
                         </svg>
-                        <span class="small">Task</span>
+                        <span class="small">Item</span>
                     </button>
                 </div>
             </div>

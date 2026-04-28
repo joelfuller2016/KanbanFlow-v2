@@ -157,23 +157,21 @@
     private void SelectFeatureType() => itemType = FeatureType;
     private void SelectTaskType() => itemType = TaskType;
 
+    private WorkStatus SelectedWorkStatus => Enum.IsDefined(typeof(WorkStatus), selectedStatus)
+        ? (WorkStatus)selectedStatus
+        : WorkStatus.Backlog;
+
     private string GetModalTitle() => itemType == FeatureType
         ? "Add feature"
-        : DefaultStatus.HasValue
-            ? $"Add task to {GetStatusDisplayName(DefaultStatus.Value)}"
-            : "Add task to feature";
+        : $"Add task to {GetStatusDisplayName(SelectedWorkStatus)}";
 
     private string GetContextHelpText() => itemType == FeatureType
         ? "Creates a feature in this project's outline. Choose a parent feature to nest it, or leave it top-level."
-        : DefaultStatus.HasValue
-            ? $"Creates a task in the {GetStatusDisplayName(DefaultStatus.Value)} kanban column. Select the feature it belongs to before creating it."
-            : "Creates a task under the selected feature in the project outline.";
+        : $"Creates a task in the {GetStatusDisplayName(SelectedWorkStatus)} kanban column. Select the feature it belongs to before creating it.";
 
     private string GetCreateButtonText() => itemType == FeatureType
         ? "Create feature"
-        : DefaultStatus.HasValue
-            ? $"Create task in {GetStatusDisplayName(DefaultStatus.Value)}"
-            : "Create task in feature";
+        : $"Create task in {GetStatusDisplayName(SelectedWorkStatus)}";
 
     private async Task HandleBackdropClick()
     {
