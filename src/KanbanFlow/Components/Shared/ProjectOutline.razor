@@ -113,7 +113,7 @@
                         <span class="small fw-medium text-truncate" title="@feature.Name">@feature.Name</span>
                     </button>
                     <span class="ms-auto badge bg-secondary rounded-pill" style="font-size: 0.65rem;">@doneCount/@totalCount</span>
-<<                    <button type="button" class="btn btn-link text-primary p-0 ms-1 d-flex align-items-center gap-1" style="line-height: 1;"
+                    <button type="button" class="btn btn-link text-primary p-0 ms-1 d-flex align-items-center gap-1" style="line-height: 1;"
                             @onclick="() => OnOpenAddFeature.InvokeAsync(feature.Id)"
                             @onclick:stopPropagation="true"
                             @onkeydown:stopPropagation="true"
@@ -182,7 +182,7 @@
                                     aria-label="Open task details for @task.Name"
                                     title="@task.Name">@task.Name</button>
                             <span class="ms-auto @GetPriorityBadgeClass(task.Priority)" style="font-size: 0.6rem;">@task.Priority</span>
-<<                            <button type="button" class="btn btn-link text-primary p-0 ms-1 d-flex align-items-center gap-1" style="line-height: 1;"
+                            <button type="button" class="btn btn-link text-primary p-0 ms-1 d-flex align-items-center gap-1" style="line-height: 1;"
                                     @onclick="() => OnOpenAddFeature.InvokeAsync(task.FeatureId)"
                                     @onclick:stopPropagation="true"
                                     @onkeydown:stopPropagation="true"
@@ -245,7 +245,7 @@
                            @onkeydown:stopPropagation="true"
                            aria-label="Mark @subtask.Text as @(subtask.Completed ? "not done" : "done")"
                            data-testid="outline-subtask-@subtask.Id-done-checkbox" />
-<<                    <button type="button"
+                    <button type="button"
                             class="btn btn-link text-reset text-decoration-none text-start p-0 flex-grow-1 text-truncate small @(subtask.Completed ? "text-decoration-line-through text-muted" : "")"
                             @onclick="() => OnOpenEditTask.InvokeAsync(parentTask)"
                             @onclick:stopPropagation="true"
