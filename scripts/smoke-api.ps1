@@ -176,6 +176,24 @@ try {
     Assert-Truthy ($blocksDependency.dependsOnTaskItemId -eq $blocksBlockingTask.id) "Blocks dependency has unexpected blocking task id."
     Assert-Truthy ($blocksDependency.type -eq "Blocks") "Blocks dependency did not preserve type."
 
+    $contextWithDependency = Invoke-SmokeGet "/api/projects/$projectId/context"
+    $contextDependency = $contextWithDependency.dependencies | Where-Object { $_.id -eq $blocksDependency.id } | Select-Object -First 1
+    Assert-Truthy $contextDependency.id "GET /api/projects/$projectId/context did not expose project-level dependency data."
+    Assert-Truthy ($contextDependency.blockedTaskId -eq $blocksBlockedTask.id) "Project context dependency has unexpected blocked task id."
+    Assert-Truthy ($contextDependency.blockingTaskId -eq $blocksBlockingTask.id) "Project context dependency has unexpected blocking task id."
+    Assert-Truthy ($contextDependency.blockingTaskStatus -ne "Done") "Project context dependency should expose unfinished blocker status."
+    $contextBlockedTask = $contextWithDependency.tasks | Where-Object { $_.id -eq $blocksBlockedTask.id } | Select-Object -First 1
+    Assert-Truthy $contextBlockedTask.blockedByUnfinishedTasks "Project context task did not mark unfinished dependency blocker."
+    Assert-Truthy (@($contextBlockedTask.unfinishedBlockers | Where-Object { $_.blockingTaskId -eq $blocksBlockingTask.id }).Count -eq 1) "Project context task did not expose unfinished blocker details."
+
+    $nextTasksWithBlocked = Invoke-SmokeGet "/api/projects/$projectId/next-tasks?limit=25"
+    Assert-Truthy (@($nextTasksWithBlocked.recommendations | Where-Object { $_.id -eq $blocksBlockedTask.id }).Count -eq 0) "Blocked task was recommended before its blocker was Done."
+    Assert-Truthy (@($nextTasksWithBlocked.blockedTasks | Where-Object { $_.id -eq $blocksBlockedTask.id }).Count -eq 1) "Blocked task was not marked in next-task response."
+
+    Invoke-SmokeJson "Patch" "/api/tasks/$($blocksBlockingTask.id)/status" @{ status = "Done" } | Out-Null
+    $nextTasksAfterBlockerDone = Invoke-SmokeGet "/api/projects/$projectId/next-tasks?limit=25"
+    Assert-Truthy (@($nextTasksAfterBlockerDone.recommendations | Where-Object { $_.id -eq $blocksBlockedTask.id }).Count -eq 1) "Blocked task was not recommended after its blocker was Done."
+
     Assert-SmokePostFailure "/api/tasks/$blockedTaskId/dependencies" @{ dependsOnTaskItemId = $blockedTaskId } @(422) "Self-dependency validation failed."
     Assert-SmokePostFailure "/api/tasks/$blockedTaskId/dependencies" @{ dependsOnTaskItemId = $blockingTaskId } @(409) "Duplicate dependency validation failed."
     Assert-SmokePostFailure "/api/tasks/$blockingTaskId/dependencies" @{ dependsOnTaskItemId = $blockedTaskId } @(422) "Dependency cycle validation failed."
