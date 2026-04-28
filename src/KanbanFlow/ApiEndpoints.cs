@@ -12,6 +12,7 @@ public static class ApiEndpoints
         app.MapFeatureEndpoints();
         app.MapTaskEndpoints();
         app.MapSubtaskEndpoints();
+        app.MapAcceptanceCriterionEndpoints();
         app.MapRequirementEndpoints();
         app.MapTaskCommentEndpoints();
         return app;
@@ -89,6 +90,9 @@ public static class ApiEndpoints
                         .ThenInclude(t => t.Subtasks)
                 .Include(p => p.Features)
                     .ThenInclude(f => f.Tasks)
+                        .ThenInclude(t => t.AcceptanceCriteria)
+                .Include(p => p.Features)
+                    .ThenInclude(f => f.Tasks)
                         .ThenInclude(t => t.Comments)
                 .Include(p => p.Requirements)
                     .ThenInclude(r => r.Feature)
@@ -141,6 +145,17 @@ public static class ApiEndpoints
                     .Where(s => s.ParentSubtaskId == null)
                     .OrderBy(s => s.SortOrder)
                     .Select(subtask => MapSubtaskContext(subtask, task.Subtasks)),
+                AcceptanceCriteria = task.AcceptanceCriteria
+                    .OrderBy(c => c.SortOrder)
+                    .Select(c => new
+                    {
+                        c.Id,
+                        c.Text,
+                        c.Completed,
+                        c.SortOrder,
+                        c.CreatedAt,
+                        c.UpdatedAt
+                    }),
                 Comments = task.Comments
                     .OrderBy(c => c.CreatedAt)
                     .Select(c => new
@@ -547,6 +562,7 @@ public static class ApiEndpoints
             var tasks = await db.Tasks
                 .Where(t => t.FeatureId == featureId)
                 .Include(t => t.Subtasks)
+                .Include(t => t.AcceptanceCriteria)
                 .AsNoTracking()
                 .OrderBy(t => t.SortOrder)
                 .ToListAsync();
@@ -565,6 +581,7 @@ public static class ApiEndpoints
                 .Where(t => t.Feature.ProjectId == projectId)
                 .Include(t => t.Feature)
                 .Include(t => t.Subtasks)
+                .Include(t => t.AcceptanceCriteria)
                 .AsNoTracking()
                 .OrderBy(t => t.Feature.SortOrder)
                     .ThenBy(t => t.SortOrder)
@@ -587,7 +604,9 @@ public static class ApiEndpoints
                 t.UpdatedAt,
                 t.CompletedAt,
                 SubtaskCount = t.Subtasks.Count,
-                SubtaskDoneCount = t.Subtasks.Count(s => s.Completed)
+                SubtaskDoneCount = t.Subtasks.Count(s => s.Completed),
+                AcceptanceCriteriaCount = t.AcceptanceCriteria.Count,
+                AcceptanceCriteriaDoneCount = t.AcceptanceCriteria.Count(c => c.Completed)
             }));
         });
 
@@ -602,6 +621,7 @@ public static class ApiEndpoints
                 .Where(t => t.Feature.ProjectId == projectId)
                 .Include(t => t.Feature)
                 .Include(t => t.Subtasks)
+                .Include(t => t.AcceptanceCriteria)
                 .AsNoTracking()
                 .OrderBy(t => t.SortOrder)
                 .ToListAsync();
@@ -628,7 +648,9 @@ public static class ApiEndpoints
                             t.UpdatedAt,
                             t.CompletedAt,
                             SubtaskCount = t.Subtasks.Count,
-                            SubtaskDoneCount = t.Subtasks.Count(s => s.Completed)
+                            SubtaskDoneCount = t.Subtasks.Count(s => s.Completed),
+                            AcceptanceCriteriaCount = t.AcceptanceCriteria.Count,
+                            AcceptanceCriteriaDoneCount = t.AcceptanceCriteria.Count(c => c.Completed)
                         })
                         .ToList()
                 );
@@ -642,6 +664,7 @@ public static class ApiEndpoints
             var task = await db.Tasks
                 .Include(t => t.Feature)
                 .Include(t => t.Subtasks.OrderBy(s => s.SortOrder))
+                .Include(t => t.AcceptanceCriteria.OrderBy(c => c.SortOrder))
                 .AsNoTracking()
                 .FirstOrDefaultAsync(t => t.Id == id);
 
@@ -672,6 +695,15 @@ public static class ApiEndpoints
                     s.Completed,
                     s.SortOrder,
                     s.CreatedAt
+                }),
+                AcceptanceCriteria = task.AcceptanceCriteria.Select(c => new
+                {
+                    c.Id,
+                    c.Text,
+                    c.Completed,
+                    c.SortOrder,
+                    c.CreatedAt,
+                    c.UpdatedAt
                 })
             });
         });
@@ -894,6 +926,7 @@ public static class ApiEndpoints
                 return Results.NotFound(new { message = $"Task {id} not found." });
 
             await DeleteSubtasksForTasksAsync(db, [id]);
+            await DeleteAcceptanceCriteriaForTasksAsync(db, [id]);
             db.Tasks.Remove(task);
             await db.SaveChangesAsync();
             return Results.NoContent();
@@ -1108,6 +1141,115 @@ public static class ApiEndpoints
                 return Results.NotFound(new { message = $"Subtask {id} not found." });
 
             await DeleteSubtaskTreeAsync(db, id);
+            await db.SaveChangesAsync();
+            return Results.NoContent();
+        });
+    }
+
+    // ── Acceptance Criterion Endpoints ─────────────────────────────────────────
+
+    private static void MapAcceptanceCriterionEndpoints(this WebApplication app)
+    {
+        // GET /api/tasks/{taskId}/acceptance-criteria — list acceptance criteria for a task
+        app.MapGet("/api/tasks/{taskId:int}/acceptance-criteria", async (int taskId, AppDbContext db) =>
+        {
+            var taskExists = await db.Tasks.AnyAsync(t => t.Id == taskId);
+            if (!taskExists)
+                return Results.NotFound(new { message = $"Task {taskId} not found." });
+
+            var criteria = await db.AcceptanceCriteria
+                .Where(c => c.TaskItemId == taskId)
+                .AsNoTracking()
+                .OrderBy(c => c.SortOrder)
+                .Select(c => new
+                {
+                    c.Id,
+                    c.TaskItemId,
+                    c.Text,
+                    c.Completed,
+                    c.SortOrder,
+                    c.CreatedAt,
+                    c.UpdatedAt
+                })
+                .ToListAsync();
+
+            return Results.Ok(criteria);
+        });
+
+        // POST /api/tasks/{taskId}/acceptance-criteria — create
+        app.MapPost("/api/tasks/{taskId:int}/acceptance-criteria", async (int taskId, AcceptanceCriterionDto dto, AppDbContext db) =>
+        {
+            var taskExists = await db.Tasks.AnyAsync(t => t.Id == taskId);
+            if (!taskExists)
+                return Results.NotFound(new { message = $"Task {taskId} not found." });
+
+            if (string.IsNullOrWhiteSpace(dto.Text))
+                return Results.UnprocessableEntity(new { message = "Text is required." });
+
+            var maxSort = await db.AcceptanceCriteria
+                .Where(c => c.TaskItemId == taskId)
+                .MaxAsync(c => (int?)c.SortOrder) ?? -1;
+
+            var criterion = new AcceptanceCriterion
+            {
+                TaskItemId = taskId,
+                Text = dto.Text.Trim(),
+                Completed = dto.Completed ?? false,
+                SortOrder = dto.SortOrder ?? maxSort + 1
+            };
+
+            db.AcceptanceCriteria.Add(criterion);
+            await db.SaveChangesAsync();
+
+            return Results.Created($"/api/acceptance-criteria/{criterion.Id}", new
+            {
+                criterion.Id,
+                criterion.TaskItemId,
+                criterion.Text,
+                criterion.Completed,
+                criterion.SortOrder,
+                criterion.CreatedAt,
+                criterion.UpdatedAt
+            });
+        });
+
+        // PUT /api/acceptance-criteria/{id} — update
+        app.MapPut("/api/acceptance-criteria/{id:int}", async (int id, AcceptanceCriterionDto dto, AppDbContext db) =>
+        {
+            var criterion = await db.AcceptanceCriteria.FindAsync(id);
+            if (criterion is null)
+                return Results.NotFound(new { message = $"Acceptance criterion {id} not found." });
+
+            if (string.IsNullOrWhiteSpace(dto.Text))
+                return Results.UnprocessableEntity(new { message = "Text is required." });
+
+            criterion.Text = dto.Text.Trim();
+            if (dto.Completed.HasValue) criterion.Completed = dto.Completed.Value;
+            if (dto.SortOrder.HasValue) criterion.SortOrder = dto.SortOrder.Value;
+            criterion.UpdatedAt = DateTime.UtcNow;
+
+            await db.SaveChangesAsync();
+
+            return Results.Ok(new
+            {
+                criterion.Id,
+                criterion.TaskItemId,
+                criterion.Text,
+                criterion.Completed,
+                criterion.SortOrder,
+                criterion.CreatedAt,
+                criterion.UpdatedAt
+            });
+        });
+
+        // DELETE /api/acceptance-criteria/{id} — delete
+        app.MapDelete("/api/acceptance-criteria/{id:int}", async (int id, AppDbContext db) =>
+        {
+            var criterion = await db.AcceptanceCriteria.FindAsync(id);
+            if (criterion is null)
+                return Results.NotFound(new { message = $"Acceptance criterion {id} not found." });
+
+            db.AcceptanceCriteria.Remove(criterion);
             await db.SaveChangesAsync();
             return Results.NoContent();
         });
@@ -1422,7 +1564,9 @@ public static class ApiEndpoints
         t.UpdatedAt,
         t.CompletedAt,
         SubtaskCount = t.Subtasks.Count,
-        SubtaskDoneCount = t.Subtasks.Count(s => s.Completed)
+        SubtaskDoneCount = t.Subtasks.Count(s => s.Completed),
+        AcceptanceCriteriaCount = t.AcceptanceCriteria.Count,
+        AcceptanceCriteriaDoneCount = t.AcceptanceCriteria.Count(c => c.Completed)
     };
 
     private static bool WouldCreateFeatureCycle(int featureId, int proposedParentFeatureId, IReadOnlyCollection<Feature> allProjectFeatures)
@@ -1528,6 +1672,7 @@ public static class ApiEndpoints
         if (taskIds.Count > 0)
         {
             await DeleteSubtasksForTasksAsync(db, taskIds);
+            await DeleteAcceptanceCriteriaForTasksAsync(db, taskIds);
 
             var comments = await db.TaskComments
                 .Where(c => taskIds.Contains(c.TaskItemId))
@@ -1590,6 +1735,17 @@ public static class ApiEndpoints
             .ToList();
 
         db.Subtasks.RemoveRange(orderedSubtasks);
+    }
+
+    private static async Task DeleteAcceptanceCriteriaForTasksAsync(AppDbContext db, List<int> taskIds)
+    {
+        if (taskIds.Count == 0) return;
+
+        var criteria = await db.AcceptanceCriteria
+            .Where(c => taskIds.Contains(c.TaskItemId))
+            .ToListAsync();
+
+        db.AcceptanceCriteria.RemoveRange(criteria);
     }
 
     private static void CollectSubtaskAndChildren(int subtaskId, List<Subtask> allSubtasks, HashSet<int> subtaskIds)
@@ -1687,8 +1843,11 @@ public record ReassignDto(int FeatureId);
 
 public record SubtaskDto(string? Text, bool? Completed, int? SortOrder, int? ParentSubtaskId);
 
+public record AcceptanceCriterionDto(string? Text, bool? Completed, int? SortOrder);
+
 public record RequirementDto(string? Text, string? Description, string? Priority, string? Status, int? FeatureId, int? TaskItemId, int? SortOrder);
 
 public record RequirementAssignDto(int? FeatureId, int? TaskItemId);
 
 public record TaskCommentDto(string? Text, string? Author);
+

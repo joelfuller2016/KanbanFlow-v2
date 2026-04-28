@@ -25,6 +25,7 @@ using (var scope = app.Services.CreateScope())
     var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
     db.Database.EnsureCreated();
     EnsureTaskClaimColumns(db);
+    EnsureAcceptanceCriteriaTable(db);
     SeedData.Initialize(db);
 }
 
@@ -42,6 +43,36 @@ app.MapRazorComponents<App>()
 app.MapApiEndpoints();
 
 app.Run();
+
+static void EnsureAcceptanceCriteriaTable(AppDbContext db)
+{
+    if (!db.Database.IsSqlite())
+        return;
+
+    db.Database.OpenConnection();
+    try
+    {
+        var connection = db.Database.GetDbConnection();
+        using var command = connection.CreateCommand();
+        command.CommandText = @"
+CREATE TABLE IF NOT EXISTS AcceptanceCriteria (
+    Id INTEGER NOT NULL CONSTRAINT PK_AcceptanceCriteria PRIMARY KEY AUTOINCREMENT,
+    TaskItemId INTEGER NOT NULL,
+    Text TEXT NOT NULL,
+    Completed INTEGER NOT NULL,
+    SortOrder INTEGER NOT NULL,
+    CreatedAt TEXT NOT NULL,
+    UpdatedAt TEXT NOT NULL,
+    CONSTRAINT FK_AcceptanceCriteria_Tasks_TaskItemId FOREIGN KEY (TaskItemId) REFERENCES Tasks (Id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS IX_AcceptanceCriteria_TaskItemId ON AcceptanceCriteria (TaskItemId);";
+        command.ExecuteNonQuery();
+    }
+    finally
+    {
+        db.Database.CloseConnection();
+    }
+}
 
 static void EnsureTaskClaimColumns(AppDbContext db)
 {
