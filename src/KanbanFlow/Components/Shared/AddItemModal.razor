@@ -7,10 +7,11 @@
     <div class="modal-dialog" @onclick:stopPropagation="true">
         <div class="modal-content">
             <div class="modal-header">
-                <h5 class="modal-title">Add @(itemType == FeatureType ? "Feature" : "Task")</h5>
+                <h5 class="modal-title">@GetModalTitle()</h5>
                 <button type="button" class="btn-close" @onclick="Close" aria-label="Close add item modal" data-testid="add-item-close-button"></button>
             </div>
             <div class="modal-body">
+                <p class="small text-muted mb-3" data-testid="add-item-context-help">@GetContextHelpText()</p>
                 @if (errorMessage is not null)
                 {
                     <div class="alert alert-danger alert-dismissible fade show py-2 small" role="alert">
@@ -21,7 +22,7 @@
 
                 @* Type toggle *@
                 <div class="mb-3">
-                    <label class="form-label small text-muted mb-1">Type</label>
+                    <label class="form-label small text-muted mb-1">Create type</label>
                     <div class="btn-group w-100" role="group">
                         <input type="radio" class="btn-check" id="typeFeature" value="feature"
                                checked="@(itemType == FeatureType)" @onchange="SelectFeatureType" />
@@ -103,7 +104,7 @@
                 <button type="button" class="btn btn-primary btn-sm" @onclick="SaveItem"
                         data-testid="add-item-create-button"
                         disabled="@(string.IsNullOrWhiteSpace(itemName) || (itemType == TaskType && selectedFeatureId == 0))">
-                    Create @(itemType == FeatureType ? "Feature" : "Task")
+                    @GetCreateButtonText()
                 </button>
             </div>
         </div>
@@ -155,6 +156,24 @@
 
     private void SelectFeatureType() => itemType = FeatureType;
     private void SelectTaskType() => itemType = TaskType;
+
+    private string GetModalTitle() => itemType == FeatureType
+        ? "Add feature"
+        : DefaultStatus.HasValue
+            ? $"Add task to {GetStatusDisplayName(DefaultStatus.Value)}"
+            : "Add task to feature";
+
+    private string GetContextHelpText() => itemType == FeatureType
+        ? "Creates a feature in this project's outline. Choose a parent feature to nest it, or leave it top-level."
+        : DefaultStatus.HasValue
+            ? $"Creates a task in the {GetStatusDisplayName(DefaultStatus.Value)} kanban column. Select the feature it belongs to before creating it."
+            : "Creates a task under the selected feature in the project outline.";
+
+    private string GetCreateButtonText() => itemType == FeatureType
+        ? "Create feature"
+        : DefaultStatus.HasValue
+            ? $"Create task in {GetStatusDisplayName(DefaultStatus.Value)}"
+            : "Create task in feature";
 
     private async Task HandleBackdropClick()
     {
