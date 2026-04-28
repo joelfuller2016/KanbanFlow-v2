@@ -58,29 +58,26 @@ else
                         <div class="text-uppercase text-primary fw-bold small">AI tools</div>
                         <div class="text-muted small">Optional agent helpers for context and next-work planning.</div>
                     </div>
-                    <button class="btn btn-sm btn-outline-primary" data-testid="ai-tools-toggle" aria-expanded="@aiControlsExpanded" @onclick="ToggleAiControls">
+                    <button class="btn btn-sm btn-outline-primary" data-testid="ai-tools-toggle" aria-expanded="@ToAriaExpanded(aiControlsExpanded)" aria-controls="ai-tools-controls" @onclick="ToggleAiControls">
                         @(aiControlsExpanded ? "Hide AI tools" : "Show AI tools")
                     </button>
                 </div>
 
-                @if (aiControlsExpanded)
-                {
-                    <div class="d-flex flex-wrap align-items-center gap-2 mt-2 pt-2 border-top">
-                        <span class="text-muted small me-auto">Inspect project context, choose next work, or prepare future AI actions.</span>
-                        <button class="btn btn-sm btn-outline-primary" data-testid="ai-project-context-button" @onclick="ShowProjectContextAsync">
-                            Project Context
-                        </button>
-                        <button class="btn btn-sm btn-outline-primary" data-testid="ai-next-tasks-button" @onclick="ShowNextTasksAsync">
-                            Next Tasks
-                        </button>
-                        <button class="btn btn-sm btn-outline-secondary" data-testid="ai-generate-tasks-button" disabled title="Coming soon: create tasks from project context">
-                            Generate Tasks
-                        </button>
-                        <button class="btn btn-sm btn-outline-secondary" data-testid="ai-assign-button" disabled title="Coming soon: claim and assign selected work to an AI agent">
-                            Assign to AI
-                        </button>
-                    </div>
-                }
+                <div id="ai-tools-controls" class="d-flex flex-wrap align-items-center gap-2 mt-2 pt-2 border-top" hidden="@(!aiControlsExpanded)">
+                    <span class="text-muted small me-auto">Inspect project context, choose next work, or prepare future AI actions.</span>
+                    <button class="btn btn-sm btn-outline-primary" data-testid="ai-project-context-button" @onclick="ShowProjectContextAsync">
+                        Project Context
+                    </button>
+                    <button class="btn btn-sm btn-outline-primary" data-testid="ai-next-tasks-button" @onclick="ShowNextTasksAsync">
+                        Next Tasks
+                    </button>
+                    <button class="btn btn-sm btn-outline-secondary" data-testid="ai-generate-tasks-button" disabled title="Coming soon: create tasks from project context">
+                        Generate Tasks
+                    </button>
+                    <button class="btn btn-sm btn-outline-secondary" data-testid="ai-assign-button" disabled title="Coming soon: claim and assign selected work to an AI agent">
+                        Assign to AI
+                    </button>
+                </div>
 
                 @if (aiPanelOpen)
                 {
@@ -172,13 +169,12 @@ else
                         <div class="text-muted small">@GetRequirementsSummaryText()</div>
                     </div>
                     <span class="badge text-bg-secondary" data-testid="requirements-count">@GetOrderedRequirements().Count</span>
-                    <button class="btn btn-sm btn-outline-secondary" data-testid="requirements-toggle" aria-expanded="@requirementsExpanded" @onclick="ToggleRequirements">
+                    <button class="btn btn-sm btn-outline-secondary" data-testid="requirements-toggle" aria-expanded="@ToAriaExpanded(requirementsExpanded)" aria-controls="requirements-content" @onclick="ToggleRequirements">
                         @(requirementsExpanded ? "Hide requirements" : "Show requirements")
                     </button>
                 </div>
 
-                @if (requirementsExpanded)
-                {
+                <div id="requirements-content" hidden="@(!requirementsExpanded)">
                     @if (GetOrderedRequirements().Count == 0)
                     {
                         <div class="text-muted small border rounded bg-white p-3 mt-2" data-testid="requirements-empty-state">
@@ -223,7 +219,7 @@ else
                             }
                         </div>
                     }
-                }
+                </div>
             </section>
 
             <KanbanBoard AllTasks="allTasks"
@@ -386,6 +382,8 @@ else
     {
         requirementsExpanded = !requirementsExpanded;
     }
+
+    private static string ToAriaExpanded(bool expanded) => expanded ? "true" : "false";
 
     private async Task ShowProjectContextAsync()
     {
