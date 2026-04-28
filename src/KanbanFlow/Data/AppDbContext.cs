@@ -11,6 +11,7 @@ public class AppDbContext : DbContext
     public DbSet<Feature> Features => Set<Feature>();
     public DbSet<TaskItem> Tasks => Set<TaskItem>();
     public DbSet<Subtask> Subtasks => Set<Subtask>();
+    public DbSet<AcceptanceCriterion> AcceptanceCriteria => Set<AcceptanceCriterion>();
     public DbSet<Requirement> Requirements => Set<Requirement>();
     public DbSet<TaskComment> TaskComments => Set<TaskComment>();
     public DbSet<ActivityEvent> ActivityEvents => Set<ActivityEvent>();
@@ -31,6 +32,7 @@ public class AppDbContext : DbContext
         modelBuilder.Entity<TaskItem>(e =>
         {
             e.HasMany(t => t.Subtasks).WithOne(s => s.TaskItem).HasForeignKey(s => s.TaskItemId).OnDelete(DeleteBehavior.Cascade);
+            e.HasMany(t => t.AcceptanceCriteria).WithOne(c => c.TaskItem).HasForeignKey(c => c.TaskItemId).OnDelete(DeleteBehavior.Cascade);
         });
 
         modelBuilder.Entity<Subtask>(e =>

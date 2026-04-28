@@ -18,6 +18,7 @@ public class TaskItem
 
     public Feature Feature { get; set; } = null!;
     public List<Subtask> Subtasks { get; set; } = [];
+    public List<AcceptanceCriterion> AcceptanceCriteria { get; set; } = [];
     public List<TaskComment> Comments { get; set; } = [];
 }
 

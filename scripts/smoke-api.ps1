@@ -12,14 +12,17 @@ function Resolve-RepoRoot {
 }
 
 function Invoke-SmokeGet([string]$Path) {
+    Write-Host "GET $Path"
     Invoke-RestMethod -Method Get -Uri "$BaseUrl$Path" -TimeoutSec 5
 }
 
 function Invoke-SmokeJson([string]$Method, [string]$Path, $Body) {
+    Write-Host "$($Method.ToUpperInvariant()) $Path"
     Invoke-RestMethod -Method $Method -Uri "$BaseUrl$Path" -ContentType "application/json" -Body ($Body | ConvertTo-Json -Depth 10) -TimeoutSec 5
 }
 
 function Invoke-SmokeDelete([string]$Path) {
+    Write-Host "DELETE $Path"
     Invoke-RestMethod -Method Delete -Uri "$BaseUrl$Path" -TimeoutSec 5
 }
 
@@ -86,6 +89,13 @@ try {
         }
     } while ((Get-Date) -lt $deadline)
 
+    Start-Sleep -Milliseconds 250
+    if ($appProcess.HasExited) {
+        $stdout = if (Test-Path $stdoutPath) { Get-Content $stdoutPath -Raw } else { "" }
+        $stderr = if (Test-Path $stderrPath) { Get-Content $stderrPath -Raw } else { "" }
+        throw "KanbanFlow exited after startup check.`nSTDOUT:`n$stdout`nSTDERR:`n$stderr"
+    }
+
     Assert-Truthy $projects "GET /api/projects did not return a response before timeout."
     Assert-Truthy ($projects.Count -gt 0) "GET /api/projects returned no seeded projects."
 
@@ -114,6 +124,41 @@ try {
     $tasks = Invoke-SmokeGet "/api/projects/$projectId/tasks"
     Assert-Truthy ($tasks.Count -gt 0) "GET /api/projects/$projectId/tasks returned no seeded tasks."
     $taskId = $tasks[0].id
+
+    $task = $context.tasks | Where-Object { $_.id -eq $taskId } | Select-Object -First 1
+    if (-not $task) { $task = $context.tasks | Select-Object -First 1 }
+    Assert-Truthy $task.id "Project context did not include a task to test acceptance criteria."
+    $otherTask = $context.tasks | Where-Object { $_.id -ne $task.id } | Select-Object -First 1
+    Assert-Truthy $otherTask.id "Project context did not include a second task for scoped acceptance criteria check."
+
+    $initialCriteria = Invoke-SmokeGet "/api/tasks/$($task.id)/acceptance-criteria"
+    Assert-Truthy ($null -ne $initialCriteria) "GET /api/tasks/$($task.id)/acceptance-criteria returned null."
+
+    $createdCriterion = Invoke-SmokeJson "Post" "/api/tasks/$($task.id)/acceptance-criteria" @{ text = "User can complete the workflow" }
+    Assert-Truthy $createdCriterion.id "POST /api/tasks/$($task.id)/acceptance-criteria did not return an id."
+    Assert-Truthy ($createdCriterion.taskItemId -eq $task.id) "Created acceptance criterion was not scoped to the requested task."
+    Assert-Truthy (-not $createdCriterion.completed) "Created acceptance criterion should default to incomplete."
+
+    $criteria = Invoke-SmokeGet "/api/tasks/$($task.id)/acceptance-criteria"
+    Assert-Truthy (@($criteria | Where-Object { $_.id -eq $createdCriterion.id }).Count -eq 1) "Created acceptance criterion was not returned for its task."
+
+    $otherCriteria = Invoke-SmokeGet "/api/tasks/$($otherTask.id)/acceptance-criteria"
+    Assert-Truthy (@($otherCriteria | Where-Object { $_.id -eq $createdCriterion.id }).Count -eq 0) "Acceptance criterion leaked into another task."
+
+    $updatedCriterion = Invoke-SmokeJson "Put" "/api/acceptance-criteria/$($createdCriterion.id)" @{ text = "User can complete the workflow successfully"; completed = $true; sortOrder = 7 }
+    Assert-Truthy $updatedCriterion.completed "PUT /api/acceptance-criteria/$($createdCriterion.id) did not update completed."
+    Assert-Truthy ($updatedCriterion.sortOrder -eq 7) "PUT /api/acceptance-criteria/$($createdCriterion.id) did not update sortOrder."
+
+    $taskDetail = Invoke-SmokeGet "/api/tasks/$($task.id)"
+    Assert-Truthy (@($taskDetail.acceptanceCriteria | Where-Object { $_.id -eq $createdCriterion.id }).Count -eq 1) "GET /api/tasks/$($task.id) did not include acceptance criteria."
+
+    $contextWithCriteria = Invoke-SmokeGet "/api/projects/$projectId/context"
+    $contextTask = $contextWithCriteria.tasks | Where-Object { $_.id -eq $task.id } | Select-Object -First 1
+    Assert-Truthy (@($contextTask.acceptanceCriteria | Where-Object { $_.id -eq $createdCriterion.id }).Count -eq 1) "GET /api/projects/$projectId/context did not include acceptance criteria."
+
+    Invoke-SmokeDelete "/api/acceptance-criteria/$($createdCriterion.id)" | Out-Null
+    $criteriaAfterDelete = Invoke-SmokeGet "/api/tasks/$($task.id)/acceptance-criteria"
+    Assert-Truthy (@($criteriaAfterDelete | Where-Object { $_.id -eq $createdCriterion.id }).Count -eq 0) "DELETE /api/acceptance-criteria/$($createdCriterion.id) did not remove the criterion."
 
     Invoke-SmokeJson "Patch" "/api/tasks/$taskId/status" @{ status = "InProgress" } | Out-Null
     Invoke-SmokeJson "Post" "/api/tasks/$taskId/claim" @{ actor = "smoke-agent" } | Out-Null
@@ -149,6 +194,7 @@ finally {
     if ($appProcess -and -not $appProcess.HasExited) {
         Stop-Process -Id $appProcess.Id -Force
         $appProcess.WaitForExit(5000) | Out-Null
+        Start-Sleep -Milliseconds 250
     }
 
     if (Test-Path $runDir) {
