@@ -52,25 +52,35 @@ else
 
         @* ── Right Panel: AI Action Bar + Kanban Board ── *@
         <div class="flex-grow-1 d-flex flex-column overflow-hidden" style="min-width: 0;">
-            <div class="border-bottom bg-white p-3">
+            <div class="border-bottom bg-white px-3 py-2">
                 <div class="d-flex flex-wrap align-items-center gap-2">
                     <div class="me-auto">
-                        <div class="text-uppercase text-primary fw-bold small">AI project controls</div>
-                        <div class="text-muted small">Inspect context, choose next work, and prepare agent actions.</div>
+                        <div class="text-uppercase text-primary fw-bold small">AI tools</div>
+                        <div class="text-muted small">Optional agent helpers for context and next-work planning.</div>
                     </div>
-                    <button class="btn btn-sm btn-outline-primary" data-testid="ai-project-context-button" @onclick="ShowProjectContextAsync">
-                        Project Context
-                    </button>
-                    <button class="btn btn-sm btn-outline-primary" data-testid="ai-next-tasks-button" @onclick="ShowNextTasksAsync">
-                        Next Tasks
-                    </button>
-                    <button class="btn btn-sm btn-outline-secondary" data-testid="ai-generate-tasks-button" disabled title="Coming soon: create tasks from project context">
-                        Generate Tasks
-                    </button>
-                    <button class="btn btn-sm btn-outline-secondary" data-testid="ai-assign-button" disabled title="Coming soon: claim and assign selected work to an AI agent">
-                        Assign to AI
+                    <button class="btn btn-sm btn-outline-primary" data-testid="ai-tools-toggle" aria-expanded="@aiControlsExpanded" @onclick="ToggleAiControls">
+                        @(aiControlsExpanded ? "Hide AI tools" : "Show AI tools")
                     </button>
                 </div>
+
+                @if (aiControlsExpanded)
+                {
+                    <div class="d-flex flex-wrap align-items-center gap-2 mt-2 pt-2 border-top">
+                        <span class="text-muted small me-auto">Inspect project context, choose next work, or prepare future AI actions.</span>
+                        <button class="btn btn-sm btn-outline-primary" data-testid="ai-project-context-button" @onclick="ShowProjectContextAsync">
+                            Project Context
+                        </button>
+                        <button class="btn btn-sm btn-outline-primary" data-testid="ai-next-tasks-button" @onclick="ShowNextTasksAsync">
+                            Next Tasks
+                        </button>
+                        <button class="btn btn-sm btn-outline-secondary" data-testid="ai-generate-tasks-button" disabled title="Coming soon: create tasks from project context">
+                            Generate Tasks
+                        </button>
+                        <button class="btn btn-sm btn-outline-secondary" data-testid="ai-assign-button" disabled title="Coming soon: claim and assign selected work to an AI agent">
+                            Assign to AI
+                        </button>
+                    </div>
+                }
 
                 @if (aiPanelOpen)
                 {
@@ -155,58 +165,64 @@ else
                 }
             </div>
 
-            <section class="requirements-panel border-bottom bg-light p-3" data-testid="requirements-panel" aria-labelledby="requirements-heading">
-                <div class="d-flex flex-wrap align-items-center gap-2 mb-2">
+            <section class="requirements-panel border-bottom bg-light px-3 py-2" data-testid="requirements-panel" aria-labelledby="requirements-heading">
+                <div class="d-flex flex-wrap align-items-center gap-2">
                     <div class="me-auto">
                         <h2 id="requirements-heading" class="h6 mb-0">Requirements</h2>
-                        <div class="text-muted small">Project-level requirements visible to humans and AI agents.</div>
+                        <div class="text-muted small">@GetRequirementsSummaryText()</div>
                     </div>
                     <span class="badge text-bg-secondary" data-testid="requirements-count">@GetOrderedRequirements().Count</span>
+                    <button class="btn btn-sm btn-outline-secondary" data-testid="requirements-toggle" aria-expanded="@requirementsExpanded" @onclick="ToggleRequirements">
+                        @(requirementsExpanded ? "Hide requirements" : "Show requirements")
+                    </button>
                 </div>
 
-                @if (GetOrderedRequirements().Count == 0)
+                @if (requirementsExpanded)
                 {
-                    <div class="text-muted small border rounded bg-white p-3" data-testid="requirements-empty-state">
-                        No requirements yet. Requirements added through the API will appear here.
-                    </div>
-                }
-                else
-                {
-                    <div class="requirements-list d-flex flex-column gap-2">
-                        @foreach (var requirement in GetOrderedRequirements())
-                        {
-                            <article class="requirement-row border rounded bg-white p-2" data-testid="@($"requirement-row-{requirement.Id}")">
-                                <div class="d-flex flex-wrap align-items-start gap-2">
-                                    <div class="fw-semibold me-auto">@requirement.Text</div>
-                                    <span class="@GetRequirementPriorityBadgeClass(requirement.Priority)" data-testid="@($"requirement-priority-{requirement.Id}")">@requirement.Priority</span>
-                                    <span class="@GetRequirementStatusBadgeClass(requirement.Status)" data-testid="@($"requirement-status-{requirement.Id}")">@GetRequirementStatusDisplayName(requirement.Status)</span>
-                                </div>
-
-                                @if (!string.IsNullOrWhiteSpace(requirement.Description))
-                                {
-                                    <p class="small text-muted mb-1 mt-1">@requirement.Description</p>
-                                }
-
-                                @if (requirement.Feature is not null || requirement.TaskItem is not null)
-                                {
-                                    <div class="small text-muted mt-1">
-                                        @if (requirement.Feature is not null)
-                                        {
-                                            <span>Feature: @requirement.Feature.Name</span>
-                                        }
-                                        @if (requirement.Feature is not null && requirement.TaskItem is not null)
-                                        {
-                                            <span class="mx-1">•</span>
-                                        }
-                                        @if (requirement.TaskItem is not null)
-                                        {
-                                            <span>Task: @requirement.TaskItem.Name</span>
-                                        }
+                    @if (GetOrderedRequirements().Count == 0)
+                    {
+                        <div class="text-muted small border rounded bg-white p-3 mt-2" data-testid="requirements-empty-state">
+                            No requirements yet. Requirements added through the API will appear here.
+                        </div>
+                    }
+                    else
+                    {
+                        <div class="requirements-list d-flex flex-column gap-2 mt-2">
+                            @foreach (var requirement in GetOrderedRequirements())
+                            {
+                                <article class="requirement-row border rounded bg-white p-2" data-testid="@($"requirement-row-{requirement.Id}")">
+                                    <div class="d-flex flex-wrap align-items-start gap-2">
+                                        <div class="fw-semibold me-auto">@requirement.Text</div>
+                                        <span class="@GetRequirementPriorityBadgeClass(requirement.Priority)" data-testid="@($"requirement-priority-{requirement.Id}")">@requirement.Priority</span>
+                                        <span class="@GetRequirementStatusBadgeClass(requirement.Status)" data-testid="@($"requirement-status-{requirement.Id}")">@GetRequirementStatusDisplayName(requirement.Status)</span>
                                     </div>
-                                }
-                            </article>
-                        }
-                    </div>
+
+                                    @if (!string.IsNullOrWhiteSpace(requirement.Description))
+                                    {
+                                        <p class="small text-muted mb-1 mt-1">@requirement.Description</p>
+                                    }
+
+                                    @if (requirement.Feature is not null || requirement.TaskItem is not null)
+                                    {
+                                        <div class="small text-muted mt-1">
+                                            @if (requirement.Feature is not null)
+                                            {
+                                                <span>Feature: @requirement.Feature.Name</span>
+                                            }
+                                            @if (requirement.Feature is not null && requirement.TaskItem is not null)
+                                            {
+                                                <span class="mx-1">•</span>
+                                            }
+                                            @if (requirement.TaskItem is not null)
+                                            {
+                                                <span>Task: @requirement.TaskItem.Name</span>
+                                            }
+                                        </div>
+                                    }
+                                </article>
+                            }
+                        </div>
+                    }
                 }
             </section>
 
@@ -324,12 +340,16 @@ else
     private string? editModalAssignee;
 
     // AI action bar state
+    private bool aiControlsExpanded;
     private bool aiPanelOpen;
     private bool aiLoading;
     private string aiPanelTitle = string.Empty;
     private string? aiPanelError;
     private AiProjectContext? aiContext;
     private List<AiTaskRecommendation> aiNextTasks = [];
+
+    // Requirements are compact by default so the board is visible sooner.
+    private bool requirementsExpanded;
 
     protected override async Task OnInitializedAsync()
     {
@@ -357,6 +377,16 @@ else
         }
     }
 
+    private void ToggleAiControls()
+    {
+        aiControlsExpanded = !aiControlsExpanded;
+    }
+
+    private void ToggleRequirements()
+    {
+        requirementsExpanded = !requirementsExpanded;
+    }
+
     private async Task ShowProjectContextAsync()
     {
         await LoadAiPanelAsync("Project Context", async client =>
@@ -379,6 +409,7 @@ else
     private async Task LoadAiPanelAsync(string title, Func<HttpClient, Task> load)
     {
         aiPanelTitle = title;
+        aiControlsExpanded = true;
         aiPanelOpen = true;
         aiLoading = true;
         aiPanelError = null;
@@ -792,6 +823,15 @@ else
         .OrderBy(r => r.SortOrder)
         .ThenBy(r => r.Id)
         .ToList() ?? [];
+
+    private string GetRequirementsSummaryText()
+    {
+        var count = project?.Requirements?.Count ?? 0;
+
+        return count == 0
+            ? "No requirements yet; expand for details."
+            : $"{count} project-level requirement{(count == 1 ? string.Empty : "s")} available for humans and AI agents.";
+    }
 
     private static string GetRequirementPriorityBadgeClass(RequirementPriority priority) => priority switch
     {
