@@ -2,7 +2,8 @@
 @inject IJSRuntime JS
 
 <div class="offcanvas offcanvas-end @(IsOpen ? "show" : "")"
-     tabindex="-1" data-testid="task-detail-panel"
+     tabindex="-1" role="dialog" aria-modal="true" aria-labelledby="task-detail-title"
+     data-testid="task-detail-panel" @ref="panelRoot"
      style="visibility: @(IsOpen ? "visible" : "hidden"); width: min(480px, 100vw);"
      @onclick:stopPropagation="true">
 
@@ -11,7 +12,7 @@
         {
             @if (isEditingName)
             {
-                <input type="text" class="form-control form-control-lg fw-bold border-0 p-0"
+                <input id="task-detail-title" type="text" class="form-control form-control-lg fw-bold border-0 p-0"
                        aria-label="Task name"
                        @bind="editingName" @bind:event="oninput"
                        @onblur="SaveNameAsync"
@@ -20,7 +21,7 @@
             }
             else
             {
-                <h5 class="offcanvas-title fw-bold text-break mb-0" role="button"
+                <h5 id="task-detail-title" class="offcanvas-title fw-bold text-break mb-0" role="button"
                     tabindex="0" aria-label="Edit task name @Task.Name"
                     @onclick="StartEditingName" @onkeydown="HandleNameActivationKeyDown" title="Click to edit">
                     @Task.Name
@@ -387,6 +388,10 @@
     [Parameter] public EventCallback OnTaskUpdated { get; set; }
     [Parameter] public EventCallback<int> OnTaskDeleted { get; set; }
 
+    private ElementReference panelRoot;
+    private bool wasOpen;
+    private bool shouldInitializeDialogFocus;
+
     // Inline name editing
     private bool isEditingName;
     private string? editingName;
@@ -420,6 +425,13 @@
 
     protected override async Task OnParametersSetAsync()
     {
+        if (IsOpen && !wasOpen)
+        {
+            shouldInitializeDialogFocus = true;
+        }
+
+        wasOpen = IsOpen;
+
         // Reset editing state when task changes
         isEditingName = false;
         confirmingDelete = false;
@@ -446,6 +458,21 @@
             {
                 await LoadCommentsAsync(id, loadVersion);
             }
+        }
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (shouldInitializeDialogFocus && IsOpen)
+        {
+            shouldInitializeDialogFocus = false;
+            try
+            {
+                await JS.InvokeVoidAsync("KanbanFlow.initTaskDetailDialog", panelRoot);
+            }
+            catch (JSDisconnectedException) { }
+            catch (ObjectDisposedException) { }
+            catch (InvalidOperationException) { }
         }
     }
 

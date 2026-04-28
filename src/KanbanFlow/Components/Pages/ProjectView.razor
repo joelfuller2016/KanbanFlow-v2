@@ -313,6 +313,7 @@ else
     private TaskItem? selectedTask;
     private bool detailPanelOpen;
     private int? detailPanelAddSubtaskParentId;
+    private int? pendingDetailFocusReturnTaskId;
     private bool outlineOpen;
 
     private void ToggleOutline() => outlineOpen = !outlineOpen;
@@ -337,6 +338,7 @@ else
 
     private async Task OnDetailClose()
     {
+        pendingDetailFocusReturnTaskId = selectedTask?.Id;
         detailPanelOpen = false;
         selectedTask = null;
         detailPanelAddSubtaskParentId = null;
@@ -431,6 +433,18 @@ else
             try
             {
                 await JS.InvokeVoidAsync("KanbanFlow.initProjectOutlineAccessibility");
+            }
+            catch (JSDisconnectedException) { }
+            catch (ObjectDisposedException) { }
+            catch (InvalidOperationException) { }
+        }
+
+        if (pendingDetailFocusReturnTaskId is int taskId && !detailPanelOpen)
+        {
+            pendingDetailFocusReturnTaskId = null;
+            try
+            {
+                await JS.InvokeVoidAsync("KanbanFlow.focusTaskCard", taskId);
             }
             catch (JSDisconnectedException) { }
             catch (ObjectDisposedException) { }
