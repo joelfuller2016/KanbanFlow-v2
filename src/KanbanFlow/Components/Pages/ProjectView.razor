@@ -345,8 +345,14 @@ else
 
     private async Task OnTaskUpdated()
     {
+        var selectedTaskId = selectedTask?.Id;
         detailPanelAddSubtaskParentId = null;
         await LoadProject();
+
+        if (selectedTaskId is int taskId)
+        {
+            selectedTask = allTasks.FirstOrDefault(t => t.Id == taskId);
+        }
     }
 
     private async Task OnTaskDeleted(int taskId)
@@ -511,6 +517,9 @@ else
                 .Include(p => p.Features)
                     .ThenInclude(f => f.Tasks)
                         .ThenInclude(t => t.Subtasks)
+                .Include(p => p.Features)
+                    .ThenInclude(f => f.Tasks)
+                        .ThenInclude(t => t.AcceptanceCriteria)
                 .Include(p => p.Features)
                     .ThenInclude(f => f.ChildFeatures)
                 .Include(p => p.Requirements)
