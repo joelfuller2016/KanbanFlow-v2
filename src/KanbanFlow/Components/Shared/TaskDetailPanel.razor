@@ -71,6 +71,43 @@
                 </select>
             </div>
 
+            @* Dependency blockers *@
+            <section class="mb-3" data-testid="task-detail-blockers-section" aria-labelledby="task-detail-blockers-heading">
+                <div class="d-flex align-items-center mb-1">
+                    <h6 id="task-detail-blockers-heading" class="form-label small text-muted mb-0">Dependency blockers</h6>
+                    @if (Task.Dependencies.Count > 0)
+                    {
+                        <span class="ms-2 badge @(HasIncompleteBlockers ? "text-bg-danger" : "text-bg-secondary") small" data-testid="task-detail-blockers-count">@Task.Dependencies.Count</span>
+                    }
+                </div>
+
+                @if (Task.Dependencies.Count == 0)
+                {
+                    <div class="text-muted small border rounded p-2" data-testid="task-detail-blockers-empty-state">
+                        No dependency blockers for this task.
+                    </div>
+                }
+                else
+                {
+                    <div class="list-group list-group-flush border rounded" data-testid="task-detail-blockers-list">
+                        @foreach (var dependency in OrderedDependencies)
+                        {
+                            var blocker = dependency.DependsOnTaskItem;
+                            var blockerName = blocker?.Name ?? $"Task #{dependency.DependsOnTaskItemId}";
+                            var blockerStatus = blocker?.Status;
+                            var blockerDone = blockerStatus == WorkStatus.Done;
+
+                            <div class="list-group-item py-2 @(blockerDone ? null : "task-blocker-incomplete")" data-testid="task-detail-blocker-@dependency.DependsOnTaskItemId">
+                                <div class="d-flex flex-wrap align-items-center gap-2">
+                                    <span class="fw-medium small me-auto text-break">@blockerName</span>
+                                    <span class="@GetStatusBadgeClass(blockerStatus)" data-testid="task-detail-blocker-@dependency.DependsOnTaskItemId-status">@GetStatusDisplayName(blockerStatus)</span>
+                                </div>
+                            </div>
+                        }
+                    </div>
+                }
+            </section>
+
             @* Priority *@
             <div class="mb-3">
                 <label class="form-label small text-muted mb-1">Priority</label>
@@ -812,6 +849,15 @@
 
     // ── Helpers ──
 
+    private IReadOnlyList<TaskDependency> OrderedDependencies => Task?.Dependencies
+        .OrderBy(d => d.DependsOnTaskItem?.Status == WorkStatus.Done)
+        .ThenBy(d => d.DependsOnTaskItem?.Name ?? string.Empty)
+        .ThenBy(d => d.DependsOnTaskItemId)
+        .ToList() ?? [];
+
+    private bool HasIncompleteBlockers => Task?.Dependencies
+        .Any(d => d.DependsOnTaskItem is not null && d.DependsOnTaskItem.Status != WorkStatus.Done) == true;
+
     private static string GetStatusDisplayName(WorkStatus status) => status switch
     {
         WorkStatus.Backlog => "Backlog",
@@ -820,6 +866,26 @@
         WorkStatus.Review => "Review",
         WorkStatus.Done => "Done",
         _ => status.ToString()
+    };
+
+    private static string GetStatusDisplayName(WorkStatus? status) => status switch
+    {
+        WorkStatus.Backlog => "Backlog",
+        WorkStatus.Todo => "To Do",
+        WorkStatus.InProgress => "In Progress",
+        WorkStatus.Review => "Review",
+        WorkStatus.Done => "Done",
+        _ => "Unknown"
+    };
+
+    private static string GetStatusBadgeClass(WorkStatus? status) => status switch
+    {
+        WorkStatus.Done => "badge text-bg-success",
+        WorkStatus.InProgress => "badge text-bg-primary",
+        WorkStatus.Review => "badge text-bg-info",
+        WorkStatus.Todo => "badge text-bg-warning",
+        WorkStatus.Backlog => "badge text-bg-secondary",
+        _ => "badge text-bg-light border text-dark"
     };
 
     private static string GetCommentTypeDisplayName(CommentType type) => type switch
