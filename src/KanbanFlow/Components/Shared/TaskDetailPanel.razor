@@ -12,6 +12,7 @@
             @if (isEditingName)
             {
                 <input type="text" class="form-control form-control-lg fw-bold border-0 p-0"
+                       aria-label="Task name"
                        @bind="editingName" @bind:event="oninput"
                        @onblur="SaveNameAsync"
                        @onkeydown="HandleNameKeyDown"
@@ -46,8 +47,8 @@
 
             @* Feature reassignment *@
             <div class="mb-3">
-                <label class="form-label small text-muted mb-1">Feature</label>
-                <select class="form-select form-select-sm" value="@Task.FeatureId"
+                <label class="form-label small text-muted mb-1" for="task-detail-feature">Feature</label>
+                <select id="task-detail-feature" class="form-select form-select-sm" value="@Task.FeatureId"
                         @onchange="OnFeatureChanged">
                     @if (Features is not null)
                     {
@@ -61,8 +62,8 @@
 
             @* Status *@
             <div class="mb-3">
-                <label class="form-label small text-muted mb-1">Status</label>
-                <select class="form-select form-select-sm" value="@((int)Task.Status)"
+                <label class="form-label small text-muted mb-1" for="task-detail-status">Status</label>
+                <select id="task-detail-status" class="form-select form-select-sm" value="@((int)Task.Status)"
                         @onchange="OnStatusChanged">
                     @foreach (var status in Enum.GetValues<WorkStatus>())
                     {
@@ -110,8 +111,8 @@
 
             @* Priority *@
             <div class="mb-3">
-                <label class="form-label small text-muted mb-1">Priority</label>
-                <select class="form-select form-select-sm" value="@((int)Task.Priority)"
+                <label class="form-label small text-muted mb-1" for="task-detail-priority">Priority</label>
+                <select id="task-detail-priority" class="form-select form-select-sm" value="@((int)Task.Priority)"
                         @onchange="OnPriorityChanged">
                     @foreach (var priority in Enum.GetValues<TaskPriority>())
                     {
@@ -122,8 +123,8 @@
 
             @* Assignee *@
             <div class="mb-3">
-                <label class="form-label small text-muted mb-1">Assignee</label>
-                <input type="text" class="form-control form-control-sm"
+                <label class="form-label small text-muted mb-1" for="task-detail-assignee">Assignee</label>
+                <input id="task-detail-assignee" type="text" class="form-control form-control-sm"
                        placeholder="Unassigned"
                        value="@Task.Assignee"
                        @onchange="OnAssigneeChanged" />
@@ -131,8 +132,8 @@
 
             @* Description *@
             <div class="mb-3">
-                <label class="form-label small text-muted mb-1">Description</label>
-                <textarea class="form-control form-control-sm" rows="4"
+                <label class="form-label small text-muted mb-1" for="task-detail-description">Description</label>
+                <textarea id="task-detail-description" class="form-control form-control-sm" rows="4"
                           placeholder="Add a description..."
                           @bind="editingDescription"
                           @bind:event="oninput"
@@ -143,7 +144,7 @@
             @* Subtasks (recursive) *@
             <div class="mb-3">
                 <div class="d-flex align-items-center mb-2">
-                    <label class="form-label small text-muted mb-0">Subtasks</label>
+                    <h6 id="task-detail-subtasks-heading" class="form-label small text-muted mb-0">Subtasks</h6>
                     @{
                         var completedCount = Task.Subtasks.Count(s => s.Completed);
                         var totalCount = Task.Subtasks.Count;
@@ -163,7 +164,7 @@
                     </div>
                 }
 
-                <div class="list-group list-group-flush mb-2">
+                <div class="list-group list-group-flush mb-2" aria-labelledby="task-detail-subtasks-heading">
                     @{ var rootSubtasks = Task.Subtasks.Where(s => s.ParentSubtaskId == null).OrderBy(s => s.SortOrder).ToList(); }
                     @foreach (var subtask in rootSubtasks)
                     {
@@ -173,7 +174,7 @@
 
                 @* Add top-level subtask *@
                 <div class="input-group input-group-sm">
-                    <input type="text" class="form-control" placeholder="Add a subtask..."
+                    <input type="text" class="form-control" placeholder="Add a subtask..." aria-label="New subtask text"
                            @bind="newSubtaskText" @bind:event="oninput"
                            @onkeydown="HandleSubtaskKeyDown" />
                     <button class="btn btn-outline-secondary d-flex align-items-center gap-1" @onclick="AddSubtaskAsync"
@@ -561,10 +562,10 @@
         <div class="list-group-item px-0 py-1 border-0" style="margin-left: @(indent)px;">
             <div class="d-flex align-items-center">
                 <div class="form-check flex-grow-1 mb-0">
-                    <input class="form-check-input" type="checkbox"
+                    <input id="@($"task-detail-subtask-{subtask.Id}")" class="form-check-input" type="checkbox"
                            checked="@subtask.Completed"
                            @onchange="() => ToggleSubtaskAsync(subtask)" />
-                    <label class="form-check-label small @(subtask.Completed ? "text-decoration-line-through text-muted" : "")">
+                    <label class="form-check-label small @(subtask.Completed ? "text-decoration-line-through text-muted" : "")" for="@($"task-detail-subtask-{subtask.Id}")">
                         @subtask.Text
                     </label>
                 </div>
