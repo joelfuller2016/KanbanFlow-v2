@@ -275,14 +275,19 @@ else
     private bool detailPanelOpen;
     private int? detailPanelAddSubtaskParentId;
 
-    private void OpenTaskDetail(TaskItem task) => OpenTaskDetail(task, null);
+    private void OpenTaskDetail(TaskItem task) => OpenTaskDetail(task, null, forceTaskExpansion: false);
 
-    private void OpenTaskDetail(TaskItem task, int? addSubtaskParentId)
+    private void OpenTaskDetail(TaskItem task, int? addSubtaskParentId, bool forceTaskExpansion)
     {
         selectedTask = task;
         detailPanelAddSubtaskParentId = addSubtaskParentId;
         detailPanelOpen = true;
-        expandedTasks.Add(task.Id);
+
+        if (forceTaskExpansion)
+        {
+            expandedTasks.Add(task.Id);
+        }
+
         StateHasChanged();
     }
 
@@ -549,14 +554,14 @@ else
     private void OpenAddModalForProject() => OpenAddModal("feature", null, null);
     private void OpenAddModalForFeature(int featureId) => OpenAddModal("task", featureId, null);
     private void OpenAddModalForColumn(WorkStatus status) => OpenAddModal("task", null, status);
-    private void OpenAddSubtaskForTask(TaskItem task) => OpenTaskDetail(task, null);
+    private void OpenAddSubtaskForTask(TaskItem task) => OpenTaskDetail(task, null, forceTaskExpansion: true);
 
     private void OpenAddChildSubtaskFromOutline(Subtask subtask)
     {
         var parentTask = allTasks.FirstOrDefault(t => t.Id == subtask.TaskItemId);
         if (parentTask is not null)
         {
-            OpenTaskDetail(parentTask, subtask.Id);
+            OpenTaskDetail(parentTask, subtask.Id, forceTaskExpansion: true);
         }
     }
 
