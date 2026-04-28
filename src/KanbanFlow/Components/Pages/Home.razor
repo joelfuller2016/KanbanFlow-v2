@@ -98,16 +98,16 @@ else
                             <div class="alert alert-danger">@saveError</div>
                         }
                         <div class="mb-3">
-                            <label class="form-label" for="project-name-input">Name <span class="text-danger">*</span></label>
-                            <InputText id="project-name-input" @bind-Value="editingProject.Name" class="form-control" placeholder="Project name" autofocus />
+                            <label class="form-label" for="project-name">Name <span class="text-danger">*</span></label>
+                            <InputText id="project-name" @bind-Value="editingProject.Name" class="form-control" placeholder="Project name" autofocus />
                         </div>
                         <div class="mb-3">
-                            <label class="form-label" for="project-description-input">Description</label>
-                            <InputTextArea id="project-description-input" @bind-Value="editingProject.Description" class="form-control" rows="3" placeholder="What is this project about?" />
+                            <label class="form-label" for="project-description">Description</label>
+                            <InputTextArea id="project-description" @bind-Value="editingProject.Description" class="form-control" rows="3" placeholder="What is this project about?" />
                         </div>
                         <div class="mb-3">
-                            <label class="form-label" for="project-goals-input">Goals</label>
-                            <InputTextArea id="project-goals-input" @bind-Value="editingProject.Goals" class="form-control" rows="3" placeholder="- Goal 1&#10;- Goal 2" />
+                            <label class="form-label" for="project-goals">Goals</label>
+                            <InputTextArea id="project-goals" @bind-Value="editingProject.Goals" class="form-control" rows="3" placeholder="- Goal 1&#10;- Goal 2" />
                         </div>
                     </div>
                     <div class="modal-footer">

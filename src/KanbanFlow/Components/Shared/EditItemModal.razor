@@ -22,14 +22,14 @@
 
                 @* Name *@
                 <div class="mb-3">
-                    <label class="form-label small text-muted mb-1">Name</label>
-                    <input type="text" class="form-control" @bind="editName" @bind:event="oninput" />
+                    <label class="form-label small text-muted mb-1" for="edit-item-name">Name</label>
+                    <input id="edit-item-name" type="text" class="form-control" @bind="editName" @bind:event="oninput" />
                 </div>
 
                 @* Description *@
                 <div class="mb-3">
-                    <label class="form-label small text-muted mb-1">Description</label>
-                    <textarea class="form-control form-control-sm" rows="3"
+                    <label class="form-label small text-muted mb-1" for="edit-item-description">Description</label>
+                    <textarea id="edit-item-description" class="form-control form-control-sm" rows="3"
                               placeholder="Add a description..."
                               @bind="editDescription"></textarea>
                 </div>
@@ -38,15 +38,15 @@
                 @if (EditMode == EditItemType.Project)
                 {
                     <div class="mb-3">
-                        <label class="form-label small text-muted mb-1">Goals</label>
-                        <textarea class="form-control form-control-sm" rows="3"
+                        <label class="form-label small text-muted mb-1" for="edit-item-goals">Goals</label>
+                        <textarea id="edit-item-goals" class="form-control form-control-sm" rows="3"
                                   placeholder="Project goals (markdown)..."
                                   @bind="editGoals"></textarea>
                     </div>
 
                     <div class="mb-3">
-                        <label class="form-label small text-muted mb-1">README</label>
-                        <textarea class="form-control form-control-sm" rows="8"
+                        <label class="form-label small text-muted mb-1" for="edit-item-readme">README</label>
+                        <textarea id="edit-item-readme" class="form-control form-control-sm" rows="8"
                                   placeholder="Project documentation (markdown)..."
                                   @bind="editReadme" style="font-family: monospace; font-size: 0.85rem;"></textarea>
                     </div>
@@ -56,8 +56,8 @@
                 @if (EditMode == EditItemType.Feature)
                 {
                     <div class="mb-3">
-                        <label class="form-label small text-muted mb-1">Parent Feature</label>
-                        <select class="form-select form-select-sm" @bind="editParentFeatureId">
+                        <label class="form-label small text-muted mb-1" for="edit-item-parent-feature">Parent Feature</label>
+                        <select id="edit-item-parent-feature" class="form-select form-select-sm" @bind="editParentFeatureId">
                             <option value="0">None (top-level)</option>
                             @if (AllFeatures is not null)
                             {
@@ -75,8 +75,8 @@
                 @if (EditMode == EditItemType.Task)
                 {
                     <div class="mb-3">
-                        <label class="form-label small text-muted mb-1">Feature</label>
-                        <select class="form-select form-select-sm" @bind="editFeatureId">
+                        <label class="form-label small text-muted mb-1" for="edit-item-feature">Feature</label>
+                        <select id="edit-item-feature" class="form-select form-select-sm" @bind="editFeatureId">
                             @if (AllFeatures is not null)
                             {
                                 @foreach (var f in AllFeatures.OrderBy(f => f.SortOrder))
@@ -90,8 +90,8 @@
 
                     <div class="row mb-3">
                         <div class="col-6">
-                            <label class="form-label small text-muted mb-1">Status</label>
-                            <select class="form-select form-select-sm" @bind="editStatus">
+                            <label class="form-label small text-muted mb-1" for="edit-item-status">Status</label>
+                            <select id="edit-item-status" class="form-select form-select-sm" @bind="editStatus">
                                 @foreach (var status in Enum.GetValues<WorkStatus>())
                                 {
                                     <option value="@((int)status)">@GetStatusDisplayName(status)</option>
@@ -99,8 +99,8 @@
                             </select>
                         </div>
                         <div class="col-6">
-                            <label class="form-label small text-muted mb-1">Priority</label>
-                            <select class="form-select form-select-sm" @bind="editPriority">
+                            <label class="form-label small text-muted mb-1" for="edit-item-priority">Priority</label>
+                            <select id="edit-item-priority" class="form-select form-select-sm" @bind="editPriority">
                                 @foreach (var priority in Enum.GetValues<TaskPriority>())
                                 {
                                     <option value="@((int)priority)">@priority</option>
@@ -110,23 +110,23 @@
                     </div>
 
                     <div class="mb-3">
-                        <label class="form-label small text-muted mb-1">Assignee</label>
-                        <input type="text" class="form-control form-control-sm" placeholder="Unassigned" @bind="editAssignee" />
+                        <label class="form-label small text-muted mb-1" for="edit-item-assignee">Assignee</label>
+                        <input id="edit-item-assignee" type="text" class="form-control form-control-sm" placeholder="Unassigned" @bind="editAssignee" />
                     </div>
 
                     @* Subtasks as cards *@
                     @if (taskSubtasks.Count > 0)
                     {
                         <div class="mb-3">
-                            <label class="form-label small text-muted mb-1">Subtasks</label>
+                            <div id="edit-item-subtasks-label" class="form-label small text-muted mb-1">Subtasks</div>
                             @foreach (var sub in taskSubtasks.Where(s => s.ParentSubtaskId == null).OrderBy(s => s.SortOrder))
                             {
                                 <div class="card mb-1" style="border-left: 3px solid @(sub.Completed ? "#198754" : "#6c757d"); @(sub.Completed ? "opacity: 0.6;" : "")">
                                     <div class="card-body p-2 d-flex align-items-center">
-                                        <input type="checkbox" class="form-check-input me-2 flex-shrink-0" style="margin-top: 0;"
+                                        <input id="@($"edit-item-subtask-{sub.Id}")" type="checkbox" class="form-check-input me-2 flex-shrink-0" style="margin-top: 0;"
                                                checked="@sub.Completed"
                                                @onchange="() => ToggleSubtaskInModal(sub)" />
-                                        <span class="small @(sub.Completed ? "text-decoration-line-through text-muted" : "")">@sub.Text</span>
+                                        <label class="small @(sub.Completed ? "text-decoration-line-through text-muted" : "")" for="@($"edit-item-subtask-{sub.Id}")">@sub.Text</label>
                                     </div>
                                 </div>
                                 @* Nested subtasks *@
@@ -134,10 +134,10 @@
                                 {
                                     <div class="card mb-1 ms-3" style="border-left: 3px solid @(child.Completed ? "#198754" : "#adb5bd"); @(child.Completed ? "opacity: 0.6;" : "")">
                                         <div class="card-body p-2 d-flex align-items-center">
-                                            <input type="checkbox" class="form-check-input me-2 flex-shrink-0" style="margin-top: 0;"
+                                            <input id="@($"edit-item-subtask-{child.Id}")" type="checkbox" class="form-check-input me-2 flex-shrink-0" style="margin-top: 0;"
                                                    checked="@child.Completed"
                                                    @onchange="() => ToggleSubtaskInModal(child)" />
-                                            <span class="small @(child.Completed ? "text-decoration-line-through text-muted" : "")">@child.Text</span>
+                                            <label class="small @(child.Completed ? "text-decoration-line-through text-muted" : "")" for="@($"edit-item-subtask-{child.Id}")">@child.Text</label>
                                         </div>
                                     </div>
                                 }
@@ -147,7 +147,7 @@
 
                     @* Activity Timeline *@
                     <div class="mb-3">
-                        <label class="form-label small text-muted mb-1">Activity</label>
+                        <div id="edit-item-activity-label" class="form-label small text-muted mb-1">Activity</div>
                         <div class="border rounded p-2" style="max-height: 250px; overflow-y: auto; background: #f8f9fa;">
                             @if (taskComments.Count == 0)
                             {
@@ -183,7 +183,7 @@
 
                         @* Add comment *@
                         <div class="input-group input-group-sm mt-2">
-                            <input type="text" class="form-control" placeholder="Add a comment..."
+                            <input type="text" class="form-control" placeholder="Add a comment..." aria-label="Add activity comment"
                                    @bind="newCommentText" @bind:event="oninput"
                                    @onkeydown="HandleCommentKeyDown" />
                             <button class="btn btn-outline-primary" @onclick="AddComment"
