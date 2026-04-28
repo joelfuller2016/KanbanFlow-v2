@@ -167,7 +167,14 @@ else
                 @if (GetOrderedRequirements().Count == 0)
                 {
                     <div class="text-muted small border rounded bg-white p-3" data-testid="requirements-empty-state">
-                        No requirements yet. Requirements added through the API will appear here.
+                        <div class="fw-semibold text-body mb-1">No requirements captured yet.</div>
+                        <div>
+                            Requirements describe the project rules, constraints, and must-have outcomes that keep the board aligned.
+                            They are shown here for people reviewing the project and included in the context AI agents use.
+                        </div>
+                        <div class="mt-2">
+                            Requirement editing is API-only for now; any requirements added by your team or automation will appear here.
+                        </div>
                     </div>
                 }
                 else
