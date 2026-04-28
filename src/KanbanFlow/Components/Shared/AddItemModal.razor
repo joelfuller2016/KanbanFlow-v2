@@ -22,22 +22,22 @@
 
                 @* Type toggle *@
                 <div class="mb-3">
-                    <label class="form-label small text-muted mb-1">Create type</label>
-                    <div class="btn-group w-100" role="group">
-                        <input type="radio" class="btn-check" id="typeFeature" value="feature"
+                    <div id="add-item-type-label" class="form-label small text-muted mb-1">Create type</div>
+                    <div class="btn-group w-100" role="group" aria-labelledby="add-item-type-label">
+                        <input type="radio" class="btn-check" id="add-item-type-feature" value="feature"
                                checked="@(itemType == FeatureType)" @onchange="SelectFeatureType" />
-                        <label class="btn btn-outline-primary btn-sm" for="typeFeature" data-testid="add-item-feature-toggle">Feature</label>
+                        <label class="btn btn-outline-primary btn-sm" for="add-item-type-feature" data-testid="add-item-feature-toggle">Feature</label>
 
-                        <input type="radio" class="btn-check" id="typeTask" value="task"
+                        <input type="radio" class="btn-check" id="add-item-type-task" value="task"
                                checked="@(itemType == TaskType)" @onchange="SelectTaskType" />
-                        <label class="btn btn-outline-primary btn-sm" for="typeTask" data-testid="add-item-task-toggle">Task</label>
+                        <label class="btn btn-outline-primary btn-sm" for="add-item-type-task" data-testid="add-item-task-toggle">Task</label>
                     </div>
                 </div>
 
                 @* Name *@
                 <div class="mb-3">
-                    <label class="form-label small text-muted mb-1">Name</label>
-                    <input type="text" class="form-control" placeholder="@(itemType == FeatureType ? "Feature name" : "Task name")"
+                    <label class="form-label small text-muted mb-1" for="add-item-name">Name</label>
+                    <input id="add-item-name" type="text" class="form-control" placeholder="@(itemType == FeatureType ? "Feature name" : "Task name")"
                            @bind="itemName" @bind:event="oninput"
                            @onkeydown="HandleKeyDown" />
                 </div>
@@ -46,10 +46,10 @@
                 @if (itemType == TaskType || (itemType == FeatureType && Features is not null && Features.Count > 0))
                 {
                     <div class="mb-3">
-                        <label class="form-label small text-muted mb-1">
+                        <label class="form-label small text-muted mb-1" for="add-item-feature">
                             @(itemType == TaskType ? "Feature" : "Parent Feature (optional)")
                         </label>
-                        <select class="form-select form-select-sm" @bind="selectedFeatureId">
+                        <select id="add-item-feature" class="form-select form-select-sm" @bind="selectedFeatureId">
                             @if (itemType == FeatureType)
                             {
                                 <option value="0">None (top-level)</option>
@@ -71,8 +71,8 @@
                 {
                     <div class="row mb-3">
                         <div class="col-6">
-                            <label class="form-label small text-muted mb-1">Status</label>
-                            <select class="form-select form-select-sm" @bind="selectedStatus">
+                            <label class="form-label small text-muted mb-1" for="add-item-status">Status</label>
+                            <select id="add-item-status" class="form-select form-select-sm" @bind="selectedStatus">
                                 @foreach (var status in Enum.GetValues<WorkStatus>())
                                 {
                                     <option value="@((int)status)">@GetStatusDisplayName(status)</option>
@@ -80,8 +80,8 @@
                             </select>
                         </div>
                         <div class="col-6">
-                            <label class="form-label small text-muted mb-1">Priority</label>
-                            <select class="form-select form-select-sm" @bind="selectedPriority">
+                            <label class="form-label small text-muted mb-1" for="add-item-priority">Priority</label>
+                            <select id="add-item-priority" class="form-select form-select-sm" @bind="selectedPriority">
                                 @foreach (var priority in Enum.GetValues<TaskPriority>())
                                 {
                                     <option value="@((int)priority)">@priority</option>
@@ -93,8 +93,8 @@
 
                 @* Description *@
                 <div class="mb-3">
-                    <label class="form-label small text-muted mb-1">Description (optional)</label>
-                    <textarea class="form-control form-control-sm" rows="3"
+                    <label class="form-label small text-muted mb-1" for="add-item-description">Description (optional)</label>
+                    <textarea id="add-item-description" class="form-control form-control-sm" rows="3"
                               placeholder="Add a description..."
                               @bind="itemDescription"></textarea>
                 </div>

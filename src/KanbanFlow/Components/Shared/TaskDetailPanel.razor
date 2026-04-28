@@ -12,6 +12,7 @@
             @if (isEditingName)
             {
                 <input type="text" class="form-control form-control-lg fw-bold border-0 p-0"
+                       aria-label="Task name"
                        @bind="editingName" @bind:event="oninput"
                        @onblur="SaveNameAsync"
                        @onkeydown="HandleNameKeyDown"
@@ -46,8 +47,8 @@
 
             @* Feature reassignment *@
             <div class="mb-3">
-                <label class="form-label small text-muted mb-1">Feature</label>
-                <select class="form-select form-select-sm" value="@Task.FeatureId"
+                <label class="form-label small text-muted mb-1" for="task-detail-feature">Feature</label>
+                <select id="task-detail-feature" class="form-select form-select-sm" value="@Task.FeatureId"
                         @onchange="OnFeatureChanged">
                     @if (Features is not null)
                     {
@@ -61,8 +62,8 @@
 
             @* Status *@
             <div class="mb-3">
-                <label class="form-label small text-muted mb-1">Status</label>
-                <select class="form-select form-select-sm" value="@((int)Task.Status)"
+                <label class="form-label small text-muted mb-1" for="task-detail-status">Status</label>
+                <select id="task-detail-status" class="form-select form-select-sm" value="@((int)Task.Status)"
                         @onchange="OnStatusChanged">
                     @foreach (var status in Enum.GetValues<WorkStatus>())
                     {
@@ -71,10 +72,47 @@
                 </select>
             </div>
 
+            @* Dependency blockers *@
+            <section class="mb-3" data-testid="task-detail-blockers-section" aria-labelledby="task-detail-blockers-heading">
+                <div class="d-flex align-items-center mb-1">
+                    <h6 id="task-detail-blockers-heading" class="form-label small text-muted mb-0">Dependency blockers</h6>
+                    @if (Task.Dependencies.Count > 0)
+                    {
+                        <span class="ms-2 badge @(HasIncompleteBlockers ? "text-bg-danger" : "text-bg-secondary") small" data-testid="task-detail-blockers-count">@Task.Dependencies.Count</span>
+                    }
+                </div>
+
+                @if (Task.Dependencies.Count == 0)
+                {
+                    <div class="text-muted small border rounded p-2" data-testid="task-detail-blockers-empty-state">
+                        No dependency blockers for this task.
+                    </div>
+                }
+                else
+                {
+                    <div class="list-group list-group-flush border rounded" data-testid="task-detail-blockers-list">
+                        @foreach (var dependency in OrderedDependencies)
+                        {
+                            var blocker = dependency.DependsOnTaskItem;
+                            var blockerName = blocker?.Name ?? $"Task #{dependency.DependsOnTaskItemId}";
+                            var blockerStatus = blocker?.Status;
+                            var blockerDone = blockerStatus == WorkStatus.Done;
+
+                            <div class="list-group-item py-2 @(blockerDone ? null : "task-blocker-incomplete")" data-testid="task-detail-blocker-@dependency.DependsOnTaskItemId">
+                                <div class="d-flex flex-wrap align-items-center gap-2">
+                                    <span class="fw-medium small me-auto text-break">@blockerName</span>
+                                    <span class="@GetStatusBadgeClass(blockerStatus)" data-testid="task-detail-blocker-@dependency.DependsOnTaskItemId-status">@GetStatusDisplayName(blockerStatus)</span>
+                                </div>
+                            </div>
+                        }
+                    </div>
+                }
+            </section>
+
             @* Priority *@
             <div class="mb-3">
-                <label class="form-label small text-muted mb-1">Priority</label>
-                <select class="form-select form-select-sm" value="@((int)Task.Priority)"
+                <label class="form-label small text-muted mb-1" for="task-detail-priority">Priority</label>
+                <select id="task-detail-priority" class="form-select form-select-sm" value="@((int)Task.Priority)"
                         @onchange="OnPriorityChanged">
                     @foreach (var priority in Enum.GetValues<TaskPriority>())
                     {
@@ -85,8 +123,8 @@
 
             @* Assignee *@
             <div class="mb-3">
-                <label class="form-label small text-muted mb-1">Assignee</label>
-                <input type="text" class="form-control form-control-sm"
+                <label class="form-label small text-muted mb-1" for="task-detail-assignee">Assignee</label>
+                <input id="task-detail-assignee" type="text" class="form-control form-control-sm"
                        placeholder="Unassigned"
                        value="@Task.Assignee"
                        @onchange="OnAssigneeChanged" />
@@ -94,8 +132,8 @@
 
             @* Description *@
             <div class="mb-3">
-                <label class="form-label small text-muted mb-1">Description</label>
-                <textarea class="form-control form-control-sm" rows="4"
+                <label class="form-label small text-muted mb-1" for="task-detail-description">Description</label>
+                <textarea id="task-detail-description" class="form-control form-control-sm" rows="4"
                           placeholder="Add a description..."
                           @bind="editingDescription"
                           @bind:event="oninput"
@@ -129,12 +167,11 @@
                         @foreach (var criterion in Task.AcceptanceCriteria.OrderBy(c => c.SortOrder).ThenBy(c => c.Id))
                         {
                             <div class="list-group-item px-0 py-1 border-0 d-flex align-items-start gap-2" data-testid="@($"task-acceptance-criterion-{criterion.Id}")">
-                                <input class="form-check-input mt-1" type="checkbox"
+                                <input id="@($"task-acceptance-criterion-toggle-{criterion.Id}")" class="form-check-input mt-1" type="checkbox"
                                        checked="@criterion.Completed"
-                                       aria-label="Toggle acceptance criterion @criterion.Text"
                                        data-testid="@($"task-acceptance-criterion-toggle-{criterion.Id}")"
                                        @onchange="() => ToggleAcceptanceCriterionAsync(criterion)" />
-                                <span class="small flex-grow-1 text-break @(criterion.Completed ? "text-decoration-line-through text-muted" : null)">@criterion.Text</span>
+                                <label class="small flex-grow-1 text-break @(criterion.Completed ? "text-decoration-line-through text-muted" : null)" for="@($"task-acceptance-criterion-toggle-{criterion.Id}")">@criterion.Text</label>
                                 <button class="btn btn-sm text-danger p-0 ms-1" title="Delete acceptance criterion"
                                         aria-label="Delete acceptance criterion @criterion.Text"
                                         data-testid="@($"task-acceptance-criterion-delete-{criterion.Id}")"
@@ -148,9 +185,9 @@
                     </div>
                 }
 
+                <label class="visually-hidden" for="task-acceptance-criterion-input">Acceptance criterion text</label>
                 <div class="input-group input-group-sm">
-                    <input type="text" class="form-control" placeholder="Add acceptance criterion..."
-                           aria-label="Acceptance criterion text"
+                    <input id="task-acceptance-criterion-input" type="text" class="form-control" placeholder="Add acceptance criterion..."
                            data-testid="task-acceptance-criterion-input"
                            @bind="newAcceptanceCriterionText" @bind:event="oninput"
                            @onkeydown="HandleAcceptanceCriterionKeyDown" />
@@ -169,10 +206,11 @@
             @* Subtasks (recursive) *@
             <div class="mb-3">
                 <div class="d-flex align-items-center mb-2">
-                    <label class="form-label small text-muted mb-0">Subtasks</label>
+                    <h6 id="task-detail-subtasks-heading" class="form-label small text-muted mb-0">Subtasks</h6>
                     @{
                         var completedCount = Task.Subtasks.Count(s => s.Completed);
                         var totalCount = Task.Subtasks.Count;
+                        var subtaskProgressPct = totalCount > 0 ? (int)(100.0 * completedCount / totalCount) : 0;
                     }
                     @if (totalCount > 0)
                     {
@@ -184,12 +222,17 @@
                 {
                     <div class="progress mb-2" style="height: 4px;">
                         <div class="progress-bar bg-success" role="progressbar"
-                             style="width: @(totalCount > 0 ? (int)(100.0 * completedCount / totalCount) : 0)%">
+                             style="width: @(subtaskProgressPct)%"
+                             aria-label="@($"{Task.Name} subtask completion")"
+                             aria-valuemin="0"
+                             aria-valuemax="100"
+                             aria-valuenow="@subtaskProgressPct"
+                             aria-valuetext="@($"{completedCount} of {totalCount} subtasks complete")">
                         </div>
                     </div>
                 }
 
-                <div class="list-group list-group-flush mb-2">
+                <div class="list-group list-group-flush mb-2" aria-labelledby="task-detail-subtasks-heading">
                     @{ var rootSubtasks = Task.Subtasks.Where(s => s.ParentSubtaskId == null).OrderBy(s => s.SortOrder).ToList(); }
                     @foreach (var subtask in rootSubtasks)
                     {
@@ -199,7 +242,7 @@
 
                 @* Add top-level subtask *@
                 <div class="input-group input-group-sm">
-                    <input type="text" class="form-control" placeholder="Add a subtask..."
+                    <input type="text" class="form-control" placeholder="Add a subtask..." aria-label="New subtask text"
                            @bind="newSubtaskText" @bind:event="oninput"
                            @onkeydown="HandleSubtaskKeyDown" />
                     <button class="btn btn-outline-secondary d-flex align-items-center gap-1" @onclick="AddSubtaskAsync"
@@ -591,10 +634,10 @@
         <div class="list-group-item px-0 py-1 border-0" style="margin-left: @(indent)px;">
             <div class="d-flex align-items-center">
                 <div class="form-check flex-grow-1 mb-0">
-                    <input class="form-check-input" type="checkbox"
+                    <input id="@($"task-detail-subtask-{subtask.Id}")" class="form-check-input" type="checkbox"
                            checked="@subtask.Completed"
                            @onchange="() => ToggleSubtaskAsync(subtask)" />
-                    <label class="form-check-label small @(subtask.Completed ? "text-decoration-line-through text-muted" : "")">
+                    <label class="form-check-label small @(subtask.Completed ? "text-decoration-line-through text-muted" : "")" for="@($"task-detail-subtask-{subtask.Id}")">
                         @subtask.Text
                     </label>
                 </div>
@@ -937,6 +980,15 @@
 
     // ── Helpers ──
 
+    private IReadOnlyList<TaskDependency> OrderedDependencies => Task?.Dependencies
+        .OrderBy(d => d.DependsOnTaskItem?.Status == WorkStatus.Done)
+        .ThenBy(d => d.DependsOnTaskItem?.Name ?? string.Empty)
+        .ThenBy(d => d.DependsOnTaskItemId)
+        .ToList() ?? [];
+
+    private bool HasIncompleteBlockers => Task?.Dependencies
+        .Any(d => d.DependsOnTaskItem is not null && d.DependsOnTaskItem.Status != WorkStatus.Done) == true;
+
     private static string GetStatusDisplayName(WorkStatus status) => status switch
     {
         WorkStatus.Backlog => "Backlog",
@@ -945,6 +997,26 @@
         WorkStatus.Review => "Review",
         WorkStatus.Done => "Done",
         _ => status.ToString()
+    };
+
+    private static string GetStatusDisplayName(WorkStatus? status) => status switch
+    {
+        WorkStatus.Backlog => "Backlog",
+        WorkStatus.Todo => "To Do",
+        WorkStatus.InProgress => "In Progress",
+        WorkStatus.Review => "Review",
+        WorkStatus.Done => "Done",
+        _ => "Unknown"
+    };
+
+    private static string GetStatusBadgeClass(WorkStatus? status) => status switch
+    {
+        WorkStatus.Done => "badge text-bg-success",
+        WorkStatus.InProgress => "badge text-bg-primary",
+        WorkStatus.Review => "badge text-bg-info",
+        WorkStatus.Todo => "badge text-bg-warning",
+        WorkStatus.Backlog => "badge text-bg-secondary",
+        _ => "badge text-bg-light border text-dark"
     };
 
     private static string GetCommentTypeDisplayName(CommentType type) => type switch

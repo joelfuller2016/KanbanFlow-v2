@@ -521,6 +521,10 @@ else
                     .ThenInclude(f => f.Tasks)
                         .ThenInclude(t => t.AcceptanceCriteria)
                 .Include(p => p.Features)
+                    .ThenInclude(f => f.Tasks)
+                        .ThenInclude(t => t.Dependencies)
+                            .ThenInclude(d => d.DependsOnTaskItem)
+                .Include(p => p.Features)
                     .ThenInclude(f => f.ChildFeatures)
                 .Include(p => p.Requirements)
                     .ThenInclude(r => r.Feature)
@@ -539,6 +543,11 @@ else
 
             project = loaded;
             allTasks = project.Features.SelectMany(f => f.Tasks).ToList();
+            if (selectedTask is not null)
+            {
+                selectedTask = allTasks.FirstOrDefault(t => t.Id == selectedTask.Id);
+                detailPanelOpen = detailPanelOpen && selectedTask is not null;
+            }
 
             InitializeOutlineExpansion();
 
