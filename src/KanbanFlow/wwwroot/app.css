@@ -144,3 +144,87 @@ h1:focus {
     border-left: 0.25rem solid #6c757d !important;
     background: rgba(108, 117, 125, .06);
 }
+
+/* -- Responsive project workspace -- */
+.project-shell {
+    height: calc(100vh - 56px);
+    min-height: 0;
+    position: relative;
+    overflow: hidden;
+}
+
+.project-main {
+    min-width: 0;
+}
+
+.project-outline {
+    width: 300px;
+    min-width: 300px;
+    flex-shrink: 0;
+    overflow-y: auto;
+}
+
+.project-outline-backdrop {
+    display: none;
+}
+
+.kanban-board {
+    min-width: 0;
+    scroll-padding-inline: .5rem;
+}
+
+.kanban-column {
+    min-width: 180px;
+    flex: 1 1 0;
+    max-width: 260px;
+}
+
+@media (max-width: 991.98px) {
+    .project-outline {
+        position: absolute;
+        inset: 0 auto 0 0;
+        z-index: 1040;
+        width: min(86vw, 320px);
+        min-width: 0;
+        max-width: 100vw;
+        box-shadow: 0 .5rem 1rem rgba(0, 0, 0, .15);
+        transform: translateX(-100%);
+        transition: transform .18s ease-in-out;
+    }
+
+    .project-shell.outline-open .project-outline {
+        transform: translateX(0);
+    }
+
+    .project-shell.outline-open .project-outline-backdrop {
+        display: block;
+        position: absolute;
+        inset: 0;
+        z-index: 1030;
+        border: 0;
+        padding: 0;
+        background: rgba(0, 0, 0, .25);
+    }
+
+    .kanban-board {
+        gap: .75rem !important;
+        padding-bottom: 1rem !important;
+        scrollbar-gutter: stable;
+    }
+
+    .kanban-column {
+        min-width: min(82vw, 260px);
+        flex: 0 0 min(82vw, 260px);
+        max-width: none;
+    }
+}
+
+@media (max-width: 575.98px) {
+    .project-shell {
+        height: calc(100dvh - 56px);
+    }
+
+    .offcanvas.offcanvas-end {
+        max-width: 100vw;
+    }
+}

@@ -1,4 +1,4 @@
-<div class="flex-grow-1 d-flex overflow-auto p-2 gap-2" style="min-width: 0;" data-testid="kanban-board">
+<div class="kanban-board flex-grow-1 d-flex overflow-auto p-2 gap-2" data-testid="kanban-board">
     @foreach (var status in Enum.GetValues<WorkStatus>())
     {
         var tasksInColumn = AllTasks.Where(t => t.Status == status).ToList();

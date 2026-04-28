@@ -1,4 +1,4 @@
-<div class="border-end bg-light p-3" style="width: 300px; min-width: 300px; overflow-y: auto;" data-testid="project-outline">
+<div id="project-outline" class="project-outline border-end bg-light p-3" data-testid="project-outline">
     <div class="d-flex align-items-center mb-3">
         <button class="btn btn-sm btn-outline-secondary me-2" @onclick="() => OnGoHome.InvokeAsync()" title="Back to Projects" aria-label="Back to projects" data-testid="back-to-projects-button">
             <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16">
@@ -26,6 +26,14 @@
             <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="currentColor" viewBox="0 0 16 16">
                 <path fill-rule="evenodd" d="M8 2a.5.5 0 0 1 .5.5v5h5a.5.5 0 0 1 0 1h-5v5a.5.5 0 0 1-1 0v-5h-5a.5.5 0 0 1 0-1h5v-5A.5.5 0 0 1 8 2"/>
             </svg>
+        </button>
+        <button class="btn btn-sm btn-outline-secondary p-0 d-lg-none d-flex align-items-center justify-content-center ms-1"
+                style="width: 24px; height: 24px;"
+                @onclick="() => OnCloseOutline.InvokeAsync()"
+                title="Hide outline"
+                aria-label="Hide project outline"
+                data-testid="close-project-outline-button">
+            ×
         </button>
     </div>
 
@@ -55,6 +63,7 @@
     [Parameter] public EventCallback<int> OnToggleTask { get; set; }
     [Parameter] public EventCallback<TaskItem> OnToggleTaskDone { get; set; }
     [Parameter] public EventCallback<Subtask> OnToggleOutlineSubtask { get; set; }
+    [Parameter] public EventCallback OnCloseOutline { get; set; }
 
     private (int done, int total) GetFeatureTaskCounts(Feature feature)
     {

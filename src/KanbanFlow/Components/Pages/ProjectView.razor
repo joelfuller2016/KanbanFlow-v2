@@ -34,7 +34,7 @@ else if (project is null)
 }
 else
 {
-    <div class="d-flex" style="height: calc(100vh - 56px);">
+    <div class="project-shell d-flex @(outlineOpen ? "outline-open" : null)">
 
         <ProjectOutline Project="project"
                         ExpandedFeatures="expandedFeatures"
@@ -48,11 +48,22 @@ else
                         OnToggleFeature="ToggleFeature"
                         OnToggleTask="ToggleTask"
                         OnToggleTaskDone="ToggleTaskDone"
-                        OnToggleOutlineSubtask="ToggleOutlineSubtask" />
+                        OnToggleOutlineSubtask="ToggleOutlineSubtask"
+                        OnCloseOutline="CloseOutline" />
+
+        <button type="button"
+                class="project-outline-backdrop"
+                aria-label="Hide project outline"
+                @onclick="CloseOutline"></button>
 
         @* ── Right Panel: AI Action Bar + Kanban Board ── *@
-        <div class="flex-grow-1 d-flex flex-column overflow-hidden" style="min-width: 0;">
+        <div class="project-main flex-grow-1 d-flex flex-column overflow-hidden">
             <div class="border-bottom bg-white p-3">
+                <div class="d-lg-none mb-3">
+                    <button class="btn btn-sm btn-outline-secondary" @onclick="ToggleOutline" aria-expanded="@outlineOpen" aria-controls="project-outline" data-testid="toggle-project-outline-button">
+                        ☰ Project outline
+                    </button>
+                </div>
                 <div class="d-flex flex-wrap align-items-center gap-2">
                     <div class="me-auto">
                         <div class="text-uppercase text-primary fw-bold small">AI project controls</div>
@@ -270,6 +281,11 @@ else
     // Detail panel state
     private TaskItem? selectedTask;
     private bool detailPanelOpen;
+    private bool outlineOpen;
+
+    private void ToggleOutline() => outlineOpen = !outlineOpen;
+
+    private void CloseOutline() => outlineOpen = false;
 
     private void OpenTaskDetail(TaskItem task)
     {
