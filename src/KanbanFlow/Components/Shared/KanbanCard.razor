@@ -1,5 +1,9 @@
 <div class="card mb-2 board-card" data-testid="board-card-@Task.Id" data-task-id="@Task.Id"
      @onclick="() => OnOpenTaskDetail.InvokeAsync(Task)"
+     @onkeydown="HandleCardKeyDown"
+     tabindex="0"
+     role="button"
+     aria-label="Open task details for @Task.Name"
      style="border-left: 3px solid @GetPriorityBorderColor(Task.Priority); @(IsDone ? "opacity: 0.6;" : "")">
     <div class="card-body p-2">
         <div class="d-flex align-items-center">
@@ -25,6 +29,16 @@
     [Parameter] public EventCallback<TaskItem> OnOpenTaskDetail { get; set; }
 
     private bool IsDone => Task.Status == WorkStatus.Done;
+
+    private async Task HandleCardKeyDown(KeyboardEventArgs e)
+    {
+        if (IsActivationKey(e.Key))
+        {
+            await OnOpenTaskDetail.InvokeAsync(Task);
+        }
+    }
+
+    private static bool IsActivationKey(string key) => key is "Enter" or " " or "Spacebar";
 
     private static string GetPriorityBadgeClass(TaskPriority priority) => priority switch
     {

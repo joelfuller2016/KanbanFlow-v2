@@ -72,6 +72,40 @@
         return (done, total);
     }
 
+    private async Task HandleFeatureCardKeyDown(KeyboardEventArgs e, Feature feature)
+    {
+        if (IsActivationKey(e.Key))
+        {
+            await OnOpenEditFeature.InvokeAsync(feature);
+        }
+    }
+
+    private async Task HandleTaskCardKeyDown(KeyboardEventArgs e, TaskItem task)
+    {
+        if (IsActivationKey(e.Key))
+        {
+            await OnOpenEditTask.InvokeAsync(task);
+        }
+    }
+
+    private async Task HandleFeatureToggleKeyDown(KeyboardEventArgs e, int featureId)
+    {
+        if (IsActivationKey(e.Key))
+        {
+            await OnToggleFeature.InvokeAsync(featureId);
+        }
+    }
+
+    private async Task HandleTaskToggleKeyDown(KeyboardEventArgs e, int taskId)
+    {
+        if (IsActivationKey(e.Key))
+        {
+            await OnToggleTask.InvokeAsync(taskId);
+        }
+    }
+
+    private static bool IsActivationKey(string key) => key is "Enter" or " " or "Spacebar";
+
     private RenderFragment RenderFeatureNode(Feature feature, int depth) => __builder =>
     {
         var (doneCount, totalCount) = GetFeatureTaskCounts(feature);
@@ -81,15 +115,18 @@
         var progressPct = totalCount > 0 ? (int)(100.0 * doneCount / totalCount) : 0;
 
         <div class="card mb-1" style="border-left: 4px solid @GetDepthColor(depth); cursor: pointer;"
-             role="button" data-testid="outline-feature-@feature.Id" @onclick="() => OnOpenEditFeature.InvokeAsync(feature)">
+             role="button" tabindex="0" aria-label="Edit feature @feature.Name"
+             data-testid="outline-feature-@feature.Id" @onclick="() => OnOpenEditFeature.InvokeAsync(feature)"
+             @onkeydown="(e) => HandleFeatureCardKeyDown(e, feature)">
             <div class="card-body p-2">
                 <div class="d-flex align-items-center">
                     @if (hasChildren)
                     {
                         <span class="me-1 flex-shrink-0 d-flex align-items-center justify-content-center"
                               style="width: 20px; height: 20px; cursor: pointer;"
-                              role="button" aria-label="Toggle @feature.Name" data-testid="outline-feature-@feature.Id-toggle"
-                              @onclick="() => OnToggleFeature.InvokeAsync(feature.Id)" @onclick:stopPropagation="true">
+                              role="button" tabindex="0" aria-label="Toggle @feature.Name" data-testid="outline-feature-@feature.Id-toggle"
+                              @onclick="() => OnToggleFeature.InvokeAsync(feature.Id)" @onclick:stopPropagation="true"
+                              @onkeydown="(e) => HandleFeatureToggleKeyDown(e, feature.Id)" @onkeydown:stopPropagation="true">
                             <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" class="text-muted"
                                  viewBox="0 0 16 16" style="transition: transform 0.15s; transform: rotate(@(isExpanded ? "90" : "0")deg);">
                                 <path fill-rule="evenodd" d="M4.646 1.646a.5.5 0 0 1 .708 0l6 6a.5.5 0 0 1 0 .708l-6 6a.5.5 0 0 1-.708-.708L10.293 8 4.646 2.354a.5.5 0 0 1 0-.708"/>
@@ -136,15 +173,17 @@
                 var taskIsDone = task.Status == WorkStatus.Done;
 
                 <div class="card mb-1" style="border-left: 4px solid @GetDepthColor(depth + 1); @(taskIsDone ? "opacity: 0.6;" : "") cursor: pointer;"
-                     data-testid="outline-task-@task.Id" data-task-id="@task.Id" role="button" @onclick="() => OnOpenEditTask.InvokeAsync(task)">
+                     data-testid="outline-task-@task.Id" data-task-id="@task.Id" role="button" tabindex="0" aria-label="Open task details for @task.Name"
+                     @onclick="() => OnOpenEditTask.InvokeAsync(task)" @onkeydown="(e) => HandleTaskCardKeyDown(e, task)">
                     <div class="card-body p-2">
                         <div class="d-flex align-items-center">
                             @if (taskHasSubtasks)
                             {
                                 <span class="me-1 flex-shrink-0 d-flex align-items-center justify-content-center"
                                       style="width: 20px; height: 20px; cursor: pointer;"
-                                      role="button" aria-label="Toggle subtasks for @task.Name" data-testid="outline-task-@task.Id-toggle"
-                                      @onclick="() => OnToggleTask.InvokeAsync(task.Id)" @onclick:stopPropagation="true">
+                                      role="button" tabindex="0" aria-label="Toggle subtasks for @task.Name" data-testid="outline-task-@task.Id-toggle"
+                                      @onclick="() => OnToggleTask.InvokeAsync(task.Id)" @onclick:stopPropagation="true"
+                                      @onkeydown="(e) => HandleTaskToggleKeyDown(e, task.Id)" @onkeydown:stopPropagation="true">
                                     <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" class="text-muted"
                                          viewBox="0 0 16 16" style="transition: transform 0.15s; transform: rotate(@(taskIsExpanded ? "90" : "0")deg);">
                                         <path fill-rule="evenodd" d="M4.646 1.646a.5.5 0 0 1 .708 0l6 6a.5.5 0 0 1 0 .708l-6 6a.5.5 0 0 1-.708-.708L10.293 8 4.646 2.354a.5.5 0 0 1 0-.708"/>
@@ -202,7 +241,9 @@
         var hasChildren = children.Count > 0;
 
         <div class="card mb-1" style="border-left: 4px solid @GetDepthColor(depth); @(subtask.Completed ? "opacity: 0.6;" : "") cursor: pointer;"
-             role="button" data-testid="outline-subtask-@subtask.Id" @onclick="() => OnOpenEditTask.InvokeAsync(parentTask)">
+             role="button" tabindex="0" aria-label="Open parent task details for @subtask.Text"
+             data-testid="outline-subtask-@subtask.Id" @onclick="() => OnOpenEditTask.InvokeAsync(parentTask)"
+             @onkeydown="(e) => HandleTaskCardKeyDown(e, parentTask)">
             <div class="card-body p-2">
                 <div class="d-flex align-items-center">
                     @if (hasChildren)
