@@ -84,12 +84,12 @@ else
 @* ── Create / Edit Project Modal ── *@
 @if (showEditModal)
 {
-    <div class="modal fade show d-block" tabindex="-1" style="background-color: rgba(0,0,0,0.5);">
+    <div class="modal fade show d-block" tabindex="-1" role="dialog" aria-modal="true" aria-labelledby="project-modal-title" style="background-color: rgba(0,0,0,0.5);">
         <div class="modal-dialog">
-            <div class="modal-content">
+            <div class="modal-content" tabindex="-1" @ref="projectModalDialog">
                 <div class="modal-header">
-                    <h5 class="modal-title">@(editingProject.Id == 0 ? "New Project" : "Edit Project")</h5>
-                    <button type="button" class="btn-close" @onclick="CloseEditModal"></button>
+                    <h5 class="modal-title" id="project-modal-title">@(editingProject.Id == 0 ? "New Project" : "Edit Project")</h5>
+                    <button type="button" class="btn-close" aria-label="Close project dialog" @onclick="CloseEditModal"></button>
                 </div>
                 <EditForm Model="editingProject" OnValidSubmit="SaveProject" FormName="projectForm">
                     <div class="modal-body">
@@ -99,7 +99,7 @@ else
                         }
                         <div class="mb-3">
                             <label class="form-label" for="project-name">Name <span class="text-danger">*</span></label>
-                            <InputText id="project-name" @bind-Value="editingProject.Name" class="form-control" placeholder="Project name" />
+                            <InputText id="project-name" @bind-Value="editingProject.Name" class="form-control" placeholder="Project name" autofocus />
                         </div>
                         <div class="mb-3">
                             <label class="form-label" for="project-description">Description</label>
@@ -129,12 +129,12 @@ else
 @* ── Delete Confirmation Modal ── *@
 @if (showDeleteModal && deletingProject is not null)
 {
-    <div class="modal fade show d-block" tabindex="-1" style="background-color: rgba(0,0,0,0.5);">
+    <div class="modal fade show d-block" tabindex="-1" role="dialog" aria-modal="true" aria-labelledby="delete-project-modal-title" style="background-color: rgba(0,0,0,0.5);">
         <div class="modal-dialog">
-            <div class="modal-content">
+            <div class="modal-content" tabindex="-1" @ref="deleteModalDialog">
                 <div class="modal-header">
-                    <h5 class="modal-title">Confirm Delete</h5>
-                    <button type="button" class="btn-close" @onclick="CloseDeleteModal"></button>
+                    <h5 class="modal-title" id="delete-project-modal-title">Confirm Delete</h5>
+                    <button type="button" class="btn-close" aria-label="Close delete confirmation dialog" @onclick="CloseDeleteModal"></button>
                 </div>
                 <div class="modal-body">
                     <p>Delete <strong>@deletingProject.Name</strong> and all its features and tasks?</p>
@@ -164,15 +164,34 @@ else
     private ProjectFormModel editingProject = new();
     private bool isSaving;
     private string? saveError;
+    private ElementReference projectModalDialog;
+    private bool shouldFocusProjectModal;
 
     // ── Delete modal state ──
     private bool showDeleteModal;
     private ProjectListItem? deletingProject;
     private bool isDeleting;
+    private ElementReference deleteModalDialog;
+    private bool shouldFocusDeleteModal;
 
     protected override async Task OnInitializedAsync()
     {
         await LoadProjects();
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (shouldFocusProjectModal && showEditModal)
+        {
+            shouldFocusProjectModal = false;
+            await projectModalDialog.FocusAsync(preventScroll: true);
+        }
+
+        if (shouldFocusDeleteModal && showDeleteModal)
+        {
+            shouldFocusDeleteModal = false;
+            await deleteModalDialog.FocusAsync(preventScroll: true);
+        }
     }
 
     private async Task LoadProjects()
@@ -204,6 +223,7 @@ else
         editingProject = new ProjectFormModel();
         saveError = null;
         showEditModal = true;
+        shouldFocusProjectModal = true;
     }
 
     private void OpenEditModal(ProjectListItem p)
@@ -228,6 +248,7 @@ else
             };
             saveError = null;
             showEditModal = true;
+            shouldFocusProjectModal = true;
             StateHasChanged();
         }
     }
@@ -298,6 +319,7 @@ else
     {
         deletingProject = p;
         showDeleteModal = true;
+        shouldFocusDeleteModal = true;
     }
 
     private void CloseDeleteModal()
