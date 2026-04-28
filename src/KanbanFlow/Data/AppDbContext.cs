@@ -14,6 +14,7 @@ public class AppDbContext : DbContext
     public DbSet<AcceptanceCriterion> AcceptanceCriteria => Set<AcceptanceCriterion>();
     public DbSet<Requirement> Requirements => Set<Requirement>();
     public DbSet<TaskComment> TaskComments => Set<TaskComment>();
+    public DbSet<ActivityEvent> ActivityEvents => Set<ActivityEvent>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -49,6 +50,15 @@ public class AppDbContext : DbContext
             e.HasOne(r => r.Project).WithMany(p => p.Requirements).HasForeignKey(r => r.ProjectId).OnDelete(DeleteBehavior.Cascade);
             e.HasOne(r => r.Feature).WithMany().HasForeignKey(r => r.FeatureId).OnDelete(DeleteBehavior.SetNull);
             e.HasOne(r => r.TaskItem).WithMany().HasForeignKey(r => r.TaskItemId).OnDelete(DeleteBehavior.SetNull);
+        });
+
+        modelBuilder.Entity<ActivityEvent>(e =>
+        {
+            // Activity rows are an audit trail. Keep ProjectId as historical attribution,
+            // but do not enforce a FK that would cascade-delete or block project deletion.
+            e.Ignore(a => a.Project);
+            e.HasIndex(a => new { a.ProjectId, a.CreatedAt });
+            e.HasIndex(a => new { a.EntityType, a.EntityId, a.CreatedAt });
         });
     }
 }

@@ -1,4 +1,4 @@
-<div class="border-end bg-light p-3" style="width: 300px; min-width: 300px; overflow-y: auto;" data-testid="project-outline">
+<div id="project-outline" class="project-outline border-end bg-light p-3" data-testid="project-outline">
     <div class="d-flex align-items-center mb-3">
         <button class="btn btn-sm btn-outline-secondary me-2" @onclick="() => OnGoHome.InvokeAsync()" title="Back to Projects" aria-label="Back to projects" data-testid="back-to-projects-button">
             <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16">
@@ -17,15 +17,23 @@
                 <path fill-rule="evenodd" d="M1 13.5A1.5 1.5 0 0 0 2.5 15h11a1.5 1.5 0 0 0 1.5-1.5v-6a.5.5 0 0 0-1 0v6a.5.5 0 0 1-.5.5h-11a.5.5 0 0 1-.5-.5v-11a.5.5 0 0 1 .5-.5H9a.5.5 0 0 0 0-1H2.5A1.5 1.5 0 0 0 1 2.5z"/>
             </svg>
         </button>
-        <button class="btn btn-sm btn-outline-primary p-0 d-flex align-items-center justify-content-center ms-1"
-                style="width: 24px; height: 24px;"
+        <button class="btn btn-sm btn-outline-primary d-flex align-items-center gap-1 ms-1 py-0 px-2"
                 @onclick="() => OnOpenAddProject.InvokeAsync()"
-                title="Add feature or task"
-                aria-label="Add feature or task to project"
+                title="Add a top-level feature or task to @Project.Name"
+                aria-label="Add a top-level feature or task to @Project.Name"
                 data-testid="add-project-item-button">
-            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="currentColor" viewBox="0 0 16 16">
+            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="currentColor" viewBox="0 0 16 16" aria-hidden="true">
                 <path fill-rule="evenodd" d="M8 2a.5.5 0 0 1 .5.5v5h5a.5.5 0 0 1 0 1h-5v5a.5.5 0 0 1-1 0v-5h-5a.5.5 0 0 1 0-1h5v-5A.5.5 0 0 1 8 2"/>
             </svg>
+            <span class="small">Feature/task</span>
+        </button>
+        <button class="btn btn-sm btn-outline-secondary p-0 d-lg-none d-flex align-items-center justify-content-center ms-1"
+                style="width: 44px; height: 44px; min-width: 44px; min-height: 44px;"
+                @onclick="() => OnCloseOutline.InvokeAsync()"
+                title="Hide outline"
+                aria-label="Hide project outline"
+                data-testid="close-project-outline-button">
+            ×
         </button>
     </div>
 
@@ -50,11 +58,14 @@
     [Parameter] public EventCallback OnOpenAddProject { get; set; }
     [Parameter] public EventCallback<Feature> OnOpenEditFeature { get; set; }
     [Parameter] public EventCallback<int> OnOpenAddFeature { get; set; }
+    [Parameter] public EventCallback<TaskItem> OnOpenAddTaskSubtask { get; set; }
+    [Parameter] public EventCallback<Subtask> OnOpenAddSubtaskChild { get; set; }
     [Parameter] public EventCallback<TaskItem> OnOpenEditTask { get; set; }
     [Parameter] public EventCallback<int> OnToggleFeature { get; set; }
     [Parameter] public EventCallback<int> OnToggleTask { get; set; }
     [Parameter] public EventCallback<TaskItem> OnToggleTaskDone { get; set; }
     [Parameter] public EventCallback<Subtask> OnToggleOutlineSubtask { get; set; }
+    [Parameter] public EventCallback OnCloseOutline { get; set; }
 
     private (int done, int total) GetFeatureTaskCounts(Feature feature)
     {
@@ -81,39 +92,49 @@
         var progressPct = totalCount > 0 ? (int)(100.0 * doneCount / totalCount) : 0;
 
         <div class="card mb-1" style="border-left: 4px solid @GetDepthColor(depth); cursor: pointer;"
-             role="button" data-testid="outline-feature-@feature.Id" @onclick="() => OnOpenEditFeature.InvokeAsync(feature)">
+             data-testid="outline-feature-@feature.Id" @onclick="() => OnOpenEditFeature.InvokeAsync(feature)">
             <div class="card-body p-2">
                 <div class="d-flex align-items-center">
                     @if (hasChildren)
                     {
-                        <span class="me-1 flex-shrink-0 d-flex align-items-center justify-content-center"
-                              style="width: 20px; height: 20px; cursor: pointer;"
-                              role="button" aria-label="Toggle @feature.Name" data-testid="outline-feature-@feature.Id-toggle"
-                              @onclick="() => OnToggleFeature.InvokeAsync(feature.Id)" @onclick:stopPropagation="true">
+                        <button type="button"
+                                class="btn btn-link text-reset me-1 p-0 flex-shrink-0 d-flex align-items-center justify-content-center"
+                                style="width: 20px; height: 20px;"
+                                aria-label="Toggle @feature.Name" data-testid="outline-feature-@feature.Id-toggle"
+                                @onclick="() => OnToggleFeature.InvokeAsync(feature.Id)" @onclick:stopPropagation="true"
+                                @onkeydown:stopPropagation="true">
                             <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" class="text-muted"
                                  viewBox="0 0 16 16" style="transition: transform 0.15s; transform: rotate(@(isExpanded ? "90" : "0")deg);">
                                 <path fill-rule="evenodd" d="M4.646 1.646a.5.5 0 0 1 .708 0l6 6a.5.5 0 0 1 0 .708l-6 6a.5.5 0 0 1-.708-.708L10.293 8 4.646 2.354a.5.5 0 0 1 0-.708"/>
                             </svg>
-                        </span>
+                        </button>
                     }
                     else
                     {
                         <span class="me-1" style="width: 20px; display: inline-block;"></span>
                     }
-                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="@GetDepthColor(depth)" class="me-2 flex-shrink-0" viewBox="0 0 16 16">
-                        <path d="M1 3.5A1.5 1.5 0 0 1 2.5 2h2.764c.958 0 1.76.56 2.311 1.184C7.985 3.648 8.48 4 9 4h4.5A1.5 1.5 0 0 1 15 5.5v7a1.5 1.5 0 0 1-1.5 1.5h-11A1.5 1.5 0 0 1 1 12.5z"/>
-                    </svg>
-                    <span class="small fw-medium text-truncate" title="@feature.Name">@feature.Name</span>
+                    <button type="button"
+                            class="btn btn-link text-reset text-decoration-none text-start p-0 d-flex align-items-center flex-grow-1 overflow-hidden"
+                            @onclick="() => OnOpenEditFeature.InvokeAsync(feature)"
+                            @onclick:stopPropagation="true"
+                            aria-label="Edit feature @feature.Name">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="@GetDepthColor(depth)" class="me-2 flex-shrink-0" viewBox="0 0 16 16">
+                            <path d="M1 3.5A1.5 1.5 0 0 1 2.5 2h2.764c.958 0 1.76.56 2.311 1.184C7.985 3.648 8.48 4 9 4h4.5A1.5 1.5 0 0 1 15 5.5v7a1.5 1.5 0 0 1-1.5 1.5h-11A1.5 1.5 0 0 1 1 12.5z"/>
+                        </svg>
+                        <span class="small fw-medium text-truncate" title="@feature.Name">@feature.Name</span>
+                    </button>
                     <span class="ms-auto badge bg-secondary rounded-pill" style="font-size: 0.65rem;">@doneCount/@totalCount</span>
-                    <button class="btn btn-link text-primary p-0 ms-1 d-flex align-items-center" style="line-height: 1;"
+                    <button type="button" class="btn btn-link text-primary p-0 ms-1 d-flex align-items-center gap-1" style="line-height: 1;"
                             @onclick="() => OnOpenAddFeature.InvokeAsync(feature.Id)"
                             @onclick:stopPropagation="true"
-                            title="Add item under @feature.Name"
-                            aria-label="Add item under @feature.Name"
+                            @onkeydown:stopPropagation="true"
+                            title="Add a feature or task under @feature.Name"
+                            aria-label="Add a feature or task under @feature.Name"
                             data-testid="outline-feature-@feature.Id-add-button">
-                        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="currentColor" viewBox="0 0 16 16">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="currentColor" viewBox="0 0 16 16" aria-hidden="true">
                             <path fill-rule="evenodd" d="M8 2a.5.5 0 0 1 .5.5v5h5a.5.5 0 0 1 0 1h-5v5a.5.5 0 0 1-1 0v-5h-5a.5.5 0 0 1 0-1h5v-5A.5.5 0 0 1 8 2"/>
                         </svg>
+                        <span class="small">Item</span>
                     </button>
                 </div>
                 @if (totalCount > 0)
@@ -136,20 +157,23 @@
                 var taskIsDone = task.Status == WorkStatus.Done;
 
                 <div class="card mb-1" style="border-left: 4px solid @GetDepthColor(depth + 1); @(taskIsDone ? "opacity: 0.6;" : "") cursor: pointer;"
-                     data-testid="outline-task-@task.Id" data-task-id="@task.Id" role="button" @onclick="() => OnOpenEditTask.InvokeAsync(task)">
+                     data-testid="outline-task-@task.Id" data-task-id="@task.Id"
+                     @onclick="() => OnOpenEditTask.InvokeAsync(task)">
                     <div class="card-body p-2">
                         <div class="d-flex align-items-center">
                             @if (taskHasSubtasks)
                             {
-                                <span class="me-1 flex-shrink-0 d-flex align-items-center justify-content-center"
-                                      style="width: 20px; height: 20px; cursor: pointer;"
-                                      role="button" aria-label="Toggle subtasks for @task.Name" data-testid="outline-task-@task.Id-toggle"
-                                      @onclick="() => OnToggleTask.InvokeAsync(task.Id)" @onclick:stopPropagation="true">
+                                <button type="button"
+                                        class="btn btn-link text-reset me-1 p-0 flex-shrink-0 d-flex align-items-center justify-content-center"
+                                        style="width: 20px; height: 20px;"
+                                        aria-label="Toggle subtasks for @task.Name" data-testid="outline-task-@task.Id-toggle"
+                                        @onclick="() => OnToggleTask.InvokeAsync(task.Id)" @onclick:stopPropagation="true"
+                                        @onkeydown:stopPropagation="true">
                                     <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" class="text-muted"
                                          viewBox="0 0 16 16" style="transition: transform 0.15s; transform: rotate(@(taskIsExpanded ? "90" : "0")deg);">
                                         <path fill-rule="evenodd" d="M4.646 1.646a.5.5 0 0 1 .708 0l6 6a.5.5 0 0 1 0 .708l-6 6a.5.5 0 0 1-.708-.708L10.293 8 4.646 2.354a.5.5 0 0 1 0-.708"/>
                                     </svg>
-                                </span>
+                                </button>
                             }
                             else
                             {
@@ -159,20 +183,27 @@
                                    checked="@taskIsDone"
                                    @onchange="() => OnToggleTaskDone.InvokeAsync(task)"
                                    @onclick:stopPropagation="true"
+                                   @onkeydown:stopPropagation="true"
                                    aria-label="Mark @task.Name as @(taskIsDone ? "not done" : "done")"
                                    data-testid="outline-task-@task.Id-done-checkbox" />
-                            <span class="small text-truncate @(taskIsDone ? "text-decoration-line-through text-muted" : "")"
-                                  title="@task.Name">@task.Name</span>
-                            <span class="ms-auto @GetPriorityBadgeClass(task.Priority)" style="font-size: 0.6rem;">@task.Priority</span>
-                            <button class="btn btn-link text-primary p-0 ms-1 d-flex align-items-center" style="line-height: 1;"
-                                    @onclick="() => OnOpenAddFeature.InvokeAsync(task.FeatureId)"
+                            <button type="button"
+                                    class="btn btn-link text-reset text-decoration-none text-start p-0 flex-grow-1 text-truncate small @(taskIsDone ? "text-decoration-line-through text-muted" : "")"
+                                    @onclick="() => OnOpenEditTask.InvokeAsync(task)"
                                     @onclick:stopPropagation="true"
-                                    title="Add item under @task.Name"
-                                    aria-label="Add item under @task.Name"
+                                    aria-label="Open task details for @task.Name"
+                                    title="@task.Name">@task.Name</button>
+                            <span class="ms-auto @GetPriorityBadgeClass(task.Priority)" style="font-size: 0.6rem;">@task.Priority</span>
+                            <button type="button" class="btn btn-link text-primary p-0 ms-1 d-flex align-items-center gap-1" style="line-height: 1;"
+                                    @onclick="() => OnOpenAddTaskSubtask.InvokeAsync(task)"
+                                    @onclick:stopPropagation="true"
+                                    @onkeydown:stopPropagation="true"
+                                    title="Add subtask under @task.Name"
+                                    aria-label="Add subtask under @task.Name"
                                     data-testid="outline-task-@task.Id-add-button">
-                                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="currentColor" viewBox="0 0 16 16">
+                                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="currentColor" viewBox="0 0 16 16" aria-hidden="true">
                                     <path fill-rule="evenodd" d="M8 2a.5.5 0 0 1 .5.5v5h5a.5.5 0 0 1 0 1h-5v5a.5.5 0 0 1-1 0v-5h-5a.5.5 0 0 1 0-1h5v-5A.5.5 0 0 1 8 2"/>
                                 </svg>
+                                <span class="small">Item</span>
                             </button>
                         </div>
                     </div>
@@ -202,7 +233,7 @@
         var hasChildren = children.Count > 0;
 
         <div class="card mb-1" style="border-left: 4px solid @GetDepthColor(depth); @(subtask.Completed ? "opacity: 0.6;" : "") cursor: pointer;"
-             role="button" data-testid="outline-subtask-@subtask.Id" @onclick="() => OnOpenEditTask.InvokeAsync(parentTask)">
+             data-testid="outline-subtask-@subtask.Id" @onclick="() => OnOpenEditTask.InvokeAsync(parentTask)">
             <div class="card-body p-2">
                 <div class="d-flex align-items-center">
                     @if (hasChildren)
@@ -222,19 +253,26 @@
                            checked="@subtask.Completed"
                            @onchange="() => OnToggleOutlineSubtask.InvokeAsync(subtask)"
                            @onclick:stopPropagation="true"
+                           @onkeydown:stopPropagation="true"
                            aria-label="Mark @subtask.Text as @(subtask.Completed ? "not done" : "done")"
                            data-testid="outline-subtask-@subtask.Id-done-checkbox" />
-                    <span class="small text-truncate @(subtask.Completed ? "text-decoration-line-through text-muted" : "")"
-                          title="@subtask.Text">@subtask.Text</span>
-                    <button class="btn btn-link text-primary p-0 ms-auto d-flex align-items-center" style="line-height: 1;"
-                            @onclick="() => OnOpenAddFeature.InvokeAsync(parentTask.FeatureId)"
+                    <button type="button"
+                            class="btn btn-link text-reset text-decoration-none text-start p-0 flex-grow-1 text-truncate small @(subtask.Completed ? "text-decoration-line-through text-muted" : "")"
+                            @onclick="() => OnOpenEditTask.InvokeAsync(parentTask)"
                             @onclick:stopPropagation="true"
-                            title="Add item under @parentTask.Name"
-                            aria-label="Add item under @parentTask.Name"
+                            aria-label="Open parent task details for @subtask.Text"
+                            title="@subtask.Text">@subtask.Text</button>
+                    <button type="button" class="btn btn-link text-primary p-0 ms-auto d-flex align-items-center gap-1" style="line-height: 1;"
+                            @onclick="() => OnOpenAddSubtaskChild.InvokeAsync(subtask)"
+                            @onclick:stopPropagation="true"
+                            @onkeydown:stopPropagation="true"
+                            title="Add sub-item under @subtask.Text"
+                            aria-label="Add sub-item under @subtask.Text"
                             data-testid="outline-subtask-@subtask.Id-add-button">
-                        <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" fill="currentColor" viewBox="0 0 16 16">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" fill="currentColor" viewBox="0 0 16 16" aria-hidden="true">
                             <path fill-rule="evenodd" d="M8 2a.5.5 0 0 1 .5.5v5h5a.5.5 0 0 1 0 1h-5v5a.5.5 0 0 1-1 0v-5h-5a.5.5 0 0 1 0-1h5v-5A.5.5 0 0 1 8 2"/>
                         </svg>
+                        <span class="small">Item</span>
                     </button>
                 </div>
             </div>

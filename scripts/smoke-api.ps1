@@ -1,6 +1,6 @@
 param(
     [string]$ProjectPath = "src/KanbanFlow/KanbanFlow.csproj",
-    [string]$BaseUrl = "http://127.0.0.1:$(Get-Random -Minimum 5200 -Maximum 5999)",
+    [string]$BaseUrl = "http://127.0.0.1:5124",
     [int]$StartupTimeoutSeconds = 30
 )
 
@@ -23,11 +23,28 @@ function Invoke-SmokeJson([string]$Method, [string]$Path, $Body) {
 
 function Invoke-SmokeDelete([string]$Path) {
     Write-Host "DELETE $Path"
-    Invoke-RestMethod -Method Delete -Uri "$BaseUrl$Path" -TimeoutSec 5 | Out-Null
+    Invoke-RestMethod -Method Delete -Uri "$BaseUrl$Path" -TimeoutSec 5
 }
 
 function Assert-Truthy($Value, [string]$Message) {
     if (-not $Value) { throw $Message }
+}
+
+function New-FreeLoopbackBaseUrl {
+    $listener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, 0)
+    try {
+        $listener.Start()
+        $port = $listener.LocalEndpoint.Port
+    }
+    finally {
+        $listener.Stop()
+    }
+
+    return "http://127.0.0.1:$port"
+}
+
+if ($BaseUrl -eq "http://127.0.0.1:5124") {
+    $BaseUrl = New-FreeLoopbackBaseUrl
 }
 
 $repoRoot = Resolve-RepoRoot
@@ -38,12 +55,16 @@ New-Item -ItemType Directory -Path $runDir | Out-Null
 $appProcess = $null
 $stdoutPath = Join-Path $runDir "kanbanflow.out.log"
 $stderrPath = Join-Path $runDir "kanbanflow.err.log"
+$dbPath = Join-Path $runDir "kanbanflow.db"
+$previousDbPath = $env:KANBANFLOW_DB_PATH
 
 try {
     Write-Host "Building KanbanFlow..."
     dotnet build $resolvedProjectPath --nologo
 
     Write-Host "Starting KanbanFlow with a fresh SQLite DB in $runDir..."
+    Write-Host "Using API smoke base URL $BaseUrl"
+    $env:KANBANFLOW_DB_PATH = $dbPath
     $appProcess = Start-Process dotnet `
         -ArgumentList @("run", "--no-build", "--no-launch-profile", "--project", $resolvedProjectPath, "--urls", $BaseUrl) `
         -WorkingDirectory $runDir `
@@ -100,7 +121,12 @@ try {
     $nextTasks = Invoke-SmokeGet "/api/projects/$projectId/next-tasks"
     Assert-Truthy ($null -ne $nextTasks.recommendations) "GET /api/projects/$projectId/next-tasks is missing recommendations."
 
-    $task = $context.tasks | Select-Object -First 1
+    $tasks = Invoke-SmokeGet "/api/projects/$projectId/tasks"
+    Assert-Truthy ($tasks.Count -gt 0) "GET /api/projects/$projectId/tasks returned no seeded tasks."
+    $taskId = $tasks[0].id
+
+    $task = $context.tasks | Where-Object { $_.id -eq $taskId } | Select-Object -First 1
+    if (-not $task) { $task = $context.tasks | Select-Object -First 1 }
     Assert-Truthy $task.id "Project context did not include a task to test acceptance criteria."
     $otherTask = $context.tasks | Where-Object { $_.id -ne $task.id } | Select-Object -First 1
     Assert-Truthy $otherTask.id "Project context did not include a second task for scoped acceptance criteria check."
@@ -130,13 +156,41 @@ try {
     $contextTask = $contextWithCriteria.tasks | Where-Object { $_.id -eq $task.id } | Select-Object -First 1
     Assert-Truthy (@($contextTask.acceptanceCriteria | Where-Object { $_.id -eq $createdCriterion.id }).Count -eq 1) "GET /api/projects/$projectId/context did not include acceptance criteria."
 
-    Invoke-SmokeDelete "/api/acceptance-criteria/$($createdCriterion.id)"
+    Invoke-SmokeDelete "/api/acceptance-criteria/$($createdCriterion.id)" | Out-Null
     $criteriaAfterDelete = Invoke-SmokeGet "/api/tasks/$($task.id)/acceptance-criteria"
     Assert-Truthy (@($criteriaAfterDelete | Where-Object { $_.id -eq $createdCriterion.id }).Count -eq 0) "DELETE /api/acceptance-criteria/$($createdCriterion.id) did not remove the criterion."
+
+    Invoke-SmokeJson "Patch" "/api/tasks/$taskId/status" @{ status = "InProgress" } | Out-Null
+    Invoke-SmokeJson "Post" "/api/tasks/$taskId/claim" @{ actor = "smoke-agent" } | Out-Null
+    Invoke-SmokeJson "Post" "/api/tasks/$taskId/comments" @{ text = "Smoke test activity comment"; author = "smoke-agent" } | Out-Null
+
+    $taskActivity = Invoke-SmokeGet "/api/tasks/$taskId/activity"
+    Assert-Truthy ($taskActivity.Count -ge 3) "GET /api/tasks/$taskId/activity did not return expected workflow events."
+    $eventTypes = @($taskActivity | ForEach-Object { $_.eventType })
+    foreach ($eventType in @("TaskStatusChanged", "TaskClaimed", "TaskCommentAdded")) {
+        Assert-Truthy ($eventTypes -contains $eventType) "Task activity is missing $eventType."
+    }
+
+    Invoke-SmokeDelete "/api/tasks/$taskId" | Out-Null
+    $deletedTaskActivity = Invoke-SmokeGet "/api/tasks/$taskId/activity"
+    $deletedEventTypes = @($deletedTaskActivity | ForEach-Object { $_.eventType })
+    Assert-Truthy ($deletedEventTypes -contains "TaskDeleted") "GET /api/tasks/$taskId/activity did not return deleted task history."
+
+    $projectActivity = Invoke-SmokeGet "/api/projects/$projectId/activity"
+    Assert-Truthy ($projectActivity.Count -ge $deletedTaskActivity.Count) "GET /api/projects/$projectId/activity did not include task events."
+
+    Invoke-SmokeDelete "/api/projects/$projectId" | Out-Null
 
     Write-Host "API smoke tests passed."
 }
 finally {
+    if ($null -eq $previousDbPath) {
+        Remove-Item Env:KANBANFLOW_DB_PATH -ErrorAction SilentlyContinue
+    }
+    else {
+        $env:KANBANFLOW_DB_PATH = $previousDbPath
+    }
+
     if ($appProcess -and -not $appProcess.HasExited) {
         Stop-Process -Id $appProcess.Id -Force
         $appProcess.WaitForExit(5000) | Out-Null
@@ -144,12 +198,15 @@ finally {
     }
 
     if (Test-Path $runDir) {
-        try {
-            Remove-Item $runDir -Recurse -Force
-        }
-        catch {
-            Start-Sleep -Milliseconds 500
-            Remove-Item $runDir -Recurse -Force
+        for ($i = 0; $i -lt 5; $i++) {
+            try {
+                Remove-Item $runDir -Recurse -Force -ErrorAction Stop
+                break
+            }
+            catch {
+                if ($i -eq 4) { throw }
+                Start-Sleep -Milliseconds 500
+            }
         }
     }
 }

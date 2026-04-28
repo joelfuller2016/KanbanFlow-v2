@@ -1,6 +1,52 @@
 window.KanbanFlow = {
     _boardSortables: [],
     _navSortables: [],
+    _outlineMediaQuery: null,
+    _outlineMediaQueryHandler: null,
+    _outlineObserver: null,
+
+    updateProjectOutlineAccessibility: function () {
+        var shell = document.querySelector('.project-shell');
+        var outline = document.getElementById('project-outline');
+        if (!shell || !outline) {
+            return;
+        }
+
+        var isMobile = window.matchMedia('(max-width: 991.98px)').matches;
+        var isOpen = shell.classList.contains('outline-open');
+        var shouldHideFromA11y = isMobile && !isOpen;
+
+        if (shouldHideFromA11y) {
+            outline.setAttribute('aria-hidden', 'true');
+            outline.setAttribute('inert', '');
+        } else {
+            outline.removeAttribute('aria-hidden');
+            outline.removeAttribute('inert');
+        }
+    },
+
+    initProjectOutlineAccessibility: function () {
+        this.updateProjectOutlineAccessibility();
+
+        if (!this._outlineMediaQuery) {
+            this._outlineMediaQuery = window.matchMedia('(max-width: 991.98px)');
+            this._outlineMediaQueryHandler = this.updateProjectOutlineAccessibility.bind(this);
+
+            if (this._outlineMediaQuery.addEventListener) {
+                this._outlineMediaQuery.addEventListener('change', this._outlineMediaQueryHandler);
+            } else if (this._outlineMediaQuery.addListener) {
+                this._outlineMediaQuery.addListener(this._outlineMediaQueryHandler);
+            }
+        }
+
+        if (!this._outlineObserver) {
+            var shell = document.querySelector('.project-shell');
+            if (shell) {
+                this._outlineObserver = new MutationObserver(this.updateProjectOutlineAccessibility.bind(this));
+                this._outlineObserver.observe(shell, { attributes: true, attributeFilter: ['class'] });
+            }
+        }
+    },
 
     initBoardDragDrop: function (dotNetRef) {
         // Destroy any existing board sortables first
@@ -55,5 +101,23 @@ window.KanbanFlow = {
         this._navSortables.forEach(function (s) { s.destroy(); });
         this._boardSortables = [];
         this._navSortables = [];
+    },
+
+    destroyProjectOutlineAccessibility: function () {
+        if (this._outlineObserver) {
+            this._outlineObserver.disconnect();
+            this._outlineObserver = null;
+        }
+
+        if (this._outlineMediaQuery && this._outlineMediaQueryHandler) {
+            if (this._outlineMediaQuery.removeEventListener) {
+                this._outlineMediaQuery.removeEventListener('change', this._outlineMediaQueryHandler);
+            } else if (this._outlineMediaQuery.removeListener) {
+                this._outlineMediaQuery.removeListener(this._outlineMediaQueryHandler);
+            }
+        }
+
+        this._outlineMediaQuery = null;
+        this._outlineMediaQueryHandler = null;
     }
 };
