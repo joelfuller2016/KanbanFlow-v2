@@ -1,4 +1,4 @@
-<div class="card mb-2 board-card" data-testid="board-card-@Task.Id" data-task-id="@Task.Id"
+<div class="card mb-2 board-card @(HasIncompleteBlockers ? "board-card-blocked" : null)" data-testid="board-card-@Task.Id" data-task-id="@Task.Id"
      @onclick="() => OnOpenTaskDetail.InvokeAsync(Task)"
      style="border-left: 3px solid @GetPriorityBorderColor(Task.Priority); @(IsDone ? "opacity: 0.6;" : "")">
     <div class="card-body p-2">
@@ -10,12 +10,23 @@
                    @onkeydown:stopPropagation="true"
                    aria-label="Mark @Task.Name as @(IsDone ? "not done" : "done")"
                    data-testid="board-card-@Task.Id-done-checkbox" />
-            <button type="button"
-                    class="btn btn-link fw-medium small text-start p-0 text-decoration-none text-reset flex-grow-1 text-truncate @(IsDone ? "text-decoration-line-through text-muted" : "")"
-                    @onclick="() => OnOpenTaskDetail.InvokeAsync(Task)"
-                    @onclick:stopPropagation="true"
-                    aria-label="Open task details for @Task.Name"
-                    data-testid="board-card-@Task.Id-title">@Task.Name</button>
+            <div class="d-flex align-items-center gap-1 flex-grow-1 overflow-hidden">
+                <button type="button"
+                        class="btn btn-link fw-medium small text-start p-0 text-decoration-none text-reset flex-grow-1 text-truncate @(IsDone ? "text-decoration-line-through text-muted" : "")"
+                        @onclick="() => OnOpenTaskDetail.InvokeAsync(Task)"
+                        @onclick:stopPropagation="true"
+                        aria-label="Open task details for @Task.Name"
+                        data-testid="board-card-@Task.Id-title">@Task.Name</button>
+                @if (HasIncompleteBlockers)
+                {
+                    <span class="badge text-bg-danger board-card-blocked-badge flex-shrink-0"
+                          title="Blocked by @IncompleteBlockers.Count unfinished task@(IncompleteBlockers.Count == 1 ? "" : "s")"
+                          aria-label="Blocked by @IncompleteBlockers.Count unfinished task@(IncompleteBlockers.Count == 1 ? "" : "s")"
+                          data-testid="board-card-@Task.Id-blocked-badge">
+                        Blocked
+                    </span>
+                }
+            </div>
         </div>
         <div class="d-flex justify-content-between align-items-center mt-1 ps-4">
             <span class="@GetPriorityBadgeClass(Task.Priority)">@Task.Priority</span>
@@ -30,6 +41,10 @@
     [Parameter] public EventCallback<TaskItem> OnOpenTaskDetail { get; set; }
 
     private bool IsDone => Task.Status == WorkStatus.Done;
+    private IReadOnlyList<TaskDependency> IncompleteBlockers => Task.Dependencies
+        .Where(d => d.DependsOnTaskItem is not null && d.DependsOnTaskItem.Status != WorkStatus.Done)
+        .ToList();
+    private bool HasIncompleteBlockers => IncompleteBlockers.Count > 0;
 
     private static string GetPriorityBadgeClass(TaskPriority priority) => priority switch
     {

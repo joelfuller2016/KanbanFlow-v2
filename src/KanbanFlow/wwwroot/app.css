@@ -109,6 +109,15 @@ h1:focus {
     transform: translateY(-1px);
 }
 
+.board-card-blocked {
+    background: #fff7f7;
+    box-shadow: 0 .125rem .25rem rgba(220, 53, 69, .18);
+}
+
+.board-card-blocked-badge {
+    font-size: .65rem;
+}
+
 /* ── Mini-card hover effect (left nav) ── */
 .mini-card {
     transition: box-shadow 0.15s ease-in-out, background-color 0.15s ease-in-out;
@@ -143,6 +152,11 @@ h1:focus {
 .task-comment-system {
     border-left: 0.25rem solid #6c757d !important;
     background: rgba(108, 117, 125, .06);
+}
+
+.task-blocker-incomplete {
+    border-left: 0.25rem solid #dc3545 !important;
+    background: rgba(220, 53, 69, .06);
 }
 
 /* -- Responsive project workspace -- */
