@@ -50,6 +50,8 @@
     [Parameter] public EventCallback OnOpenAddProject { get; set; }
     [Parameter] public EventCallback<Feature> OnOpenEditFeature { get; set; }
     [Parameter] public EventCallback<int> OnOpenAddFeature { get; set; }
+    [Parameter] public EventCallback<TaskItem> OnOpenAddTaskSubtask { get; set; }
+    [Parameter] public EventCallback<Subtask> OnOpenAddSubtaskChild { get; set; }
     [Parameter] public EventCallback<TaskItem> OnOpenEditTask { get; set; }
     [Parameter] public EventCallback<int> OnToggleFeature { get; set; }
     [Parameter] public EventCallback<int> OnToggleTask { get; set; }
@@ -165,10 +167,10 @@
                                   title="@task.Name">@task.Name</span>
                             <span class="ms-auto @GetPriorityBadgeClass(task.Priority)" style="font-size: 0.6rem;">@task.Priority</span>
                             <button class="btn btn-link text-primary p-0 ms-1 d-flex align-items-center" style="line-height: 1;"
-                                    @onclick="() => OnOpenAddFeature.InvokeAsync(task.FeatureId)"
+                                    @onclick="() => OnOpenAddTaskSubtask.InvokeAsync(task)"
                                     @onclick:stopPropagation="true"
-                                    title="Add item under @task.Name"
-                                    aria-label="Add item under @task.Name"
+                                    title="Add subtask under @task.Name"
+                                    aria-label="Add subtask under @task.Name"
                                     data-testid="outline-task-@task.Id-add-button">
                                 <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="currentColor" viewBox="0 0 16 16">
                                     <path fill-rule="evenodd" d="M8 2a.5.5 0 0 1 .5.5v5h5a.5.5 0 0 1 0 1h-5v5a.5.5 0 0 1-1 0v-5h-5a.5.5 0 0 1 0-1h5v-5A.5.5 0 0 1 8 2"/>
@@ -227,10 +229,10 @@
                     <span class="small text-truncate @(subtask.Completed ? "text-decoration-line-through text-muted" : "")"
                           title="@subtask.Text">@subtask.Text</span>
                     <button class="btn btn-link text-primary p-0 ms-auto d-flex align-items-center" style="line-height: 1;"
-                            @onclick="() => OnOpenAddFeature.InvokeAsync(parentTask.FeatureId)"
+                            @onclick="() => OnOpenAddSubtaskChild.InvokeAsync(subtask)"
                             @onclick:stopPropagation="true"
-                            title="Add item under @parentTask.Name"
-                            aria-label="Add item under @parentTask.Name"
+                            title="Add sub-item under @subtask.Text"
+                            aria-label="Add sub-item under @subtask.Text"
                             data-testid="outline-subtask-@subtask.Id-add-button">
                         <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" fill="currentColor" viewBox="0 0 16 16">
                             <path fill-rule="evenodd" d="M8 2a.5.5 0 0 1 .5.5v5h5a.5.5 0 0 1 0 1h-5v5a.5.5 0 0 1-1 0v-5h-5a.5.5 0 0 1 0-1h5v-5A.5.5 0 0 1 8 2"/>
