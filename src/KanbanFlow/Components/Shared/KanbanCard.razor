@@ -1,4 +1,4 @@
-<div class="card mb-2 board-card @(HasIncompleteBlockers ? "board-card-blocked" : null)" data-testid="board-card-@Task.Id" data-task-id="@Task.Id"
+<div class="card mb-2 board-card" data-testid="board-card-@Task.Id" data-task-id="@Task.Id"
      @onclick="() => OnOpenTaskDetail.InvokeAsync(Task)"
      style="border-left: 3px solid @GetPriorityBorderColor(Task.Priority); @(IsDone ? "opacity: 0.6;" : "")">
     <div class="card-body p-2">
@@ -16,12 +16,6 @@
                     @onclick:stopPropagation="true"
                     aria-label="Open task details for @Task.Name"
                     data-testid="board-card-@Task.Id-title">@Task.Name</button>
-            @if (HasIncompleteBlockers)
-            {
-                <span class="badge text-bg-danger ms-2 flex-shrink-0" title="Blocked by @IncompleteBlockerCount incomplete task(s)" aria-label="Blocked by @IncompleteBlockerCount incomplete task(s)" data-testid="board-card-@Task.Id-blocked-badge">
-                    ⚠ Blocked
-                </span>
-            }
         </div>
         <div class="d-flex justify-content-between align-items-center mt-1 ps-4">
             <span class="@GetPriorityBadgeClass(Task.Priority)">@Task.Priority</span>
@@ -36,8 +30,6 @@
     [Parameter] public EventCallback<TaskItem> OnOpenTaskDetail { get; set; }
 
     private bool IsDone => Task.Status == WorkStatus.Done;
-    private int IncompleteBlockerCount => Task.Dependencies.Count(d => d.DependsOnTaskItem.Status != WorkStatus.Done);
-    private bool HasIncompleteBlockers => IncompleteBlockerCount > 0;
 
     private static string GetPriorityBadgeClass(TaskPriority priority) => priority switch
     {

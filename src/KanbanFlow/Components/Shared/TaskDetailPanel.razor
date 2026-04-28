@@ -71,40 +71,6 @@
                 </select>
             </div>
 
-            @* Dependencies / blockers *@
-            <section class="mb-3" data-testid="task-detail-blockers-section" aria-labelledby="task-detail-blockers-heading">
-                <div class="d-flex align-items-center mb-2">
-                    <h6 id="task-detail-blockers-heading" class="form-label small text-muted mb-0">Blocked by</h6>
-                    @if (Blockers.Count > 0)
-                    {
-                        <span class="ms-2 badge @(HasIncompleteBlockers ? "text-bg-danger" : "text-bg-success") small" data-testid="task-detail-blockers-count">
-                            @IncompleteBlockerCount/@Blockers.Count incomplete
-                        </span>
-                    }
-                </div>
-
-                @if (Blockers.Count == 0)
-                {
-                    <div class="text-muted small border rounded p-2" data-testid="task-detail-blockers-empty-state">
-                        No blocking tasks.
-                    </div>
-                }
-                else
-                {
-                    <div class="list-group list-group-flush border rounded" data-testid="task-detail-blockers-list">
-                        @foreach (var blocker in Blockers)
-                        {
-                            <div class="list-group-item d-flex align-items-center gap-2 py-2 @(blocker.Status != WorkStatus.Done ? "task-blocker-incomplete" : null)" data-testid="task-detail-blocker-@blocker.Id">
-                                <span class="@(blocker.Status == WorkStatus.Done ? "badge text-bg-success" : "badge text-bg-danger")" data-testid="task-detail-blocker-@blocker.Id-status">
-                                    @GetStatusDisplayName(blocker.Status)
-                                </span>
-                                <span class="small text-break" data-testid="task-detail-blocker-@blocker.Id-name">@blocker.Name</span>
-                            </div>
-                        }
-                    </div>
-                }
-            </section>
-
             @* Priority *@
             <div class="mb-3">
                 <label class="form-label small text-muted mb-1">Priority</label>
@@ -136,93 +102,6 @@
                           @onblur="SaveDescriptionAsync"
                           @onfocus="StartEditingDescription"></textarea>
             </div>
-
-            @* Acceptance criteria *@
-            <section class="mb-3 pt-3 border-top" data-testid="task-acceptance-criteria-section" aria-labelledby="task-acceptance-criteria-heading">
-                <div class="d-flex align-items-center mb-2">
-                    <h6 id="task-acceptance-criteria-heading" class="form-label small text-muted mb-0">Acceptance criteria</h6>
-                    @if (!criteriaLoading)
-                    {
-                        <span class="ms-2 badge bg-secondary small" data-testid="task-acceptance-criteria-count">@completedCriteriaCount/@acceptanceCriteria.Count</span>
-                    }
-                </div>
-
-                @if (criteriaLoading)
-                {
-                    <div class="d-flex align-items-center small text-muted" data-testid="task-acceptance-criteria-loading">
-                        <div class="spinner-border spinner-border-sm me-2" role="status" aria-hidden="true"></div>
-                        Loading acceptance criteria...
-                    </div>
-                }
-                else if (criteriaError is not null)
-                {
-                    <div class="alert alert-danger py-2 small" data-testid="task-acceptance-criteria-error">@criteriaError</div>
-                }
-                else
-                {
-                    @if (acceptanceCriteria.Count > 0)
-                    {
-                        <div class="progress mb-2" style="height: 4px;">
-                            <div class="progress-bar bg-success" role="progressbar"
-                                 style="width: @(acceptanceCriteria.Count > 0 ? (int)(100.0 * completedCriteriaCount / acceptanceCriteria.Count) : 0)%">
-                            </div>
-                        </div>
-                    }
-
-                    @if (acceptanceCriteria.Count == 0)
-                    {
-                        <div class="text-muted small border rounded p-2 mb-2" data-testid="task-acceptance-criteria-empty-state">
-                            No acceptance criteria yet. Add one to define what must be true before this task is done.
-                        </div>
-                    }
-                    else
-                    {
-                        <div class="list-group list-group-flush mb-2" data-testid="task-acceptance-criteria-list">
-                            @foreach (var criterion in acceptanceCriteria.OrderBy(c => c.SortOrder).ThenBy(c => c.Id))
-                            {
-                                <div class="list-group-item px-0 py-1 border-0" data-testid="@($"task-acceptance-criterion-{criterion.Id}")">
-                                    <div class="d-flex align-items-center gap-2">
-                                        <div class="form-check flex-grow-1 mb-0">
-                                            <input class="form-check-input" type="checkbox"
-                                                   checked="@criterion.Completed"
-                                                   aria-label="Toggle acceptance criterion @criterion.Text"
-                                                   data-testid="@($"task-acceptance-criterion-toggle-{criterion.Id}")"
-                                                   @onchange="() => ToggleCriterionAsync(criterion)" />
-                                            <label class="form-check-label small @(criterion.Completed ? "text-decoration-line-through text-muted" : null)">
-                                                @criterion.Text
-                                            </label>
-                                        </div>
-                                        <button class="btn btn-sm text-danger p-0" title="Delete acceptance criterion"
-                                                aria-label="Delete acceptance criterion @criterion.Text"
-                                                data-testid="@($"task-acceptance-criterion-delete-{criterion.Id}")"
-                                                @onclick="() => DeleteCriterionAsync(criterion)">
-                                            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="currentColor" viewBox="0 0 16 16" aria-hidden="true">
-                                                <path d="M4.646 4.646a.5.5 0 0 1 .708 0L8 7.293l2.646-2.647a.5.5 0 0 1 .708.708L8.707 8l2.647 2.646a.5.5 0 0 1-.708.708L8 8.707l-2.646 2.647a.5.5 0 0 1-.708-.708L7.293 8 4.646 5.354a.5.5 0 0 1 0-.708"/>
-                                            </svg>
-                                        </button>
-                                    </div>
-                                </div>
-                            }
-                        </div>
-                    }
-                }
-
-                <div class="input-group input-group-sm">
-                    <input type="text" class="form-control" placeholder="Add an acceptance criterion..."
-                           data-testid="task-acceptance-criterion-input"
-                           @bind="newCriterionText" @bind:event="oninput"
-                           @onkeydown="HandleCriterionKeyDown" />
-                    <button class="btn btn-outline-secondary d-flex align-items-center gap-1" @onclick="AddCriterionAsync"
-                            title="Add acceptance criterion to @Task.Name"
-                            aria-label="Add acceptance criterion to @Task.Name" data-testid="task-acceptance-criterion-add-button"
-                            disabled="@(addingCriterion || string.IsNullOrWhiteSpace(newCriterionText))">
-                        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="currentColor" viewBox="0 0 16 16" aria-hidden="true">
-                            <path fill-rule="evenodd" d="M8 2a.5.5 0 0 1 .5.5v5h5a.5.5 0 0 1 0 1h-5v5a.5.5 0 0 1-1 0v-5h-5a.5.5 0 0 1 0-1h5v-5A.5.5 0 0 1 8 2"/>
-                        </svg>
-                        <span>@(addingCriterion ? "Adding..." : "Add criterion")</span>
-                    </button>
-                </div>
-            </section>
 
             @* Subtasks (recursive) *@
             <div class="mb-3">
@@ -412,17 +291,6 @@
     // Subtask input
     private string? newSubtaskText;
 
-    // Acceptance criteria
-    private int? loadedCriteriaTaskId;
-    private long criteriaLoadVersion;
-    private long criteriaSaveVersion;
-    private List<AcceptanceCriterion> acceptanceCriteria = [];
-    private bool criteriaLoading;
-    private bool addingCriterion;
-    private string? criteriaError;
-    private string? newCriterionText;
-    private int completedCriteriaCount => acceptanceCriteria.Count(c => c.Completed);
-
     // Add child subtask
     private int? addingChildSubtaskToId;
     private string? newChildSubtaskText;
@@ -441,17 +309,6 @@
     private string? newCommentText;
     private CommentType newCommentType = CommentType.Note;
 
-    private List<TaskItem> Blockers => Task?.Dependencies
-        .Where(d => d.DependsOnTaskItem is not null)
-        .Select(d => d.DependsOnTaskItem)
-        .OrderBy(t => t.Status == WorkStatus.Done)
-        .ThenBy(t => t.SortOrder)
-        .ThenBy(t => t.Name)
-        .ToList() ?? [];
-
-    private int IncompleteBlockerCount => Blockers.Count(t => t.Status != WorkStatus.Done);
-    private bool HasIncompleteBlockers => IncompleteBlockerCount > 0;
-
     protected override async Task OnParametersSetAsync()
     {
         // Reset editing state when task changes
@@ -463,23 +320,6 @@
         newChildSubtaskText = null;
 
         var taskId = IsOpen ? Task?.Id : null;
-        if (taskId != loadedCriteriaTaskId)
-        {
-            loadedCriteriaTaskId = taskId;
-            criteriaSaveVersion++;
-            var loadVersion = ++criteriaLoadVersion;
-            addingCriterion = false;
-            criteriaLoading = false;
-            newCriterionText = null;
-            acceptanceCriteria = [];
-            criteriaError = null;
-
-            if (taskId is int id)
-            {
-                await LoadCriteriaAsync(id, loadVersion);
-            }
-        }
-
         if (taskId != loadedCommentsTaskId)
         {
             loadedCommentsTaskId = taskId;
@@ -673,162 +513,6 @@
 
         await OnTaskUpdated.InvokeAsync();
     }
-
-    // ── Acceptance criteria ──
-
-    private async Task LoadCriteriaAsync(int taskId, long loadVersion)
-    {
-        criteriaLoading = true;
-        criteriaError = null;
-
-        try
-        {
-            using var db = await DbFactory.CreateDbContextAsync();
-            var loadedCriteria = await db.AcceptanceCriteria
-                .Where(c => c.TaskItemId == taskId)
-                .AsNoTracking()
-                .OrderBy(c => c.SortOrder)
-                .ThenBy(c => c.Id)
-                .ToListAsync();
-
-            if (IsCurrentCriteriaLoad(taskId, loadVersion))
-            {
-                acceptanceCriteria = loadedCriteria;
-                if (Task?.Id == taskId)
-                {
-                    Task.AcceptanceCriteria = loadedCriteria.ToList();
-                }
-            }
-        }
-        catch
-        {
-            if (IsCurrentCriteriaLoad(taskId, loadVersion))
-            {
-                criteriaError = "We couldn't load acceptance criteria right now. Please try reopening the task.";
-                acceptanceCriteria = [];
-            }
-        }
-        finally
-        {
-            if (IsCurrentCriteriaLoad(taskId, loadVersion))
-            {
-                criteriaLoading = false;
-            }
-        }
-    }
-
-    private async Task HandleCriterionKeyDown(KeyboardEventArgs e)
-    {
-        if (e.Key == "Enter" && !string.IsNullOrWhiteSpace(newCriterionText))
-        {
-            await AddCriterionAsync();
-        }
-    }
-
-    private async Task AddCriterionAsync()
-    {
-        if (Task is null || string.IsNullOrWhiteSpace(newCriterionText)) return;
-
-        var taskId = Task.Id;
-        var saveVersion = ++criteriaSaveVersion;
-        addingCriterion = true;
-        criteriaError = null;
-
-        try
-        {
-            var criterion = new AcceptanceCriterion
-            {
-                TaskItemId = taskId,
-                Text = newCriterionText.Trim(),
-                SortOrder = acceptanceCriteria.Count == 0 ? 0 : acceptanceCriteria.Max(c => c.SortOrder) + 1,
-                CreatedAt = DateTime.UtcNow,
-                UpdatedAt = DateTime.UtcNow
-            };
-
-            using var db = await DbFactory.CreateDbContextAsync();
-            db.AcceptanceCriteria.Add(criterion);
-            await db.SaveChangesAsync();
-
-            if (IsCurrentCriteriaSave(taskId, saveVersion))
-            {
-                acceptanceCriteria.Add(criterion);
-                acceptanceCriteria = acceptanceCriteria.OrderBy(c => c.SortOrder).ThenBy(c => c.Id).ToList();
-                Task.AcceptanceCriteria = acceptanceCriteria.ToList();
-                newCriterionText = null;
-            }
-
-            await OnTaskUpdated.InvokeAsync();
-        }
-        catch
-        {
-            if (IsCurrentCriteriaSave(taskId, saveVersion))
-            {
-                criteriaError = "Unable to add acceptance criterion.";
-            }
-        }
-        finally
-        {
-            if (IsCurrentCriteriaSave(taskId, saveVersion))
-            {
-                addingCriterion = false;
-            }
-        }
-    }
-
-    private async Task ToggleCriterionAsync(AcceptanceCriterion criterion)
-    {
-        if (Task is null) return;
-
-        criterion.Completed = !criterion.Completed;
-        criterion.UpdatedAt = DateTime.UtcNow;
-
-        try
-        {
-            using var db = await DbFactory.CreateDbContextAsync();
-            db.AcceptanceCriteria.Attach(criterion);
-            db.Entry(criterion).Property(c => c.Completed).IsModified = true;
-            db.Entry(criterion).Property(c => c.UpdatedAt).IsModified = true;
-            await db.SaveChangesAsync();
-
-            Task.AcceptanceCriteria = acceptanceCriteria.ToList();
-            await OnTaskUpdated.InvokeAsync();
-        }
-        catch
-        {
-            criterion.Completed = !criterion.Completed;
-            criteriaError = "Unable to update acceptance criterion.";
-        }
-    }
-
-    private async Task DeleteCriterionAsync(AcceptanceCriterion criterion)
-    {
-        if (Task is null) return;
-
-        var previousCriteria = acceptanceCriteria.ToList();
-        acceptanceCriteria.Remove(criterion);
-        Task.AcceptanceCriteria = acceptanceCriteria.ToList();
-
-        try
-        {
-            using var db = await DbFactory.CreateDbContextAsync();
-            db.AcceptanceCriteria.Remove(db.AcceptanceCriteria.Attach(criterion).Entity);
-            await db.SaveChangesAsync();
-
-            await OnTaskUpdated.InvokeAsync();
-        }
-        catch
-        {
-            acceptanceCriteria = previousCriteria;
-            Task.AcceptanceCriteria = previousCriteria.ToList();
-            criteriaError = "Unable to delete acceptance criterion.";
-        }
-    }
-
-    private bool IsCurrentCriteriaLoad(int taskId, long loadVersion) =>
-        loadedCriteriaTaskId == taskId && criteriaLoadVersion == loadVersion;
-
-    private bool IsCurrentCriteriaSave(int taskId, long saveVersion) =>
-        Task?.Id == taskId && loadedCriteriaTaskId == taskId && criteriaSaveVersion == saveVersion;
 
     // ── Subtask recursive rendering ──
 

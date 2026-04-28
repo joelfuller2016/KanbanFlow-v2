@@ -227,7 +227,7 @@ else
                                             }
                                             @if (requirement.Feature is not null && requirement.TaskItem is not null)
                                             {
-                                                <span class="mx-1">ï¿½</span>
+                                                <span class="mx-1">•</span>
                                             }
                                             @if (requirement.TaskItem is not null)
                                             {
@@ -501,9 +501,6 @@ else
                 .Include(p => p.Features)
                     .ThenInclude(f => f.Tasks)
                         .ThenInclude(t => t.Subtasks)
-                .Include(p => p.Features)
-                    .ThenInclude(f => f.Tasks)
-                        .ThenInclude(t => t.AcceptanceCriteria)
                 .Include(p => p.Features)
                     .ThenInclude(f => f.ChildFeatures)
                 .Include(p => p.Requirements)
