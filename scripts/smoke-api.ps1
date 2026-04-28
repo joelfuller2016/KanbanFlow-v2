@@ -15,6 +15,14 @@ function Invoke-SmokeGet([string]$Path) {
     Invoke-RestMethod -Method Get -Uri "$BaseUrl$Path" -TimeoutSec 5
 }
 
+function Invoke-SmokeJson([string]$Method, [string]$Path, $Body) {
+    Invoke-RestMethod -Method $Method -Uri "$BaseUrl$Path" -ContentType "application/json" -Body ($Body | ConvertTo-Json -Depth 10) -TimeoutSec 5
+}
+
+function Invoke-SmokeDelete([string]$Path) {
+    Invoke-RestMethod -Method Delete -Uri "$BaseUrl$Path" -TimeoutSec 5
+}
+
 function Assert-Truthy($Value, [string]$Message) {
     if (-not $Value) { throw $Message }
 }
@@ -82,6 +90,31 @@ try {
     $nextTasks = Invoke-SmokeGet "/api/projects/$projectId/next-tasks"
     Assert-Truthy ($null -ne $nextTasks.recommendations) "GET /api/projects/$projectId/next-tasks is missing recommendations."
 
+    $tasks = Invoke-SmokeGet "/api/projects/$projectId/tasks"
+    Assert-Truthy ($tasks.Count -gt 0) "GET /api/projects/$projectId/tasks returned no seeded tasks."
+    $taskId = $tasks[0].id
+
+    Invoke-SmokeJson "Patch" "/api/tasks/$taskId/status" @{ status = "InProgress" } | Out-Null
+    Invoke-SmokeJson "Post" "/api/tasks/$taskId/claim" @{ actor = "smoke-agent" } | Out-Null
+    Invoke-SmokeJson "Post" "/api/tasks/$taskId/comments" @{ text = "Smoke test activity comment"; author = "smoke-agent" } | Out-Null
+
+    $taskActivity = Invoke-SmokeGet "/api/tasks/$taskId/activity"
+    Assert-Truthy ($taskActivity.Count -ge 3) "GET /api/tasks/$taskId/activity did not return expected workflow events."
+    $eventTypes = @($taskActivity | ForEach-Object { $_.eventType })
+    foreach ($eventType in @("TaskStatusChanged", "TaskClaimed", "TaskCommentAdded")) {
+        Assert-Truthy ($eventTypes -contains $eventType) "Task activity is missing $eventType."
+    }
+
+    Invoke-SmokeDelete "/api/tasks/$taskId" | Out-Null
+    $deletedTaskActivity = Invoke-SmokeGet "/api/tasks/$taskId/activity"
+    $deletedEventTypes = @($deletedTaskActivity | ForEach-Object { $_.eventType })
+    Assert-Truthy ($deletedEventTypes -contains "TaskDeleted") "GET /api/tasks/$taskId/activity did not return deleted task history."
+
+    $projectActivity = Invoke-SmokeGet "/api/projects/$projectId/activity"
+    Assert-Truthy ($projectActivity.Count -ge $deletedTaskActivity.Count) "GET /api/projects/$projectId/activity did not include task events."
+
+    Invoke-SmokeDelete "/api/projects/$projectId" | Out-Null
+
     Write-Host "API smoke tests passed."
 }
 finally {
@@ -91,6 +124,15 @@ finally {
     }
 
     if (Test-Path $runDir) {
-        Remove-Item $runDir -Recurse -Force
+        for ($i = 0; $i -lt 5; $i++) {
+            try {
+                Remove-Item $runDir -Recurse -Force -ErrorAction Stop
+                break
+            }
+            catch {
+                if ($i -eq 4) { throw }
+                Start-Sleep -Milliseconds 500
+            }
+        }
     }
 }
