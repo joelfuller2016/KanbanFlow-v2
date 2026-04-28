@@ -27,6 +27,23 @@ function Assert-Truthy($Value, [string]$Message) {
     if (-not $Value) { throw $Message }
 }
 
+function New-FreeLoopbackBaseUrl {
+    $listener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, 0)
+    try {
+        $listener.Start()
+        $port = $listener.LocalEndpoint.Port
+    }
+    finally {
+        $listener.Stop()
+    }
+
+    return "http://127.0.0.1:$port"
+}
+
+if ($BaseUrl -eq "http://127.0.0.1:5124") {
+    $BaseUrl = New-FreeLoopbackBaseUrl
+}
+
 $repoRoot = Resolve-RepoRoot
 $resolvedProjectPath = (Resolve-Path (Join-Path $repoRoot $ProjectPath)).Path
 $runDir = Join-Path ([System.IO.Path]::GetTempPath()) ("kanbanflow-smoke-" + [Guid]::NewGuid().ToString("N"))
@@ -35,12 +52,16 @@ New-Item -ItemType Directory -Path $runDir | Out-Null
 $appProcess = $null
 $stdoutPath = Join-Path $runDir "kanbanflow.out.log"
 $stderrPath = Join-Path $runDir "kanbanflow.err.log"
+$dbPath = Join-Path $runDir "kanbanflow.db"
+$previousDbPath = $env:KANBANFLOW_DB_PATH
 
 try {
     Write-Host "Building KanbanFlow..."
     dotnet build $resolvedProjectPath --nologo
 
     Write-Host "Starting KanbanFlow with a fresh SQLite DB in $runDir..."
+    Write-Host "Using API smoke base URL $BaseUrl"
+    $env:KANBANFLOW_DB_PATH = $dbPath
     $appProcess = Start-Process dotnet `
         -ArgumentList @("run", "--no-build", "--no-launch-profile", "--project", $resolvedProjectPath, "--urls", $BaseUrl) `
         -WorkingDirectory $runDir `
@@ -118,6 +139,13 @@ try {
     Write-Host "API smoke tests passed."
 }
 finally {
+    if ($null -eq $previousDbPath) {
+        Remove-Item Env:KANBANFLOW_DB_PATH -ErrorAction SilentlyContinue
+    }
+    else {
+        $env:KANBANFLOW_DB_PATH = $previousDbPath
+    }
+
     if ($appProcess -and -not $appProcess.HasExited) {
         Stop-Process -Id $appProcess.Id -Force
         $appProcess.WaitForExit(5000) | Out-Null

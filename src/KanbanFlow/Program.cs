@@ -6,7 +6,19 @@ using Microsoft.EntityFrameworkCore;
 var builder = WebApplication.CreateBuilder(args);
 
 // Database
-var dbPath = Path.Combine(Environment.CurrentDirectory, "kanbanflow.db");
+var dbPath = Environment.GetEnvironmentVariable("KANBANFLOW_DB_PATH");
+if (string.IsNullOrWhiteSpace(dbPath))
+{
+    dbPath = Path.Combine(Environment.CurrentDirectory, "kanbanflow.db");
+}
+else
+{
+    dbPath = Path.GetFullPath(dbPath);
+    var dbDirectory = Path.GetDirectoryName(dbPath);
+    if (!string.IsNullOrWhiteSpace(dbDirectory))
+        Directory.CreateDirectory(dbDirectory);
+}
+
 builder.Services.AddDbContextFactory<AppDbContext>(options => options.UseSqlite($"Data Source={dbPath}"));
 
 // Blazor
