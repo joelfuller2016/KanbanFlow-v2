@@ -994,15 +994,30 @@ public static class ApiEndpoints
             return Results.Ok(dependencies.Select(MapTaskDependency));
         });
 
+        // GET /api/task-dependencies/{id} — get a single dependency
+        app.MapGet("/api/task-dependencies/{id:int}", async (int id, AppDbContext db) =>
+        {
+            var dependency = await db.TaskDependencies
+                .Include(d => d.TaskItem)
+                .Include(d => d.DependsOnTaskItem)
+                .AsNoTracking()
+                .SingleOrDefaultAsync(d => d.Id == id);
+
+            if (dependency is null)
+                return Results.NotFound(new { message = $"Task dependency {id} not found." });
+
+            return Results.Ok(MapTaskDependency(dependency));
+        });
+
         // POST /api/tasks/{taskId}/dependencies — create a dependency for a task
         app.MapPost("/api/tasks/{taskId:int}/dependencies", async (int taskId, TaskDependencyDto dto, AppDbContext db) =>
         {
             if (!Enum.TryParse<TaskDependencyType>(dto.Type ?? nameof(TaskDependencyType.DependsOn), ignoreCase: true, out var type))
                 return Results.UnprocessableEntity(new { message = $"Invalid dependency type: {dto.Type}. Valid values: {string.Join(", ", Enum.GetNames<TaskDependencyType>())}" });
 
-            var (blockedTaskId, blockingTaskId) = ResolveDependencyTaskIds(taskId, dto, type);
+            var (blockedTaskId, blockingTaskId, missingTaskMessage) = ResolveDependencyTaskIds(taskId, dto, type);
             if (!blockedTaskId.HasValue || !blockingTaskId.HasValue)
-                return Results.UnprocessableEntity(new { message = "DependsOnTaskItemId or BlockingTaskItemId is required." });
+                return Results.UnprocessableEntity(new { message = missingTaskMessage });
 
             if (blockedTaskId.Value == blockingTaskId.Value)
                 return Results.UnprocessableEntity(new { message = "A task cannot depend on itself." });
@@ -1535,39 +1550,44 @@ public static class ApiEndpoints
         d.CreatedAt
     };
 
-    private static (int? BlockedTaskId, int? BlockingTaskId) ResolveDependencyTaskIds(int routeTaskId, TaskDependencyDto dto, TaskDependencyType type)
+    private static (int? BlockedTaskId, int? BlockingTaskId, string MissingTaskMessage) ResolveDependencyTaskIds(int routeTaskId, TaskDependencyDto dto, TaskDependencyType type)
     {
-        var dtoBlockedTaskId = dto.BlockedTaskId ?? dto.TaskItemId;
-        var dtoBlockingTaskId = dto.BlockingTaskId ?? dto.BlockingTaskItemId ?? dto.DependsOnTaskItemId;
+        if (type == TaskDependencyType.Blocks)
+        {
+            // For Blocks, the route task is the blocker; require the blocked task via explicit blocked aliases.
+            // Do not treat DependsOnTaskItemId as a blocked-task alias because that inverts the relationship.
+            var blockedTaskId = dto.BlockedTaskId ?? dto.TaskItemId;
+            return (blockedTaskId, routeTaskId, "BlockedTaskId or TaskItemId is required when type is Blocks.");
+        }
 
-        if (type == TaskDependencyType.Blocks && dtoBlockedTaskId.HasValue)
-            return (dtoBlockedTaskId.Value, routeTaskId);
-
-        return (routeTaskId, dtoBlockingTaskId);
+        // For DependsOn, the route task is blocked by another task; accept the blocking-task aliases only.
+        var blockingTaskId = dto.DependsOnTaskItemId ?? dto.BlockingTaskItemId ?? dto.BlockingTaskId;
+        return (routeTaskId, blockingTaskId, "DependsOnTaskItemId, BlockingTaskItemId, or BlockingTaskId is required.");
     }
 
     private static bool WouldCreateTaskDependencyCycle(int blockedTaskId, int blockingTaskId, IReadOnlyCollection<TaskDependency> projectDependencies)
     {
+        var dependenciesByBlockedTask = projectDependencies.ToLookup(d => d.TaskItemId, d => d.DependsOnTaskItemId);
         var visited = new HashSet<int>();
 
-        bool DependsOn(int taskId, int targetTaskId)
+        bool HasPath(int currentTaskId, int targetTaskId)
         {
-            if (!visited.Add(taskId))
+            if (currentTaskId == targetTaskId)
+                return true;
+
+            if (!visited.Add(currentTaskId))
                 return false;
 
-            foreach (var dependency in projectDependencies.Where(d => d.TaskItemId == taskId))
+            foreach (var nextTaskId in dependenciesByBlockedTask[currentTaskId])
             {
-                if (dependency.DependsOnTaskItemId == targetTaskId)
-                    return true;
-
-                if (DependsOn(dependency.DependsOnTaskItemId, targetTaskId))
+                if (HasPath(nextTaskId, targetTaskId))
                     return true;
             }
 
             return false;
         }
 
-        return DependsOn(blockingTaskId, blockedTaskId);
+        return HasPath(blockingTaskId, blockedTaskId);
     }
 
     private static bool WouldCreateFeatureCycle(int featureId, int proposedParentFeatureId, IReadOnlyCollection<Feature> allProjectFeatures)
