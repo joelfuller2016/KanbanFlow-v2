@@ -155,9 +155,9 @@ try {
   await callTool("get_next_tasks", { projectId, limit: 3 });
   await callTool("claim_task", { taskId: task.id, actor: "mcp-smoke" });
   const commentText = `MCP smoke test comment ${runMarker}`;
-  await callTool("add_task_comment", { taskId: task.id, text: commentText, author: "mcp-smoke" });
+  await callTool("add_task_comment", { taskId: task.id, text: commentText, author: "mcp-smoke", type: "Handoff" });
   const fetchedTaskWithComment = await callTool("get_task", { taskId: task.id });
-  if (!Array.isArray(fetchedTaskWithComment.comments) || !fetchedTaskWithComment.comments.some(comment => comment?.text === commentText)) {
+  if (!Array.isArray(fetchedTaskWithComment.comments) || !fetchedTaskWithComment.comments.some(comment => comment?.text === commentText && comment?.type === "Handoff")) {
     throw new Error(`get_task did not return the newly added comment: ${JSON.stringify(fetchedTaskWithComment)}`);
   }
   await callTool("update_task_status", { taskId: task.id, status: "Review" });

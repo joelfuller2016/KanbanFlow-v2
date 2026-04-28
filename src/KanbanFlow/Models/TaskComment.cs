@@ -19,5 +19,11 @@ public enum CommentType
     Created,
     FeatureChange,
     PriorityChange,
-    AssigneeChange
+    AssigneeChange,
+    Note,
+    Decision,
+    Question,
+    Blocked,
+    Handoff,
+    Verification
 }

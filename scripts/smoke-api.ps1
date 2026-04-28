@@ -139,6 +139,18 @@ try {
     Assert-Truthy ($tasks.Count -gt 0) "GET /api/projects/$projectId/tasks returned no seeded tasks."
     $taskId = $tasks[0].id
 
+    $handoffText = "API smoke typed handoff $([Guid]::NewGuid().ToString("N"))"
+    $handoff = Invoke-SmokeJson "Post" "/api/tasks/$taskId/comments" @{ text = $handoffText; author = "api-smoke"; type = "Handoff" }
+    Assert-Truthy ($handoff.type -eq "Handoff") "POST /api/tasks/$taskId/comments did not preserve handoff type."
+
+    $verification = Invoke-SmokeJson "Post" "/api/tasks/$taskId/comments" @{ text = "Verified in smoke"; author = "api-smoke"; type = "Verification" }
+    Assert-Truthy ($verification.type -eq "Verification") "POST /api/tasks/$taskId/comments did not preserve verification type."
+
+    $comments = Invoke-SmokeGet "/api/tasks/$taskId/comments"
+    Assert-Truthy (@($comments | Where-Object { $_.id -eq $handoff.id -and $_.type -eq "Handoff" }).Count -eq 1) "GET /api/tasks/$taskId/comments did not return the handoff type."
+
+    Assert-SmokePostFailure "/api/tasks/$taskId/comments" @{ text = "bad type"; type = "NotAType" } @(422) "Invalid comment type validation failed."
+
     Assert-Truthy ($tasks.Count -ge 2) "Seeded project must have at least two tasks for dependency smoke coverage."
     $blockedTaskId = $tasks[0].id
     $blockingTaskId = $tasks[1].id
