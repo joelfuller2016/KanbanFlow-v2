@@ -1,14 +1,26 @@
-<div class="flex-grow-1 d-flex overflow-auto p-2 gap-2" style="min-width: 0;" data-testid="kanban-board">
-    @foreach (var status in Enum.GetValues<WorkStatus>())
-    {
-        var tasksInColumn = AllTasks.Where(t => t.Status == status).ToList();
-        <KanbanColumn Status="status"
-                      Tasks="tasksInColumn"
-                      OnAddTask="OnAddTask"
-                      OnToggleTaskDone="OnToggleTaskDone"
-                      OnOpenTaskDetail="OnOpenTaskDetail" />
-    }
-</div>
+<section class="flex-grow-1 d-flex flex-column overflow-hidden" aria-labelledby="kanban-board-heading">
+    <div class="border-bottom bg-white px-3 py-2">
+        <h2 id="kanban-board-heading" class="h6 mb-1">Board</h2>
+        <p id="kanban-board-guidance" class="small text-muted mb-0" data-testid="kanban-board-guidance">
+            Drag cards between columns. Click a card for details.
+        </p>
+    </div>
+
+    <div class="flex-grow-1 d-flex overflow-auto p-2 gap-2"
+         style="min-width: 0;"
+         data-testid="kanban-board"
+         aria-describedby="kanban-board-guidance">
+        @foreach (var status in Enum.GetValues<WorkStatus>())
+        {
+            var tasksInColumn = AllTasks.Where(t => t.Status == status).ToList();
+            <KanbanColumn Status="status"
+                          Tasks="tasksInColumn"
+                          OnAddTask="OnAddTask"
+                          OnToggleTaskDone="OnToggleTaskDone"
+                          OnOpenTaskDetail="OnOpenTaskDetail" />
+        }
+    </div>
+</section>
 
 @code {
     [Parameter, EditorRequired] public IReadOnlyList<TaskItem> AllTasks { get; set; } = [];
