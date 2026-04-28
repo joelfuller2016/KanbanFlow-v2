@@ -52,7 +52,9 @@ public class AppDbContext : DbContext
 
         modelBuilder.Entity<ActivityEvent>(e =>
         {
-            e.HasOne(a => a.Project).WithMany().HasForeignKey(a => a.ProjectId).OnDelete(DeleteBehavior.Cascade);
+            // Activity rows are an audit trail. Keep ProjectId as historical attribution,
+            // but do not enforce a FK that would cascade-delete or block project deletion.
+            e.Ignore(a => a.Project);
             e.HasIndex(a => new { a.ProjectId, a.CreatedAt });
             e.HasIndex(a => new { a.EntityType, a.EntityId, a.CreatedAt });
         });

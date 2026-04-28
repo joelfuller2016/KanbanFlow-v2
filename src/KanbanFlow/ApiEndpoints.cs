@@ -367,10 +367,6 @@ public static class ApiEndpoints
         // GET /api/tasks/{id}/activity — durable task event trail
         app.MapGet("/api/tasks/{id:int}/activity", async (int id, int? limit, AppDbContext db) =>
         {
-            var taskExists = await db.Tasks.AnyAsync(t => t.Id == id);
-            if (!taskExists)
-                return Results.NotFound(new { message = $"Task {id} not found." });
-
             var take = Math.Clamp(limit ?? 100, 1, 500);
             var events = await db.ActivityEvents
                 .Where(e => e.EntityType == "Task" && e.EntityId == id)
@@ -378,6 +374,13 @@ public static class ApiEndpoints
                 .OrderByDescending(e => e.CreatedAt)
                 .Take(take)
                 .ToListAsync();
+
+            if (events.Count == 0)
+            {
+                var taskExists = await db.Tasks.AnyAsync(t => t.Id == id);
+                if (!taskExists)
+                    return Results.NotFound(new { message = $"Task {id} not found." });
+            }
 
             return Results.Ok(events.Select(MapActivityEvent));
         });
@@ -775,7 +778,7 @@ public static class ApiEndpoints
                 Type = CommentType.Created
             };
             db.TaskComments.Add(createdComment);
-            AddActivityEvent(db, projectId.Value, "Task", task.Id, dto.Assignee, "TaskCreated", null, TaskActivitySnapshot(task), $"Task '{task.Name}' created");
+            AddActivityEvent(db, projectId.Value, "Task", task.Id, null, "TaskCreated", null, TaskActivitySnapshot(task), $"Task '{task.Name}' created");
             await db.SaveChangesAsync();
 
             return Results.Created($"/api/tasks/{task.Id}", new
@@ -832,7 +835,7 @@ public static class ApiEndpoints
             else if (newStatus != WorkStatus.Done)
                 task.CompletedAt = null;
 
-            AddActivityEvent(db, task.Feature.ProjectId, "Task", task.Id, dto.Assignee, oldStatus == newStatus ? "TaskUpdated" : "TaskStatusChanged", before, TaskActivitySnapshot(task), oldStatus == newStatus ? $"Task '{task.Name}' updated" : $"Task '{task.Name}' status changed from {oldStatus} to {newStatus}");
+            AddActivityEvent(db, task.Feature.ProjectId, "Task", task.Id, null, oldStatus == newStatus ? "TaskUpdated" : "TaskStatusChanged", before, TaskActivitySnapshot(task), oldStatus == newStatus ? $"Task '{task.Name}' updated" : $"Task '{task.Name}' status changed from {oldStatus} to {newStatus}");
             await db.SaveChangesAsync();
 
             return Results.Ok(new
@@ -860,8 +863,11 @@ public static class ApiEndpoints
             if (string.IsNullOrWhiteSpace(actor))
                 return Results.UnprocessableEntity(new { message = "Actor is required." });
 
+            await using var tx = await db.Database.BeginTransactionAsync();
+
             var task = await db.Tasks
                 .Include(t => t.Feature)
+                .AsNoTracking()
                 .FirstOrDefaultAsync(t => t.Id == id);
             if (task is null)
                 return Results.NotFound(new { message = $"Task {id} not found." });
@@ -877,13 +883,37 @@ public static class ApiEndpoints
             }
 
             var before = TaskActivitySnapshot(task);
-            task.ClaimedBy = actor;
-            task.ClaimedAt ??= DateTime.UtcNow;
-            task.UpdatedAt = DateTime.UtcNow;
-            AddActivityEvent(db, task.Feature.ProjectId, "Task", task.Id, actor, "TaskClaimed", before, TaskActivitySnapshot(task), $"Task '{task.Name}' claimed by {actor}");
-            await db.SaveChangesAsync();
+            var now = DateTime.UtcNow;
+            var normalizedActor = actor.ToLowerInvariant();
+            var updated = await db.Tasks
+                .Where(t => t.Id == id && (t.ClaimedBy == null || t.ClaimedBy.ToLower() == normalizedActor))
+                .ExecuteUpdateAsync(setters => setters
+                    .SetProperty(t => t.ClaimedBy, actor)
+                    .SetProperty(t => t.ClaimedAt, t => t.ClaimedAt ?? now)
+                    .SetProperty(t => t.UpdatedAt, now));
 
-            return Results.Ok(await GetTaskClaimStateAsync(db, id));
+            if (updated == 0)
+            {
+                var currentClaim = await GetTaskClaimStateOrDefaultAsync(db, id);
+                if (currentClaim is null)
+                    return Results.NotFound(new { message = $"Task {id} not found." });
+
+                return Results.Conflict(new
+                {
+                    message = $"Task {id} is already claimed by {currentClaim.ClaimedBy}.",
+                    currentClaim.ClaimedBy,
+                    currentClaim.ClaimedAt
+                });
+            }
+
+            var claimedTask = await db.Tasks
+                .Include(t => t.Feature)
+                .FirstAsync(t => t.Id == id);
+            AddActivityEvent(db, claimedTask.Feature.ProjectId, "Task", claimedTask.Id, actor, "TaskClaimed", before, TaskActivitySnapshot(claimedTask), $"Task '{claimedTask.Name}' claimed by {actor}");
+            await db.SaveChangesAsync();
+            await tx.CommitAsync();
+
+            return Results.Ok(MapTaskClaimState(claimedTask));
         });
 
         // POST /api/tasks/{id}/release — release a task claimed by the same actor
@@ -893,8 +923,11 @@ public static class ApiEndpoints
             if (string.IsNullOrWhiteSpace(actor))
                 return Results.UnprocessableEntity(new { message = "Actor is required." });
 
+            await using var tx = await db.Database.BeginTransactionAsync();
+
             var task = await db.Tasks
                 .Include(t => t.Feature)
+                .AsNoTracking()
                 .FirstOrDefaultAsync(t => t.Id == id);
             if (task is null)
                 return Results.NotFound(new { message = $"Task {id} not found." });
@@ -910,13 +943,37 @@ public static class ApiEndpoints
             }
 
             var before = TaskActivitySnapshot(task);
-            task.ClaimedBy = null;
-            task.ClaimedAt = null;
-            task.UpdatedAt = DateTime.UtcNow;
-            AddActivityEvent(db, task.Feature.ProjectId, "Task", task.Id, actor, "TaskReleased", before, TaskActivitySnapshot(task), $"Task '{task.Name}' released by {actor}");
-            await db.SaveChangesAsync();
+            var now = DateTime.UtcNow;
+            var normalizedActor = actor.ToLowerInvariant();
+            var updated = await db.Tasks
+                .Where(t => t.Id == id && (t.ClaimedBy == null || t.ClaimedBy.ToLower() == normalizedActor))
+                .ExecuteUpdateAsync(setters => setters
+                    .SetProperty(t => t.ClaimedBy, (string?)null)
+                    .SetProperty(t => t.ClaimedAt, (DateTime?)null)
+                    .SetProperty(t => t.UpdatedAt, now));
 
-            return Results.Ok(await GetTaskClaimStateAsync(db, id));
+            if (updated == 0)
+            {
+                var currentClaim = await GetTaskClaimStateOrDefaultAsync(db, id);
+                if (currentClaim is null)
+                    return Results.NotFound(new { message = $"Task {id} not found." });
+
+                return Results.Conflict(new
+                {
+                    message = $"Task {id} is claimed by {currentClaim.ClaimedBy}; only that actor can release it.",
+                    currentClaim.ClaimedBy,
+                    currentClaim.ClaimedAt
+                });
+            }
+
+            var releasedTask = await db.Tasks
+                .Include(t => t.Feature)
+                .FirstAsync(t => t.Id == id);
+            AddActivityEvent(db, releasedTask.Feature.ProjectId, "Task", releasedTask.Id, actor, "TaskReleased", before, TaskActivitySnapshot(releasedTask), $"Task '{releasedTask.Name}' released by {actor}");
+            await db.SaveChangesAsync();
+            await tx.CommitAsync();
+
+            return Results.Ok(MapTaskClaimState(releasedTask));
         });
 
         // DELETE /api/tasks/{id} — delete
@@ -959,8 +1016,6 @@ public static class ApiEndpoints
                 task.CompletedAt = DateTime.UtcNow;
             else if (newStatus != WorkStatus.Done)
                 task.CompletedAt = null;
-
-            await db.SaveChangesAsync();
 
             var statusComment = new TaskComment
             {
@@ -1722,20 +1777,24 @@ public static class ApiEndpoints
         return depth;
     }
 
-    private static async Task<object> GetTaskClaimStateAsync(AppDbContext db, int id)
+    private static object MapTaskClaimState(TaskItem task) => new
+    {
+        task.Id,
+        task.Name,
+        task.ClaimedBy,
+        task.ClaimedAt,
+        task.UpdatedAt
+    };
+
+    private static async Task<TaskClaimState?> GetTaskClaimStateOrDefaultAsync(AppDbContext db, int id)
     {
         return await db.Tasks
             .Where(task => task.Id == id)
-            .Select(task => new
-            {
-                task.Id,
-                task.Name,
-                task.ClaimedBy,
-                task.ClaimedAt,
-                task.UpdatedAt
-            })
-            .SingleAsync();
+            .Select(task => new TaskClaimState(task.Id, task.Name, task.ClaimedBy, task.ClaimedAt, task.UpdatedAt))
+            .SingleOrDefaultAsync();
     }
+
+    private sealed record TaskClaimState(int Id, string Name, string? ClaimedBy, DateTime? ClaimedAt, DateTime UpdatedAt);
 
     private static int PriorityRank(TaskPriority priority) => priority switch
     {

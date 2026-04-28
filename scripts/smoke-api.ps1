@@ -19,6 +19,10 @@ function Invoke-SmokeJson([string]$Method, [string]$Path, $Body) {
     Invoke-RestMethod -Method $Method -Uri "$BaseUrl$Path" -ContentType "application/json" -Body ($Body | ConvertTo-Json -Depth 10) -TimeoutSec 5
 }
 
+function Invoke-SmokeDelete([string]$Path) {
+    Invoke-RestMethod -Method Delete -Uri "$BaseUrl$Path" -TimeoutSec 5
+}
+
 function Assert-Truthy($Value, [string]$Message) {
     if (-not $Value) { throw $Message }
 }
@@ -101,8 +105,15 @@ try {
         Assert-Truthy ($eventTypes -contains $eventType) "Task activity is missing $eventType."
     }
 
+    Invoke-SmokeDelete "/api/tasks/$taskId" | Out-Null
+    $deletedTaskActivity = Invoke-SmokeGet "/api/tasks/$taskId/activity"
+    $deletedEventTypes = @($deletedTaskActivity | ForEach-Object { $_.eventType })
+    Assert-Truthy ($deletedEventTypes -contains "TaskDeleted") "GET /api/tasks/$taskId/activity did not return deleted task history."
+
     $projectActivity = Invoke-SmokeGet "/api/projects/$projectId/activity"
-    Assert-Truthy ($projectActivity.Count -ge $taskActivity.Count) "GET /api/projects/$projectId/activity did not include task events."
+    Assert-Truthy ($projectActivity.Count -ge $deletedTaskActivity.Count) "GET /api/projects/$projectId/activity did not include task events."
+
+    Invoke-SmokeDelete "/api/projects/$projectId" | Out-Null
 
     Write-Host "API smoke tests passed."
 }
