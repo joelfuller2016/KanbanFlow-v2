@@ -103,6 +103,58 @@ window.KanbanFlow = {
         this._navSortables = [];
     },
 
+    initTaskDetailDialog: function (panel) {
+        if (!panel) {
+            return;
+        }
+
+        if (panel._kanbanFlowTaskDetailKeydown) {
+            panel.removeEventListener('keydown', panel._kanbanFlowTaskDetailKeydown);
+        }
+
+        panel._kanbanFlowTaskDetailKeydown = function (event) {
+            if (event.key !== 'Escape') {
+                return;
+            }
+
+            var target = event.target;
+            var isTextEntry = target && (
+                target.isContentEditable ||
+                target.matches('input, textarea, select')
+            );
+
+            if (isTextEntry) {
+                return;
+            }
+
+            var closeButton = panel.querySelector('[data-testid="task-detail-close-button"]');
+            if (closeButton) {
+                event.preventDefault();
+                closeButton.click();
+            }
+        };
+
+        panel.addEventListener('keydown', panel._kanbanFlowTaskDetailKeydown);
+        panel.focus({ preventScroll: true });
+    },
+
+    focusTaskCard: function (taskId) {
+        var selector = '[data-testid="board-card-' + taskId + '-title"]';
+        var taskButton = document.querySelector(selector);
+        if (taskButton) {
+            taskButton.focus({ preventScroll: true });
+            return;
+        }
+
+        var board = document.querySelector('[data-testid="kanban-board"], .kanban-board, .board-column-cards');
+        if (board) {
+            if (!board.hasAttribute('tabindex')) {
+                board.setAttribute('tabindex', '-1');
+            }
+            board.focus({ preventScroll: true });
+        }
+    },
+
     destroyProjectOutlineAccessibility: function () {
         if (this._outlineObserver) {
             this._outlineObserver.disconnect();
