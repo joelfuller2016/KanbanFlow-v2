@@ -23,7 +23,21 @@ function Invoke-SmokeJson([string]$Method, [string]$Path, $Body) {
 
 function Invoke-SmokeDelete([string]$Path) {
     Write-Host "DELETE $Path"
-    Invoke-RestMethod -Method Delete -Uri "$BaseUrl$Path" -TimeoutSec 5
+    Invoke-WebRequest -Method Delete -Uri "$BaseUrl$Path" -TimeoutSec 5 -UseBasicParsing
+}
+
+function Assert-SmokePostFailure([string]$Path, $Body, [int[]]$ExpectedStatusCodes, [string]$Message) {
+    Write-Host "POST $Path (expecting failure)"
+    try {
+        Invoke-WebRequest -Method Post -Uri "$BaseUrl$Path" -ContentType "application/json" -Body ($Body | ConvertTo-Json -Depth 10) -TimeoutSec 5 -UseBasicParsing -ErrorAction Stop | Out-Null
+    }
+    catch {
+        $statusCode = [int]$_.Exception.Response.StatusCode
+        if ($ExpectedStatusCodes -contains $statusCode) { return }
+        throw "$Message Expected HTTP $($ExpectedStatusCodes -join '/') but got $statusCode. $($_.Exception.Message)"
+    }
+
+    throw "$Message Expected HTTP failure but request succeeded."
 }
 
 function Assert-Truthy($Value, [string]$Message) {
@@ -124,6 +138,48 @@ try {
     $tasks = Invoke-SmokeGet "/api/projects/$projectId/tasks"
     Assert-Truthy ($tasks.Count -gt 0) "GET /api/projects/$projectId/tasks returned no seeded tasks."
     $taskId = $tasks[0].id
+
+    Assert-Truthy ($tasks.Count -ge 2) "Seeded project must have at least two tasks for dependency smoke coverage."
+    $blockedTaskId = $tasks[0].id
+    $blockingTaskId = $tasks[1].id
+
+    $dependency = Invoke-SmokeJson "Post" "/api/tasks/$blockedTaskId/dependencies" @{ dependsOnTaskItemId = $blockingTaskId; type = "DependsOn" }
+    Assert-Truthy $dependency.id "POST /api/tasks/$blockedTaskId/dependencies did not return an id."
+    Assert-Truthy ($dependency.taskItemId -eq $blockedTaskId) "Created dependency has unexpected taskItemId."
+    Assert-Truthy ($dependency.dependsOnTaskItemId -eq $blockingTaskId) "Created dependency has unexpected dependsOnTaskItemId."
+
+    $dependencies = Invoke-SmokeGet "/api/tasks/$blockedTaskId/dependencies"
+    Assert-Truthy (@($dependencies | Where-Object { $_.id -eq $dependency.id }).Count -eq 1) "GET /api/tasks/$blockedTaskId/dependencies did not include the created dependency."
+
+    $dependencyById = Invoke-SmokeGet "/api/task-dependencies/$($dependency.id)"
+    Assert-Truthy ($dependencyById.id -eq $dependency.id) "GET /api/task-dependencies/$($dependency.id) did not return the created dependency."
+
+    Assert-SmokePostFailure "/api/tasks/$blockingTaskId/dependencies" @{ dependsOnTaskItemId = $blockedTaskId; type = "Blocks" } @(422) "Blocks payload using dependsOnTaskItemId should be rejected instead of inverted."
+
+    $smokeFeatureId = $project.features[0].id
+    $blocksBlockedTask = Invoke-SmokeJson "Post" "/api/features/$smokeFeatureId/tasks" @{ name = "Blocks smoke blocked task" }
+    $blocksBlockingTask = Invoke-SmokeJson "Post" "/api/features/$smokeFeatureId/tasks" @{ name = "Blocks smoke blocking task" }
+    $blocksDependency = Invoke-SmokeJson "Post" "/api/tasks/$($blocksBlockingTask.id)/dependencies" @{ blockedTaskId = $blocksBlockedTask.id; type = "Blocks" }
+    Assert-Truthy ($blocksDependency.taskItemId -eq $blocksBlockedTask.id) "Blocks dependency has unexpected blocked task id."
+    Assert-Truthy ($blocksDependency.dependsOnTaskItemId -eq $blocksBlockingTask.id) "Blocks dependency has unexpected blocking task id."
+    Assert-Truthy ($blocksDependency.type -eq "Blocks") "Blocks dependency did not preserve type."
+
+    Assert-SmokePostFailure "/api/tasks/$blockedTaskId/dependencies" @{ dependsOnTaskItemId = $blockedTaskId } @(422) "Self-dependency validation failed."
+    Assert-SmokePostFailure "/api/tasks/$blockedTaskId/dependencies" @{ dependsOnTaskItemId = $blockingTaskId } @(409) "Duplicate dependency validation failed."
+    Assert-SmokePostFailure "/api/tasks/$blockingTaskId/dependencies" @{ dependsOnTaskItemId = $blockedTaskId } @(422) "Dependency cycle validation failed."
+
+    $otherProject = Invoke-SmokeJson "Post" "/api/projects" @{ name = "Dependency smoke cross-project" }
+    $otherFeature = Invoke-SmokeJson "Post" "/api/projects/$($otherProject.id)/features" @{ name = "Other feature" }
+    $otherTask = Invoke-SmokeJson "Post" "/api/features/$($otherFeature.id)/tasks" @{ name = "Other task" }
+    Assert-SmokePostFailure "/api/tasks/$blockedTaskId/dependencies" @{ dependsOnTaskItemId = $otherTask.id } @(422) "Cross-project dependency validation failed."
+
+    $deleteBlocksResponse = Invoke-SmokeDelete "/api/task-dependencies/$($blocksDependency.id)"
+    Assert-Truthy ($deleteBlocksResponse.StatusCode -eq 204) "DELETE /api/task-dependencies/$($blocksDependency.id) did not return 204."
+
+    $deleteResponse = Invoke-SmokeDelete "/api/task-dependencies/$($dependency.id)"
+    Assert-Truthy ($deleteResponse.StatusCode -eq 204) "DELETE /api/task-dependencies/$($dependency.id) did not return 204."
+    $dependenciesAfterDelete = Invoke-SmokeGet "/api/tasks/$blockedTaskId/dependencies"
+    Assert-Truthy (@($dependenciesAfterDelete | Where-Object { $_.id -eq $dependency.id }).Count -eq 0) "Deleted dependency still appears in GET /api/tasks/$blockedTaskId/dependencies."
 
     $task = $context.tasks | Where-Object { $_.id -eq $taskId } | Select-Object -First 1
     if (-not $task) { $task = $context.tasks | Select-Object -First 1 }

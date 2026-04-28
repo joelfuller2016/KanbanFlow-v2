@@ -37,6 +37,7 @@ using (var scope = app.Services.CreateScope())
     var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
     db.Database.EnsureCreated();
     EnsureTaskClaimColumns(db);
+    EnsureTaskDependencyTable(db);
     EnsureAcceptanceCriteriaTable(db);
     EnsureActivityEventTable(db);
     SeedData.Initialize(db);
@@ -57,6 +58,48 @@ app.MapApiEndpoints();
 
 app.Run();
 
+static void EnsureTaskDependencyTable(AppDbContext db)
+{
+    if (!db.Database.IsSqlite())
+        return;
+
+    db.Database.OpenConnection();
+    try
+    {
+        var connection = db.Database.GetDbConnection();
+        using var createTable = connection.CreateCommand();
+        createTable.CommandText = """
+            CREATE TABLE IF NOT EXISTS TaskDependencies (
+                Id INTEGER NOT NULL CONSTRAINT PK_TaskDependencies PRIMARY KEY AUTOINCREMENT,
+                ProjectId INTEGER NOT NULL,
+                TaskItemId INTEGER NOT NULL,
+                DependsOnTaskItemId INTEGER NOT NULL,
+                Type INTEGER NOT NULL,
+                CreatedAt TEXT NOT NULL,
+                CONSTRAINT FK_TaskDependencies_Projects_ProjectId FOREIGN KEY (ProjectId) REFERENCES Projects (Id) ON DELETE CASCADE,
+                CONSTRAINT FK_TaskDependencies_Tasks_DependsOnTaskItemId FOREIGN KEY (DependsOnTaskItemId) REFERENCES Tasks (Id) ON DELETE CASCADE,
+                CONSTRAINT FK_TaskDependencies_Tasks_TaskItemId FOREIGN KEY (TaskItemId) REFERENCES Tasks (Id) ON DELETE CASCADE
+            )
+            """;
+        createTable.ExecuteNonQuery();
+
+        using var createUniqueIndex = connection.CreateCommand();
+        createUniqueIndex.CommandText = "CREATE UNIQUE INDEX IF NOT EXISTS IX_TaskDependencies_TaskItemId_DependsOnTaskItemId ON TaskDependencies (TaskItemId, DependsOnTaskItemId)";
+        createUniqueIndex.ExecuteNonQuery();
+
+        using var createProjectIndex = connection.CreateCommand();
+        createProjectIndex.CommandText = "CREATE INDEX IF NOT EXISTS IX_TaskDependencies_ProjectId ON TaskDependencies (ProjectId)";
+        createProjectIndex.ExecuteNonQuery();
+
+        using var createDependsOnIndex = connection.CreateCommand();
+        createDependsOnIndex.CommandText = "CREATE INDEX IF NOT EXISTS IX_TaskDependencies_DependsOnTaskItemId ON TaskDependencies (DependsOnTaskItemId)";
+        createDependsOnIndex.ExecuteNonQuery();
+    }
+    finally
+    {
+        db.Database.CloseConnection();
+    }
+}
 static void EnsureAcceptanceCriteriaTable(AppDbContext db)
 {
     if (!db.Database.IsSqlite())
