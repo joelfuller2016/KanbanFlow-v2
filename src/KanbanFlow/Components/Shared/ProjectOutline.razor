@@ -141,7 +141,12 @@
                 {
                     <div class="progress mt-1" style="height: 2px;">
                         <div class="progress-bar @(progressPct == 100 ? "bg-success" : "bg-primary") opacity-75" role="progressbar"
-                             style="width: @(progressPct)%"></div>
+                             style="width: @(progressPct)%"
+                             aria-label="@($"{feature.Name} completion")"
+                             aria-valuemin="0"
+                             aria-valuemax="100"
+                             aria-valuenow="@progressPct"
+                             aria-valuetext="@($"{doneCount} of {totalCount} tasks complete")"></div>
                     </div>
                 }
             </div>

@@ -110,6 +110,7 @@
                     @{
                         var completedCount = Task.Subtasks.Count(s => s.Completed);
                         var totalCount = Task.Subtasks.Count;
+                        var subtaskProgressPct = totalCount > 0 ? (int)(100.0 * completedCount / totalCount) : 0;
                     }
                     @if (totalCount > 0)
                     {
@@ -121,7 +122,12 @@
                 {
                     <div class="progress mb-2" style="height: 4px;">
                         <div class="progress-bar bg-success" role="progressbar"
-                             style="width: @(totalCount > 0 ? (int)(100.0 * completedCount / totalCount) : 0)%">
+                             style="width: @(subtaskProgressPct)%"
+                             aria-label="@($"{Task.Name} subtask completion")"
+                             aria-valuemin="0"
+                             aria-valuemax="100"
+                             aria-valuenow="@subtaskProgressPct"
+                             aria-valuetext="@($"{completedCount} of {totalCount} subtasks complete")">
                         </div>
                     </div>
                 }
