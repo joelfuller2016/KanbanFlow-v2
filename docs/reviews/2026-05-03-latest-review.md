@@ -15,6 +15,8 @@ Reviewed latest `origin/master` at commit `afdc2a0` (`fix: add task detail dialo
 - [#84 P1: Restrict CORS or document local-only API assumptions](https://github.com/joelfuller2016/KanbanFlow-v2/issues/84)
 - [#85 P2: Keep deleted project activity accessible or document retention semantics](https://github.com/joelfuller2016/KanbanFlow-v2/issues/85)
 - [#86 P2: Replace manual schema patching with EF migrations](https://github.com/joelfuller2016/KanbanFlow-v2/issues/86)
+- [#88 P1: Route UI mutations through shared validation and audit logic](https://github.com/joelfuller2016/KanbanFlow-v2/issues/88)
+- [#89 P1: Reject undefined numeric enum values in API DTO validation](https://github.com/joelfuller2016/KanbanFlow-v2/issues/89)
 
 ## Review Findings
 
@@ -33,3 +35,13 @@ Activity rows are intentionally retained without a project foreign key, but proj
 ### Schema Evolution
 
 Startup uses `EnsureCreated()` plus manual table and column patch helpers. This is workable for a prototype, but EF Core migrations would be safer for long-lived SQLite databases as the schema grows.
+
+## Second-Pass Additions
+
+### UI and API Parity
+
+Several Blazor UI flows write directly through EF instead of the REST endpoints or a shared domain layer. That means UI-created, edited, moved, or deleted tasks can bypass API-side side effects such as created comments, task activity events, and future project-boundary validation.
+
+### Strict Enum Validation
+
+API DTO validation uses `Enum.TryParse` in several places. Numeric strings can parse into undefined enum-backed values, so the API should explicitly reject numeric or undefined values while continuing to accept documented symbolic values case-insensitively.
