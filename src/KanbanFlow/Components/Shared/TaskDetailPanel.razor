@@ -530,16 +530,20 @@
         if (Task is null || string.IsNullOrWhiteSpace(editingName) || editingName.Trim() == Task.Name)
             return;
 
-        Task.Name = editingName.Trim();
-        Task.UpdatedAt = DateTime.UtcNow;
+        try
+        {
+            // Routed through ITaskService — emits a uniform TaskUpdated activity event
+            // and "Updated: Name" comment alongside API-driven edits (closes UI half of #88).
+            var updated = await TaskSvc.UpdateAsync(Task.Id, new TaskUpdate(Name: editingName), actor: "User");
+            Task.Name = updated.Name;
+            Task.UpdatedAt = updated.UpdatedAt;
 
-        using var db = await DbFactory.CreateDbContextAsync();
-        db.Tasks.Attach(Task);
-        db.Entry(Task).Property(t => t.Name).IsModified = true;
-        db.Entry(Task).Property(t => t.UpdatedAt).IsModified = true;
-        await db.SaveChangesAsync();
-
-        await OnTaskUpdated.InvokeAsync();
+            await OnTaskUpdated.InvokeAsync();
+        }
+        catch (TaskNotFoundException)
+        {
+            await OnTaskUpdated.InvokeAsync();
+        }
     }
 
     // ── Feature change ──
@@ -651,16 +655,21 @@
         var newDesc = string.IsNullOrWhiteSpace(editingDescription) ? null : editingDescription.Trim();
         if (newDesc == Task.Description) return;
 
-        Task.Description = newDesc;
-        Task.UpdatedAt = DateTime.UtcNow;
+        try
+        {
+            // Routed through ITaskService — pass empty string (not null) so the service
+            // distinguishes "clear description" from "leave unchanged" via TaskUpdate.
+            var payload = new TaskUpdate(Description: newDesc ?? string.Empty);
+            var updated = await TaskSvc.UpdateAsync(Task.Id, payload, actor: "User");
+            Task.Description = updated.Description;
+            Task.UpdatedAt = updated.UpdatedAt;
 
-        using var db = await DbFactory.CreateDbContextAsync();
-        db.Tasks.Attach(Task);
-        db.Entry(Task).Property(t => t.Description).IsModified = true;
-        db.Entry(Task).Property(t => t.UpdatedAt).IsModified = true;
-        await db.SaveChangesAsync();
-
-        await OnTaskUpdated.InvokeAsync();
+            await OnTaskUpdated.InvokeAsync();
+        }
+        catch (TaskNotFoundException)
+        {
+            await OnTaskUpdated.InvokeAsync();
+        }
     }
 
     // ── Subtask recursive rendering ──
