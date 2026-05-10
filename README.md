@@ -40,19 +40,23 @@ $env:KANBANFLOW_API_URL = "http://127.0.0.1:5123"
 node ./scripts/mcp-server.mjs
 ```
 
-The server exposes these REST-backed MCP tools:
+The server exposes **36 REST-backed MCP tools** so AI agents can read, author, and direct project work end-to-end:
 
-- `list_projects`
-- `get_project`
-- `list_project_tasks`
-- `get_task`
-- `get_project_board`
-- `get_project_context`
-- `get_next_tasks`
-- `claim_task`
-- `release_task`
-- `update_task_status`
-- `add_task_comment`
+**Projects (5):** `list_projects`, `get_project`, `get_project_context`, `create_project`, `update_project`
+
+**Features (4):** `list_features`, `get_feature` (via `get_project`), `create_feature`, `update_feature`, `delete_feature`
+
+**Tasks (8):** `list_project_tasks`, `get_task`, `get_step_context`, `create_task`, `update_task`, `delete_task`, `update_task_status`, `reassign_task`
+
+**Subtasks (5):** `list_subtasks`, `create_subtask`, `update_subtask`, `mark_subtask_done`, `delete_subtask`
+
+**Acceptance criteria (5):** `list_acceptance_criteria`, `create_acceptance_criterion`, `update_acceptance_criterion`, `mark_acceptance_criterion_done`, `delete_acceptance_criterion`
+
+**Dependencies (3):** `list_dependencies`, `create_dependency`, `delete_dependency`
+
+**Comments + claim + activity (6):** `add_task_comment`, `claim_task`, `release_task`, `get_project_board`, `get_next_tasks`, `list_project_activity`, `list_task_activity`
+
+The full machine-readable list is at `tools/list` (JSON-RPC) when the server is running. The OpenAPI document at `/openapi/v1.json` describes the underlying REST surface.
 
 With the web app already running, smoke-test the wrapper with:
 
