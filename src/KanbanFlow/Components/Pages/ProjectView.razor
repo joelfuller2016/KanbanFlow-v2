@@ -63,15 +63,20 @@ else
         <div class="project-main flex-grow-1 d-flex flex-column overflow-hidden" style="min-width: 0;">
             <div class="border-bottom bg-white px-3 py-2">
                 <div class="d-lg-none mb-3">
-                    <button class="btn btn-sm btn-outline-secondary" @onclick="ToggleOutline" aria-expanded="@outlineOpen" aria-controls="project-outline" data-testid="toggle-project-outline-button" style="width: 44px; height: 44px; min-width: 44px; min-height: 44px;">
+                    <button class="btn btn-sm btn-outline-secondary d-inline-flex align-items-center gap-2"
+                            @onclick="ToggleOutline"
+                            aria-expanded="@outlineOpen"
+                            aria-controls="project-outline"
+                            data-testid="toggle-project-outline-button"
+                            style="min-height: 44px; padding: .5rem .75rem;">
                         @if (!outlineOpen) {
-                            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16" class="me-1">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16" aria-hidden="true">
                                 <path fill-rule="evenodd" d="M1 3h14v1H1V3zm0 4h14v1H1V7zm0 4h14v1H1v-1z"/>
                             </svg>
                             <span>Project outline</span>
                         } else {
-                            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16" class="me-1">
-                                <path fill-rule="evenodd" d="M2 2l12 12M14 2L2 14" stroke="currentColor" stroke-width="2"/> <!-- simple X -->
+                            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16" aria-hidden="true">
+                                <path d="M2.146 2.854a.5.5 0 1 1 .708-.708L8 7.293l5.146-5.147a.5.5 0 0 1 .708.708L8.707 8l5.147 5.146a.5.5 0 0 1-.708.708L8 8.707l-5.146 5.147a.5.5 0 0 1-.708-.708L7.293 8z"/>
                             </svg>
                             <span>Close outline</span>
                         }

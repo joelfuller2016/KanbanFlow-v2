@@ -1,23 +1,37 @@
 <div id="project-outline" class="project-outline border-end bg-light p-3" data-testid="project-outline">
-    <div class="d-flex align-items-center mb-3">
-        <button class="btn btn-sm btn-outline-secondary me-2" @onclick="() => OnGoHome.InvokeAsync()" title="Back to Projects" aria-label="Back to projects" data-testid="back-to-projects-button">
-            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16">
-                <path fill-rule="evenodd" d="M15 8a.5.5 0 0 0-.5-.5H2.707l3.147-3.146a.5.5 0 1 0-.708-.708l-4 4a.5.5 0 0 0 0 .708l4 4a.5.5 0 0 0 .708-.708L2.707 8.5H14.5A.5.5 0 0 0 15 8"/>
-            </svg>
-        </button>
-        <h6 class="fw-bold mb-0 text-truncate" title="@Project.Name">@Project.Name</h6>
-        <button class="btn btn-sm btn-link text-muted ms-auto p-0 d-flex align-items-center justify-content-center"
-                style="width: 24px; height: 24px;"
-                @onclick="() => OnOpenEditProject.InvokeAsync()"
-                title="Edit project"
-                aria-label="Edit project"
-                data-testid="edit-project-button">
-            <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" fill="currentColor" viewBox="0 0 16 16">
-                <path d="M15.502 1.94a.5.5 0 0 1 0 .706L14.459 3.69l-2-2L13.502.646a.5.5 0 0 1 .707 0l1.293 1.293zm-1.75 2.456-2-2L4.939 9.21a.5.5 0 0 0-.121.196l-.805 2.414a.25.25 0 0 0 .316.316l2.414-.805a.5.5 0 0 0 .196-.12l6.813-6.814z"/>
-                <path fill-rule="evenodd" d="M1 13.5A1.5 1.5 0 0 0 2.5 15h11a1.5 1.5 0 0 0 1.5-1.5v-6a.5.5 0 0 0-1 0v6a.5.5 0 0 1-.5.5h-11a.5.5 0 0 1-.5-.5v-11a.5.5 0 0 1 .5-.5H9a.5.5 0 0 0 0-1H2.5A1.5 1.5 0 0 0 1 2.5z"/>
-            </svg>
-        </button>
-        <button class="btn btn-sm btn-outline-primary d-flex align-items-center gap-1 ms-1 py-0 px-2"
+    <div class="project-outline-header">
+        <div class="outline-title-row">
+            <button class="btn btn-sm btn-outline-secondary icon-btn"
+                    @onclick="() => OnGoHome.InvokeAsync()"
+                    title="Back to Projects"
+                    aria-label="Back to projects"
+                    data-testid="back-to-projects-button">
+                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16">
+                    <path fill-rule="evenodd" d="M15 8a.5.5 0 0 0-.5-.5H2.707l3.147-3.146a.5.5 0 1 0-.708-.708l-4 4a.5.5 0 0 0 0 .708l4 4a.5.5 0 0 0 .708-.708L2.707 8.5H14.5A.5.5 0 0 0 15 8"/>
+                </svg>
+            </button>
+            <h6 class="outline-title" title="@Project.Name">@Project.Name</h6>
+            <button class="btn btn-sm btn-outline-secondary icon-btn"
+                    @onclick="() => OnOpenEditProject.InvokeAsync()"
+                    title="Edit project"
+                    aria-label="Edit project"
+                    data-testid="edit-project-button">
+                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="currentColor" viewBox="0 0 16 16">
+                    <path d="M15.502 1.94a.5.5 0 0 1 0 .706L14.459 3.69l-2-2L13.502.646a.5.5 0 0 1 .707 0l1.293 1.293zm-1.75 2.456-2-2L4.939 9.21a.5.5 0 0 0-.121.196l-.805 2.414a.25.25 0 0 0 .316.316l2.414-.805a.5.5 0 0 0 .196-.12l6.813-6.814z"/>
+                    <path fill-rule="evenodd" d="M1 13.5A1.5 1.5 0 0 0 2.5 15h11a1.5 1.5 0 0 0 1.5-1.5v-6a.5.5 0 0 0-1 0v6a.5.5 0 0 1-.5.5h-11a.5.5 0 0 1-.5-.5v-11a.5.5 0 0 1 .5-.5H9a.5.5 0 0 0 0-1H2.5A1.5 1.5 0 0 0 1 2.5z"/>
+                </svg>
+            </button>
+            <button class="btn btn-sm btn-outline-secondary icon-btn d-lg-none"
+                    @onclick="() => OnCloseOutline.InvokeAsync()"
+                    title="Hide outline"
+                    aria-label="Hide project outline"
+                    data-testid="close-project-outline-button">
+                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="currentColor" viewBox="0 0 16 16" aria-hidden="true">
+                    <path d="M2.146 2.854a.5.5 0 1 1 .708-.708L8 7.293l5.146-5.147a.5.5 0 0 1 .708.708L8.707 8l5.147 5.146a.5.5 0 0 1-.708.708L8 8.707l-5.146 5.147a.5.5 0 0 1-.708-.708L7.293 8z"/>
+                </svg>
+            </button>
+        </div>
+        <button class="btn btn-sm btn-primary d-flex align-items-center justify-content-center gap-2 w-100"
                 @onclick="() => OnOpenAddProject.InvokeAsync()"
                 title="Add a top-level feature or task to @Project.Name"
                 aria-label="Add a top-level feature or task to @Project.Name"
@@ -25,15 +39,7 @@
             <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="currentColor" viewBox="0 0 16 16" aria-hidden="true">
                 <path fill-rule="evenodd" d="M8 2a.5.5 0 0 1 .5.5v5h5a.5.5 0 0 1 0 1h-5v5a.5.5 0 0 1-1 0v-5h-5a.5.5 0 0 1 0-1h5v-5A.5.5 0 0 1 8 2"/>
             </svg>
-            <span class="small">Feature/task</span>
-        </button>
-        <button class="btn btn-sm btn-outline-secondary p-0 d-lg-none d-flex align-items-center justify-content-center ms-1"
-                style="width: 44px; height: 44px; min-width: 44px; min-height: 44px;"
-                @onclick="() => OnCloseOutline.InvokeAsync()"
-                title="Hide outline"
-                aria-label="Hide project outline"
-                data-testid="close-project-outline-button">
-            ×
+            <span>Add Feature / Task</span>
         </button>
     </div>
 
@@ -124,17 +130,17 @@
                         <span class="small fw-medium text-truncate" title="@feature.Name">@feature.Name</span>
                     </button>
                     <span class="ms-auto badge bg-secondary rounded-pill" style="font-size: 0.65rem;">@doneCount/@totalCount</span>
-                    <button type="button" class="btn btn-link text-primary p-0 ms-1 d-flex align-items-center gap-1" style="line-height: 1;"
+                    <button type="button" class="outline-action-btn ms-1"
                             @onclick="() => OnOpenAddFeature.InvokeAsync(feature.Id)"
                             @onclick:stopPropagation="true"
                             @onkeydown:stopPropagation="true"
                             title="Add a feature or task under @feature.Name"
                             aria-label="Add a feature or task under @feature.Name"
                             data-testid="outline-feature-@feature.Id-add-button">
-                        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="currentColor" viewBox="0 0 16 16" aria-hidden="true">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" fill="currentColor" viewBox="0 0 16 16" aria-hidden="true">
                             <path fill-rule="evenodd" d="M8 2a.5.5 0 0 1 .5.5v5h5a.5.5 0 0 1 0 1h-5v5a.5.5 0 0 1-1 0v-5h-5a.5.5 0 0 1 0-1h5v-5A.5.5 0 0 1 8 2"/>
                         </svg>
-                        <span class="small">Item</span>
+                        <span>Add</span>
                     </button>
                 </div>
                 @if (totalCount > 0)
@@ -198,17 +204,17 @@
                                     aria-label="Open task details for @task.Name"
                                     title="@task.Name">@task.Name</button>
                             <span class="ms-auto @GetPriorityBadgeClass(task.Priority)" style="font-size: 0.6rem;">@task.Priority</span>
-                            <button type="button" class="btn btn-link text-primary p-0 ms-1 d-flex align-items-center gap-1" style="line-height: 1;"
+                            <button type="button" class="outline-action-btn ms-1"
                                     @onclick="() => OnOpenAddTaskSubtask.InvokeAsync(task)"
                                     @onclick:stopPropagation="true"
                                     @onkeydown:stopPropagation="true"
                                     title="Add subtask under @task.Name"
                                     aria-label="Add subtask under @task.Name"
                                     data-testid="outline-task-@task.Id-add-button">
-                                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="currentColor" viewBox="0 0 16 16" aria-hidden="true">
+                                <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" fill="currentColor" viewBox="0 0 16 16" aria-hidden="true">
                                     <path fill-rule="evenodd" d="M8 2a.5.5 0 0 1 .5.5v5h5a.5.5 0 0 1 0 1h-5v5a.5.5 0 0 1-1 0v-5h-5a.5.5 0 0 1 0-1h5v-5A.5.5 0 0 1 8 2"/>
                                 </svg>
-                                <span class="small">Item</span>
+                                <span>Add</span>
                             </button>
                         </div>
                     </div>
@@ -267,7 +273,7 @@
                             @onclick:stopPropagation="true"
                             aria-label="Open parent task details for @subtask.Text"
                             title="@subtask.Text">@subtask.Text</button>
-                    <button type="button" class="btn btn-link text-primary p-0 ms-auto d-flex align-items-center gap-1" style="line-height: 1;"
+                    <button type="button" class="outline-action-btn ms-auto"
                             @onclick="() => OnOpenAddSubtaskChild.InvokeAsync(subtask)"
                             @onclick:stopPropagation="true"
                             @onkeydown:stopPropagation="true"
@@ -277,7 +283,7 @@
                         <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" fill="currentColor" viewBox="0 0 16 16" aria-hidden="true">
                             <path fill-rule="evenodd" d="M8 2a.5.5 0 0 1 .5.5v5h5a.5.5 0 0 1 0 1h-5v5a.5.5 0 0 1-1 0v-5h-5a.5.5 0 0 1 0-1h5v-5A.5.5 0 0 1 8 2"/>
                         </svg>
-                        <span class="small">Item</span>
+                        <span>Add</span>
                     </button>
                 </div>
             </div>

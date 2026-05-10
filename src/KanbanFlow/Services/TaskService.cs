@@ -207,17 +207,25 @@ public sealed class TaskService(IDbContextFactory<AppDbContext> dbFactory) : ITa
         if (dto.Name is null && dto.Description is null && dto.Status is null && dto.Priority is null && dto.Assignee is null)
             return task;
 
+        // Validate up-front so we never do half a mutation. Service is the trust boundary
+        // — every entry point (REST, MCP, future UI direct calls) flows through here.
         if (dto.Name is not null)
         {
             if (string.IsNullOrWhiteSpace(dto.Name))
-                throw new ArgumentException("Name cannot be empty or whitespace.", nameof(dto));
-            if (dto.Name.Length > 500)
-                throw new ArgumentException("Name cannot exceed 500 characters.", nameof(dto));
+                throw new ValidationException("Name cannot be empty or whitespace.");
+            if (dto.Name.Length > MaxNameLength)
+                throw new ValidationException($"Name cannot exceed {MaxNameLength} characters.");
         }
+        if (dto.Status is not null && !Enum.IsDefined(dto.Status.Value))
+            throw new ValidationException($"Invalid status '{dto.Status.Value}'.");
+        if (dto.Priority is not null && !Enum.IsDefined(dto.Priority.Value))
+            throw new ValidationException($"Invalid priority '{dto.Priority.Value}'.");
 
         var before = TaskActivitySnapshot(task);
         var oldStatus = task.Status;
         var changedFields = new List<string>();
+        var statusChanged = false;
+        WorkStatus newStatus = oldStatus;
 
         if (dto.Name is not null && task.Name != dto.Name.Trim())
         {
@@ -237,7 +245,7 @@ public sealed class TaskService(IDbContextFactory<AppDbContext> dbFactory) : ITa
 
         if (dto.Status is not null && dto.Status.Value != task.Status)
         {
-            var newStatus = dto.Status.Value;
+            newStatus = dto.Status.Value;
             task.Status = newStatus;
             // Mirror ChangeStatusAsync's CompletedAt invariant so audit history stays consistent.
             if (newStatus == WorkStatus.Done && oldStatus != WorkStatus.Done)
@@ -245,6 +253,7 @@ public sealed class TaskService(IDbContextFactory<AppDbContext> dbFactory) : ITa
             else if (newStatus != WorkStatus.Done)
                 task.CompletedAt = null;
             changedFields.Add("Status");
+            statusChanged = true;
         }
 
         if (dto.Priority is not null && dto.Priority.Value != task.Priority)
@@ -269,23 +278,48 @@ public sealed class TaskService(IDbContextFactory<AppDbContext> dbFactory) : ITa
 
         task.UpdatedAt = DateTime.UtcNow;
 
-        db.TaskComments.Add(new TaskComment
+        // If status changed in this Update, emit a StatusChange comment + TaskStatusChanged
+        // event (matching ChangeStatusAsync) so the audit trail stays consistent regardless
+        // of whether the caller used the dedicated status endpoint or the bulk update path.
+        // If other fields also changed, emit an additional Note comment for them.
+        if (statusChanged)
         {
-            TaskItemId = task.Id,
-            Text = $"Updated: {string.Join(", ", changedFields)}",
-            Author = string.IsNullOrWhiteSpace(actor) ? "System" : actor!.Trim(),
-            Type = CommentType.Note,
-            CreatedAt = DateTime.UtcNow
-        });
+            db.TaskComments.Add(new TaskComment
+            {
+                TaskItemId = task.Id,
+                Text = $"Status changed from {oldStatus} to {newStatus}",
+                Author = string.IsNullOrWhiteSpace(actor) ? "System" : actor!.Trim(),
+                Type = CommentType.StatusChange,
+                CreatedAt = DateTime.UtcNow
+            });
+            AddActivityEvent(
+                db, task.Feature.ProjectId, "Task", task.Id, actor,
+                "TaskStatusChanged", before, TaskActivitySnapshot(task),
+                $"Task '{task.Name}' status changed from {oldStatus} to {newStatus}");
+        }
 
-        AddActivityEvent(
-            db, task.Feature.ProjectId, "Task", task.Id, actor,
-            "TaskUpdated", before, TaskActivitySnapshot(task),
-            $"Task '{task.Name}' updated: {string.Join(", ", changedFields)}");
+        var nonStatusChanges = changedFields.Where(f => f != "Status").ToList();
+        if (nonStatusChanges.Count > 0)
+        {
+            db.TaskComments.Add(new TaskComment
+            {
+                TaskItemId = task.Id,
+                Text = $"Updated: {string.Join(", ", nonStatusChanges)}",
+                Author = string.IsNullOrWhiteSpace(actor) ? "System" : actor!.Trim(),
+                Type = CommentType.Note,
+                CreatedAt = DateTime.UtcNow
+            });
+            AddActivityEvent(
+                db, task.Feature.ProjectId, "Task", task.Id, actor,
+                "TaskUpdated", before, TaskActivitySnapshot(task),
+                $"Task '{task.Name}' updated: {string.Join(", ", nonStatusChanges)}");
+        }
 
         await db.SaveChangesAsync(ct);
         return task;
     }
+
+    private const int MaxNameLength = 500;
 
     public Task DeleteAsync(int taskId, string? actor, CancellationToken ct = default)
         => throw new NotImplementedException("TODO: implement in follow-up PR. Closes the UI half of #88 for deletes.");
