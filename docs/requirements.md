@@ -1,577 +1,453 @@
-# KanbanFlow v2 — Requirements Document
+# KanbanFlow v2 — Requirements
 
-> **Version:** 1.0 | **Date:** 2026-04-12 | **Status:** Draft
+> **Version:** 2.0 | **Date:** 2026-05-09 | **Status:** Active
 >
-> A simple .NET 10 Blazor Server app with C# and SQLite. AI agents use a REST API to manage project work. The UI shows a Project outline on the left and a Kanban board on the right, with cards auto-placed by task status.
+> Reframes v1 (2026-04-12) around the AI-first vision documented in [README.md](../README.md). v1 was organised P0/P1/P2 by entity. v2 is organised by **capability** — what an AI agent must be able to do — because that's the system's actual shape.
+>
+> The README is the canonical short version of this document. This file is the expanded reference: full data-model field specs, per-capability acceptance criteria, current implementation status, and the gap list to "vision-complete".
 
 ---
 
-## Tech Stack
+## 1. Vision
 
-| Layer | Choice | Rationale |
-|---|---|---|
-| Framework | .NET 10, Blazor Server | C# full-stack, no JS build step |
-| Database | SQLite (EF Core) | Zero config, file-based, no Docker |
-| CSS | Bootstrap 5.3 | Standard, well-documented, no build step |
-| Icons | Bootstrap Icons or Font Awesome | Included via CDN |
-| API | Minimal APIs | Lightweight, fast to build |
-| DnD | SortableJS via JS interop | 8KB, proven in Ticky v1 |
-| Markdown | Markdig | .NET markdown rendering |
-| Auth | None (auto-login) | Single-user local tool |
+KanbanFlow v2 is a **project knowledge graph** with three jobs: it **documents** projects (every entity is structured documentation), **directs** AI agents (given a project, says "what's next, with the context to act"), and **records** every change in an immutable audit trail. The kanban UI is one view of the graph, optimised for humans. The REST API and MCP server are the views optimised for AI agents.
+
+This is not a kanban app with an API bolted on. The API is the product. The kanban is a side effect of the data model.
+
+**See README §"Vision"** for the short version.
 
 ---
 
-## Data Model
+## 2. Tech stack
+
+| Layer | Choice |
+|---|---|
+| Framework | .NET 10, Blazor Server (Interactive Server render mode) |
+| Database | SQLite via EF Core 10.0.5 |
+| CSS | Bootstrap 5.3 |
+| API | Minimal APIs |
+| Drag-and-drop | SortableJS via JS interop |
+| Markdown | Markdig (referenced; not yet wired — see R-4.2) |
+| MCP | Node 18+ stdio JSON-RPC wrapper (`scripts/mcp-server.mjs`) |
+| Auth | None — single-trust-boundary tool |
+
+---
+
+## 3. Data model
 
 ```
-Project (1)
-  └── Feature (many)
-        ├── Feature (many, recursive — sub-features via ParentFeatureId)
-        └── Task (many)
-              └── Subtask (many)
-                    └── Subtask (many, recursive — sub-subtasks via ParentSubtaskId)
-
-Board = virtual view of Tasks grouped by Status column
-Card = visual representation of a Task on the Board
+Project
+  ├── name (required, ≤200)
+  ├── description (markdown body)
+  ├── goals (markdown body)
+  ├── readme (markdown body — primary documentation)
+  ├── createdAt, updatedAt
+  ├── Requirement (priority P0/P1/P2, status, optional Feature/Task link)
+  ├── Feature (recursive — features contain features via parentFeatureId)
+  │     ├── name, description (markdown), sortOrder
+  │     └── TaskItem
+  │           ├── name, description (markdown)
+  │           ├── status (Backlog | Todo | InProgress | Review | Done)
+  │           ├── priority (Low | Medium | High | Critical)
+  │           ├── assignee, claimedBy, claimedAt, completedAt, sortOrder
+  │           ├── AcceptanceCriterion (text, met, sortOrder)
+  │           ├── Subtask (recursive — subtasks contain subtasks via parentSubtaskId)
+  │           ├── TaskComment (Note | Decision | Handoff | Verification | system events)
+  │           └── TaskDependency (DependsOn | Blocks; cycle-protected DAG)
+  └── ActivityEvent (append-only audit log; survives entity deletion)
 ```
 
-**Key relationship:** A Card on the Kanban board is NOT a separate entity — it IS the Task, rendered visually. Moving a card changes the Task's `Status` field. Clicking a card opens the detail slide-out panel (R-11).
+Every text field on every entity is documentation that agents can retrieve, summarise, or update.
 
----
+### 3.1 Project
 
-## P0 — Must Have
+| Field | Type | Required | Notes |
+|---|---|---|---|
+| Id | int | yes (auto) | |
+| Name | string | yes | ≤200 chars |
+| Description | string | no | markdown body |
+| Goals | string | no | markdown body — high-level objectives |
+| Readme | string | no | markdown body — primary documentation; agents read+update this |
+| CreatedAt | DateTime | yes | |
+| UpdatedAt | DateTime | yes | |
 
-### R-01: Project CRUD
+### 3.2 Feature
 
-**Description:** Users can create, view, edit, and delete Projects. A Project is the top-level container for all work.
+| Field | Type | Required | Notes |
+|---|---|---|---|
+| Id | int | yes (auto) | |
+| ProjectId | int | yes | FK → Project (cascade delete) |
+| ParentFeatureId | int? | no | recursive; null = top-level; cycle-protected |
+| Name | string | yes | ≤200 chars |
+| Description | string | no | markdown body |
+| SortOrder | int | yes | within parent feature |
+| CreatedAt, UpdatedAt | DateTime | yes | |
 
-**Entity fields:**
-- `Id` (int, PK, auto-increment)
-- `Name` (string, required, max 200 chars)
-- `Description` (string, optional, markdown — stored as-is, rendered in detail panel (R-11) only; board cards and left nav mini-cards show plain truncated text)
-- `Goals` (string, optional, markdown — stored as-is, rendered in detail panel (R-11) only)
-- `CreatedAt` (DateTime)
-- `UpdatedAt` (DateTime)
+### 3.3 TaskItem
 
-**UI:**
-- Home page lists all Projects as cards
-- "New Project" button opens a form (name, description, goals)
-- Click a project card to open it (shows left nav + board)
-- Edit/delete via context menu on project card
+| Field | Type | Required | Notes |
+|---|---|---|---|
+| Id | int | yes (auto) | |
+| FeatureId | int | yes | FK → Feature (cascade delete) |
+| Name | string | yes | ≤500 chars |
+| Description | string | no | markdown body |
+| Status | enum | yes | `Backlog | Todo | InProgress | Review | Done` |
+| Priority | enum | yes | `Low | Medium | High | Critical` |
+| Assignee | string? | no | free-text label |
+| ClaimedBy | string? | no | claim system actor; case-insensitive comparison |
+| ClaimedAt | DateTime? | no | set on successful claim |
+| SortOrder | int | yes | within feature + status column |
+| CreatedAt, UpdatedAt | DateTime | yes | |
+| CompletedAt | DateTime? | no | set when Status → Done; cleared otherwise |
 
-**API:**
-- `GET /api/projects` — list all
-- `GET /api/projects/{id}` — get one with features + task counts
-- `POST /api/projects` — create (body: name, description, goals)
-- `PUT /api/projects/{id}` — update
-- `DELETE /api/projects/{id}` — delete (cascades features + tasks)
+### 3.4 Subtask
 
-**Acceptance criteria:**
-- [ ] Creating a project with a name succeeds; empty name returns 422
-- [ ] Deleting a project removes all its features and tasks
-- [ ] Project list shows task count per project
+| Field | Type | Required | Notes |
+|---|---|---|---|
+| Id, TaskItemId | int | yes | FK → TaskItem (cascade) |
+| ParentSubtaskId | int? | no | recursive; null = top-level; cycle-protected |
+| Text | string | yes | |
+| Completed | bool | yes | |
+| SortOrder | int | yes | |
+| CreatedAt | DateTime | yes | |
+| CompletedAt | DateTime? | no | |
 
----
+### 3.5 AcceptanceCriterion
 
-### R-02: Feature CRUD
+First-class checklist items per task. Distinct from `description` text bullets.
 
-**Description:** Features group related Tasks within a Project. They represent major work areas (e.g., "User Authentication", "Dashboard", "API Layer").
-
-**Entity fields:**
-- `Id` (int, PK)
-- `ProjectId` (int, FK → Project, required)
-- `Name` (string, required, max 200 chars)
-- `Description` (string, optional)
-- `SortOrder` (int — for ordering in the left nav)
-- `CreatedAt` (DateTime)
-- `UpdatedAt` (DateTime)
-
-**UI:**
-- Shown in the left nav under the Project name
-- Expandable/collapsible — click to show/hide child Tasks
-- Drag-and-drop to reorder features
-- Add/edit/delete via inline controls
-
-**API:**
-- `GET /api/projects/{projectId}/features` — list features for a project
-- `GET /api/features/{id}` — get a single feature with task counts
-- `POST /api/projects/{projectId}/features` — create
-- `PUT /api/features/{id}` — update
-- `DELETE /api/features/{id}` — delete (cascades tasks)
-
-**Acceptance criteria:**
-- [ ] Features appear under their parent Project in the left nav
-- [ ] Deleting a feature shows a confirmation dialog with task count before cascade deletion
-- [ ] Features can be reordered via drag-and-drop
-- [ ] Progress indicator shows X/Y tasks complete per feature
-
----
-
-### R-03: Task CRUD
-
-**Description:** Tasks are the atomic work items. Each Task has a Status that determines which Kanban column it appears in. Tasks belong to a Feature.
-
-**Entity fields:**
-- `Id` (int, PK)
-- `FeatureId` (int, FK → Feature, required)
-- `Name` (string, required, max 500 chars)
-- `Description` (string, optional, markdown — stored as-is, rendered in detail panel (R-11) only; board cards and left nav mini-cards show plain truncated text)
-- `Status` (enum: Backlog, Todo, InProgress, Review, Done)
-- `Priority` (enum: Low, Medium, High, Critical)
-- `Assignee` (string, optional — free text, not linked to users)
-- `SortOrder` (int — ordering within the same status column)
-- `CreatedAt` (DateTime)
-- `UpdatedAt` (DateTime)
-- `CompletedAt` (DateTime, nullable — set when Status → Done)
-
-**UI:**
-- Shown as mini-cards in the left nav under their Feature
-- Mini-card shows: name, priority badge, status dot
-- Click to open detail panel (slide-out or modal)
-- Drag mini-cards in the left nav to reorder within a feature
-
-**API:**
-- `GET /api/features/{featureId}/tasks` — list tasks for a feature
-- `GET /api/projects/{projectId}/tasks` — list ALL tasks for a project (flat)
-- `GET /api/tasks/{id}` — get one with subtasks
-- `POST /api/features/{featureId}/tasks` — create
-- `PUT /api/tasks/{id}` — update (including status change)
-- `DELETE /api/tasks/{id}` — delete
-- `PATCH /api/tasks/{id}/status` — change status only (used by board drag-and-drop)
-- `PATCH /api/tasks/{id}/feature` — reassign task to a different Feature (body: `{ featureId: int }`)
-
-Tasks can be reassigned to a different Feature via drag-and-drop in the left nav or via the Feature dropdown in the detail panel.
-
-If Status is omitted in POST body, defaults to Backlog.
-
-**Acceptance criteria:**
-- [ ] Creating a task with Status=Backlog places it in the Backlog column
-- [ ] Changing a task's status via API moves it on the board
-- [ ] Tasks with Status=Done set CompletedAt automatically
-- [ ] Priority badges render correctly (color-coded)
-- [ ] Tasks appear under their Feature in the left nav
-
----
-
-### R-04: Kanban Board (Auto-Generated from Status)
-
-**Description:** The board is a virtual view — not a separate entity. Each column maps to a Task Status. Cards appear in the column matching their current status. There's no separate "Board" or "Column" entity to manage.
-
-**Columns (fixed, derived from Status enum):**
-
-| Column | Status Value | Color Hint |
+| Field | Type | Required |
 |---|---|---|
-| Backlog | `Backlog` | Gray |
-| To Do | `Todo` | Blue |
-| In Progress | `InProgress` | Yellow/Orange |
-| Review | `Review` | Purple |
-| Done | `Done` | Green |
+| Id, TaskItemId | int | yes |
+| Text | string | yes |
+| Met | bool | yes |
+| SortOrder | int | yes |
+| CreatedAt, UpdatedAt | DateTime | yes |
 
-**UI:**
-- Board fills the main content area (right side of the layout)
-- Each column shows a header with name + task count
-- Cards show: task name, priority badge, feature name (small text), assignee
-- Drag-and-drop a card between columns changes the Task's Status
-- Click a card to open the detail slide-out panel (R-11)
-- "New Task" button at the bottom of each column (creates task with that status)
+### 3.6 Requirement
 
-A filter dropdown in the board header allows filtering by Feature ("All" by default). Selecting a Feature shows only that feature's tasks on the board.
+P0/P1/P2 trackable requirements scoped to a project. Optionally linked to a Feature or Task.
 
-Board auto-polls every 30 seconds for changes. A manual refresh button in the board header forces immediate sync. No SignalR.
+| Field | Type | Required | Notes |
+|---|---|---|---|
+| Id, ProjectId | int | yes | |
+| Priority | enum | yes | `P0 | P1 | P2` |
+| Status | enum | yes | open/met/dropped (see code) |
+| Name | string | yes | |
+| Description | string | no | markdown |
+| FeatureId | int? | no | optional link |
+| TaskItemId | int? | no | optional link |
+| SortOrder | int | yes | |
 
-**Acceptance criteria:**
-- [ ] Board shows exactly 5 columns matching the Status enum
-- [ ] Moving a card updates the Task.Status in the database
-- [ ] Board reflects task changes made via the API (auto-polls every 30s)
-- [ ] Manual refresh button forces immediate sync
-- [ ] Empty columns show a helpful empty state message
-- [ ] Card count badge on each column header
-- [ ] Feature filter dropdown filters board cards by Feature
+### 3.7 TaskDependency
 
----
+DAG; cycle-protected; project-scoped.
 
-### R-05: Drag-and-Drop on Board
+| Field | Type | Required | Notes |
+|---|---|---|---|
+| Id | int | yes | |
+| TaskItemId | int | yes | the dependent task |
+| DependsOnTaskItemId | int | yes | the prerequisite task |
+| ProjectId | int | yes | denormalised for cheap project queries |
+| Type | enum | yes | `DependsOn | Blocks` |
+| CreatedAt | DateTime | yes | |
 
-**Description:** Dragging a card from one column to another updates the Task's Status field in the database.
+### 3.8 TaskComment
 
-**Behavior:**
-- Drag within a column → reorder (update SortOrder)
-- Drag between columns → change Status + place at drop position
-- Visual feedback during drag (card lifts, drop zone highlights)
-- Optimistic update — UI moves immediately, API call in background
-- On API failure — revert the card to its original position + show error toast
+Mixed system + user comments on a task.
 
-**Acceptance criteria:**
-- [ ] Drag from "Todo" to "InProgress" sets Task.Status = InProgress
-- [ ] SortOrder updates correctly when dropping between existing cards
-- [ ] The left nav mini-card status dot updates to match
-- [ ] API failure reverts the visual state
-
----
-
-### R-06: Card ↔ Project Outline Link
-
-**Description:** Clicking a card on the board opens the detail slide-out panel (R-11). The detail panel includes a "Show in outline" button that highlights the task in the left nav. Clicking a mini-card in the left nav also opens the detail panel and highlights the corresponding card on the board.
-
-**Behavior:**
-- Board card click → opens the detail slide-out panel (R-11)
-- Detail panel "Show in outline" button → left nav scrolls to the Task, expands parent Feature, highlights the mini-card briefly (smooth scroll + 2-second highlight animation)
-- Left nav mini-card click → opens the detail panel + board scrolls to the card's column, highlights the card briefly (smooth scroll + 2-second highlight animation)
-
-**Acceptance criteria:**
-- [ ] Clicking a board card opens the detail panel
-- [ ] "Show in outline" button in detail panel highlights and scrolls to the task in the left nav
-- [ ] Clicking a left nav mini-card opens the detail panel and highlights the card on the board
-- [ ] Parent Feature expands automatically if collapsed
-
----
-
-### R-07: Left Nav — Project Outline Panel
-
-**Description:** A persistent left panel showing the Project hierarchy: Project → Features → Tasks as a tree with mini-cards.
-
-**Layout:**
-- Fixed width (300px default, resizable)
-- Scrollable independently from the board
-- Collapsible (toggle button to hide/show)
-
-**Content:**
-- Project name + description at the top
-- Features as collapsible sections
-- Tasks as mini-cards under each Feature
-- Mini-card shows: name (truncated), priority badge (small colored dot), status indicator (colored dot matching column color)
-- Drag-and-drop mini-cards to reorder within a Feature
-- "Add Feature" button at the bottom
-- "Add Task" button under each Feature
-
-**Acceptance criteria:**
-- [ ] Left nav shows correct hierarchy for the selected project
-- [ ] Mini-cards show priority and status visually
-- [ ] Features are collapsible
-- [ ] Drag-and-drop reorders tasks within a feature
-- [ ] Adding a task from the left nav creates it with Status=Backlog
-
----
-
-### R-08: REST API for AI Agents
-
-**Description:** A complete JSON API that AI agents (Claude Code, Cursor, etc.) can use to read and modify project data. No authentication required (local trust model).
-
-**Design principles:**
-- All endpoints return JSON
-- Standard HTTP status codes (200, 201, 204, 400, 404, 422)
-- Error responses include a `message` field
-- Supports `X-Request-Id` header for correlation
-
-**Endpoint summary:**
-
-| Method | Path | Description |
+| Field | Type | Required |
 |---|---|---|
-| GET | `/api/projects` | List all projects |
-| GET | `/api/projects/{id}` | Get project with feature/task counts |
-| POST | `/api/projects` | Create project |
-| PUT | `/api/projects/{id}` | Update project |
-| DELETE | `/api/projects/{id}` | Delete project + cascade |
-| GET | `/api/projects/{id}/features` | List features |
-| GET | `/api/features/{id}` | Get single feature with task counts |
-| POST | `/api/projects/{id}/features` | Create feature |
-| PUT | `/api/features/{id}` | Update feature |
-| DELETE | `/api/features/{id}` | Delete feature + cascade |
-| GET | `/api/features/{id}/tasks` | List tasks in feature |
-| GET | `/api/projects/{id}/tasks` | List ALL tasks in project |
-| GET | `/api/projects/{id}/board` | Get board view (tasks grouped by status) |
-| GET | `/api/tasks/{id}` | Get task with subtasks |
-| POST | `/api/features/{id}/tasks` | Create task |
-| PUT | `/api/tasks/{id}` | Update task |
-| DELETE | `/api/tasks/{id}` | Delete task |
-| PATCH | `/api/tasks/{id}/status` | Change status only |
-| PATCH | `/api/tasks/{id}/feature` | Reassign task to different feature |
-| GET | `/api/tasks/{id}/subtasks` | List subtasks for a task |
-| POST | `/api/tasks/{id}/subtasks` | Create subtask |
-| PUT | `/api/subtasks/{id}` | Update subtask |
-| DELETE | `/api/subtasks/{id}` | Delete subtask |
+| Id, TaskItemId | int | yes |
+| Text | string | yes |
+| Author | string | yes |
+| Type | enum | yes |
+| CreatedAt | DateTime | yes |
 
-**Pagination:** Not required. All list endpoints return full results.
+`CommentType` values:
+- **System types** (only the API/service layer may create): `Created`, `StatusChange`, `FeatureChange`, `Claimed`, `Released`, `Deleted` (and similar)
+- **User-creatable types** (whitelisted): `Note`, `Decision`, `Handoff`, `Verification`
 
-**Concurrency:** Last-write-wins. No optimistic locking for P0.
+The whitelist is enforced server-side in `AllowedUserCommentTypes` (`ApiEndpoints.cs`).
 
-**CORS:** Enabled for all origins (no auth, local tool).
+### 3.9 ActivityEvent
 
-### Validation Rules
+Append-only audit log. **Survives entity deletion** (see R-7.3).
 
-- Name: required (1+ char trimmed)
-- Description: max 10,000 chars
-- Status and Priority must be valid enum values
-- Unknown JSON fields are ignored
+| Field | Type | Required | Notes |
+|---|---|---|---|
+| Id | int | yes | |
+| ProjectId | int | yes | denormalised; **not a navigation property** — survives project delete |
+| EntityType | string | yes | "Task", "Requirement", "Project", "Feature" — see R-5.5 about typing |
+| EntityId | int | yes | |
+| Actor | string? | no | free-text label of who did it |
+| EventType | string | yes | "TaskCreated", "TaskStatusChanged", "TaskClaimed", etc. |
+| BeforeJson | string? | no | structured snapshot of relevant fields before the change |
+| AfterJson | string? | no | structured snapshot after |
+| Message | string? | no | human-readable summary |
+| OccurredAt | DateTime | yes | UTC |
 
-### Error Response Schema
+---
 
-All 400/422 responses use this shape:
+## 4. Capabilities (the requirements)
 
-```json
-{
-  "message": "string",
-  "errors": {
-    "fieldName": ["error message 1", "error message 2"]
-  }
-}
+Requirements are organised by **capability**. Every capability must be reachable from both REST and MCP. Status legend:
+
+- ✅ implemented
+- ⚠️ partially implemented (with caveat)
+- ❌ not implemented (gap)
+
+### C-1. Read everything
+
+The agent can navigate and read every entity in the graph.
+
+| # | Requirement | Status |
+|---|-------------|--------|
+| R-1.1 | List + get for every entity: project, feature, task, subtask, acceptance criterion, requirement, dependency, comment, activity event. | ✅ |
+| R-1.2 | `GET /api/projects/{id}/context` returns the entire project graph in one denormalised JSON payload optimised for AI consumption: features (recursive), tasks, subtasks (recursive), criteria, comments, requirements, dependencies, recent activity. | ✅ |
+| R-1.3 | Activity is queryable per project (`GET /api/projects/{id}/activity`) and per task (`GET /api/tasks/{id}/activity`), time-ordered, with structured `before`/`after` snapshots. | ✅ |
+| R-1.4 | All list endpoints support `?limit=&offset=` paging. | ❌ Only `/activity` clamps `limit` to 500. Everything else is unbounded. |
+| R-1.5 | Search endpoint: `GET /api/projects/{id}/search?q=...` returns matches across project descriptions, task descriptions, comments, requirements. | ❌ Not implemented. |
+| R-1.6 | Per-task context endpoint: `GET /api/tasks/{id}/context` returns task + criteria + subtasks recursively + dependencies (resolved to names + status) + recent comments + related requirements + recent activity, in one call. | ⚠️ `GET /api/tasks/{id}` returns subtasks + criteria but not comments/deps/activity. Consolidate. |
+
+**Acceptance criteria:**
+- Every entity has a working `GET /api/...` route.
+- `/context` and `/board` round-trip through `smoke-api.ps1` with assertions on returned shape.
+- `next-tasks` returns priority-sorted results (see C-3).
+
+### C-2. Write everything
+
+The agent can author, modify, and remove every entity. Mutations preserve audit integrity.
+
+| # | Requirement | Status |
+|---|-------------|--------|
+| R-2.1 | Every entity has full REST CRUD: list, get, create, update, delete. | ✅ 46 endpoints in `ApiEndpoints.cs`. |
+| R-2.2 | Every REST capability has at least one MCP tool. | ❌ MCP exposes 11 of ~40 needed tools — see §6. |
+| R-2.3 | Mutations through the UI go through the **same shared service layer** as REST mutations, so audit events, claim semantics, and validation are produced once and applied everywhere. | ❌ Issue #88 — UI components write directly to EF, bypassing audit. **Highest-priority refactor.** |
+| R-2.4 | All entity mutations produce an `ActivityEvent` row. | ✅ for REST (9 emission sites in `ApiEndpoints.cs`); ❌ for UI (R-2.3). |
+| R-2.5 | Project boundary integrity: a feature cannot have a parent feature in another project; a task cannot be reassigned across projects; a requirement cannot link to a feature/task in another project. | ❌ Issues #82, #83 — both still open. |
+| R-2.6 | Cycle protection on feature trees, subtask trees, and dependency graphs. | ✅ `WouldCreateFeatureCycle`, `WouldCreateSubtaskCycle`, `WouldCreateTaskDependencyCycle` (`ApiEndpoints.cs:2014-2080`). |
+| R-2.7 | Enum validation rejects undefined values: `Status: "99"` returns 422. UI int-to-enum casts also validate. | ❌ Issue #89 — 14 API call sites use `Enum.TryParse` (accepts numeric strings); UI does raw `(WorkStatus)int` casts. |
+
+**Acceptance criteria:**
+- Smoke suite covers create + update + delete for every entity (R-1.4 of `smoke-api.ps1` extension).
+- Concurrent UI + API mutation produces one `ActivityEvent` row per logical change (regardless of source).
+- Cross-project link attempts return 422.
+
+### C-3. Direct agents to the next step, with full context
+
+Given a project, the API tells an agent what to work on next, with reasoning and the context needed to act.
+
+| # | Requirement | Status |
+|---|-------------|--------|
+| R-3.1 | `GET /api/projects/{id}/next-tasks?actor={name}&limit={n}` returns priority-sorted, dependency-aware next tasks. | ✅ |
+| R-3.2 | Each recommendation includes a `reason` string ("Top because: P0 requirement linked, no open blockers, oldest unclaimed"). | ✅ `BuildNextTaskReason` (`ApiEndpoints.cs:2280`). |
+| R-3.3 | Tasks blocked by incomplete dependencies are excluded from `next-tasks` results. | ✅ |
+| R-3.4 | Per-task context endpoint (see R-1.6) returns the bundle an agent needs without further round-trips. | ⚠️ Partial. |
+| R-3.5 | `next-tasks` accepts `actor` and de-prioritises tasks claimed by other actors. | ✅ |
+| R-3.6 | Recommendation algorithm is documented in `docs/` so agents (and humans) can predict ranking. | ❌ Lives only in `BuildNextTaskReason` source. |
+
+**Ranking rules (current):**
+1. Tasks with incomplete acceptance criteria (the closest to done)
+2. Tasks linked from open P0 requirements
+3. Tasks with no open blockers
+4. Oldest unclaimed (FIFO bias)
+
+**Acceptance criteria:**
+- `next-tasks` is non-empty for any project with ≥1 unblocked task.
+- Reasons are non-empty strings tying back to specific ranking signals.
+- Blocked tasks never appear at the top of the list.
+
+### C-4. Add and update documentation
+
+Every textual field is documentation. Agents update README, goals, descriptions, comments, and decisions.
+
+| # | Requirement | Status |
+|---|-------------|--------|
+| R-4.1 | Project carries first-class documentation fields: `name`, `description`, `goals`, `readme`. The `readme` field is intended as the project's living documentation. | ✅ schema; ⚠️ no MCP tool to update README/goals yet. |
+| R-4.2 | Markdown is rendered server-side via Markdig with HTML sanitisation. Renderable on any text field tagged `markdown` (project description/goals/readme, feature description, task description, comment text). | ❌ Markdig is referenced in `KanbanFlow.csproj:11` but never imported. README/description currently render as plaintext. |
+| R-4.3 | Comments support typed authoring: `Note`, `Decision`, `Handoff`, `Verification` (user-creatable) and system types (`Created`, `StatusChange`, etc.). The whitelist enforces the user/system split. | ✅ `AllowedUserCommentTypes` (`ApiEndpoints.cs`). |
+| R-4.4 | Acceptance criteria are first-class checklist items, not embedded in description text. | ✅ |
+| R-4.5 | Activity log records both structured `BeforeJson`/`AfterJson` snapshots and a human-readable `Message`. Both are exposed to AI for summarisation. | ✅ |
+| R-4.6 | Adding a `Decision` or `Handoff` comment is a single MCP tool call. | ✅ `add_task_comment` exists. |
+
+**Acceptance criteria:**
+- An agent can create a project, populate README + goals, add features and tasks, record a Decision comment, and link a Handoff to another agent — all via MCP, in <10 tool calls.
+
+### C-5. Be self-describing
+
+Agents discover the API and tool surface without reading source.
+
+| # | Requirement | Status |
+|---|-------------|--------|
+| R-5.1 | API publishes an OpenAPI document at `/openapi.json` covering every endpoint, request body, and response shape. | ❌ Not wired (`Microsoft.AspNetCore.OpenApi` not added). |
+| R-5.2 | Response types are strongly typed (records), not anonymous. | ❌ ~25 distinct anonymous shapes inline in `ApiEndpoints.cs`. |
+| R-5.3 | Each MCP tool description explains purpose, parameters, and the typical follow-up after calling it. | ⚠️ Tool descriptions exist but are terse. |
+| R-5.4 | This requirements doc + README list every endpoint, kept in sync with code. | ⚠️ README has the full table; legacy v1 doc drifted to 23 of 46. v2 (this doc) is fresh. Plan: regenerate from OpenAPI once R-5.1 lands. |
+| R-5.5 | Errors use a uniform shape: `{ "message": string, "errors"?: Record<string, string[]>, "details"?: Record<string, unknown> }`. | ⚠️ Inconsistent — some endpoints add bonus fields ad-hoc. |
+| R-5.6 | `EntityType` discriminator on `ActivityEvent` is constant-typed, not free-form string. | ❌ Currently string literals (`"Task"`, `"Requirement"`); typo-prone. Add `static class ActivityEntityTypes`. |
+
+**Acceptance criteria:**
+- An agent can fetch `/openapi.json`, parse it, and call any endpoint without source-code access.
+- Error responses are deterministic enough to handle without per-endpoint special cases.
+
+### C-6. Be operationally simple
+
+Zero setup. Single SQLite file. Cross-platform. CI-tested.
+
+| # | Requirement | Status |
+|---|-------------|--------|
+| R-6.1 | Zero setup: `dotnet run` produces a working app with seed data on .NET 10. | ✅ |
+| R-6.2 | Single SQLite file; portable; no Docker, no migrations service. | ✅ |
+| R-6.3 | Smoke suite runs in <60 seconds. | ✅ ~40s, asserts ~50 HTTP calls. |
+| R-6.4 | Schema evolves via EF Core migrations, not hand-rolled `ALTER TABLE` patchers. | ❌ Issue #86 — `EnsureCreated()` + four `Ensure*` patchers in `Program.cs`, including a transactional FK-rebuild dance. |
+| R-6.5 | A second smoke script (Node-based, cross-platform) lets non-Windows contributors verify the API. | ❌ Only PowerShell smoke exists. |
+| R-6.6 | CI runs build + smoke on every PR. | ❌ No `.github/workflows/`. |
+| R-6.7 | Dev URL is consistent across `launchSettings.json`, README, and MCP defaults. | ❌ Three URLs in use today (`:5148`, `:5123`, `:5043`). Standardise on `:5123`. |
+
+**Acceptance criteria:**
+- `git clone && dotnet run` works on a fresh machine.
+- A non-Windows contributor can verify the API via Node smoke.
+
+### C-7. Be honest about the audit trail (non-negotiable for AI accuracy)
+
+The audit log is the single source of truth for "what changed when." This must hold without exceptions.
+
+| # | Requirement | Status |
+|---|-------------|--------|
+| R-7.1 | The audit log is the single source of truth for "what changed when." No mutation path is allowed to skip it. | rule |
+| R-7.2 | UI mutations and API mutations produce identical activity events. | ❌ Issue #88 — UI bypasses. Fixed by R-2.3 (service layer). |
+| R-7.3 | The audit log survives entity deletion. The activity-read endpoint allows reading after the project no longer exists. | ⚠️ ✅ — `ActivityEvent` deliberately ignores the project FK (`AppDbContext.cs:64-71`). ❌ — `GET /api/projects/{id}/activity` hard-fails on missing project (issue #85, P2). |
+
+**Acceptance criteria:**
+- Smoke suite asserts: a status change via the UI produces an `ActivityEvent` with the same `EventType` and snapshot fields as a status change via the API.
+- After deleting a project, its activity rows are still queryable (post-#85 fix).
+
+---
+
+## 5. Out of scope (deliberate exclusions)
+
+These aren't oversights. They're explicit non-goals for v2:
+
+| Excluded | Reason |
+|---|---|
+| Authentication / authorisation | Single-trust-boundary tool. Agent + owner on one machine. |
+| Multi-tenancy / per-project ownership | One DB, one user. |
+| HTTPS, security headers, rate limiting | Local-loopback only. Bind explicitly to `127.0.0.1`. |
+| Real-time human collaboration (multiple humans on the same board) | Single-user UX; auto-poll or manual refresh. |
+| Notifications (email, Slack) | The agent is the integration. |
+| External integrations (GitHub, Jira, Linear) | Possibly a later module; not v2. |
+| Mobile-first UI | Desktop primary; existing responsive work is a courtesy, not a target. |
+| LLM-driven planning features (`generate_task_outline` etc.) | The agent does this; the system records the outcome via existing CRUD. |
+
+---
+
+## 6. API + MCP surface
+
+### 6.1 REST endpoints (46 total)
+
+```
+/api/projects                               GET (list), POST (create)
+/api/projects/{id}                          GET, PUT, DELETE
+/api/projects/{id}/context                  GET (full graph for AI)
+/api/projects/{id}/board                    GET (tasks by status column)
+/api/projects/{id}/next-tasks               GET (direction)
+/api/projects/{id}/activity                 GET (project audit log)
+/api/projects/{id}/features                 GET (list), POST (create)
+/api/projects/{id}/tasks                    GET (flat task list)
+/api/projects/{id}/requirements             GET (list), POST (create)
+/api/features/{id}                          GET, PUT, DELETE
+/api/features/{id}/tasks                    GET (list), POST (create)
+/api/tasks/{id}                             GET, PUT, DELETE
+/api/tasks/{id}/status                      PATCH
+/api/tasks/{id}/feature                     PATCH (reassign)
+/api/tasks/{id}/claim                       POST
+/api/tasks/{id}/release                     POST
+/api/tasks/{id}/activity                    GET
+/api/tasks/{id}/subtasks                    GET (list), POST (create)
+/api/tasks/{id}/acceptance-criteria         GET (list), POST (create)
+/api/tasks/{id}/comments                    GET (list), POST (create)
+/api/tasks/{id}/dependencies                GET (list), POST (create)
+/api/subtasks/{id}                          GET, PUT, DELETE
+/api/acceptance-criteria/{id}               GET, PUT, DELETE
+/api/comments/{id}                          DELETE
+/api/task-dependencies/{id}                 GET, DELETE
+/api/requirements/{id}                      GET, PUT, DELETE
+/api/requirements/{id}/assign               PATCH (assign feature/task)
 ```
 
-The `errors` field is optional and only present for validation errors.
+### 6.2 MCP tools
 
-**Acceptance criteria:**
-- [ ] All endpoints return proper JSON with correct status codes
-- [ ] `GET /api/projects/{id}/board` returns tasks grouped by status column
-- [ ] Creating a task via API makes it appear on the board immediately (on refresh)
-- [ ] Status change via `PATCH` is reflected on the board
+**Implemented (11):** `list_projects`, `get_project`, `list_project_tasks`, `get_task`, `get_project_board`, `get_project_context`, `get_next_tasks`, `claim_task`, `release_task`, `update_task_status`, `add_task_comment`.
 
----
+**To add (priority order):**
 
-### R-09: SQLite Database
+| # | Tool | Closes capability |
+|---|------|-------------------|
+| 1 | `update_project` | C-4 (the documentation backbone) |
+| 2 | `create_project` | C-2 |
+| 3 | `create_feature`, `update_feature`, `delete_feature`, `reparent_feature` | C-2 |
+| 4 | `create_task`, `update_task`, `delete_task`, `reassign_task` | C-2 |
+| 5 | `get_step_context` | C-3 (single-call bundle for an agent about to act) |
+| 6 | Subtask CRUD (5 tools) | C-2 |
+| 7 | Acceptance-criterion CRUD (5 tools) | C-2 |
+| 8 | Requirement CRUD + assign (6 tools) | C-2 |
+| 9 | Dependency CRUD (3 tools) | C-2 |
+| 10 | Activity tools (`list_project_activity`, `list_task_activity`) | C-1 |
+| 11 | `search_project` (waits on R-1.5) | C-1 |
 
-**Description:** The app uses SQLite via EF Core. Database file is created automatically on first run. No setup, no Docker, no connection strings to configure.
-
-**Details:**
-- Database file: `kanbanflow.db` in the app directory
-- EF Core with `Microsoft.EntityFrameworkCore.Sqlite`
-- Code-first migrations (or `EnsureCreated` for simplicity)
-- Default URL: `http://localhost:5000`
-- Seed data:
-  - Project: "Sample Project"
-  - Feature 1: "User Management" (3 tasks)
-    - "Login page" — Status: Done
-    - "Registration form" — Status: InProgress
-    - "Password reset" — Status: Todo
-  - Feature 2: "Dashboard" (2 tasks)
-    - "KPI cards" — Status: Backlog
-    - "Activity feed" — Status: Backlog
-
-**Acceptance criteria:**
-- [ ] `dotnet run` creates the database automatically if it doesn't exist
-- [ ] Sample project with tasks appears on first run
-- [ ] No configuration needed — works out of the box
+Each tool forwards to the REST API — no duplicate logic in the MCP wrapper.
 
 ---
 
-### R-10: Auto-Login
+## 7. Definition of done (vision-complete)
 
-**Description:** No user accounts, no login page. The app is a single-user local tool. It starts and you're immediately using it.
+An agent can do the following 10-step workflow end-to-end via MCP, in under 5 minutes, on a fresh DB:
 
-**Details:**
-- No ASP.NET Identity
-- No authentication middleware
-- No login/register pages
-- App loads directly to the home page (project list)
+1. `create_project` "Build feature X" with description + goals
+2. `update_project_readme` to document context, links, prior art
+3. `create_feature` × 3 (with markdown descriptions)
+4. `create_requirement` × 5 (P0/P1/P2 with acceptance criteria)
+5. `create_task` × 12 (assigned to features; with markdown descriptions)
+6. `create_acceptance_criterion` × 30 (3 per task average)
+7. `create_dependency` × 8 (real DAG)
+8. `get_next_tasks` → reasoning explains the top recommendation
+9. `claim_task` → `update_task_status` Todo → InProgress → `add_task_comment` Decision → `mark_acceptance_criterion_done` × 3 → `update_task_status` Done
+10. `list_task_activity` returns 8+ events tracing the lifecycle
 
-**Acceptance criteria:**
-- [ ] Opening the app URL shows the home page immediately
-- [ ] No login redirect
-- [ ] No user-related UI elements (no "Log out", no avatar)
-
----
-
-## P1 — Should Have
-
-### R-11: Task Detail Panel
-
-**Description:** Clicking a task (mini-card or board card) opens a slide-out panel showing full task details with inline editing. Changes auto-save with 500ms debounce. No explicit Save button.
-
-**Panel contents:**
-- Task name (editable inline)
-- Status dropdown
-- Priority dropdown
-- Feature dropdown (reassign task to a different Feature)
-- Assignee text field
-- Description (markdown editor or textarea — rendered as markdown via Markdig)
-- Subtask list (R-13)
-- Feature breadcrumb (Project > Feature > Task)
-- Created/Updated timestamps
-- "Show in outline" button (highlights the task in the left nav, see R-06)
-- "Delete" button with confirmation
-
-**Acceptance criteria:**
-- [ ] Panel slides in from the right
-- [ ] All fields are editable inline
-- [ ] Changes auto-save with 500ms debounce (no explicit Save button)
-- [ ] Close via X button or clicking outside
+All 10 steps must succeed without the agent reading any source code — the OpenAPI spec and MCP tool descriptions are sufficient.
 
 ---
 
-### R-12: Priority Badges
+## 8. Gap list (prioritised)
 
-**Description:** Tasks show a colored priority badge on both board cards and left nav mini-cards.
+The five concentrated gaps to vision-complete:
 
-| Priority | Color | Badge Text |
-|---|---|---|
-| Critical | Red | `Critical` |
-| High | Orange | `High` |
-| Medium | Yellow | `Medium` |
-| Low | Gray | `Low` |
+| # | Gap | Closes | Effort |
+|---|-----|--------|--------|
+| 1 | **Service layer extraction** so REST + UI share validation, audit, project-boundary checks. | R-2.3, R-2.4, R-2.5, R-7.2 (closes #82, #83, #88, half of #89) | 2-3 days |
+| 2 | **Expand MCP tool surface** from 11 → ~40. | R-2.2 | 2-4 days |
+| 3 | **OpenAPI generation + replace anonymous response types with records.** | R-5.1, R-5.2 | 1-2 days |
+| 4 | **Wire up Markdig** for rendering descriptions / goals / README / comments. | R-4.2 | 0.5-1 day |
+| 5 | **Adopt EF Core migrations** (replace `EnsureCreated` + manual patchers). | R-6.4 | 0.5 day |
 
-**Acceptance criteria:**
-- [ ] Badge visible on board cards
-- [ ] Small dot or badge on left nav mini-cards
-- [ ] Correct colors for each priority level
+Plus four integrity bugs that directly hurt AI accuracy:
 
----
+| Bug | Issue | Fix vehicle |
+|-----|-------|-------------|
+| Cross-project context leak (requirement assign) | #82 | Service-layer extraction (gap #1) |
+| Task feature reassignment crosses projects | #83 | Service-layer extraction |
+| UI mutations leave audit log half-empty | #88 | Service-layer extraction |
+| `Status: "99"` produces ghost tasks invisible to board | #89 | `TryParseStrict<T>` helper + remove UI raw int-to-enum casts |
 
-### R-13: Subtasks
-
-**Description:** Tasks can have a checkbox list of subtasks.
-
-**Entity fields:**
-- `Id` (int, PK)
-- `TaskId` (int, FK → Task)
-- `Text` (string, required)
-- `Completed` (bool)
-- `SortOrder` (int)
-- `CreatedAt` (DateTime)
-
-**UI:**
-- Checkbox list in the task detail panel
-- Add new subtask via text input + Enter
-- Toggle completion via checkbox
-- Delete via X button
-- Drag to reorder
-- Progress shown on board card: "3/5" checkmark count
-
-**API:**
-- `GET /api/tasks/{id}/subtasks`
-- `POST /api/tasks/{id}/subtasks`
-- `PUT /api/subtasks/{id}`
-- `DELETE /api/subtasks/{id}`
-
-**Acceptance criteria:**
-- [ ] Subtasks render as checkboxes
-- [ ] Checking a subtask saves immediately
-- [ ] Board card shows subtask progress (e.g., "2/4")
+Plus polish: standardise dev URL on `:5123`, add CI workflow, add Node-based smoke, add cross-platform contributor docs.
 
 ---
 
-### R-14: Feature Progress Indicator
+## 9. Historical reference
 
-**Description:** Each Feature in the left nav shows a progress bar or fraction showing how many tasks are Done.
+v1 (2026-04-12) of this document organised requirements P0/P1/P2 by entity (R-01 Project CRUD, R-02 Feature CRUD, ... R-21 Recursive Hierarchy). That structure shipped successfully — the entity-level work is implemented and the data model is stable.
 
-**Display:** `3/7 tasks` with a small progress bar
+v2 (this version) reorganises around capabilities because that's the lens the AI-first vision (README §"Vision") needs. The entity field specs from v1 are preserved in §3 above; the per-entity acceptance-criteria checklists are folded into the C-1..C-7 acceptance criteria.
 
-**Acceptance criteria:**
-- [ ] Progress updates when a task status changes to Done
-- [ ] Shows 0/N for features with no completed tasks
-- [ ] Shows checkmark or "Complete" when all tasks are Done
-
----
-
-### R-15: Filter/Search
-
-**Description:** A search bar at the top of the left nav that filters tasks by name. Optional filters for status and priority.
-
-**Acceptance criteria:**
-- [ ] Typing in search filters tasks in real-time (client-side)
-- [ ] Matching tasks remain visible; non-matching hide
-- [ ] Clear button resets the filter
-- [ ] Search also filters board cards
-
----
-
-### R-16: Board Column WIP Limits
-
-**Description:** Columns can have optional WIP (Work In Progress) limits. When the limit is reached, the column header shows a warning and adding more cards is blocked.
-
-WIP limits are stored in `appsettings.json` as a dictionary of status to max count. Default: unlimited for all columns.
-
-**Acceptance criteria:**
-- [ ] WIP limit configurable per column (default: unlimited)
-- [ ] Column header shows "3/5" when limit is set
-- [ ] Dragging a card into a full column shows a warning and reverts
-
----
-
-## P2 — Nice to Have
-
-### R-17: Multiple Board Views
-
-**Description:** Different filtered views of the same tasks — e.g., "My Tasks", "Critical Only", "This Sprint".
-
----
-
-### R-18: Comments/Notes on Tasks
-
-**Description:** Free-text comments attached to tasks with timestamps.
-
----
-
-### R-19: Activity Log
-
-**Description:** Chronological log of all changes — task created, status changed, etc.
-
----
-
-### R-20: Dark Mode
-
-**Description:** Toggle between light and dark Bootstrap themes.
-
----
-
-### R-21: Recursive Hierarchy (Nested Features & Subtasks)
-
-**Description:** Features can contain child features (sub-features), and subtasks can contain child subtasks (sub-subtasks), to arbitrary depth. This enables breaking down complex work into an outline-style hierarchy displayed in the left nav and detail panel.
-
-**Data model changes:**
-- `Feature.ParentFeatureId` (int?, FK → Feature, nullable) — null means top-level
-- `Feature.ChildFeatures` — navigation property to child features
-- `Subtask.ParentSubtaskId` (int?, FK → Subtask, nullable) — null means top-level
-- `Subtask.ChildSubtasks` — navigation property to child subtasks
-- Both use `DeleteBehavior.Restrict` (must delete children first to prevent orphans)
-
-**UI — Left Nav:**
-- Features render recursively as an indented tree (16px indent per level)
-- Each feature shows "+ Add Task" and "+ Sub-feature" buttons when expanded
-- Task counts aggregate recursively (parent shows sum of own + all descendant tasks)
-- Progress bar reflects aggregate done/total across the entire subtree
-
-**UI — Detail Panel:**
-- Subtasks render recursively as an indented checkbox tree (20px indent per level)
-- Each subtask has a `+` button to add a child sub-item inline
-- Subtask count badge (e.g., "0/4") includes all descendants
-
-**API:**
-- `POST /api/projects/{id}/features` — accepts optional `parentFeatureId` in body
-- `PUT /api/features/{id}` — can update `parentFeatureId` (set to 0 or null to make top-level)
-- `POST /api/tasks/{id}/subtasks` — accepts optional `parentSubtaskId` in body
-- `PUT /api/subtasks/{id}` — can update `parentSubtaskId`
-- All GET responses include `parentFeatureId` / `parentSubtaskId` fields
-
-**Acceptance criteria:**
-- [ ] Creating a feature with `parentFeatureId` nests it under the parent in the left nav
-- [ ] Creating a subtask with `parentSubtaskId` nests it under the parent in the detail panel
-- [ ] Parent feature task counts aggregate across all descendant features
-- [ ] Deleting a parent feature with children returns an error (Restrict, not Cascade)
-- [ ] Sub-features are visually indented in the left nav
-- [ ] Sub-subtasks are visually indented in the detail panel
-- [ ] Seed data includes at least one sub-feature and one nested subtask
-
----
-
-## Out of Scope
-
-- User accounts / multi-user authentication
-- Real-time collaboration (SignalR/WebSocket)
-- GitHub issue sync
-- LLM/AI planning features (generate_task_outline, etc.)
-- MCP server
-- Docker deployment
-- Mobile-specific layouts
-
----
-
-## Definition of Done
-
-1. `dotnet run` starts the app with zero config on .NET 10
-2. SQLite database created automatically with seed data
-3. Home page shows project list
-4. Selecting a project shows left nav (Project → Features → Tasks) + Kanban board
-5. Dragging a card on the board updates the task status
-6. Clicking a board card opens the detail panel; "Show in outline" highlights the task in the left nav
-7. All API endpoints return correct JSON
-8. Bootstrap CSS renders cleanly — no custom CSS hacks
-9. No login page, no accounts — immediate access
+The previous review documents in `docs/reviews/` remain authoritative for code-state-as-of date.
