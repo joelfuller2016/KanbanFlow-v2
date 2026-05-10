@@ -70,6 +70,7 @@ try {
   const list = await request("tools/list", {});
   const toolNames = new Set(list.tools.map(tool => tool.name));
   for (const requiredTool of [
+    // Read tools (original 11)
     "list_projects",
     "get_project",
     "list_project_tasks",
@@ -80,7 +81,18 @@ try {
     "claim_task",
     "release_task",
     "update_task_status",
-    "add_task_comment"
+    "add_task_comment",
+    // Authoring tools (added with /api/tasks/{id}/context)
+    "create_project",
+    "update_project",
+    "create_feature",
+    "update_feature",
+    "delete_feature",
+    "create_task",
+    "update_task",
+    "delete_task",
+    "reassign_task",
+    "get_step_context"
   ]) {
     if (!toolNames.has(requiredTool)) {
       throw new Error(`Missing MCP tool: ${requiredTool}`);
@@ -151,6 +163,54 @@ try {
   if (!Array.isArray(fetchedTask.comments)) {
     throw new Error("get_task did not include a comments array.");
   }
+
+  // Step context: the single-call AI bundle that closes R-1.6.
+  const stepContext = await callTool("get_step_context", { taskId: task.id });
+  for (const key of [
+    "task",
+    "feature",
+    "acceptanceCriteria",
+    "subtasks",
+    "dependencies",
+    "openBlockerCount",
+    "isBlocked",
+    "recentComments",
+    "relatedRequirements",
+    "recentActivity"
+  ]) {
+    if (!(key in stepContext)) {
+      throw new Error(`get_step_context payload missing '${key}' key: ${JSON.stringify(stepContext)}`);
+    }
+  }
+  if (stepContext.task?.id !== task.id) {
+    throw new Error(`get_step_context returned wrong task: ${JSON.stringify(stepContext.task)}`);
+  }
+  if (stepContext.feature?.projectId !== projectId) {
+    throw new Error(`get_step_context returned wrong project: ${JSON.stringify(stepContext.feature)}`);
+  }
+
+  // Authoring tools spot-check: create_task -> update_task -> delete_task round-trip.
+  const authoredTask = await callTool("create_task", {
+    featureId: tempFeatureId,
+    name: `MCP authored task ${runMarker}`,
+    description: "Created via the new create_task MCP tool.",
+    status: "Backlog",
+    priority: "Medium"
+  });
+  if (typeof authoredTask?.id !== "number") {
+    throw new Error(`create_task did not return an id: ${JSON.stringify(authoredTask)}`);
+  }
+  const updatedTask = await callTool("update_task", {
+    taskId: authoredTask.id,
+    name: `MCP authored task ${runMarker} (updated)`,
+    description: "Updated via update_task.",
+    status: "Todo",
+    priority: "High"
+  });
+  if (updatedTask?.priority !== "High") {
+    throw new Error(`update_task did not return updated priority: ${JSON.stringify(updatedTask)}`);
+  }
+  await callTool("delete_task", { taskId: authoredTask.id });
 
   await callTool("get_next_tasks", { projectId, limit: 3 });
   await callTool("claim_task", { taskId: task.id, actor: "mcp-smoke" });
