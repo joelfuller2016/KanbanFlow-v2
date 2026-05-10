@@ -29,6 +29,9 @@ builder.Services.AddScoped<ITaskService, TaskService>();
 builder.Services.AddHttpClient();
 builder.Services.AddScoped<ITestRunnerService, TestRunnerService>();
 
+// Markdown rendering (R-4.2: server-rendered, sanitized)
+builder.Services.AddSingleton<IMarkdownRenderer, MarkdownRenderer>();
+
 // OpenAPI document generation (R-5.1: /openapi.json discovery)
 builder.Services.AddOpenApi();
 

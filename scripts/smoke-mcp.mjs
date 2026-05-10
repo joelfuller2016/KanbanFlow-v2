@@ -92,7 +92,26 @@ try {
     "update_task",
     "delete_task",
     "reassign_task",
-    "get_step_context"
+    "get_step_context",
+    // Subtask CRUD
+    "list_subtasks",
+    "create_subtask",
+    "update_subtask",
+    "mark_subtask_done",
+    "delete_subtask",
+    // Acceptance criterion CRUD
+    "list_acceptance_criteria",
+    "create_acceptance_criterion",
+    "update_acceptance_criterion",
+    "mark_acceptance_criterion_done",
+    "delete_acceptance_criterion",
+    // Dependency CRUD
+    "list_dependencies",
+    "create_dependency",
+    "delete_dependency",
+    // Activity
+    "list_project_activity",
+    "list_task_activity"
   ]) {
     if (!toolNames.has(requiredTool)) {
       throw new Error(`Missing MCP tool: ${requiredTool}`);
@@ -211,6 +230,58 @@ try {
     throw new Error(`update_task did not return updated priority: ${JSON.stringify(updatedTask)}`);
   }
   await callTool("delete_task", { taskId: authoredTask.id });
+
+  // Subtask CRUD spot-check: create_subtask -> mark_subtask_done -> delete_subtask round-trip.
+  const createdSubtask = await callTool("create_subtask", {
+    taskId: task.id,
+    text: `MCP smoke subtask ${runMarker}`,
+    sortOrder: 0
+  });
+  if (typeof createdSubtask?.id !== "number") {
+    throw new Error(`create_subtask did not return an id: ${JSON.stringify(createdSubtask)}`);
+  }
+  if (createdSubtask.completed !== false) {
+    throw new Error(`create_subtask should default completed=false: ${JSON.stringify(createdSubtask)}`);
+  }
+  const markedSubtask = await callTool("mark_subtask_done", { subtaskId: createdSubtask.id, completed: true });
+  if (markedSubtask?.completed !== true) {
+    throw new Error(`mark_subtask_done did not return completed=true: ${JSON.stringify(markedSubtask)}`);
+  }
+  await callTool("delete_subtask", { subtaskId: createdSubtask.id });
+  const subtasksAfterDelete = await callTool("list_subtasks", { taskId: task.id });
+  if (!Array.isArray(subtasksAfterDelete) || subtasksAfterDelete.some(s => s.id === createdSubtask.id)) {
+    throw new Error(`delete_subtask did not remove subtask ${createdSubtask.id}: ${JSON.stringify(subtasksAfterDelete)}`);
+  }
+
+  // Acceptance criterion spot-check: create -> update -> delete round-trip.
+  const createdAc = await callTool("create_acceptance_criterion", {
+    taskId: task.id,
+    text: `MCP smoke AC ${runMarker}`,
+    sortOrder: 0
+  });
+  if (typeof createdAc?.id !== "number") {
+    throw new Error(`create_acceptance_criterion did not return an id: ${JSON.stringify(createdAc)}`);
+  }
+  const updatedAc = await callTool("update_acceptance_criterion", {
+    acId: createdAc.id,
+    text: `MCP smoke AC ${runMarker} (updated)`,
+    completed: true,
+    sortOrder: 5
+  });
+  if (updatedAc?.completed !== true || updatedAc?.sortOrder !== 5) {
+    throw new Error(`update_acceptance_criterion did not return updated fields: ${JSON.stringify(updatedAc)}`);
+  }
+  await callTool("delete_acceptance_criterion", { acId: createdAc.id });
+  const acAfterDelete = await callTool("list_acceptance_criteria", { taskId: task.id });
+  if (!Array.isArray(acAfterDelete) || acAfterDelete.some(a => a.id === createdAc.id)) {
+    throw new Error(`delete_acceptance_criterion did not remove criterion ${createdAc.id}: ${JSON.stringify(acAfterDelete)}`);
+  }
+
+  // Activity spot-check: list_task_activity should return an array (the round-trips above generate events).
+  const taskActivity = await callTool("list_task_activity", { taskId: task.id, limit: 5 });
+  if (!Array.isArray(taskActivity)) {
+    throw new Error(`list_task_activity did not return an array: ${JSON.stringify(taskActivity)}`);
+  }
 
   await callTool("get_next_tasks", { projectId, limit: 3 });
   await callTool("claim_task", { taskId: task.id, actor: "mcp-smoke" });
