@@ -369,6 +369,52 @@ public sealed class TestRunnerService(
                 throw new Exception($"Server errored on unknown route: {(int)resp.StatusCode}");
         }));
 
+        results.Add(await RunTest("OpenAPI document is published at /openapi/v1.json", "UI:Discovery", async () =>
+        {
+            var resp = await http.GetAsync("/openapi/v1.json", ct);
+            if (!resp.IsSuccessStatusCode)
+                throw new Exception($"GET /openapi/v1.json returned {(int)resp.StatusCode}");
+
+            var doc = await resp.Content.ReadFromJsonAsync<JsonElement>(Json, ct);
+            if (doc.ValueKind != JsonValueKind.Object)
+                throw new Exception($"Expected JSON object, got {doc.ValueKind}");
+
+            if (!doc.TryGetProperty("openapi", out var version) || version.ValueKind != JsonValueKind.String)
+                throw new Exception("Missing or non-string top-level 'openapi' field");
+            var versionString = version.GetString();
+            if (string.IsNullOrEmpty(versionString) || !versionString.StartsWith("3.", StringComparison.Ordinal))
+                throw new Exception($"Expected OpenAPI 3.x, got '{versionString}'");
+
+            if (!doc.TryGetProperty("paths", out var paths) || paths.ValueKind != JsonValueKind.Object)
+                throw new Exception("Missing 'paths' object on OpenAPI document");
+
+            var hasApiRoute = false;
+            foreach (var path in paths.EnumerateObject())
+            {
+                if (path.Name.StartsWith("/api/", StringComparison.Ordinal))
+                {
+                    hasApiRoute = true;
+                    break;
+                }
+            }
+            if (!hasApiRoute)
+                throw new Exception("OpenAPI document has no /api/* paths");
+
+            // /openapi.json should redirect (302) to /openapi/v1.json. Use a one-off
+            // HttpClient with AllowAutoRedirect = false so we can observe the 302 itself.
+            using var noRedirectClient = new HttpClient(new HttpClientHandler { AllowAutoRedirect = false })
+            {
+                BaseAddress = new Uri(GetBaseUrl()),
+                Timeout = TimeSpan.FromSeconds(10)
+            };
+            var redirectResp = await noRedirectClient.GetAsync("/openapi.json", ct);
+            if (redirectResp.StatusCode != HttpStatusCode.Found)
+                throw new Exception($"Expected 302 from /openapi.json, got {(int)redirectResp.StatusCode}");
+            var location = redirectResp.Headers.Location?.ToString();
+            if (string.IsNullOrEmpty(location) || !location.Contains("/openapi/v1.json", StringComparison.Ordinal))
+                throw new Exception($"Expected Location to point at /openapi/v1.json, got '{location}'");
+        }));
+
         return new TestSuiteResult("UI", results, sw.Elapsed.TotalMilliseconds);
     }
 

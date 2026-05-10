@@ -287,9 +287,17 @@ dotnet run --project src/KanbanFlow/KanbanFlow.csproj --urls http://127.0.0.1:51
 
 ---
 
+- **Project Outline** (left panel) — tree view of Project → Features → Tasks as draggable mini-cards
+- **Kanban Board** (main area) — cards auto-placed by task status, drag-and-drop to change status
+- **REST API** — full CRUD for AI agents to read and write project data
+- **OpenAPI Spec** — machine-readable API description (R-5.1) at `/openapi.json` (redirects to `/openapi/v1.json`); response shapes are loose pending the records refactor (R-5.2)
+- **Zero Setup** — SQLite, no Docker, no accounts, no login
+
+---
+
 ## API reference
 
-Until OpenAPI lands (R-5.1), the source of truth is `src/KanbanFlow/ApiEndpoints.cs`. The endpoint shape is:
+The OpenAPI document (R-5.1) is now the source of truth: GET `/openapi/v1.json` (or `/openapi.json` for the README-friendly path; it 302s to the canonical URL). The endpoint shape is:
 
 ```
 /api/projects                               # list/create
@@ -321,7 +329,7 @@ Until OpenAPI lands (R-5.1), the source of truth is `src/KanbanFlow/ApiEndpoints
 /api/requirements/{id}/assign               # PATCH assign feature/task
 ```
 
-46 endpoints total. Every list endpoint and every detail endpoint will be paginated and OpenAPI-described once R-1.4 and R-5.1 land.
+46 endpoints total. Every list endpoint and every detail endpoint will be paginated once R-1.4 lands; richer response shapes follow with the records refactor (R-5.2).
 
 ---
 
