@@ -55,7 +55,7 @@ dotnet run --project src/KanbanFlow/KanbanFlow.csproj --urls http://127.0.0.1:51
 
 ```powershell
 ./scripts/smoke-api.ps1                 # ~50 HTTP calls against an ephemeral DB
-node ./scripts/smoke-mcp.mjs 1          # exercises all 11 MCP tools (needs the app running)
+node ./scripts/smoke-mcp.mjs 1          # exercises the MCP tool surface (needs the app running)
 ```
 
 ---
@@ -220,39 +220,46 @@ Plus a small set of integrity bugs that directly hurt AI accuracy:
 
 ## MCP roadmap
 
-The MCP server (`scripts/mcp-server.mjs`) is the agent's primary entry point. Today it exposes **11 of the ~40 tools the vision requires**. Every tool forwards to the REST API — single source of truth, no duplicated logic.
+The MCP server (`scripts/mcp-server.mjs`) is the agent's primary entry point. **It exposes 36 tools** as of the latest integrated batch (PRs #100, #101). Every tool forwards to the REST API — single source of truth, no duplicated logic.
 
-### Implemented (11)
+### Implemented (36)
 
-| Tool | Capability |
-|------|------------|
-| `list_projects` | C-1 read |
-| `get_project` | C-1 read |
-| `list_project_tasks` | C-1 read |
-| `get_task` | C-1 read |
-| `get_project_board` | C-1 read |
-| `get_project_context` | C-1 read (full project graph for AI) |
-| `get_next_tasks` | C-3 direction |
-| `claim_task` | C-2 write |
-| `release_task` | C-2 write |
-| `update_task_status` | C-2 write |
-| `add_task_comment` | C-4 documentation |
+Grouped by capability area:
 
-### To add (priority order)
+**Projects (5)** — C-1, C-2, C-4
+- `list_projects`, `get_project`, `get_project_context` (read)
+- `create_project`, `update_project` (the documentation backbone — name + description + goals + readme)
 
-| # | Tool | Capability | Notes |
-|---|------|------------|-------|
-| 1 | `update_project` | C-4 | Update name, description, goals, README — the documentation backbone |
-| 2 | `create_project` | C-2 | Agents need to be able to bootstrap a new project |
-| 3 | `create_feature` / `update_feature` / `delete_feature` | C-2 | Including reparent (sub-feature) |
-| 4 | `create_task` / `update_task` / `delete_task` | C-2 | Full task authoring; today only `update_task_status` exists |
-| 5 | `get_step_context` | C-3 | Single-call bundle: task + criteria + subtasks + deps + recent comments + related requirements + activity |
-| 6 | `list_subtasks` / `create_subtask` / `update_subtask` / `mark_subtask_done` / `delete_subtask` | C-2 | Including reparent (sub-subtask) |
-| 7 | `list_acceptance_criteria` / `create_acceptance_criterion` / `update_acceptance_criterion` / `mark_acceptance_criterion_done` / `delete_acceptance_criterion` | C-2 | First-class checklist items |
-| 8 | `list_requirements` / `get_requirement` / `create_requirement` / `update_requirement` / `assign_requirement` / `delete_requirement` | C-2 | P0/P1/P2 with feature/task links |
-| 9 | `list_dependencies` / `create_dependency` / `delete_dependency` | C-2 | Cycle-protected DAG |
-| 10 | `list_project_activity` / `list_task_activity` | C-1 | Already in REST; expose as MCP |
-| 11 | `search_project` | C-1 | Once the search endpoint lands (R-1.5) |
+**Features (4)** — C-2
+- `create_feature`, `update_feature`, `delete_feature` (sub-feature support via `parentFeatureId`)
+
+**Tasks (8)** — C-1, C-2, C-3
+- `list_project_tasks`, `get_task`, `get_step_context` (one-call AI bundle: task + criteria + subtasks + deps + comments + activity), `get_project_board`, `get_next_tasks` (direction)
+- `create_task`, `update_task`, `delete_task`, `update_task_status`, `reassign_task`, `claim_task`, `release_task`
+
+**Subtasks (5)** — C-2
+- `list_subtasks`, `create_subtask`, `update_subtask`, `mark_subtask_done`, `delete_subtask` (sub-subtask support via `parentSubtaskId`)
+
+**Acceptance criteria (5)** — C-2
+- `list_acceptance_criteria`, `create_acceptance_criterion`, `update_acceptance_criterion`, `mark_acceptance_criterion_done`, `delete_acceptance_criterion`
+
+**Dependencies (3)** — C-2
+- `list_dependencies`, `create_dependency`, `delete_dependency` (cycle-protected DAG)
+
+**Comments (1)** — C-4
+- `add_task_comment` (typed: Note / Decision / Question / Blocked / Handoff / Verification)
+
+**Activity (2)** — C-1
+- `list_project_activity`, `list_task_activity`
+
+The full machine-readable list is at `tools/list` (JSON-RPC) when the server is running. The OpenAPI document at `/openapi/v1.json` describes the underlying REST surface.
+
+### To add (remaining roadmap)
+
+| Tool | Capability | Notes |
+|------|------------|-------|
+| `list_requirements` / `get_requirement` / `create_requirement` / `update_requirement` / `assign_requirement` / `delete_requirement` (6) | C-2 | P0/P1/P2 with feature/task links — last entity without MCP CRUD |
+| `search_project` | C-1 | Once the search endpoint lands (R-1.5) |
 
 ### Wiring into Claude Code
 
