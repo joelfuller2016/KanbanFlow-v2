@@ -92,28 +92,34 @@ else
                     </button>
                 </div>
 
-                <div id="ai-tools-controls" class="d-flex flex-wrap align-items-center gap-2 mt-2 pt-2 border-top" hidden="@(!aiControlsExpanded)">
-                    <span class="text-muted small me-auto">Inspect project context, choose next work, or prepare future AI actions.</span>
-                    <button class="btn btn-sm btn-outline-primary" data-testid="ai-project-context-button" @onclick="ShowProjectContextAsync">
-                        Project Context
-                    </button>
-                    <button class="btn btn-sm btn-outline-primary" data-testid="ai-next-tasks-button" @onclick="ShowNextTasksAsync">
-                        Next Tasks
-                    </button>
-                    <button class="btn btn-sm btn-outline-secondary" data-testid="ai-generate-tasks-button" disabled title="Coming soon: create tasks from project context">
-                        Generate Tasks
-                    </button>
-                    <button class="btn btn-sm btn-outline-secondary" data-testid="ai-assign-button" disabled title="Coming soon: claim and assign selected work to an AI agent">
-                        Assign to AI
-                    </button>
-                </div>
+                @* Bootstrap's `d-flex` carries `display: flex !important`, which beats the
+                   user-agent `[hidden] { display: none }` rule. Conditional render instead
+                   of relying on the `hidden` attribute so the toggle actually toggles. *@
+                @if (aiControlsExpanded)
+                {
+                    <div id="ai-tools-controls" class="d-flex flex-wrap align-items-center gap-2 mt-2 pt-2 border-top">
+                        <span class="text-muted small me-auto">Inspect project context, choose next work, or prepare future AI actions.</span>
+                        <button class="btn btn-sm btn-outline-primary" data-testid="ai-project-context-button" @onclick="ShowProjectContextAsync">
+                            Project Context
+                        </button>
+                        <button class="btn btn-sm btn-outline-primary" data-testid="ai-next-tasks-button" @onclick="ShowNextTasksAsync">
+                            Next Tasks
+                        </button>
+                        <button class="btn btn-sm btn-outline-secondary" data-testid="ai-generate-tasks-button" disabled title="Coming soon: create tasks from project context">
+                            Generate Tasks
+                        </button>
+                        <button class="btn btn-sm btn-outline-secondary" data-testid="ai-assign-button" disabled title="Coming soon: claim and assign selected work to an AI agent">
+                            Assign to AI
+                        </button>
+                    </div>
+                }
 
                 @if (aiPanelOpen)
                 {
                     <div class="card mt-3 shadow-sm" data-testid="ai-action-panel">
                         <div class="card-header d-flex align-items-center py-2">
                             <strong>@aiPanelTitle</strong>
-                            <button class="btn btn-sm btn-link text-muted ms-auto" @onclick="CloseAiPanel">Close</button>
+                            <button class="btn-close ms-auto" aria-label="Close AI panel" title="Close" @onclick="CloseAiPanel"></button>
                         </div>
                         <div class="card-body">
                             @if (aiLoading)
@@ -205,7 +211,9 @@ else
                     </button>
                 </div>
 
-                <div id="requirements-content" hidden="@(!requirementsExpanded)">
+                @* Conditional render rather than relying on `hidden` attribute, which descendants
+                   with `display: flex !important` would override. *@
+                <div id="requirements-content" style="@(requirementsExpanded ? null : "display:none;")">
                     @if (GetOrderedRequirements().Count == 0)
                     {
                         <div class="text-muted small border rounded bg-white p-3 mt-2" data-testid="requirements-empty-state">
