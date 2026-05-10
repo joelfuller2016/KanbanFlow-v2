@@ -25,9 +25,10 @@ builder.Services.AddDbContextFactory<AppDbContext>(options => options.UseSqlite(
 // Audit-aware service layer (issue #88: route REST + UI mutations through one place)
 builder.Services.AddScoped<ITaskService, TaskService>();
 
-// Real process start time, captured once at app boot. Replaces the per-request
-// DateTime.UtcNow that previously masqueraded as a start time in /api/admin/health.
-builder.Services.AddSingleton<IAppStartupInfo, AppStartupInfo>();
+// Real process start time, captured once at app boot. Construct eagerly so the
+// timestamp captured by AppStartupInfo's constructor is the boot time, not the
+// time of the first request that happens to resolve the singleton lazily.
+builder.Services.AddSingleton<IAppStartupInfo>(new AppStartupInfo());
 
 // In-process test runner (Settings panel + /api/admin/run-tests endpoint)
 builder.Services.AddHttpClient();
