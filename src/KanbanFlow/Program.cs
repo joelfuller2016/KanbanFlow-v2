@@ -30,6 +30,9 @@ builder.Services.AddHttpClient();
 builder.Services.AddScoped<ITestRunnerService, TestRunnerService>();
 builder.Services.AddSingleton<IMarkdownRenderer, MarkdownRenderer>();
 
+// OpenAPI document generation (R-5.1: /openapi.json discovery)
+builder.Services.AddOpenApi();
+
 // Blazor
 builder.Services.AddRazorComponents()
     .AddInteractiveServerComponents();
@@ -62,6 +65,15 @@ app.UseAntiforgery();
 app.MapStaticAssets();
 app.MapRazorComponents<App>()
     .AddInteractiveServerRenderMode();
+
+// OpenAPI: serve at /openapi/v1.json (default) and redirect /openapi.json → /openapi/v1.json
+// so the README-documented path works for agents doing discovery.
+app.MapOpenApi();
+app.MapGet("/openapi.json", (HttpContext ctx) =>
+{
+    ctx.Response.Redirect("/openapi/v1.json", permanent: false);
+    return Task.CompletedTask;
+});
 
 app.MapApiEndpoints();
 app.MapAdminEndpoints();

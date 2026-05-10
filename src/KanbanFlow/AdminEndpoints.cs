@@ -11,12 +11,14 @@ public static class AdminEndpoints
     public static WebApplication MapAdminEndpoints(this WebApplication app)
     {
         // GET /api/admin/health — quick smoke that the app is up and DI is wired.
+        // openApiUrl advertises the OpenAPI document path so agents can discover it.
         app.MapGet("/api/admin/health", () => Results.Ok(new
         {
             status = "ok",
             app = "KanbanFlow",
             startedAtUtc = DateTime.UtcNow,
-            runtime = $".NET {Environment.Version}"
+            runtime = $".NET {Environment.Version}",
+            openApiUrl = "/openapi.json"
         }));
 
         // POST /api/admin/run-tests?suite=api|ui|service|all (default: all)
