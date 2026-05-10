@@ -857,6 +857,173 @@ public static class ApiEndpoints
             });
         });
 
+        // GET /api/tasks/{id}/context — single-call AI bundle (R-1.6, R-3.4): task + feature
+        // breadcrumb + criteria + recursive subtasks + resolved dependencies + recent comments
+        // + related requirements + recent activity. Designed so an agent claiming a task can
+        // act with full context in one round-trip.
+        app.MapGet("/api/tasks/{id:int}/context", async (int id, AppDbContext db) =>
+        {
+            var task = await db.Tasks
+                .Include(t => t.Feature).ThenInclude(f => f.Project)
+                .Include(t => t.AcceptanceCriteria.OrderBy(c => c.SortOrder).ThenBy(c => c.Id))
+                .Include(t => t.Subtasks.OrderBy(s => s.SortOrder).ThenBy(s => s.Id))
+                .AsSplitQuery()
+                .AsNoTracking()
+                .FirstOrDefaultAsync(t => t.Id == id);
+            if (task is null)
+                return Results.NotFound(new { message = $"Task {id} not found." });
+
+            var projectId = task.Feature.ProjectId;
+
+            // Recursive subtask materialisation
+            var subtasksFlat = task.Subtasks.ToList();
+            object MapSubtask(Subtask s) => new
+            {
+                s.Id,
+                s.ParentSubtaskId,
+                s.Text,
+                s.Completed,
+                s.SortOrder,
+                s.CreatedAt,
+                Children = subtasksFlat
+                    .Where(c => c.ParentSubtaskId == s.Id)
+                    .OrderBy(c => c.SortOrder).ThenBy(c => c.Id)
+                    .Select(MapSubtask)
+                    .ToList()
+            };
+            var subtaskTree = subtasksFlat
+                .Where(s => s.ParentSubtaskId == null)
+                .OrderBy(s => s.SortOrder).ThenBy(s => s.Id)
+                .Select(MapSubtask)
+                .ToList();
+
+            // Dependencies — both directions, with names + status of the other side
+            var deps = await db.TaskDependencies
+                .Where(d => d.TaskItemId == id || d.DependsOnTaskItemId == id)
+                .Include(d => d.TaskItem)
+                .Include(d => d.DependsOnTaskItem)
+                .AsNoTracking()
+                .ToListAsync();
+            var dependencies = deps.Select(d => new
+            {
+                d.Id,
+                Direction = d.TaskItemId == id ? "DependsOn" : "Blocks",
+                Type = d.Type.ToString(),
+                Other = d.TaskItemId == id
+                    ? new
+                    {
+                        d.DependsOnTaskItem!.Id,
+                        d.DependsOnTaskItem.Name,
+                        Status = d.DependsOnTaskItem.Status.ToString(),
+                        d.DependsOnTaskItem.ClaimedBy,
+                        IsComplete = d.DependsOnTaskItem.Status == WorkStatus.Done
+                    }
+                    : new
+                    {
+                        d.TaskItem!.Id,
+                        d.TaskItem.Name,
+                        Status = d.TaskItem.Status.ToString(),
+                        d.TaskItem.ClaimedBy,
+                        IsComplete = d.TaskItem.Status == WorkStatus.Done
+                    },
+                d.CreatedAt
+            }).ToList();
+            var openBlockerCount = dependencies.Count(x => x.Direction == "DependsOn" && !x.Other.IsComplete);
+
+            // Recent comments (latest first, capped)
+            var recentComments = await db.TaskComments
+                .Where(c => c.TaskItemId == id)
+                .OrderByDescending(c => c.CreatedAt)
+                .Take(20)
+                .AsNoTracking()
+                .Select(c => new
+                {
+                    c.Id,
+                    c.Text,
+                    c.Author,
+                    Type = c.Type.ToString(),
+                    c.CreatedAt
+                })
+                .ToListAsync();
+
+            // Requirements that link to this task (or to its feature)
+            var relatedRequirements = await db.Requirements
+                .Where(r => r.TaskItemId == id || r.FeatureId == task.FeatureId)
+                .OrderBy(r => r.Priority).ThenBy(r => r.SortOrder)
+                .AsNoTracking()
+                .Select(r => new
+                {
+                    r.Id,
+                    r.Text,
+                    r.Description,
+                    Priority = r.Priority.ToString(),
+                    Status = r.Status.ToString(),
+                    Linkage = r.TaskItemId == id ? "Task" : "Feature"
+                })
+                .ToListAsync();
+
+            // Recent activity touching this task (capped)
+            var recentActivity = await db.ActivityEvents
+                .Where(e => e.EntityType == "Task" && e.EntityId == id)
+                .OrderByDescending(e => e.CreatedAt)
+                .Take(20)
+                .AsNoTracking()
+                .Select(e => new
+                {
+                    e.Id,
+                    e.EventType,
+                    e.Actor,
+                    e.Message,
+                    e.BeforeJson,
+                    e.AfterJson,
+                    OccurredAt = e.CreatedAt
+                })
+                .ToListAsync();
+
+            return Results.Ok(new
+            {
+                Task = new
+                {
+                    task.Id,
+                    task.FeatureId,
+                    task.Name,
+                    task.Description,
+                    Status = task.Status.ToString(),
+                    Priority = task.Priority.ToString(),
+                    task.Assignee,
+                    task.ClaimedBy,
+                    task.ClaimedAt,
+                    task.SortOrder,
+                    task.CreatedAt,
+                    task.UpdatedAt,
+                    task.CompletedAt
+                },
+                Feature = new
+                {
+                    task.Feature.Id,
+                    task.Feature.Name,
+                    ProjectId = projectId,
+                    ProjectName = task.Feature.Project.Name
+                },
+                AcceptanceCriteria = task.AcceptanceCriteria.Select(c => new
+                {
+                    c.Id,
+                    c.Text,
+                    c.Completed,
+                    c.SortOrder,
+                    c.CreatedAt,
+                    c.UpdatedAt
+                }),
+                Subtasks = subtaskTree,
+                Dependencies = dependencies,
+                OpenBlockerCount = openBlockerCount,
+                IsBlocked = openBlockerCount > 0,
+                RecentComments = recentComments,
+                RelatedRequirements = relatedRequirements,
+                RecentActivity = recentActivity
+            });
+        });
+
         // POST /api/features/{featureId}/tasks — create (default status: Backlog)
         app.MapPost("/api/features/{featureId:int}/tasks", async (int featureId, TaskDto dto, AppDbContext db) =>
         {

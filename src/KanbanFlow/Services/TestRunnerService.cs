@@ -231,6 +231,35 @@ public sealed class TestRunnerService(
                 }
             }));
 
+            results.Add(await RunTest("Step context returns rich AI bundle", "API:AI", async () =>
+            {
+                var (innerPid, _, taskId) = await CreateProjectFeatureTaskAsync(http, ct);
+                try
+                {
+                    var body = await http.GetFromJsonAsync<JsonElement>($"/api/tasks/{taskId}/context", Json, ct);
+                    foreach (var key in new[] { "task", "feature", "acceptanceCriteria", "subtasks", "dependencies", "openBlockerCount", "isBlocked", "recentComments", "relatedRequirements", "recentActivity" })
+                    {
+                        if (!body.TryGetProperty(key, out _))
+                            throw new Exception($"Step context missing '{key}' field");
+                    }
+                    if (body.GetProperty("task").GetProperty("id").GetInt32() != taskId)
+                        throw new Exception("Step context's task.id does not match requested taskId");
+                    if (body.GetProperty("feature").GetProperty("projectId").GetInt32() != innerPid)
+                        throw new Exception("Step context's feature.projectId does not match parent project");
+                }
+                finally
+                {
+                    await TryDeleteProjectAsync(http, innerPid, ct);
+                }
+            }));
+
+            results.Add(await RunTest("Step context for unknown task returns 404", "API:AI", async () =>
+            {
+                var resp = await http.GetAsync("/api/tasks/99999999/context", ct);
+                if (resp.StatusCode != HttpStatusCode.NotFound)
+                    throw new Exception($"Expected 404 for unknown task, got {(int)resp.StatusCode}");
+            }));
+
             results.Add(await RunTest("Acceptance criterion CRUD round-trip", "API:AC", async () =>
             {
                 var (innerPid, _, taskId) = await CreateProjectFeatureTaskAsync(http, ct);

@@ -143,6 +143,163 @@ const tools = [
       },
       required: ["taskId", "text"]
     }
+  },
+
+  // ── Authoring tools (R-2.2): agents can create + update + delete the entities they need. ──
+
+  {
+    name: "create_project",
+    description: "Create a new project. Optional fields populate first-class documentation surfaces (description, goals, readme markdown).",
+    inputSchema: {
+      type: "object",
+      properties: {
+        name: { type: "string", description: "Project name (required, ≤200 chars)." },
+        description: { type: "string", description: "Optional short description (markdown)." },
+        goals: { type: "string", description: "Optional high-level goals (markdown)." },
+        readme: { type: "string", description: "Optional living README for the project (markdown). Primary documentation surface for agents." }
+      },
+      required: ["name"]
+    }
+  },
+  {
+    name: "update_project",
+    description: "Update project name, description, goals, and/or readme. Use this to maintain the project's living documentation as the work evolves.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        projectId: { type: "integer", minimum: 1, description: "Project id to update." },
+        name: { type: "string", description: "New name (required by API; must be non-empty)." },
+        description: { type: "string", description: "New description (markdown)." },
+        goals: { type: "string", description: "New goals (markdown)." },
+        readme: { type: "string", description: "New README (markdown)." }
+      },
+      required: ["projectId", "name"]
+    }
+  },
+  {
+    name: "create_feature",
+    description: "Create a feature inside a project. Optionally nest under a parent feature via parentFeatureId (cycle-protected).",
+    inputSchema: {
+      type: "object",
+      properties: {
+        projectId: { type: "integer", minimum: 1, description: "Project id this feature belongs to." },
+        name: { type: "string", description: "Feature name (≤200 chars)." },
+        description: { type: "string", description: "Optional feature description (markdown)." },
+        parentFeatureId: { type: "integer", minimum: 1, description: "Optional parent feature id for nesting." },
+        sortOrder: { type: "integer", minimum: 0, description: "Optional sort order within parent." }
+      },
+      required: ["projectId", "name"]
+    }
+  },
+  {
+    name: "update_feature",
+    description: "Update an existing feature. Set parentFeatureId to 0 to clear it (make it top-level). Cycle-protected.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        featureId: { type: "integer", minimum: 1, description: "Feature id to update." },
+        name: { type: "string", description: "New name (required by API; must be non-empty)." },
+        description: { type: "string", description: "New description (markdown)." },
+        parentFeatureId: { type: "integer", minimum: 0, description: "New parent feature id, or 0 to make top-level." },
+        sortOrder: { type: "integer", minimum: 0, description: "New sort order within parent." }
+      },
+      required: ["featureId", "name"]
+    }
+  },
+  {
+    name: "delete_feature",
+    description: "Delete a feature. Cascades to its tasks and their children. Errors if the feature has child features (delete those first).",
+    inputSchema: {
+      type: "object",
+      properties: {
+        featureId: { type: "integer", minimum: 1, description: "Feature id to delete." }
+      },
+      required: ["featureId"]
+    }
+  },
+  {
+    name: "create_task",
+    description: "Create a task inside a feature. Defaults: status=Backlog, priority=Low.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        featureId: { type: "integer", minimum: 1, description: "Feature id this task belongs to." },
+        name: { type: "string", description: "Task name (≤500 chars)." },
+        description: { type: "string", description: "Optional task description (markdown)." },
+        status: {
+          type: "string",
+          enum: ["Backlog", "Todo", "InProgress", "Review", "Done"],
+          description: "Optional initial status. Defaults to Backlog."
+        },
+        priority: {
+          type: "string",
+          enum: ["Low", "Medium", "High", "Critical"],
+          description: "Optional initial priority. Defaults to Low."
+        },
+        assignee: { type: "string", description: "Optional free-text assignee label." },
+        sortOrder: { type: "integer", minimum: 0, description: "Optional sort order within column." }
+      },
+      required: ["featureId", "name"]
+    }
+  },
+  {
+    name: "update_task",
+    description: "Update task fields (name, description, status, priority, assignee). Use update_task_status for status-only or reassign_task to move between features.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        taskId: { type: "integer", minimum: 1, description: "Task id to update." },
+        name: { type: "string", description: "New name (required by API; must be non-empty)." },
+        description: { type: "string", description: "New description (markdown)." },
+        status: {
+          type: "string",
+          enum: ["Backlog", "Todo", "InProgress", "Review", "Done"],
+          description: "New status."
+        },
+        priority: {
+          type: "string",
+          enum: ["Low", "Medium", "High", "Critical"],
+          description: "New priority."
+        },
+        assignee: { type: "string", description: "New assignee label." },
+        sortOrder: { type: "integer", minimum: 0, description: "New sort order within column." }
+      },
+      required: ["taskId", "name"]
+    }
+  },
+  {
+    name: "delete_task",
+    description: "Delete a task. Cascades to its subtasks, acceptance criteria, comments, and dependencies. Activity row remains in audit log.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        taskId: { type: "integer", minimum: 1, description: "Task id to delete." }
+      },
+      required: ["taskId"]
+    }
+  },
+  {
+    name: "reassign_task",
+    description: "Reassign a task to a different feature (typically in the same project). NOTE: project-boundary enforcement is a known gap (#83); the API today permits cross-project moves.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        taskId: { type: "integer", minimum: 1, description: "Task id to reassign." },
+        featureId: { type: "integer", minimum: 1, description: "Target feature id." }
+      },
+      required: ["taskId", "featureId"]
+    }
+  },
+  {
+    name: "get_step_context",
+    description: "AI agent's primary entry point: returns one task plus everything needed to act on it — feature breadcrumb, acceptance criteria, recursive subtasks, resolved dependencies (with names + status + IsComplete), recent comments (latest first), related requirements (linked to this task or its feature), and recent activity events. One call instead of five round-trips.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        taskId: { type: "integer", minimum: 1, description: "Task id to bundle context for." }
+      },
+      required: ["taskId"]
+    }
   }
 ];
 
@@ -346,9 +503,105 @@ async function callTool(toolName, args) {
         method: "POST",
         body: { text: requiredString(args, "text"), author: args.author ?? "MCP", type: optionalCommentType(args) }
       });
+
+    // ── Authoring tools ──
+
+    case "create_project":
+      return restJson("/api/projects", {
+        method: "POST",
+        body: {
+          name: requiredString(args, "name"),
+          description: optionalString(args, "description"),
+          goals: optionalString(args, "goals"),
+          readme: optionalString(args, "readme")
+        }
+      });
+    case "update_project":
+      return restJson(`/api/projects/${requiredInt(args, "projectId", { min: 1 })}`, {
+        method: "PUT",
+        body: {
+          name: requiredString(args, "name"),
+          description: optionalString(args, "description"),
+          goals: optionalString(args, "goals"),
+          readme: optionalString(args, "readme")
+        }
+      });
+    case "create_feature":
+      return restJson(`/api/projects/${requiredInt(args, "projectId", { min: 1 })}/features`, {
+        method: "POST",
+        body: {
+          name: requiredString(args, "name"),
+          description: optionalString(args, "description"),
+          parentFeatureId: optionalInt(args, "parentFeatureId", { min: 1 }),
+          sortOrder: optionalInt(args, "sortOrder", { min: 0 })
+        }
+      });
+    case "update_feature":
+      return restJson(`/api/features/${requiredInt(args, "featureId", { min: 1 })}`, {
+        method: "PUT",
+        body: {
+          name: requiredString(args, "name"),
+          description: optionalString(args, "description"),
+          parentFeatureId: optionalInt(args, "parentFeatureId", { min: 0 }),
+          sortOrder: optionalInt(args, "sortOrder", { min: 0 })
+        }
+      });
+    case "delete_feature":
+      return restJson(`/api/features/${requiredInt(args, "featureId", { min: 1 })}`, { method: "DELETE" });
+    case "create_task":
+      if (args.status !== undefined && args.status !== null && args.status !== "")
+        assertEnum(args, "status", ["Backlog", "Todo", "InProgress", "Review", "Done"]);
+      if (args.priority !== undefined && args.priority !== null && args.priority !== "")
+        assertEnum(args, "priority", ["Low", "Medium", "High", "Critical"]);
+      return restJson(`/api/features/${requiredInt(args, "featureId", { min: 1 })}/tasks`, {
+        method: "POST",
+        body: {
+          name: requiredString(args, "name"),
+          description: optionalString(args, "description"),
+          status: optionalString(args, "status"),
+          priority: optionalString(args, "priority"),
+          assignee: optionalString(args, "assignee"),
+          sortOrder: optionalInt(args, "sortOrder", { min: 0 })
+        }
+      });
+    case "update_task":
+      if (args.status !== undefined && args.status !== null && args.status !== "")
+        assertEnum(args, "status", ["Backlog", "Todo", "InProgress", "Review", "Done"]);
+      if (args.priority !== undefined && args.priority !== null && args.priority !== "")
+        assertEnum(args, "priority", ["Low", "Medium", "High", "Critical"]);
+      return restJson(`/api/tasks/${requiredInt(args, "taskId", { min: 1 })}`, {
+        method: "PUT",
+        body: {
+          name: requiredString(args, "name"),
+          description: optionalString(args, "description"),
+          status: optionalString(args, "status"),
+          priority: optionalString(args, "priority"),
+          assignee: optionalString(args, "assignee"),
+          sortOrder: optionalInt(args, "sortOrder", { min: 0 })
+        }
+      });
+    case "delete_task":
+      return restJson(`/api/tasks/${requiredInt(args, "taskId", { min: 1 })}`, { method: "DELETE" });
+    case "reassign_task":
+      return restJson(`/api/tasks/${requiredInt(args, "taskId", { min: 1 })}/feature`, {
+        method: "PATCH",
+        body: { featureId: requiredInt(args, "featureId", { min: 1 }) }
+      });
+    case "get_step_context":
+      return restJson(`/api/tasks/${requiredInt(args, "taskId", { min: 1 })}/context`);
+
     default:
       throw new McpError(-32601, `Unknown tool: ${toolName}`);
   }
+}
+
+function optionalString(args, name) {
+  const value = args[name];
+  if (value === undefined || value === null || value === "") return undefined;
+  if (typeof value !== "string") {
+    throw new McpError(-32602, `${name} must be a string when provided.`);
+  }
+  return value;
 }
 
 function optionalCommentType(args) {
