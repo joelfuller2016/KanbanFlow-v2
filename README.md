@@ -65,6 +65,7 @@ node ./scripts/smoke-mcp.mjs 1
 - **Project Outline** (left panel) — tree view of Project → Features → Tasks as draggable mini-cards
 - **Kanban Board** (main area) — cards auto-placed by task status, drag-and-drop to change status
 - **REST API** — full CRUD for AI agents to read and write project data
+- **OpenAPI Spec** — machine-readable API description (R-5.1) at `/openapi.json` (redirects to `/openapi/v1.json`); response shapes are loose pending the records refactor (R-5.2)
 - **Zero Setup** — SQLite, no Docker, no accounts, no login
 
 ## Stack
