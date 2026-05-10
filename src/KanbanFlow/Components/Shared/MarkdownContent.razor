@@ -1,0 +1,16 @@
+@inject IMarkdownRenderer Renderer
+
+@if (string.IsNullOrWhiteSpace(Markdown))
+{
+    <div class="@CssClass text-muted small fst-italic">@(EmptyText ?? "No description.")</div>
+}
+else
+{
+    <div class="@CssClass markdown-body">@((MarkupString)Renderer.RenderToSafeHtml(Markdown))</div>
+}
+
+@code {
+    [Parameter] public string? Markdown { get; set; }
+    [Parameter] public string? CssClass { get; set; }
+    [Parameter] public string? EmptyText { get; set; }
+}
