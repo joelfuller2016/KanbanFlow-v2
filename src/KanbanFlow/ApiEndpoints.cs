@@ -1101,61 +1101,87 @@ public static class ApiEndpoints
             });
         });
 
-        // PUT /api/tasks/{id} — update
-        app.MapPut("/api/tasks/{id:int}", async (int id, TaskDto dto, AppDbContext db) =>
+        // PUT /api/tasks/{id} — update. Routes through ITaskService.UpdateAsync so
+        // every field change emits a uniform audit event regardless of caller (#88).
+        // SortOrder is applied inline after the service call because it is a UI
+        // concern (drag-and-drop reorder) outside the audit-tracked TaskUpdate fields.
+        app.MapPut("/api/tasks/{id:int}", async (int id, TaskDto dto, Services.ITaskService taskSvc, AppDbContext db, CancellationToken ct) =>
         {
-            var task = await db.Tasks
-                .Include(t => t.Feature)
-                .FirstOrDefaultAsync(t => t.Id == id);
-            if (task is null)
-                return Results.NotFound(new { message = $"Task {id} not found." });
-
             if (string.IsNullOrWhiteSpace(dto.Name))
                 return Results.UnprocessableEntity(new { message = "Name is required." });
 
-            if (dto.Status is not null && !Enum.TryParse<WorkStatus>(dto.Status, ignoreCase: true, out _))
-                return Results.UnprocessableEntity(new { message = $"Invalid status: {dto.Status}. Valid values: {string.Join(", ", Enum.GetNames<WorkStatus>())}" });
-
-            if (dto.Priority is not null && !Enum.TryParse<TaskPriority>(dto.Priority, ignoreCase: true, out _))
-                return Results.UnprocessableEntity(new { message = $"Invalid priority: {dto.Priority}. Valid values: {string.Join(", ", Enum.GetNames<TaskPriority>())}" });
-
-            var before = TaskActivitySnapshot(task);
-            var oldStatus = task.Status;
-            var newStatus = dto.Status is not null ? Enum.Parse<WorkStatus>(dto.Status, ignoreCase: true) : task.Status;
-
-            task.Name = dto.Name.Trim();
-            task.Description = dto.Description?.Trim();
-            task.Status = newStatus;
-            task.Priority = dto.Priority is not null ? Enum.Parse<TaskPriority>(dto.Priority, ignoreCase: true) : task.Priority;
-            task.Assignee = dto.Assignee?.Trim();
-            if (dto.SortOrder.HasValue) task.SortOrder = dto.SortOrder.Value;
-            task.UpdatedAt = DateTime.UtcNow;
-
-            // Set or clear CompletedAt based on status transition
-            if (newStatus == WorkStatus.Done && oldStatus != WorkStatus.Done)
-                task.CompletedAt = DateTime.UtcNow;
-            else if (newStatus != WorkStatus.Done)
-                task.CompletedAt = null;
-
-            AddActivityEvent(db, task.Feature.ProjectId, "Task", task.Id, null, oldStatus == newStatus ? "TaskUpdated" : "TaskStatusChanged", before, TaskActivitySnapshot(task), oldStatus == newStatus ? $"Task '{task.Name}' updated" : $"Task '{task.Name}' status changed from {oldStatus} to {newStatus}");
-            await db.SaveChangesAsync();
-
-            return Results.Ok(new
+            // Validate enums up-front so the service never sees a malformed payload.
+            WorkStatus? newStatus = null;
+            if (dto.Status is not null)
             {
-                task.Id,
-                task.FeatureId,
-                task.Name,
-                task.Description,
-                Status = task.Status.ToString(),
-                Priority = task.Priority.ToString(),
-                task.Assignee,
-                task.ClaimedBy,
-                task.ClaimedAt,
-                task.SortOrder,
-                task.CreatedAt,
-                task.UpdatedAt,
-                task.CompletedAt
-            });
+                if (!Enum.TryParse<WorkStatus>(dto.Status, ignoreCase: true, out var parsed)
+                    || !Enum.IsDefined(typeof(WorkStatus), parsed))
+                {
+                    return Results.UnprocessableEntity(new { message = $"Invalid status: {dto.Status}. Valid values: {string.Join(", ", Enum.GetNames<WorkStatus>())}" });
+                }
+                newStatus = parsed;
+            }
+
+            TaskPriority? newPriority = null;
+            if (dto.Priority is not null)
+            {
+                if (!Enum.TryParse<TaskPriority>(dto.Priority, ignoreCase: true, out var parsed)
+                    || !Enum.IsDefined(typeof(TaskPriority), parsed))
+                {
+                    return Results.UnprocessableEntity(new { message = $"Invalid priority: {dto.Priority}. Valid values: {string.Join(", ", Enum.GetNames<TaskPriority>())}" });
+                }
+                newPriority = parsed;
+            }
+
+            try
+            {
+                var update = new Services.TaskUpdate(
+                    Name: dto.Name,
+                    Description: dto.Description,
+                    Status: newStatus,
+                    Priority: newPriority,
+                    Assignee: dto.Assignee);
+                var task = await taskSvc.UpdateAsync(id, update, dto.Actor, ct);
+
+                // Apply SortOrder outside the service: it is a UI-only reorder concern
+                // not modeled by TaskUpdate. We persist it on the same context here.
+                if (dto.SortOrder.HasValue && task.SortOrder != dto.SortOrder.Value)
+                {
+                    var tracked = await db.Tasks.FirstOrDefaultAsync(t => t.Id == id, ct);
+                    if (tracked is not null)
+                    {
+                        tracked.SortOrder = dto.SortOrder.Value;
+                        tracked.UpdatedAt = DateTime.UtcNow;
+                        await db.SaveChangesAsync(ct);
+                        task = tracked;
+                    }
+                }
+
+                return Results.Ok(new
+                {
+                    task.Id,
+                    task.FeatureId,
+                    task.Name,
+                    task.Description,
+                    Status = task.Status.ToString(),
+                    Priority = task.Priority.ToString(),
+                    task.Assignee,
+                    task.ClaimedBy,
+                    task.ClaimedAt,
+                    task.SortOrder,
+                    task.CreatedAt,
+                    task.UpdatedAt,
+                    task.CompletedAt
+                });
+            }
+            catch (Services.TaskNotFoundException)
+            {
+                return Results.NotFound(new { message = $"Task {id} not found." });
+            }
+            catch (ArgumentException ex)
+            {
+                return Results.UnprocessableEntity(new { message = ex.Message });
+            }
         });
 
         // POST /api/tasks/{id}/claim — lightweight task claim for AI agents
@@ -1328,30 +1354,41 @@ public static class ApiEndpoints
             }
         });
 
-        // PATCH /api/tasks/{id}/feature — reassign to different feature
-        app.MapPatch("/api/tasks/{id:int}/feature", async (int id, ReassignDto dto, AppDbContext db) =>
+        // PATCH /api/tasks/{id}/feature — reassign to different feature.
+        // Routes through ITaskService so the project-boundary check (#83) and audit
+        // event are produced uniformly with UI-driven reassignments.
+        app.MapPatch("/api/tasks/{id:int}/feature", async (int id, ReassignDto dto, Services.ITaskService taskSvc, CancellationToken ct) =>
         {
-            var task = await db.Tasks.FindAsync(id);
-            if (task is null)
-                return Results.NotFound(new { message = $"Task {id} not found." });
-
-            var featureExists = await db.Features.AnyAsync(f => f.Id == dto.FeatureId);
-            if (!featureExists)
-                return Results.NotFound(new { message = $"Feature {dto.FeatureId} not found." });
-
-            task.FeatureId = dto.FeatureId;
-            task.UpdatedAt = DateTime.UtcNow;
-
-            await db.SaveChangesAsync();
-
-            return Results.Ok(new
+            try
             {
-                task.Id,
-                task.FeatureId,
-                task.Name,
-                Status = task.Status.ToString(),
-                task.UpdatedAt
-            });
+                var task = await taskSvc.ReassignToFeatureAsync(id, dto.FeatureId, dto.Actor, ct);
+                return Results.Ok(new
+                {
+                    task.Id,
+                    task.FeatureId,
+                    task.Name,
+                    Status = task.Status.ToString(),
+                    task.UpdatedAt
+                });
+            }
+            catch (Services.TaskNotFoundException)
+            {
+                return Results.NotFound(new { message = $"Task {id} not found." });
+            }
+            catch (Services.FeatureNotFoundException)
+            {
+                return Results.NotFound(new { message = $"Feature {dto.FeatureId} not found." });
+            }
+            catch (Services.CrossProjectReassignmentException ex)
+            {
+                return Results.UnprocessableEntity(new
+                {
+                    message = "Cannot reassign task across projects.",
+                    taskId = ex.TaskId,
+                    sourceProjectId = ex.SourceProjectId,
+                    targetProjectId = ex.TargetProjectId
+                });
+            }
         });
     }
 
@@ -2466,13 +2503,14 @@ public record TaskDto(
     string? Status,
     string? Priority,
     string? Assignee,
-    int? SortOrder);
+    int? SortOrder,
+    string? Actor = null);
 
 public record StatusDto(string? Status, string? Actor = null);
 
 public record ClaimDto(string? Actor);
 
-public record ReassignDto(int FeatureId);
+public record ReassignDto(int FeatureId, string? Actor = null);
 
 public record SubtaskDto(string? Text, bool? Completed, int? SortOrder, int? ParentSubtaskId);
 

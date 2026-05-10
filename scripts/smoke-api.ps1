@@ -40,6 +40,20 @@ function Assert-SmokePostFailure([string]$Path, $Body, [int[]]$ExpectedStatusCod
     throw "$Message Expected HTTP failure but request succeeded."
 }
 
+function Assert-SmokePatchFailure([string]$Path, $Body, [int[]]$ExpectedStatusCodes, [string]$Message) {
+    Write-Host "PATCH $Path (expecting failure)"
+    try {
+        Invoke-WebRequest -Method Patch -Uri "$BaseUrl$Path" -ContentType "application/json" -Body ($Body | ConvertTo-Json -Depth 10) -TimeoutSec 5 -UseBasicParsing -ErrorAction Stop | Out-Null
+    }
+    catch {
+        $statusCode = [int]$_.Exception.Response.StatusCode
+        if ($ExpectedStatusCodes -contains $statusCode) { return }
+        throw "$Message Expected HTTP $($ExpectedStatusCodes -join '/') but got $statusCode. $($_.Exception.Message)"
+    }
+
+    throw "$Message Expected HTTP failure but request succeeded."
+}
+
 function Assert-Truthy($Value, [string]$Message) {
     if (-not $Value) { throw $Message }
 }
@@ -202,6 +216,11 @@ try {
     $otherFeature = Invoke-SmokeJson "Post" "/api/projects/$($otherProject.id)/features" @{ name = "Other feature" }
     $otherTask = Invoke-SmokeJson "Post" "/api/features/$($otherFeature.id)/tasks" @{ name = "Other task" }
     Assert-SmokePostFailure "/api/tasks/$blockedTaskId/dependencies" @{ dependsOnTaskItemId = $otherTask.id } @(422) "Cross-project dependency validation failed."
+
+    # Issue #83: PATCH /api/tasks/{id}/feature must reject reassignment when the target
+    # feature lives in a different project. The same project pair from the dependency
+    # cross-project case ($projectId vs $otherProject.id) gives us a known-good payload.
+    Assert-SmokePatchFailure "/api/tasks/$blockedTaskId/feature" @{ featureId = $otherFeature.id } @(422) "Cross-project task reassignment was not rejected (issue #83)."
 
     $deleteBlocksResponse = Invoke-SmokeDelete "/api/task-dependencies/$($blocksDependency.id)"
     Assert-Truthy ($deleteBlocksResponse.StatusCode -eq 204) "DELETE /api/task-dependencies/$($blocksDependency.id) did not return 204."

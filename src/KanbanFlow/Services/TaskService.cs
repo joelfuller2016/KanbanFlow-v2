@@ -140,13 +140,152 @@ public sealed class TaskService(IDbContextFactory<AppDbContext> dbFactory) : ITa
         return task;
     }
 
-    // ── Stubs ──
+    public async Task<TaskItem> ReassignToFeatureAsync(int taskId, int newFeatureId, string? actor, CancellationToken ct = default)
+    {
+        await using var db = await dbFactory.CreateDbContextAsync(ct);
+        var task = await db.Tasks
+            .Include(t => t.Feature)
+            .FirstOrDefaultAsync(t => t.Id == taskId, ct);
+        if (task is null)
+            throw new TaskNotFoundException(taskId);
+        if (task.Feature is null)
+            throw new InvalidOperationException($"Task {taskId} has no feature; cannot resolve project for audit.");
 
-    public Task<TaskItem> ReassignToFeatureAsync(int taskId, int newFeatureId, string? actor, CancellationToken ct = default)
-        => throw new NotImplementedException("TODO: implement in follow-up PR. Closes #83 (cross-project boundary check).");
+        var oldFeatureId = task.FeatureId;
+        var oldProjectId = task.Feature.ProjectId;
 
-    public Task<TaskItem> UpdateAsync(int taskId, TaskUpdate dto, string? actor, CancellationToken ct = default)
-        => throw new NotImplementedException("TODO: implement in follow-up PR. Owns the PUT /api/tasks/{id} body + UI inline edits.");
+        // Idempotent: same feature → no audit, no comment, no UpdatedAt churn.
+        if (newFeatureId == oldFeatureId)
+            return task;
+
+        // Distinct exception (vs TaskNotFoundException) so the API layer can surface
+        // a clear "target feature missing" message — the source task DOES exist here.
+        var newFeature = await db.Features.FirstOrDefaultAsync(f => f.Id == newFeatureId, ct);
+        if (newFeature is null)
+            throw new FeatureNotFoundException(newFeatureId);
+
+        // #83: project-boundary enforcement. Reassigning across projects would orphan
+        // requirements/dependencies/activity history rooted in the source project.
+        if (newFeature.ProjectId != oldProjectId)
+            throw new CrossProjectReassignmentException(taskId, oldProjectId, newFeature.ProjectId);
+
+        var before = TaskActivitySnapshot(task);
+
+        task.FeatureId = newFeatureId;
+        task.UpdatedAt = DateTime.UtcNow;
+
+        db.TaskComments.Add(new TaskComment
+        {
+            TaskItemId = task.Id,
+            Text = $"Feature changed: was feature {oldFeatureId}, now feature {newFeatureId}",
+            Author = string.IsNullOrWhiteSpace(actor) ? "System" : actor!.Trim(),
+            Type = CommentType.FeatureChange,
+            CreatedAt = DateTime.UtcNow
+        });
+
+        AddActivityEvent(
+            db, oldProjectId, "Task", task.Id, actor,
+            "TaskFeatureChanged", before, TaskActivitySnapshot(task),
+            $"Task '{task.Name}' reassigned from feature {oldFeatureId} to feature {newFeatureId}");
+
+        await db.SaveChangesAsync(ct);
+        return task;
+    }
+
+    public async Task<TaskItem> UpdateAsync(int taskId, TaskUpdate dto, string? actor, CancellationToken ct = default)
+    {
+        await using var db = await dbFactory.CreateDbContextAsync(ct);
+        var task = await db.Tasks
+            .Include(t => t.Feature)
+            .FirstOrDefaultAsync(t => t.Id == taskId, ct);
+        if (task is null)
+            throw new TaskNotFoundException(taskId);
+        if (task.Feature is null)
+            throw new InvalidOperationException($"Task {taskId} has no feature; cannot resolve project for audit.");
+
+        // No-op: caller passed nothing to change.
+        if (dto.Name is null && dto.Description is null && dto.Status is null && dto.Priority is null && dto.Assignee is null)
+            return task;
+
+        if (dto.Name is not null)
+        {
+            if (string.IsNullOrWhiteSpace(dto.Name))
+                throw new ArgumentException("Name cannot be empty or whitespace.", nameof(dto));
+            if (dto.Name.Length > 500)
+                throw new ArgumentException("Name cannot exceed 500 characters.", nameof(dto));
+        }
+
+        var before = TaskActivitySnapshot(task);
+        var oldStatus = task.Status;
+        var changedFields = new List<string>();
+
+        if (dto.Name is not null && task.Name != dto.Name.Trim())
+        {
+            task.Name = dto.Name.Trim();
+            changedFields.Add("Name");
+        }
+
+        if (dto.Description is not null)
+        {
+            var trimmed = string.IsNullOrWhiteSpace(dto.Description) ? null : dto.Description.Trim();
+            if (task.Description != trimmed)
+            {
+                task.Description = trimmed;
+                changedFields.Add("Description");
+            }
+        }
+
+        if (dto.Status is not null && dto.Status.Value != task.Status)
+        {
+            var newStatus = dto.Status.Value;
+            task.Status = newStatus;
+            // Mirror ChangeStatusAsync's CompletedAt invariant so audit history stays consistent.
+            if (newStatus == WorkStatus.Done && oldStatus != WorkStatus.Done)
+                task.CompletedAt = DateTime.UtcNow;
+            else if (newStatus != WorkStatus.Done)
+                task.CompletedAt = null;
+            changedFields.Add("Status");
+        }
+
+        if (dto.Priority is not null && dto.Priority.Value != task.Priority)
+        {
+            task.Priority = dto.Priority.Value;
+            changedFields.Add("Priority");
+        }
+
+        if (dto.Assignee is not null)
+        {
+            var trimmed = string.IsNullOrWhiteSpace(dto.Assignee) ? null : dto.Assignee.Trim();
+            if (task.Assignee != trimmed)
+            {
+                task.Assignee = trimmed;
+                changedFields.Add("Assignee");
+            }
+        }
+
+        // All proposed values matched current state → idempotent, skip audit.
+        if (changedFields.Count == 0)
+            return task;
+
+        task.UpdatedAt = DateTime.UtcNow;
+
+        db.TaskComments.Add(new TaskComment
+        {
+            TaskItemId = task.Id,
+            Text = $"Updated: {string.Join(", ", changedFields)}",
+            Author = string.IsNullOrWhiteSpace(actor) ? "System" : actor!.Trim(),
+            Type = CommentType.Note,
+            CreatedAt = DateTime.UtcNow
+        });
+
+        AddActivityEvent(
+            db, task.Feature.ProjectId, "Task", task.Id, actor,
+            "TaskUpdated", before, TaskActivitySnapshot(task),
+            $"Task '{task.Name}' updated: {string.Join(", ", changedFields)}");
+
+        await db.SaveChangesAsync(ct);
+        return task;
+    }
 
     public Task DeleteAsync(int taskId, string? actor, CancellationToken ct = default)
         => throw new NotImplementedException("TODO: implement in follow-up PR. Closes the UI half of #88 for deletes.");
