@@ -1,5 +1,6 @@
 @inject IDbContextFactory<AppDbContext> DbFactory
 @inject IJSRuntime JS
+@inject ITaskService TaskSvc
 
 <div class="offcanvas offcanvas-end @(IsOpen ? "show" : "")"
      tabindex="-1" role="dialog" aria-modal="true" aria-labelledby="task-detail-title"
@@ -562,26 +563,31 @@
     {
         if (Task is null || e.Value is null) return;
         if (!int.TryParse(e.Value.ToString(), out var statusInt)) return;
+        // Reject undefined enum values (closes part of #89 for the UI's int-cast path).
+        if (!Enum.IsDefined(typeof(WorkStatus), statusInt)) return;
 
         var newStatus = (WorkStatus)statusInt;
         if (newStatus == Task.Status) return;
 
-        Task.Status = newStatus;
-        Task.UpdatedAt = DateTime.UtcNow;
+        try
+        {
+            // Routed through ITaskService — produces the StatusChange comment + activity event
+            // (closes UI half of #88 for the detail panel's status select).
+            var updated = await TaskSvc.ChangeStatusAsync(Task.Id, newStatus, actor: "User");
 
-        if (newStatus == WorkStatus.Done && !Task.CompletedAt.HasValue)
-            Task.CompletedAt = DateTime.UtcNow;
-        else if (newStatus != WorkStatus.Done)
-            Task.CompletedAt = null;
+            // Reflect the canonical service-returned values in the local entity so the panel
+            // re-renders consistently without a full reload.
+            Task.Status = updated.Status;
+            Task.UpdatedAt = updated.UpdatedAt;
+            Task.CompletedAt = updated.CompletedAt;
 
-        using var db = await DbFactory.CreateDbContextAsync();
-        db.Tasks.Attach(Task);
-        db.Entry(Task).Property(t => t.Status).IsModified = true;
-        db.Entry(Task).Property(t => t.UpdatedAt).IsModified = true;
-        db.Entry(Task).Property(t => t.CompletedAt).IsModified = true;
-        await db.SaveChangesAsync();
-
-        await OnTaskUpdated.InvokeAsync();
+            await OnTaskUpdated.InvokeAsync();
+        }
+        catch (TaskNotFoundException)
+        {
+            // Task vanished mid-edit; let the parent reload to surface the empty state.
+            await OnTaskUpdated.InvokeAsync();
+        }
     }
 
     // ── Priority change ──

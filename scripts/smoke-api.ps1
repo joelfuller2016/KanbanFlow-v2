@@ -246,9 +246,17 @@ try {
     $criteriaAfterDelete = Invoke-SmokeGet "/api/tasks/$($task.id)/acceptance-criteria"
     Assert-Truthy (@($criteriaAfterDelete | Where-Object { $_.id -eq $createdCriterion.id }).Count -eq 0) "DELETE /api/acceptance-criteria/$($createdCriterion.id) did not remove the criterion."
 
-    Invoke-SmokeJson "Patch" "/api/tasks/$taskId/status" @{ status = "InProgress" } | Out-Null
+    # Status change goes through ITaskService (issue #88): the same code path runs whether
+    # this comes from the API or a Blazor UI handler. The assertions below lock in the
+    # service's contract — comment + activity event + actor propagation + snapshot completeness.
+    Invoke-SmokeJson "Patch" "/api/tasks/$taskId/status" @{ status = "InProgress"; actor = "smoke-agent" } | Out-Null
     Invoke-SmokeJson "Post" "/api/tasks/$taskId/claim" @{ actor = "smoke-agent" } | Out-Null
     Invoke-SmokeJson "Post" "/api/tasks/$taskId/comments" @{ text = "Smoke test activity comment"; author = "smoke-agent" } | Out-Null
+
+    # Audit-parity: the StatusChange comment is the user-visible audit signal.
+    $taskComments = Invoke-SmokeGet "/api/tasks/$taskId/comments"
+    $statusChangeComments = @($taskComments | Where-Object { $_.type -eq "StatusChange" })
+    Assert-Truthy ($statusChangeComments.Count -ge 1) "PATCH /api/tasks/$taskId/status did not produce a StatusChange comment (issue #88 audit-trail contract)."
 
     $taskActivity = Invoke-SmokeGet "/api/tasks/$taskId/activity"
     Assert-Truthy ($taskActivity.Count -ge 3) "GET /api/tasks/$taskId/activity did not return expected workflow events."
@@ -256,6 +264,13 @@ try {
     foreach ($eventType in @("TaskStatusChanged", "TaskClaimed", "TaskCommentAdded")) {
         Assert-Truthy ($eventTypes -contains $eventType) "Task activity is missing $eventType."
     }
+
+    # Audit-parity: the TaskStatusChanged event must carry full snapshots and the actor.
+    $statusEvent = $taskActivity | Where-Object { $_.eventType -eq "TaskStatusChanged" } | Select-Object -First 1
+    Assert-Truthy ($null -ne $statusEvent) "Could not locate the TaskStatusChanged event for parity assertions."
+    Assert-Truthy (-not [string]::IsNullOrWhiteSpace($statusEvent.beforeJson)) "TaskStatusChanged event has empty BeforeJson — service audit snapshot broken."
+    Assert-Truthy (-not [string]::IsNullOrWhiteSpace($statusEvent.afterJson)) "TaskStatusChanged event has empty AfterJson — service audit snapshot broken."
+    Assert-Truthy ($statusEvent.actor -eq "smoke-agent") "TaskStatusChanged event Actor was not propagated from request body (got '$($statusEvent.actor)')."
 
     Invoke-SmokeDelete "/api/tasks/$taskId" | Out-Null
     $deletedTaskActivity = Invoke-SmokeGet "/api/tasks/$taskId/activity"

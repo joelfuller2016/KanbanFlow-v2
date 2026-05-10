@@ -1,6 +1,7 @@
 using KanbanFlow;
 using KanbanFlow.Components;
 using KanbanFlow.Data;
+using KanbanFlow.Services;
 using Microsoft.EntityFrameworkCore;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -20,6 +21,9 @@ else
 }
 
 builder.Services.AddDbContextFactory<AppDbContext>(options => options.UseSqlite($"Data Source={dbPath}"));
+
+// Audit-aware service layer (issue #88: route REST + UI mutations through one place)
+builder.Services.AddScoped<ITaskService, TaskService>();
 
 // Blazor
 builder.Services.AddRazorComponents()
