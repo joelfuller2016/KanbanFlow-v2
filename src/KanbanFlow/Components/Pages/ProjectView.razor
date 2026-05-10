@@ -129,7 +129,9 @@ else
                                         <div class="border rounded p-3 h-100">
                                             <div class="text-muted small">Project</div>
                                             <div class="fw-semibold">@aiContext.Project.Name</div>
-                                            <p class="small mb-0 text-muted">@(!string.IsNullOrWhiteSpace(aiContext.Project.Description) ? aiContext.Project.Description : "No description yet.")</p>
+                                            <MarkdownContent Markdown="@aiContext.Project.Description"
+                                                             CssClass="small mb-0 text-muted"
+                                                             EmptyText="No description yet." />
                                         </div>
                                     </div>
                                     <div class="col-md-8">
@@ -226,7 +228,8 @@ else
 
                                     @if (!string.IsNullOrWhiteSpace(requirement.Description))
                                     {
-                                        <p class="small text-muted mb-1 mt-1">@requirement.Description</p>
+                                        <MarkdownContent Markdown="@requirement.Description"
+                                                         CssClass="small text-muted mb-1 mt-1" />
                                     }
 
                                     @if (requirement.Feature is not null || requirement.TaskItem is not null)

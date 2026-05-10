@@ -1585,10 +1585,12 @@ public static class ApiEndpoints
             if (subtask is null)
                 return Results.NotFound(new { message = $"Subtask {id} not found." });
 
-            if (string.IsNullOrWhiteSpace(dto.Text))
-                return Results.UnprocessableEntity(new { message = "Text is required." });
-
-            subtask.Text = dto.Text.Trim();
+            if (dto.Text is not null)
+            {
+                if (string.IsNullOrWhiteSpace(dto.Text))
+                    return Results.UnprocessableEntity(new { message = "Text cannot be empty." });
+                subtask.Text = dto.Text.Trim();
+            }
             if (dto.Completed.HasValue) subtask.Completed = dto.Completed.Value;
             if (dto.SortOrder.HasValue) subtask.SortOrder = dto.SortOrder.Value;
             if (dto.ParentSubtaskId.HasValue)
@@ -1716,10 +1718,12 @@ public static class ApiEndpoints
             if (criterion is null)
                 return Results.NotFound(new { message = $"Acceptance criterion {id} not found." });
 
-            if (string.IsNullOrWhiteSpace(dto.Text))
-                return Results.UnprocessableEntity(new { message = "Text is required." });
-
-            criterion.Text = dto.Text.Trim();
+            if (dto.Text is not null)
+            {
+                if (string.IsNullOrWhiteSpace(dto.Text))
+                    return Results.UnprocessableEntity(new { message = "Text cannot be empty." });
+                criterion.Text = dto.Text.Trim();
+            }
             if (dto.Completed.HasValue) criterion.Completed = dto.Completed.Value;
             if (dto.SortOrder.HasValue) criterion.SortOrder = dto.SortOrder.Value;
             criterion.UpdatedAt = DateTime.UtcNow;

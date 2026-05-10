@@ -28,6 +28,7 @@ builder.Services.AddScoped<ITaskService, TaskService>();
 // In-process test runner (Settings panel + /api/admin/run-tests endpoint)
 builder.Services.AddHttpClient();
 builder.Services.AddScoped<ITestRunnerService, TestRunnerService>();
+builder.Services.AddSingleton<IMarkdownRenderer, MarkdownRenderer>();
 
 // Blazor
 builder.Services.AddRazorComponents()

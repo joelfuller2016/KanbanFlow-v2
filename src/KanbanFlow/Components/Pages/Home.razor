@@ -61,9 +61,8 @@ else
                         </div>
                         @if (!string.IsNullOrWhiteSpace(p.Description))
                         {
-                            <p class="card-text text-muted small" style="display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;">
-                                @p.Description
-                            </p>
+                            <MarkdownContent Markdown="@p.Description"
+                                             CssClass="card-text text-muted small project-card-description" />
                         }
                         <div class="mt-auto">
                             <div class="d-flex gap-2 mb-3">

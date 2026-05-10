@@ -1,0 +1,38 @@
+# CodeRabbit configuration. Read on every event by the CodeRabbit GitHub App.
+# Schema: https://docs.coderabbit.ai/reference/configuration
+language: en-US
+early_access: false
+reviews:
+  profile: assertive
+  request_changes_workflow: false
+  high_level_summary: true
+  poem: false
+  review_status: true
+  collapse_walkthrough: false
+  auto_review:
+    enabled: true
+    drafts: true                    # force-review draft PRs too
+    auto_incremental_review: true   # re-review on every push (not just PR open)
+    ignore_title_keywords: []       # don't skip "WIP" / "DO NOT MERGE"
+    labels: []                      # don't filter by labels
+    # base_branches NOT set → review PRs targeting ANY base branch
+  path_filters:
+    - "!**/bin/**"
+    - "!**/obj/**"
+    - "!**/node_modules/**"
+    - "!**/dist/**"
+    - "!**/build/**"
+    - "!**/.next/**"
+    - "!**/.nuxt/**"
+    - "!**/__pycache__/**"
+    - "!**/venv/**"
+    - "!**/.venv/**"
+    - "!**/coverage/**"
+    - "!**/*.lock"
+    - "!**/*.min.js"
+    - "!**/*.min.css"
+    - "!**/wwwroot/lib/**"
+    - "!**/.gsd-*/**"
+    - "!**/transcripts/**"
+chat:
+  auto_reply: true

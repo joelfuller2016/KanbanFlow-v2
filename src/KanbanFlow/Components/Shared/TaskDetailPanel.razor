@@ -297,7 +297,11 @@
                                 <span class="small fw-semibold">@(!string.IsNullOrWhiteSpace(latestHandoff.Author) ? latestHandoff.Author : "Anonymous")</span>
                                 <span class="small text-muted ms-auto" title="@($"UTC: {latestHandoff.CreatedAt:O}")">@latestHandoff.CreatedAt.ToLocalTime().ToString("MMM d, yyyy h:mm tt")</span>
                             </div>
-                            <div class="small text-break" data-testid="latest-handoff-comment-text">@latestHandoff.Text</div>
+                            <div data-testid="latest-handoff-comment-text">
+                                <MarkdownContent Markdown="@latestHandoff.Text"
+                                                 CssClass="small text-break"
+                                                 EmptyText="" />
+                            </div>
                         </div>
                     }
 
@@ -310,7 +314,9 @@
                                     <span class="small fw-semibold">@(!string.IsNullOrWhiteSpace(comment.Author) ? comment.Author : "Anonymous")</span>
                                     <span class="small text-muted ms-auto" title="@($"UTC: {comment.CreatedAt:O}")">@comment.CreatedAt.ToLocalTime().ToString("MMM d, yyyy h:mm tt")</span>
                                 </div>
-                                <div class="small text-break">@comment.Text</div>
+                                <MarkdownContent Markdown="@comment.Text"
+                                                 CssClass="small text-break"
+                                                 EmptyText="" />
                             </article>
                         }
                     </div>

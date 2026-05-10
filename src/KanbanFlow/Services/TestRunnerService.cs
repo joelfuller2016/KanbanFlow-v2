@@ -14,7 +14,8 @@ public sealed class TestRunnerService(
     IHttpClientFactory httpClientFactory,
     IServer server,
     ITaskService taskSvc,
-    IDbContextFactory<AppDbContext> dbFactory) : ITestRunnerService
+    IDbContextFactory<AppDbContext> dbFactory,
+    IMarkdownRenderer markdownRenderer) : ITestRunnerService
 {
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
 
@@ -273,9 +274,29 @@ public sealed class TestRunnerService(
                     var acId = body.GetProperty("id").GetInt32();
 
                     var update = await http.PutAsJsonAsync($"/api/acceptance-criteria/{acId}",
-                        new { text = "Done means... updated", met = true }, Json, ct);
+                        new { text = "Done means... updated", completed = true }, Json, ct);
                     if (!update.IsSuccessStatusCode)
                         throw new Exception($"PUT failed: {(int)update.StatusCode}");
+
+                    // Verify the round-trip actually persisted both fields. The prior version
+                    // sent `met` instead of `completed`; JSON silently dropped the unknown field
+                    // so the test was passing while testing nothing about the update.
+                    var refreshed = await http.GetFromJsonAsync<JsonElement>($"/api/tasks/{taskId}/acceptance-criteria", Json, ct);
+                    JsonElement? roundTripped = null;
+                    foreach (var item in refreshed.EnumerateArray())
+                    {
+                        if (item.GetProperty("id").GetInt32() == acId)
+                        {
+                            roundTripped = item;
+                            break;
+                        }
+                    }
+                    if (roundTripped is null)
+                        throw new Exception("Updated criterion not returned by GET");
+                    if (roundTripped.Value.GetProperty("text").GetString() != "Done means... updated")
+                        throw new Exception($"Text not persisted, got: {roundTripped.Value.GetProperty("text").GetString()}");
+                    if (!roundTripped.Value.GetProperty("completed").GetBoolean())
+                        throw new Exception("Completed flag not persisted as true");
 
                     var del = await http.DeleteAsync($"/api/acceptance-criteria/{acId}", ct);
                     if (del.StatusCode != HttpStatusCode.NoContent)
@@ -437,6 +458,39 @@ public sealed class TestRunnerService(
             throw new Exception("Expected TaskNotFoundException, got success");
         }));
 
+        results.Add(await RunTest("MarkdownRenderer renders bold and italic", "Service:Markdown", () =>
+        {
+            var html = markdownRenderer.RenderToSafeHtml("**bold** and *italic*");
+            if (!html.Contains("<strong>bold</strong>", StringComparison.Ordinal))
+                throw new Exception($"Expected '<strong>bold</strong>' in output, got: {html}");
+            if (!html.Contains("<em>italic</em>", StringComparison.Ordinal))
+                throw new Exception($"Expected '<em>italic</em>' in output, got: {html}");
+            return Task.CompletedTask;
+        }));
+
+        results.Add(await RunTest("MarkdownRenderer sanitizes script tags", "Service:Markdown", () =>
+        {
+            var html = markdownRenderer.RenderToSafeHtml("<script>alert(1)</script>hello");
+            if (html.Contains("<script", StringComparison.OrdinalIgnoreCase))
+                throw new Exception($"Output should not contain <script>, got: {html}");
+            if (!html.Contains("hello", StringComparison.Ordinal))
+                throw new Exception($"Output should still contain 'hello', got: {html}");
+            return Task.CompletedTask;
+        }));
+
+        results.Add(await RunTest("MarkdownRenderer handles empty/null", "Service:Markdown", () =>
+        {
+            var fromNull = markdownRenderer.RenderToSafeHtml(null);
+            if (fromNull != string.Empty)
+                throw new Exception($"Null input should return empty string, got: '{fromNull}'");
+            var fromEmpty = markdownRenderer.RenderToSafeHtml(string.Empty);
+            if (fromEmpty != string.Empty)
+                throw new Exception($"Empty input should return empty string, got: '{fromEmpty}'");
+            return Task.CompletedTask;
+        }));
+
+        // Now that ReassignToFeatureAsync + UpdateAsync are implemented (this PR), only
+        // DeleteAsync remains stubbed.
         results.Add(await RunTest("Stubbed service methods throw NotImplementedException", "Service:Task", async () =>
         {
             try
