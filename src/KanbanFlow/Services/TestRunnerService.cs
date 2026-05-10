@@ -349,15 +349,25 @@ public sealed class TestRunnerService(
                 throw new Exception("Settings page HTML missing 'Run Tests' marker");
         }));
 
-        results.Add(await RunTest("Project view (id=1, seed data) renders 200", "UI:ProjectView", async () =>
+        results.Add(await RunTest("Project view renders 200 for a freshly-created project", "UI:ProjectView", async () =>
         {
-            var resp = await http.GetAsync("/project/1", ct);
-            if (!resp.IsSuccessStatusCode)
-                throw new Exception($"GET /project/1 returned {(int)resp.StatusCode}");
-            var html = await resp.Content.ReadAsStringAsync(ct);
-            // The page renders even before the InteractiveServer circuit fully boots.
-            if (!html.Contains("KanbanFlow", StringComparison.OrdinalIgnoreCase))
-                throw new Exception("Project view HTML missing brand marker");
+            // Don't depend on seed project id=1 — it can be deleted by other tests
+            // or future migrations. Create a scratch project, hit its route, clean up.
+            var (pid, _, _) = await CreateProjectFeatureTaskAsync(http, ct);
+            try
+            {
+                var resp = await http.GetAsync($"/project/{pid}", ct);
+                if (!resp.IsSuccessStatusCode)
+                    throw new Exception($"GET /project/{pid} returned {(int)resp.StatusCode}");
+                var html = await resp.Content.ReadAsStringAsync(ct);
+                // The page renders even before the InteractiveServer circuit fully boots.
+                if (!html.Contains("KanbanFlow", StringComparison.OrdinalIgnoreCase))
+                    throw new Exception("Project view HTML missing brand marker");
+            }
+            finally
+            {
+                await TryDeleteProjectAsync(http, pid, ct);
+            }
         }));
 
         results.Add(await RunTest("Unknown route returns 404 (or app shell)", "UI:Routing", async () =>
@@ -535,9 +545,9 @@ public sealed class TestRunnerService(
             return Task.CompletedTask;
         }));
 
-        // Now that ReassignToFeatureAsync + UpdateAsync are implemented (this PR), only
-        // DeleteAsync remains stubbed.
-        results.Add(await RunTest("Stubbed service methods throw NotImplementedException", "Service:Task", async () =>
+        // ReassignToFeatureAsync + UpdateAsync are implemented (PR #103); only DeleteAsync
+        // remains stubbed pending the rest of the UI delete flow.
+        results.Add(await RunTest("DeleteAsync still throws NotImplementedException (stubbed)", "Service:Task", async () =>
         {
             try
             {

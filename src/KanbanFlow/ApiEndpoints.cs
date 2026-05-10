@@ -875,8 +875,15 @@ public static class ApiEndpoints
 
             var projectId = task.Feature.ProjectId;
 
-            // Recursive subtask materialisation
+            // Recursive subtask materialisation. Pre-build a parent→children index so the
+            // tree walk is O(n) instead of the previous O(n²) Where-scan-per-node.
             var subtasksFlat = task.Subtasks.ToList();
+            var subtasksByParent = subtasksFlat
+                .Where(s => s.ParentSubtaskId.HasValue)
+                .GroupBy(s => s.ParentSubtaskId!.Value)
+                .ToDictionary(
+                    g => g.Key,
+                    g => g.OrderBy(c => c.SortOrder).ThenBy(c => c.Id).ToList());
             object MapSubtask(Subtask s) => new
             {
                 s.Id,
@@ -885,11 +892,9 @@ public static class ApiEndpoints
                 s.Completed,
                 s.SortOrder,
                 s.CreatedAt,
-                Children = subtasksFlat
-                    .Where(c => c.ParentSubtaskId == s.Id)
-                    .OrderBy(c => c.SortOrder).ThenBy(c => c.Id)
-                    .Select(MapSubtask)
-                    .ToList()
+                Children = subtasksByParent.TryGetValue(s.Id, out var kids)
+                    ? kids.Select(MapSubtask).ToList()
+                    : new List<object>()
             };
             var subtaskTree = subtasksFlat
                 .Where(s => s.ParentSubtaskId == null)
@@ -897,11 +902,13 @@ public static class ApiEndpoints
                 .Select(MapSubtask)
                 .ToList();
 
-            // Dependencies — both directions, with names + status of the other side
+            // Dependencies — both directions, with names + status of the other side.
+            // Stable ordering (Id) so AI agents see deterministic output across runs.
             var deps = await db.TaskDependencies
                 .Where(d => d.TaskItemId == id || d.DependsOnTaskItemId == id)
                 .Include(d => d.TaskItem)
                 .Include(d => d.DependsOnTaskItem)
+                .OrderBy(d => d.Id)
                 .AsNoTracking()
                 .ToListAsync();
             var dependencies = deps.Select(d => new
@@ -946,10 +953,14 @@ public static class ApiEndpoints
                 })
                 .ToListAsync();
 
-            // Requirements that link to this task (or to its feature)
+            // Requirements that link to this task (or to its feature). Project-scope filter
+            // guards against cross-project leakage if any inconsistent linkage exists.
+            // Sort by Priority DESC so Critical/High requirements appear first — AI bundles
+            // should surface the most important constraints up top.
             var relatedRequirements = await db.Requirements
-                .Where(r => r.TaskItemId == id || r.FeatureId == task.FeatureId)
-                .OrderBy(r => r.Priority).ThenBy(r => r.SortOrder)
+                .Where(r => r.ProjectId == projectId
+                    && (r.TaskItemId == id || r.FeatureId == task.FeatureId))
+                .OrderByDescending(r => r.Priority).ThenBy(r => r.SortOrder).ThenBy(r => r.Id)
                 .AsNoTracking()
                 .Select(r => new
                 {
@@ -1177,6 +1188,10 @@ public static class ApiEndpoints
             catch (Services.TaskNotFoundException)
             {
                 return Results.NotFound(new { message = $"Task {id} not found." });
+            }
+            catch (Services.ValidationException ex)
+            {
+                return Results.UnprocessableEntity(new { message = ex.Message });
             }
             catch (ArgumentException ex)
             {

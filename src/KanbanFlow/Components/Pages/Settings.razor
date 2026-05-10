@@ -1,7 +1,7 @@
 @page "/settings"
 @rendermode InteractiveServer
 @inject ITestRunnerService TestRunner
-@inject IConfiguration Config
+@inject IAppStartupInfo Startup
 
 <PageTitle>Settings - KanbanFlow</PageTitle>
 
@@ -16,7 +16,7 @@
             <div class="card-body small">
                 <dl class="row mb-0">
                     <dt class="col-5 text-muted">App</dt>
-                    <dd class="col-7">@AppName <span class="text-muted">v@AppVersion</span></dd>
+                    <dd class="col-7">@AppName <span class="text-muted">v@(AppVersion)</span></dd>
 
                     <dt class="col-5 text-muted">Runtime</dt>
                     <dd class="col-7">.NET @Environment.Version</dd>
@@ -31,7 +31,7 @@
                     <dd class="col-7 text-truncate font-monospace" title="@DbPath">@DbPath</dd>
 
                     <dt class="col-5 text-muted">Started</dt>
-                    <dd class="col-7">@StartTime.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss")</dd>
+                    <dd class="col-7">@Startup.StartedAtUtc.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss")</dd>
                 </dl>
             </div>
         </div>
@@ -94,12 +94,13 @@
 
                     <div class="table-responsive" data-testid="settings-test-results">
                         <table class="table table-sm align-middle mb-0">
+                            <caption class="visually-hidden">Test results for the @latestSuite.Suite suite</caption>
                             <thead>
                                 <tr>
-                                    <th style="width: 1.5rem;"></th>
-                                    <th>Test</th>
-                                    <th class="d-none d-md-table-cell" style="width: 8rem;">Category</th>
-                                    <th class="text-end" style="width: 5rem;">Time</th>
+                                    <th scope="col" style="width: 1.5rem;"><span class="visually-hidden">Status</span></th>
+                                    <th scope="col">Test</th>
+                                    <th scope="col" class="d-none d-md-table-cell" style="width: 8rem;">Category</th>
+                                    <th scope="col" class="text-end" style="width: 5rem;">Time</th>
                                 </tr>
                             </thead>
                             <tbody>
@@ -109,11 +110,11 @@
                                         <td>
                                             @if (t.Passed)
                                             {
-                                                <span class="badge text-bg-success" title="Passed">✓</span>
+                                                <span class="badge text-bg-success" aria-label="Passed" title="Passed">✓</span>
                                             }
                                             else
                                             {
-                                                <span class="badge text-bg-danger" title="Failed">✗</span>
+                                                <span class="badge text-bg-danger" aria-label="Failed" title="Failed">✗</span>
                                             }
                                         </td>
                                         <td>
@@ -146,8 +147,6 @@
     private TestSuiteResult? latestSuite;
     private bool isRunning;
     private string currentSuite = "";
-
-    private static readonly DateTime StartTime = DateTime.UtcNow;
 
     private string AppName { get; set; } = "KanbanFlow";
     private string AppVersion { get; set; } = "—";

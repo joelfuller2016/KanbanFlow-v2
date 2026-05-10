@@ -447,19 +447,19 @@ const tools = [
   },
   {
     name: "create_dependency",
-    description: "Create a dependency between two tasks (must be in the same project; cycle-protected). Type defaults to DependsOn.",
+    description: "Create a dependency between two tasks (same project; cycle-protected). For type=DependsOn, taskId is the blocked task and otherTaskId is the blocker. For type=Blocks, taskId is the blocker and otherTaskId is the blocked task. Defaults to DependsOn.",
     inputSchema: {
       type: "object",
       properties: {
-        taskId: { type: "integer", minimum: 1, description: "Task id (the blocked task when type=DependsOn)." },
-        dependsOnTaskItemId: { type: "integer", minimum: 1, description: "Task id that taskId depends on (the blocking task)." },
+        taskId: { type: "integer", minimum: 1, description: "Route task id (interpreted via 'type': blocked when DependsOn, blocker when Blocks)." },
+        otherTaskId: { type: "integer", minimum: 1, description: "The other task in the relationship — the blocker (when type=DependsOn) or the blocked task (when type=Blocks)." },
         type: {
           type: "string",
           enum: ["DependsOn", "Blocks"],
           description: "Optional dependency direction. Defaults to DependsOn."
         }
       },
-      required: ["taskId", "dependsOnTaskItemId"]
+      required: ["taskId", "otherTaskId"]
     }
   },
   {
@@ -854,15 +854,21 @@ async function callTool(toolName, args) {
     case "list_dependencies":
       return restJson(`/api/tasks/${requiredInt(args, "taskId", { min: 1 })}/dependencies`);
     case "create_dependency": {
-      if (args.type !== undefined && args.type !== null && args.type !== "")
+      const taskId = requiredInt(args, "taskId", { min: 1 });
+      const otherTaskId = requiredInt(args, "otherTaskId", { min: 1 });
+      let type;
+      if (args.type !== undefined && args.type !== null && args.type !== "") {
         assertEnum(args, "type", ["DependsOn", "Blocks"]);
-      return restJson(`/api/tasks/${requiredInt(args, "taskId", { min: 1 })}/dependencies`, {
-        method: "POST",
-        body: {
-          dependsOnTaskItemId: requiredInt(args, "dependsOnTaskItemId", { min: 1 }),
-          type: optionalString(args, "type")
-        }
-      });
+        type = args.type;
+      }
+      // For type=Blocks, the route task IS the blocker, so the other side is the BLOCKED
+      // task — that field is `BlockedTaskId` server-side. For DependsOn, the other side
+      // is the BLOCKING task — `DependsOnTaskItemId`. Sending the wrong one silently
+      // inverted the relationship before this fix.
+      const body = type === "Blocks"
+        ? { blockedTaskId: otherTaskId, type }
+        : { dependsOnTaskItemId: otherTaskId, type };
+      return restJson(`/api/tasks/${taskId}/dependencies`, { method: "POST", body });
     }
     case "delete_dependency":
       return restJson(`/api/task-dependencies/${requiredInt(args, "dependencyId", { min: 1 })}`, { method: "DELETE" });

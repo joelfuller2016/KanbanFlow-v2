@@ -159,6 +159,21 @@ h1:focus {
     background: rgba(220, 53, 69, .06);
 }
 
+/* Project card description on Home — clamp to 2 lines so long markdown doesn't push
+   the card height past sibling cards. Replaces the inline -webkit-line-clamp that was
+   removed when descriptions switched to MarkdownContent. */
+.project-card-description {
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
+    overflow: hidden;
+}
+
+.project-card-description :is(p, ul, ol):last-child {
+    margin-bottom: 0;
+}
+
 /* -- Responsive project workspace -- */
 .project-shell {
     height: calc(100vh - 56px);
@@ -178,10 +193,81 @@ h1:focus {
 }
 
 .project-outline {
-    width: 300px;
-    min-width: 300px;
+    width: 320px;
+    min-width: 320px;
     flex-shrink: 0;
     overflow-y: auto;
+}
+
+/* Header inside the outline: title row, then a primary "+ Feature/task" button. */
+.project-outline-header {
+    display: flex;
+    flex-direction: column;
+    gap: .5rem;
+    margin-bottom: .75rem;
+}
+
+.project-outline-header .outline-title-row {
+    display: flex;
+    align-items: center;
+    gap: .375rem;
+    min-width: 0;
+}
+
+.project-outline-header .outline-title {
+    flex: 1 1 auto;
+    min-width: 0;
+    font-size: .95rem;
+    font-weight: 700;
+    margin: 0;
+    line-height: 1.25;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.project-outline-header .icon-btn {
+    width: 32px;
+    height: 32px;
+    padding: 0;
+    flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+}
+
+/* "+ Item" inline action buttons inside outline rows.
+   Replaces the previous btn-link/text-link look that read like a hyperlink instead of an action. */
+.outline-action-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: .15rem;
+    padding: .15rem .4rem;
+    font-size: .75rem;
+    line-height: 1;
+    color: #0d6efd;
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: .25rem;
+    text-decoration: none !important;
+    flex-shrink: 0;
+}
+
+.outline-action-btn:hover,
+.outline-action-btn:focus {
+    background: rgba(13, 110, 253, .08);
+    border-color: rgba(13, 110, 253, .25);
+    color: #0a58ca;
+    outline: none;
+}
+
+.outline-action-btn:focus-visible {
+    box-shadow: 0 0 0 .2rem rgba(13, 110, 253, .25);
+}
+
+/* Don't underline ANY btn-link inside the outline — they read like text links otherwise. */
+.project-outline .btn-link {
+    text-decoration: none !important;
 }
 
 .project-outline-backdrop {
