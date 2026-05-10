@@ -300,6 +300,205 @@ const tools = [
       },
       required: ["taskId"]
     }
+  },
+
+  // ── Subtask CRUD ───────────────────────────────────────────────────
+
+  {
+    name: "list_subtasks",
+    description: "List all subtasks for a task (ordered by SortOrder). Returns a flat list with ParentSubtaskId so the caller can build a tree.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        taskId: { type: "integer", minimum: 1, description: "Task id whose subtasks to list." }
+      },
+      required: ["taskId"]
+    }
+  },
+  {
+    name: "create_subtask",
+    description: "Create a subtask under a task. Optionally nest under a parent subtask via parentSubtaskId (cycle-protected).",
+    inputSchema: {
+      type: "object",
+      properties: {
+        taskId: { type: "integer", minimum: 1, description: "Task id this subtask belongs to." },
+        text: { type: "string", description: "Subtask text (required, non-empty)." },
+        parentSubtaskId: { type: "integer", minimum: 1, description: "Optional parent subtask id (must belong to the same task)." },
+        sortOrder: { type: "integer", minimum: 0, description: "Optional sort order within the parent group." }
+      },
+      required: ["taskId", "text"]
+    }
+  },
+  {
+    name: "update_subtask",
+    description: "Update a subtask's text, completed flag, parent, and/or sort order. Set parentSubtaskId to 0 to detach from any parent (make top-level under the task).",
+    inputSchema: {
+      type: "object",
+      properties: {
+        subtaskId: { type: "integer", minimum: 1, description: "Subtask id to update." },
+        text: { type: "string", description: "New text. If omitted, text is left unchanged." },
+        completed: { type: "boolean", description: "New completed flag." },
+        parentSubtaskId: { type: "integer", minimum: 0, description: "New parent subtask id, or 0 to detach." },
+        sortOrder: { type: "integer", minimum: 0, description: "New sort order within parent group." }
+      },
+      required: ["subtaskId"]
+    }
+  },
+  {
+    name: "mark_subtask_done",
+    description: "Convenience: toggle a subtask's completed flag without supplying its text. Equivalent to update_subtask with only the completed field set.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        subtaskId: { type: "integer", minimum: 1, description: "Subtask id to mark." },
+        completed: { type: "boolean", description: "True to mark done, false to mark not-done." }
+      },
+      required: ["subtaskId", "completed"]
+    }
+  },
+  {
+    name: "delete_subtask",
+    description: "Delete a subtask. Cascades to any child subtasks under it.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        subtaskId: { type: "integer", minimum: 1, description: "Subtask id to delete." }
+      },
+      required: ["subtaskId"]
+    }
+  },
+
+  // ── Acceptance criterion CRUD ──────────────────────────────────────
+
+  {
+    name: "list_acceptance_criteria",
+    description: "List acceptance criteria for a task (ordered by SortOrder).",
+    inputSchema: {
+      type: "object",
+      properties: {
+        taskId: { type: "integer", minimum: 1, description: "Task id whose acceptance criteria to list." }
+      },
+      required: ["taskId"]
+    }
+  },
+  {
+    name: "create_acceptance_criterion",
+    description: "Create an acceptance criterion on a task. Acceptance criteria are checkable definition-of-done items separate from subtasks.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        taskId: { type: "integer", minimum: 1, description: "Task id this acceptance criterion belongs to." },
+        text: { type: "string", description: "Acceptance criterion text (required, non-empty)." },
+        sortOrder: { type: "integer", minimum: 0, description: "Optional sort order within the task's criteria list." }
+      },
+      required: ["taskId", "text"]
+    }
+  },
+  {
+    name: "update_acceptance_criterion",
+    description: "Update an acceptance criterion's text, completed flag, and/or sort order.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        acId: { type: "integer", minimum: 1, description: "Acceptance criterion id to update." },
+        text: { type: "string", description: "New text. If omitted, text is left unchanged." },
+        completed: { type: "boolean", description: "New completed flag." },
+        sortOrder: { type: "integer", minimum: 0, description: "New sort order." }
+      },
+      required: ["acId"]
+    }
+  },
+  {
+    name: "mark_acceptance_criterion_done",
+    description: "Convenience: toggle an acceptance criterion's completed flag without supplying its text. Equivalent to update_acceptance_criterion with only the completed field set.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        acId: { type: "integer", minimum: 1, description: "Acceptance criterion id to mark." },
+        completed: { type: "boolean", description: "True to mark done, false to mark not-done." }
+      },
+      required: ["acId", "completed"]
+    }
+  },
+  {
+    name: "delete_acceptance_criterion",
+    description: "Delete an acceptance criterion.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        acId: { type: "integer", minimum: 1, description: "Acceptance criterion id to delete." }
+      },
+      required: ["acId"]
+    }
+  },
+
+  // ── Task dependency CRUD ───────────────────────────────────────────
+
+  {
+    name: "list_dependencies",
+    description: "List dependencies involving a task — both directions (tasks this task depends on, and tasks that depend on this task).",
+    inputSchema: {
+      type: "object",
+      properties: {
+        taskId: { type: "integer", minimum: 1, description: "Task id whose dependencies to list." }
+      },
+      required: ["taskId"]
+    }
+  },
+  {
+    name: "create_dependency",
+    description: "Create a dependency between two tasks (must be in the same project; cycle-protected). Type defaults to DependsOn.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        taskId: { type: "integer", minimum: 1, description: "Task id (the blocked task when type=DependsOn)." },
+        dependsOnTaskItemId: { type: "integer", minimum: 1, description: "Task id that taskId depends on (the blocking task)." },
+        type: {
+          type: "string",
+          enum: ["DependsOn", "Blocks"],
+          description: "Optional dependency direction. Defaults to DependsOn."
+        }
+      },
+      required: ["taskId", "dependsOnTaskItemId"]
+    }
+  },
+  {
+    name: "delete_dependency",
+    description: "Delete a task dependency by its id.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        dependencyId: { type: "integer", minimum: 1, description: "Dependency id to delete." }
+      },
+      required: ["dependencyId"]
+    }
+  },
+
+  // ── Activity ────────────────────────────────────────────────────────
+
+  {
+    name: "list_project_activity",
+    description: "List recent activity events for a project (newest first). Limit defaults to 100 server-side, max 500.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        projectId: { type: "integer", minimum: 1, description: "Project id whose activity to list." },
+        limit: { type: "integer", minimum: 1, maximum: 500, description: "Optional max number of events. Server clamps to [1, 500] and defaults to 100." }
+      },
+      required: ["projectId"]
+    }
+  },
+  {
+    name: "list_task_activity",
+    description: "List recent activity events for a task (newest first). Limit defaults to 100 server-side, max 500.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        taskId: { type: "integer", minimum: 1, description: "Task id whose activity to list." },
+        limit: { type: "integer", minimum: 1, maximum: 500, description: "Optional max number of events. Server clamps to [1, 500] and defaults to 100." }
+      },
+      required: ["taskId"]
+    }
   }
 ];
 
@@ -590,6 +789,99 @@ async function callTool(toolName, args) {
     case "get_step_context":
       return restJson(`/api/tasks/${requiredInt(args, "taskId", { min: 1 })}/context`);
 
+    // ── Subtask CRUD ──
+
+    case "list_subtasks":
+      return restJson(`/api/tasks/${requiredInt(args, "taskId", { min: 1 })}/subtasks`);
+    case "create_subtask":
+      return restJson(`/api/tasks/${requiredInt(args, "taskId", { min: 1 })}/subtasks`, {
+        method: "POST",
+        body: {
+          text: requiredString(args, "text"),
+          parentSubtaskId: optionalInt(args, "parentSubtaskId", { min: 1 }),
+          sortOrder: optionalInt(args, "sortOrder", { min: 0 })
+        }
+      });
+    case "update_subtask":
+      return restJson(`/api/subtasks/${requiredInt(args, "subtaskId", { min: 1 })}`, {
+        method: "PUT",
+        body: {
+          text: optionalString(args, "text"),
+          completed: optionalBool(args, "completed"),
+          parentSubtaskId: optionalInt(args, "parentSubtaskId", { min: 0 }),
+          sortOrder: optionalInt(args, "sortOrder", { min: 0 })
+        }
+      });
+    case "mark_subtask_done":
+      return restJson(`/api/subtasks/${requiredInt(args, "subtaskId", { min: 1 })}`, {
+        method: "PUT",
+        body: { completed: requiredBool(args, "completed") }
+      });
+    case "delete_subtask":
+      return restJson(`/api/subtasks/${requiredInt(args, "subtaskId", { min: 1 })}`, { method: "DELETE" });
+
+    // ── Acceptance criterion CRUD ──
+
+    case "list_acceptance_criteria":
+      return restJson(`/api/tasks/${requiredInt(args, "taskId", { min: 1 })}/acceptance-criteria`);
+    case "create_acceptance_criterion":
+      return restJson(`/api/tasks/${requiredInt(args, "taskId", { min: 1 })}/acceptance-criteria`, {
+        method: "POST",
+        body: {
+          text: requiredString(args, "text"),
+          sortOrder: optionalInt(args, "sortOrder", { min: 0 })
+        }
+      });
+    case "update_acceptance_criterion":
+      return restJson(`/api/acceptance-criteria/${requiredInt(args, "acId", { min: 1 })}`, {
+        method: "PUT",
+        body: {
+          text: optionalString(args, "text"),
+          completed: optionalBool(args, "completed"),
+          sortOrder: optionalInt(args, "sortOrder", { min: 0 })
+        }
+      });
+    case "mark_acceptance_criterion_done":
+      return restJson(`/api/acceptance-criteria/${requiredInt(args, "acId", { min: 1 })}`, {
+        method: "PUT",
+        body: { completed: requiredBool(args, "completed") }
+      });
+    case "delete_acceptance_criterion":
+      return restJson(`/api/acceptance-criteria/${requiredInt(args, "acId", { min: 1 })}`, { method: "DELETE" });
+
+    // ── Task dependency CRUD ──
+
+    case "list_dependencies":
+      return restJson(`/api/tasks/${requiredInt(args, "taskId", { min: 1 })}/dependencies`);
+    case "create_dependency": {
+      if (args.type !== undefined && args.type !== null && args.type !== "")
+        assertEnum(args, "type", ["DependsOn", "Blocks"]);
+      return restJson(`/api/tasks/${requiredInt(args, "taskId", { min: 1 })}/dependencies`, {
+        method: "POST",
+        body: {
+          dependsOnTaskItemId: requiredInt(args, "dependsOnTaskItemId", { min: 1 }),
+          type: optionalString(args, "type")
+        }
+      });
+    }
+    case "delete_dependency":
+      return restJson(`/api/task-dependencies/${requiredInt(args, "dependencyId", { min: 1 })}`, { method: "DELETE" });
+
+    // ── Activity ──
+
+    case "list_project_activity": {
+      const projectId = requiredInt(args, "projectId", { min: 1 });
+      const limit = optionalInt(args, "limit", { min: 1, max: 500 });
+      const query = limit === undefined ? "" : `?limit=${encodeURIComponent(limit)}`;
+      return restJson(`/api/projects/${projectId}/activity${query}`);
+    }
+    case "list_task_activity": {
+      const taskId = requiredInt(args, "taskId", { min: 1 });
+      const limit = optionalInt(args, "limit", { min: 1, max: 500 });
+      const query = limit === undefined ? "" : `?limit=${encodeURIComponent(limit)}`;
+      return restJson(`/api/tasks/${taskId}/activity${query}`);
+    }
+
     default:
       throw new McpError(-32601, `Unknown tool: ${toolName}`);
   }
@@ -702,6 +994,23 @@ function assertEnum(args, name, allowedValues) {
   if (!allowedValues.includes(args[name])) {
     throw new McpError(-32602, `${name} must be one of: ${allowedValues.join(", ")}.`);
   }
+}
+
+function requiredBool(args, name) {
+  const value = args[name];
+  if (typeof value !== "boolean") {
+    throw new McpError(-32602, `${name} is required and must be a boolean.`);
+  }
+  return value;
+}
+
+function optionalBool(args, name) {
+  const value = args[name];
+  if (value === undefined || value === null) return undefined;
+  if (typeof value !== "boolean") {
+    throw new McpError(-32602, `${name} must be a boolean when provided.`);
+  }
+  return value;
 }
 
 function writeResult(id, result) {
