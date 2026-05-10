@@ -4,6 +4,7 @@
 @inject IDbContextFactory<AppDbContext> DbFactory
 @inject NavigationManager Nav
 @inject IJSRuntime JS
+@inject ITaskService TaskSvc
 @implements IAsyncDisposable
 
 <PageTitle>@(project?.Name ?? "Project") - KanbanFlow</PageTitle>
@@ -641,30 +642,17 @@ else
 
     private async Task ToggleTaskDone(TaskItem task)
     {
-        var newStatus = task.Status == WorkStatus.Done ? WorkStatus.Todo : WorkStatus.Done;
-        var markSubtasksCompleted = newStatus == WorkStatus.Done;
         try
         {
-            using var db = await DbFactory.CreateDbContextAsync(_cts.Token);
-            var entity = await db.Tasks.Include(t => t.Subtasks).FirstOrDefaultAsync(t => t.Id == task.Id, _cts.Token);
-            if (entity is null) return;
-
-            entity.Status = newStatus;
-            entity.UpdatedAt = DateTime.UtcNow;
-            entity.CompletedAt = newStatus == WorkStatus.Done ? DateTime.UtcNow : null;
-
-            // Cascade: mark all subtasks completed/uncompleted
-            foreach (var subtask in entity.Subtasks)
-            {
-                subtask.Completed = markSubtasksCompleted;
-            }
-
-            await db.SaveChangesAsync(_cts.Token);
+            // Routed through ITaskService so the audit event + status-change comment
+            // fire (issue #88). Service also cascades subtask completion.
+            await TaskSvc.ToggleDoneAsync(task.Id, actor: "User", _cts.Token);
 
             await LoadProject();
             await ReinitializeSortables();
         }
         catch (OperationCanceledException) { }
+        catch (TaskNotFoundException) { /* silently ignore — task vanished mid-action */ }
         catch (Exception ex) { loadError = ex.Message; }
     }
 
@@ -762,38 +750,31 @@ else
     [JSInvokable]
     public async Task OnCardMoved(int taskId, string newStatus, int newIndex)
     {
-        if (!Enum.TryParse<WorkStatus>(newStatus, out var status)) return;
+        // Reject undefined enum values up-front (closes part of #89 for the UI).
+        if (!Enum.TryParse<WorkStatus>(newStatus, out var status)
+            || !Enum.IsDefined(typeof(WorkStatus), status))
+        {
+            return;
+        }
 
         try
         {
+            // Status change goes through ITaskService — produces the StatusChange comment
+            // and TaskStatusChanged activity event (closes UI half of #88 for status moves).
+            await TaskSvc.ChangeStatusAsync(taskId, status, actor: "User", _cts.Token);
+
+            // Reorder is still inline; service extraction for reorder is deferred to a
+            // follow-up PR (TODO: ITaskService.ReorderAsync).
             using var db = await DbFactory.CreateDbContextAsync(_cts.Token);
             var task = await db.Tasks.FindAsync(new object[] { taskId }, _cts.Token);
             if (task is null) return;
 
-            var oldStatus = task.Status;
-            task.Status = status;
-            task.UpdatedAt = DateTime.UtcNow;
-
-            // Set CompletedAt when moved to Done, clear if moved away
-            if (status == WorkStatus.Done && oldStatus != WorkStatus.Done)
-            {
-                task.CompletedAt = DateTime.UtcNow;
-            }
-            else if (status != WorkStatus.Done)
-            {
-                task.CompletedAt = null;
-            }
-
-            await db.SaveChangesAsync(_cts.Token);
-
-            // Reindex all tasks in the target column
             var columnTasks = await db.Tasks
                 .Include(t => t.Feature)
                 .Where(t => t.Status == status && t.Feature.ProjectId == Id)
                 .OrderBy(t => t.SortOrder)
                 .ToListAsync(_cts.Token);
 
-            // Remove the moved task and insert at the new index
             columnTasks.Remove(task);
             var insertIndex = Math.Min(newIndex, columnTasks.Count);
             columnTasks.Insert(insertIndex, task);
@@ -808,6 +789,7 @@ else
             await ReinitializeSortables();
         }
         catch (OperationCanceledException) { }
+        catch (TaskNotFoundException) { /* task vanished mid-drag — drop silently */ }
         catch (Exception ex)
         {
             loadError = ex.Message;

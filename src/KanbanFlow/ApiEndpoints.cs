@@ -1129,50 +1129,36 @@ public static class ApiEndpoints
         });
 
         // PATCH /api/tasks/{id}/status — change status only
-        app.MapPatch("/api/tasks/{id:int}/status", async (int id, StatusDto dto, AppDbContext db) =>
+        // Routed through ITaskService so the same audit/comment side effects fire
+        // whether this endpoint or a Blazor UI handler triggers the change (#88).
+        app.MapPatch("/api/tasks/{id:int}/status", async (int id, StatusDto dto, Services.ITaskService taskSvc, CancellationToken ct) =>
         {
-            var task = await db.Tasks
-                .Include(t => t.Feature)
-                .FirstOrDefaultAsync(t => t.Id == id);
-            if (task is null)
-                return Results.NotFound(new { message = $"Task {id} not found." });
-
             if (string.IsNullOrWhiteSpace(dto.Status))
                 return Results.UnprocessableEntity(new { message = "Status is required." });
 
-            if (!Enum.TryParse<WorkStatus>(dto.Status, ignoreCase: true, out var newStatus))
+            if (!Enum.TryParse<WorkStatus>(dto.Status, ignoreCase: true, out var newStatus)
+                || !Enum.IsDefined(typeof(WorkStatus), newStatus))
+            {
                 return Results.UnprocessableEntity(new { message = $"Invalid status: {dto.Status}. Valid values: {string.Join(", ", Enum.GetNames<WorkStatus>())}" });
+            }
 
-            var before = TaskActivitySnapshot(task);
-            var oldStatus = task.Status;
-            task.Status = newStatus;
-            task.UpdatedAt = DateTime.UtcNow;
-
-            if (newStatus == WorkStatus.Done && oldStatus != WorkStatus.Done)
-                task.CompletedAt = DateTime.UtcNow;
-            else if (newStatus != WorkStatus.Done)
-                task.CompletedAt = null;
-
-            var statusComment = new TaskComment
+            try
             {
-                TaskItemId = task.Id,
-                Text = $"Status changed from {oldStatus} to {newStatus}",
-                Author = "System",
-                Type = CommentType.StatusChange
-            };
-            db.TaskComments.Add(statusComment);
-            AddActivityEvent(db, task.Feature.ProjectId, "Task", task.Id, null, "TaskStatusChanged", before, TaskActivitySnapshot(task), $"Task '{task.Name}' status changed from {oldStatus} to {newStatus}");
-            await db.SaveChangesAsync();
-
-            return Results.Ok(new
+                var task = await taskSvc.ChangeStatusAsync(id, newStatus, dto.Actor, ct);
+                return Results.Ok(new
+                {
+                    task.Id,
+                    task.FeatureId,
+                    task.Name,
+                    Status = task.Status.ToString(),
+                    task.UpdatedAt,
+                    task.CompletedAt
+                });
+            }
+            catch (Services.TaskNotFoundException)
             {
-                task.Id,
-                task.FeatureId,
-                task.Name,
-                Status = task.Status.ToString(),
-                task.UpdatedAt,
-                task.CompletedAt
-            });
+                return Results.NotFound(new { message = $"Task {id} not found." });
+            }
         });
 
         // PATCH /api/tasks/{id}/feature — reassign to different feature
@@ -2315,7 +2301,7 @@ public record TaskDto(
     string? Assignee,
     int? SortOrder);
 
-public record StatusDto(string? Status);
+public record StatusDto(string? Status, string? Actor = null);
 
 public record ClaimDto(string? Actor);
 
