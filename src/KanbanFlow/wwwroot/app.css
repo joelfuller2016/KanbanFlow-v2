@@ -244,3 +244,14 @@ h1:focus {
         max-width: 100vw;
     }
 }
+
+/* Markdig-rendered content from MarkdownContent component (R-4.2) */
+.markdown-body p { margin-bottom: 0.5rem; }
+.markdown-body p:last-child { margin-bottom: 0; }
+.markdown-body code { background: rgba(0,0,0,0.05); padding: 0.1rem 0.25rem; border-radius: 3px; }
+.markdown-body pre { padding: 0.5rem; background: #f8f9fa; border-radius: 4px; overflow-x: auto; }
+.markdown-body pre code { background: transparent; padding: 0; }
+.markdown-body table { border-collapse: collapse; }
+.markdown-body table td, .markdown-body table th { border: 1px solid #dee2e6; padding: 0.25rem 0.5rem; }
+.markdown-body img { max-width: 100%; }
+

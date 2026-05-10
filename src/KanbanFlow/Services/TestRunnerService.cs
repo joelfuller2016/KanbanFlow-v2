@@ -14,7 +14,8 @@ public sealed class TestRunnerService(
     IHttpClientFactory httpClientFactory,
     IServer server,
     ITaskService taskSvc,
-    IDbContextFactory<AppDbContext> dbFactory) : ITestRunnerService
+    IDbContextFactory<AppDbContext> dbFactory,
+    IMarkdownRenderer markdownRenderer) : ITestRunnerService
 {
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
 
@@ -455,6 +456,37 @@ public sealed class TestRunnerService(
                 return;
             }
             throw new Exception("Expected TaskNotFoundException, got success");
+        }));
+
+        results.Add(await RunTest("MarkdownRenderer renders bold and italic", "Service:Markdown", () =>
+        {
+            var html = markdownRenderer.RenderToSafeHtml("**bold** and *italic*");
+            if (!html.Contains("<strong>bold</strong>", StringComparison.Ordinal))
+                throw new Exception($"Expected '<strong>bold</strong>' in output, got: {html}");
+            if (!html.Contains("<em>italic</em>", StringComparison.Ordinal))
+                throw new Exception($"Expected '<em>italic</em>' in output, got: {html}");
+            return Task.CompletedTask;
+        }));
+
+        results.Add(await RunTest("MarkdownRenderer sanitizes script tags", "Service:Markdown", () =>
+        {
+            var html = markdownRenderer.RenderToSafeHtml("<script>alert(1)</script>hello");
+            if (html.Contains("<script", StringComparison.OrdinalIgnoreCase))
+                throw new Exception($"Output should not contain <script>, got: {html}");
+            if (!html.Contains("hello", StringComparison.Ordinal))
+                throw new Exception($"Output should still contain 'hello', got: {html}");
+            return Task.CompletedTask;
+        }));
+
+        results.Add(await RunTest("MarkdownRenderer handles empty/null", "Service:Markdown", () =>
+        {
+            var fromNull = markdownRenderer.RenderToSafeHtml(null);
+            if (fromNull != string.Empty)
+                throw new Exception($"Null input should return empty string, got: '{fromNull}'");
+            var fromEmpty = markdownRenderer.RenderToSafeHtml(string.Empty);
+            if (fromEmpty != string.Empty)
+                throw new Exception($"Empty input should return empty string, got: '{fromEmpty}'");
+            return Task.CompletedTask;
         }));
 
         results.Add(await RunTest("Stubbed service methods throw NotImplementedException", "Service:Task", () =>
