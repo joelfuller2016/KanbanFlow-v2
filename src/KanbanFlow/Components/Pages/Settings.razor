@@ -1,0 +1,205 @@
+@page "/settings"
+@rendermode InteractiveServer
+@inject ITestRunnerService TestRunner
+@inject IConfiguration Config
+
+<PageTitle>Settings - KanbanFlow</PageTitle>
+
+<div class="d-flex justify-content-between align-items-center mb-4">
+    <h1 class="mb-0">Settings</h1>
+</div>
+
+<div class="row g-4">
+    <div class="col-12 col-lg-4">
+        <div class="card" data-testid="settings-app-info">
+            <div class="card-header"><strong>App info</strong></div>
+            <div class="card-body small">
+                <dl class="row mb-0">
+                    <dt class="col-5 text-muted">App</dt>
+                    <dd class="col-7">@AppName <span class="text-muted">v@AppVersion</span></dd>
+
+                    <dt class="col-5 text-muted">Runtime</dt>
+                    <dd class="col-7">.NET @Environment.Version</dd>
+
+                    <dt class="col-5 text-muted">Environment</dt>
+                    <dd class="col-7">@HostEnv</dd>
+
+                    <dt class="col-5 text-muted">Machine</dt>
+                    <dd class="col-7 text-truncate" title="@Environment.MachineName">@Environment.MachineName</dd>
+
+                    <dt class="col-5 text-muted">DB path</dt>
+                    <dd class="col-7 text-truncate font-monospace" title="@DbPath">@DbPath</dd>
+
+                    <dt class="col-5 text-muted">Started</dt>
+                    <dd class="col-7">@StartTime.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss")</dd>
+                </dl>
+            </div>
+        </div>
+    </div>
+
+    <div class="col-12 col-lg-8">
+        <div class="card" data-testid="settings-tests">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <strong>Run Tests</strong>
+                @if (latestSuite is not null)
+                {
+                    <span class="badge @(latestSuite.AllPassed ? "text-bg-success" : "text-bg-danger")">
+                        @latestSuite.Passed / @latestSuite.Total passed
+                        @if (latestSuite.Failed > 0)
+                        {
+                            <span> · @latestSuite.Failed failed</span>
+                        }
+                    </span>
+                }
+            </div>
+            <div class="card-body">
+                <p class="text-muted small">
+                    Three suites verify the live app from inside it. API tests hit the REST surface
+                    with isolated test data; UI tests render each Razor route via SSR;
+                    Service tests invoke <code>ITaskService</code> directly to verify the audit-log
+                    contract that closes issue #88.
+                </p>
+
+                <div class="d-flex flex-wrap gap-2 mb-3" data-testid="settings-test-buttons">
+                    <button class="btn btn-outline-primary" @onclick="@(() => RunSuite("api"))" disabled="@isRunning">
+                        Run API tests
+                    </button>
+                    <button class="btn btn-outline-primary" @onclick="@(() => RunSuite("ui"))" disabled="@isRunning">
+                        Run UI tests
+                    </button>
+                    <button class="btn btn-outline-primary" @onclick="@(() => RunSuite("service"))" disabled="@isRunning">
+                        Run Service tests
+                    </button>
+                    <button class="btn btn-primary ms-auto" @onclick="@(() => RunSuite("all"))" disabled="@isRunning">
+                        @(isRunning ? "Running…" : "Run all")
+                    </button>
+                </div>
+
+                @if (isRunning)
+                {
+                    <div class="d-flex align-items-center text-muted small mb-3" aria-live="polite" aria-busy="true">
+                        <div class="spinner-border spinner-border-sm me-2" role="status">
+                            <span class="visually-hidden">Loading…</span>
+                        </div>
+                        Running @currentSuite tests…
+                    </div>
+                }
+
+                @if (latestSuite is not null)
+                {
+                    <div class="mb-2 small">
+                        <span class="text-muted">Suite:</span> <strong>@latestSuite.Suite</strong>
+                        <span class="text-muted ms-3">Total time:</span> <strong>@latestSuite.TotalDurationMs.ToString("F0") ms</strong>
+                    </div>
+
+                    <div class="table-responsive" data-testid="settings-test-results">
+                        <table class="table table-sm align-middle mb-0">
+                            <thead>
+                                <tr>
+                                    <th style="width: 1.5rem;"></th>
+                                    <th>Test</th>
+                                    <th class="d-none d-md-table-cell" style="width: 8rem;">Category</th>
+                                    <th class="text-end" style="width: 5rem;">Time</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                @foreach (var t in latestSuite.Tests)
+                                {
+                                    <tr class="@(t.Passed ? "" : "table-danger")">
+                                        <td>
+                                            @if (t.Passed)
+                                            {
+                                                <span class="badge text-bg-success" title="Passed">✓</span>
+                                            }
+                                            else
+                                            {
+                                                <span class="badge text-bg-danger" title="Failed">✗</span>
+                                            }
+                                        </td>
+                                        <td>
+                                            <div>@t.Name</div>
+                                            @if (!t.Passed && !string.IsNullOrEmpty(t.Error))
+                                            {
+                                                <div class="small text-danger font-monospace text-break mt-1">@t.Error</div>
+                                            }
+                                        </td>
+                                        <td class="d-none d-md-table-cell">
+                                            <span class="badge bg-secondary">@t.Category</span>
+                                        </td>
+                                        <td class="text-end small text-muted">@t.DurationMs.ToString("F0")&nbsp;ms</td>
+                                    </tr>
+                                }
+                            </tbody>
+                        </table>
+                    </div>
+                }
+                else if (!isRunning)
+                {
+                    <div class="text-muted small">No results yet — pick a suite above.</div>
+                }
+            </div>
+        </div>
+    </div>
+</div>
+
+@code {
+    private TestSuiteResult? latestSuite;
+    private bool isRunning;
+    private string currentSuite = "";
+
+    private static readonly DateTime StartTime = DateTime.UtcNow;
+
+    private string AppName { get; set; } = "KanbanFlow";
+    private string AppVersion { get; set; } = "—";
+    private string HostEnv { get; set; } = "—";
+    private string DbPath { get; set; } = "(default: ./kanbanflow.db)";
+
+    protected override void OnInitialized()
+    {
+        var asm = typeof(Settings).Assembly;
+        AppVersion = asm.GetName().Version?.ToString() ?? "—";
+        HostEnv = Environment.GetEnvironmentVariable("ASPNETCORE_ENVIRONMENT") ?? "Production";
+        var configured = Environment.GetEnvironmentVariable("KANBANFLOW_DB_PATH");
+        if (!string.IsNullOrWhiteSpace(configured))
+        {
+            DbPath = Path.GetFullPath(configured);
+        }
+        else
+        {
+            DbPath = Path.Combine(Environment.CurrentDirectory, "kanbanflow.db");
+        }
+    }
+
+    private async Task RunSuite(string suite)
+    {
+        if (isRunning) return;
+        isRunning = true;
+        currentSuite = suite;
+        latestSuite = null;
+        StateHasChanged();
+
+        try
+        {
+            latestSuite = suite switch
+            {
+                "api" => await TestRunner.RunApiTestsAsync(),
+                "ui" => await TestRunner.RunUiTestsAsync(),
+                "service" => await TestRunner.RunServiceTestsAsync(),
+                _ => await TestRunner.RunAllTestsAsync()
+            };
+        }
+        catch (Exception ex)
+        {
+            // Test runner itself crashed — surface as a single failed result so the user sees something useful.
+            latestSuite = new TestSuiteResult(
+                Suite: $"{suite} (runner crashed)",
+                Tests: new[] { new TestResult("Runner exception", "Runner", false, 0, $"{ex.GetType().Name}: {ex.Message}") },
+                TotalDurationMs: 0);
+        }
+        finally
+        {
+            isRunning = false;
+            StateHasChanged();
+        }
+    }
+}

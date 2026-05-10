@@ -25,6 +25,10 @@ builder.Services.AddDbContextFactory<AppDbContext>(options => options.UseSqlite(
 // Audit-aware service layer (issue #88: route REST + UI mutations through one place)
 builder.Services.AddScoped<ITaskService, TaskService>();
 
+// In-process test runner (Settings panel + /api/admin/run-tests endpoint)
+builder.Services.AddHttpClient();
+builder.Services.AddScoped<ITestRunnerService, TestRunnerService>();
+
 // Blazor
 builder.Services.AddRazorComponents()
     .AddInteractiveServerComponents();
@@ -59,6 +63,7 @@ app.MapRazorComponents<App>()
     .AddInteractiveServerRenderMode();
 
 app.MapApiEndpoints();
+app.MapAdminEndpoints();
 
 app.Run();
 
