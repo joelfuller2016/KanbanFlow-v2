@@ -894,7 +894,7 @@ public static class ApiEndpoints
                 s.CreatedAt,
                 Children = subtasksByParent.TryGetValue(s.Id, out var kids)
                     ? kids.Select(MapSubtask).ToList()
-                    : new List<object>()
+                    : (IReadOnlyList<object>)Array.Empty<object>()
             };
             var subtaskTree = subtasksFlat
                 .Where(s => s.ParentSubtaskId == null)
@@ -955,12 +955,14 @@ public static class ApiEndpoints
 
             // Requirements that link to this task (or to its feature). Project-scope filter
             // guards against cross-project leakage if any inconsistent linkage exists.
-            // Sort by Priority DESC so Critical/High requirements appear first — AI bundles
-            // should surface the most important constraints up top.
+            // Sort by Priority ASC so P0 (highest priority) appears first — RequirementPriority
+            // is defined as P0, P1, P2 with P0 as the most critical, so the smallest enum
+            // value is the most important. (PR #106 had this backwards; it's the bug this fix
+            // is correcting.)
             var relatedRequirements = await db.Requirements
                 .Where(r => r.ProjectId == projectId
                     && (r.TaskItemId == id || r.FeatureId == task.FeatureId))
-                .OrderByDescending(r => r.Priority).ThenBy(r => r.SortOrder).ThenBy(r => r.Id)
+                .OrderBy(r => r.Priority).ThenBy(r => r.SortOrder).ThenBy(r => r.Id)
                 .AsNoTracking()
                 .Select(r => new
                 {

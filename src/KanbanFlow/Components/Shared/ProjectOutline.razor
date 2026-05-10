@@ -1,7 +1,8 @@
 <div id="project-outline" class="project-outline border-end bg-light p-3" data-testid="project-outline">
     <div class="project-outline-header">
         <div class="outline-title-row">
-            <button class="btn btn-sm btn-outline-secondary icon-btn"
+            <button type="button"
+                    class="btn btn-sm btn-outline-secondary icon-btn"
                     @onclick="() => OnGoHome.InvokeAsync()"
                     title="Back to Projects"
                     aria-label="Back to projects"
@@ -11,7 +12,8 @@
                 </svg>
             </button>
             <h6 class="outline-title" title="@Project.Name">@Project.Name</h6>
-            <button class="btn btn-sm btn-outline-secondary icon-btn"
+            <button type="button"
+                    class="btn btn-sm btn-outline-secondary icon-btn"
                     @onclick="() => OnOpenEditProject.InvokeAsync()"
                     title="Edit project"
                     aria-label="Edit project"
@@ -21,7 +23,8 @@
                     <path fill-rule="evenodd" d="M1 13.5A1.5 1.5 0 0 0 2.5 15h11a1.5 1.5 0 0 0 1.5-1.5v-6a.5.5 0 0 0-1 0v6a.5.5 0 0 1-.5.5h-11a.5.5 0 0 1-.5-.5v-11a.5.5 0 0 1 .5-.5H9a.5.5 0 0 0 0-1H2.5A1.5 1.5 0 0 0 1 2.5z"/>
                 </svg>
             </button>
-            <button class="btn btn-sm btn-outline-secondary icon-btn d-lg-none"
+            <button type="button"
+                    class="btn btn-sm btn-outline-secondary icon-btn d-lg-none"
                     @onclick="() => OnCloseOutline.InvokeAsync()"
                     title="Hide outline"
                     aria-label="Hide project outline"
@@ -31,7 +34,8 @@
                 </svg>
             </button>
         </div>
-        <button class="btn btn-sm btn-primary d-flex align-items-center justify-content-center gap-2 w-100"
+        <button type="button"
+                class="btn btn-sm btn-primary d-flex align-items-center justify-content-center gap-2 w-100"
                 @onclick="() => OnOpenAddProject.InvokeAsync()"
                 title="Add a top-level feature or task to @Project.Name"
                 aria-label="Add a top-level feature or task to @Project.Name"
