@@ -92,7 +92,13 @@ else
                     </button>
                 </div>
 
-                <div id="ai-tools-controls" class="d-flex flex-wrap align-items-center gap-2 mt-2 pt-2 border-top" hidden="@(!aiControlsExpanded)">
+                @* Keep #ai-tools-controls in the DOM at all times so the toggle button's
+                   `aria-controls="ai-tools-controls"` always refers to a real element. Toggle
+                   visibility by swapping `d-flex` ↔ `d-none`. Inline `display:none` would lose
+                   to `.d-flex { display: flex !important }` here — `!important` from a class
+                   beats a plain inline rule, so we have to use Bootstrap's own `d-none`
+                   (which is also `!important`) and rely on the cascade order. *@
+                <div id="ai-tools-controls" class="@(aiControlsExpanded ? "d-flex flex-wrap align-items-center gap-2 mt-2 pt-2 border-top" : "d-none")">
                     <span class="text-muted small me-auto">Inspect project context, choose next work, or prepare future AI actions.</span>
                     <button class="btn btn-sm btn-outline-primary" data-testid="ai-project-context-button" @onclick="ShowProjectContextAsync">
                         Project Context
@@ -113,7 +119,7 @@ else
                     <div class="card mt-3 shadow-sm" data-testid="ai-action-panel">
                         <div class="card-header d-flex align-items-center py-2">
                             <strong>@aiPanelTitle</strong>
-                            <button class="btn btn-sm btn-link text-muted ms-auto" @onclick="CloseAiPanel">Close</button>
+                            <button class="btn-close ms-auto" aria-label="Close AI panel" title="Close" @onclick="CloseAiPanel"></button>
                         </div>
                         <div class="card-body">
                             @if (aiLoading)
@@ -205,7 +211,13 @@ else
                     </button>
                 </div>
 
-                <div id="requirements-content" hidden="@(!requirementsExpanded)">
+                @* Toggle visibility via inline `display:none;` rather than the `hidden`
+                   attribute. The `hidden` attribute resolves to `display: none` from the UA
+                   stylesheet, which loses to any element with a stronger rule (e.g. utility
+                   classes that set `display: flex`). Inline style sits at the same specificity
+                   level as those utility classes and `display:none` reliably wins for the
+                   wrapper. Element stays in the DOM so `aria-controls` stays valid. *@
+                <div id="requirements-content" style="@(requirementsExpanded ? null : "display:none;")">
                     @if (GetOrderedRequirements().Count == 0)
                     {
                         <div class="text-muted small border rounded bg-white p-3 mt-2" data-testid="requirements-empty-state">
