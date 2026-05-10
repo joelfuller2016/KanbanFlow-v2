@@ -273,9 +273,29 @@ public sealed class TestRunnerService(
                     var acId = body.GetProperty("id").GetInt32();
 
                     var update = await http.PutAsJsonAsync($"/api/acceptance-criteria/{acId}",
-                        new { text = "Done means... updated", met = true }, Json, ct);
+                        new { text = "Done means... updated", completed = true }, Json, ct);
                     if (!update.IsSuccessStatusCode)
                         throw new Exception($"PUT failed: {(int)update.StatusCode}");
+
+                    // Verify the round-trip actually persisted both fields. The prior version
+                    // sent `met` instead of `completed`; JSON silently dropped the unknown field
+                    // so the test was passing while testing nothing about the update.
+                    var refreshed = await http.GetFromJsonAsync<JsonElement>($"/api/tasks/{taskId}/acceptance-criteria", Json, ct);
+                    JsonElement? roundTripped = null;
+                    foreach (var item in refreshed.EnumerateArray())
+                    {
+                        if (item.GetProperty("id").GetInt32() == acId)
+                        {
+                            roundTripped = item;
+                            break;
+                        }
+                    }
+                    if (roundTripped is null)
+                        throw new Exception("Updated criterion not returned by GET");
+                    if (roundTripped.Value.GetProperty("text").GetString() != "Done means... updated")
+                        throw new Exception($"Text not persisted, got: {roundTripped.Value.GetProperty("text").GetString()}");
+                    if (!roundTripped.Value.GetProperty("completed").GetBoolean())
+                        throw new Exception("Completed flag not persisted as true");
 
                     var del = await http.DeleteAsync($"/api/acceptance-criteria/{acId}", ct);
                     if (del.StatusCode != HttpStatusCode.NoContent)
