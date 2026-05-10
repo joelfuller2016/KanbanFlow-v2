@@ -548,17 +548,33 @@
         if (!int.TryParse(e.Value.ToString(), out var featureId)) return;
         if (featureId == Task.FeatureId) return;
 
-        Task.FeatureId = featureId;
-        Task.Feature = Features?.FirstOrDefault(f => f.Id == featureId) ?? Task.Feature;
-        Task.UpdatedAt = DateTime.UtcNow;
+        try
+        {
+            // Routed through ITaskService — produces the FeatureChange comment + TaskFeatureChanged
+            // activity event AND enforces the cross-project boundary check (closes UI half of #88
+            // for feature reassignment, defense-in-depth for #83).
+            var updated = await TaskSvc.ReassignToFeatureAsync(Task.Id, featureId, actor: "User");
+            Task.FeatureId = updated.FeatureId;
+            Task.Feature = Features?.FirstOrDefault(f => f.Id == featureId) ?? Task.Feature;
+            Task.UpdatedAt = updated.UpdatedAt;
 
-        using var db = await DbFactory.CreateDbContextAsync();
-        db.Tasks.Attach(Task);
-        db.Entry(Task).Property(t => t.FeatureId).IsModified = true;
-        db.Entry(Task).Property(t => t.UpdatedAt).IsModified = true;
-        await db.SaveChangesAsync();
-
-        await OnTaskUpdated.InvokeAsync();
+            await OnTaskUpdated.InvokeAsync();
+        }
+        catch (TaskNotFoundException)
+        {
+            await OnTaskUpdated.InvokeAsync();
+        }
+        catch (FeatureNotFoundException)
+        {
+            // Stale dropdown — refresh the panel.
+            await OnTaskUpdated.InvokeAsync();
+        }
+        catch (CrossProjectReassignmentException)
+        {
+            // Defense-in-depth: the feature dropdown is normally project-scoped, so this should
+            // never fire from the UI. If it does (stale data), refresh the panel.
+            await OnTaskUpdated.InvokeAsync();
+        }
     }
 
     // ── Status change ──
@@ -600,20 +616,26 @@
     {
         if (Task is null || e.Value is null) return;
         if (!int.TryParse(e.Value.ToString(), out var priorityInt)) return;
+        // Reject undefined enum values (mirrors OnStatusChanged hardening for #89).
+        if (!Enum.IsDefined(typeof(TaskPriority), priorityInt)) return;
 
         var newPriority = (TaskPriority)priorityInt;
         if (newPriority == Task.Priority) return;
 
-        Task.Priority = newPriority;
-        Task.UpdatedAt = DateTime.UtcNow;
+        try
+        {
+            // Routed through ITaskService.UpdateAsync — produces the TaskUpdated activity event
+            // and an "Updated: Priority" comment (closes UI half of #88 for priority).
+            var updated = await TaskSvc.UpdateAsync(Task.Id, new TaskUpdate(Priority: newPriority), actor: "User");
+            Task.Priority = updated.Priority;
+            Task.UpdatedAt = updated.UpdatedAt;
 
-        using var db = await DbFactory.CreateDbContextAsync();
-        db.Tasks.Attach(Task);
-        db.Entry(Task).Property(t => t.Priority).IsModified = true;
-        db.Entry(Task).Property(t => t.UpdatedAt).IsModified = true;
-        await db.SaveChangesAsync();
-
-        await OnTaskUpdated.InvokeAsync();
+            await OnTaskUpdated.InvokeAsync();
+        }
+        catch (TaskNotFoundException)
+        {
+            await OnTaskUpdated.InvokeAsync();
+        }
     }
 
     // ── Assignee change ──
@@ -624,16 +646,22 @@
         var newAssignee = e.Value?.ToString()?.Trim();
         if (newAssignee == Task.Assignee) return;
 
-        Task.Assignee = string.IsNullOrWhiteSpace(newAssignee) ? null : newAssignee;
-        Task.UpdatedAt = DateTime.UtcNow;
+        try
+        {
+            // Routed through ITaskService.UpdateAsync (closes UI half of #88 for assignee).
+            // Pass empty string to clear (matches SaveDescriptionAsync's convention; the service
+            // distinguishes "not provided" (null) from "clear" (empty)).
+            var assigneeArg = string.IsNullOrWhiteSpace(newAssignee) ? string.Empty : newAssignee;
+            var updated = await TaskSvc.UpdateAsync(Task.Id, new TaskUpdate(Assignee: assigneeArg), actor: "User");
+            Task.Assignee = updated.Assignee;
+            Task.UpdatedAt = updated.UpdatedAt;
 
-        using var db = await DbFactory.CreateDbContextAsync();
-        db.Tasks.Attach(Task);
-        db.Entry(Task).Property(t => t.Assignee).IsModified = true;
-        db.Entry(Task).Property(t => t.UpdatedAt).IsModified = true;
-        await db.SaveChangesAsync();
-
-        await OnTaskUpdated.InvokeAsync();
+            await OnTaskUpdated.InvokeAsync();
+        }
+        catch (TaskNotFoundException)
+        {
+            await OnTaskUpdated.InvokeAsync();
+        }
     }
 
     // ── Description ──
