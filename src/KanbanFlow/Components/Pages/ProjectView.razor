@@ -92,27 +92,27 @@ else
                     </button>
                 </div>
 
-                @* Bootstrap's `d-flex` carries `display: flex !important`, which beats the
-                   user-agent `[hidden] { display: none }` rule. Conditional render instead
-                   of relying on the `hidden` attribute so the toggle actually toggles. *@
-                @if (aiControlsExpanded)
-                {
-                    <div id="ai-tools-controls" class="d-flex flex-wrap align-items-center gap-2 mt-2 pt-2 border-top">
-                        <span class="text-muted small me-auto">Inspect project context, choose next work, or prepare future AI actions.</span>
-                        <button class="btn btn-sm btn-outline-primary" data-testid="ai-project-context-button" @onclick="ShowProjectContextAsync">
-                            Project Context
-                        </button>
-                        <button class="btn btn-sm btn-outline-primary" data-testid="ai-next-tasks-button" @onclick="ShowNextTasksAsync">
-                            Next Tasks
-                        </button>
-                        <button class="btn btn-sm btn-outline-secondary" data-testid="ai-generate-tasks-button" disabled title="Coming soon: create tasks from project context">
-                            Generate Tasks
-                        </button>
-                        <button class="btn btn-sm btn-outline-secondary" data-testid="ai-assign-button" disabled title="Coming soon: claim and assign selected work to an AI agent">
-                            Assign to AI
-                        </button>
-                    </div>
-                }
+                @* Keep #ai-tools-controls in the DOM at all times so the toggle button's
+                   `aria-controls="ai-tools-controls"` always refers to a real element. Toggle
+                   visibility by swapping `d-flex` ↔ `d-none`. Inline `display:none` would lose
+                   to `.d-flex { display: flex !important }` here — `!important` from a class
+                   beats a plain inline rule, so we have to use Bootstrap's own `d-none`
+                   (which is also `!important`) and rely on the cascade order. *@
+                <div id="ai-tools-controls" class="@(aiControlsExpanded ? "d-flex flex-wrap align-items-center gap-2 mt-2 pt-2 border-top" : "d-none")">
+                    <span class="text-muted small me-auto">Inspect project context, choose next work, or prepare future AI actions.</span>
+                    <button class="btn btn-sm btn-outline-primary" data-testid="ai-project-context-button" @onclick="ShowProjectContextAsync">
+                        Project Context
+                    </button>
+                    <button class="btn btn-sm btn-outline-primary" data-testid="ai-next-tasks-button" @onclick="ShowNextTasksAsync">
+                        Next Tasks
+                    </button>
+                    <button class="btn btn-sm btn-outline-secondary" data-testid="ai-generate-tasks-button" disabled title="Coming soon: create tasks from project context">
+                        Generate Tasks
+                    </button>
+                    <button class="btn btn-sm btn-outline-secondary" data-testid="ai-assign-button" disabled title="Coming soon: claim and assign selected work to an AI agent">
+                        Assign to AI
+                    </button>
+                </div>
 
                 @if (aiPanelOpen)
                 {
@@ -211,8 +211,12 @@ else
                     </button>
                 </div>
 
-                @* Conditional render rather than relying on `hidden` attribute, which descendants
-                   with `display: flex !important` would override. *@
+                @* Toggle visibility via inline `display:none;` rather than the `hidden`
+                   attribute. The `hidden` attribute resolves to `display: none` from the UA
+                   stylesheet, which loses to any element with a stronger rule (e.g. utility
+                   classes that set `display: flex`). Inline style sits at the same specificity
+                   level as those utility classes and `display:none` reliably wins for the
+                   wrapper. Element stays in the DOM so `aria-controls` stays valid. *@
                 <div id="requirements-content" style="@(requirementsExpanded ? null : "display:none;")">
                     @if (GetOrderedRequirements().Count == 0)
                     {
