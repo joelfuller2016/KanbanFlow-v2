@@ -1,8 +1,11 @@
-# CodeRabbit configuration — MAXIMUM aggression for KanbanFlow-v2.
-# AI-first Kanban PM: .NET 10, Blazor Server, EF Core + SQLite, MCP server, REST API + OpenAPI.
+# CodeRabbit configuration — MAXIMUM review aggression (fleet-wide standard).
+# Multi-language: C#/.NET + Blazor, Python, JS/TS, CSS, PowerShell. Per-language rules
+# only fire on matching files, so this single config is safe on any repo.
 # Read on every event by the CodeRabbit GitHub App. Schema: https://docs.coderabbit.ai/reference/configuration
 language: en-US
 early_access: true
+enable_free_tier: true
+inheritance: false                    # use this repo's own config; don't inherit an org-level one
 
 # Blunt, security-first reviewer persona (<=250 chars).
 tone_instructions: >-
@@ -28,10 +31,10 @@ reviews:
   suggested_labels: true
   auto_apply_labels: true
   suggested_reviewers: true
-  enable_prompt_for_ai_agents: true   # emit agent-ready fix prompts (this repo is AI-driven)
+  enable_prompt_for_ai_agents: true   # emit agent-ready fix prompts
   abort_on_close: true
 
-  # Catch low-effort / hallucinated AI output — this codebase is largely AI-authored.
+  # Catch low-effort / hallucinated AI output (much of this fleet is AI-authored).
   slop_detection:
     enabled: true
 
@@ -70,7 +73,7 @@ reviews:
   path_instructions:
     - path: "**/*.cs"
       instructions: |
-        C# / .NET 10 — review strictly:
+        C# / .NET — review strictly:
         - Enforce nullable reference types; flag possible null deref and missing guard clauses.
         - async/await: no `async void` (except event handlers); no `.Result` / `.Wait()` / `.GetAwaiter().GetResult()` (deadlock/blocking); thread CancellationToken; ConfigureAwait(false) in library code.
         - DI lifetimes: no captive dependencies (singleton capturing scoped/transient); register with the correct lifetime.
@@ -83,18 +86,22 @@ reviews:
         Blazor components:
         - Lifecycle: no blocking/synchronous I/O in OnInitialized; use OnInitializedAsync; guard re-entrancy.
         - Dispose event subscriptions, timers, and IDisposable; implement IDisposable when subscribing.
-        - Treat [Parameter] values as immutable — do not mutate them inside the component.
+        - Treat [Parameter] values as immutable.
         - Accessibility is REQUIRED: semantic HTML, ARIA roles/labels, full keyboard operability, visible focus, label/control association, dialog focus trapping.
         - XSS: any MarkupString / raw HTML MUST be sanitized (HtmlSanitizer); never render untrusted HTML.
         - Correct StateHasChanged usage; avoid needless re-renders; use @key in loops.
-    - path: "**/*.razor.cs"
+    - path: "**/*.py"
       instructions: |
-        Blazor code-behind — apply the .razor component rules PLUS standard C# rules: nullability, async correctness, disposal, input validation.
-    - path: "**/*.{js,mjs,ts}"
+        Python:
+        - PEP 8; type hints on public functions; specific exception handling (no bare `except:`).
+        - Security: validate/sanitize input; never eval/exec untrusted data; parameterized SQL; no hardcoded secrets; no `pickle`/unsafe deserialization on untrusted data; avoid `subprocess(..., shell=True)` with untrusted input.
+        - Use context managers for resources; no mutable default arguments.
+        - Async: never block the event loop; await all coroutines; thread cancellation.
+    - path: "**/*.{js,mjs,ts,tsx,jsx}"
       instructions: |
         - Security first: prevent XSS (sanitize before DOM insertion); no eval / new Function; no innerHTML with untrusted data.
+        - TypeScript: strict typing, no implicit any, null-safety; verify React hook usage and a11y for components.
         - Proper error handling; no unhandled promise rejections; no leftover console.* in shipped code.
-        - Accessibility for any DOM/interaction code (focus management, ARIA, keyboard).
     - path: "**/*.css"
       instructions: |
         - Maintainability: avoid !important; keep specificity low; reuse existing design tokens/CSS variables.
@@ -108,16 +115,10 @@ reviews:
         - Use approved verbs; keep operations idempotent.
     - path: "**/*{Test,Tests,Spec}*.cs"
       instructions: |
-        Tests MUST exercise real code paths:
-        - No fake/placeholder tests, no asserting only on mocks, no trivially-true assertions.
-        - Cover edge cases, error paths, and boundaries; tests must be deterministic.
-        - Do not over-mock the system under test — mock only true external boundaries.
-        - Flag any new/changed behavior that lacks coverage.
-    - path: "**/Program.cs"
+        C# tests MUST exercise real code paths: no fake/placeholder tests, no asserting only on mocks, no trivially-true assertions. Cover edge cases, error paths, and boundaries; tests must be deterministic; mock only true external boundaries; flag new/changed behavior lacking coverage.
+    - path: "**/{test_*,*_test,conftest}.py"
       instructions: |
-        Startup / security:
-        - CORS must not be wide-open (AllowAnyOrigin combined with credentials); restrict origins or explicitly document local-only intent.
-        - Verify auth/authz wiring and secure headers; no secrets in config or source.
+        Python tests MUST exercise real code paths: no trivially-true assertions; cover edge and error cases; deterministic; mock only true external boundaries; flag uncovered new behavior.
     - path: ".github/workflows/*.{yml,yaml}"
       instructions: |
         GitHub Actions security:
@@ -137,6 +138,7 @@ reviews:
     - "!**/.next/**"
     - "!**/.nuxt/**"
     - "!**/__pycache__/**"
+    - "!**/*.pyc"
     - "!**/venv/**"
     - "!**/.venv/**"
     - "!**/coverage/**"
@@ -157,7 +159,7 @@ knowledge_base:
     enabled: true                     # let reviews pull in current external context
   code_guidelines:
     enabled: true
-    filePatterns:                     # enforce this repo's own documented standards
+    filePatterns:                     # enforce each repo's own documented standards
       - "**/CLAUDE.md"
       - "**/AGENTS.md"
       - ".github/copilot-instructions.md"
@@ -169,6 +171,13 @@ knowledge_base:
     scope: auto
   pull_requests:
     scope: auto
+
+# On-demand code generation (docstrings / unit tests).
+code_generation:
+  docstrings:
+    path_instructions: []
+  unit_tests:
+    path_instructions: []
 
 # Auto-generate an implementation plan on every new/updated issue (native — no workflow required).
 issue_enrichment:
