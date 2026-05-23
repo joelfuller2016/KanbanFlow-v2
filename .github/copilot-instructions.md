@@ -1,84 +1,63 @@
-# Copilot / AI reviewer instructions — KanbanFlow-v2
+# AI reviewer & assistant instructions
 
-These are the shared house rules for every AI bot that touches this repo (GitHub Copilot,
-CodeRabbit, Gemini Code Assist). **Review aggressively.** Surface every real defect —
-correctness, security, performance, accessibility, and maintainability. Do not soften or
-withhold findings; prefer concrete, copy-pasteable fixes over vague advice. Assume code was
+House rules for every AI bot that touches this repository — GitHub Copilot (chat + PR
+review), CodeRabbit, and Gemini Code Assist. **Review aggressively.** Surface every real
+defect: correctness, security, performance, accessibility, and maintainability. Don't soften
+or withhold findings; give concrete, copy-pasteable fixes over vague advice. Assume code was
 AI-generated and may not actually work — verify the logic, don't trust the prose.
 
-## What this project is
-
-KanbanFlow-v2 is an **AI-first Kanban project-management app**: nested boards, an MCP server
-so AI agents can drive it, plus a human UI and REST API.
-
-- **Stack:** .NET 10, Blazor Server, EF Core + SQLite, ASP.NET Core REST API (OpenAPI at
-  `/openapi.json`), an MCP server exposing authoring tools, plus JS/CSS and PowerShell scripts.
-- **Layout:** application code lives under `src/KanbanFlow`; docs under `docs/`; scripts under `scripts/`.
-- **Patterns in play:** a service layer (e.g. `ITaskService`) over EF Core, MCP tool handlers,
-  Markdig + HtmlSanitizer for user-supplied markdown.
+These are owner-wide defaults. Apply the sections that match this repo's actual stack; ignore
+the rest.
 
 ## Review priorities (in order)
-
-1. **Correctness** — does the change actually do what it claims? Trace the logic and edge cases.
-2. **Security** — XSS, injection, auth/authz, CORS, secret leakage, unsafe deserialization.
-3. **Accessibility** — this is a UI product; a11y regressions are bugs, not nits.
-4. **Performance** — EF Core query shape (N+1, tracking), async/blocking, render churn.
+1. **Correctness** — does the change do what it claims? Trace logic and edge cases.
+2. **Security** — injection, XSS, auth/authz, CORS, secret leakage, unsafe deserialization.
+3. **Accessibility** — for any UI; a11y regressions are bugs, not nits.
+4. **Performance** — query shape (N+1), blocking calls, render churn, allocations.
 5. **Tests & maintainability** — real coverage, clear naming, no dead code.
 
-## C# / .NET
-
-- Nullable reference types are expected; flag possible null dereferences and missing guards.
-- **Async:** no `async void` (except event handlers); never `.Result` / `.Wait()` /
-  `.GetAwaiter().GetResult()` (deadlock + thread-pool starvation); thread `CancellationToken`
-  through; `ConfigureAwait(false)` in library code.
-- **DI:** correct lifetimes; no captive dependencies (a singleton holding a scoped/transient).
-- **EF Core:** no N+1; `AsNoTracking()` for read-only queries; no client-side evaluation of
-  large sets; parameterized queries only; **schema changes go through migrations, not manual
-  SQL/DDL.**
-- Dispose owned `IDisposable`/`IAsyncDisposable`; prefer `using`.
-- Validate all external/API input; never trust client data.
-
-## Blazor (.razor / .razor.cs)
-
-- No blocking/synchronous I/O in `OnInitialized`; use `OnInitializedAsync` and guard re-entrancy.
-- Dispose event subscriptions, timers, and `IDisposable`; implement `IDisposable` when subscribing.
-- Treat `[Parameter]` values as immutable.
-- **Accessibility is required:** semantic HTML, ARIA roles/labels, full keyboard operability,
-  visible focus, label/control association, focus trapping in dialogs.
-- **XSS:** any `MarkupString` / raw HTML must be sanitized (HtmlSanitizer). Never render
-  untrusted HTML.
-- Use `@key` in loops; avoid unnecessary `StateHasChanged`.
-
-## JavaScript / CSS
-
-- JS: prevent XSS (sanitize before DOM insertion); no `eval` / `new Function`; no `innerHTML`
-  with untrusted data; handle promise rejections; no leftover `console.*` in shipped code.
-- CSS: avoid `!important`; keep specificity low; reuse existing design tokens; responsive and
-  dark-mode safe; meet WCAG AA contrast.
-
-## PowerShell (scripts/)
-
-- Strict error handling (`$ErrorActionPreference = 'Stop'` / `-ErrorAction Stop`) with try/catch.
-- No plaintext secrets; validate parameters; never `Invoke-Expression` untrusted input;
-  use approved verbs; keep operations idempotent.
-
-## Security specifics for this app
-
-- **CORS** must not be wide-open (`AllowAnyOrigin` + credentials). Restrict origins or
-  explicitly document the local-only assumption.
-- The MCP surface and REST API take agent/automation input — validate tool arguments and DTOs;
-  reject undefined enum values; enforce project-scoped authorization on every mutation.
+## Security (all languages)
+- Never trust external / user / agent input — validate and sanitize at the boundary.
 - No secrets in source or committed config.
+- Parameterized queries only; never string-build SQL.
+- No `eval` / dynamic exec on untrusted data; safe deserialization only.
+- CORS must not be wide-open (`AllowAnyOrigin` + credentials) unless documented as local-only.
+
+## C# / .NET (+ Blazor)
+- Nullable reference types; flag null derefs and missing guard clauses.
+- async: no `async void` (except event handlers); no `.Result` / `.Wait()` /
+  `.GetAwaiter().GetResult()`; thread `CancellationToken`; `ConfigureAwait(false)` in libraries.
+- DI: correct lifetimes; no captive dependencies (singleton holding scoped/transient).
+- EF Core: no N+1; `AsNoTracking()` for reads; parameterized; schema via migrations, not manual SQL.
+- Dispose owned `IDisposable` / `IAsyncDisposable`.
+- Blazor: no blocking I/O in `OnInitialized`; dispose subscriptions; treat `[Parameter]` as
+  immutable; sanitize `MarkupString` / raw HTML; ARIA + keyboard + focus handling; `@key` in loops.
+
+## Python
+- PEP 8; type hints on public APIs; specific exceptions (no bare `except:`).
+- Context managers for resources; no mutable default arguments.
+- No `pickle` / unsafe deserialization or `subprocess(shell=True)` on untrusted input.
+- Async: don't block the event loop; await all coroutines.
+
+## JavaScript / TypeScript / CSS
+- Prevent XSS (sanitize before DOM insertion); no `eval` / `new Function`; no `innerHTML` with
+  untrusted data.
+- TypeScript: strict typing, no implicit `any`, null-safety; verify React hook usage and a11y.
+- Handle promise rejections; no leftover `console.*` in shipped code.
+- CSS: avoid `!important`; reuse design tokens; responsive + dark-mode; WCAG AA contrast.
+
+## PowerShell
+- Strict error handling (`$ErrorActionPreference = 'Stop'` / `-ErrorAction Stop`) + try/catch.
+- No plaintext secrets; validate parameters; never `Invoke-Expression` untrusted input; use
+  approved verbs; keep operations idempotent.
 
 ## Tests
+Tests MUST exercise real code paths. Reject fake/placeholder tests, assertions against mocks
+only, and trivially-true assertions. Cover edge cases, error paths, and boundaries; keep tests
+deterministic; mock only true external boundaries; flag new or changed behavior shipped without
+coverage.
 
-Per project policy, **tests must exercise real code paths.** Reject fake/placeholder tests,
-assertions against mocks only, and trivially-true assertions. Cover edge cases, error paths,
-and boundaries; keep tests deterministic; mock only true external boundaries; flag new or
-changed behavior that ships without coverage.
-
-## GitHub Actions (if/when workflows are added)
-
+## GitHub Actions (only if workflows already exist)
 Least-privilege `permissions:`; pin third-party actions to a full commit SHA; never interpolate
 untrusted `${{ github.event.* }}` text into `run:` shells; beware `pull_request_target` with PR
-checkout; set timeouts.
+checkout; set job timeouts.
