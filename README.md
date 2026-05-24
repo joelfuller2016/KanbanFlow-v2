@@ -54,8 +54,9 @@ dotnet run --project src/KanbanFlow/KanbanFlow.csproj --urls http://127.0.0.1:51
 ### Tests (all local — no CI)
 
 ```powershell
-# In-app integration suite (40 tests) — click "Run all" at /settings, or hit the endpoint:
-curl -X POST "http://localhost:5148/api/admin/run-tests?suite=all"   # suite=api|ui|service|all
+# In-app integration suite (40 tests) — click "Run all" at /settings, or hit the running app
+# (match the port you launched with — the launch profile defaults to :5148, Quick Start uses :5123):
+curl -X POST "http://127.0.0.1:5123/api/admin/run-tests?suite=all"   # suite=api|ui|service|all
 
 ./scripts/smoke-api.ps1                 # ~50 HTTP calls against an ephemeral DB
 node ./scripts/smoke-mcp.mjs 1          # exercises the MCP tool surface (needs the app running)

@@ -7,10 +7,11 @@
 //   npm run test:ui            # build + run
 //   SKIP_BUILD=1 npm run test:ui
 //
-// NOTE ON "DRAG-DROP": the kanban board does NOT use drag-and-drop (no draggable
-// handlers exist). Cards move between columns via *status change* — toggling a
-// card's done checkbox sets status=Done and the board re-groups it into the Done
-// column. That status-based auto-placement is the real behaviour these tests cover.
+// The kanban board uses SortableJS drag-and-drop (initBoardDragDrop in
+// wwwroot/js/kanbanflow.js): dragging a card between the `.board-column-cards`
+// containers fires onEnd -> OnCardMoved(taskId, newStatus), which updates the
+// task's status. These tests drive a real drag (mouse events) AND the done-checkbox
+// path — both re-group the card into the destination column.
 
 import { chromium } from "playwright";
 import { spawn, execSync } from "node:child_process";
@@ -40,9 +41,23 @@ async function api(method, p, body) {
     body: body ? JSON.stringify(body) : undefined,
   });
   const text = await res.text();
-  const json = text ? JSON.parse(text) : null;
+  // Check status before parsing: error responses may be HTML/plaintext and would
+  // otherwise make JSON.parse throw, masking the real status/body.
   if (!res.ok) throw new Error(`${method} ${p} -> ${res.status}: ${text.slice(0, 200)}`);
-  return json;
+  return text ? JSON.parse(text) : null;
+}
+
+// Status persistence after a drag is async (SortableJS moves the DOM immediately,
+// then OnCardMoved round-trips to the server), so poll the API rather than read once.
+async function waitForApiStatus(taskId, expected, timeoutMs = 6000) {
+  const deadline = Date.now() + timeoutMs;
+  let last;
+  do {
+    last = (await api("GET", `/api/tasks/${taskId}`)).status;
+    if (last === expected) return;
+    await sleep(200);
+  } while (Date.now() < deadline);
+  throw new Error(`expected status ${expected}, got ${last}`);
 }
 
 async function test(name, fn) {
@@ -70,6 +85,28 @@ async function clickUntil(opener, expected, attempts = 6) {
   }
   await opener();
   await expected.waitFor({ state: "visible", timeout: 5000 });
+}
+
+// SortableJS responds to real mouse movement (not HTML5 DnD), so we press on the
+// card and move toward the destination column in small steps before releasing.
+async function dragCardTo(page, cardSelector, targetColumnSelector) {
+  const card = page.locator(cardSelector);
+  const target = page.locator(targetColumnSelector);
+  await card.scrollIntoViewIfNeeded();
+  const cb = await card.boundingBox();
+  const tb = await target.boundingBox();
+  if (!cb || !tb) throw new Error("card or target column not visible for drag");
+  const sx = cb.x + cb.width / 2, sy = cb.y + cb.height / 2;
+  const tx = tb.x + tb.width / 2, ty = tb.y + Math.min(tb.height / 2, 40);
+  await page.mouse.move(sx, sy);
+  await page.mouse.down();
+  for (let i = 1; i <= 12; i++) {
+    await page.mouse.move(sx + ((tx - sx) * i) / 12, sy + ((ty - sy) * i) / 12, { steps: 2 });
+    await page.waitForTimeout(25);
+  }
+  await page.mouse.move(tx, ty);
+  await page.waitForTimeout(60);
+  await page.mouse.up();
 }
 
 async function startApp() {
@@ -163,18 +200,25 @@ async function main() {
     const created = tasks.find((t) => t.name === taskName);
     assert(created, "created task not found via API");
 
-    // ── Scenario D: toggling done auto-places the card into the Done column ──
-    await test("Toggling done moves the card from Todo to the Done column (status auto-placement)", async () => {
-      // card currently lives under Todo
+    // ── Scenario D: drag a card between columns (SortableJS) updates its status ──
+    await test("Dragging a card from Todo to In Progress updates its status", async () => {
       await page.locator(`[data-testid="board-column-Todo-cards"] [data-testid="board-card-${created.id}"]`)
         .waitFor({ state: "visible" });
+      await dragCardTo(page,
+        `[data-testid="board-card-${created.id}"]`,
+        `[data-testid="board-column-InProgress-cards"]`);
+      // card re-groups under In Progress, and the API reflects the new status
+      await page.locator(`[data-testid="board-column-InProgress-cards"] [data-testid="board-card-${created.id}"]`)
+        .waitFor({ state: "visible" });
+      await waitForApiStatus(created.id, "InProgress");
+    });
+
+    // ── Scenario E: toggling the done checkbox auto-places the card into Done ──
+    await test("Toggling done moves the card to the Done column", async () => {
       await page.locator(`[data-testid="board-card-${created.id}-done-checkbox"]`).click();
-      // it should re-group under the Done column
       await page.locator(`[data-testid="board-column-Done-cards"] [data-testid="board-card-${created.id}"]`)
         .waitFor({ state: "visible" });
-      // and the API agrees the status is now Done
-      const t = await api("GET", `/api/tasks/${created.id}`);
-      assert(t.status === "Done", `expected status Done via API, got ${t.status}`);
+      await waitForApiStatus(created.id, "Done");
     });
 
     // ── Scenario E: Settings -> Run all shows an all-passed result table ──
