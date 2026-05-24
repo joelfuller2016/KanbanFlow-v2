@@ -40,6 +40,15 @@ builder.Services.AddSingleton<IMarkdownRenderer, MarkdownRenderer>();
 // OpenAPI document generation (R-5.1: /openapi.json discovery)
 builder.Services.AddOpenApi();
 
+// Native in-process MCP server (prototype) — co-hosted with the REST API + Blazor in
+// the same Kestrel process. Tools call the service layer / EF Core DIRECTLY via DI
+// (no HTTP hop), unlike the Node wrapper (scripts/mcp-server.mjs), which stays as a
+// stdio fallback. Streamable HTTP transport is mapped at /mcp below. Stateless mode
+// keeps it simple for local agent clients (no session handshake required).
+builder.Services.AddMcpServer()
+    .WithHttpTransport(options => options.Stateless = true)
+    .WithToolsFromAssembly();
+
 // Blazor
 builder.Services.AddRazorComponents()
     .AddInteractiveServerComponents();
@@ -84,6 +93,11 @@ app.MapGet("/openapi.json", (HttpContext ctx) =>
 
 app.MapApiEndpoints();
 app.MapAdminEndpoints();
+
+// Native MCP server (Streamable HTTP), prototype — agents connect at POST /mcp.
+// Loopback-only: enforces the documented localhost trust boundary (no auth by design,
+// same as the REST API) so an accidental non-loopback --urls can't expose mutation tools.
+app.MapMcp("/mcp").RequireHost("localhost", "127.0.0.1");
 
 app.Run();
 
