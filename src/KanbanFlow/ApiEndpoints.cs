@@ -472,10 +472,9 @@ public static class ApiEndpoints
         // GET /api/projects/{id}/activity — durable project event trail
         app.MapGet("/api/projects/{id:int}/activity", async (int id, int? limit, AppDbContext db) =>
         {
-            var projectExists = await db.Projects.AnyAsync(p => p.Id == id);
-            if (!projectExists)
-                return Results.NotFound(new { message = $"Project {id} not found." });
-
+            // Audit events are retained without a Project FK so history survives deletion (#85).
+            // Query events first; 404 only when there is genuinely nothing — no events AND the
+            // project never existed. A deleted project with retained events still returns them.
             var take = Math.Clamp(limit ?? 100, 1, 500);
             var events = await db.ActivityEvents
                 .Where(e => e.ProjectId == id)
@@ -483,6 +482,9 @@ public static class ApiEndpoints
                 .OrderByDescending(e => e.CreatedAt)
                 .Take(take)
                 .ToListAsync();
+
+            if (events.Count == 0 && !await db.Projects.AnyAsync(p => p.Id == id))
+                return Results.NotFound(new { message = $"Project {id} not found." });
 
             return Results.Ok(events.Select(MapActivityEvent));
         });
