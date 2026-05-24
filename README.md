@@ -51,12 +51,22 @@ dotnet run --project src/KanbanFlow/KanbanFlow.csproj --urls http://127.0.0.1:51
 
 > **Note on URL.** The launch profile defaults to `http://localhost:5148`, but the MCP wrapper and smoke tests assume `http://127.0.0.1:5123`. Use the `--urls` flag above (or set `KANBANFLOW_API_URL` to match) to keep everything aligned. Standardising on `:5123` is on the roadmap.
 
-### Smoke tests
+### Tests (all local — no CI)
 
 ```powershell
+# In-app integration suite (40 tests) — click "Run all" at /settings, or hit the endpoint:
+curl -X POST "http://localhost:5148/api/admin/run-tests?suite=all"   # suite=api|ui|service|all
+
 ./scripts/smoke-api.ps1                 # ~50 HTTP calls against an ephemeral DB
 node ./scripts/smoke-mcp.mjs 1          # exercises the MCP tool surface (needs the app running)
+npm run test:ui                         # Playwright browser e2e: New Project + add-task modals,
+                                        # board render, status auto-placement, Settings "Run all"
 ```
+
+The in-app suite runs real integration tests from inside the live app (API hits the REST
+surface, UI renders Razor routes via SSR, Service exercises `ITaskService` + the audit-log
+contract). `npm run test:ui` builds, boots an isolated instance (scratch port + throwaway DB),
+drives chromium, and tears down. First run needs `npm install` + `npx playwright install chromium`.
 
 ---
 

@@ -1,0 +1,13 @@
+{
+  "name": "kanbanflow-v2-scripts",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Local automation & test scripts for KanbanFlow v2 (MCP server, smoke tests, UI e2e). Local-only; no CI.",
+  "scripts": {
+    "test:ui": "node scripts/ui-e2e.mjs",
+    "test:mcp": "node scripts/smoke-mcp.mjs"
+  },
+  "devDependencies": {
+    "playwright": "^1.49.0"
+  }
+}
