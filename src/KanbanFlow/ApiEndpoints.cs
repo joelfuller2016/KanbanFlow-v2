@@ -446,17 +446,13 @@ public static class ApiEndpoints
             });
         });
 
-        // DELETE /api/projects/{id} — cascade delete
-        app.MapDelete("/api/projects/{id:int}", async (int id, AppDbContext db) =>
+        // DELETE /api/projects/{id} — full graph delete via the shared service (#155), so REST and
+        // the Blazor UI take one audited, leaf-first deletion path.
+        app.MapDelete("/api/projects/{id:int}", async (int id, Services.IProjectService projectSvc, CancellationToken ct) =>
         {
-            var project = await db.Projects.FindAsync(id);
-            if (project is null)
-                return Results.NotFound(new { message = $"Project {id} not found." });
-
-            await DeleteProjectChildrenAsync(db, id);
-            db.Projects.Remove(project);
-            await db.SaveChangesAsync();
-            return Results.NoContent();
+            return await projectSvc.DeleteAsync(id, actor: null, ct)
+                ? Results.NoContent()
+                : Results.NotFound(new { message = $"Project {id} not found." });
         });
     }
 
@@ -2223,7 +2219,9 @@ public static class ApiEndpoints
         return false;
     }
 
-    private static async Task DeleteProjectChildrenAsync(AppDbContext db, int projectId)
+    // internal so ProjectService (the shared project-delete path, #155) can reuse this proven
+    // leaf-first cleanup instead of duplicating it.
+    internal static async Task DeleteProjectChildrenAsync(AppDbContext db, int projectId)
     {
         var projectFeatureIds = await db.Features
             .Where(f => f.ProjectId == projectId)

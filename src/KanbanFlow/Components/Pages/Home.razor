@@ -2,6 +2,7 @@
 @rendermode InteractiveServer
 @inject IDbContextFactory<AppDbContext> DbFactory
 @inject NavigationManager Nav
+@inject IProjectService ProjectSvc
 
 <PageTitle>KanbanFlow</PageTitle>
 
@@ -335,13 +336,8 @@ else
 
         try
         {
-            using var db = await DbFactory.CreateDbContextAsync();
-            var project = await db.Projects.FindAsync(deletingProject.Id);
-            if (project is not null)
-            {
-                db.Projects.Remove(project);
-                await db.SaveChangesAsync();
-            }
+            // Shared, audited, leaf-first delete (handles nested feature/subtask RESTRICT FKs) — #155.
+            await ProjectSvc.DeleteAsync(deletingProject.Id, actor: "User");
 
             showDeleteModal = false;
             deletingProject = null;

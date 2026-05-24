@@ -25,6 +25,9 @@ builder.Services.AddDbContextFactory<AppDbContext>(options => options.UseSqlite(
 // Audit-aware service layer (issue #88: route REST + UI mutations through one place)
 builder.Services.AddScoped<ITaskService, TaskService>();
 
+// Audit-aware project deletion shared by REST + UI (issue #155).
+builder.Services.AddScoped<IProjectService, ProjectService>();
+
 // Real process start time, captured once at app boot. Construct eagerly so the
 // timestamp captured by AppStartupInfo's constructor is the boot time, not the
 // time of the first request that happens to resolve the singleton lazily.
