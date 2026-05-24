@@ -43,6 +43,10 @@ TaskItem (added)
 
 ## `get_project_briefing` — response schema
 
+> **Pseudocode notation:** the block below uses `int`/`str`/`num?` type hints and `| null`
+> union syntax for readability. This is intentional schema pseudocode, not valid JSON/JSONC.
+> The real implementation will be TypeScript-style types or JSON Schema once the endpoint ships.
+
 ```jsonc
 {
   "project":   { "id": int, "name": str, "goals": str?, "requirementsTotal": int, "requirementsSatisfied": int },
@@ -74,7 +78,7 @@ TaskItem (added)
 | `actor` | null | de-prioritize tasks claimed by others; scope "since my last activity" |
 | `since` | null | cursor/timestamp from a prior `cursor` → return only deltas in `recent` |
 | `depth` | `summary` | `summary` (top-N + counts) or `full` (larger caps) |
-| `limit` | 5 | cap for `now` / `next` / `blocked` lists (clamped 1–50) |
+| `limit` | 5 | cap for `now` / `next` / `blocked` lists (clamped 1–50 for the native MCP tool; the Node MCP wrapper may apply a lower cap — see `scripts/mcp-server.mjs`) |
 
 ## "Next" precedence (the heart of the feature — must be deterministic)
 
