@@ -61,10 +61,10 @@ node ./scripts/smoke-mcp.mjs 1          # exercises the MCP tool surface (needs 
 ### Before you push
 
 ```powershell
-./scripts/verify.ps1                    # restore + build (warnings = errors) + test + format
+./scripts/verify.ps1                    # restore + build (warnings=errors) + test  (+ format, advisory)
 ```
 
-**There is no CI** (single-trust-boundary, local-first by design), so `verify.ps1` is the quality gate — run it before every push.
+**There is no CI** (single-trust-boundary, local-first by design), so `verify.ps1` is the quality gate — run it before every push. Build + tests are hard gates; the **format check is advisory** (it reports drift but doesn't fail the run), pending a one-time `dotnet format` cleanup of the existing tree.
 
 Client-side libraries (Bootstrap, SortableJS) are vendored under `wwwroot/lib` and pinned in `libman.json`. To restore or update them:
 

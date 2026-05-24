@@ -8,7 +8,8 @@
 #
 # Exits non-zero on the first failing step so humans and agents can gate on it.
 # ─────────────────────────────────────────────────────────────────────────────
-$ErrorActionPreference = 'Stop'
+$ErrorActionPreference = 'Stop'   # Stop-action cmdlet failures become terminating errors -> caught below
+$script:verifyFailed = $false
 $repoRoot = Split-Path -Parent $PSScriptRoot
 Push-Location $repoRoot
 try {
@@ -26,8 +27,9 @@ try {
         Write-Host "=== $Name ===" -ForegroundColor Cyan
         & $Action
         if ($LASTEXITCODE -ne 0) {
-            Write-Host "`nFAILED: $Name (exit $LASTEXITCODE)`n" -ForegroundColor Red
-            exit 1
+            # throw (not exit) so the finally block still runs and restores the
+            # location stack — exit inside try would skip Pop-Location.
+            throw "FAILED: $Name (exit $LASTEXITCODE)"
         }
         Write-Host ""
     }
@@ -56,6 +58,14 @@ try {
 
     Write-Host "Build + tests passed. Safe to push." -ForegroundColor Green
 }
+catch {
+    # A step threw, or a Stop-action cmdlet failed. Report, then fall through to
+    # finally so the location stack is always restored before we exit non-zero.
+    Write-Host "`n$($_.Exception.Message)`n" -ForegroundColor Red
+    $script:verifyFailed = $true
+}
 finally {
     Pop-Location
 }
+
+if ($script:verifyFailed) { exit 1 }
