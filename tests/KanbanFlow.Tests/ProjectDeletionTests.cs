@@ -60,7 +60,7 @@ public sealed class ProjectDeletionTests
         await svc.DeleteProjectAsync(projectId, "tester");
 
         using var db = f.CreateDbContext();
-        var ev = await db.ActivityEvents.SingleOrDefaultAsync(e => e.EventType == "ProjectDeleted");
+        var ev = await db.ActivityEvents.SingleOrDefaultAsync(e => e.EventType == "ProjectDeleted" && e.ProjectId == projectId);
         Assert.NotNull(ev);
         Assert.Equal(projectId, ev!.ProjectId);
         Assert.Equal("Project", ev.EntityType);

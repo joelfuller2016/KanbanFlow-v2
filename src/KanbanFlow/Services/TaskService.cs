@@ -419,7 +419,7 @@ public sealed class TaskService(IDbContextFactory<AppDbContext> dbFactory) : ITa
         // OnDelete(Cascade) and Requirement.TaskItemId is OnDelete(SetNull) — EF handles
         // those on Remove(task). Leaf-first subtask removal lives in ONE place
         // (ProjectGraphDeleter), shared with the project/feature cascade.
-        await ProjectGraphDeleter.DeleteSubtasksForTaskAsync(db, taskId);
+        await ProjectGraphDeleter.DeleteSubtasksForTaskAsync(db, taskId, ct);
 
         var criteria = await db.AcceptanceCriteria
             .Where(c => c.TaskItemId == taskId)
@@ -449,7 +449,7 @@ public sealed class TaskService(IDbContextFactory<AppDbContext> dbFactory) : ITa
         // service-layer ProjectGraphDeleter so both surfaces behave identically (#155). A single
         // SaveChanges makes the children removal, the project removal, and the audit row one
         // atomic unit.
-        await ProjectGraphDeleter.DeleteProjectChildrenAsync(db, projectId);
+        await ProjectGraphDeleter.DeleteProjectChildrenAsync(db, projectId, ct);
         db.Projects.Remove(project);
         await db.SaveChangesAsync(ct);
     }

@@ -31,25 +31,25 @@ internal static class ProjectGraphDeleter
     /// inside the tree are nulled by <see cref="DeleteFeatureTreesAsync"/>. Does NOT remove the
     /// <see cref="Project"/> row itself or call SaveChanges — the caller does both.
     /// </summary>
-    public static async Task DeleteProjectChildrenAsync(AppDbContext db, int projectId)
+    public static async Task DeleteProjectChildrenAsync(AppDbContext db, int projectId, CancellationToken ct = default)
     {
         var projectFeatureIds = await db.Features
             .Where(f => f.ProjectId == projectId)
             .Select(f => f.Id)
-            .ToListAsync();
+            .ToListAsync(ct);
 
-        await DeleteFeatureTreesAsync(db, projectFeatureIds);
+        await DeleteFeatureTreesAsync(db, projectFeatureIds, ct);
 
         var requirements = await db.Requirements
             .Where(r => r.ProjectId == projectId)
-            .ToListAsync();
+            .ToListAsync(ct);
         db.Requirements.RemoveRange(requirements);
     }
 
     /// <summary>Deletes a single feature subtree (root + all descendants and their tasks/children).</summary>
-    public static async Task DeleteFeatureTreeAsync(AppDbContext db, int rootFeatureId)
+    public static async Task DeleteFeatureTreeAsync(AppDbContext db, int rootFeatureId, CancellationToken ct = default)
     {
-        await DeleteFeatureTreesAsync(db, [rootFeatureId]);
+        await DeleteFeatureTreesAsync(db, [rootFeatureId], ct);
     }
 
     /// <summary>
@@ -57,11 +57,11 @@ internal static class ProjectGraphDeleter
     /// leaf-first. Tasks under any collected feature have their subtasks (leaf-first), acceptance
     /// criteria, and comments removed; requirement links into the tree are nulled.
     /// </summary>
-    public static async Task DeleteFeatureTreesAsync(AppDbContext db, List<int> rootFeatureIds)
+    public static async Task DeleteFeatureTreesAsync(AppDbContext db, List<int> rootFeatureIds, CancellationToken ct = default)
     {
         if (rootFeatureIds.Count == 0) return;
 
-        var allFeatures = await db.Features.ToListAsync();
+        var allFeatures = await db.Features.ToListAsync(ct);
         var featureIds = new HashSet<int>();
 
         void CollectFeatureAndChildren(int featureId)
@@ -81,13 +81,13 @@ internal static class ProjectGraphDeleter
 
         var tasks = await db.Tasks
             .Where(t => featureIds.Contains(t.FeatureId))
-            .ToListAsync();
+            .ToListAsync(ct);
         var taskIds = tasks.Select(t => t.Id).ToList();
 
         var requirements = await db.Requirements
             .Where(r => (r.FeatureId.HasValue && featureIds.Contains(r.FeatureId.Value)) ||
                         (r.TaskItemId.HasValue && taskIds.Contains(r.TaskItemId.Value)))
-            .ToListAsync();
+            .ToListAsync(ct);
 
         foreach (var requirement in requirements)
         {
@@ -99,12 +99,12 @@ internal static class ProjectGraphDeleter
 
         if (taskIds.Count > 0)
         {
-            await DeleteSubtasksForTasksAsync(db, taskIds);
-            await DeleteAcceptanceCriteriaForTasksAsync(db, taskIds);
+            await DeleteSubtasksForTasksAsync(db, taskIds, ct);
+            await DeleteAcceptanceCriteriaForTasksAsync(db, taskIds, ct);
 
             var comments = await db.TaskComments
                 .Where(c => taskIds.Contains(c.TaskItemId))
-                .ToListAsync();
+                .ToListAsync(ct);
             db.TaskComments.RemoveRange(comments);
             db.Tasks.RemoveRange(tasks);
         }
@@ -122,14 +122,14 @@ internal static class ProjectGraphDeleter
     }
 
     /// <summary>Deletes a single subtask subtree (root + descendants), leaf-first, within its owning task.</summary>
-    public static async Task DeleteSubtaskTreeAsync(AppDbContext db, int rootSubtaskId)
+    public static async Task DeleteSubtaskTreeAsync(AppDbContext db, int rootSubtaskId, CancellationToken ct = default)
     {
-        var root = await db.Subtasks.FindAsync(rootSubtaskId);
+        var root = await db.Subtasks.FindAsync([rootSubtaskId], ct);
         if (root is null) return;
 
         var allSubtasksForTask = await db.Subtasks
             .Where(s => s.TaskItemId == root.TaskItemId)
-            .ToListAsync();
+            .ToListAsync(ct);
 
         var subtaskIds = new HashSet<int>();
         CollectSubtaskAndChildren(rootSubtaskId, allSubtasksForTask, subtaskIds);
@@ -151,13 +151,13 @@ internal static class ProjectGraphDeleter
     /// the single home for leaf-first subtask removal, used by both the project/feature cascade and the
     /// per-task delete path.
     /// </summary>
-    public static async Task DeleteSubtasksForTasksAsync(AppDbContext db, List<int> taskIds)
+    public static async Task DeleteSubtasksForTasksAsync(AppDbContext db, List<int> taskIds, CancellationToken ct = default)
     {
         if (taskIds.Count == 0) return;
 
         var subtasks = await db.Subtasks
             .Where(s => taskIds.Contains(s.TaskItemId))
-            .ToListAsync();
+            .ToListAsync(ct);
         if (subtasks.Count == 0) return;
 
         // Build id -> parentSubtaskId once (O(n)), then memoize each node's depth so the ordering is
@@ -173,17 +173,17 @@ internal static class ProjectGraphDeleter
     }
 
     /// <summary>Convenience overload for removing the subtasks of a single task.</summary>
-    public static Task DeleteSubtasksForTaskAsync(AppDbContext db, int taskId)
-        => DeleteSubtasksForTasksAsync(db, [taskId]);
+    public static Task DeleteSubtasksForTaskAsync(AppDbContext db, int taskId, CancellationToken ct = default)
+        => DeleteSubtasksForTasksAsync(db, [taskId], ct);
 
     /// <summary>Removes all acceptance criteria belonging to <paramref name="taskIds"/>.</summary>
-    public static async Task DeleteAcceptanceCriteriaForTasksAsync(AppDbContext db, List<int> taskIds)
+    public static async Task DeleteAcceptanceCriteriaForTasksAsync(AppDbContext db, List<int> taskIds, CancellationToken ct = default)
     {
         if (taskIds.Count == 0) return;
 
         var criteria = await db.AcceptanceCriteria
             .Where(c => taskIds.Contains(c.TaskItemId))
-            .ToListAsync();
+            .ToListAsync(ct);
 
         db.AcceptanceCriteria.RemoveRange(criteria);
     }

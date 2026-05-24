@@ -689,14 +689,14 @@ public static class ApiEndpoints
         });
 
         // DELETE /api/features/{id} — cascade delete
-        app.MapDelete("/api/features/{id:int}", async (int id, AppDbContext db) =>
+        app.MapDelete("/api/features/{id:int}", async (int id, AppDbContext db, CancellationToken ct) =>
         {
-            var exists = await db.Features.AnyAsync(f => f.Id == id);
+            var exists = await db.Features.AnyAsync(f => f.Id == id, ct);
             if (!exists)
                 return Results.NotFound(new { message = $"Feature {id} not found." });
 
-            await KanbanFlow.Services.ProjectGraphDeleter.DeleteFeatureTreeAsync(db, id);
-            await db.SaveChangesAsync();
+            await KanbanFlow.Services.ProjectGraphDeleter.DeleteFeatureTreeAsync(db, id, ct);
+            await db.SaveChangesAsync(ct);
             return Results.NoContent();
         });
     }
@@ -1592,14 +1592,14 @@ public static class ApiEndpoints
         });
 
         // DELETE /api/subtasks/{id} — delete
-        app.MapDelete("/api/subtasks/{id:int}", async (int id, AppDbContext db) =>
+        app.MapDelete("/api/subtasks/{id:int}", async (int id, AppDbContext db, CancellationToken ct) =>
         {
-            var exists = await db.Subtasks.AnyAsync(s => s.Id == id);
+            var exists = await db.Subtasks.AnyAsync(s => s.Id == id, ct);
             if (!exists)
                 return Results.NotFound(new { message = $"Subtask {id} not found." });
 
-            await KanbanFlow.Services.ProjectGraphDeleter.DeleteSubtaskTreeAsync(db, id);
-            await db.SaveChangesAsync();
+            await KanbanFlow.Services.ProjectGraphDeleter.DeleteSubtaskTreeAsync(db, id, ct);
+            await db.SaveChangesAsync(ct);
             return Results.NoContent();
         });
     }
