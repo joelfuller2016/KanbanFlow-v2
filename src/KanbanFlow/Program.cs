@@ -95,7 +95,9 @@ app.MapApiEndpoints();
 app.MapAdminEndpoints();
 
 // Native MCP server (Streamable HTTP), prototype — agents connect at POST /mcp.
-app.MapMcp("/mcp");
+// Loopback-only: enforces the documented localhost trust boundary (no auth by design,
+// same as the REST API) so an accidental non-loopback --urls can't expose mutation tools.
+app.MapMcp("/mcp").RequireHost("localhost", "127.0.0.1");
 
 app.Run();
 

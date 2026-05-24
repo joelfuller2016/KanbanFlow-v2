@@ -43,7 +43,7 @@ sacred: never bypass it.
 
 This is the workflow KanbanFlow is built for. Follow it on every unit of work.
 
-```
+```text
 1. get_next_tasks(projectId, actor=<you>)   → priority-sorted, unblocked, with a `reason`
 2. get_step_context(taskId)  (or get_task)  → one bundle: description, acceptance
                                                criteria, subtasks, dependencies, comments
@@ -81,7 +81,7 @@ Trust it; don't re-derive priority yourself.
 
 ## Entity model (what you can read/write)
 
-```
+```text
 Project ─ readme/goals/description (markdown docs), Requirements (P0/P1/P2)
   └─ Feature (recursive: features contain features)
        └─ TaskItem ─ description, Status, Priority, claim

@@ -40,14 +40,19 @@ public static class KanbanMcpTools
         var projects = await db.Projects.AsNoTracking()
             .OrderBy(p => p.Id)
             .ToListAsync(cancellationToken);
+        var projectIds = projects.Select(p => p.Id).ToList();
 
+        // Scope the count aggregations to the projects we just loaded rather than
+        // aggregating across the whole DB (cheap now, avoids a scan as projects grow).
         var featureCounts = (await db.Features.AsNoTracking()
+                .Where(f => projectIds.Contains(f.ProjectId))
                 .GroupBy(f => f.ProjectId)
                 .Select(g => new { ProjectId = g.Key, Count = g.Count() })
                 .ToListAsync(cancellationToken))
             .ToDictionary(x => x.ProjectId, x => x.Count);
 
         var taskCounts = (await db.Tasks.AsNoTracking()
+                .Where(t => projectIds.Contains(t.Feature.ProjectId))
                 .GroupBy(t => t.Feature.ProjectId)
                 .Select(g => new { ProjectId = g.Key, Count = g.Count() })
                 .ToListAsync(cancellationToken))
@@ -106,19 +111,23 @@ public static class KanbanMcpTools
     {
         await using var db = await dbFactory.CreateDbContextAsync(cancellationToken);
 
+        // AsSplitQuery: three collection Includes would otherwise produce a cartesian
+        // JOIN that explodes row counts for tasks with many children.
         var task = await db.Tasks.AsNoTracking()
             .Include(t => t.AcceptanceCriteria)
             .Include(t => t.Subtasks)
             .Include(t => t.Dependencies)
+            .AsSplitQuery()
             .FirstOrDefaultAsync(t => t.Id == taskId, cancellationToken)
             ?? throw new McpException($"Task {taskId} not found.");
 
+        // Stable, deterministic ordering for agent payloads: SortOrder, then Id as a tie-break.
         return new TaskDetail(
             task.Id, task.FeatureId, task.Name, task.Description,
             task.Status.ToString(), task.Priority.ToString(), task.Assignee, task.ClaimedBy,
-            task.AcceptanceCriteria.OrderBy(c => c.SortOrder)
+            task.AcceptanceCriteria.OrderBy(c => c.SortOrder).ThenBy(c => c.Id)
                 .Select(c => new ChecklistItem(c.Id, c.Text, c.Completed)).ToList(),
-            task.Subtasks.OrderBy(s => s.SortOrder)
+            task.Subtasks.OrderBy(s => s.SortOrder).ThenBy(s => s.Id)
                 .Select(s => new ChecklistItem(s.Id, s.Text, s.Completed)).ToList(),
             task.Dependencies.Select(d => d.DependsOnTaskItemId).OrderBy(id => id).ToList());
     }

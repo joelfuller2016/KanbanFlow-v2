@@ -11,6 +11,7 @@ wrapper (`scripts/mcp-server.mjs`).
 - `src/KanbanFlow/Mcp/KanbanMcpTools.cs` — a `[McpServerToolType]` class exposing a curated
   **5-tool vertical slice**.
 - `Program.cs` wiring:
+
   ```csharp
   builder.Services.AddMcpServer()
       .WithHttpTransport(options => options.Stateless = true)
@@ -18,6 +19,7 @@ wrapper (`scripts/mcp-server.mjs`).
   // …
   app.MapMcp("/mcp");
   ```
+
 - The Node wrapper is **left in place** as the stdio fallback and the full 36-tool surface.
 
 ## Why in-process beats the Node wrapper
