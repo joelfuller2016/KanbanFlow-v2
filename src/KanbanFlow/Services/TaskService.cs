@@ -13,10 +13,6 @@ namespace KanbanFlow.Services;
 /// </summary>
 public sealed class TaskService(IDbContextFactory<AppDbContext> dbFactory) : ITaskService
 {
-    // TODO: extract these helpers (mirror of the private statics in ApiEndpoints.cs)
-    // into a shared internal static class once a second service lands. Duplicated here
-    // intentionally to keep the blast radius of this PR small — touching ApiEndpoints
-    // to extract them would mean updating 14 call sites and ship as a separate concern.
     private static readonly JsonSerializerOptions ActivityJsonOptions = new(JsonSerializerDefaults.Web);
 
     private static object TaskActivitySnapshot(TaskItem task) => new
@@ -421,8 +417,9 @@ public sealed class TaskService(IDbContextFactory<AppDbContext> dbFactory) : ITa
         // (self-ref), so subtasks MUST be removed leaf-first. Acceptance criteria are
         // removed explicitly. Comments + Dependencies + BlockingDependencies are
         // OnDelete(Cascade) and Requirement.TaskItemId is OnDelete(SetNull) — EF handles
-        // those on Remove(task).
-        await DeleteSubtasksLeafFirstAsync(db, taskId, ct);
+        // those on Remove(task). Leaf-first subtask removal lives in ONE place
+        // (ProjectGraphDeleter), shared with the project/feature cascade.
+        await ProjectGraphDeleter.DeleteSubtasksForTaskAsync(db, taskId, ct);
 
         var criteria = await db.AcceptanceCriteria
             .Where(c => c.TaskItemId == taskId)
@@ -432,6 +429,38 @@ public sealed class TaskService(IDbContextFactory<AppDbContext> dbFactory) : ITa
         db.Tasks.Remove(task);
         await db.SaveChangesAsync(ct);
     }
+
+    public async Task DeleteProjectAsync(int projectId, string? actor, CancellationToken ct = default)
+    {
+        await using var db = await dbFactory.CreateDbContextAsync(ct);
+        var project = await db.Projects.FirstOrDefaultAsync(p => p.Id == projectId, ct);
+        if (project is null)
+            throw new ProjectNotFoundException(projectId);
+
+        // Snapshot + emit the audit event BEFORE removal. ActivityEvent has no FK to the
+        // project (Project is Ignored in AppDbContext), so the row survives the delete.
+        AddActivityEvent(
+            db, projectId, "Project", projectId, actor,
+            "ProjectDeleted", ProjectActivitySnapshot(project), null,
+            $"Project '{project.Name}' deleted");
+
+        // FK-safe child cleanup (features -> tasks -> leaf-first subtasks + acceptance criteria
+        // + comments; requirement links nulled) — shared with the REST delete path via the
+        // service-layer ProjectGraphDeleter so both surfaces behave identically (#155). A single
+        // SaveChanges makes the children removal, the project removal, and the audit row one
+        // atomic unit.
+        await ProjectGraphDeleter.DeleteProjectChildrenAsync(db, projectId, ct);
+        db.Projects.Remove(project);
+        await db.SaveChangesAsync(ct);
+    }
+
+    private static object ProjectActivitySnapshot(Project project) => new
+    {
+        project.Id,
+        project.Name,
+        project.Description,
+        project.Goals
+    };
 
     public async Task<TaskItem> ClaimAsync(int taskId, string actor, CancellationToken ct = default)
     {
@@ -648,49 +677,4 @@ public sealed class TaskService(IDbContextFactory<AppDbContext> dbFactory) : ITa
             _ => false
         };
 
-    // Leaf-first subtask removal (replicates ApiEndpoints.DeleteSubtasksForTasksAsync):
-    // Subtask.ChildSubtasks is OnDelete(Restrict), so a parent cannot be deleted before
-    // its children. Ordering by descending depth removes the deepest leaves first.
-    private static async Task DeleteSubtasksLeafFirstAsync(AppDbContext db, int taskId, CancellationToken ct)
-    {
-        var subtasks = await db.Subtasks
-            .Where(s => s.TaskItemId == taskId)
-            .ToListAsync(ct);
-        if (subtasks.Count == 0)
-            return;
-
-        // Build id -> parentSubtaskId once (O(n)), then memoize each node's depth so the
-        // ordering is O(n) total instead of O(n²) (the old per-node FirstOrDefault scan).
-        var parentById = subtasks.ToDictionary(s => s.Id, s => s.ParentSubtaskId);
-        var depthCache = new Dictionary<int, int>(subtasks.Count);
-
-        var ordered = subtasks
-            .OrderByDescending(s => GetSubtaskDepth(s.Id, parentById, depthCache, new HashSet<int>()))
-            .ToList();
-
-        db.Subtasks.RemoveRange(ordered);
-    }
-
-    // Memoized depth walk: follows parent links via the prebuilt map, caching every node
-    // visited along the way. Stops at a root (null parent) or a parent outside this task's
-    // set (defensive — same break behavior as the original scan). The `visiting` set guards
-    // against a (cycle-protected, but defensively handled) self-referential parent chain so
-    // a corrupt graph can't cause unbounded recursion.
-    private static int GetSubtaskDepth(int id, Dictionary<int, int?> parentById, Dictionary<int, int> depthCache, HashSet<int> visiting)
-    {
-        if (depthCache.TryGetValue(id, out var cached))
-            return cached;
-        if (!visiting.Add(id))
-            return 0; // cycle detected — break defensively
-
-        var parentId = parentById[id];
-        int depth;
-        if (parentId is null || !parentById.ContainsKey(parentId.Value))
-            depth = 0;
-        else
-            depth = GetSubtaskDepth(parentId.Value, parentById, depthCache, visiting) + 1;
-
-        depthCache[id] = depth;
-        return depth;
-    }
 }

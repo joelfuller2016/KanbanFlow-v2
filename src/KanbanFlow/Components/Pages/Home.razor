@@ -2,6 +2,7 @@
 @rendermode InteractiveServer
 @inject IDbContextFactory<AppDbContext> DbFactory
 @inject NavigationManager Nav
+@inject ITaskService TaskSvc
 
 <PageTitle>KanbanFlow</PageTitle>
 
@@ -41,7 +42,7 @@ else
     <div class="row g-4">
         @foreach (var p in projects)
         {
-            <div class="col-md-4">
+            <div class="col-md-4" @key="p.Id">
                 <div class="card h-100 shadow-sm">
                     <div class="card-body d-flex flex-column">
                         <div class="d-flex justify-content-between align-items-start mb-2">
@@ -94,7 +95,7 @@ else
                     <div class="modal-body">
                         @if (saveError is not null)
                         {
-                            <div class="alert alert-danger">@saveError</div>
+                            <div class="alert alert-danger" role="alert" aria-live="assertive" aria-atomic="true">@saveError</div>
                         }
                         <div class="mb-3">
                             <label class="form-label" for="project-name">Name <span class="text-danger">*</span></label>
@@ -136,6 +137,10 @@ else
                     <button type="button" class="btn-close" aria-label="Close delete confirmation dialog" @onclick="CloseDeleteModal"></button>
                 </div>
                 <div class="modal-body">
+                    @if (deleteError is not null)
+                    {
+                        <div class="alert alert-danger" role="alert" aria-live="assertive" aria-atomic="true">@deleteError</div>
+                    }
                     <p>Delete <strong>@deletingProject.Name</strong> and all its features and tasks?</p>
                     <p class="text-muted small mb-0">This action cannot be undone.</p>
                 </div>
@@ -170,6 +175,7 @@ else
     private bool showDeleteModal;
     private ProjectListItem? deletingProject;
     private bool isDeleting;
+    private string? deleteError;
     private ElementReference deleteModalDialog;
     private bool shouldFocusDeleteModal;
 
@@ -317,6 +323,7 @@ else
     private void OpenDeleteModal(ProjectListItem p)
     {
         deletingProject = p;
+        deleteError = null;
         showDeleteModal = true;
         shouldFocusDeleteModal = true;
     }
@@ -332,20 +339,26 @@ else
         if (deletingProject is null) return;
 
         isDeleting = true;
+        deleteError = null;
 
         try
         {
-            using var db = await DbFactory.CreateDbContextAsync();
-            var project = await db.Projects.FindAsync(deletingProject.Id);
-            if (project is not null)
-            {
-                db.Projects.Remove(project);
-                await db.SaveChangesAsync();
-            }
+            await TaskSvc.DeleteProjectAsync(deletingProject.Id, "User");
 
             showDeleteModal = false;
             deletingProject = null;
             await LoadProjects();
+        }
+        catch (ProjectNotFoundException)
+        {
+            // Project already removed (e.g. deleted in another tab) — just refresh the list.
+            showDeleteModal = false;
+            deletingProject = null;
+            await LoadProjects();
+        }
+        catch (Exception)
+        {
+            deleteError = "Delete failed. Please retry.";
         }
         finally
         {

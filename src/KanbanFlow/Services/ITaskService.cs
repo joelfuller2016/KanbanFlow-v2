@@ -97,6 +97,21 @@ public interface ITaskService
     Task DeleteAsync(int taskId, string? actor, CancellationToken ct = default);
 
     /// <summary>
+    /// Delete a project and its entire object graph (features, tasks, subtasks, acceptance
+    /// criteria, comments, dependencies; requirement links are nulled), removing children in
+    /// an FK-safe order so the self-referential <c>Subtask.ChildSubtasks</c> Restrict FK is
+    /// not violated. Emits a <c>ProjectDeleted</c> activity event (snapshot <em>before</em>
+    /// removal; the audit row survives because <see cref="ActivityEvent"/> has no FK to the
+    /// project). Both the REST API and the Blazor UI route through here so project deletion is
+    /// FK-safe and audited identically regardless of caller (fixes #155; down-payment on #149).
+    /// </summary>
+    /// <param name="projectId">Target project id.</param>
+    /// <param name="actor">Actor label; null is stored as null on the activity event.</param>
+    /// <param name="ct">Cancellation token.</param>
+    /// <exception cref="ProjectNotFoundException">The project does not exist.</exception>
+    Task DeleteProjectAsync(int projectId, string? actor, CancellationToken ct = default);
+
+    /// <summary>
     /// Claim a task for <paramref name="actor"/>. Idempotent when the same actor
     /// re-claims (the original <see cref="TaskItem.ClaimedAt"/> is preserved). Emits
     /// a <c>TaskClaimed</c> activity event. No comment (matches the REST endpoint).
