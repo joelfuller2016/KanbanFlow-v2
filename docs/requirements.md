@@ -333,7 +333,7 @@ These aren't oversights. They're explicit non-goals for v2:
 |---|---|
 | Authentication / authorisation | Single-trust-boundary tool. Agent + owner on one machine. |
 | Multi-tenancy / per-project ownership | One DB, one user. |
-| HTTPS, security headers, rate limiting, CORS / host restrictions | **Open access by design** — trust the network (single-user local tool). No enforced loopback / CORS / source-IP restrictions; security hardening is deferred to #84. |
+| HTTPS, security headers, rate limiting | **Open access by design** — trust the network (single-user local tool). No enforced loopback / CORS / source-IP restrictions; hardening deferred to #84. |
 | Real-time human collaboration (multiple humans on the same board) | Single-user UX; auto-poll or manual refresh. |
 | Notifications (email, Slack) | The agent is the integration. |
 | External integrations (GitHub, Jira, Linear) | Possibly a later module; not v2. |
