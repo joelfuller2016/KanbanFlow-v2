@@ -12,6 +12,14 @@ a, .btn-link {
     border-color: #1861ac;
 }
 
+/* High-priority badge ("badge bg-orange text-white"). Bootstrap has no bg-orange,
+   so without this the High badge rendered transparent (white-on-transparent = invisible).
+   Bootstrap's .badge sets no background, so no !important is needed to win.
+   Deep orange keeps white text above WCAG AA contrast (~6:1). */
+.bg-orange {
+    background-color: #c2410c;
+}
+
 .btn:focus, .btn:active:focus, .btn-link.nav-link:focus, .form-control:focus, .form-check-input:focus {
   box-shadow: 0 0 0 0.1rem white, 0 0 0 0.25rem #258cfb;
 }
