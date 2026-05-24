@@ -1,8 +1,30 @@
 # KanbanFlow v2
 
-**An AI-first project documentation and direction system.** Designed for AI agents to read, write, and navigate structured project knowledge — and to be told *what to work on next, with the context they need to do it*. Humans use the kanban UI; agents use the REST API and MCP server.
+> **An AI-first project knowledge graph that's equally a human kanban board and an agent API.**
+> .NET 10 · Blazor Server · SQLite · REST + MCP · local-first · no auth · no Docker
 
-This is not a kanban app with an API bolted on. The kanban board is one view of a project knowledge graph. The same graph is exposed as REST + MCP for agents.
+**Designed for AI agents to read, write, and navigate structured project knowledge — and to be told *what to work on next, with the context they need to do it*.** Humans use the kanban UI; agents use the REST API and MCP server. It's not a kanban app with an API bolted on — the board is one view of a project knowledge graph that is equally exposed as REST + MCP.
+
+## In one minute
+
+- **What:** a single-file (.NET 10 + SQLite) app where a project — its features, tasks, subtasks, requirements, acceptance criteria, decisions, and dependencies — is structured data.
+- **For humans:** a drag-and-drop kanban board + project outline.
+- **For agents:** the *same* data over a REST API and an MCP server, plus a `next-tasks` engine that answers "what should I work on next?" with reasoning.
+- **Guarantee:** every **task** mutation (human *or* agent) writes an immutable `ActivityEvent` — full-entity audit coverage is landing via the service-layer work (#88) — so agents inherit the causal history.
+- **Scope:** local-first, single-user, single-trust-boundary (agent + owner on one machine). No auth, no multi-tenancy, no cloud.
+
+---
+
+## The problem it solves
+
+AI coding agents are good at *executing* a well-scoped task but bad at knowing **what to do next, and why**. The state that answers those questions — goals, decisions, what's blocked, what changed and when — is scattered across chat logs, code comments, and a human's head. None of it is queryable by an agent, so:
+
+- Agents **re-derive context** from scratch every session, expensively and unreliably.
+- The **causal history of decisions is lost** — a new agent can't see *why* a previous one did something.
+- Humans and agents **drift**: there's no shared, authoritative picture of project state.
+- Traditional PM tools (Jira, Linear, Trello) are built for **humans clicking buttons** — their APIs are afterthoughts, and none of them can hand an agent "the exact context needed to act on this task."
+
+**KanbanFlow v2 makes project state a first-class, agent-native knowledge graph.** Every entity is structured documentation reachable over REST + MCP; a direction engine ranks the next tasks with human-readable reasoning and bundles everything needed to execute; and an append-only audit trail records every mutation so agents and humans share one source of truth. The kanban board is just the human's view of that graph.
 
 ---
 
@@ -89,45 +111,104 @@ libman update bootstrap                                    # bump a library
 
 ## Architecture
 
-```
-            Humans                        AI agents
-               │                              │
-               │                              │
-               ▼                              ▼
-       Blazor Server UI                MCP server (stdio)
-       (Components/*)                  (scripts/mcp-server.mjs)
-               │                              │
-               │                              ▼
-               │                       REST/JSON API
-               │                       (ApiEndpoints.cs)
-               │                              │
-               └──────────────┬───────────────┘
-                              ▼
-                       AppDbContext (EF Core)
-                              │
-                              ▼
-                       SQLite (single file)
+```mermaid
+flowchart TD
+    H["👤 Human"] -->|"kanban board · outline"| UI["Blazor Server UI<br/>Components/*"]
+    A["🤖 AI agent"] -->|"JSON-RPC (stdio)"| NODE["Node MCP wrapper<br/>scripts/mcp-server.mjs"]
+    A -->|"JSON-RPC over HTTP"| NATIVE["Native in-process MCP<br/>/mcp · Mcp/*"]
+    A -->|"HTTP / JSON"| REST["REST · Minimal API<br/>ApiEndpoints.cs"]
+    NODE -->|"HTTP"| REST
+
+    UI --> SVC
+    REST --> SVC
+    NATIVE --> SVC["ITaskService<br/><i>audit-aware service layer</i>"]
+
+    SVC -->|"mutation + ActivityEvent<br/>in one transaction"| DB["AppDbContext · EF Core 10"]
+    DB --> SQLITE[("SQLite — single file")]
+    SVC -. "every write" .-> AUDIT[["ActivityEvent<br/>append-only audit log"]]
+    AUDIT --> DB
 ```
 
-**Single project, single assembly, single SQLite file.** The simplicity is the feature.
+**Single project, single assembly, single SQLite file.** The simplicity is the feature. The **service layer (`ITaskService`) is the one audit boundary** — UI, REST, and the native MCP all route mutations through it so an `ActivityEvent` is produced once and applied everywhere (this is the #88 guarantee; the Node MCP wrapper reaches it via REST).
 
 ### Entities
 
-```
-Project
-  ├── README, goals, description (markdown documentation)
-  ├── Requirement (P0/P1/P2, optional Feature/Task link)
-  ├── Feature (recursive — features contain features)
-  │     └── TaskItem
-  │           ├── description (markdown)
-  │           ├── AcceptanceCriterion (checklist)
-  │           ├── Subtask (recursive — subtasks contain subtasks)
-  │           ├── TaskComment (Note / Decision / Handoff / Verification / system events)
-  │           └── TaskDependency (DAG; cycle-protected)
-  └── ActivityEvent (append-only audit log; survives entity deletion)
+```mermaid
+flowchart TD
+    P["Project<br/><small>name · description · goals · readme (markdown)</small>"]
+    P --> R["Requirement<br/><small>P0 / P1 / P2 · links a Feature or Task</small>"]
+    P --> F["Feature"]
+    F -->|"recursive: sub-features"| F
+    F --> T["TaskItem<br/><small>status · priority · markdown description</small>"]
+    T --> AC["AcceptanceCriterion<br/><small>checklist item</small>"]
+    T --> S["Subtask"]
+    S -->|"recursive: sub-subtasks"| S
+    T --> C["TaskComment<br/><small>user: Note/Decision/Question/Blocked/Handoff/Verification · + system types</small>"]
+    T --> D["TaskDependency<br/><small>DAG · cycle-protected</small>"]
+    P -. "every change" .-> AE[["ActivityEvent<br/><small>append-only · survives entity deletion</small>"]]
 ```
 
-Every text field on every entity is documentation that agents can retrieve, summarise, or update.
+Every text field on every entity is documentation that agents can retrieve, summarise, or update. Feature trees, subtask trees, and the dependency graph are all cycle-protected.
+
+---
+
+## Workflows
+
+### 1. "What should I work on next?" — the direction engine
+
+The whole point of the system: an agent asks for direction and gets a ranked, dependency-aware list with reasoning, then pulls one task's full context and acts — leaving an audit trail the *next* agent inherits.
+
+```mermaid
+flowchart LR
+    A["🤖 agent"] --> N["GET /api/projects/{id}/next-tasks?limit="]
+    N --> CHK{"task has an<br/>open blocker?"}
+    CHK -- yes --> BLK["→ blockedTasks<br/>(excluded from picks)"]
+    CHK -- no --> RANK["rank by:<br/>priority → status → oldest updated"]
+    RANK --> REC["recommendations[]<br/>each with a human-readable <b>reason</b>"]
+    REC --> SC["GET /api/tasks/{id}/context<br/>criteria + subtasks + deps + comments + activity"]
+    SC --> ACT["agent executes →<br/>status change · comment · claim"]
+    ACT --> AUD[["ActivityEvent recorded"]]
+    AUD -. "next session inherits the history" .-> A
+```
+
+### 2. Every change is audited — the #88 guarantee
+
+There is one write path by design. Whether a mutation originates in the Blazor UI, a REST call, or an MCP tool, it flows through `ITaskService`, which validates, applies the change, and records an `ActivityEvent` (+ a typed comment) **in a single transaction** — so every surface produces identical audit history. (The UI reroute lands with the service-layer extraction, #88.)
+
+```mermaid
+flowchart TD
+    UI["Blazor UI"] --> SVC
+    RST["REST endpoint"] --> SVC
+    MCP["MCP tool"] --> SVC["ITaskService.&lt;Mutate&gt;Async(actor)"]
+    SVC --> V{"validate<br/>enums · project boundary · claim owner"}
+    V -- invalid --> E["422 / 409 / 404<br/>{ message } (+ context on some)"]
+    V -- ok --> M["apply mutation"]
+    M --> EV["ActivityEvent<br/>before/after snapshot + message"]
+    M --> CM["typed TaskComment<br/>StatusChange · Created · …"]
+    EV --> SAVE[("SaveChanges — one transaction")]
+    CM --> SAVE
+```
+
+### 3. Task lifecycle & dependency blocking
+
+Cards are placed on the board by their status; changing status (drag-drop, the done checkbox, or an API/MCP call) re-groups the card. A task with an unfinished dependency is **blocked** and held out of `next-tasks` until its blocker is `Done`.
+
+```mermaid
+stateDiagram-v2
+    [*] --> Backlog
+    Backlog --> Todo
+    Todo --> InProgress
+    InProgress --> Review
+    Review --> Done
+    InProgress --> Todo : reopen
+    Review --> InProgress : changes requested
+    Done --> Todo : reopened
+    note right of Todo
+      A task with an unfinished dependency is "blocked":
+      excluded from next-tasks recommendations and
+      flagged isBlocked / openBlockerCount in step-context.
+    end note
+```
 
 ---
 
@@ -183,7 +264,7 @@ Requirements are organised by **capability**, not by entity. Every capability mu
 
 | # | Requirement |
 |---|-------------|
-| R-5.1 | The API publishes an OpenAPI document (`/openapi.json`) covering every endpoint, request body, and response shape. *(❌ not implemented — `Microsoft.AspNetCore.OpenApi` not wired up. Required for agents to discover the surface without reading source.)* |
+| R-5.1 | The API publishes an OpenAPI document (`/openapi.json`) covering every endpoint, request body, and response shape. *(✅ implemented — `Microsoft.AspNetCore.OpenApi` serves `/openapi/v1.json`; `/openapi.json` 302s to it. Response shapes still loosen pending the records refactor, R-5.2.)* |
 | R-5.2 | Response types are strongly typed (records), not anonymous. *(❌ ~25 distinct anonymous shapes are constructed inline in `ApiEndpoints.cs`.)* |
 | R-5.3 | Each MCP tool has a rich description that explains its purpose, parameters, and the kind of follow-up the agent typically does after calling it. *(⚠️ tool descriptions exist but are terse; could be expanded.)* |
 | R-5.4 | `docs/requirements.md` lists every endpoint, kept in sync with the code. *(❌ currently lists 23 endpoints; code has 46. Plan: regenerate from OpenAPI once R-5.1 lands.)* |
@@ -314,11 +395,13 @@ dotnet run --project src/KanbanFlow/KanbanFlow.csproj --urls http://127.0.0.1:51
 
 ---
 
-- **Project Outline** (left panel) — tree view of Project → Features → Tasks as draggable mini-cards
-- **Kanban Board** (main area) — cards auto-placed by task status, drag-and-drop to change status
-- **REST API** — full CRUD for AI agents to read and write project data
-- **OpenAPI Spec** — machine-readable API description (R-5.1) at `/openapi.json` (redirects to `/openapi/v1.json`); response shapes are loose pending the records refactor (R-5.2)
-- **Zero Setup** — SQLite, no Docker, no accounts, no login
+## Surfaces at a glance
+
+- **Kanban UI** — a **Project Outline** (left panel: Project → Features → Tasks as draggable mini-cards) and a **Kanban Board** (main area: cards auto-placed by status; drag-and-drop or the done-checkbox to change it). Click a card for full detail; modals create/edit items.
+- **REST API** — full CRUD for every entity, so agents read and write project data over plain HTTP/JSON.
+- **MCP server** — the same capabilities as first-class agent tools (native in-process `/mcp` plus a Node stdio wrapper).
+- **OpenAPI spec** — machine-readable API description at `/openapi.json` (302 → `/openapi/v1.json`) so agents discover the surface without reading source.
+- **Zero setup** — SQLite single file, seeded on first run; no Docker, no accounts, no login.
 
 ---
 
