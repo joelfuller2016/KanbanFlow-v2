@@ -236,6 +236,116 @@ async function main() {
       await waitForApiStatus(created.id, "Done");
     });
 
+    // ── Scenario F: Ideas inbox — create / edit / filter / promote / delete ──
+    // The harness boots a fresh scratch DB each run (mkdtempSync), so the ideas table
+    // starts empty: assert the empty state first, then drive the full lifecycle through
+    // the real Blazor UI (IdeaModal + IdeaCard + the confirm modals).
+    await test("Ideas inbox shows the empty state on a fresh DB", async () => {
+      await page.goto(`${baseUrl}/ideas`);
+      await page.waitForLoadState("networkidle").catch(() => {});
+      await page.locator('[data-testid="ideas-empty-state"]').waitFor({ state: "visible" });
+    });
+
+    const ideaTitle = `E2E Idea ${stamp}`;
+    const ideaTag = `e2etag${stamp}`;
+    await test("New-idea modal creates a card", async () => {
+      await clickUntil(
+        () => page.locator('[data-testid="new-idea-button"]').click(),
+        page.locator("#idea-title"),
+      );
+      await page.locator("#idea-title").fill(ideaTitle);
+      await page.locator("#idea-body").fill("captured via e2e");
+      await page.locator("#idea-tags").fill(ideaTag);
+      await page.locator('[data-testid="idea-priority-select"]').selectOption(String(2)); // High
+      await page.locator('[data-testid="idea-save-button"]').click();
+      // the new card appears in the grid with that title
+      await page.getByText(ideaTitle, { exact: true }).waitFor({ state: "visible" });
+    });
+
+    // Resolve the created idea's id via the REST surface so we can target its card precisely.
+    const ideasAfterCreate = await api("GET", `/api/ideas?q=${encodeURIComponent(ideaTitle)}&limit=500`);
+    const createdIdea = ideasAfterCreate.find((i) => i.title === ideaTitle);
+    assert(createdIdea, "created idea not found via API");
+
+    const ideaTitleEdited = `${ideaTitle} (edited)`;
+    await test("Editing an idea updates its card title", async () => {
+      await clickUntil(
+        () => page.locator(`[data-testid="idea-card-menu-${createdIdea.id}"]`).click(),
+        page.locator(`[data-testid="idea-card-edit-${createdIdea.id}"]`),
+      );
+      await page.locator(`[data-testid="idea-card-edit-${createdIdea.id}"]`).click();
+      await page.locator("#idea-title").waitFor({ state: "visible" });
+      await page.locator("#idea-title").fill(ideaTitleEdited);
+      await page.locator('[data-testid="idea-status-select"]').selectOption(String(1)); // Triaging
+      await page.locator('[data-testid="idea-save-button"]').click();
+      await page.getByText(ideaTitleEdited, { exact: true }).waitFor({ state: "visible" });
+    });
+
+    await test("Tag filter narrows the list to the matching idea", async () => {
+      // A second idea with a different tag must be filtered OUT by our unique tag.
+      const other = await api("POST", "/api/ideas", { title: `E2E Other ${stamp}`, tags: "unrelated" });
+      await page.goto(`${baseUrl}/ideas`);
+      const ours = page.locator(`[data-testid="idea-card-${createdIdea.id}"]`);
+      const unrelated = page.locator(`[data-testid="idea-card-${other.id}"]`);
+      const tagInput = page.locator('[data-testid="idea-tag-filter"]');
+      await ours.waitFor({ state: "visible" });
+      await unrelated.waitFor({ state: "visible" });
+      // The tag filter runs on the interactive Blazor circuit, which connects a moment
+      // after the SSR HTML loads; a fill that lands before it is live is a no-op (the same
+      // SSR->interactive handoff clickUntil guards against). Re-apply until it takes effect.
+      for (let i = 0; i < 6; i++) {
+        await tagInput.fill("");
+        await tagInput.fill(ideaTag);
+        try { await unrelated.waitFor({ state: "detached", timeout: 2500 }); break; }
+        catch { await sleep(500); }
+      }
+      // our idea remains; the unrelated one is filtered away
+      await ours.waitFor({ state: "visible" });
+      await unrelated.waitFor({ state: "detached" });
+      await api("DELETE", `/api/ideas/${other.id}`).catch(() => {});
+      // clear the filter for subsequent steps
+      await tagInput.fill("");
+      await ours.waitFor({ state: "visible" });
+    });
+
+    await test("Promoting an idea flips it to Promoted with a project link", async () => {
+      await clickUntil(
+        () => page.locator(`[data-testid="idea-card-menu-${createdIdea.id}"]`).click(),
+        page.locator(`[data-testid="idea-card-promote-${createdIdea.id}"]`),
+      );
+      await page.locator(`[data-testid="idea-card-promote-${createdIdea.id}"]`).click();
+      await page.locator('[data-testid="idea-promote-confirm"]').waitFor({ state: "visible" });
+      await page.locator('[data-testid="idea-promote-confirm"]').click();
+      // success banner with an "Open new project" link appears, and the card now shows Promoted
+      await page.locator('[data-testid="idea-promote-success-link"]').waitFor({ state: "visible" });
+      await page.locator(`[data-testid="idea-card-status-${createdIdea.id}"]`)
+        .getByText("Promoted", { exact: true }).waitFor({ state: "visible" });
+    });
+
+    await test("The promoted idea's project link opens a real board", async () => {
+      // confirm the promote actually created a project, and its board route renders
+      const promoted = await api("GET", `/api/ideas/${createdIdea.id}`);
+      assert(promoted.status === "Promoted", `expected Promoted, got ${promoted.status}`);
+      assert(promoted.promotedProjectId > 0, "promoted idea has no project id");
+      await page.goto(`${baseUrl}/project/${promoted.promotedProjectId}`);
+      for (const status of ["Backlog", "Todo", "InProgress", "Review", "Done"]) {
+        await page.locator(`[data-testid="board-column-${status}"]`).waitFor({ state: "visible" });
+      }
+      await api("DELETE", `/api/projects/${promoted.promotedProjectId}`).catch(() => {});
+    });
+
+    await test("Deleting an idea removes its card", async () => {
+      await page.goto(`${baseUrl}/ideas`);
+      await clickUntil(
+        () => page.locator(`[data-testid="idea-card-menu-${createdIdea.id}"]`).click(),
+        page.locator(`[data-testid="idea-card-delete-${createdIdea.id}"]`),
+      );
+      await page.locator(`[data-testid="idea-card-delete-${createdIdea.id}"]`).click();
+      await page.locator('[data-testid="idea-delete-confirm"]').waitFor({ state: "visible" });
+      await page.locator('[data-testid="idea-delete-confirm"]').click();
+      await page.locator(`[data-testid="idea-card-${createdIdea.id}"]`).waitFor({ state: "detached" });
+    });
+
     // ── Scenario E: Settings -> Run all shows an all-passed result table ──
     await test("Settings 'Run all' reports an all-passed result", async () => {
       await page.goto(`${baseUrl}/settings`);
@@ -253,6 +363,11 @@ async function main() {
     const all = await api("GET", "/api/projects");
     const modalProj = all.find((p) => p.name === modalProjectName);
     if (modalProj) await api("DELETE", `/api/projects/${modalProj.id}`).catch(() => {});
+    // sweep any ideas this run created (in case a mid-flow step failed before the delete step)
+    const leftoverIdeas = await api("GET", `/api/ideas?q=E2E&limit=500`).catch(() => []);
+    for (const i of leftoverIdeas.filter((i) => i.title.includes(String(stamp)))) {
+      await api("DELETE", `/api/ideas/${i.id}`).catch(() => {});
+    }
   } finally {
     await browser.close();
   }

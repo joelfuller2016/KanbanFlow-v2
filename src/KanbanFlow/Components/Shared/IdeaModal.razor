@@ -1,0 +1,300 @@
+@inject IIdeaService IdeaSvc
+@inject IJSRuntime JS
+@implements IAsyncDisposable
+
+@* Combined create + edit modal for an Idea (#180 Phase 4). One modal because an Idea has
+   identical fields for create and edit — the only difference is the edit-only Status select
+   and the title text — exactly like Home.razor's create/edit project modal keyed on Id == 0.
+   Accessibility (focus-trap + Esc + focus-restore) mirrors AddItemModal verbatim via
+   KanbanFlow.initDialog. *@
+<div class="modal fade @(IsOpen ? "show" : "")" tabindex="-1" data-testid="idea-modal"
+     style="display: @(IsOpen ? "block" : "none");"
+     @onclick="HandleBackdropClick" @onclick:stopPropagation="false">
+    <div class="modal-dialog modal-lg" @ref="dialogRef" role="dialog" aria-modal="true" aria-labelledby="idea-modal-title" @onclick:stopPropagation="true">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="idea-modal-title">@(IsNew ? "New idea" : "Edit idea")</h5>
+                <button type="button" class="btn-close" @onclick="Close" aria-label="Close idea dialog" data-testid="idea-close-button"></button>
+            </div>
+            <div class="modal-body">
+                @if (errorMessage is not null)
+                {
+                    <div class="alert alert-danger alert-dismissible fade show py-2 small" role="alert" aria-live="assertive" aria-atomic="true">
+                        @errorMessage
+                        <button type="button" class="btn-close btn-close-sm" @onclick="() => errorMessage = null" aria-label="Dismiss error"></button>
+                    </div>
+                }
+
+                @* Title (required) *@
+                <div class="mb-3">
+                    <label class="form-label small text-muted mb-1" for="idea-title">Title <span class="text-danger">*</span></label>
+                    <input id="idea-title" type="text" class="form-control" maxlength="500" placeholder="What's the idea?"
+                           data-dialog-autofocus="true" data-testid="idea-title-input"
+                           @bind="title" @bind:event="oninput"
+                           @onkeydown="HandleKeyDown" />
+                    @if (showTitleRequired)
+                    {
+                        <div class="text-danger small mt-1" data-testid="idea-title-validation">Title is required.</div>
+                    }
+                </div>
+
+                @* Body (markdown) *@
+                <div class="mb-3">
+                    <label class="form-label small text-muted mb-1" for="idea-body">Body</label>
+                    <textarea id="idea-body" class="form-control form-control-sm" rows="4" placeholder="Brain-dump the idea..."
+                              data-testid="idea-body-input" @bind="body"></textarea>
+                    <div class="form-text small">Markdown supported.</div>
+                </div>
+
+                @* Plan (markdown) *@
+                <div class="mb-3">
+                    <label class="form-label small text-muted mb-1" for="idea-plan">Plan</label>
+                    <textarea id="idea-plan" class="form-control form-control-sm" rows="6" placeholder="Problem · approach · scope · value..."
+                              data-testid="idea-plan-input" @bind="plan"></textarea>
+                    <div class="form-text small">Markdown supported.</div>
+                </div>
+
+                @* Tags *@
+                <div class="mb-3">
+                    <label class="form-label small text-muted mb-1" for="idea-tags">Tags</label>
+                    <input id="idea-tags" type="text" class="form-control form-control-sm" placeholder="comma,separated,tags"
+                           data-testid="idea-tags-input" @bind="tags" />
+                </div>
+
+                @* Priority (nullable → explicit None option) *@
+                <div class="mb-3">
+                    <label class="form-label small text-muted mb-1" for="idea-priority">Priority</label>
+                    <select id="idea-priority" class="form-select form-select-sm" data-testid="idea-priority-select" @bind="priorityRaw">
+                        <option value="">None</option>
+                        @foreach (var p in Enum.GetValues<TaskPriority>())
+                        {
+                            <option value="@((int)p)">@p</option>
+                        }
+                    </select>
+                </div>
+
+                @* Status — edit only (create always starts New) *@
+                @if (!IsNew)
+                {
+                    <div class="mb-3">
+                        <label class="form-label small text-muted mb-1" for="idea-status">Status</label>
+                        <select id="idea-status" class="form-select form-select-sm" data-testid="idea-status-select" @bind="status">
+                            @foreach (var s in Enum.GetValues<IdeaStatus>())
+                            {
+                                <option value="@((int)s)">@s</option>
+                            }
+                        </select>
+                    </div>
+                }
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary btn-sm" @onclick="Close" data-testid="idea-cancel-button">Cancel</button>
+                <button type="button" class="btn btn-primary btn-sm" @onclick="SaveIdea"
+                        data-testid="idea-save-button" disabled="@(isSaving || string.IsNullOrWhiteSpace(title))">
+                    @if (isSaving)
+                    {
+                        <span class="spinner-border spinner-border-sm me-1" role="status" aria-hidden="true"></span>
+                    }
+                    Save
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+@if (IsOpen)
+{
+    <div class="modal-backdrop fade show"></div>
+}
+
+@code {
+    [Parameter] public bool IsOpen { get; set; }
+
+    /// <summary>The idea being edited, or <c>null</c> to create a new idea.</summary>
+    [Parameter] public int? EditIdeaId { get; set; }
+
+    [Parameter] public EventCallback OnClose { get; set; }
+    [Parameter] public EventCallback OnSaved { get; set; }
+
+    private bool IsNew => EditIdeaId is null;
+
+    private string? title;
+    private string? body;
+    private string? plan;
+    private string? tags;
+    // Bound to the priority <select>. "" = None (null), otherwise the enum's int value as a string.
+    // A string intermediary is the robust way to give a nullable enum select a blank "None" option.
+    private string priorityRaw = "";
+    private int status; // edit-only; backs the IdeaStatus select by its int value
+    private string? errorMessage;
+    private bool showTitleRequired;
+    private bool isSaving;
+
+    // Guards re-loading the same idea on every OnParametersSet while the modal stays open.
+    private int? loadedIdeaId;
+    private bool wasOpen;
+
+    protected override void OnParametersSet()
+    {
+        if (IsOpen && !wasOpen)
+        {
+            // Modal just opened — reset transient UI state.
+            errorMessage = null;
+            showTitleRequired = false;
+            isSaving = false;
+
+            if (EditIdeaId is int id)
+            {
+                // Edit: load the existing idea's fields (async, like EditItemModal.LoadTaskDetails).
+                if (loadedIdeaId != id)
+                {
+                    loadedIdeaId = id;
+                    _ = LoadIdea(id);
+                }
+            }
+            else
+            {
+                // Create: start from a blank form.
+                ResetFields();
+                loadedIdeaId = null;
+            }
+        }
+
+        wasOpen = IsOpen;
+    }
+
+    private void ResetFields()
+    {
+        title = null;
+        body = null;
+        plan = null;
+        tags = null;
+        priorityRaw = "";
+        status = (int)IdeaStatus.New;
+    }
+
+    private async Task LoadIdea(int id)
+    {
+        var idea = await IdeaSvc.GetByIdAsync(id);
+        if (idea is null)
+        {
+            errorMessage = "This idea no longer exists.";
+            StateHasChanged();
+            return;
+        }
+        title = idea.Title;
+        body = idea.Body;
+        plan = idea.Plan;
+        tags = idea.Tags;
+        priorityRaw = idea.Priority is TaskPriority p ? ((int)p).ToString() : "";
+        status = (int)idea.Status;
+        StateHasChanged();
+    }
+
+    private TaskPriority? SelectedPriority =>
+        string.IsNullOrEmpty(priorityRaw) ? null : (TaskPriority)int.Parse(priorityRaw);
+
+    private async Task HandleKeyDown(KeyboardEventArgs e)
+    {
+        // Escape is handled by the dialog focus-trap (KanbanFlow.initDialog → CloseFromJs);
+        // here we only handle Enter-to-save from the title field.
+        if (e.Key == "Enter" && !string.IsNullOrWhiteSpace(title))
+            await SaveIdea();
+    }
+
+    private async Task SaveIdea()
+    {
+        if (string.IsNullOrWhiteSpace(title))
+        {
+            showTitleRequired = true;
+            return;
+        }
+
+        showTitleRequired = false;
+        errorMessage = null;
+        isSaving = true;
+
+        try
+        {
+            if (IsNew)
+            {
+                await IdeaSvc.CreateAsync(
+                    new IdeaCreate(title.Trim(), body, plan, tags, SelectedPriority), actor: "User");
+            }
+            else
+            {
+                await IdeaSvc.UpdateAsync(EditIdeaId!.Value,
+                    new IdeaUpdate(
+                        Title: title.Trim(),
+                        Body: body,
+                        Plan: plan,
+                        Status: (IdeaStatus)status,
+                        Tags: tags,
+                        Priority: SelectedPriority),
+                    actor: "User");
+            }
+
+            await OnSaved.InvokeAsync();
+            await OnClose.InvokeAsync();
+        }
+        catch (ValidationException ex)
+        {
+            errorMessage = ex.Message;
+        }
+        catch (IdeaNotFoundException)
+        {
+            errorMessage = "This idea no longer exists. Close and refresh the list.";
+        }
+        catch (Exception ex)
+        {
+            // Surface unexpected failures (e.g. DbUpdateException, SQLite busy) inline rather
+            // than letting them escape the @onclick handler and tear down the Blazor circuit.
+            errorMessage = $"Save failed: {ex.Message}";
+        }
+        finally
+        {
+            isSaving = false;
+        }
+    }
+
+    private async Task HandleBackdropClick() => await Close();
+
+    private async Task Close() => await OnClose.InvokeAsync();
+
+    // ── Accessible dialog (#166): focus-trap + Esc + focus restore via KanbanFlow.initDialog ──
+    private ElementReference dialogRef;
+    private DotNetObjectReference<IdeaModal>? _selfRef;
+    private bool _dialogInited;
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (IsOpen && !_dialogInited)
+        {
+            _dialogInited = true;   // set before the await so a re-render mid-init can't double-call
+            _selfRef ??= DotNetObjectReference.Create(this);
+            try { await JS.InvokeVoidAsync("KanbanFlow.initDialog", dialogRef, _selfRef); }
+            catch (Microsoft.JSInterop.JSDisconnectedException) { /* circuit gone during teardown */ }
+        }
+        else if (!IsOpen && _dialogInited)
+        {
+            _dialogInited = false;
+            await SafeDestroyDialogAsync();
+        }
+    }
+
+    [JSInvokable]
+    public Task CloseFromJs() => Close();
+
+    private async Task SafeDestroyDialogAsync()
+    {
+        try { await JS.InvokeVoidAsync("KanbanFlow.destroyDialog", dialogRef); }
+        catch (Microsoft.JSInterop.JSDisconnectedException) { /* circuit gone during teardown */ }
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        if (_dialogInited)
+            await SafeDestroyDialogAsync();
+        _selfRef?.Dispose();
+    }
+}

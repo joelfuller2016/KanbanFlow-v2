@@ -8,7 +8,7 @@
 ## In one minute
 
 - **What:** a single-file (.NET 10 + SQLite) app where a project — its features, tasks, subtasks, requirements, acceptance criteria, decisions, and dependencies — is structured data.
-- **For humans:** a drag-and-drop kanban board + project outline.
+- **For humans:** a drag-and-drop kanban board, project outline, and an **Ideas inbox** (`/ideas`) for capturing, triaging, and promoting ideas into projects.
 - **For agents:** the *same* data over a REST API and an MCP server, plus a `next-tasks` engine that answers "what should I work on next?" with reasoning.
 - **Guarantee:** every **task** mutation (human *or* agent) writes an immutable `ActivityEvent` — full-entity audit coverage is landing via the service-layer work (#88) — so agents inherit the causal history.
 - **Scope:** local-first, single-user, single-trust-boundary (agent + owner on one machine). No auth, no multi-tenancy, no cloud.
@@ -447,7 +447,7 @@ The OpenAPI document (R-5.1) is now the source of truth: GET `/openapi/v1.json` 
 /api/ideas/{id}/activity                    # audit log per idea
 ```
 
-53 endpoints total. Ideas (`/api/ideas`) are the pre-project "inbox" — capture raw ideas, then promote one into a full project (#180). Collection/list endpoints will gain consistent pagination once R-1.4 lands; richer response shapes follow with the records refactor (R-5.2).
+53 endpoints total. Ideas (`/api/ideas`) are the pre-project "inbox" — capture raw ideas, then promote one into a full project (#180). Humans manage them in the browser at the **Ideas inbox** (`/ideas`): search and filter by status or tag, create/edit ideas (markdown body + plan), and promote an idea into a project — all through the same audited `IIdeaService` as REST + MCP (the #88 boundary). Collection/list endpoints will gain consistent pagination once R-1.4 lands; richer response shapes follow with the records refactor (R-5.2).
 
 ---
 

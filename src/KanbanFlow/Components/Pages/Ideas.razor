@@ -1,0 +1,405 @@
+@page "/ideas"
+@rendermode InteractiveServer
+@inject IIdeaService IdeaSvc
+@inject NavigationManager Nav
+
+<PageTitle>Ideas - KanbanFlow</PageTitle>
+
+<div class="d-flex justify-content-between align-items-center mb-4">
+    <h1 class="mb-0">Ideas</h1>
+    <button class="btn btn-primary" @onclick="OpenCreateModal" data-testid="new-idea-button">
+        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" class="bi bi-plus-lg me-1" viewBox="0 0 16 16" aria-hidden="true">
+            <path fill-rule="evenodd" d="M8 2a.5.5 0 0 1 .5.5v5h5a.5.5 0 0 1 0 1h-5v5a.5.5 0 0 1-1 0v-5h-5a.5.5 0 0 1 0-1h5v-5A.5.5 0 0 1 8 2"/>
+        </svg>
+        New idea
+    </button>
+</div>
+
+@* Promote success banner (no toast system exists — surface the project link inline). *@
+@if (promoteSuccess is not null)
+{
+    <div class="alert alert-success alert-dismissible fade show d-flex align-items-center" role="alert" aria-live="polite" data-testid="idea-promote-success">
+        <span>
+            Promoted to a new project.
+            <a class="alert-link ms-1" href="@($"/project/{promoteSuccess.ProjectId}")" data-testid="idea-promote-success-link">Open new project →</a>
+        </span>
+        <button type="button" class="btn-close ms-auto" @onclick="() => promoteSuccess = null" aria-label="Dismiss"></button>
+    </div>
+}
+
+@* Page-level error (filter/load failures). Mutation errors surface inside their own modals. *@
+@if (loadError is not null)
+{
+    <div class="alert alert-danger alert-dismissible fade show" role="alert" aria-live="assertive" aria-atomic="true" data-testid="idea-load-error">
+        @loadError
+        <button type="button" class="btn-close" @onclick="() => loadError = null" aria-label="Dismiss error"></button>
+    </div>
+}
+
+@* Filter bar *@
+<div class="row g-2 mb-4">
+    <div class="col-12 col-md-5">
+        <label class="visually-hidden" for="idea-search">Search ideas</label>
+        <input id="idea-search" type="search" class="form-control" placeholder="Search ideas..."
+               data-testid="idea-search" @bind="searchFilter" @bind:event="oninput" @bind:after="ReloadIdeas" />
+    </div>
+    <div class="col-6 col-md-4">
+        <label class="visually-hidden" for="idea-status-filter">Filter by status</label>
+        <select id="idea-status-filter" class="form-select" data-testid="idea-status-filter"
+                @bind="statusFilterRaw" @bind:after="ReloadIdeas">
+            <option value="">All statuses</option>
+            @foreach (var s in Enum.GetValues<IdeaStatus>())
+            {
+                <option value="@((int)s)">@s</option>
+            }
+        </select>
+    </div>
+    <div class="col-6 col-md-3">
+        <label class="visually-hidden" for="idea-tag-filter">Filter by tag</label>
+        <input id="idea-tag-filter" type="text" class="form-control" placeholder="Tag filter..."
+               data-testid="idea-tag-filter" @bind="tagFilter" @bind:event="oninput" @bind:after="ReloadIdeas" />
+    </div>
+</div>
+
+@if (ideas is null)
+{
+    <div class="text-center py-5" aria-busy="true">
+        <div class="spinner-border text-primary" role="status">
+            <span class="visually-hidden">Loading...</span>
+        </div>
+    </div>
+}
+else if (ideas.Count == 0)
+{
+    <div class="text-center py-5" data-testid="ideas-empty-state">
+        <div class="text-muted mb-3">
+            <svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" fill="currentColor" class="bi bi-lightbulb" viewBox="0 0 16 16" aria-hidden="true">
+                <path d="M2 6a6 6 0 1 1 10.174 4.31c-.203.196-.359.4-.453.619l-.762 1.769A.5.5 0 0 1 10.5 13a.5.5 0 0 1 0 1 .5.5 0 0 1 0 1l-.224.447a1 1 0 0 1-.894.553H6.618a1 1 0 0 1-.894-.553L5.5 15a.5.5 0 0 1 0-1 .5.5 0 0 1 0-1 .5.5 0 0 1-.46-.302l-.761-1.77a2 2 0 0 0-.453-.618A5.98 5.98 0 0 1 2 6m6-5a5 5 0 0 0-3.479 8.592c.263.254.514.564.676.941L5.83 12h4.342l.632-1.467c.162-.377.413-.687.676-.941A5 5 0 0 0 8 1"/>
+            </svg>
+        </div>
+        @if (HasActiveFilter)
+        {
+            <h4 class="text-muted">No matching ideas</h4>
+            <p class="text-muted">No ideas match your filters. Try clearing the search or tag.</p>
+            <button class="btn btn-outline-primary" @onclick="ClearFilters" data-testid="ideas-clear-filters">Clear filters</button>
+        }
+        else
+        {
+            <h4 class="text-muted">No ideas yet</h4>
+            <p class="text-muted">Capture your first idea to get started.</p>
+            <button class="btn btn-primary" @onclick="OpenCreateModal" data-testid="ideas-empty-create">Create your first idea</button>
+        }
+    </div>
+}
+else
+{
+    <div class="row g-4" data-testid="ideas-grid">
+        @foreach (var idea in ideas)
+        {
+            <div class="col-md-4" @key="idea.Id">
+                <IdeaCard Idea="idea"
+                          OnEdit="OpenEditModal"
+                          OnDelete="OpenDeleteModal"
+                          OnPromote="OpenPromoteModal" />
+            </div>
+        }
+    </div>
+}
+
+@* ── Create / Edit modal ── *@
+<IdeaModal IsOpen="showModal"
+           EditIdeaId="editIdeaId"
+           OnClose="CloseModal"
+           OnSaved="OnIdeaSaved" />
+
+@* ── Delete confirmation modal (mirrors Home.razor's delete modal) ── *@
+@if (showDeleteModal && deletingIdea is not null)
+{
+    <div class="modal fade show d-block" tabindex="-1" role="dialog" aria-modal="true" aria-labelledby="delete-idea-modal-title" style="background-color: rgba(0,0,0,0.5);" data-testid="idea-delete-modal">
+        <div class="modal-dialog">
+            <div class="modal-content" tabindex="-1" @ref="deleteModalDialog">
+                <div class="modal-header">
+                    <h5 class="modal-title" id="delete-idea-modal-title">Confirm Delete</h5>
+                    <button type="button" class="btn-close" aria-label="Close delete confirmation dialog" @onclick="CloseDeleteModal"></button>
+                </div>
+                <div class="modal-body">
+                    @if (deleteError is not null)
+                    {
+                        <div class="alert alert-danger" role="alert" aria-live="assertive" aria-atomic="true">@deleteError</div>
+                    }
+                    <p>Delete <strong>@deletingIdea.Title</strong>?</p>
+                    <p class="text-muted small mb-0">This action cannot be undone.</p>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" @onclick="CloseDeleteModal">Cancel</button>
+                    <button type="button" class="btn btn-danger" @onclick="ConfirmDelete" disabled="@isDeleting" data-testid="idea-delete-confirm">
+                        @if (isDeleting)
+                        {
+                            <span class="spinner-border spinner-border-sm me-1" role="status" aria-hidden="true"></span>
+                        }
+                        Delete
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+}
+
+@* ── Promote confirmation modal ── *@
+@if (showPromoteModal && promotingIdea is not null)
+{
+    <div class="modal fade show d-block" tabindex="-1" role="dialog" aria-modal="true" aria-labelledby="promote-idea-modal-title" style="background-color: rgba(0,0,0,0.5);" data-testid="idea-promote-modal">
+        <div class="modal-dialog">
+            <div class="modal-content" tabindex="-1" @ref="promoteModalDialog">
+                <div class="modal-header">
+                    <h5 class="modal-title" id="promote-idea-modal-title">Promote idea</h5>
+                    <button type="button" class="btn-close" aria-label="Close promote confirmation dialog" @onclick="ClosePromoteModal"></button>
+                </div>
+                <div class="modal-body">
+                    @if (promoteError is not null)
+                    {
+                        <div class="alert alert-danger" role="alert" aria-live="assertive" aria-atomic="true">@promoteError</div>
+                    }
+                    <p>Promote <strong>@promotingIdea.Title</strong> to a new project?</p>
+                    <p class="text-muted small mb-0">This creates a project and marks the idea as promoted.</p>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" @onclick="ClosePromoteModal">Cancel</button>
+                    <button type="button" class="btn btn-primary" @onclick="ConfirmPromote" disabled="@isPromoting" data-testid="idea-promote-confirm">
+                        @if (isPromoting)
+                        {
+                            <span class="spinner-border spinner-border-sm me-1" role="status" aria-hidden="true"></span>
+                        }
+                        Promote
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+}
+
+@code {
+    // ── Idea list + filters ──
+    private List<Idea>? ideas;
+    private string? searchFilter;
+    private string? tagFilter;
+    // "" = all statuses, otherwise the IdeaStatus int value as a string (robust select binding).
+    private string statusFilterRaw = "";
+
+    // ── Create / Edit modal state ──
+    private bool showModal;
+    private int? editIdeaId;
+
+    // ── Delete modal state ──
+    private bool showDeleteModal;
+    private Idea? deletingIdea;
+    private bool isDeleting;
+    private string? deleteError;
+    private ElementReference deleteModalDialog;
+    private bool shouldFocusDeleteModal;
+
+    // ── Promote modal state ──
+    private bool showPromoteModal;
+    private Idea? promotingIdea;
+    private bool isPromoting;
+    private string? promoteError;
+    private IdeaPromoteResult? promoteSuccess;
+    private ElementReference promoteModalDialog;
+    private bool shouldFocusPromoteModal;
+
+    // ── Page-level load/filter error ──
+    private string? loadError;
+
+    private bool HasActiveFilter =>
+        !string.IsNullOrWhiteSpace(searchFilter)
+        || !string.IsNullOrWhiteSpace(tagFilter)
+        || !string.IsNullOrEmpty(statusFilterRaw);
+
+    private IdeaStatus? StatusFilter =>
+        string.IsNullOrEmpty(statusFilterRaw) ? null : (IdeaStatus)int.Parse(statusFilterRaw);
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadIdeas();
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (shouldFocusDeleteModal && showDeleteModal)
+        {
+            shouldFocusDeleteModal = false;
+            await deleteModalDialog.FocusAsync(preventScroll: true);
+        }
+        if (shouldFocusPromoteModal && showPromoteModal)
+        {
+            shouldFocusPromoteModal = false;
+            await promoteModalDialog.FocusAsync(preventScroll: true);
+        }
+    }
+
+    // Monotonic token guarding against out-of-order reloads. Typing in the live
+    // search/tag filters fires one reload per keystroke; those ListAsync calls can
+    // resolve out of order, so only the newest reload is allowed to apply its result.
+    private int reloadGeneration;
+
+    private async Task LoadIdeas()
+    {
+        var generation = ++reloadGeneration;
+        try
+        {
+            var results = await IdeaSvc.ListAsync(
+                status: StatusFilter,
+                tag: string.IsNullOrWhiteSpace(tagFilter) ? null : tagFilter.Trim(),
+                search: string.IsNullOrWhiteSpace(searchFilter) ? null : searchFilter.Trim());
+            // A newer reload superseded this one — discard the stale result.
+            if (generation != reloadGeneration) return;
+            // ListAsync already returns newest-first; materialise for @key iteration.
+            ideas = [.. results];
+            loadError = null;
+        }
+        catch (Exception ex)
+        {
+            if (generation != reloadGeneration) return;
+            loadError = $"Failed to load ideas: {ex.Message}";
+            ideas ??= [];
+        }
+    }
+
+    // Re-query on filter change. Show the spinner while reloading so the state is real, not stale.
+    private async Task ReloadIdeas()
+    {
+        ideas = null;
+        await LoadIdeas();
+    }
+
+    private async Task ClearFilters()
+    {
+        searchFilter = null;
+        tagFilter = null;
+        statusFilterRaw = "";
+        await ReloadIdeas();
+    }
+
+    // ── Create / Edit ──
+
+    private void OpenCreateModal()
+    {
+        editIdeaId = null;
+        showModal = true;
+    }
+
+    private void OpenEditModal(Idea idea)
+    {
+        editIdeaId = idea.Id;
+        showModal = true;
+    }
+
+    private void CloseModal()
+    {
+        showModal = false;
+        editIdeaId = null;
+    }
+
+    private async Task OnIdeaSaved()
+    {
+        await LoadIdeas();
+    }
+
+    // ── Delete ──
+
+    private void OpenDeleteModal(Idea idea)
+    {
+        deletingIdea = idea;
+        deleteError = null;
+        showDeleteModal = true;
+        shouldFocusDeleteModal = true;
+    }
+
+    private void CloseDeleteModal()
+    {
+        showDeleteModal = false;
+        deletingIdea = null;
+    }
+
+    private async Task ConfirmDelete()
+    {
+        if (deletingIdea is null) return;
+
+        isDeleting = true;
+        deleteError = null;
+
+        try
+        {
+            await IdeaSvc.DeleteAsync(deletingIdea.Id, "User");
+            showDeleteModal = false;
+            deletingIdea = null;
+            await LoadIdeas();
+        }
+        catch (IdeaNotFoundException)
+        {
+            // Already gone (e.g. deleted in another tab) — treat as success and refresh.
+            showDeleteModal = false;
+            deletingIdea = null;
+            await LoadIdeas();
+        }
+        catch (Exception ex)
+        {
+            deleteError = $"Delete failed: {ex.Message}";
+        }
+        finally
+        {
+            isDeleting = false;
+        }
+    }
+
+    // ── Promote ──
+
+    private void OpenPromoteModal(Idea idea)
+    {
+        promotingIdea = idea;
+        promoteError = null;
+        promoteSuccess = null;
+        showPromoteModal = true;
+        shouldFocusPromoteModal = true;
+    }
+
+    private void ClosePromoteModal()
+    {
+        showPromoteModal = false;
+        promotingIdea = null;
+    }
+
+    private async Task ConfirmPromote()
+    {
+        if (promotingIdea is null) return;
+
+        isPromoting = true;
+        promoteError = null;
+
+        try
+        {
+            var result = await IdeaSvc.PromoteAsync(promotingIdea.Id, "User");
+            showPromoteModal = false;
+            promotingIdea = null;
+            promoteSuccess = result;
+            await LoadIdeas();
+        }
+        catch (ValidationException ex)
+        {
+            // e.g. already promoted.
+            promoteError = ex.Message;
+        }
+        catch (IdeaNotFoundException)
+        {
+            promoteError = "This idea no longer exists.";
+        }
+        catch (Exception ex)
+        {
+            promoteError = $"Promote failed: {ex.Message}";
+        }
+        finally
+        {
+            isPromoting = false;
+        }
+    }
+}
