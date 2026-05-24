@@ -175,9 +175,13 @@ window.KanbanFlow = {
 
     // ── Accessible modal dialogs (#166): focus-trap + Esc + focus restore ──
     _dialogFocusables: function (dialog) {
+        // Visible-and-focusable filter. Use getClientRects() rather than offsetParent:
+        // offsetParent is null for position:fixed elements (the .modal is fixed), which would
+        // wrongly exclude them. getClientRects() is empty only when the element isn't rendered
+        // (e.g. display:none while the dialog is closed).
         return Array.prototype.slice.call(dialog.querySelectorAll(
             'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
-        )).filter(function (el) { return el.offsetParent !== null; });
+        )).filter(function (el) { return el.getClientRects().length > 0; });
     },
 
     initDialog: function (dialog, dotNetRef) {
