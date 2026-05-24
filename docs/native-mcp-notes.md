@@ -8,8 +8,8 @@ wrapper (`scripts/mcp-server.mjs`).
 
 - Package: **`ModelContextProtocol.AspNetCore` 1.3.0** (the official, Microsoft-co-maintained
   C# MCP SDK).
-- `src/KanbanFlow/Mcp/KanbanMcpTools.cs` — a `[McpServerToolType]` class exposing a curated
-  **5-tool vertical slice**.
+- `src/KanbanFlow/Mcp/KanbanMcpTools.cs` — a `[McpServerToolType]` class exposing
+  **10 tools (5 read + 5 audit-aware write)**.
 - `Program.cs` wiring:
 
   ```csharp
@@ -35,14 +35,20 @@ one deployable, and mutations reuse the exact audit-aware code path the UI/REST 
 | `get_next_tasks` | `IDbContextFactory<AppDbContext>` | read (direction) |
 | `get_task` | `IDbContextFactory<AppDbContext>` | read |
 | `update_task_status` | **`ITaskService.ChangeStatusAsync`** | mutation (audit-aware) |
+| `create_task` | **`ITaskService.CreateAsync`** | mutation (audit-aware) |
+| `delete_task` | **`ITaskService.DeleteAsync`** | mutation (audit-aware) |
+| `add_task_comment` | **`ITaskService.AddCommentAsync`** | mutation (audit-aware) |
+| `claim_task` | **`ITaskService.ClaimAsync`** | mutation (audit-aware) |
+| `release_task` | **`ITaskService.ReleaseAsync`** | mutation (audit-aware) |
 
-### Deliberately out of scope for the prototype
+### Service-layer extraction (done — closes the task/comment half of #88)
 
-`create_task` and `add_task_comment` were **not** ported. Their write logic still lives
-inline in `ApiEndpoints.cs` (the matching `ITaskService` methods are stubs). Porting them
-to MCP without first lifting that logic into the service would **bypass the audit trail** —
-which violates the project's non-negotiable audit contract (R-7.x, issue #88). They belong
-in the service-layer extraction work, not here.
+The write tools (`create_task`/`delete_task`/`add_task_comment`/`claim_task`/`release_task`)
+go through `ITaskService`, whose write logic was lifted out of `ApiEndpoints.cs` so UI, REST,
+and MCP all emit identical `ActivityEvent`s. This closes the task/comment half of the #88
+audit-bypass bug — the Blazor UI no longer writes to EF directly for task/comment mutations.
+Remaining (phase 2): feature / requirement / subtask / acceptance-criterion / dependency
+write extraction.
 
 ## Design decisions
 
@@ -60,7 +66,9 @@ in the service-layer extraction work, not here.
 
 - `dotnet build` → **0 warnings, 0 errors**.
 - App started on `http://127.0.0.1:5123` (verified on a scratch port + throwaway DB):
-  - `POST /mcp` `tools/list` → all 5 tools with correct input schemas.
+  - `POST /mcp` `tools/list` → all 10 tools with correct input schemas; write tools emit
+    `TaskCreated`/`TaskCommentAdded`/`TaskClaimed`/`TaskStatusChanged`/`TaskDeleted` activity
+    events attributed to the actor (verified e2e); in-app service tests 17/17.
   - `tools/call list_projects` → real seed data (`Sample Project`, 4 features / 5 tasks).
   - `tools/call update_task_status {taskId:1, status:"InProgress", actor:"verify"}` →
     succeeded, and `GET /api/tasks/1/activity` showed a `TaskStatusChanged` event with
@@ -83,9 +91,9 @@ Start the app first: `dotnet run --project src/KanbanFlow/KanbanFlow.csproj --ur
 
 ## Path to full coverage (next steps)
 
-1. **Extract the service layer** (#82/#83/#88): move task/feature/subtask/criterion/comment
-   write logic out of `ApiEndpoints.cs` into `ITaskService` (and siblings). This unblocks
-   audit-safe `create_*`/`update_*`/`delete_*` MCP tools.
+1. **Extract the service layer** (#88) — *done for tasks + comments*. Remaining: move
+   feature/subtask/criterion/requirement/dependency write logic out of `ApiEndpoints.cs`
+   into services (and add their MCP write tools).
 2. **Grow the native tool surface** to match the Node wrapper (36 tools), curated — see below.
 3. **Retire the Node wrapper** once parity + clients are migrated; keep stdio via a thin
    console host if any client still needs it.

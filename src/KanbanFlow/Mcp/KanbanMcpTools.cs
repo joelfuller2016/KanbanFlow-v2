@@ -16,8 +16,8 @@ namespace KanbanFlow.Mcp;
 /// JSON-RPC to the REST API over HTTP, these methods call the EF Core data layer and
 /// the audit-aware <see cref="ITaskService"/> DIRECTLY via DI — no extra network hop.
 ///
-/// This is a curated vertical slice (5 tools) proving parity with the Node wrapper,
-/// NOT the full 36-tool surface. See <c>docs/native-mcp-notes.md</c> for the rationale,
+/// This is a curated slice (10 tools: 5 read + 5 audit-aware write) proving parity with the
+/// Node wrapper, not yet the full 36-tool surface. See <c>docs/native-mcp-notes.md</c> for the rationale,
 /// the path to full coverage, and the Kebechet.Api.ToMcp evaluation.
 ///
 /// Tool-design conventions follow Anthropic's mcp-builder skill: snake_case names,
