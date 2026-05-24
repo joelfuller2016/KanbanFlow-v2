@@ -440,10 +440,9 @@ public sealed class TestRunnerService(
         }
         finally
         {
-            // Purge only this run's orphaned audit rows (test-project droppings),
-            // preserving real deleted-project audit history (#85). Fixes #150.
-            // Use CancellationToken.None so a cancelled run still cleans up after itself.
-            await TestAuditCleanup.PurgeOrphanedSinceAsync(dbFactory, runStart, preExistingProjectIds, CancellationToken.None);
+            // Best-effort: CancellationToken.None runs cleanup even on cancellation;
+            // swallowing errors prevents masking the suite's original exception (#85, #150).
+            try { await TestAuditCleanup.PurgeOrphanedSinceAsync(dbFactory, runStart, preExistingProjectIds, CancellationToken.None); } catch { }
         }
     }
 
@@ -568,10 +567,9 @@ public sealed class TestRunnerService(
         }
         finally
         {
-            // Purge only this run's orphaned audit rows (test-project droppings),
-            // preserving real deleted-project audit history (#85). Fixes #150.
-            // Use CancellationToken.None so a cancelled run still cleans up after itself.
-            await TestAuditCleanup.PurgeOrphanedSinceAsync(dbFactory, runStart, preExistingProjectIds, CancellationToken.None);
+            // Best-effort: CancellationToken.None runs cleanup even on cancellation;
+            // swallowing errors prevents masking the suite's original exception (#85, #150).
+            try { await TestAuditCleanup.PurgeOrphanedSinceAsync(dbFactory, runStart, preExistingProjectIds, CancellationToken.None); } catch { }
         }
     }
 
@@ -1103,10 +1101,9 @@ public sealed class TestRunnerService(
         }
         finally
         {
-            // Purge only this run's orphaned audit rows (test-project droppings),
-            // preserving real deleted-project audit history (#85). Fixes #150.
-            // Use CancellationToken.None so a cancelled run still cleans up after itself.
-            await TestAuditCleanup.PurgeOrphanedSinceAsync(dbFactory, runStart, preExistingProjectIds, CancellationToken.None);
+            // Best-effort: CancellationToken.None runs cleanup even on cancellation;
+            // swallowing errors prevents masking the suite's original exception (#85, #150).
+            try { await TestAuditCleanup.PurgeOrphanedSinceAsync(dbFactory, runStart, preExistingProjectIds, CancellationToken.None); } catch { }
         }
     }
 
