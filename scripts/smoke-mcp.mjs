@@ -26,6 +26,8 @@ const unexpectedMessages = [];
 const unexpectedWaiters = [];
 const runMarker = `mcp-smoke-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 let tempFeatureId;
+let tempIdeaId;
+let promotedProjectId;
 
 server.stdout.on("data", chunk => {
   buffer = Buffer.concat([buffer, chunk]);
@@ -111,7 +113,13 @@ try {
     "delete_dependency",
     // Activity
     "list_project_activity",
-    "list_task_activity"
+    "list_task_activity",
+    // Idea inbox CRUD
+    "create_idea",
+    "list_ideas",
+    "get_idea",
+    "update_idea",
+    "promote_idea"
   ]) {
     if (!toolNames.has(requiredTool)) {
       throw new Error(`Missing MCP tool: ${requiredTool}`);
@@ -231,6 +239,35 @@ try {
   }
   await callTool("delete_task", { taskId: authoredTask.id });
 
+  // Idea inbox spot-check: create_idea -> get_idea -> update_idea -> promote_idea round-trip.
+  const createdIdea = await callTool("create_idea", {
+    title: `MCP smoke idea ${runMarker}`,
+    body: "Created via the new create_idea MCP tool.",
+    tags: "smoke,mcp",
+    priority: "Medium"
+  });
+  if (typeof createdIdea?.id !== "number") {
+    throw new Error(`create_idea did not return an id: ${JSON.stringify(createdIdea)}`);
+  }
+  tempIdeaId = createdIdea.id;
+  const fetchedIdea = await callTool("get_idea", { ideaId: createdIdea.id });
+  if (fetchedIdea?.title !== `MCP smoke idea ${runMarker}` || fetchedIdea?.status !== "New") {
+    throw new Error(`get_idea returned unexpected idea: ${JSON.stringify(fetchedIdea)}`);
+  }
+  const updatedIdea = await callTool("update_idea", {
+    ideaId: createdIdea.id,
+    status: "Triaging",
+    priority: "High"
+  });
+  if (updatedIdea?.status !== "Triaging") {
+    throw new Error(`update_idea did not return updated status: ${JSON.stringify(updatedIdea)}`);
+  }
+  const promotedIdea = await callTool("promote_idea", { ideaId: createdIdea.id, actor: "mcp-smoke" });
+  if (typeof promotedIdea?.projectId !== "number" || promotedIdea.projectId <= 0) {
+    throw new Error(`promote_idea did not return a project id: ${JSON.stringify(promotedIdea)}`);
+  }
+  promotedProjectId = promotedIdea.projectId;
+
   // Subtask CRUD spot-check: create_subtask -> mark_subtask_done -> delete_subtask round-trip.
   const createdSubtask = await callTool("create_subtask", {
     taskId: task.id,
@@ -297,6 +334,24 @@ try {
   console.log(`MCP smoke tests passed for project ${projectId}, task ${task.id}.`);
 } finally {
   try {
+    if (promotedProjectId !== undefined) {
+      try {
+        await restJson(`/api/projects/${promotedProjectId}`, { method: "DELETE", expectNoContent: true });
+        console.log(`Cleaned up MCP smoke promoted project ${promotedProjectId}.`);
+      } catch (error) {
+        console.error(`MCP smoke cleanup failed for promoted project ${promotedProjectId}: ${error.message}`);
+        process.exitCode = 1;
+      }
+    }
+    if (tempIdeaId !== undefined) {
+      try {
+        await restJson(`/api/ideas/${tempIdeaId}`, { method: "DELETE", expectNoContent: true });
+        console.log(`Cleaned up MCP smoke idea ${tempIdeaId}.`);
+      } catch (error) {
+        console.error(`MCP smoke cleanup failed for idea ${tempIdeaId}: ${error.message}`);
+        process.exitCode = 1;
+      }
+    }
     if (tempFeatureId !== undefined) {
       try {
         await restJson(`/api/features/${tempFeatureId}`, { method: "DELETE", expectNoContent: true });

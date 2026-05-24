@@ -9,7 +9,7 @@ wrapper (`scripts/mcp-server.mjs`).
 - Package: **`ModelContextProtocol.AspNetCore` 1.3.0** (the official, Microsoft-co-maintained
   C# MCP SDK).
 - `src/KanbanFlow/Mcp/KanbanMcpTools.cs` — a `[McpServerToolType]` class exposing
-  **10 tools (5 read + 5 audit-aware write)**.
+  **15 tools (7 read + 8 audit-aware write)**.
 - `Program.cs` wiring:
 
   ```csharp

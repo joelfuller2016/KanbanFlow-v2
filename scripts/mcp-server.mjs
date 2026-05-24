@@ -499,6 +499,96 @@ const tools = [
       },
       required: ["taskId"]
     }
+  },
+
+  // ── Idea inbox CRUD (#180) ─────────────────────────────────────────
+
+  {
+    name: "create_idea",
+    description: "Capture a new idea in the inbox. Always starts status=New. Promote it later with promote_idea.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        title: { type: "string", description: "Idea title (required, ≤500 chars)." },
+        body: { type: "string", description: "Optional markdown brain-dump body." },
+        plan: { type: "string", description: "Optional markdown plan (problem · approach · scope · value)." },
+        tags: { type: "string", description: "Optional comma-separated tags." },
+        priority: {
+          type: "string",
+          enum: ["Low", "Medium", "High", "Critical"],
+          description: "Optional priority."
+        },
+        actor: { type: "string", description: "Optional actor label recorded in the audit trail." }
+      },
+      required: ["title"]
+    }
+  },
+  {
+    name: "list_ideas",
+    description: "List ideas with optional status/tag/search filters. Use to triage the inbox before promoting.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        status: {
+          type: "string",
+          enum: ["New", "Triaging", "Promoted", "Archived", "Rejected"],
+          description: "Optional status filter."
+        },
+        tag: { type: "string", description: "Optional case-insensitive tag substring filter." },
+        q: { type: "string", description: "Optional case-insensitive search across title + body." },
+        limit: { type: "integer", minimum: 1, maximum: 500, description: "Optional max results." },
+        offset: { type: "integer", minimum: 0, description: "Optional offset for paging." }
+      }
+    }
+  },
+  {
+    name: "get_idea",
+    description: "Get one idea in detail (title, body, plan, status, tags, priority, promoted project id).",
+    inputSchema: {
+      type: "object",
+      properties: {
+        ideaId: { type: "integer", minimum: 1, description: "Idea id to inspect." }
+      },
+      required: ["ideaId"]
+    }
+  },
+  {
+    name: "update_idea",
+    description: "Update mutable idea fields (title, body, plan, status, tags, priority). Omitted fields are left unchanged.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        ideaId: { type: "integer", minimum: 1, description: "Idea id to update." },
+        title: { type: "string", description: "New title (≤500 chars)." },
+        body: { type: "string", description: "New markdown body." },
+        plan: { type: "string", description: "New markdown plan." },
+        status: {
+          type: "string",
+          enum: ["New", "Triaging", "Promoted", "Archived", "Rejected"],
+          description: "New status."
+        },
+        tags: { type: "string", description: "New comma-separated tags." },
+        priority: {
+          type: "string",
+          enum: ["Low", "Medium", "High", "Critical"],
+          description: "New priority."
+        },
+        actor: { type: "string", description: "Optional actor label recorded in the audit trail." }
+      },
+      required: ["ideaId"]
+    }
+  },
+  {
+    name: "promote_idea",
+    description: "Promote an idea into a new project (Title→Name, Body→Description, Plan→Goals). Fails if already promoted. Returns the idea id and new project id.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        ideaId: { type: "integer", minimum: 1, description: "Idea id to promote." },
+        actor: { type: "string", description: "Optional actor label recorded in the audit trail." }
+      },
+      required: ["ideaId"]
+    }
   }
 ];
 
@@ -887,6 +977,64 @@ async function callTool(toolName, args) {
       const query = limit === undefined ? "" : `?limit=${encodeURIComponent(limit)}`;
       return restJson(`/api/tasks/${taskId}/activity${query}`);
     }
+
+    // ── Idea inbox CRUD ──
+
+    case "create_idea":
+      if (args.priority !== undefined && args.priority !== null && args.priority !== "")
+        assertEnum(args, "priority", ["Low", "Medium", "High", "Critical"]);
+      return restJson("/api/ideas", {
+        method: "POST",
+        body: {
+          title: requiredString(args, "title"),
+          body: optionalString(args, "body"),
+          plan: optionalString(args, "plan"),
+          tags: optionalString(args, "tags"),
+          priority: optionalString(args, "priority"),
+          actor: optionalString(args, "actor")
+        }
+      });
+    case "list_ideas": {
+      if (args.status !== undefined && args.status !== null && args.status !== "")
+        assertEnum(args, "status", ["New", "Triaging", "Promoted", "Archived", "Rejected"]);
+      const params = new URLSearchParams();
+      const status = optionalString(args, "status");
+      if (status !== undefined) params.set("status", status);
+      const tag = optionalString(args, "tag");
+      if (tag !== undefined) params.set("tag", tag);
+      const q = optionalString(args, "q");
+      if (q !== undefined) params.set("q", q);
+      const limit = optionalInt(args, "limit", { min: 1, max: 500 });
+      if (limit !== undefined) params.set("limit", String(limit));
+      const offset = optionalInt(args, "offset", { min: 0 });
+      if (offset !== undefined) params.set("offset", String(offset));
+      const query = params.toString();
+      return restJson(`/api/ideas${query ? `?${query}` : ""}`);
+    }
+    case "get_idea":
+      return restJson(`/api/ideas/${requiredInt(args, "ideaId", { min: 1 })}`);
+    case "update_idea":
+      if (args.status !== undefined && args.status !== null && args.status !== "")
+        assertEnum(args, "status", ["New", "Triaging", "Promoted", "Archived", "Rejected"]);
+      if (args.priority !== undefined && args.priority !== null && args.priority !== "")
+        assertEnum(args, "priority", ["Low", "Medium", "High", "Critical"]);
+      return restJson(`/api/ideas/${requiredInt(args, "ideaId", { min: 1 })}`, {
+        method: "PATCH",
+        body: {
+          title: optionalString(args, "title"),
+          body: optionalString(args, "body"),
+          plan: optionalString(args, "plan"),
+          status: optionalString(args, "status"),
+          tags: optionalString(args, "tags"),
+          priority: optionalString(args, "priority"),
+          actor: optionalString(args, "actor")
+        }
+      });
+    case "promote_idea":
+      return restJson(`/api/ideas/${requiredInt(args, "ideaId", { min: 1 })}/promote`, {
+        method: "POST",
+        body: { actor: optionalString(args, "actor") }
+      });
 
     default:
       throw new McpError(-32601, `Unknown tool: ${toolName}`);

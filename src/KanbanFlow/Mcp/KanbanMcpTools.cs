@@ -390,6 +390,154 @@ public static class KanbanMcpTools
         else if (string.IsNullOrWhiteSpace(task.ClaimedBy)) parts.Add("unclaimed");
         return "Top because: " + string.Join(", ", parts) + ".";
     }
+
+    // ── Ideas inbox tools (#180 Phase 3) — native parity with the /api/ideas REST surface ──
+    // All five route through IIdeaService (the single audit boundary) instead of touching
+    // EF directly, so every mutation writes its ActivityEvent exactly like the REST/Blazor paths.
+
+    [McpServerTool(Name = "create_idea")]
+    [Description("Capture a new idea in the inbox through the audit-aware service layer (writes an IdeaCreated activity event; no HTTP hop). Always starts status=New. Returns the new idea — triage it with update_idea or promote it with promote_idea.")]
+    public static async Task<IdeaResult> CreateIdea(
+        IIdeaService ideaService,
+        [Description("Idea title (required, <= 500 chars).")] string title,
+        [Description("Optional markdown brain-dump body.")] string? body = null,
+        [Description("Optional markdown plan (problem · approach · scope · value).")] string? plan = null,
+        [Description("Optional comma-separated tags.")] string? tags = null,
+        [Description("Optional priority: Low | Medium | High | Critical (case-insensitive).")] string? priority = null,
+        [Description("Optional actor label recorded in the audit trail (default 'mcp-agent').")] string? actor = null,
+        CancellationToken cancellationToken = default)
+    {
+        var parsedPriority = ParsePriority(priority);
+        try
+        {
+            var idea = await ideaService.CreateAsync(
+                new IdeaCreate(title, body, plan, tags, parsedPriority),
+                NormalizeActor(actor), cancellationToken);
+            return MapIdea(idea);
+        }
+        catch (ValidationException ex)
+        {
+            throw new McpException(ex.Message);
+        }
+    }
+
+    [McpServerTool(Name = "list_ideas")]
+    [Description("List ideas newest-first with optional status, tag, and free-text filters. Use to triage the inbox before promoting. Returns up to 'limit' ideas (default 100).")]
+    public static async Task<IReadOnlyList<IdeaResult>> ListIdeas(
+        IIdeaService ideaService,
+        [Description("Optional status filter: New | Triaging | Promoted | Archived | Rejected (case-insensitive).")] string? status = null,
+        [Description("Optional case-insensitive tag substring filter.")] string? tag = null,
+        [Description("Optional case-insensitive search across title and body.")] string? q = null,
+        [Description("Max results (default 100, clamped 1-500 by the service).")] int? limit = null,
+        [Description("Offset for paging (default 0).")] int? offset = null,
+        CancellationToken cancellationToken = default)
+    {
+        var statusFilter = ParseIdeaStatus(status);
+        // Service materialises the entities; enums are projected to strings in memory below.
+        var ideas = await ideaService.ListAsync(statusFilter, tag, q, limit ?? 100, offset ?? 0, cancellationToken);
+        return ideas.Select(MapIdea).ToList();
+    }
+
+    [McpServerTool(Name = "get_idea")]
+    [Description("Return one idea in detail (title, body, plan, status, tags, priority, promoted project id). Errors if the idea does not exist.")]
+    public static async Task<IdeaResult> GetIdea(
+        IIdeaService ideaService,
+        [Description("The idea id (from list_ideas).")] int ideaId,
+        CancellationToken cancellationToken = default)
+    {
+        var idea = await ideaService.GetByIdAsync(ideaId, cancellationToken)
+            ?? throw new McpException($"Idea {ideaId} not found.");
+        return MapIdea(idea);
+    }
+
+    [McpServerTool(Name = "update_idea")]
+    [Description("Update mutable idea fields (title, body, plan, status, tags, priority) through the audit-aware service layer (writes an IdeaUpdated activity event; no HTTP hop). Omitted/null fields are left unchanged. Idempotent when nothing changes.")]
+    public static async Task<IdeaResult> UpdateIdea(
+        IIdeaService ideaService,
+        [Description("The idea id to update.")] int ideaId,
+        [Description("New title (<= 500 chars), or omit to leave unchanged.")] string? title = null,
+        [Description("New markdown body, or omit.")] string? body = null,
+        [Description("New markdown plan, or omit.")] string? plan = null,
+        [Description("New status: New | Triaging | Promoted | Archived | Rejected (case-insensitive), or omit.")] string? status = null,
+        [Description("New comma-separated tags, or omit.")] string? tags = null,
+        [Description("New priority: Low | Medium | High | Critical (case-insensitive), or omit.")] string? priority = null,
+        [Description("Optional actor label recorded in the audit trail (default 'mcp-agent').")] string? actor = null,
+        CancellationToken cancellationToken = default)
+    {
+        var parsedStatus = ParseIdeaStatus(status);
+        var parsedPriority = ParsePriority(priority);
+        try
+        {
+            var idea = await ideaService.UpdateAsync(
+                ideaId, new IdeaUpdate(title, body, plan, parsedStatus, tags, parsedPriority),
+                NormalizeActor(actor), cancellationToken);
+            return MapIdea(idea);
+        }
+        catch (IdeaNotFoundException)
+        {
+            throw new McpException($"Idea {ideaId} not found.");
+        }
+        catch (ValidationException ex)
+        {
+            throw new McpException(ex.Message);
+        }
+    }
+
+    [McpServerTool(Name = "promote_idea")]
+    [Description("Promote an idea into a new project (Title→Name, Body→Description, Plan→Goals) through the audit-aware service layer (writes IdeaPromoted + ProjectCreatedFromIdea activity events; no HTTP hop). Fails if the idea is already promoted. Returns the idea id and the new project id.")]
+    public static async Task<IdeaPromoteResultDto> PromoteIdea(
+        IIdeaService ideaService,
+        [Description("The idea id to promote.")] int ideaId,
+        [Description("Optional actor label recorded in the audit trail (default 'mcp-agent').")] string? actor = null,
+        CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            var result = await ideaService.PromoteAsync(ideaId, NormalizeActor(actor), cancellationToken);
+            return new IdeaPromoteResultDto(
+                result.IdeaId, result.ProjectId,
+                $"Idea {result.IdeaId} promoted to project {result.ProjectId}");
+        }
+        catch (IdeaNotFoundException)
+        {
+            throw new McpException($"Idea {ideaId} not found.");
+        }
+        catch (ValidationException ex)
+        {
+            // e.g. the idea is already promoted — surface the service's reason verbatim.
+            throw new McpException(ex.Message);
+        }
+    }
+
+    // Normalise the optional audit actor exactly like the task tools do (trim, fall back to default).
+    private static string NormalizeActor(string? actor) =>
+        string.IsNullOrWhiteSpace(actor) ? DefaultActor : actor.Trim();
+
+    // One DRY enum-parse for the idea tools' string? enum params: null/omitted → null;
+    // present-but-blank or unrecognised → McpException listing the valid values (Phase-2 finding).
+    private static TaskPriority? ParsePriority(string? priority)
+    {
+        if (priority is null) return null;
+        if (!Enum.TryParse<TaskPriority>(priority, ignoreCase: true, out var parsed) || !Enum.IsDefined(parsed))
+            throw new McpException(
+                $"Invalid priority: {priority}. Valid values: {string.Join(", ", Enum.GetNames<TaskPriority>())}");
+        return parsed;
+    }
+
+    private static IdeaStatus? ParseIdeaStatus(string? status)
+    {
+        if (status is null) return null;
+        if (!Enum.TryParse<IdeaStatus>(status, ignoreCase: true, out var parsed) || !Enum.IsDefined(parsed))
+            throw new McpException(
+                $"Invalid status: {status}. Valid values: {string.Join(", ", Enum.GetNames<IdeaStatus>())}");
+        return parsed;
+    }
+
+    // Mirrors the REST MapIdea projection (ApiEndpoints) so MCP and HTTP return the same idea shape.
+    // Enums → strings via .ToString()/?.ToString(); the repo has no JsonStringEnumConverter.
+    private static IdeaResult MapIdea(Idea idea) => new(
+        idea.Id, idea.Title, idea.Body, idea.Plan, idea.Status.ToString(), idea.Tags,
+        idea.Priority?.ToString(), idea.PromotedProjectId, idea.CreatedAt, idea.UpdatedAt);
 }
 
 // ── Response DTOs (records → serialised to JSON by the MCP SDK) ────────────────────
@@ -405,3 +553,7 @@ public sealed record TaskDetailResult(int Id, int FeatureId, string Name, string
 public sealed record TaskDeleteResult(int Id, bool Deleted, string Message);
 public sealed record TaskCommentResult(int Id, int TaskItemId, string Text, string? Author, string Type, DateTime CreatedAt);
 public sealed record TaskClaimResult(int Id, string Name, string? ClaimedBy, DateTime? ClaimedAt, string Message);
+
+// ── Idea inbox DTOs (#180 Phase 3) — IdeaResult mirrors the REST MapIdea field set ──
+public sealed record IdeaResult(int Id, string Title, string? Body, string? Plan, string Status, string? Tags, string? Priority, int? PromotedProjectId, DateTime CreatedAt, DateTime UpdatedAt);
+public sealed record IdeaPromoteResultDto(int IdeaId, int ProjectId, string Message);
