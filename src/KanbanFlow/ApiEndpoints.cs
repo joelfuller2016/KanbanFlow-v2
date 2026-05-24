@@ -1037,81 +1037,79 @@ public static class ApiEndpoints
             });
         });
 
-        // POST /api/features/{featureId}/tasks — create (default status: Backlog)
-        app.MapPost("/api/features/{featureId:int}/tasks", async (int featureId, TaskDto dto, AppDbContext db) =>
+        // POST /api/features/{featureId}/tasks — create (default status: Backlog).
+        // Routes through ITaskService.CreateAsync so the Created comment + TaskCreated
+        // audit event fire identically whether the REST API, MCP, or a Blazor UI handler
+        // creates the task (#88). Enums are validated at the edge to preserve the exact
+        // 422 messages; the service re-validates defensively.
+        app.MapPost("/api/features/{featureId:int}/tasks", async (int featureId, TaskDto dto, Services.ITaskService taskSvc, CancellationToken ct) =>
         {
-            var projectId = await db.Features
-                .Where(f => f.Id == featureId)
-                .Select(f => (int?)f.ProjectId)
-                .SingleOrDefaultAsync();
-            if (projectId is null)
-                return Results.NotFound(new { message = $"Feature {featureId} not found." });
-
             if (string.IsNullOrWhiteSpace(dto.Name))
                 return Results.UnprocessableEntity(new { message = "Name is required." });
 
-            // Validate status enum
-            WorkStatus status = WorkStatus.Backlog;
+            // Validate status enum. Enum.TryParse alone accepts numeric strings like "999"
+            // (any in-range int), so pair it with Enum.IsDefined to reject out-of-range
+            // values at the edge — mirroring the PUT /api/tasks/{id} validation exactly.
+            WorkStatus? status = null;
             if (dto.Status is not null)
             {
-                if (!Enum.TryParse<WorkStatus>(dto.Status, ignoreCase: true, out status))
+                if (!Enum.TryParse<WorkStatus>(dto.Status, ignoreCase: true, out var parsedStatus)
+                    || !Enum.IsDefined(typeof(WorkStatus), parsedStatus))
+                {
                     return Results.UnprocessableEntity(new { message = $"Invalid status: {dto.Status}. Valid values: {string.Join(", ", Enum.GetNames<WorkStatus>())}" });
+                }
+                status = parsedStatus;
             }
 
-            // Validate priority enum
-            TaskPriority priority = TaskPriority.Low;
+            // Validate priority enum (same numeric-string guard as status).
+            TaskPriority? priority = null;
             if (dto.Priority is not null)
             {
-                if (!Enum.TryParse<TaskPriority>(dto.Priority, ignoreCase: true, out priority))
+                if (!Enum.TryParse<TaskPriority>(dto.Priority, ignoreCase: true, out var parsedPriority)
+                    || !Enum.IsDefined(typeof(TaskPriority), parsedPriority))
+                {
                     return Results.UnprocessableEntity(new { message = $"Invalid priority: {dto.Priority}. Valid values: {string.Join(", ", Enum.GetNames<TaskPriority>())}" });
+                }
+                priority = parsedPriority;
             }
 
-            var maxSort = await db.Tasks
-                .Where(t => t.FeatureId == featureId)
-                .MaxAsync(t => (int?)t.SortOrder) ?? -1;
-
-            var task = new TaskItem
+            try
             {
-                FeatureId = featureId,
-                Name = dto.Name.Trim(),
-                Description = dto.Description?.Trim(),
-                Status = status,
-                Priority = priority,
-                Assignee = dto.Assignee?.Trim(),
-                SortOrder = dto.SortOrder ?? maxSort + 1,
-                CompletedAt = status == WorkStatus.Done ? DateTime.UtcNow : null
-            };
+                var create = new Services.TaskCreate(
+                    FeatureId: featureId,
+                    Name: dto.Name,
+                    Description: dto.Description,
+                    Status: status,
+                    Priority: priority,
+                    Assignee: dto.Assignee,
+                    SortOrder: dto.SortOrder);
+                var task = await taskSvc.CreateAsync(create, dto.Actor, ct);
 
-            db.Tasks.Add(task);
-            await db.SaveChangesAsync();
-
-            var createdComment = new TaskComment
+                return Results.Created($"/api/tasks/{task.Id}", new
+                {
+                    task.Id,
+                    task.FeatureId,
+                    task.Name,
+                    task.Description,
+                    Status = task.Status.ToString(),
+                    Priority = task.Priority.ToString(),
+                    task.Assignee,
+                    task.ClaimedBy,
+                    task.ClaimedAt,
+                    task.SortOrder,
+                    task.CreatedAt,
+                    task.UpdatedAt,
+                    task.CompletedAt
+                });
+            }
+            catch (Services.FeatureNotFoundException)
             {
-                TaskItemId = task.Id,
-                Text = "Task created",
-                Author = "System",
-                Type = CommentType.Created
-            };
-            db.TaskComments.Add(createdComment);
-            AddActivityEvent(db, projectId.Value, "Task", task.Id, null, "TaskCreated", null, TaskActivitySnapshot(task), $"Task '{task.Name}' created");
-            await db.SaveChangesAsync();
-
-            return Results.Created($"/api/tasks/{task.Id}", new
+                return Results.NotFound(new { message = $"Feature {featureId} not found." });
+            }
+            catch (Services.ValidationException ex)
             {
-                task.Id,
-                task.FeatureId,
-                task.Name,
-                task.Description,
-                Status = task.Status.ToString(),
-                Priority = task.Priority.ToString(),
-                task.Assignee,
-                task.ClaimedBy,
-                task.ClaimedAt,
-                task.SortOrder,
-                task.CreatedAt,
-                task.UpdatedAt,
-                task.CompletedAt
-            });
+                return Results.UnprocessableEntity(new { message = ex.Message });
+            }
         });
 
         // PUT /api/tasks/{id} — update. Routes through ITaskService.UpdateAsync so
@@ -1201,141 +1199,82 @@ public static class ApiEndpoints
             }
         });
 
-        // POST /api/tasks/{id}/claim — lightweight task claim for AI agents
-        app.MapPost("/api/tasks/{id:int}/claim", async (int id, ClaimDto dto, AppDbContext db) =>
+        // POST /api/tasks/{id}/claim — lightweight task claim for AI agents.
+        // Routes through ITaskService.ClaimAsync so the TaskClaimed audit event is
+        // emitted uniformly with UI-driven claims (#88). Conflict body shape is
+        // preserved here from the exception's claimant fields.
+        app.MapPost("/api/tasks/{id:int}/claim", async (int id, ClaimDto dto, Services.ITaskService taskSvc, CancellationToken ct) =>
         {
             var actor = dto.Actor?.Trim();
             if (string.IsNullOrWhiteSpace(actor))
                 return Results.UnprocessableEntity(new { message = "Actor is required." });
 
-            await using var tx = await db.Database.BeginTransactionAsync();
-
-            var task = await db.Tasks
-                .Include(t => t.Feature)
-                .AsNoTracking()
-                .FirstOrDefaultAsync(t => t.Id == id);
-            if (task is null)
+            try
+            {
+                var claimedTask = await taskSvc.ClaimAsync(id, actor, ct);
+                return Results.Ok(MapTaskClaimState(claimedTask));
+            }
+            catch (Services.TaskNotFoundException)
+            {
                 return Results.NotFound(new { message = $"Task {id} not found." });
-
-            if (!string.IsNullOrWhiteSpace(task.ClaimedBy) && !string.Equals(task.ClaimedBy, actor, StringComparison.OrdinalIgnoreCase))
+            }
+            catch (Services.TaskClaimConflictException ex)
             {
                 return Results.Conflict(new
                 {
-                    message = $"Task {id} is already claimed by {task.ClaimedBy}.",
-                    task.ClaimedBy,
-                    task.ClaimedAt
+                    message = $"Task {id} is already claimed by {ex.ClaimedBy}.",
+                    ex.ClaimedBy,
+                    ex.ClaimedAt
                 });
             }
-
-            var before = TaskActivitySnapshot(task);
-            var now = DateTime.UtcNow;
-            var normalizedActor = actor.ToLowerInvariant();
-            var updated = await db.Tasks
-                .Where(t => t.Id == id && (t.ClaimedBy == null || t.ClaimedBy.ToLower() == normalizedActor))
-                .ExecuteUpdateAsync(setters => setters
-                    .SetProperty(t => t.ClaimedBy, actor)
-                    .SetProperty(t => t.ClaimedAt, t => t.ClaimedAt ?? now)
-                    .SetProperty(t => t.UpdatedAt, now));
-
-            if (updated == 0)
-            {
-                var currentClaim = await GetTaskClaimStateOrDefaultAsync(db, id);
-                if (currentClaim is null)
-                    return Results.NotFound(new { message = $"Task {id} not found." });
-
-                return Results.Conflict(new
-                {
-                    message = $"Task {id} is already claimed by {currentClaim.ClaimedBy}.",
-                    currentClaim.ClaimedBy,
-                    currentClaim.ClaimedAt
-                });
-            }
-
-            var claimedTask = await db.Tasks
-                .Include(t => t.Feature)
-                .FirstAsync(t => t.Id == id);
-            AddActivityEvent(db, claimedTask.Feature.ProjectId, "Task", claimedTask.Id, actor, "TaskClaimed", before, TaskActivitySnapshot(claimedTask), $"Task '{claimedTask.Name}' claimed by {actor}");
-            await db.SaveChangesAsync();
-            await tx.CommitAsync();
-
-            return Results.Ok(MapTaskClaimState(claimedTask));
         });
 
-        // POST /api/tasks/{id}/release — release a task claimed by the same actor
-        app.MapPost("/api/tasks/{id:int}/release", async (int id, ClaimDto dto, AppDbContext db) =>
+        // POST /api/tasks/{id}/release — release a task claimed by the same actor.
+        // Routes through ITaskService.ReleaseAsync so the TaskReleased audit event is
+        // emitted uniformly with UI-driven releases (#88). The release-specific conflict
+        // message ("only that actor can release it") is reconstructed here so the
+        // response stays byte-identical to the previous inline handler.
+        app.MapPost("/api/tasks/{id:int}/release", async (int id, ClaimDto dto, Services.ITaskService taskSvc, CancellationToken ct) =>
         {
             var actor = dto.Actor?.Trim();
             if (string.IsNullOrWhiteSpace(actor))
                 return Results.UnprocessableEntity(new { message = "Actor is required." });
 
-            await using var tx = await db.Database.BeginTransactionAsync();
-
-            var task = await db.Tasks
-                .Include(t => t.Feature)
-                .AsNoTracking()
-                .FirstOrDefaultAsync(t => t.Id == id);
-            if (task is null)
+            try
+            {
+                var releasedTask = await taskSvc.ReleaseAsync(id, actor, ct);
+                return Results.Ok(MapTaskClaimState(releasedTask));
+            }
+            catch (Services.TaskNotFoundException)
+            {
                 return Results.NotFound(new { message = $"Task {id} not found." });
-
-            if (!string.IsNullOrWhiteSpace(task.ClaimedBy) && !string.Equals(task.ClaimedBy, actor, StringComparison.OrdinalIgnoreCase))
+            }
+            catch (Services.TaskClaimConflictException ex)
             {
                 return Results.Conflict(new
                 {
-                    message = $"Task {id} is claimed by {task.ClaimedBy}; only that actor can release it.",
-                    task.ClaimedBy,
-                    task.ClaimedAt
+                    message = $"Task {id} is claimed by {ex.ClaimedBy}; only that actor can release it.",
+                    ex.ClaimedBy,
+                    ex.ClaimedAt
                 });
             }
-
-            var before = TaskActivitySnapshot(task);
-            var now = DateTime.UtcNow;
-            var normalizedActor = actor.ToLowerInvariant();
-            var updated = await db.Tasks
-                .Where(t => t.Id == id && (t.ClaimedBy == null || t.ClaimedBy.ToLower() == normalizedActor))
-                .ExecuteUpdateAsync(setters => setters
-                    .SetProperty(t => t.ClaimedBy, (string?)null)
-                    .SetProperty(t => t.ClaimedAt, (DateTime?)null)
-                    .SetProperty(t => t.UpdatedAt, now));
-
-            if (updated == 0)
-            {
-                var currentClaim = await GetTaskClaimStateOrDefaultAsync(db, id);
-                if (currentClaim is null)
-                    return Results.NotFound(new { message = $"Task {id} not found." });
-
-                return Results.Conflict(new
-                {
-                    message = $"Task {id} is claimed by {currentClaim.ClaimedBy}; only that actor can release it.",
-                    currentClaim.ClaimedBy,
-                    currentClaim.ClaimedAt
-                });
-            }
-
-            var releasedTask = await db.Tasks
-                .Include(t => t.Feature)
-                .FirstAsync(t => t.Id == id);
-            AddActivityEvent(db, releasedTask.Feature.ProjectId, "Task", releasedTask.Id, actor, "TaskReleased", before, TaskActivitySnapshot(releasedTask), $"Task '{releasedTask.Name}' released by {actor}");
-            await db.SaveChangesAsync();
-            await tx.CommitAsync();
-
-            return Results.Ok(MapTaskClaimState(releasedTask));
         });
 
-        // DELETE /api/tasks/{id} — delete
-        app.MapDelete("/api/tasks/{id:int}", async (int id, AppDbContext db) =>
+        // DELETE /api/tasks/{id} — delete.
+        // Routes through ITaskService.DeleteAsync so the TaskDeleted audit event and the
+        // FK-safe child cleanup (leaf-first subtasks + acceptance criteria) are produced
+        // uniformly with UI-driven deletes (#88). No actor param exists on this route.
+        app.MapDelete("/api/tasks/{id:int}", async (int id, Services.ITaskService taskSvc, CancellationToken ct) =>
         {
-            var task = await db.Tasks
-                .Include(t => t.Feature)
-                .FirstOrDefaultAsync(t => t.Id == id);
-            if (task is null)
+            try
+            {
+                await taskSvc.DeleteAsync(id, actor: null, ct);
+                return Results.NoContent();
+            }
+            catch (Services.TaskNotFoundException)
+            {
                 return Results.NotFound(new { message = $"Task {id} not found." });
-
-            AddActivityEvent(db, task.Feature.ProjectId, "Task", task.Id, null, "TaskDeleted", TaskActivitySnapshot(task), null, $"Task '{task.Name}' deleted");
-            await DeleteSubtasksForTasksAsync(db, [id]);
-            await DeleteAcceptanceCriteriaForTasksAsync(db, [id]);
-            db.Tasks.Remove(task);
-            await db.SaveChangesAsync();
-            return Results.NoContent();
+            }
         });
 
         // PATCH /api/tasks/{id}/status — change status only
@@ -2025,16 +1964,13 @@ public static class ApiEndpoints
             return Results.Ok(comments);
         });
 
-        // POST /api/tasks/{taskId}/comments — add comment
-        app.MapPost("/api/tasks/{taskId:int}/comments", async (int taskId, TaskCommentDto dto, AppDbContext db) =>
+        // POST /api/tasks/{taskId}/comments — add comment.
+        // Routes through ITaskService.AddCommentAsync so the TaskCommentAdded audit event
+        // is emitted uniformly with the Blazor comment writers (#88). Comment-type parsing
+        // stays at the edge so the {message, allowedTypes} 422 body remains byte-identical;
+        // the typed CommentType is then handed to the service (R3).
+        app.MapPost("/api/tasks/{taskId:int}/comments", async (int taskId, TaskCommentDto dto, Services.ITaskService taskSvc, CancellationToken ct) =>
         {
-            var projectId = await db.Tasks
-                .Where(t => t.Id == taskId)
-                .Select(t => (int?)t.Feature.ProjectId)
-                .SingleOrDefaultAsync();
-            if (projectId is null)
-                return Results.NotFound(new { message = $"Task {taskId} not found." });
-
             if (string.IsNullOrWhiteSpace(dto.Text))
                 return Results.UnprocessableEntity(new { message = "Text is required." });
 
@@ -2047,27 +1983,27 @@ public static class ApiEndpoints
                 });
             }
 
-            var comment = new TaskComment
+            try
             {
-                TaskItemId = taskId,
-                Text = dto.Text.Trim(),
-                Author = dto.Author?.Trim(),
-                Type = commentType
-            };
-
-            db.TaskComments.Add(comment);
-            AddActivityEvent(db, projectId.Value, "Task", taskId, comment.Author, "TaskCommentAdded", null, new { comment.Text, comment.Author }, "Comment added");
-            await db.SaveChangesAsync();
-
-            return Results.Created($"/api/tasks/{taskId}/comments/{comment.Id}", new
+                var comment = await taskSvc.AddCommentAsync(taskId, dto.Text, dto.Author, commentType, actor: dto.Author, ct);
+                return Results.Created($"/api/tasks/{taskId}/comments/{comment.Id}", new
+                {
+                    comment.Id,
+                    comment.TaskItemId,
+                    comment.Text,
+                    comment.Author,
+                    Type = comment.Type.ToString(),
+                    comment.CreatedAt
+                });
+            }
+            catch (Services.TaskNotFoundException)
             {
-                comment.Id,
-                comment.TaskItemId,
-                comment.Text,
-                comment.Author,
-                Type = comment.Type.ToString(),
-                comment.CreatedAt
-            });
+                return Results.NotFound(new { message = $"Task {taskId} not found." });
+            }
+            catch (Services.ValidationException ex)
+            {
+                return Results.UnprocessableEntity(new { message = ex.Message });
+            }
         });
 
         // DELETE /api/comments/{id}

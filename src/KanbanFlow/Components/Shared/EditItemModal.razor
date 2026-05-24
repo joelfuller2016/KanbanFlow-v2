@@ -1,5 +1,6 @@
 @using Microsoft.EntityFrameworkCore
 @inject IDbContextFactory<AppDbContext> DbFactory
+@inject ITaskService TaskService
 
 @* Bootstrap Modal for editing Projects, Features, and Tasks *@
 <div class="modal fade @(IsOpen ? "show" : "")" tabindex="-1" data-testid="edit-item-modal"
@@ -344,16 +345,10 @@
     private async Task AddComment()
     {
         if (EditTaskId is null || string.IsNullOrWhiteSpace(newCommentText)) return;
-        using var db = await DbFactory.CreateDbContextAsync();
-        var comment = new TaskComment
-        {
-            TaskItemId = EditTaskId.Value,
-            Text = newCommentText.Trim(),
-            Author = "User",
-            Type = CommentType.Comment
-        };
-        db.TaskComments.Add(comment);
-        await db.SaveChangesAsync();
+        // Route the comment through ITaskService so the UI emits a TaskCommentAdded
+        // audit event identical to the REST/MCP surfaces (#88).
+        var comment = await TaskService.AddCommentAsync(
+            EditTaskId.Value, newCommentText, author: "User", type: CommentType.Comment, actor: "User");
         taskComments.Add(comment);
         newCommentText = null;
         StateHasChanged();
@@ -410,25 +405,29 @@
 
                 case EditItemType.Task:
                     if (EditTaskId is null) return;
-                    var task = await db.Tasks.FindAsync(EditTaskId.Value);
-                    if (task is null) { errorMessage = "Task not found."; return; }
-                    var oldStatus = task.Status;
-                    var newStatus = (WorkStatus)editStatus;
-                    task.Name = editName.Trim();
-                    task.Description = string.IsNullOrWhiteSpace(editDescription) ? null : editDescription.Trim();
-                    task.FeatureId = editFeatureId;
-                    task.Status = newStatus;
-                    task.Priority = (TaskPriority)editPriority;
-                    task.Assignee = string.IsNullOrWhiteSpace(editAssignee) ? null : editAssignee.Trim();
-                    task.UpdatedAt = DateTime.UtcNow;
-                    if (newStatus == WorkStatus.Done && oldStatus != WorkStatus.Done)
-                        task.CompletedAt = DateTime.UtcNow;
-                    else if (newStatus != WorkStatus.Done)
-                        task.CompletedAt = null;
+                    // Route the task edit through ITaskService so every field change emits
+                    // the same TaskUpdated / TaskStatusChanged audit events (and StatusChange
+                    // comment) as the REST/MCP surfaces — instead of a silent SaveChanges
+                    // bypass (#88). UpdateAsync handles the CompletedAt invariant internally.
+                    await TaskService.UpdateAsync(EditTaskId.Value, new TaskUpdate(
+                        Name: editName,
+                        Description: editDescription,
+                        Status: (WorkStatus)editStatus,
+                        Priority: (TaskPriority)editPriority,
+                        Assignee: editAssignee), actor: "User");
+                    // Feature moves are a separate audit concern (TaskFeatureChanged) with a
+                    // cross-project guard; no-op when the feature is unchanged.
+                    await TaskService.ReassignToFeatureAsync(EditTaskId.Value, editFeatureId, actor: "User");
                     break;
             }
 
-            await db.SaveChangesAsync();
+            // The Task path mutates through ITaskService (its own DbContext) and has
+            // already persisted; the outer save would be a no-op that muddies the
+            // unit-of-work, so skip it. Project/Feature edits mutate the outer `db`
+            // above and still need this save.
+            if (EditMode != EditItemType.Task)
+                await db.SaveChangesAsync();
+
             await OnSaved.InvokeAsync();
             await OnClose.InvokeAsync();
         }

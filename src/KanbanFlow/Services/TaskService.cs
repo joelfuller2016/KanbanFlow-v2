@@ -321,6 +321,376 @@ public sealed class TaskService(IDbContextFactory<AppDbContext> dbFactory) : ITa
 
     private const int MaxNameLength = 500;
 
-    public Task DeleteAsync(int taskId, string? actor, CancellationToken ct = default)
-        => throw new NotImplementedException("TODO: implement in follow-up PR. Closes the UI half of #88 for deletes.");
+    public async Task<TaskItem> CreateAsync(TaskCreate dto, string? actor, CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(dto);
+
+        await using var db = await dbFactory.CreateDbContextAsync(ct);
+
+        // Validate up-front so we never persist a half-built task. Service is the trust
+        // boundary — REST, MCP, and Blazor direct-callers all flow through here (#88).
+        if (string.IsNullOrWhiteSpace(dto.Name))
+            throw new ValidationException("Name cannot be empty or whitespace.");
+        if (dto.Name.Length > MaxNameLength)
+            throw new ValidationException($"Name cannot exceed {MaxNameLength} characters.");
+        // Defensive enum guard (matches UpdateAsync): rejects undefined/out-of-range
+        // values such as a cast numeric the caller failed to validate.
+        if (dto.Status is not null && !Enum.IsDefined(dto.Status.Value))
+            throw new ValidationException($"Invalid status '{dto.Status.Value}'.");
+        if (dto.Priority is not null && !Enum.IsDefined(dto.Priority.Value))
+            throw new ValidationException($"Invalid priority '{dto.Priority.Value}'.");
+
+        // Resolve the project for audit attribution; a missing feature is a distinct,
+        // actionable error (the task itself does not exist yet).
+        var projectId = await db.Features
+            .Where(f => f.Id == dto.FeatureId)
+            .Select(f => (int?)f.ProjectId)
+            .SingleOrDefaultAsync(ct);
+        if (projectId is null)
+            throw new FeatureNotFoundException(dto.FeatureId);
+
+        var status = dto.Status ?? WorkStatus.Backlog;
+        var priority = dto.Priority ?? TaskPriority.Low;
+
+        var maxSort = await db.Tasks
+            .Where(t => t.FeatureId == dto.FeatureId)
+            .MaxAsync(t => (int?)t.SortOrder, ct) ?? -1;
+
+        var task = new TaskItem
+        {
+            FeatureId = dto.FeatureId,
+            Name = dto.Name.Trim(),
+            Description = string.IsNullOrWhiteSpace(dto.Description) ? null : dto.Description.Trim(),
+            Status = status,
+            Priority = priority,
+            Assignee = string.IsNullOrWhiteSpace(dto.Assignee) ? null : dto.Assignee.Trim(),
+            SortOrder = dto.SortOrder ?? maxSort + 1,
+            CompletedAt = status == WorkStatus.Done ? DateTime.UtcNow : null
+        };
+
+        // Atomic create + audit: the first save assigns task.Id (needed by the comment +
+        // activity event), the second persists those audit rows. Wrap both in one
+        // transaction so a failure can't leave a task without its Created comment /
+        // TaskCreated event. EF Core + SQLite supports explicit transactions.
+        await using var tx = await db.Database.BeginTransactionAsync(ct);
+
+        db.Tasks.Add(task);
+        // First save assigns task.Id so the comment + activity event can reference it.
+        await db.SaveChangesAsync(ct);
+
+        db.TaskComments.Add(new TaskComment
+        {
+            TaskItemId = task.Id,
+            Text = "Task created",
+            // Inline REST hardcoded "System"; honor the actor here for parity with the
+            // other audit-aware methods (R6). The Created comment is audit-internal.
+            Author = string.IsNullOrWhiteSpace(actor) ? "System" : actor!.Trim(),
+            Type = CommentType.Created,
+            CreatedAt = DateTime.UtcNow
+        });
+
+        AddActivityEvent(
+            db, projectId.Value, "Task", task.Id, actor,
+            "TaskCreated", null, TaskActivitySnapshot(task),
+            $"Task '{task.Name}' created");
+
+        await db.SaveChangesAsync(ct);
+        await tx.CommitAsync(ct);
+        return task;
+    }
+
+    public async Task DeleteAsync(int taskId, string? actor, CancellationToken ct = default)
+    {
+        await using var db = await dbFactory.CreateDbContextAsync(ct);
+        var task = await db.Tasks
+            .Include(t => t.Feature)
+            .FirstOrDefaultAsync(t => t.Id == taskId, ct);
+        if (task is null)
+            throw new TaskNotFoundException(taskId);
+        if (task.Feature is null)
+            throw new InvalidOperationException($"Task {taskId} has no feature; cannot resolve project for audit.");
+
+        // Snapshot + emit the audit event BEFORE removal. ActivityEvent has no FK to the
+        // task (intentional — audit history must survive deletion), so the row persists.
+        AddActivityEvent(
+            db, task.Feature.ProjectId, "Task", task.Id, actor,
+            "TaskDeleted", TaskActivitySnapshot(task), null,
+            $"Task '{task.Name}' deleted");
+
+        // FK-safe cascade order (R1): Subtask.ChildSubtasks is OnDelete(Restrict)
+        // (self-ref), so subtasks MUST be removed leaf-first. Acceptance criteria are
+        // removed explicitly. Comments + Dependencies + BlockingDependencies are
+        // OnDelete(Cascade) and Requirement.TaskItemId is OnDelete(SetNull) — EF handles
+        // those on Remove(task).
+        await DeleteSubtasksLeafFirstAsync(db, taskId, ct);
+
+        var criteria = await db.AcceptanceCriteria
+            .Where(c => c.TaskItemId == taskId)
+            .ToListAsync(ct);
+        db.AcceptanceCriteria.RemoveRange(criteria);
+
+        db.Tasks.Remove(task);
+        await db.SaveChangesAsync(ct);
+    }
+
+    public async Task<TaskItem> ClaimAsync(int taskId, string actor, CancellationToken ct = default)
+    {
+        // The REST endpoint maps a blank actor to 422; surface it as a ValidationException.
+        if (string.IsNullOrWhiteSpace(actor))
+            throw new ValidationException("Actor is required.");
+        var trimmedActor = actor.Trim();
+
+        await using var db = await dbFactory.CreateDbContextAsync(ct);
+        var task = await db.Tasks
+            .Include(t => t.Feature)
+            .FirstOrDefaultAsync(t => t.Id == taskId, ct);
+        if (task is null)
+            throw new TaskNotFoundException(taskId);
+        if (task.Feature is null)
+            throw new InvalidOperationException($"Task {taskId} has no feature; cannot resolve project for audit.");
+
+        // Claimed by someone else → conflict (API → 409). Same actor is idempotent.
+        if (!string.IsNullOrWhiteSpace(task.ClaimedBy)
+            && !string.Equals(task.ClaimedBy, trimmedActor, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new TaskClaimConflictException(taskId, task.ClaimedBy, task.ClaimedAt);
+        }
+
+        // Idempotent re-claim by the same actor: no audit/UpdatedAt churn.
+        if (string.Equals(task.ClaimedBy, trimmedActor, StringComparison.OrdinalIgnoreCase))
+            return task;
+
+        var before = TaskActivitySnapshot(task);
+        var now = DateTime.UtcNow;
+
+        // Race-safe claim (R4): a conditional UPDATE that only fires while the row is still
+        // unclaimed. Under concurrent claimers (multiple agents), exactly one UPDATE matches
+        // (rows == 1); the loser sees rows == 0 and is reconciled below. This closes the
+        // load-check-write gap without a rowversion column (schema uses EnsureCreated, not migrations).
+        var claimed = await db.Tasks
+            .Where(t => t.Id == taskId && t.ClaimedBy == null)
+            .ExecuteUpdateAsync(s => s
+                .SetProperty(t => t.ClaimedBy, trimmedActor)
+                .SetProperty(t => t.ClaimedAt, now)
+                .SetProperty(t => t.UpdatedAt, now), ct);
+
+        if (claimed == 0)
+        {
+            // Another request claimed the task between our check and our write. Re-read the
+            // current owner: same actor ⇒ idempotent success, otherwise a genuine 409 conflict.
+            var current = await db.Tasks.AsNoTracking()
+                .Where(t => t.Id == taskId)
+                .Select(t => new { t.ClaimedBy, t.ClaimedAt, t.UpdatedAt })
+                .FirstOrDefaultAsync(ct)
+                ?? throw new TaskNotFoundException(taskId);
+            if (string.Equals(current.ClaimedBy, trimmedActor, StringComparison.OrdinalIgnoreCase))
+            {
+                // Reconcile the stale tracked entity with the concurrent winner's values.
+                task.ClaimedBy = current.ClaimedBy;
+                task.ClaimedAt = current.ClaimedAt;
+                task.UpdatedAt = current.UpdatedAt;
+                return task;
+            }
+            throw new TaskClaimConflictException(taskId, current.ClaimedBy!, current.ClaimedAt);
+        }
+
+        // We won the claim. Mirror the persisted values onto the tracked entity so the audit
+        // snapshot + return value are accurate, then emit the TaskClaimed event.
+        task.ClaimedBy = trimmedActor;
+        task.ClaimedAt = now;
+        task.UpdatedAt = now;
+
+        AddActivityEvent(
+            db, task.Feature.ProjectId, "Task", task.Id, trimmedActor,
+            "TaskClaimed", before, TaskActivitySnapshot(task),
+            $"Task '{task.Name}' claimed by {trimmedActor}");
+
+        await db.SaveChangesAsync(ct);
+        return task;
+    }
+
+    public async Task<TaskItem> ReleaseAsync(int taskId, string actor, CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(actor))
+            throw new ValidationException("Actor is required.");
+        var trimmedActor = actor.Trim();
+
+        await using var db = await dbFactory.CreateDbContextAsync(ct);
+        var task = await db.Tasks
+            .Include(t => t.Feature)
+            .FirstOrDefaultAsync(t => t.Id == taskId, ct);
+        if (task is null)
+            throw new TaskNotFoundException(taskId);
+        if (task.Feature is null)
+            throw new InvalidOperationException($"Task {taskId} has no feature; cannot resolve project for audit.");
+
+        // Only the claiming actor may release; anyone else → conflict (API → 409).
+        if (!string.IsNullOrWhiteSpace(task.ClaimedBy)
+            && !string.Equals(task.ClaimedBy, trimmedActor, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new TaskClaimConflictException(taskId, task.ClaimedBy, task.ClaimedAt);
+        }
+
+        // Idempotent: already unclaimed → nothing to do, no audit churn.
+        if (string.IsNullOrWhiteSpace(task.ClaimedBy))
+            return task;
+
+        var before = TaskActivitySnapshot(task);
+        var now = DateTime.UtcNow;
+
+        // Race-safe release (R4): conditional UPDATE that only fires while THIS actor still
+        // holds the claim. If the state changed underneath us, rows == 0 → reconcile below.
+        var released = await db.Tasks
+            .Where(t => t.Id == taskId && t.ClaimedBy != null
+                        && t.ClaimedBy.ToLower() == trimmedActor.ToLower())
+            .ExecuteUpdateAsync(s => s
+                .SetProperty(t => t.ClaimedBy, (string?)null)
+                .SetProperty(t => t.ClaimedAt, (DateTime?)null)
+                .SetProperty(t => t.UpdatedAt, now), ct);
+
+        if (released == 0)
+        {
+            // State changed between check and write. Re-read: still claimed by another actor
+            // ⇒ 409 conflict; otherwise it is already released ⇒ idempotent success.
+            var current = await db.Tasks.AsNoTracking()
+                .Where(t => t.Id == taskId)
+                .Select(t => new { t.ClaimedBy, t.ClaimedAt, t.UpdatedAt })
+                .FirstOrDefaultAsync(ct)
+                ?? throw new TaskNotFoundException(taskId);
+            if (!string.IsNullOrWhiteSpace(current.ClaimedBy)
+                && !string.Equals(current.ClaimedBy, trimmedActor, StringComparison.OrdinalIgnoreCase))
+                throw new TaskClaimConflictException(taskId, current.ClaimedBy!, current.ClaimedAt);
+            // Reconcile the stale tracked entity with the already-released DB state.
+            task.ClaimedBy = current.ClaimedBy;
+            task.ClaimedAt = current.ClaimedAt;
+            task.UpdatedAt = current.UpdatedAt;
+            return task;
+        }
+
+        // Mirror onto the tracked entity for an accurate audit snapshot + return value.
+        task.ClaimedBy = null;
+        task.ClaimedAt = null;
+        task.UpdatedAt = now;
+
+        AddActivityEvent(
+            db, task.Feature.ProjectId, "Task", task.Id, trimmedActor,
+            "TaskReleased", before, TaskActivitySnapshot(task),
+            $"Task '{task.Name}' released by {trimmedActor}");
+
+        await db.SaveChangesAsync(ct);
+        return task;
+    }
+
+    public async Task<TaskComment> AddCommentAsync(int taskId, string text, string? author, CommentType type, string? actor, CancellationToken ct = default)
+    {
+        await using var db = await dbFactory.CreateDbContextAsync(ct);
+
+        // Resolve project (and prove the task exists) in one round-trip.
+        var projectId = await db.Tasks
+            .Where(t => t.Id == taskId)
+            .Select(t => (int?)t.Feature.ProjectId)
+            .SingleOrDefaultAsync(ct);
+        if (projectId is null)
+            throw new TaskNotFoundException(taskId);
+
+        if (string.IsNullOrWhiteSpace(text))
+            throw new ValidationException("Text cannot be empty or whitespace.");
+
+        // Only user-facing comment types may be authored directly; system types
+        // (StatusChange/Created/FeatureChange/…) are emitted by the service itself.
+        if (!IsUserCommentType(type))
+            throw new ValidationException(
+                $"Invalid comment type '{type}'. Allowed values: {string.Join(", ", AllowedUserCommentTypes)}.");
+
+        var comment = new TaskComment
+        {
+            TaskItemId = taskId,
+            Text = text.Trim(),
+            Author = string.IsNullOrWhiteSpace(author) ? null : author.Trim(),
+            Type = type,
+            CreatedAt = DateTime.UtcNow
+        };
+
+        db.TaskComments.Add(comment);
+        AddActivityEvent(
+            db, projectId.Value, "Task", taskId, actor,
+            "TaskCommentAdded", null, new { comment.Text, comment.Author }, "Comment added");
+
+        await db.SaveChangesAsync(ct);
+        return comment;
+    }
+
+    // ── Comment-type policy (single source of truth) ──
+    // Canonical set + order of user-authorable CommentTypes. Edge layers (REST, MCP) defer
+    // to IsUserCommentType for validation and reference THIS list for their 422 message body,
+    // so there is exactly one definition (R3).
+    public static readonly string[] AllowedUserCommentTypes =
+    [
+        nameof(CommentType.Note),
+        nameof(CommentType.Decision),
+        nameof(CommentType.Question),
+        nameof(CommentType.Blocked),
+        nameof(CommentType.Handoff),
+        nameof(CommentType.Verification),
+        nameof(CommentType.Comment)
+    ];
+
+    public bool IsUserCommentType(CommentType type) =>
+        type switch
+        {
+            CommentType.Note => true,
+            CommentType.Decision => true,
+            CommentType.Question => true,
+            CommentType.Blocked => true,
+            CommentType.Handoff => true,
+            CommentType.Verification => true,
+            CommentType.Comment => true,
+            _ => false
+        };
+
+    // Leaf-first subtask removal (replicates ApiEndpoints.DeleteSubtasksForTasksAsync):
+    // Subtask.ChildSubtasks is OnDelete(Restrict), so a parent cannot be deleted before
+    // its children. Ordering by descending depth removes the deepest leaves first.
+    private static async Task DeleteSubtasksLeafFirstAsync(AppDbContext db, int taskId, CancellationToken ct)
+    {
+        var subtasks = await db.Subtasks
+            .Where(s => s.TaskItemId == taskId)
+            .ToListAsync(ct);
+        if (subtasks.Count == 0)
+            return;
+
+        // Build id -> parentSubtaskId once (O(n)), then memoize each node's depth so the
+        // ordering is O(n) total instead of O(n²) (the old per-node FirstOrDefault scan).
+        var parentById = subtasks.ToDictionary(s => s.Id, s => s.ParentSubtaskId);
+        var depthCache = new Dictionary<int, int>(subtasks.Count);
+
+        var ordered = subtasks
+            .OrderByDescending(s => GetSubtaskDepth(s.Id, parentById, depthCache, new HashSet<int>()))
+            .ToList();
+
+        db.Subtasks.RemoveRange(ordered);
+    }
+
+    // Memoized depth walk: follows parent links via the prebuilt map, caching every node
+    // visited along the way. Stops at a root (null parent) or a parent outside this task's
+    // set (defensive — same break behavior as the original scan). The `visiting` set guards
+    // against a (cycle-protected, but defensively handled) self-referential parent chain so
+    // a corrupt graph can't cause unbounded recursion.
+    private static int GetSubtaskDepth(int id, Dictionary<int, int?> parentById, Dictionary<int, int> depthCache, HashSet<int> visiting)
+    {
+        if (depthCache.TryGetValue(id, out var cached))
+            return cached;
+        if (!visiting.Add(id))
+            return 0; // cycle detected — break defensively
+
+        var parentId = parentById[id];
+        int depth;
+        if (parentId is null || !parentById.ContainsKey(parentId.Value))
+            depth = 0;
+        else
+            depth = GetSubtaskDepth(parentId.Value, parentById, depthCache, visiting) + 1;
+
+        depthCache[id] = depth;
+        return depth;
+    }
 }

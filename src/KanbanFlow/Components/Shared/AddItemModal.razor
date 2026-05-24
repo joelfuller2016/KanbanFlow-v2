@@ -1,4 +1,5 @@
 @inject IDbContextFactory<AppDbContext> DbFactory
+@inject ITaskService TaskService
 
 @* Bootstrap Modal *@
 <div class="modal fade @(IsOpen ? "show" : "")" tabindex="-1" data-testid="add-item-modal"
@@ -198,10 +199,11 @@
 
         try
         {
-            using var db = await DbFactory.CreateDbContextAsync();
-
             if (itemType == FeatureType)
             {
+                // Feature creation still writes directly via EF (no service yet — phase 2).
+                // The task branch routes through ITaskService, so the DbContext is scoped here.
+                using var db = await DbFactory.CreateDbContextAsync();
                 int? parentId = selectedFeatureId == 0 ? null : selectedFeatureId;
                 var siblingQuery = parentId.HasValue
                     ? db.Features.Where(f => f.ParentFeatureId == parentId.Value)
@@ -227,22 +229,15 @@
                     return;
                 }
 
-                var maxSort = await db.Tasks
-                    .Where(t => t.FeatureId == selectedFeatureId)
-                    .MaxAsync(t => (int?)t.SortOrder) ?? -1;
-
-                var task = new TaskItem
-                {
-                    FeatureId = selectedFeatureId,
-                    Name = itemName.Trim(),
-                    Description = string.IsNullOrWhiteSpace(itemDescription) ? null : itemDescription.Trim(),
-                    Status = (WorkStatus)selectedStatus,
-                    Priority = (TaskPriority)selectedPriority,
-                    SortOrder = maxSort + 1,
-                    CompletedAt = (WorkStatus)selectedStatus == WorkStatus.Done ? DateTime.UtcNow : null
-                };
-                db.Tasks.Add(task);
-                await db.SaveChangesAsync();
+                // Route task creation through ITaskService so the UI emits the same
+                // Created comment + TaskCreated audit event as the REST/MCP surfaces (#88).
+                // The service computes SortOrder and CompletedAt internally.
+                await TaskService.CreateAsync(new TaskCreate(
+                    FeatureId: selectedFeatureId,
+                    Name: itemName,
+                    Description: itemDescription,
+                    Status: (WorkStatus)selectedStatus,
+                    Priority: (TaskPriority)selectedPriority), actor: "User");
             }
 
             await OnItemCreated.InvokeAsync();

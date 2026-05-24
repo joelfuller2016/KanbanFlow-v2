@@ -979,18 +979,10 @@
 
         try
         {
-            var comment = new TaskComment
-            {
-                TaskItemId = taskId,
-                Text = newCommentText.Trim(),
-                Author = "You",
-                Type = newCommentType,
-                CreatedAt = DateTime.UtcNow
-            };
-
-            using var db = await DbFactory.CreateDbContextAsync();
-            db.TaskComments.Add(comment);
-            await db.SaveChangesAsync();
+            // Route the comment through ITaskService so the UI emits a TaskCommentAdded
+            // audit event identical to the REST/MCP surfaces (#88).
+            var comment = await TaskSvc.AddCommentAsync(
+                taskId, newCommentText, author: "User", type: newCommentType, actor: "User");
 
             if (IsCurrentCommentSave(taskId, saveVersion))
             {
@@ -1032,12 +1024,16 @@
 
         var taskId = Task.Id;
 
-        using var db = await DbFactory.CreateDbContextAsync();
-        var entity = await db.Tasks.FindAsync(taskId);
-        if (entity is not null)
+        // Route deletion through ITaskService so the UI emits a TaskDeleted audit event
+        // and performs the FK-safe child cleanup (leaf-first subtasks + acceptance
+        // criteria) identical to the REST/MCP surfaces (#88).
+        try
         {
-            db.Tasks.Remove(entity);
-            await db.SaveChangesAsync();
+            await TaskSvc.DeleteAsync(taskId, actor: "User");
+        }
+        catch (TaskNotFoundException)
+        {
+            // Already deleted by another circuit/request — treat as success.
         }
 
         confirmingDelete = false;
