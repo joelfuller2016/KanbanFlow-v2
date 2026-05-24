@@ -474,7 +474,7 @@ public static class ApiEndpoints
         {
             // Audit events are retained without a Project FK so history survives deletion (#85).
             // Query events first; 404 only when there is genuinely nothing — no events AND the
-            // project never existed. A deleted project with retained events still returns them.
+            // project does not currently exist. A deleted project with retained events still returns them.
             var take = Math.Clamp(limit ?? 100, 1, 500);
             var events = await db.ActivityEvents
                 .Where(e => e.ProjectId == id)
