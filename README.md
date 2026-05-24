@@ -267,7 +267,7 @@ Requirements are organised by **capability**, not by entity. Every capability mu
 | R-5.1 | The API publishes an OpenAPI document (`/openapi.json`) covering every endpoint, request body, and response shape. *(✅ implemented — `Microsoft.AspNetCore.OpenApi` serves `/openapi/v1.json`; `/openapi.json` 302s to it. Response shapes still loosen pending the records refactor, R-5.2.)* |
 | R-5.2 | Response types are strongly typed (records), not anonymous. *(❌ ~25 distinct anonymous shapes are constructed inline in `ApiEndpoints.cs`.)* |
 | R-5.3 | Each MCP tool has a rich description that explains its purpose, parameters, and the kind of follow-up the agent typically does after calling it. *(⚠️ tool descriptions exist but are terse; could be expanded.)* |
-| R-5.4 | `docs/requirements.md` lists every endpoint, kept in sync with the code. *(❌ currently lists 23 endpoints; code has 53. Plan: regenerate from OpenAPI once R-5.1 lands.)* |
+| R-5.4 | `docs/requirements.md` lists every endpoint, kept in sync with the code; to be regenerated from OpenAPI once R-5.1 lands. |
 | R-5.5 | Errors use a uniform shape: `{ "message": string, "errors"?: Record<string, string[]>, "details"?: Record<string, unknown> }`. *(⚠️ partially consistent — some endpoints add bonus fields ad-hoc.)* |
 
 ### C-6. Be operationally simple
@@ -443,7 +443,7 @@ The OpenAPI document (R-5.1) is now the source of truth: GET `/openapi/v1.json` 
 /api/ideas/{id}/activity                    # audit log per idea
 ```
 
-53 endpoints total. Ideas (`/api/ideas`) are the pre-project "inbox" — capture raw ideas, then promote one into a full project (#180). Every list endpoint and every detail endpoint will be paginated once R-1.4 lands; richer response shapes follow with the records refactor (R-5.2).
+53 endpoints total. Ideas (`/api/ideas`) are the pre-project "inbox" — capture raw ideas, then promote one into a full project (#180). Collection/list endpoints will gain consistent pagination once R-1.4 lands; richer response shapes follow with the records refactor (R-5.2).
 
 ---
 
