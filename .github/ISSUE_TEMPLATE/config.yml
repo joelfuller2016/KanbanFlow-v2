@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: README — capabilities & requirements
+    url: https://github.com/joelfuller2016/KanbanFlow-v2#readme
+    about: "Architecture, the C-1..C-7 capability requirements, and what's in/out of scope."

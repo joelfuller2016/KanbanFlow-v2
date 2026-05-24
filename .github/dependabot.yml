@@ -1,0 +1,26 @@
+# Dependabot — automated dependency update PRs.
+# Runs on GitHub's infrastructure; does NOT consume GitHub Actions minutes
+# (this repo intentionally has no Actions workflows). CodeRabbit reviews each PR.
+# Docs: https://docs.github.com/code-security/dependabot/dependabot-version-updates
+version: 2
+updates:
+  - package-ecosystem: "nuget"
+    directory: "/src/KanbanFlow"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "chore(deps)"
+    labels:
+      - "dependencies"
+    groups:
+      # Bundle low-risk minor/patch bumps into a single PR to cut review noise.
+      nuget-minor-patch:
+        update-types:
+          - "minor"
+          - "patch"
+
+  # NOTE: client-side libs (Bootstrap, SortableJS) are vendored under
+  # wwwroot/lib and are NOT covered by Dependabot. They are managed via
+  # libman.json — run `libman update` to bump them. See issue #136.
