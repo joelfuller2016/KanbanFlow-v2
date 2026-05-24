@@ -15,16 +15,34 @@ public sealed class TestRunnerService(
     IServer server,
     ITaskService taskSvc,
     IDbContextFactory<AppDbContext> dbFactory,
-    IMarkdownRenderer markdownRenderer) : ITestRunnerService
+    IMarkdownRenderer markdownRenderer,
+    ILogger<TestRunnerService> logger) : ITestRunnerService
 {
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
 
+    /// <summary>
+    /// Runs the full API test suite against the running application and collects per-test results.
+    /// </summary>
+    /// <param name="ct">A cancellation token that can be used to cancel the test run.</param>
+    /// <returns>A TestSuiteResult named "API" containing each TestResult and the total elapsed milliseconds.</returns>
+    /// <remarks>
+    /// The method snapshots existing project IDs at start to avoid affecting pre-existing projects, executes multiple isolated API tests (creating and deleting scratch projects as needed), and performs a best-effort audit cleanup after completion using CancellationToken.None; cleanup errors are swallowed so they do not mask test failures or cancellations.
+    /// </remarks>
     public async Task<TestSuiteResult> RunApiTestsAsync(CancellationToken ct = default)
     {
+        var runStart = DateTime.UtcNow;
+        // Snapshot the projects that already exist at run start. The runner uses the live DB,
+        // so a user could delete a real, pre-existing project mid-run; excluding these ids from
+        // the cleanup keeps that real project's audit trail intact (see TestAuditCleanup).
+        List<int> preExistingProjectIds;
+        await using (var preDb = await dbFactory.CreateDbContextAsync(ct))
+            preExistingProjectIds = await preDb.Projects.Select(p => p.Id).ToListAsync(ct);
         var sw = Stopwatch.StartNew();
         using var http = CreateHttpClient();
         var results = new List<TestResult>();
 
+        try
+        {
         // Each test creates an isolated test project (named with a random GUID prefix)
         // and deletes it on completion. This means tests can run in parallel against the
         // live DB without interfering with the user's real projects.
@@ -428,14 +446,36 @@ public sealed class TestRunnerService(
         }
 
         return new TestSuiteResult("API", results, sw.Elapsed.TotalMilliseconds);
+        }
+        finally
+        {
+            // Best-effort: CancellationToken.None runs cleanup even on cancellation;
+            // swallowing errors prevents masking the suite's original exception (#85, #150).
+            try { await TestAuditCleanup.PurgeOrphanedSinceAsync(dbFactory, runStart, preExistingProjectIds, CancellationToken.None); }
+            catch (Exception ex) { logger.LogWarning(ex, "Best-effort test audit cleanup failed (API suite)."); }
+        }
     }
 
+    /// <summary>
+    /// Execute the UI test suite against the running application.
+    /// </summary>
+    /// <param name="ct">Cancellation token to stop test execution; cleanup is still attempted using <see cref="CancellationToken.None"/> so orphaned test artifacts are purged even on cancellation.</param>
+    /// <returns>A <see cref="TestSuiteResult"/> containing the individual test results and the total elapsed milliseconds for the UI suite.</returns>
     public async Task<TestSuiteResult> RunUiTestsAsync(CancellationToken ct = default)
     {
+        var runStart = DateTime.UtcNow;
+        // Snapshot the projects that already exist at run start. The runner uses the live DB,
+        // so a user could delete a real, pre-existing project mid-run; excluding these ids from
+        // the cleanup keeps that real project's audit trail intact (see TestAuditCleanup).
+        List<int> preExistingProjectIds;
+        await using (var preDb = await dbFactory.CreateDbContextAsync(ct))
+            preExistingProjectIds = await preDb.Projects.Select(p => p.Id).ToListAsync(ct);
         var sw = Stopwatch.StartNew();
         using var http = CreateHttpClient();
         var results = new List<TestResult>();
 
+        try
+        {
         results.Add(await RunTest("Home page renders 200 with PageTitle", "UI:Home", async () =>
         {
             var resp = await http.GetAsync("/", ct);
@@ -539,10 +579,33 @@ public sealed class TestRunnerService(
         }));
 
         return new TestSuiteResult("UI", results, sw.Elapsed.TotalMilliseconds);
+        }
+        finally
+        {
+            // Best-effort: CancellationToken.None runs cleanup even on cancellation;
+            // swallowing errors prevents masking the suite's original exception (#85, #150).
+            try { await TestAuditCleanup.PurgeOrphanedSinceAsync(dbFactory, runStart, preExistingProjectIds, CancellationToken.None); }
+            catch (Exception ex) { logger.LogWarning(ex, "Best-effort test audit cleanup failed (UI suite)."); }
+        }
     }
 
+    /// <summary>
+    /// Executes the service-layer test suite against the DI-registered ITaskService using the live database.
+    /// </summary>
+    /// <param name="ct">A cancellation token that can be used to cancel the test run.</param>
+    /// <returns>A TestSuiteResult containing the suite name ("Service"), the list of individual test results, and the total elapsed milliseconds.</returns>
+    /// <remarks>
+    /// The method creates isolated scratch data for each test, verifies persistence and activity audit rows, and performs a best-effort audit cleanup of orphaned test artifacts after the run. Cleanup is attempted with CancellationToken.None and any cleanup exceptions are swallowed to avoid masking test failures or cancellations.
+    /// </remarks>
     public async Task<TestSuiteResult> RunServiceTestsAsync(CancellationToken ct = default)
     {
+        var runStart = DateTime.UtcNow;
+        // Snapshot the projects that already exist at run start. The runner uses the live DB,
+        // so a user could delete a real, pre-existing project mid-run; excluding these ids from
+        // the cleanup keeps that real project's audit trail intact (see TestAuditCleanup).
+        List<int> preExistingProjectIds;
+        await using (var preDb = await dbFactory.CreateDbContextAsync(ct))
+            preExistingProjectIds = await preDb.Projects.Select(p => p.Id).ToListAsync(ct);
         var sw = Stopwatch.StartNew();
         var results = new List<TestResult>();
 
@@ -550,6 +613,8 @@ public sealed class TestRunnerService(
         // wrapping each test in a project we delete on completion so they don't leak.
         using var http = CreateHttpClient();
 
+        try
+        {
         results.Add(await RunTest("ChangeStatusAsync writes activity + StatusChange comment", "Service:Task", async () =>
         {
             var (pid, _, taskId) = await CreateProjectFeatureTaskAsync(http, ct);
@@ -1057,8 +1122,21 @@ public sealed class TestRunnerService(
         }));
 
         return new TestSuiteResult("Service", results, sw.Elapsed.TotalMilliseconds);
+        }
+        finally
+        {
+            // Best-effort: CancellationToken.None runs cleanup even on cancellation;
+            // swallowing errors prevents masking the suite's original exception (#85, #150).
+            try { await TestAuditCleanup.PurgeOrphanedSinceAsync(dbFactory, runStart, preExistingProjectIds, CancellationToken.None); }
+            catch (Exception ex) { logger.LogWarning(ex, "Best-effort test audit cleanup failed (Service suite)."); }
+        }
     }
 
+    /// <summary>
+    /// Runs the API, UI, and Service test suites sequentially and aggregates their results.
+    /// </summary>
+    /// <param name="ct">A cancellation token used to cancel the test run.</param>
+    /// <returns>A TestSuiteResult named "All" containing the combined TestResult items from the API, UI, and Service suites and the total elapsed milliseconds.</returns>
     public async Task<TestSuiteResult> RunAllTestsAsync(CancellationToken ct = default)
     {
         var sw = Stopwatch.StartNew();
