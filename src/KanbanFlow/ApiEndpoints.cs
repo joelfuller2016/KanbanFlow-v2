@@ -2104,9 +2104,12 @@ public static class ApiEndpoints
             }
 
             requirement.UpdatedAt = DateTime.UtcNow;
-            var entityType = requirement.TaskItemId.HasValue ? "Task" : "Requirement";
-            var entityId = requirement.TaskItemId ?? requirement.Id;
-            AddActivityEvent(db, requirement.ProjectId, entityType, entityId, null, "RequirementAssigned", before, RequirementActivitySnapshot(requirement), $"Requirement '{requirement.Text}' assignment updated");
+            // Always emit as a Requirement-typed event so entityType matches the
+            // RequirementActivitySnapshot shape. Previously this wrote entityType="Task"/entityId=taskId
+            // when assigned to a task, dropping a Requirement-shaped snapshot into the task's activity
+            // stream (a different schema than every other "Task" event). The snapshot already carries
+            // TaskItemId/FeatureId for consumers that want the link. (#186)
+            AddActivityEvent(db, requirement.ProjectId, "Requirement", requirement.Id, null, "RequirementAssigned", before, RequirementActivitySnapshot(requirement), $"Requirement '{requirement.Text}' assignment updated");
             await db.SaveChangesAsync();
 
             return Results.Ok(new
