@@ -98,16 +98,28 @@ app.MapGet("/openapi.json", (HttpContext ctx) =>
     return Task.CompletedTask;
 });
 
-// Defense-in-depth (#84): a browser attaches an Origin header to cross-origin requests (and to
-// non-GET requests). CORS response headers alone do NOT stop a "simple" cross-origin request
-// (e.g. a POST to /api/admin/run-tests, which takes only a query string) from executing — they
-// only hide the response from the calling page. Reject any /api request whose Origin is present
-// and non-loopback, so an external site can't trigger state changes. Non-browser agent clients
-// send no Origin header and pass straight through.
+// Local-only guard for the unauthenticated /api + /mcp surfaces (defense-in-depth; this is a
+// single-trust-boundary local tool). Two independent checks here, plus RequireHost on the route
+// groups — each blocks a different vector:
+//   1. RemoteIpAddress.IsLoopback — the real TCP peer must be loopback. This is the non-spoofable
+//      control: if the app is accidentally started on a non-loopback --urls, a remote client can
+//      forge "Host: localhost" (so RequireHost alone is not enough) but cannot forge its source IP.
+//   2. Origin (when present) must be loopback — browsers attach Origin to cross-origin requests, so
+//      this blocks "simple" cross-origin requests (no preflight, e.g. POST /api/admin/run-tests)
+//      that CORS response headers cannot stop. Non-browser agents send no Origin and pass.
+// (RequireHost on the groups additionally blocks DNS-rebinding, where Host is the rebound domain.)
 app.Use(async (context, next) =>
 {
-    if (context.Request.Path.StartsWithSegments("/api"))
+    var path = context.Request.Path;
+    if (path.StartsWithSegments("/api") || path.StartsWithSegments("/mcp"))
     {
+        var remoteIp = context.Connection.RemoteIpAddress;
+        if (remoteIp is not null && !System.Net.IPAddress.IsLoopback(remoteIp))
+        {
+            context.Response.StatusCode = StatusCodes.Status403Forbidden;
+            return;
+        }
+
         var origin = context.Request.Headers["Origin"].ToString();
         if (!string.IsNullOrEmpty(origin)
             && !(Uri.TryCreate(origin, UriKind.Absolute, out var o) && o.IsLoopback))
