@@ -4,7 +4,7 @@ Every issue must have **well-defined scope** and a concrete **how + what** plan 
 problem-only stub. This is the issue-side companion to the PR template's *Pre-PR Analysis gate*
 (#176): the analysis happens when the issue is written, the verification when the PR is opened.
 
-> Origin: roadmap #163 ("Issues stay well-defined: Summary · Evidence `file:line@commit` · Fix plan ·
+> Origin: roadmap #163 ("Issues stay well-defined: Summary · Evidence `file:line @ <commit>` · Fix plan ·
 > Acceptance criteria · Test plan"). This file makes that standard explicit and reusable.
 
 ## ANALYSIS — do this BEFORE writing the issue (never assume)
@@ -21,7 +21,7 @@ problem-only stub. This is the issue-side companion to the PR template's *Pre-PR
 ## CONTENT — the issue MUST contain
 
 1. **Summary** — what + why, one paragraph.
-2. **Evidence** — `file:line @ commit` proving the problem / current state.
+2. **Evidence** — `file:line @ <commit>` proving the problem / current state.
 3. **Scope** — explicit in-scope / out-of-scope.
 4. **Fix plan (HOW)** — numbered, concrete; names the files/methods to touch.
 5. **Acceptance criteria (WHAT-done)** — testable checkboxes.
