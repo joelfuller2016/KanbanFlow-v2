@@ -60,7 +60,7 @@ builder.Services.AddRazorComponents()
 builder.Services.AddCors(options =>
     options.AddDefaultPolicy(policy => policy
         .SetIsOriginAllowed(static origin => Uri.TryCreate(origin, UriKind.Absolute, out var uri)
-            && uri.Host is "localhost" or "127.0.0.1")
+            && uri.IsLoopback)   // localhost / 127.0.0.1 / [::1], any port
         .AllowAnyMethod()
         .AllowAnyHeader()));
 
@@ -96,6 +96,28 @@ app.MapGet("/openapi.json", (HttpContext ctx) =>
 {
     ctx.Response.Redirect("/openapi/v1.json", permanent: false);
     return Task.CompletedTask;
+});
+
+// Defense-in-depth (#84): a browser attaches an Origin header to cross-origin requests (and to
+// non-GET requests). CORS response headers alone do NOT stop a "simple" cross-origin request
+// (e.g. a POST to /api/admin/run-tests, which takes only a query string) from executing — they
+// only hide the response from the calling page. Reject any /api request whose Origin is present
+// and non-loopback, so an external site can't trigger state changes. Non-browser agent clients
+// send no Origin header and pass straight through.
+app.Use(async (context, next) =>
+{
+    if (context.Request.Path.StartsWithSegments("/api"))
+    {
+        var origin = context.Request.Headers["Origin"].ToString();
+        if (!string.IsNullOrEmpty(origin)
+            && !(Uri.TryCreate(origin, UriKind.Absolute, out var o) && o.IsLoopback))
+        {
+            context.Response.StatusCode = StatusCodes.Status403Forbidden;
+            return;
+        }
+    }
+
+    await next(context);
 });
 
 app.MapApiEndpoints();
