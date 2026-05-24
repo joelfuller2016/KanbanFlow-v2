@@ -221,7 +221,7 @@ The agent can author, modify, and remove every entity. Mutations preserve audit 
 
 | # | Requirement | Status |
 |---|-------------|--------|
-| R-2.1 | Every entity has full REST CRUD: list, get, create, update, delete. | ✅ 46 endpoints in `ApiEndpoints.cs`. |
+| R-2.1 | Every entity has full REST CRUD: list, get, create, update, delete. | ✅ 53 endpoints in `ApiEndpoints.cs`. |
 | R-2.2 | Every REST capability has at least one MCP tool. | ❌ MCP exposes 11 of ~40 needed tools — see §6. |
 | R-2.3 | Mutations through the UI go through the **same shared service layer** as REST mutations, so audit events, claim semantics, and validation are produced once and applied everywhere. | ❌ Issue #88 — UI components write directly to EF, bypassing audit. **Highest-priority refactor.** |
 | R-2.4 | All entity mutations produce an `ActivityEvent` row. | ✅ for REST (9 emission sites in `ApiEndpoints.cs`); ❌ for UI (R-2.3). |
@@ -283,7 +283,7 @@ Agents discover the API and tool surface without reading source.
 | R-5.1 | API publishes an OpenAPI document at `/openapi.json` covering every endpoint, request body, and response shape. | ❌ Not wired (`Microsoft.AspNetCore.OpenApi` not added). |
 | R-5.2 | Response types are strongly typed (records), not anonymous. | ❌ ~25 distinct anonymous shapes inline in `ApiEndpoints.cs`. |
 | R-5.3 | Each MCP tool description explains purpose, parameters, and the typical follow-up after calling it. | ⚠️ Tool descriptions exist but are terse. |
-| R-5.4 | This requirements doc + README list every endpoint, kept in sync with code. | ⚠️ README has the full table; legacy v1 doc drifted to 23 of 46. v2 (this doc) is fresh. Plan: regenerate from OpenAPI once R-5.1 lands. |
+| R-5.4 | This requirements doc + README list every endpoint, kept in sync with code. | ⚠️ README has the full table; the legacy v1 doc drifted out of sync. v2 (this doc) is fresh. Plan: regenerate from OpenAPI once R-5.1 lands. |
 | R-5.5 | Errors use a uniform shape: `{ "message": string, "errors"?: Record<string, string[]>, "details"?: Record<string, unknown> }`. | ⚠️ Inconsistent — some endpoints add bonus fields ad-hoc. |
 | R-5.6 | `EntityType` discriminator on `ActivityEvent` is constant-typed, not free-form string. | ❌ Currently string literals (`"Task"`, `"Requirement"`); typo-prone. Add `static class ActivityEntityTypes`. |
 
@@ -344,7 +344,7 @@ These aren't oversights. They're explicit non-goals for v2:
 
 ## 6. API + MCP surface
 
-### 6.1 REST endpoints (46 total)
+### 6.1 REST endpoints (53 total)
 
 ```
 /api/projects                               GET (list), POST (create)
@@ -374,6 +374,10 @@ These aren't oversights. They're explicit non-goals for v2:
 /api/task-dependencies/{id}                 GET, DELETE
 /api/requirements/{id}                      GET, PUT, DELETE
 /api/requirements/{id}/assign               PATCH (assign feature/task)
+/api/ideas                                  GET (list ?status= ?tag= ?q= ?limit= ?offset=), POST (create)
+/api/ideas/{id}                             GET, PATCH, DELETE
+/api/ideas/{id}/promote                     POST (promote idea to a project)
+/api/ideas/{id}/activity                    GET (idea audit log)
 ```
 
 ### 6.2 MCP tools
