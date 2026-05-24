@@ -1,0 +1,46 @@
+name: "Enhancement / Feature"
+description: "Propose a new capability or improvement"
+labels: ["enhancement"]
+title: "P_: "
+body:
+  - type: markdown
+    attributes:
+      value: "Replace the `P_` in the title with the priority (e.g. `P1:` or `P2:`)."
+  - type: dropdown
+    id: priority
+    attributes:
+      label: Priority
+      options: ["P1 (should have)", "P2 (nice to have)"]
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options: ["ui", "api", "ai-agent", "tech-debt", "docs", "other"]
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem / motivation
+      description: What's missing or painful today, and why does it matter?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed scope
+      description: What should change? Files, endpoints, components, behavior.
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+      description: Specific, binary checks that prove this is done.
+      placeholder: |
+        - [ ] ...
+        - [ ] ...
+    validations:
+      required: true

@@ -58,6 +58,22 @@ dotnet run --project src/KanbanFlow/KanbanFlow.csproj --urls http://127.0.0.1:51
 node ./scripts/smoke-mcp.mjs 1          # exercises the MCP tool surface (needs the app running)
 ```
 
+### Before you push
+
+```powershell
+./scripts/verify.ps1                    # restore + build (warnings=errors) + test  (+ format, advisory)
+```
+
+**There is no CI** (single-trust-boundary, local-first by design), so `verify.ps1` is the quality gate — run it before every push. Build + tests are hard gates; the **format check is advisory** (it reports drift but doesn't fail the run), pending a one-time `dotnet format` cleanup of the existing tree.
+
+Client-side libraries (Bootstrap, SortableJS) are vendored under `wwwroot/lib` and pinned in `libman.json`. To restore or update them:
+
+```powershell
+dotnet tool install -g Microsoft.Web.LibraryManager.Cli   # once
+libman restore                                            # fetch the pinned versions
+libman update bootstrap                                    # bump a library
+```
+
 ---
 
 ## Architecture
@@ -345,4 +361,6 @@ The OpenAPI document (R-5.1) is now the source of truth: GET `/openapi/v1.json` 
 
 ## License & contributing
 
-Single-developer project. No CONTRIBUTING.md yet. If you fork it, the data model is small enough to skim in an afternoon — start with `Models/`, then `Data/AppDbContext.cs`, then `ApiEndpoints.cs`.
+Licensed under the [MIT License](LICENSE).
+
+Single-developer project. No CONTRIBUTING.md yet, but: issues use the templates under `.github/ISSUE_TEMPLATE/`, PRs follow `.github/PULL_REQUEST_TEMPLATE.md`, and `./scripts/verify.ps1` must pass before pushing. If you fork it, the data model is small enough to skim in an afternoon — start with `Models/`, then `Data/AppDbContext.cs`, then `ApiEndpoints.cs`.
