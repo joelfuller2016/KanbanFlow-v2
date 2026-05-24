@@ -1975,8 +1975,11 @@ public static class ApiEndpoints
                 Description = dto.Description?.Trim(),
                 Priority = priority,
                 Status = status,
-                FeatureId = dto.FeatureId,
-                TaskItemId = dto.TaskItemId,
+                // Normalize the 0 "clear-link" sentinel to null so it matches the
+                // validator (which skips 0) — persisting a raw 0 would violate the
+                // Feature/Task FK (no entity has Id 0) and 500 (#82 regression).
+                FeatureId = NormalizeLink(dto.FeatureId),
+                TaskItemId = NormalizeLink(dto.TaskItemId),
                 SortOrder = dto.SortOrder ?? maxSort + 1
             };
 
@@ -2027,8 +2030,10 @@ public static class ApiEndpoints
             requirement.Description = dto.Description?.Trim();
             requirement.Priority = dto.Priority is not null ? Enum.Parse<RequirementPriority>(dto.Priority, ignoreCase: true) : requirement.Priority;
             requirement.Status = dto.Status is not null ? Enum.Parse<RequirementStatus>(dto.Status, ignoreCase: true) : requirement.Status;
-            if (dto.FeatureId.HasValue) requirement.FeatureId = dto.FeatureId.Value == 0 ? null : dto.FeatureId;
-            if (dto.TaskItemId.HasValue) requirement.TaskItemId = dto.TaskItemId.Value == 0 ? null : dto.TaskItemId;
+            // 0 clears the link (→ null); a non-zero id was validated above. Same rule as the
+            // validator-skip and the create path — single-sourced via NormalizeLink (#82).
+            if (dto.FeatureId.HasValue) requirement.FeatureId = NormalizeLink(dto.FeatureId);
+            if (dto.TaskItemId.HasValue) requirement.TaskItemId = NormalizeLink(dto.TaskItemId);
             if (dto.SortOrder.HasValue) requirement.SortOrder = dto.SortOrder.Value;
             requirement.UpdatedAt = DateTime.UtcNow;
 
@@ -2078,11 +2083,13 @@ public static class ApiEndpoints
             if (MapRequirementLinkError(linkValidation) is { } linkError)
                 return linkError;
 
+            // 0 clears the link (→ null); a non-zero id was validated above. Same rule as the
+            // validator-skip and the create/update paths — single-sourced via NormalizeLink (#82).
             if (dto.FeatureId.HasValue)
-                requirement.FeatureId = dto.FeatureId.Value == 0 ? null : dto.FeatureId.Value;
+                requirement.FeatureId = NormalizeLink(dto.FeatureId);
 
             if (dto.TaskItemId.HasValue)
-                requirement.TaskItemId = dto.TaskItemId.Value == 0 ? null : dto.TaskItemId.Value;
+                requirement.TaskItemId = NormalizeLink(dto.TaskItemId);
 
             requirement.UpdatedAt = DateTime.UtcNow;
             // Always emit as a Requirement-typed event so entityType matches the
@@ -2307,6 +2314,16 @@ public static class ApiEndpoints
         RequirementLinkErrorKind.CrossProject => Results.UnprocessableEntity(new { message = validation.Message }),
         _ => null
     };
+
+    /// <summary>
+    /// Normalizes a requirement Feature/Task link value for persistence: both <c>null</c> and the
+    /// <c>0</c> "clear-link" sentinel mean "no link" and become <c>null</c>; any other id is kept
+    /// as-is. This MUST agree with <see cref="ValidateRequirementLinksScopedAsync"/>, which skips
+    /// <c>0</c> during validation — so the create/update/assign paths persist <c>null</c> rather
+    /// than a raw <c>0</c> that would violate the Feature/Task foreign key (no entity has Id 0) and
+    /// surface as a 500 (#82 regression).
+    /// </summary>
+    internal static int? NormalizeLink(int? id) => id is null or 0 ? null : id;
 
     private static object MapTaskSummary(TaskItem t) => new
     {
