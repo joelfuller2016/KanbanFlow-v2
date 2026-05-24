@@ -48,18 +48,18 @@ TaskItem (added)
   "project":   { "id": int, "name": str, "goals": str?, "requirementsTotal": int, "requirementsSatisfied": int },
   "workflow":  {
     "states": ["Backlog","Todo","InProgress","Review","Done"],
-    "transitions": [["Backlog","Todo"],["Todo","InProgress"],["InProgress","Review"],["Review","Done"],["Review","InProgress"]],
+    "transitions": [["Backlog","Todo"],["Todo","InProgress"],["InProgress","Review"],["Review","Done"],["Review","InProgress"],["InProgress","Todo"],["Todo","Backlog"]],  // incl. pause (InProgress→Todo) + demote (Todo→Backlog)
     "definitionOfReady": "Has acceptance criteria, a milestone, identified deps, non-empty description.",
     "definitionOfDone":  "All acceptance criteria checked + a Verification comment recorded."
   },
   "activeMilestone": { "id": int, "name": str, "goal": str?, "tasksDone": int, "tasksTotal": int, "target": str? } | null,
   "now":   [ { "taskId": int, "name": str, "claimedBy": str?, "claimedAgoHours": num?, "latestNote": { "type": str, "text": str }?, "stalled": bool } ],
-  "next":  [ { "taskId": int, "name": str, "priority": str, "milestone": str?, "ready": bool, "reason": str } ],
+  "next":  [ { "taskId": int, "name": str, "priority": str, "estimate": str?, "milestone": str?, "ready": bool, "reason": str } ],
   "blocked": [ { "taskId": int, "name": str, "blockedBy": [int], "reason": str } ],
   "progress": {
     "byMilestone": [ { "name": str, "done": int, "total": int } ],
     "byFeature":   [ { "name": str, "done": int, "total": int } ],
-    "wip": { "inProgress": int, "limit": int?, "overLimitActors": [str] }
+    "wip": { "inProgress": int, "wipLimit": int?, "overLimitActors": [str] }  // wipLimit (not "limit") to avoid clashing with the pagination param
   },
   "recent": [ { "at": str, "actor": str, "event": str, "taskId": int?, "summary": str } ],
   "cursor": str   // opaque; pass back as `since` next call to get only the delta
@@ -78,11 +78,18 @@ TaskItem (added)
 
 ## "Next" precedence (the heart of the feature — must be deterministic)
 
-1. **Exclude** tasks with an unmet hard dependency (a blocker not `Done`).
+Ordering, after **excluding** any task with an unmet hard dependency (a blocker not `Done`):
+
+1. **Finish before you start** (Kanban "Stop Starting, Start Finishing"): the requesting actor's own
+   `InProgress`/claimed **Ready** tasks rank first — to drain WIP rather than fan out.
 2. Prefer **Ready** tasks (Definition-of-Ready met) over not-ready.
 3. Prefer the **Active milestone**, then milestone `SortOrder`.
 4. **Priority** Critical → Low.
-5. **In-progress continuity**, then de-prioritize others' (non-stale) claims, then oldest `Id`.
+5. De-prioritize tasks claimed by *other* (non-stale) actors; tie-break oldest `Id`.
+
+> **Flow vs. priority:** finishing in-flight work is preferred (step 1), but a `Critical` unblocked task
+> should still surface above a `Low`/`Medium` in-progress one — a `Critical` new item may pre-empt step 1.
+> The `reason` string always states which rule won, so the choice is auditable.
 
 Derivations: **Blocked** = has an unmet dependency OR an open `Blocked` comment. **Stalled** =
 `InProgress` + claimed + no activity in N hours (claim past its TTL → reclaimable). **Ready** = DoR met.
@@ -99,11 +106,11 @@ Derivations: **Blocked** = has an unmet dependency OR an open `Blocked` comment.
     { "taskId": 139, "name": "Milestone EF migration", "claimedBy": "agent-sonnet", "claimedAgoHours": 26.0, "latestNote": { "type": "Blocked", "text": "waiting on schema sign-off" }, "stalled": true }
   ],
   "next": [
-    { "taskId": 145, "name": "Requirement↔Task links", "priority": "High", "milestone": "M3 — Briefing + sequencing", "ready": true, "reason": "Top because: High priority, Ready, in active milestone, no open blockers, unclaimed." },
-    { "taskId": 150, "name": "WIP-limit surfacing", "priority": "Medium", "milestone": "M3 — Briefing + sequencing", "ready": false, "reason": "After: Medium priority, active milestone, but NOT ready (no acceptance criteria yet)." }
+    { "taskId": 145, "name": "Requirement↔Task links", "priority": "High", "estimate": "M", "milestone": "M3 — Briefing + sequencing", "ready": true, "reason": "Top because: High priority, Ready, in active milestone, no open blockers, unclaimed." },
+    { "taskId": 150, "name": "WIP-limit surfacing", "priority": "Medium", "estimate": "S", "milestone": "M3 — Briefing + sequencing", "ready": false, "reason": "After: Medium priority, active milestone, but NOT ready (no acceptance criteria yet)." }
   ],
   "blocked": [ { "taskId": 151, "name": "Burndown chart", "blockedBy": [145], "reason": "Depends on #145 (Requirement↔Task links), not Done." } ],
-  "progress": { "byMilestone": [ { "name": "M3 — Briefing + sequencing", "done": 3, "total": 9 } ], "byFeature": [ { "name": "MCP surface", "done": 5, "total": 8 } ], "wip": { "inProgress": 2, "limit": 3, "overLimitActors": [] } },
+  "progress": { "byMilestone": [ { "name": "M3 — Briefing + sequencing", "done": 3, "total": 9 } ], "byFeature": [ { "name": "MCP surface", "done": 5, "total": 8 } ], "wip": { "inProgress": 2, "wipLimit": 3, "overLimitActors": [] } },
   "recent": [ { "at": "2026-05-24T07:40:00Z", "actor": "agent-opus", "event": "TaskClaimed", "taskId": 142, "summary": "agent-opus claimed #142" } ],
   "cursor": "evt_20260524T0740Z_8842"
 }
