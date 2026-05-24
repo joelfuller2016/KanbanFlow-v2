@@ -50,6 +50,12 @@ The write tools (`create_task`/`delete_task`/`add_task_comment`/`claim_task`/`re
 go through `ITaskService`, whose write logic was lifted out of `ApiEndpoints.cs` so UI, REST,
 and MCP all emit identical `ActivityEvent`s. This closes the task/comment half of the #88
 audit-bypass bug — the Blazor UI no longer writes to EF directly for task/comment mutations.
+
+These five write tools are mutation-capable and **unauthenticated by design**, so they are
+reachable only on the loopback-bound `/mcp` endpoint (`app.MapMcp("/mcp").RequireHost("localhost", "127.0.0.1")`,
+see above) — the same single-trust-boundary as the REST API. A non-loopback `--urls` cannot
+expose them.
+
 Remaining (phase 2): feature / requirement / subtask / acceptance-criterion / dependency
 write extraction.
 

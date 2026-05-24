@@ -297,7 +297,7 @@ public static class KanbanMcpTools
             if (!Enum.TryParse<CommentType>(type, ignoreCase: true, out var parsed)
                 || !taskService.IsUserCommentType(parsed))
                 throw new McpException(
-                    $"Invalid comment type '{type}'. Valid values: {string.Join(", ", AllowedUserCommentTypeNames)}.");
+                    $"Invalid comment type '{type}'. Valid values: {string.Join(", ", KanbanFlow.Services.TaskService.AllowedUserCommentTypes)}.");
             commentType = parsed;
         }
 
@@ -380,20 +380,6 @@ public static class KanbanMcpTools
             throw new McpException(ex.Message);
         }
     }
-
-    // User-authorable comment types, mirroring ApiEndpoints.AllowedUserCommentTypes /
-    // ITaskService.IsUserCommentType so the add_task_comment 422-style message lists the
-    // same set (and order) the REST endpoint returns.
-    private static readonly string[] AllowedUserCommentTypeNames =
-    [
-        nameof(CommentType.Note),
-        nameof(CommentType.Decision),
-        nameof(CommentType.Question),
-        nameof(CommentType.Blocked),
-        nameof(CommentType.Handoff),
-        nameof(CommentType.Verification),
-        nameof(CommentType.Comment)
-    ];
 
     private static string BuildReason(TaskItem task, bool claimedByOther)
     {

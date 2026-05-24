@@ -457,16 +457,42 @@ public sealed class TaskService(IDbContextFactory<AppDbContext> dbFactory) : ITa
         }
 
         // Idempotent re-claim by the same actor: no audit/UpdatedAt churn.
-        // (Concurrency note R4: a load-check-save is racier than the inline endpoint's
-        // ExecuteUpdateAsync guard, but acceptable for the localhost single-user target.)
         if (string.Equals(task.ClaimedBy, trimmedActor, StringComparison.OrdinalIgnoreCase))
             return task;
 
         var before = TaskActivitySnapshot(task);
+        var now = DateTime.UtcNow;
 
+        // Race-safe claim (R4): a conditional UPDATE that only fires while the row is still
+        // unclaimed. Under concurrent claimers (multiple agents), exactly one UPDATE matches
+        // (rows == 1); the loser sees rows == 0 and is reconciled below. This closes the
+        // load-check-write gap without a rowversion column (schema uses EnsureCreated, not migrations).
+        var claimed = await db.Tasks
+            .Where(t => t.Id == taskId && t.ClaimedBy == null)
+            .ExecuteUpdateAsync(s => s
+                .SetProperty(t => t.ClaimedBy, trimmedActor)
+                .SetProperty(t => t.ClaimedAt, now)
+                .SetProperty(t => t.UpdatedAt, now), ct);
+
+        if (claimed == 0)
+        {
+            // Another request claimed the task between our check and our write. Re-read the
+            // current owner: same actor ⇒ idempotent success, otherwise a genuine 409 conflict.
+            var current = await db.Tasks.AsNoTracking()
+                .Where(t => t.Id == taskId)
+                .Select(t => new { t.ClaimedBy, t.ClaimedAt })
+                .FirstOrDefaultAsync(ct)
+                ?? throw new TaskNotFoundException(taskId);
+            if (string.Equals(current.ClaimedBy, trimmedActor, StringComparison.OrdinalIgnoreCase))
+                return task;
+            throw new TaskClaimConflictException(taskId, current.ClaimedBy!, current.ClaimedAt);
+        }
+
+        // We won the claim. Mirror the persisted values onto the tracked entity so the audit
+        // snapshot + return value are accurate, then emit the TaskClaimed event.
         task.ClaimedBy = trimmedActor;
-        task.ClaimedAt ??= DateTime.UtcNow;
-        task.UpdatedAt = DateTime.UtcNow;
+        task.ClaimedAt = now;
+        task.UpdatedAt = now;
 
         AddActivityEvent(
             db, task.Feature.ProjectId, "Task", task.Id, trimmedActor,
@@ -504,10 +530,37 @@ public sealed class TaskService(IDbContextFactory<AppDbContext> dbFactory) : ITa
             return task;
 
         var before = TaskActivitySnapshot(task);
+        var now = DateTime.UtcNow;
 
+        // Race-safe release (R4): conditional UPDATE that only fires while THIS actor still
+        // holds the claim. If the state changed underneath us, rows == 0 → reconcile below.
+        var released = await db.Tasks
+            .Where(t => t.Id == taskId && t.ClaimedBy != null
+                        && t.ClaimedBy.ToLower() == trimmedActor.ToLower())
+            .ExecuteUpdateAsync(s => s
+                .SetProperty(t => t.ClaimedBy, (string?)null)
+                .SetProperty(t => t.ClaimedAt, (DateTime?)null)
+                .SetProperty(t => t.UpdatedAt, now), ct);
+
+        if (released == 0)
+        {
+            // State changed between check and write. Re-read: still claimed by another actor
+            // ⇒ 409 conflict; otherwise it is already released ⇒ idempotent success.
+            var current = await db.Tasks.AsNoTracking()
+                .Where(t => t.Id == taskId)
+                .Select(t => new { t.ClaimedBy, t.ClaimedAt })
+                .FirstOrDefaultAsync(ct)
+                ?? throw new TaskNotFoundException(taskId);
+            if (!string.IsNullOrWhiteSpace(current.ClaimedBy)
+                && !string.Equals(current.ClaimedBy, trimmedActor, StringComparison.OrdinalIgnoreCase))
+                throw new TaskClaimConflictException(taskId, current.ClaimedBy!, current.ClaimedAt);
+            return task;
+        }
+
+        // Mirror onto the tracked entity for an accurate audit snapshot + return value.
         task.ClaimedBy = null;
         task.ClaimedAt = null;
-        task.UpdatedAt = DateTime.UtcNow;
+        task.UpdatedAt = now;
 
         AddActivityEvent(
             db, task.Feature.ProjectId, "Task", task.Id, trimmedActor,
@@ -557,11 +610,11 @@ public sealed class TaskService(IDbContextFactory<AppDbContext> dbFactory) : ITa
         return comment;
     }
 
-    // ── Comment-type policy ──
-    // Mirror of ApiEndpoints.AllowedUserCommentTypes. Centralized here so the service
-    // is the single source of truth for which CommentType values a caller may author;
-    // edge layers can defer to IsUserCommentType to keep their 422 body shape (R3).
-    private static readonly string[] AllowedUserCommentTypes =
+    // ── Comment-type policy (single source of truth) ──
+    // Canonical set + order of user-authorable CommentTypes. Edge layers (REST, MCP) defer
+    // to IsUserCommentType for validation and reference THIS list for their 422 message body,
+    // so there is exactly one definition (R3).
+    public static readonly string[] AllowedUserCommentTypes =
     [
         nameof(CommentType.Note),
         nameof(CommentType.Decision),
