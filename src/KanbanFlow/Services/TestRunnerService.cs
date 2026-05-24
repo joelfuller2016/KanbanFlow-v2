@@ -307,6 +307,115 @@ public sealed class TestRunnerService(
                     await TryDeleteProjectAsync(http, innerPid, ct);
                 }
             }));
+
+            // ── Added coverage: claim release, dependency blocking, requirements CRUD ──
+
+            results.Add(await RunTest("Claim release frees task for another actor", "API:Claim", async () =>
+            {
+                var (innerPid, _, taskId) = await CreateProjectFeatureTaskAsync(http, ct);
+                try
+                {
+                    var claim = await http.PostAsJsonAsync($"/api/tasks/{taskId}/claim", new { actor = "alice" }, Json, ct);
+                    if (!claim.IsSuccessStatusCode)
+                        throw new Exception($"Claim by alice failed: {(int)claim.StatusCode}");
+
+                    // bob is locked out while alice holds the claim
+                    var bobBlocked = await http.PostAsJsonAsync($"/api/tasks/{taskId}/claim", new { actor = "bob" }, Json, ct);
+                    if (bobBlocked.StatusCode != HttpStatusCode.Conflict)
+                        throw new Exception($"Expected 409 for bob before release, got {(int)bobBlocked.StatusCode}");
+
+                    var release = await http.PostAsJsonAsync($"/api/tasks/{taskId}/release", new { actor = "alice" }, Json, ct);
+                    if (!release.IsSuccessStatusCode)
+                        throw new Exception($"Release by alice failed: {(int)release.StatusCode}");
+
+                    // after release the task is claimable by a different actor
+                    var bobClaim = await http.PostAsJsonAsync($"/api/tasks/{taskId}/claim", new { actor = "bob" }, Json, ct);
+                    if (!bobClaim.IsSuccessStatusCode)
+                        throw new Exception($"Bob should claim after release, got {(int)bobClaim.StatusCode}");
+
+                    var task = await http.GetFromJsonAsync<JsonElement>($"/api/tasks/{taskId}", Json, ct);
+                    if (task.TryGetProperty("claimedBy", out var cb) && cb.ValueKind == JsonValueKind.String
+                        && cb.GetString() != "bob")
+                        throw new Exception($"Expected claimedBy 'bob' after re-claim, got '{cb.GetString()}'");
+                }
+                finally { await TryDeleteProjectAsync(http, innerPid, ct); }
+            }));
+
+            results.Add(await RunTest("Dependency blocks next-tasks until blocker is Done", "API:AI", async () =>
+            {
+                var (innerPid, featureId, blockerId) = await CreateProjectFeatureTaskAsync(http, ct);
+                try
+                {
+                    var t2 = await http.PostAsJsonAsync($"/api/features/{featureId}/tasks",
+                        new { name = "Blocked task", status = "Todo", priority = "Medium" }, Json, ct);
+                    var blockedId = (await t2.Content.ReadFromJsonAsync<JsonElement>(Json, ct)).GetProperty("id").GetInt32();
+
+                    // blockedId depends on blockerId; blocker is not Done yet
+                    var dep = await http.PostAsJsonAsync($"/api/tasks/{blockedId}/dependencies",
+                        new { dependsOnTaskItemId = blockerId, type = "DependsOn" }, Json, ct);
+                    if (dep.StatusCode != HttpStatusCode.Created)
+                        throw new Exception($"Create dependency expected 201, got {(int)dep.StatusCode}");
+
+                    bool RecsContain(JsonElement body, int id) =>
+                        body.GetProperty("recommendations").EnumerateArray().Any(r => r.GetProperty("id").GetInt32() == id);
+                    bool BlockedContain(JsonElement body, int id) =>
+                        body.GetProperty("blockedTasks").EnumerateArray().Any(r => r.GetProperty("id").GetInt32() == id);
+
+                    var nt = await http.GetFromJsonAsync<JsonElement>($"/api/projects/{innerPid}/next-tasks?limit=25", Json, ct);
+                    if (RecsContain(nt, blockedId)) throw new Exception("Blocked task should NOT be recommended while blocker is open");
+                    if (!BlockedContain(nt, blockedId)) throw new Exception("Blocked task should appear in blockedTasks");
+                    if (!RecsContain(nt, blockerId)) throw new Exception("Blocker task should be recommendable");
+
+                    var blockedCtx = await http.GetFromJsonAsync<JsonElement>($"/api/tasks/{blockedId}/context", Json, ct);
+                    if (!blockedCtx.GetProperty("isBlocked").GetBoolean()) throw new Exception("context.isBlocked should be true while blocker open");
+                    if (blockedCtx.GetProperty("openBlockerCount").GetInt32() < 1) throw new Exception("context.openBlockerCount should be >= 1");
+
+                    var patch = await http.PatchAsJsonAsync($"/api/tasks/{blockerId}/status",
+                        new { status = "Done", actor = "test-runner" }, Json, ct);
+                    if (!patch.IsSuccessStatusCode) throw new Exception($"Mark blocker Done failed: {(int)patch.StatusCode}");
+
+                    var nt2 = await http.GetFromJsonAsync<JsonElement>($"/api/projects/{innerPid}/next-tasks?limit=25", Json, ct);
+                    if (!RecsContain(nt2, blockedId)) throw new Exception("Blocked task should be recommended after blocker Done");
+                    var blockedCtx2 = await http.GetFromJsonAsync<JsonElement>($"/api/tasks/{blockedId}/context", Json, ct);
+                    if (blockedCtx2.GetProperty("isBlocked").GetBoolean()) throw new Exception("context.isBlocked should be false after blocker Done");
+                    if (blockedCtx2.GetProperty("openBlockerCount").GetInt32() != 0) throw new Exception("context.openBlockerCount should be 0 after blocker Done");
+                }
+                finally { await TryDeleteProjectAsync(http, innerPid, ct); }
+            }));
+
+            results.Add(await RunTest("Requirement create / assign / delete round-trip", "API:Requirement", async () =>
+            {
+                var (innerPid, _, taskId) = await CreateProjectFeatureTaskAsync(http, ct);
+                try
+                {
+                    var create = await http.PostAsJsonAsync($"/api/projects/{innerPid}/requirements",
+                        new { text = "Must support export", priority = "P1" }, Json, ct);
+                    if (create.StatusCode != HttpStatusCode.Created)
+                        throw new Exception($"Create requirement expected 201, got {(int)create.StatusCode}");
+                    var reqId = (await create.Content.ReadFromJsonAsync<JsonElement>(Json, ct)).GetProperty("id").GetInt32();
+
+                    var list = await http.GetFromJsonAsync<JsonElement>($"/api/projects/{innerPid}/requirements", Json, ct);
+                    if (!list.EnumerateArray().Any(r => r.GetProperty("id").GetInt32() == reqId))
+                        throw new Exception("Created requirement not returned by GET list");
+
+                    var assign = await http.PatchAsJsonAsync($"/api/requirements/{reqId}/assign",
+                        new { taskItemId = taskId }, Json, ct);
+                    if (!assign.IsSuccessStatusCode)
+                        throw new Exception($"Assign requirement failed: {(int)assign.StatusCode}");
+
+                    var tctx = await http.GetFromJsonAsync<JsonElement>($"/api/tasks/{taskId}/context", Json, ct);
+                    if (!tctx.GetProperty("relatedRequirements").EnumerateArray().Any(r => r.GetProperty("id").GetInt32() == reqId))
+                        throw new Exception("Assigned requirement not linked to task in step context");
+
+                    var del = await http.DeleteAsync($"/api/requirements/{reqId}", ct);
+                    if (del.StatusCode != HttpStatusCode.NoContent)
+                        throw new Exception($"Delete requirement expected 204, got {(int)del.StatusCode}");
+                    var list2 = await http.GetFromJsonAsync<JsonElement>($"/api/projects/{innerPid}/requirements", Json, ct);
+                    if (list2.EnumerateArray().Any(r => r.GetProperty("id").GetInt32() == reqId))
+                        throw new Exception("Deleted requirement still present in GET list");
+                }
+                finally { await TryDeleteProjectAsync(http, innerPid, ct); }
+            }));
         }
         finally
         {
@@ -632,6 +741,83 @@ public sealed class TestRunnerService(
             {
                 await TryDeleteProjectAsync(http, pid, ct);
             }
+        }));
+
+        // ── Added coverage: subtask cascade completion + markdown security ──
+
+        results.Add(await RunTest("ToggleDoneAsync cascades completion to subtasks", "Service:Task", async () =>
+        {
+            var (pid, _, taskId) = await CreateProjectFeatureTaskAsync(http, ct);
+            try
+            {
+                foreach (var text in new[] { "subtask A", "subtask B" })
+                {
+                    var s = await http.PostAsJsonAsync($"/api/tasks/{taskId}/subtasks", new { text }, Json, ct);
+                    if (s.StatusCode != HttpStatusCode.Created)
+                        throw new Exception($"Create subtask expected 201, got {(int)s.StatusCode}");
+                }
+
+                var task = await taskSvc.ToggleDoneAsync(taskId, "service-test", ct);
+                if (task.Status != WorkStatus.Done) throw new Exception("Task should be Done after toggle");
+                if (task.CompletedAt is null) throw new Exception("CompletedAt should be set when toggled to Done");
+
+                await using var db = await dbFactory.CreateDbContextAsync(ct);
+                var withSubs = await db.Tasks.Include(t => t.Subtasks).AsNoTracking().FirstAsync(t => t.Id == taskId, ct);
+                if (withSubs.Subtasks.Count != 2) throw new Exception($"Expected 2 subtasks, found {withSubs.Subtasks.Count}");
+                if (withSubs.Subtasks.Any(s => !s.Completed)) throw new Exception("All subtasks should be Completed after task toggled Done");
+                var hasComment = await db.TaskComments.AnyAsync(c => c.TaskItemId == taskId && c.Type == CommentType.StatusChange, ct);
+                if (!hasComment) throw new Exception("ToggleDone should write a StatusChange comment");
+                var hasEvent = await db.ActivityEvents.AnyAsync(e => e.EntityType == "Task" && e.EntityId == taskId && e.EventType == "TaskStatusChanged", ct);
+                if (!hasEvent) throw new Exception("ToggleDone should write a TaskStatusChanged event");
+            }
+            finally { await TryDeleteProjectAsync(http, pid, ct); }
+        }));
+
+        results.Add(await RunTest("ToggleDoneAsync un-completes subtasks when toggled off Done", "Service:Task", async () =>
+        {
+            var (pid, _, taskId) = await CreateProjectFeatureTaskAsync(http, ct);
+            try
+            {
+                var s = await http.PostAsJsonAsync($"/api/tasks/{taskId}/subtasks", new { text = "only sub" }, Json, ct);
+                if (s.StatusCode != HttpStatusCode.Created) throw new Exception($"Create subtask failed: {(int)s.StatusCode}");
+
+                await taskSvc.ToggleDoneAsync(taskId, "x", ct);            // Todo -> Done (subtask completed)
+                var task = await taskSvc.ToggleDoneAsync(taskId, "x", ct); // Done -> Todo (subtask un-completed)
+                if (task.Status == WorkStatus.Done) throw new Exception("Second toggle should leave task not Done");
+                if (task.CompletedAt is not null) throw new Exception("CompletedAt should be null when toggled off Done");
+
+                await using var db = await dbFactory.CreateDbContextAsync(ct);
+                var withSubs = await db.Tasks.Include(t => t.Subtasks).AsNoTracking().FirstAsync(t => t.Id == taskId, ct);
+                if (withSubs.Subtasks.Any(x => x.Completed)) throw new Exception("Subtasks should be un-completed after toggling off Done");
+            }
+            finally { await TryDeleteProjectAsync(http, pid, ct); }
+        }));
+
+        results.Add(await RunTest("MarkdownRenderer strips javascript: links", "Service:Markdown", () =>
+        {
+            var html = markdownRenderer.RenderToSafeHtml("[click me](javascript:alert(1))");
+            if (html.Contains("javascript:", StringComparison.OrdinalIgnoreCase))
+                throw new Exception($"javascript: URL should be sanitized, got: {html}");
+            return Task.CompletedTask;
+        }));
+
+        results.Add(await RunTest("MarkdownRenderer strips event-handler attributes", "Service:Markdown", () =>
+        {
+            var html = markdownRenderer.RenderToSafeHtml("<a href=\"https://x.com\" onclick=\"steal()\">x</a>");
+            if (html.Contains("onclick", StringComparison.OrdinalIgnoreCase))
+                throw new Exception($"onclick handler should be stripped, got: {html}");
+            return Task.CompletedTask;
+        }));
+
+        results.Add(await RunTest("MarkdownRenderer renders links and tables", "Service:Markdown", () =>
+        {
+            var link = markdownRenderer.RenderToSafeHtml("[ok](https://example.com)");
+            if (!link.Contains("href=\"https://example.com\"", StringComparison.Ordinal))
+                throw new Exception($"Expected anchor with href, got: {link}");
+            var table = markdownRenderer.RenderToSafeHtml("| A | B |\n| - | - |\n| 1 | 2 |");
+            if (!table.Contains("<table", StringComparison.OrdinalIgnoreCase))
+                throw new Exception($"Expected <table> from pipe-table markdown, got: {table}");
+            return Task.CompletedTask;
         }));
 
         return new TestSuiteResult("Service", results, sw.Elapsed.TotalMilliseconds);
