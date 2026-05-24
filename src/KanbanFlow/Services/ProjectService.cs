@@ -40,7 +40,7 @@ public sealed class ProjectService(IDbContextFactory<AppDbContext> dbFactory) : 
         // so a plain DB cascade aborts when a parent still has children. Reuse the proven REST
         // deletion so REST + UI share one path (#155). All removes are staged, then persisted with
         // the project removal in a single SaveChanges inside this transaction.
-        await GraphDeletion.DeleteProjectChildrenAsync(db, projectId);
+        await GraphDeletion.DeleteProjectChildrenAsync(db, projectId, ct);
         db.Projects.Remove(project);
         await db.SaveChangesAsync(ct);
         await tx.CommitAsync(ct);

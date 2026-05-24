@@ -14,34 +14,34 @@ namespace KanbanFlow.Services;
 /// </summary>
 internal static class GraphDeletion
 {
-    public static async Task DeleteProjectChildrenAsync(AppDbContext db, int projectId)
+    public static async Task DeleteProjectChildrenAsync(AppDbContext db, int projectId, CancellationToken ct = default)
     {
         var projectFeatureIds = await db.Features
             .Where(f => f.ProjectId == projectId)
             .Select(f => f.Id)
-            .ToListAsync();
+            .ToListAsync(ct);
 
-        await DeleteFeatureTreesAsync(db, projectFeatureIds);
+        await DeleteFeatureTreesAsync(db, projectFeatureIds, ct);
 
         var requirements = await db.Requirements
             .Where(r => r.ProjectId == projectId)
-            .ToListAsync();
+            .ToListAsync(ct);
         db.Requirements.RemoveRange(requirements);
     }
 
-    public static async Task DeleteFeatureTreeAsync(AppDbContext db, int rootFeatureId)
+    public static async Task DeleteFeatureTreeAsync(AppDbContext db, int rootFeatureId, CancellationToken ct = default)
     {
-        await DeleteFeatureTreesAsync(db, [rootFeatureId]);
+        await DeleteFeatureTreesAsync(db, [rootFeatureId], ct);
     }
 
-    public static async Task DeleteSubtaskTreeAsync(AppDbContext db, int rootSubtaskId)
+    public static async Task DeleteSubtaskTreeAsync(AppDbContext db, int rootSubtaskId, CancellationToken ct = default)
     {
-        var root = await db.Subtasks.FindAsync(rootSubtaskId);
+        var root = await db.Subtasks.FindAsync([rootSubtaskId], ct);
         if (root is null) return;
 
         var allSubtasksForTask = await db.Subtasks
             .Where(s => s.TaskItemId == root.TaskItemId)
-            .ToListAsync();
+            .ToListAsync(ct);
 
         var subtaskIds = new HashSet<int>();
         CollectSubtaskAndChildren(rootSubtaskId, allSubtasksForTask, subtaskIds);
@@ -54,11 +54,11 @@ internal static class GraphDeletion
         db.Subtasks.RemoveRange(subtasksToRemove);
     }
 
-    private static async Task DeleteFeatureTreesAsync(AppDbContext db, List<int> rootFeatureIds)
+    private static async Task DeleteFeatureTreesAsync(AppDbContext db, List<int> rootFeatureIds, CancellationToken ct)
     {
         if (rootFeatureIds.Count == 0) return;
 
-        var allFeatures = await db.Features.ToListAsync();
+        var allFeatures = await db.Features.ToListAsync(ct);
         var featureIds = new HashSet<int>();
 
         void CollectFeatureAndChildren(int featureId)
@@ -78,13 +78,13 @@ internal static class GraphDeletion
 
         var tasks = await db.Tasks
             .Where(t => featureIds.Contains(t.FeatureId))
-            .ToListAsync();
+            .ToListAsync(ct);
         var taskIds = tasks.Select(t => t.Id).ToList();
 
         var requirements = await db.Requirements
             .Where(r => (r.FeatureId.HasValue && featureIds.Contains(r.FeatureId.Value)) ||
                         (r.TaskItemId.HasValue && taskIds.Contains(r.TaskItemId.Value)))
-            .ToListAsync();
+            .ToListAsync(ct);
 
         foreach (var requirement in requirements)
         {
@@ -96,12 +96,12 @@ internal static class GraphDeletion
 
         if (taskIds.Count > 0)
         {
-            await DeleteSubtasksForTasksAsync(db, taskIds);
-            await DeleteAcceptanceCriteriaForTasksAsync(db, taskIds);
+            await DeleteSubtasksForTasksAsync(db, taskIds, ct);
+            await DeleteAcceptanceCriteriaForTasksAsync(db, taskIds, ct);
 
             var comments = await db.TaskComments
                 .Where(c => taskIds.Contains(c.TaskItemId))
-                .ToListAsync();
+                .ToListAsync(ct);
             db.TaskComments.RemoveRange(comments);
             db.Tasks.RemoveRange(tasks);
         }
@@ -127,13 +127,13 @@ internal static class GraphDeletion
         return depth;
     }
 
-    private static async Task DeleteSubtasksForTasksAsync(AppDbContext db, List<int> taskIds)
+    private static async Task DeleteSubtasksForTasksAsync(AppDbContext db, List<int> taskIds, CancellationToken ct)
     {
         if (taskIds.Count == 0) return;
 
         var subtasks = await db.Subtasks
             .Where(s => taskIds.Contains(s.TaskItemId))
-            .ToListAsync();
+            .ToListAsync(ct);
 
         var orderedSubtasks = subtasks
             .OrderByDescending(s => GetSubtaskDepth(s, subtasks))
@@ -142,13 +142,13 @@ internal static class GraphDeletion
         db.Subtasks.RemoveRange(orderedSubtasks);
     }
 
-    private static async Task DeleteAcceptanceCriteriaForTasksAsync(AppDbContext db, List<int> taskIds)
+    private static async Task DeleteAcceptanceCriteriaForTasksAsync(AppDbContext db, List<int> taskIds, CancellationToken ct)
     {
         if (taskIds.Count == 0) return;
 
         var criteria = await db.AcceptanceCriteria
             .Where(c => taskIds.Contains(c.TaskItemId))
-            .ToListAsync();
+            .ToListAsync(ct);
 
         db.AcceptanceCriteria.RemoveRange(criteria);
     }
