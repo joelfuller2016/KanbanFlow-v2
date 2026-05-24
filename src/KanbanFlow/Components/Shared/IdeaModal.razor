@@ -130,8 +130,6 @@
     private bool showTitleRequired;
     private bool isSaving;
 
-    // Guards re-loading the same idea on every OnParametersSet while the modal stays open.
-    private int? loadedIdeaId;
     private bool wasOpen;
 
     protected override async Task OnParametersSetAsync()
@@ -145,18 +143,15 @@
 
             if (EditIdeaId is int id)
             {
-                // Edit: load the existing idea's fields (async, like EditItemModal.LoadTaskDetails).
-                if (loadedIdeaId != id)
-                {
-                    loadedIdeaId = id;
-                    await LoadIdea(id);
-                }
+                // Edit: always reload the idea's fields on open so a previously cancelled edit
+                // can't leave stale values; the !wasOpen guard already prevents reloads while
+                // the modal stays open.
+                await LoadIdea(id);
             }
             else
             {
                 // Create: start from a blank form.
                 ResetFields();
-                loadedIdeaId = null;
             }
         }
 

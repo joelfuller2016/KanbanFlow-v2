@@ -11,34 +11,36 @@ namespace KanbanFlow.Tests;
 /// </summary>
 public sealed class IdeaBadgeTests
 {
-    [Theory]
-    [InlineData(IdeaStatus.New, "bg-primary")]
-    [InlineData(IdeaStatus.Triaging, "bg-warning text-dark")]
-    [InlineData(IdeaStatus.Promoted, "bg-success")]
-    [InlineData(IdeaStatus.Archived, "bg-secondary")]
-    [InlineData(IdeaStatus.Rejected, "bg-danger")]
-    public void StatusClass_MapsEveryStatus(IdeaStatus status, string expected)
+    // Exhaustive + guarded: every declared IdeaStatus maps to its expected badge class, AND a
+    // newly-added enum value fails here (no expected entry) instead of silently falling through
+    // to the non-empty default — which a non-empty-only assertion would not catch.
+    [Fact]
+    public void StatusClass_MapsEveryDeclaredStatus()
     {
-        Assert.Equal(expected, IdeaBadge.StatusClass(status));
+        var expected = new Dictionary<IdeaStatus, string>
+        {
+            [IdeaStatus.New] = "bg-primary",
+            [IdeaStatus.Triaging] = "bg-warning text-dark",
+            [IdeaStatus.Promoted] = "bg-success",
+            [IdeaStatus.Archived] = "bg-secondary",
+            [IdeaStatus.Rejected] = "bg-danger",
+        };
+        foreach (var status in Enum.GetValues<IdeaStatus>())
+        {
+            Assert.True(expected.ContainsKey(status),
+                $"No expected badge for {status} — add it to IdeaBadge.StatusClass and this test.");
+            Assert.Equal(expected[status], IdeaBadge.StatusClass(status));
+        }
     }
 
     [Theory]
-    [InlineData(TaskPriority.Low, "bg-light text-dark")]
-    [InlineData(TaskPriority.Medium, "bg-secondary")]
+    [InlineData(TaskPriority.Low, "bg-secondary")]
+    [InlineData(TaskPriority.Medium, "bg-warning text-dark")]
     [InlineData(TaskPriority.High, "bg-orange text-white")]
     [InlineData(TaskPriority.Critical, "bg-danger")]
     public void PriorityClass_MapsEveryPriority(TaskPriority priority, string expected)
     {
         Assert.Equal(expected, IdeaBadge.PriorityClass(priority));
-    }
-
-    [Fact]
-    public void StatusClass_CoversAllDeclaredStatuses()
-    {
-        // Guard: if a new IdeaStatus is added, this fails until the mapping is updated
-        // (no value falls through to the default "bg-secondary" silently for a real enum).
-        foreach (var status in Enum.GetValues<IdeaStatus>())
-            Assert.False(string.IsNullOrWhiteSpace(IdeaBadge.StatusClass(status)));
     }
 
     [Fact]

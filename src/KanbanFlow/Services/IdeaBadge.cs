@@ -22,13 +22,17 @@ public static class IdeaBadge
         _ => "bg-secondary"
     };
 
-    /// <summary>Bootstrap badge classes for a <see cref="TaskPriority"/>. High uses the custom <c>bg-orange</c>.</summary>
+    /// <summary>
+    /// Bootstrap badge classes for a <see cref="TaskPriority"/>. Matches the app-wide priority
+    /// palette used by <c>KanbanCard.razor</c> and <c>ProjectOutline.razor</c> so colours are
+    /// consistent everywhere. High uses the project's custom <c>bg-orange</c> (Bootstrap has none).
+    /// </summary>
     public static string PriorityClass(TaskPriority priority) => priority switch
     {
         TaskPriority.Critical => "bg-danger",
         TaskPriority.High => "bg-orange text-white",
-        TaskPriority.Medium => "bg-secondary",
-        TaskPriority.Low => "bg-light text-dark",
+        TaskPriority.Medium => "bg-warning text-dark",
+        TaskPriority.Low => "bg-secondary",
         _ => "bg-secondary"
     };
 }
