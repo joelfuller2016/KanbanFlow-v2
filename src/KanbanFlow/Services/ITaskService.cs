@@ -42,28 +42,119 @@ public interface ITaskService
     /// <exception cref="TaskNotFoundException">The task does not exist.</exception>
     Task<TaskItem> ToggleDoneAsync(int taskId, string? actor, CancellationToken ct = default);
 
-    // ── Stubs: planned for follow-up PRs ──
-    // Each stub closes one or more open issues:
-    //   ReassignToFeatureAsync   — closes #83 (cross-project task reassignment)
-    //   UpdateAsync              — full task update with field-by-field audit diff
-    //   DeleteAsync              — closes #88 UI deletion bypass; cascades subtasks/criteria
-    //   ClaimAsync / ReleaseAsync — lifts existing API claim/release into the service
-    //   CreateAsync              — task authoring; partial fix for #82-class linkage validation
-    // The stubs throw NotImplementedException with TODO markers so the call sites
-    // can be wired progressively without a flag-day refactor.
+    /// <summary>
+    /// Create a new task under a feature. Validates <paramref name="dto"/> (name
+    /// non-empty/&lt;= 500 chars, feature exists, status/priority are defined enum
+    /// values). Computes <see cref="TaskItem.SortOrder"/> from existing siblings when
+    /// not supplied and sets <see cref="TaskItem.CompletedAt"/> when created in the
+    /// Done state. Writes a <see cref="CommentType.Created"/> comment and a
+    /// <c>TaskCreated</c> activity event.
+    /// </summary>
+    /// <param name="dto">Create payload.</param>
+    /// <param name="actor">Actor label; null falls back to "System" for the comment author.</param>
+    /// <param name="ct">Cancellation token.</param>
+    /// <returns>The created task entity (with its database-assigned id).</returns>
+    /// <exception cref="ValidationException">Name is empty/too long or an enum value is undefined.</exception>
+    /// <exception cref="FeatureNotFoundException">The target feature does not exist.</exception>
+    Task<TaskItem> CreateAsync(TaskCreate dto, string? actor, CancellationToken ct = default);
 
-    /// <summary>(Stub) Reassign task to a different feature with project-boundary check.</summary>
-    /// <remarks>Closes issue #83. TODO: implement in follow-up PR.</remarks>
+    /// <summary>
+    /// Reassign task to a different feature with project-boundary check. Closes #83.
+    /// Writes a <see cref="CommentType.FeatureChange"/> comment and a
+    /// <c>TaskFeatureChanged</c> activity event.
+    /// </summary>
+    /// <exception cref="TaskNotFoundException">The task does not exist.</exception>
+    /// <exception cref="FeatureNotFoundException">The target feature does not exist.</exception>
+    /// <exception cref="CrossProjectReassignmentException">The target feature belongs to a different project.</exception>
     Task<TaskItem> ReassignToFeatureAsync(int taskId, int newFeatureId, string? actor, CancellationToken ct = default);
 
-    /// <summary>(Stub) Full task update with field-by-field audit diff.</summary>
-    /// <remarks>TODO: implement in follow-up PR. Today PUT /api/tasks/{id} is still inline in ApiEndpoints.</remarks>
+    /// <summary>
+    /// Full task update with field-by-field audit diff. Idempotent when no field
+    /// actually changes. Emits a <c>TaskStatusChanged</c> (+ StatusChange comment)
+    /// and/or <c>TaskUpdated</c> (+ Note comment) activity event as appropriate.
+    /// </summary>
+    /// <exception cref="TaskNotFoundException">The task does not exist.</exception>
+    /// <exception cref="ValidationException">Name is empty/too long or an enum value is undefined.</exception>
     Task<TaskItem> UpdateAsync(int taskId, TaskUpdate dto, string? actor, CancellationToken ct = default);
 
-    /// <summary>(Stub) Delete task with cascade cleanup of subtasks, criteria, comments, dependencies, and audit emission.</summary>
-    /// <remarks>Closes the UI half of #88 for deletes. TODO: implement in follow-up PR.</remarks>
+    /// <summary>
+    /// Delete a task and cascade-clean its children. Subtasks are removed leaf-first
+    /// to satisfy the self-referential <c>Subtask.ChildSubtasks</c> Restrict FK;
+    /// acceptance criteria are removed explicitly; comments and both dependency
+    /// directions are removed by EF cascade. Emits a <c>TaskDeleted</c> activity
+    /// event <em>before</em> removal (the audit row has no project FK so it survives).
+    /// Closes the UI half of #88 for deletes.
+    /// </summary>
+    /// <param name="taskId">Target task id.</param>
+    /// <param name="actor">Actor label; null falls back to "System" on the activity event.</param>
+    /// <param name="ct">Cancellation token.</param>
+    /// <exception cref="TaskNotFoundException">The task does not exist.</exception>
     Task DeleteAsync(int taskId, string? actor, CancellationToken ct = default);
+
+    /// <summary>
+    /// Claim a task for <paramref name="actor"/>. Idempotent when the same actor
+    /// re-claims (the original <see cref="TaskItem.ClaimedAt"/> is preserved). Emits
+    /// a <c>TaskClaimed</c> activity event. No comment (matches the REST endpoint).
+    /// </summary>
+    /// <param name="taskId">Target task id.</param>
+    /// <param name="actor">Claiming actor; required (non-blank).</param>
+    /// <param name="ct">Cancellation token.</param>
+    /// <returns>The updated task entity.</returns>
+    /// <exception cref="ValidationException">Actor is blank (API maps to 422).</exception>
+    /// <exception cref="TaskNotFoundException">The task does not exist.</exception>
+    /// <exception cref="TaskClaimConflictException">The task is already claimed by a different actor (API maps to 409).</exception>
+    Task<TaskItem> ClaimAsync(int taskId, string actor, CancellationToken ct = default);
+
+    /// <summary>
+    /// Release a task previously claimed by <paramref name="actor"/>. Clears
+    /// <see cref="TaskItem.ClaimedBy"/>/<see cref="TaskItem.ClaimedAt"/> and emits a
+    /// <c>TaskReleased</c> activity event.
+    /// </summary>
+    /// <param name="taskId">Target task id.</param>
+    /// <param name="actor">Releasing actor; required (non-blank).</param>
+    /// <param name="ct">Cancellation token.</param>
+    /// <returns>The updated task entity.</returns>
+    /// <exception cref="ValidationException">Actor is blank (API maps to 422).</exception>
+    /// <exception cref="TaskNotFoundException">The task does not exist.</exception>
+    /// <exception cref="TaskClaimConflictException">The task is claimed by a different actor (API maps to 409).</exception>
+    Task<TaskItem> ReleaseAsync(int taskId, string actor, CancellationToken ct = default);
+
+    /// <summary>
+    /// Add a typed user comment to a task and emit a <c>TaskCommentAdded</c> activity
+    /// event. Only user-facing <see cref="CommentType"/> values are accepted; system
+    /// types (e.g. <see cref="CommentType.StatusChange"/>, <see cref="CommentType.Created"/>)
+    /// are rejected. Use <see cref="IsUserCommentType"/> for the allowed set.
+    /// </summary>
+    /// <param name="taskId">Target task id.</param>
+    /// <param name="text">Comment body; required (non-blank).</param>
+    /// <param name="author">Comment author label; optional.</param>
+    /// <param name="type">Comment type; must be a user-allowed value.</param>
+    /// <param name="actor">Actor label for the activity event; optional.</param>
+    /// <param name="ct">Cancellation token.</param>
+    /// <returns>The created comment entity.</returns>
+    /// <exception cref="TaskNotFoundException">The task does not exist.</exception>
+    /// <exception cref="ValidationException">Text is blank or the comment type is not user-allowed.</exception>
+    Task<TaskComment> AddCommentAsync(int taskId, string text, string? author, CommentType type, string? actor, CancellationToken ct = default);
+
+    /// <summary>
+    /// True when <paramref name="type"/> is a comment type a user/agent is allowed to
+    /// author directly (Note, Decision, Question, Blocked, Handoff, Verification,
+    /// Comment). System-generated types (StatusChange, Created, FeatureChange, …) are
+    /// excluded. Edge layers (REST/MCP) can use this to preserve the existing
+    /// "allowed types" 422 body shape.
+    /// </summary>
+    bool IsUserCommentType(CommentType type);
 }
+
+/// <summary>Create payload for <see cref="ITaskService.CreateAsync"/>. Status/Priority null → Backlog/Low.</summary>
+public sealed record TaskCreate(
+    int FeatureId,
+    string Name,
+    string? Description = null,
+    WorkStatus? Status = null,
+    TaskPriority? Priority = null,
+    string? Assignee = null,
+    int? SortOrder = null);
 
 /// <summary>Update payload for <see cref="ITaskService.UpdateAsync"/>. Optional fields are <c>null</c> for unchanged.</summary>
 public sealed record TaskUpdate(

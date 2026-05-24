@@ -658,16 +658,246 @@ public sealed class TestRunnerService(
             return Task.CompletedTask;
         }));
 
-        // ReassignToFeatureAsync + UpdateAsync are implemented (PR #103); only DeleteAsync
-        // remains stubbed pending the rest of the UI delete flow.
-        results.Add(await RunTest("DeleteAsync still throws NotImplementedException (stubbed)", "Service:Task", async () =>
+        // CreateAsync, DeleteAsync, ClaimAsync, ReleaseAsync, and AddCommentAsync are now
+        // implemented (service-layer extraction wave 1). The DeleteAsync test below used to
+        // assert NotImplementedException; it now asserts real deletion + audit emission.
+
+        results.Add(await RunTest("CreateAsync writes Created comment + TaskCreated activity", "Service:Task", async () =>
+        {
+            // Create only the project+feature via REST; the task is authored by the service
+            // under test so we exercise CreateAsync directly (not the REST create path).
+            var (pid, featureId, seedTaskId) = await CreateProjectFeatureTaskAsync(http, ct);
+            try
+            {
+                var created = await taskSvc.CreateAsync(
+                    new TaskCreate(featureId, "Service-created task", Priority: TaskPriority.High),
+                    actor: "svc-test", ct);
+                if (created.Id == seedTaskId)
+                    throw new Exception("CreateAsync returned the seed task instead of a new row");
+                if (created.Priority != TaskPriority.High)
+                    throw new Exception($"Priority not honored (expected High, got {created.Priority})");
+                if (created.FeatureId != featureId)
+                    throw new Exception("Created task has the wrong FeatureId");
+
+                await using var db = await dbFactory.CreateDbContextAsync(ct);
+                var rowExists = await db.Tasks.AnyAsync(t => t.Id == created.Id, ct);
+                if (!rowExists) throw new Exception("Created task row not persisted");
+                var hasCreatedComment = await db.TaskComments
+                    .AnyAsync(c => c.TaskItemId == created.Id && c.Type == CommentType.Created, ct);
+                if (!hasCreatedComment) throw new Exception("Created comment not written");
+                var hasEvent = await db.ActivityEvents
+                    .AnyAsync(e => e.EntityType == "Task" && e.EntityId == created.Id
+                        && e.EventType == "TaskCreated" && e.Actor == "svc-test", ct);
+                if (!hasEvent) throw new Exception("TaskCreated activity event missing or actor not propagated");
+            }
+            finally
+            {
+                await TryDeleteProjectAsync(http, pid, ct);
+            }
+        }));
+
+        results.Add(await RunTest("CreateAsync rejects empty name + unknown feature", "Service:Task", async () =>
+        {
+            var (pid, featureId, _) = await CreateProjectFeatureTaskAsync(http, ct);
+            try
+            {
+                try
+                {
+                    await taskSvc.CreateAsync(new TaskCreate(featureId, "   "), "x", ct);
+                    throw new Exception("Expected ValidationException for empty name, got success");
+                }
+                catch (ValidationException) { /* ok */ }
+
+                try
+                {
+                    await taskSvc.CreateAsync(new TaskCreate(99999999, "orphan"), "x", ct);
+                    throw new Exception("Expected FeatureNotFoundException for unknown feature, got success");
+                }
+                catch (FeatureNotFoundException ex)
+                {
+                    if (ex.FeatureId != 99999999)
+                        throw new Exception("FeatureNotFoundException carries the wrong FeatureId");
+                }
+            }
+            finally
+            {
+                await TryDeleteProjectAsync(http, pid, ct);
+            }
+        }));
+
+        results.Add(await RunTest("DeleteAsync removes task + children and TaskDeleted audit survives", "Service:Task", async () =>
+        {
+            var (pid, featureId, taskId) = await CreateProjectFeatureTaskAsync(http, ct);
+            try
+            {
+                // Build a 2-level subtask tree (parent → child) so the leaf-first delete
+                // path (Subtask.ChildSubtasks Restrict FK) is actually exercised — see R1.
+                var parentResp = await http.PostAsJsonAsync($"/api/tasks/{taskId}/subtasks",
+                    new { text = "parent subtask" }, Json, ct);
+                var parentId = (await parentResp.Content.ReadFromJsonAsync<JsonElement>(Json, ct))
+                    .GetProperty("id").GetInt32();
+                var childResp = await http.PostAsJsonAsync($"/api/tasks/{taskId}/subtasks",
+                    new { text = "child subtask", parentSubtaskId = parentId }, Json, ct);
+                if (childResp.StatusCode != HttpStatusCode.Created)
+                    throw new Exception($"Child subtask create failed: {(int)childResp.StatusCode}");
+
+                // Acceptance criterion (Cascade) + user comment (Cascade).
+                await http.PostAsJsonAsync($"/api/tasks/{taskId}/acceptance-criteria",
+                    new { text = "AC for delete test" }, Json, ct);
+                await http.PostAsJsonAsync($"/api/tasks/{taskId}/comments",
+                    new { text = "comment for delete test", author = "x", type = "Note" }, Json, ct);
+
+                // A dependency on a second task in the same project (Cascade on both directions).
+                var t2Resp = await http.PostAsJsonAsync($"/api/features/{featureId}/tasks",
+                    new { name = "dependency target" }, Json, ct);
+                var depTargetId = (await t2Resp.Content.ReadFromJsonAsync<JsonElement>(Json, ct))
+                    .GetProperty("id").GetInt32();
+                var depResp = await http.PostAsJsonAsync($"/api/tasks/{taskId}/dependencies",
+                    new { dependsOnTaskItemId = depTargetId, type = "DependsOn" }, Json, ct);
+                if (depResp.StatusCode != HttpStatusCode.Created)
+                    throw new Exception($"Dependency create failed: {(int)depResp.StatusCode}");
+
+                await taskSvc.DeleteAsync(taskId, actor: "svc-test", ct);
+
+                await using var db = await dbFactory.CreateDbContextAsync(ct);
+                if (await db.Tasks.AnyAsync(t => t.Id == taskId, ct))
+                    throw new Exception("Task row still present after DeleteAsync");
+                if (await db.Subtasks.AnyAsync(s => s.TaskItemId == taskId, ct))
+                    throw new Exception("Subtasks not cascade-deleted");
+                if (await db.AcceptanceCriteria.AnyAsync(c => c.TaskItemId == taskId, ct))
+                    throw new Exception("Acceptance criteria not deleted");
+                if (await db.TaskComments.AnyAsync(c => c.TaskItemId == taskId, ct))
+                    throw new Exception("Comments not cascade-deleted");
+                if (await db.TaskDependencies.AnyAsync(d => d.TaskItemId == taskId || d.DependsOnTaskItemId == taskId, ct))
+                    throw new Exception("Dependencies not cascade-deleted");
+
+                // Audit row must SURVIVE the delete (ActivityEvent has no task FK).
+                var auditSurvives = await db.ActivityEvents
+                    .AnyAsync(e => e.EntityType == "Task" && e.EntityId == taskId
+                        && e.EventType == "TaskDeleted" && e.Actor == "svc-test", ct);
+                if (!auditSurvives) throw new Exception("TaskDeleted audit event missing after deletion");
+            }
+            finally
+            {
+                await TryDeleteProjectAsync(http, pid, ct);
+            }
+        }));
+
+        results.Add(await RunTest("DeleteAsync throws TaskNotFoundException for missing id", "Service:Task", async () =>
         {
             try
             {
-                await taskSvc.DeleteAsync(1, "x", ct);
-                throw new Exception("DeleteAsync should throw NotImplementedException (stubbed)");
+                await taskSvc.DeleteAsync(99999999, "x", ct);
             }
-            catch (NotImplementedException) { /* ok */ }
+            catch (TaskNotFoundException ex)
+            {
+                if (ex.TaskId != 99999999)
+                    throw new Exception("TaskNotFoundException carries the wrong TaskId");
+                return;
+            }
+            throw new Exception("Expected TaskNotFoundException, got success");
+        }));
+
+        results.Add(await RunTest("ClaimAsync idempotent for same actor; conflict for another", "Service:Task", async () =>
+        {
+            var (pid, _, taskId) = await CreateProjectFeatureTaskAsync(http, ct);
+            try
+            {
+                var first = await taskSvc.ClaimAsync(taskId, "alice", ct);
+                var firstClaimedAt = first.ClaimedAt;
+                if (first.ClaimedBy != "alice" || firstClaimedAt is null)
+                    throw new Exception("First claim did not set ClaimedBy/ClaimedAt");
+
+                // Same actor re-claim is idempotent: ClaimedAt is preserved.
+                var second = await taskSvc.ClaimAsync(taskId, "alice", ct);
+                if (second.ClaimedAt != firstClaimedAt)
+                    throw new Exception("Re-claim by same actor changed ClaimedAt (not idempotent)");
+
+                try
+                {
+                    await taskSvc.ClaimAsync(taskId, "bob", ct);
+                    throw new Exception("Expected TaskClaimConflictException for second actor, got success");
+                }
+                catch (TaskClaimConflictException ex)
+                {
+                    if (ex.TaskId != taskId || !string.Equals(ex.ClaimedBy, "alice", StringComparison.OrdinalIgnoreCase))
+                        throw new Exception("TaskClaimConflictException carries the wrong task/claimant");
+                }
+
+                await using var db = await dbFactory.CreateDbContextAsync(ct);
+                var claimedEvents = await db.ActivityEvents.CountAsync(
+                    e => e.EntityId == taskId && e.EventType == "TaskClaimed", ct);
+                if (claimedEvents != 1)
+                    throw new Exception($"Expected exactly 1 TaskClaimed event, got {claimedEvents}");
+            }
+            finally
+            {
+                await TryDeleteProjectAsync(http, pid, ct);
+            }
+        }));
+
+        results.Add(await RunTest("ReleaseAsync clears claim + emits audit; conflict for another actor", "Service:Task", async () =>
+        {
+            var (pid, _, taskId) = await CreateProjectFeatureTaskAsync(http, ct);
+            try
+            {
+                await taskSvc.ClaimAsync(taskId, "alice", ct);
+
+                // A different actor cannot release someone else's claim.
+                try
+                {
+                    await taskSvc.ReleaseAsync(taskId, "bob", ct);
+                    throw new Exception("Expected TaskClaimConflictException releasing another actor's claim");
+                }
+                catch (TaskClaimConflictException) { /* ok */ }
+
+                var released = await taskSvc.ReleaseAsync(taskId, "alice", ct);
+                if (released.ClaimedBy is not null || released.ClaimedAt is not null)
+                    throw new Exception("ReleaseAsync did not clear ClaimedBy/ClaimedAt");
+
+                await using var db = await dbFactory.CreateDbContextAsync(ct);
+                var hasReleaseEvent = await db.ActivityEvents
+                    .AnyAsync(e => e.EntityType == "Task" && e.EntityId == taskId
+                        && e.EventType == "TaskReleased" && e.Actor == "alice", ct);
+                if (!hasReleaseEvent) throw new Exception("TaskReleased activity event missing");
+            }
+            finally
+            {
+                await TryDeleteProjectAsync(http, pid, ct);
+            }
+        }));
+
+        results.Add(await RunTest("AddCommentAsync writes comment + activity; rejects system type", "Service:Task", async () =>
+        {
+            var (pid, _, taskId) = await CreateProjectFeatureTaskAsync(http, ct);
+            try
+            {
+                var comment = await taskSvc.AddCommentAsync(
+                    taskId, "a real note", author: "svc-test", type: CommentType.Note, actor: "svc-test", ct);
+                if (comment.Id == 0 || comment.Type != CommentType.Note)
+                    throw new Exception("AddCommentAsync did not return the persisted comment");
+
+                await using var db = await dbFactory.CreateDbContextAsync(ct);
+                var hasComment = await db.TaskComments
+                    .AnyAsync(c => c.Id == comment.Id && c.TaskItemId == taskId && c.Type == CommentType.Note, ct);
+                if (!hasComment) throw new Exception("Comment row not persisted");
+                var hasEvent = await db.ActivityEvents
+                    .AnyAsync(e => e.EntityType == "Task" && e.EntityId == taskId
+                        && e.EventType == "TaskCommentAdded" && e.Actor == "svc-test", ct);
+                if (!hasEvent) throw new Exception("TaskCommentAdded activity event missing");
+
+                // System comment types must be rejected (only the service emits those).
+                try
+                {
+                    await taskSvc.AddCommentAsync(taskId, "nope", "x", CommentType.StatusChange, "x", ct);
+                    throw new Exception("Expected ValidationException for system comment type, got success");
+                }
+                catch (ValidationException) { /* ok */ }
+            }
+            finally
+            {
+                await TryDeleteProjectAsync(http, pid, ct);
+            }
         }));
 
         results.Add(await RunTest("ReassignToFeatureAsync moves within same project", "Service:Task", async () =>
