@@ -15,7 +15,8 @@ public sealed class TestRunnerService(
     IServer server,
     ITaskService taskSvc,
     IDbContextFactory<AppDbContext> dbFactory,
-    IMarkdownRenderer markdownRenderer) : ITestRunnerService
+    IMarkdownRenderer markdownRenderer,
+    ILogger<TestRunnerService> logger) : ITestRunnerService
 {
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
 
@@ -442,7 +443,8 @@ public sealed class TestRunnerService(
         {
             // Best-effort: CancellationToken.None runs cleanup even on cancellation;
             // swallowing errors prevents masking the suite's original exception (#85, #150).
-            try { await TestAuditCleanup.PurgeOrphanedSinceAsync(dbFactory, runStart, preExistingProjectIds, CancellationToken.None); } catch { }
+            try { await TestAuditCleanup.PurgeOrphanedSinceAsync(dbFactory, runStart, preExistingProjectIds, CancellationToken.None); }
+            catch (Exception ex) { logger.LogWarning(ex, "Best-effort test audit cleanup failed (API suite)."); }
         }
     }
 
@@ -569,7 +571,8 @@ public sealed class TestRunnerService(
         {
             // Best-effort: CancellationToken.None runs cleanup even on cancellation;
             // swallowing errors prevents masking the suite's original exception (#85, #150).
-            try { await TestAuditCleanup.PurgeOrphanedSinceAsync(dbFactory, runStart, preExistingProjectIds, CancellationToken.None); } catch { }
+            try { await TestAuditCleanup.PurgeOrphanedSinceAsync(dbFactory, runStart, preExistingProjectIds, CancellationToken.None); }
+            catch (Exception ex) { logger.LogWarning(ex, "Best-effort test audit cleanup failed (UI suite)."); }
         }
     }
 
@@ -1103,7 +1106,8 @@ public sealed class TestRunnerService(
         {
             // Best-effort: CancellationToken.None runs cleanup even on cancellation;
             // swallowing errors prevents masking the suite's original exception (#85, #150).
-            try { await TestAuditCleanup.PurgeOrphanedSinceAsync(dbFactory, runStart, preExistingProjectIds, CancellationToken.None); } catch { }
+            try { await TestAuditCleanup.PurgeOrphanedSinceAsync(dbFactory, runStart, preExistingProjectIds, CancellationToken.None); }
+            catch (Exception ex) { logger.LogWarning(ex, "Best-effort test audit cleanup failed (Service suite)."); }
         }
     }
 
