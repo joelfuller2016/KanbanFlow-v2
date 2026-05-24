@@ -29,60 +29,62 @@ public static class ApiEndpoints
         // GET /api/projects — list all with feature/task counts
         app.MapGet("/api/projects", async (AppDbContext db) =>
         {
+            // #157: project the counts in SQL (scalar subqueries) instead of loading the full
+            // Feature->Task graph just to count it.
             var projects = await db.Projects
-                .Include(p => p.Features)
-                    .ThenInclude(f => f.Tasks)
                 .AsNoTracking()
+                .Select(p => new
+                {
+                    p.Id,
+                    p.Name,
+                    p.Description,
+                    p.Goals,
+                    p.Readme,
+                    p.CreatedAt,
+                    p.UpdatedAt,
+                    FeatureCount = p.Features.Count,
+                    TaskCount = p.Features.SelectMany(f => f.Tasks).Count()
+                })
                 .ToListAsync();
 
-            return Results.Ok(projects.Select(p => new
-            {
-                p.Id,
-                p.Name,
-                p.Description,
-                p.Goals,
-                p.Readme,
-                p.CreatedAt,
-                p.UpdatedAt,
-                FeatureCount = p.Features.Count,
-                TaskCount = p.Features.Sum(f => f.Tasks.Count)
-            }));
+            return Results.Ok(projects);
         });
 
         // GET /api/projects/{id} — get one with features + task counts
         app.MapGet("/api/projects/{id:int}", async (int id, AppDbContext db) =>
         {
+            // #157: project features + per-feature counts in SQL instead of loading every task.
             var project = await db.Projects
-                .Include(p => p.Features)
-                    .ThenInclude(f => f.Tasks)
+                .Where(p => p.Id == id)
                 .AsNoTracking()
-                .FirstOrDefaultAsync(p => p.Id == id);
+                .Select(p => new
+                {
+                    p.Id,
+                    p.Name,
+                    p.Description,
+                    p.Goals,
+                    p.Readme,
+                    p.CreatedAt,
+                    p.UpdatedAt,
+                    Features = p.Features.OrderBy(f => f.SortOrder).Select(f => new
+                    {
+                        f.Id,
+                        f.ParentFeatureId,
+                        f.Name,
+                        f.Description,
+                        f.SortOrder,
+                        f.CreatedAt,
+                        f.UpdatedAt,
+                        TaskCount = f.Tasks.Count,
+                        DoneCount = f.Tasks.Count(t => t.Status == WorkStatus.Done)
+                    })
+                })
+                .FirstOrDefaultAsync();
 
             if (project is null)
                 return Results.NotFound(new { message = $"Project {id} not found." });
 
-            return Results.Ok(new
-            {
-                project.Id,
-                project.Name,
-                project.Description,
-                project.Goals,
-                project.Readme,
-                project.CreatedAt,
-                project.UpdatedAt,
-                Features = project.Features.OrderBy(f => f.SortOrder).Select(f => new
-                {
-                    f.Id,
-                    f.ParentFeatureId,
-                    f.Name,
-                    f.Description,
-                    f.SortOrder,
-                    f.CreatedAt,
-                    f.UpdatedAt,
-                    TaskCount = f.Tasks.Count,
-                    DoneCount = f.Tasks.Count(t => t.Status == WorkStatus.Done)
-                })
-            });
+            return Results.Ok(project);
         });
 
         // GET /api/projects/{id}/context — full AI-readable project context bundle
@@ -893,6 +895,7 @@ public static class ApiEndpoints
                 .Where(t => t.FeatureId == featureId)
                 .Include(t => t.Subtasks)
                 .Include(t => t.AcceptanceCriteria)
+                .AsSplitQuery() // #157: avoid the tasks x subtasks x criteria cartesian blow-up
                 .AsNoTracking()
                 .OrderBy(t => t.SortOrder)
                 .ToListAsync();
@@ -912,6 +915,7 @@ public static class ApiEndpoints
                 .Include(t => t.Feature)
                 .Include(t => t.Subtasks)
                 .Include(t => t.AcceptanceCriteria)
+                .AsSplitQuery() // #157: avoid the tasks x subtasks x criteria cartesian blow-up
                 .AsNoTracking()
                 .OrderBy(t => t.Feature.SortOrder)
                     .ThenBy(t => t.SortOrder)
@@ -952,6 +956,7 @@ public static class ApiEndpoints
                 .Include(t => t.Feature)
                 .Include(t => t.Subtasks)
                 .Include(t => t.AcceptanceCriteria)
+                .AsSplitQuery() // #157: avoid the tasks x subtasks x criteria cartesian blow-up
                 .AsNoTracking()
                 .OrderBy(t => t.SortOrder)
                 .ToListAsync();
