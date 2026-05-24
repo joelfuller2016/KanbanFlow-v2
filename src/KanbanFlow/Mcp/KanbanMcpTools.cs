@@ -208,6 +208,193 @@ public static class KanbanMcpTools
         }
     }
 
+    [McpServerTool(Name = "create_task")]
+    [Description("Create a task inside a feature through the audit-aware service layer (writes a Created comment + TaskCreated activity event; no HTTP hop). Defaults: status=Backlog, priority=Low. Returns the new task — pass its id to update_task_status, claim_task, or add_task_comment next.")]
+    public static async Task<TaskDetailResult> CreateTask(
+        ITaskService taskService,
+        [Description("The feature id this task belongs to (from get_project_context).")] int featureId,
+        [Description("Task name (required, <= 500 chars).")] string name,
+        [Description("Optional task description (markdown).")] string? description = null,
+        [Description("Optional initial status: Backlog | Todo | InProgress | Review | Done (case-insensitive). Defaults to Backlog.")] string? status = null,
+        [Description("Optional initial priority: Low | Medium | High | Critical (case-insensitive). Defaults to Low.")] string? priority = null,
+        [Description("Optional free-text assignee label.")] string? assignee = null,
+        [Description("Optional actor label recorded in the audit trail (default 'mcp-agent').")] string? actor = null,
+        CancellationToken cancellationToken = default)
+    {
+        WorkStatus? parsedStatus = null;
+        if (!string.IsNullOrWhiteSpace(status))
+        {
+            if (!Enum.TryParse<WorkStatus>(status, ignoreCase: true, out var s) || !Enum.IsDefined(s))
+                throw new McpException(
+                    $"Invalid status '{status}'. Valid values: {string.Join(", ", Enum.GetNames<WorkStatus>())}.");
+            parsedStatus = s;
+        }
+
+        TaskPriority? parsedPriority = null;
+        if (!string.IsNullOrWhiteSpace(priority))
+        {
+            if (!Enum.TryParse<TaskPriority>(priority, ignoreCase: true, out var p) || !Enum.IsDefined(p))
+                throw new McpException(
+                    $"Invalid priority '{priority}'. Valid values: {string.Join(", ", Enum.GetNames<TaskPriority>())}.");
+            parsedPriority = p;
+        }
+
+        try
+        {
+            var created = await taskService.CreateAsync(
+                new TaskCreate(featureId, name, description, parsedStatus, parsedPriority, assignee),
+                string.IsNullOrWhiteSpace(actor) ? DefaultActor : actor.Trim(),
+                cancellationToken);
+            return new TaskDetailResult(
+                created.Id, created.FeatureId, created.Name, created.Description,
+                created.Status.ToString(), created.Priority.ToString(), created.Assignee,
+                "Task created; audit event recorded.");
+        }
+        catch (FeatureNotFoundException)
+        {
+            throw new McpException($"Feature {featureId} not found. Call get_project_context to see valid feature ids.");
+        }
+        catch (ValidationException ex)
+        {
+            throw new McpException(ex.Message);
+        }
+    }
+
+    [McpServerTool(Name = "delete_task")]
+    [Description("Delete a task through the audit-aware service layer (writes a TaskDeleted activity event before removal; no HTTP hop). Cascades to its subtasks, acceptance criteria, comments, and dependencies; the audit row remains. This is irreversible — confirm the id with get_task first.")]
+    public static async Task<TaskDeleteResult> DeleteTask(
+        ITaskService taskService,
+        [Description("The task id to delete.")] int taskId,
+        [Description("Optional actor label recorded in the audit trail (default 'mcp-agent').")] string? actor = null,
+        CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            await taskService.DeleteAsync(
+                taskId, string.IsNullOrWhiteSpace(actor) ? DefaultActor : actor.Trim(), cancellationToken);
+            return new TaskDeleteResult(taskId, true, $"Task {taskId} deleted; audit event recorded.");
+        }
+        catch (TaskNotFoundException)
+        {
+            throw new McpException($"Task {taskId} not found.");
+        }
+    }
+
+    [McpServerTool(Name = "add_task_comment")]
+    [Description("Add a typed comment to a task's activity stream through the audit-aware service layer (writes a TaskCommentAdded activity event; no HTTP hop). Use this to record decisions, questions, blockers, or handoffs as you work. Valid types: Note, Decision, Question, Blocked, Handoff, Verification, Comment (defaults to Note).")]
+    public static async Task<TaskCommentResult> AddTaskComment(
+        ITaskService taskService,
+        [Description("The task id to comment on.")] int taskId,
+        [Description("Comment text (required, non-empty).")] string text,
+        [Description("Comment type: Note | Decision | Question | Blocked | Handoff | Verification | Comment (case-insensitive). Defaults to Note.")] string? type = null,
+        [Description("Optional comment author label.")] string? author = null,
+        [Description("Optional actor label recorded in the audit trail (default 'mcp-agent').")] string? actor = null,
+        CancellationToken cancellationToken = default)
+    {
+        CommentType commentType = CommentType.Note;
+        if (!string.IsNullOrWhiteSpace(type))
+        {
+            if (!Enum.TryParse<CommentType>(type, ignoreCase: true, out var parsed)
+                || !taskService.IsUserCommentType(parsed))
+                throw new McpException(
+                    $"Invalid comment type '{type}'. Valid values: {string.Join(", ", AllowedUserCommentTypeNames)}.");
+            commentType = parsed;
+        }
+
+        try
+        {
+            var comment = await taskService.AddCommentAsync(
+                taskId, text, author, commentType,
+                string.IsNullOrWhiteSpace(actor) ? DefaultActor : actor.Trim(), cancellationToken);
+            return new TaskCommentResult(
+                comment.Id, comment.TaskItemId, comment.Text, comment.Author,
+                comment.Type.ToString(), comment.CreatedAt);
+        }
+        catch (TaskNotFoundException)
+        {
+            throw new McpException($"Task {taskId} not found.");
+        }
+        catch (ValidationException ex)
+        {
+            throw new McpException(ex.Message);
+        }
+    }
+
+    [McpServerTool(Name = "claim_task")]
+    [Description("Claim a task for an actor through the audit-aware service layer (writes a TaskClaimed activity event; no HTTP hop). Claim before starting work so other agents skip it. Re-claiming by the same actor is idempotent.")]
+    public static async Task<TaskClaimResult> ClaimTask(
+        ITaskService taskService,
+        [Description("The task id to claim.")] int taskId,
+        [Description("Actor claiming the task (required, non-empty).")] string actor,
+        CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            var claimed = await taskService.ClaimAsync(taskId, actor, cancellationToken);
+            return new TaskClaimResult(
+                claimed.Id, claimed.Name, claimed.ClaimedBy, claimed.ClaimedAt,
+                $"Task claimed by {claimed.ClaimedBy}; audit event recorded.");
+        }
+        catch (TaskNotFoundException)
+        {
+            throw new McpException($"Task {taskId} not found.");
+        }
+        catch (TaskClaimConflictException ex)
+        {
+            throw new McpException(
+                $"Task {taskId} is already claimed by {ex.ClaimedBy}. Ask {ex.ClaimedBy} to release it, or work a different task.");
+        }
+        catch (ValidationException ex)
+        {
+            throw new McpException(ex.Message);
+        }
+    }
+
+    [McpServerTool(Name = "release_task")]
+    [Description("Release a task you previously claimed through the audit-aware service layer (writes a TaskReleased activity event; no HTTP hop). Clears the claim so other actors can pick it up.")]
+    public static async Task<TaskClaimResult> ReleaseTask(
+        ITaskService taskService,
+        [Description("The task id to release.")] int taskId,
+        [Description("Optional actor releasing the task (default 'mcp-agent'). Must match the current claimant.")] string? actor = null,
+        CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            var released = await taskService.ReleaseAsync(
+                taskId, string.IsNullOrWhiteSpace(actor) ? DefaultActor : actor.Trim(), cancellationToken);
+            return new TaskClaimResult(
+                released.Id, released.Name, released.ClaimedBy, released.ClaimedAt,
+                "Task released; audit event recorded.");
+        }
+        catch (TaskNotFoundException)
+        {
+            throw new McpException($"Task {taskId} not found.");
+        }
+        catch (TaskClaimConflictException ex)
+        {
+            throw new McpException(
+                $"Task {taskId} is claimed by {ex.ClaimedBy}, not by the releasing actor. Only {ex.ClaimedBy} can release it.");
+        }
+        catch (ValidationException ex)
+        {
+            throw new McpException(ex.Message);
+        }
+    }
+
+    // User-authorable comment types, mirroring ApiEndpoints.AllowedUserCommentTypes /
+    // ITaskService.IsUserCommentType so the add_task_comment 422-style message lists the
+    // same set (and order) the REST endpoint returns.
+    private static readonly string[] AllowedUserCommentTypeNames =
+    [
+        nameof(CommentType.Note),
+        nameof(CommentType.Decision),
+        nameof(CommentType.Question),
+        nameof(CommentType.Blocked),
+        nameof(CommentType.Handoff),
+        nameof(CommentType.Verification),
+        nameof(CommentType.Comment)
+    ];
+
     private static string BuildReason(TaskItem task, bool claimedByOther)
     {
         var parts = new List<string> { $"{task.Priority} priority" };
@@ -228,3 +415,7 @@ public sealed record ChecklistItem(int Id, string Text, bool Completed);
 public sealed record TaskDetail(int Id, int FeatureId, string Name, string? Description, string Status, string Priority, string? Assignee, string? ClaimedBy, IReadOnlyList<ChecklistItem> AcceptanceCriteria, IReadOnlyList<ChecklistItem> Subtasks, IReadOnlyList<int> DependsOnTaskIds);
 public sealed record NextTask(int Id, string Name, string Status, string Priority, string? ClaimedBy, string Reason);
 public sealed record TaskStatusResult(int Id, string Name, string Status, string Message);
+public sealed record TaskDetailResult(int Id, int FeatureId, string Name, string? Description, string Status, string Priority, string? Assignee, string Message);
+public sealed record TaskDeleteResult(int Id, bool Deleted, string Message);
+public sealed record TaskCommentResult(int Id, int TaskItemId, string Text, string? Author, string Type, DateTime CreatedAt);
+public sealed record TaskClaimResult(int Id, string Name, string? ClaimedBy, DateTime? ClaimedAt, string Message);
