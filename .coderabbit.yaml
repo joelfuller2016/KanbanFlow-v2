@@ -187,3 +187,8 @@ issue_enrichment:
     enabled: true
     auto_planning:
       enabled: true
+      # Empty labels ([], the default) = manual "check the box" / @coderabbitai plan only.
+      # Listing labels makes the planner fire AUTOMATICALLY. '!label' is a negative match,
+      # so this plans every issue EXCEPT the non-actionable ones.
+      # Docs: issue_enrichment.planning.auto_planning.labels
+      labels: ["!wontfix", "!duplicate", "!invalid", "!question"]
