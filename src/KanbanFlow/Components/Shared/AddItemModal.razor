@@ -1,14 +1,16 @@
 @inject IDbContextFactory<AppDbContext> DbFactory
 @inject ITaskService TaskService
+@inject IJSRuntime JS
+@implements IAsyncDisposable
 
 @* Bootstrap Modal *@
 <div class="modal fade @(IsOpen ? "show" : "")" tabindex="-1" data-testid="add-item-modal"
      style="display: @(IsOpen ? "block" : "none");"
      @onclick="HandleBackdropClick" @onclick:stopPropagation="false">
-    <div class="modal-dialog" @onclick:stopPropagation="true">
+    <div class="modal-dialog" @ref="dialogRef" role="dialog" aria-modal="true" aria-labelledby="add-item-title" @onclick:stopPropagation="true">
         <div class="modal-content">
             <div class="modal-header">
-                <h5 class="modal-title">@GetModalTitle()</h5>
+                <h5 class="modal-title" id="add-item-title">@GetModalTitle()</h5>
                 <button type="button" class="btn-close" @onclick="Close" aria-label="Close add item modal" data-testid="add-item-close-button"></button>
             </div>
             <div class="modal-body">
@@ -39,6 +41,7 @@
                 <div class="mb-3">
                     <label class="form-label small text-muted mb-1" for="add-item-name">Name</label>
                     <input id="add-item-name" type="text" class="form-control" placeholder="@(itemType == FeatureType ? "Feature name" : "Task name")"
+                           data-dialog-autofocus="true"
                            @bind="itemName" @bind:event="oninput"
                            @onkeydown="HandleKeyDown" />
                 </div>
@@ -181,15 +184,52 @@
 
     private async Task HandleKeyDown(KeyboardEventArgs e)
     {
+        // Escape is handled by the dialog focus-trap (KanbanFlow.initDialog → CloseFromJs);
+        // here we only handle Enter-to-submit from the name field.
         if (e.Key == "Enter" && !string.IsNullOrWhiteSpace(itemName))
             await SaveItem();
-        else if (e.Key == "Escape")
-            await Close();
     }
 
     private async Task Close()
     {
         await OnClose.InvokeAsync();
+    }
+
+    // ── Accessible dialog (#166): focus-trap + Esc + focus restore via KanbanFlow.initDialog ──
+    private ElementReference dialogRef;
+    private DotNetObjectReference<AddItemModal>? _selfRef;
+    private bool _dialogInited;
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (IsOpen && !_dialogInited)
+        {
+            _dialogInited = true;   // set before the await so a re-render mid-init can't double-call
+            _selfRef ??= DotNetObjectReference.Create(this);
+            try { await JS.InvokeVoidAsync("KanbanFlow.initDialog", dialogRef, _selfRef); }
+            catch (Microsoft.JSInterop.JSDisconnectedException) { /* circuit gone during teardown */ }
+        }
+        else if (!IsOpen && _dialogInited)
+        {
+            _dialogInited = false;
+            await SafeDestroyDialogAsync();
+        }
+    }
+
+    [JSInvokable]
+    public Task CloseFromJs() => Close();
+
+    private async Task SafeDestroyDialogAsync()
+    {
+        try { await JS.InvokeVoidAsync("KanbanFlow.destroyDialog", dialogRef); }
+        catch (Microsoft.JSInterop.JSDisconnectedException) { /* circuit gone during teardown */ }
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        if (_dialogInited)
+            await SafeDestroyDialogAsync();
+        _selfRef?.Dispose();
     }
 
     private async Task SaveItem()

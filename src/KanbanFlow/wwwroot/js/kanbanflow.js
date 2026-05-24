@@ -171,5 +171,79 @@ window.KanbanFlow = {
 
         this._outlineMediaQuery = null;
         this._outlineMediaQueryHandler = null;
+    },
+
+    // ── Accessible modal dialogs (#166): focus-trap + Esc + focus restore ──
+    _dialogFocusables: function (dialog) {
+        // Visible-and-focusable filter. Use getClientRects() rather than offsetParent:
+        // offsetParent is null for position:fixed elements (the .modal is fixed), which would
+        // wrongly exclude them. getClientRects() is empty only when the element isn't rendered
+        // (e.g. display:none while the dialog is closed).
+        return Array.prototype.slice.call(dialog.querySelectorAll(
+            'a[href]:not([tabindex="-1"]), button:not([disabled]):not([tabindex="-1"]), input:not([disabled]):not([tabindex="-1"]), select:not([disabled]):not([tabindex="-1"]), textarea:not([disabled]):not([tabindex="-1"]), [tabindex]:not([tabindex="-1"])'
+        )).filter(function (el) { return el.getClientRects().length > 0; });
+    },
+
+    initDialog: function (dialog, dotNetRef) {
+        if (!dialog) {
+            return;
+        }
+        // Remember the opener so focus can be restored when the dialog closes. Capture only
+        // once per open (cleared in destroyDialog) so a re-init can't overwrite it with an
+        // element inside the dialog.
+        if (!dialog._kfOpener) {
+            dialog._kfOpener = document.activeElement;
+        }
+
+        var preferred = dialog.querySelector('[data-dialog-autofocus]');
+        var focusables = this._dialogFocusables(dialog);
+        (preferred || focusables[0] || dialog).focus({ preventScroll: true });
+
+        if (dialog._kfKeydown) {
+            dialog.removeEventListener('keydown', dialog._kfKeydown);
+        }
+        dialog._kfKeydown = function (event) {
+            if (event.key === 'Escape') {
+                event.preventDefault();
+                if (dotNetRef) {
+                    dotNetRef.invokeMethodAsync('CloseFromJs').catch(function () { /* component/circuit disposed */ });
+                }
+                return;
+            }
+            if (event.key !== 'Tab') {
+                return;
+            }
+            // Trap Tab within the dialog (wrap at the first/last focusable).
+            var f = window.KanbanFlow._dialogFocusables(dialog);
+            if (f.length === 0) {
+                event.preventDefault();
+                return;
+            }
+            var first = f[0];
+            var last = f[f.length - 1];
+            if (event.shiftKey && document.activeElement === first) {
+                event.preventDefault();
+                last.focus();
+            } else if (!event.shiftKey && document.activeElement === last) {
+                event.preventDefault();
+                first.focus();
+            }
+        };
+        dialog.addEventListener('keydown', dialog._kfKeydown);
+    },
+
+    destroyDialog: function (dialog) {
+        if (!dialog) {
+            return;
+        }
+        if (dialog._kfKeydown) {
+            dialog.removeEventListener('keydown', dialog._kfKeydown);
+            dialog._kfKeydown = null;
+        }
+        var opener = dialog._kfOpener;
+        dialog._kfOpener = null;
+        if (opener && typeof opener.focus === 'function') {
+            opener.focus({ preventScroll: true });
+        }
     }
 };
