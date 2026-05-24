@@ -20,6 +20,14 @@ public sealed class TestRunnerService(
 {
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
 
+    /// <summary>
+    /// Runs the full API test suite against the running application and collects per-test results.
+    /// </summary>
+    /// <param name="ct">A cancellation token that can be used to cancel the test run.</param>
+    /// <returns>A TestSuiteResult named "API" containing each TestResult and the total elapsed milliseconds.</returns>
+    /// <remarks>
+    /// The method snapshots existing project IDs at start to avoid affecting pre-existing projects, executes multiple isolated API tests (creating and deleting scratch projects as needed), and performs a best-effort audit cleanup after completion using CancellationToken.None; cleanup errors are swallowed so they do not mask test failures or cancellations.
+    /// </remarks>
     public async Task<TestSuiteResult> RunApiTestsAsync(CancellationToken ct = default)
     {
         var runStart = DateTime.UtcNow;
@@ -448,6 +456,11 @@ public sealed class TestRunnerService(
         }
     }
 
+    /// <summary>
+    /// Execute the UI test suite against the running application.
+    /// </summary>
+    /// <param name="ct">Cancellation token to stop test execution; cleanup is still attempted using <see cref="CancellationToken.None"/> so orphaned test artifacts are purged even on cancellation.</param>
+    /// <returns>A <see cref="TestSuiteResult"/> containing the individual test results and the total elapsed milliseconds for the UI suite.</returns>
     public async Task<TestSuiteResult> RunUiTestsAsync(CancellationToken ct = default)
     {
         var runStart = DateTime.UtcNow;
@@ -576,6 +589,14 @@ public sealed class TestRunnerService(
         }
     }
 
+    /// <summary>
+    /// Executes the service-layer test suite against the DI-registered ITaskService using the live database.
+    /// </summary>
+    /// <param name="ct">A cancellation token that can be used to cancel the test run.</param>
+    /// <returns>A TestSuiteResult containing the suite name ("Service"), the list of individual test results, and the total elapsed milliseconds.</returns>
+    /// <remarks>
+    /// The method creates isolated scratch data for each test, verifies persistence and activity audit rows, and performs a best-effort audit cleanup of orphaned test artifacts after the run. Cleanup is attempted with CancellationToken.None and any cleanup exceptions are swallowed to avoid masking test failures or cancellations.
+    /// </remarks>
     public async Task<TestSuiteResult> RunServiceTestsAsync(CancellationToken ct = default)
     {
         var runStart = DateTime.UtcNow;
@@ -1111,6 +1132,11 @@ public sealed class TestRunnerService(
         }
     }
 
+    /// <summary>
+    /// Runs the API, UI, and Service test suites sequentially and aggregates their results.
+    /// </summary>
+    /// <param name="ct">A cancellation token used to cancel the test run.</param>
+    /// <returns>A TestSuiteResult named "All" containing the combined TestResult items from the API, UI, and Service suites and the total elapsed milliseconds.</returns>
     public async Task<TestSuiteResult> RunAllTestsAsync(CancellationToken ct = default)
     {
         var sw = Stopwatch.StartNew();
