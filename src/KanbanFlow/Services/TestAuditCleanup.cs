@@ -18,6 +18,13 @@ namespace KanbanFlow.Services;
 /// </summary>
 internal static class TestAuditCleanup
 {
+    /// <summary>
+    /// Deletes ActivityEvent rows created at or after the specified run start that belong to projects created during the run and whose projects no longer exist.
+    /// </summary>
+    /// <param name="runStartUtc">Inclusive lower bound for event creation time; only events with CreatedAt >= this value are considered.</param>
+    /// <param name="preExistingProjectIds">Project IDs that existed at the start of the run; events for these projects are preserved.</param>
+    /// <param name="ct">Cancellation token to cancel the purge operation.</param>
+    /// <returns>The number of ActivityEvent rows deleted.</returns>
     public static async Task<int> PurgeOrphanedSinceAsync(
         IDbContextFactory<AppDbContext> dbFactory, DateTime runStartUtc,
         IReadOnlyCollection<int> preExistingProjectIds, CancellationToken ct = default)
