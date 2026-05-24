@@ -7,23 +7,29 @@ namespace KanbanFlow;
 
 public static class ApiEndpoints
 {
-    public static WebApplication MapApiEndpoints(this WebApplication app)
+    public static IEndpointRouteBuilder MapApiEndpoints(this IEndpointRouteBuilder app)
     {
-        app.MapProjectEndpoints();
-        app.MapFeatureEndpoints();
-        app.MapTaskEndpoints();
-        app.MapTaskDependencyEndpoints();
-        app.MapSubtaskEndpoints();
-        app.MapAcceptanceCriterionEndpoints();
-        app.MapRequirementEndpoints();
-        app.MapTaskCommentEndpoints();
-        app.MapActivityEndpoints();
+        // Loopback-only: the REST API is unauthenticated by design (single-trust-boundary, local
+        // tool). RequireHost rejects any non-loopback Host header, so a stray non-loopback --urls —
+        // or a browser DNS-rebinding request from an external site — can't reach the mutation
+        // surface. Mirrors the /mcp protection in Program.cs. The empty group prefix keeps the
+        // existing absolute "/api/..." routes unchanged. Closes #84.
+        var api = app.MapGroup("").RequireHost("localhost", "127.0.0.1");
+        api.MapProjectEndpoints();
+        api.MapFeatureEndpoints();
+        api.MapTaskEndpoints();
+        api.MapTaskDependencyEndpoints();
+        api.MapSubtaskEndpoints();
+        api.MapAcceptanceCriterionEndpoints();
+        api.MapRequirementEndpoints();
+        api.MapTaskCommentEndpoints();
+        api.MapActivityEndpoints();
         return app;
     }
 
     // ── Project Endpoints ──────────────────────────────────────────────
 
-    private static void MapProjectEndpoints(this WebApplication app)
+    private static void MapProjectEndpoints(this IEndpointRouteBuilder app)
     {
         // GET /api/projects — list all with feature/task counts
         app.MapGet("/api/projects", async (AppDbContext db) =>
@@ -462,7 +468,7 @@ public static class ApiEndpoints
 
     // ── Activity Endpoints ─────────────────────────────────────────────
 
-    private static void MapActivityEndpoints(this WebApplication app)
+    private static void MapActivityEndpoints(this IEndpointRouteBuilder app)
     {
         // GET /api/projects/{id}/activity — durable project event trail
         app.MapGet("/api/projects/{id:int}/activity", async (int id, int? limit, AppDbContext db) =>
@@ -506,7 +512,7 @@ public static class ApiEndpoints
 
     // ── Feature Endpoints ──────────────────────────────────────────────
 
-    private static void MapFeatureEndpoints(this WebApplication app)
+    private static void MapFeatureEndpoints(this IEndpointRouteBuilder app)
     {
         // GET /api/projects/{projectId}/features — list features for project
         app.MapGet("/api/projects/{projectId:int}/features", async (int projectId, AppDbContext db) =>
@@ -699,7 +705,7 @@ public static class ApiEndpoints
 
     // ── Task Endpoints ─────────────────────────────────────────────────
 
-    private static void MapTaskEndpoints(this WebApplication app)
+    private static void MapTaskEndpoints(this IEndpointRouteBuilder app)
     {
         // GET /api/features/{featureId}/tasks — list tasks for feature
         app.MapGet("/api/features/{featureId:int}/tasks", async (int featureId, AppDbContext db) =>
@@ -1350,7 +1356,7 @@ public static class ApiEndpoints
 
     // ── Task Dependency Endpoints ─────────────────────────────────────
 
-    private static void MapTaskDependencyEndpoints(this WebApplication app)
+    private static void MapTaskDependencyEndpoints(this IEndpointRouteBuilder app)
     {
         // GET /api/tasks/{taskId}/dependencies — list dependencies involving a task
         app.MapGet("/api/tasks/{taskId:int}/dependencies", async (int taskId, AppDbContext db) =>
@@ -1458,7 +1464,7 @@ public static class ApiEndpoints
 
     // ── Subtask Endpoints ──────────────────────────────────────────────
 
-    private static void MapSubtaskEndpoints(this WebApplication app)
+    private static void MapSubtaskEndpoints(this IEndpointRouteBuilder app)
     {
         // GET /api/tasks/{taskId}/subtasks — list
         app.MapGet("/api/tasks/{taskId:int}/subtasks", async (int taskId, AppDbContext db) =>
@@ -1602,7 +1608,7 @@ public static class ApiEndpoints
 
     // ── Acceptance Criterion Endpoints ─────────────────────────────────────────
 
-    private static void MapAcceptanceCriterionEndpoints(this WebApplication app)
+    private static void MapAcceptanceCriterionEndpoints(this IEndpointRouteBuilder app)
     {
         // GET /api/tasks/{taskId}/acceptance-criteria — list acceptance criteria for a task
         app.MapGet("/api/tasks/{taskId:int}/acceptance-criteria", async (int taskId, AppDbContext db) =>
@@ -1713,7 +1719,7 @@ public static class ApiEndpoints
 
     // ── Requirement Endpoints ─────────────────────────────────────────
 
-    private static void MapRequirementEndpoints(this WebApplication app)
+    private static void MapRequirementEndpoints(this IEndpointRouteBuilder app)
     {
         // GET /api/projects/{projectId}/requirements — list all requirements for a project
         app.MapGet("/api/projects/{projectId:int}/requirements", async (int projectId, AppDbContext db) =>
@@ -1937,7 +1943,7 @@ public static class ApiEndpoints
 
     // ── TaskComment Endpoints ────────────────────────────────────────────
 
-    private static void MapTaskCommentEndpoints(this WebApplication app)
+    private static void MapTaskCommentEndpoints(this IEndpointRouteBuilder app)
     {
         // GET /api/tasks/{taskId}/comments — list comments/activity
         app.MapGet("/api/tasks/{taskId:int}/comments", async (int taskId, AppDbContext db) =>

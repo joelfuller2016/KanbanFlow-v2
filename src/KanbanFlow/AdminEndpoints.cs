@@ -10,9 +10,13 @@ public static class AdminEndpoints
     /// </summary>
     public static WebApplication MapAdminEndpoints(this WebApplication app)
     {
+        // Loopback-only — same single-trust-boundary as the rest of /api and /mcp.
+        // /api/admin/run-tests mutates the DB, so it must not be reachable cross-host (#84).
+        var admin = app.MapGroup("").RequireHost("localhost", "127.0.0.1");
+
         // GET /api/admin/health — quick smoke that the app is up and DI is wired.
         // openApiUrl advertises the OpenAPI document path so agents can discover it.
-        app.MapGet("/api/admin/health", (IAppStartupInfo startup) => Results.Ok(new
+        admin.MapGet("/api/admin/health", (IAppStartupInfo startup) => Results.Ok(new
         {
             status = "ok",
             app = "KanbanFlow",
@@ -23,7 +27,7 @@ public static class AdminEndpoints
         }));
 
         // POST /api/admin/run-tests?suite=api|ui|service|all (default: all)
-        app.MapPost("/api/admin/run-tests", async (string? suite, ITestRunnerService runner, CancellationToken ct) =>
+        admin.MapPost("/api/admin/run-tests", async (string? suite, ITestRunnerService runner, CancellationToken ct) =>
         {
             var which = (suite ?? "all").ToLowerInvariant();
             var result = which switch

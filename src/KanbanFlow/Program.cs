@@ -53,9 +53,16 @@ builder.Services.AddMcpServer()
 builder.Services.AddRazorComponents()
     .AddInteractiveServerComponents();
 
-// CORS for AI agents
+// CORS — localhost origins only (defense-in-depth on top of the loopback RequireHost applied to
+// /api + /api/admin). Any localhost PORT is allowed so the Blazor UI and local tooling work on
+// whatever port the app is launched with (5123/5148/scratch test ports); pages on external sites
+// are rejected. Non-browser agent clients send no Origin and are unaffected. Closes #84.
 builder.Services.AddCors(options =>
-    options.AddDefaultPolicy(policy => policy.AllowAnyOrigin().AllowAnyMethod().AllowAnyHeader()));
+    options.AddDefaultPolicy(policy => policy
+        .SetIsOriginAllowed(static origin => Uri.TryCreate(origin, UriKind.Absolute, out var uri)
+            && uri.Host is "localhost" or "127.0.0.1")
+        .AllowAnyMethod()
+        .AllowAnyHeader()));
 
 var app = builder.Build();
 
