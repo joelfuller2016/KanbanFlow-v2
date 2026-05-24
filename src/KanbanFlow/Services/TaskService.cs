@@ -480,11 +480,17 @@ public sealed class TaskService(IDbContextFactory<AppDbContext> dbFactory) : ITa
             // current owner: same actor ⇒ idempotent success, otherwise a genuine 409 conflict.
             var current = await db.Tasks.AsNoTracking()
                 .Where(t => t.Id == taskId)
-                .Select(t => new { t.ClaimedBy, t.ClaimedAt })
+                .Select(t => new { t.ClaimedBy, t.ClaimedAt, t.UpdatedAt })
                 .FirstOrDefaultAsync(ct)
                 ?? throw new TaskNotFoundException(taskId);
             if (string.Equals(current.ClaimedBy, trimmedActor, StringComparison.OrdinalIgnoreCase))
+            {
+                // Reconcile the stale tracked entity with the concurrent winner's values.
+                task.ClaimedBy = current.ClaimedBy;
+                task.ClaimedAt = current.ClaimedAt;
+                task.UpdatedAt = current.UpdatedAt;
                 return task;
+            }
             throw new TaskClaimConflictException(taskId, current.ClaimedBy!, current.ClaimedAt);
         }
 
@@ -548,12 +554,16 @@ public sealed class TaskService(IDbContextFactory<AppDbContext> dbFactory) : ITa
             // ⇒ 409 conflict; otherwise it is already released ⇒ idempotent success.
             var current = await db.Tasks.AsNoTracking()
                 .Where(t => t.Id == taskId)
-                .Select(t => new { t.ClaimedBy, t.ClaimedAt })
+                .Select(t => new { t.ClaimedBy, t.ClaimedAt, t.UpdatedAt })
                 .FirstOrDefaultAsync(ct)
                 ?? throw new TaskNotFoundException(taskId);
             if (!string.IsNullOrWhiteSpace(current.ClaimedBy)
                 && !string.Equals(current.ClaimedBy, trimmedActor, StringComparison.OrdinalIgnoreCase))
                 throw new TaskClaimConflictException(taskId, current.ClaimedBy!, current.ClaimedAt);
+            // Reconcile the stale tracked entity with the already-released DB state.
+            task.ClaimedBy = current.ClaimedBy;
+            task.ClaimedAt = current.ClaimedAt;
+            task.UpdatedAt = current.UpdatedAt;
             return task;
         }
 
@@ -655,7 +665,7 @@ public sealed class TaskService(IDbContextFactory<AppDbContext> dbFactory) : ITa
         var depthCache = new Dictionary<int, int>(subtasks.Count);
 
         var ordered = subtasks
-            .OrderByDescending(s => GetSubtaskDepth(s.Id, parentById, depthCache))
+            .OrderByDescending(s => GetSubtaskDepth(s.Id, parentById, depthCache, new HashSet<int>()))
             .ToList();
 
         db.Subtasks.RemoveRange(ordered);
@@ -663,18 +673,22 @@ public sealed class TaskService(IDbContextFactory<AppDbContext> dbFactory) : ITa
 
     // Memoized depth walk: follows parent links via the prebuilt map, caching every node
     // visited along the way. Stops at a root (null parent) or a parent outside this task's
-    // set (defensive — same break behavior as the original scan).
-    private static int GetSubtaskDepth(int id, Dictionary<int, int?> parentById, Dictionary<int, int> depthCache)
+    // set (defensive — same break behavior as the original scan). The `visiting` set guards
+    // against a (cycle-protected, but defensively handled) self-referential parent chain so
+    // a corrupt graph can't cause unbounded recursion.
+    private static int GetSubtaskDepth(int id, Dictionary<int, int?> parentById, Dictionary<int, int> depthCache, HashSet<int> visiting)
     {
         if (depthCache.TryGetValue(id, out var cached))
             return cached;
+        if (!visiting.Add(id))
+            return 0; // cycle detected — break defensively
 
         var parentId = parentById[id];
         int depth;
         if (parentId is null || !parentById.ContainsKey(parentId.Value))
             depth = 0;
         else
-            depth = GetSubtaskDepth(parentId.Value, parentById, depthCache) + 1;
+            depth = GetSubtaskDepth(parentId.Value, parentById, depthCache, visiting) + 1;
 
         depthCache[id] = depth;
         return depth;

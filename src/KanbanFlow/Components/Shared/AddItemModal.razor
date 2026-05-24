@@ -199,10 +199,11 @@
 
         try
         {
-            using var db = await DbFactory.CreateDbContextAsync();
-
             if (itemType == FeatureType)
             {
+                // Feature creation still writes directly via EF (no service yet — phase 2).
+                // The task branch routes through ITaskService, so the DbContext is scoped here.
+                using var db = await DbFactory.CreateDbContextAsync();
                 int? parentId = selectedFeatureId == 0 ? null : selectedFeatureId;
                 var siblingQuery = parentId.HasValue
                     ? db.Features.Where(f => f.ParentFeatureId == parentId.Value)
