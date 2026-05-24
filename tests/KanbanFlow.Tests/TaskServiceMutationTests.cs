@@ -234,6 +234,23 @@ public sealed class TaskServiceMutationTests
         Assert.Equal(0, await db.ActivityEvents.CountAsync(e => e.EventType == "TaskClaimed"));
     }
 
+    // #156: symmetric to the claim case — a failed audit write must roll back the release UPDATE.
+    [Fact]
+    public async Task Release_AuditWriteFailure_RollsBackTheRelease()
+    {
+        using var f = new SqliteTestFactory();
+        var (_, taskId) = SeedFeatureWithTask(f, claimedBy: "alice");
+        var svc = new TaskService(new ThrowOnSaveFactory(f));
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => svc.ReleaseAsync(taskId, "alice"));
+
+        // The release UPDATE must have rolled back with the failed audit write — still claimed.
+        using var db = f.CreateDbContext();
+        var task = await db.Tasks.FindAsync(taskId);
+        Assert.Equal("alice", task!.ClaimedBy);
+        Assert.Equal(0, await db.ActivityEvents.CountAsync(e => e.EventType == "TaskReleased"));
+    }
+
     // A factory whose contexts share the test DB but throw on SaveChangesAsync — simulating an
     // audit-write failure so the surrounding transaction (claim/release + event) must roll back (#156).
     private sealed class ThrowOnSaveFactory(SqliteTestFactory inner) : IDbContextFactory<AppDbContext>
