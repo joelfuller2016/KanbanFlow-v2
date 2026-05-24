@@ -134,7 +134,7 @@
     private int? loadedIdeaId;
     private bool wasOpen;
 
-    protected override void OnParametersSet()
+    protected override async Task OnParametersSetAsync()
     {
         if (IsOpen && !wasOpen)
         {
@@ -149,7 +149,7 @@
                 if (loadedIdeaId != id)
                 {
                     loadedIdeaId = id;
-                    _ = LoadIdea(id);
+                    await LoadIdea(id);
                 }
             }
             else

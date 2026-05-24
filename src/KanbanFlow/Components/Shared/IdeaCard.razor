@@ -41,7 +41,7 @@
                 {
                     <span class="badge @IdeaBadge.PriorityClass(priority)" data-testid="idea-card-priority-@Idea.Id">@priority</span>
                 }
-                @foreach (var tag in Tags)
+                @foreach (var tag in tags)
                 {
                     <span class="badge bg-light text-dark border">#@tag</span>
                 }
@@ -65,8 +65,11 @@
     [Parameter] public EventCallback<Idea> OnDelete { get; set; }
     [Parameter] public EventCallback<Idea> OnPromote { get; set; }
 
-    private IEnumerable<string> Tags =>
-        string.IsNullOrWhiteSpace(Idea.Tags)
+    // Computed once per parameter change rather than on every render (Idea is a parameter).
+    private string[] tags = [];
+
+    protected override void OnParametersSet() =>
+        tags = string.IsNullOrWhiteSpace(Idea.Tags)
             ? []
             : Idea.Tags.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
 }

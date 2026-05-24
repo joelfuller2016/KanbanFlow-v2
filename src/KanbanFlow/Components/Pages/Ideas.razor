@@ -2,6 +2,7 @@
 @rendermode InteractiveServer
 @inject IIdeaService IdeaSvc
 @inject NavigationManager Nav
+@implements IDisposable
 
 <PageTitle>Ideas - KanbanFlow</PageTitle>
 
@@ -41,7 +42,7 @@
     <div class="col-12 col-md-5">
         <label class="visually-hidden" for="idea-search">Search ideas</label>
         <input id="idea-search" type="search" class="form-control" placeholder="Search ideas..."
-               data-testid="idea-search" @bind="searchFilter" @bind:event="oninput" @bind:after="ReloadIdeas" />
+               data-testid="idea-search" @bind="searchFilter" @bind:event="oninput" @bind:after="DebouncedReload" />
     </div>
     <div class="col-6 col-md-4">
         <label class="visually-hidden" for="idea-status-filter">Filter by status</label>
@@ -57,7 +58,7 @@
     <div class="col-6 col-md-3">
         <label class="visually-hidden" for="idea-tag-filter">Filter by tag</label>
         <input id="idea-tag-filter" type="text" class="form-control" placeholder="Tag filter..."
-               data-testid="idea-tag-filter" @bind="tagFilter" @bind:event="oninput" @bind:after="ReloadIdeas" />
+               data-testid="idea-tag-filter" @bind="tagFilter" @bind:event="oninput" @bind:after="DebouncedReload" />
     </div>
 </div>
 
@@ -265,11 +266,30 @@ else
         }
     }
 
-    // Re-query on filter change. Show the spinner while reloading so the state is real, not stale.
-    private async Task ReloadIdeas()
+    // Re-query on filter change. Keep the current results on screen while loading so live
+    // filtering doesn't flicker the grid to a spinner on every keystroke; the reload-generation
+    // guard in LoadIdeas discards any stale (out-of-order) result.
+    private async Task ReloadIdeas() => await LoadIdeas();
+
+    private CancellationTokenSource? debounceCts;
+
+    // Debounce the free-text filters (search + tag) so a query isn't issued on every keystroke.
+    // The newest keystroke wins; earlier pending reloads cancel out.
+    private async Task DebouncedReload()
     {
-        ideas = null;
-        await LoadIdeas();
+        debounceCts?.Cancel();
+        debounceCts?.Dispose();
+        debounceCts = new CancellationTokenSource();
+        var token = debounceCts.Token;
+        try { await Task.Delay(250, token); }
+        catch (OperationCanceledException) { return; }
+        await ReloadIdeas();
+    }
+
+    public void Dispose()
+    {
+        debounceCts?.Cancel();
+        debounceCts?.Dispose();
     }
 
     private async Task ClearFilters()
