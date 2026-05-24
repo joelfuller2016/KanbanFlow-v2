@@ -8,6 +8,7 @@
 #
 # Exits non-zero on the first failing step so humans and agents can gate on it.
 # ─────────────────────────────────────────────────────────────────────────────
+#requires -Version 7.0   # uses ?? / ?. (PS7+); fail clearly on Windows PowerShell 5.1 instead of a cryptic parse error
 $ErrorActionPreference = 'Stop'   # Stop-action cmdlet failures become terminating errors -> caught below
 $script:verifyFailed = $false
 $repoRoot = Split-Path -Parent $PSScriptRoot
