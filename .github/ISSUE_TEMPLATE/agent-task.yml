@@ -25,6 +25,16 @@ body:
     validations:
       required: true
   - type: textarea
+    id: fix-plan
+    attributes:
+      label: Fix plan (HOW)
+      description: Numbered, concrete steps naming the files/methods to change — so the agent executes, not re-derives.
+      placeholder: |
+        1. …
+        2. …
+    validations:
+      required: true
+  - type: textarea
     id: done-when
     attributes:
       label: Done when
@@ -32,5 +42,12 @@ body:
       placeholder: |
         - [ ] ...
         - [ ] `dotnet test` passes
+    validations:
+      required: true
+  - type: textarea
+    id: test-plan
+    attributes:
+      label: Test plan
+      description: Real tests that prove it (xUnit / smoke-api.ps1) — no fakes.
     validations:
       required: true
