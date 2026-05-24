@@ -109,8 +109,10 @@ public sealed class TaskServiceTests
         var comment = await db.TaskComments.SingleAsync();
         Assert.Equal(CommentType.StatusChange, comment.Type);
         Assert.Equal("alice", comment.Author);
-        Assert.Contains("Todo", comment.Text);
-        Assert.Contains("InProgress", comment.Text);
+        // Assert against the enum's own ToString() (not string literals) so the test
+        // stays in sync with the service if the WorkStatus names are ever renamed.
+        Assert.Contains(WorkStatus.Todo.ToString(), comment.Text);
+        Assert.Contains(WorkStatus.InProgress.ToString(), comment.Text);
 
         var ev = await db.ActivityEvents.SingleAsync();
         Assert.Equal("TaskStatusChanged", ev.EventType);
