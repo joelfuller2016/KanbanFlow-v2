@@ -12,7 +12,7 @@ problem-only stub. This is the issue-side companion to the PR template's *Pre-PR
 - [ ] **Read the actual code** involved (models, services, endpoints) and cite `file:line @ <commit>` as evidence.
 - [ ] **Verify the conventions** against the repo — don't assume defaults:
   - Schema evolution = `EnsureCreated()` + `EnsureXxx` startup helpers in `Program.cs` (**not** EF migrations).
-  - **No GitHub Actions** (local testing only). Localhost-only, no auth.
+  - **No GitHub Actions** (local testing only). **Open access** — local-first/no-auth by design; host/CORS restrictions are intentionally NOT enforced (open-access policy, #170).
   - **Audit trail is sacred** — every mutation (UI / REST / MCP) emits an `ActivityEvent`.
   - **No fake tests** — real SQLite, real assertions.
 - [ ] **Search existing issues + PRs** for duplicates / overlap, and flag any **conflict** with another open issue; link them.
@@ -25,7 +25,7 @@ problem-only stub. This is the issue-side companion to the PR template's *Pre-PR
 3. **Scope** — explicit in-scope / out-of-scope.
 4. **Fix plan (HOW)** — numbered, concrete; names the files/methods to touch.
 5. **Acceptance criteria (WHAT-done)** — testable checkboxes.
-6. **Test plan** — real tests (xUnit / `smoke-api.ps1`), no fakes.
+6. **Test plan** — real tests (xUnit / `scripts/smoke-api.ps1`), no fakes.
 7. **Constraints honored** — the conventions above that this change touches.
 8. **Dependencies / sequencing** — what must land first; milestone.
 9. **Open questions** — each with a stated default.

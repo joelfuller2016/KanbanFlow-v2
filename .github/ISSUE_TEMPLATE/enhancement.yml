@@ -20,6 +20,19 @@ body:
       options: ["ui", "api", "ai-agent", "tech-debt", "docs", "other"]
     validations:
       required: true
+  - type: dropdown
+    id: milestone
+    attributes:
+      label: Milestone (execution phase — see the roadmap #163)
+      options:
+        - "M1 — Correctness & Audit Trail"
+        - "M2 — Tech-debt & Foundation"
+        - "M3 — Agent API Surface"
+        - "M4 — UI / UX Polish"
+        - "M5 — Docs & Process"
+        - "Unsequenced (needs triage)"
+    validations:
+      required: true
   - type: textarea
     id: problem
     attributes:
@@ -69,7 +82,7 @@ body:
       description: Real tests that prove it — xUnit and/or smoke-api.ps1. No fakes.
       placeholder: |
         - xUnit: …
-        - smoke-api.ps1: …
+        - scripts/smoke-api.ps1: …
     validations:
       required: true
   - type: checkboxes

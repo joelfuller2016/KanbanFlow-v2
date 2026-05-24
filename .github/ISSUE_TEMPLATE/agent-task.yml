@@ -48,6 +48,6 @@ body:
     id: test-plan
     attributes:
       label: Test plan
-      description: Real tests that prove it (xUnit / smoke-api.ps1) — no fakes.
+      description: Real tests that prove it (xUnit / scripts/smoke-api.ps1) — no fakes.
     validations:
       required: true
