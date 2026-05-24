@@ -37,5 +37,9 @@ public sealed class SqliteTestFactory : IDbContextFactory<AppDbContext>, IDispos
     public Task<AppDbContext> CreateDbContextAsync(CancellationToken cancellationToken = default)
         => Task.FromResult(new AppDbContext(_options));
 
+    /// <summary>The shared options (same in-memory connection) — lets advanced tests build a
+    /// custom <see cref="AppDbContext"/> subclass against the same database.</summary>
+    public DbContextOptions<AppDbContext> Options => _options;
+
     public void Dispose() => _connection.Dispose();
 }

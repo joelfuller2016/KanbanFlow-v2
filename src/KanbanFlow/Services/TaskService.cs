@@ -492,6 +492,12 @@ public sealed class TaskService(IDbContextFactory<AppDbContext> dbFactory) : ITa
         var before = TaskActivitySnapshot(task);
         var now = DateTime.UtcNow;
 
+        // Atomic claim + audit (#156): wrap the conditional UPDATE and the TaskClaimed event in
+        // one transaction so a claim can never persist without its audit event. The race-safe
+        // conditional UPDATE still works inside the transaction (previously it auto-committed,
+        // leaving a window where the claim survived but the audit SaveChanges could fail).
+        await using var tx = await db.Database.BeginTransactionAsync(ct);
+
         // Race-safe claim (R4): a conditional UPDATE that only fires while the row is still
         // unclaimed. Under concurrent claimers (multiple agents), exactly one UPDATE matches
         // (rows == 1); the loser sees rows == 0 and is reconciled below. This closes the
@@ -535,6 +541,7 @@ public sealed class TaskService(IDbContextFactory<AppDbContext> dbFactory) : ITa
             $"Task '{task.Name}' claimed by {trimmedActor}");
 
         await db.SaveChangesAsync(ct);
+        await tx.CommitAsync(ct);
         return task;
     }
 
@@ -566,6 +573,10 @@ public sealed class TaskService(IDbContextFactory<AppDbContext> dbFactory) : ITa
 
         var before = TaskActivitySnapshot(task);
         var now = DateTime.UtcNow;
+
+        // Atomic release + audit (#156): wrap the conditional UPDATE and the TaskReleased event
+        // in one transaction so a release can never persist without its audit event.
+        await using var tx = await db.Database.BeginTransactionAsync(ct);
 
         // Race-safe release (R4): conditional UPDATE that only fires while THIS actor still
         // holds the claim. If the state changed underneath us, rows == 0 → reconcile below.
@@ -607,6 +618,7 @@ public sealed class TaskService(IDbContextFactory<AppDbContext> dbFactory) : ITa
             $"Task '{task.Name}' released by {trimmedActor}");
 
         await db.SaveChangesAsync(ct);
+        await tx.CommitAsync(ct);
         return task;
     }
 

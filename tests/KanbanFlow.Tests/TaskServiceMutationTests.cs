@@ -1,3 +1,4 @@
+using KanbanFlow.Data;
 using KanbanFlow.Models;
 using KanbanFlow.Services;
 using Microsoft.EntityFrameworkCore;
@@ -210,6 +211,42 @@ public sealed class TaskServiceMutationTests
         var ev = await db.ActivityEvents.SingleAsync(e => e.EntityId == taskId);
         Assert.Equal("TaskClaimed", ev.EventType);
         Assert.Equal("alice", ev.Actor);
+    }
+
+    // #156: the claim UPDATE and its TaskClaimed audit event must commit atomically. If the
+    // audit write fails, the claim must roll back — no claimed-but-unaudited task.
+    [Fact]
+    public async Task Claim_AuditWriteFailure_RollsBackTheClaim()
+    {
+        using var f = new SqliteTestFactory();
+        var (_, taskId) = SeedFeatureWithTask(f);
+        // The service runs against contexts whose audit SaveChanges throws (after the claim UPDATE).
+        var svc = new TaskService(new ThrowOnSaveFactory(f));
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => svc.ClaimAsync(taskId, "alice"));
+
+        // Re-query a real context: the conditional claim UPDATE must have rolled back with the
+        // failed audit write — otherwise the task would be claimed with no TaskClaimed event.
+        using var db = f.CreateDbContext();
+        var task = await db.Tasks.FindAsync(taskId);
+        Assert.Null(task!.ClaimedBy);
+        Assert.Null(task.ClaimedAt);
+        Assert.Equal(0, await db.ActivityEvents.CountAsync(e => e.EventType == "TaskClaimed"));
+    }
+
+    // A factory whose contexts share the test DB but throw on SaveChangesAsync — simulating an
+    // audit-write failure so the surrounding transaction (claim/release + event) must roll back (#156).
+    private sealed class ThrowOnSaveFactory(SqliteTestFactory inner) : IDbContextFactory<AppDbContext>
+    {
+        public AppDbContext CreateDbContext() => new ThrowOnSaveContext(inner.Options);
+        public Task<AppDbContext> CreateDbContextAsync(CancellationToken ct = default)
+            => Task.FromResult<AppDbContext>(new ThrowOnSaveContext(inner.Options));
+    }
+
+    private sealed class ThrowOnSaveContext(DbContextOptions<AppDbContext> options) : AppDbContext(options)
+    {
+        public override Task<int> SaveChangesAsync(CancellationToken cancellationToken = default)
+            => throw new InvalidOperationException("simulated audit-write failure");
     }
 
     [Fact]
