@@ -2,6 +2,9 @@
   "name": "kanbanflow-v2-scripts",
   "version": "1.0.0",
   "private": true,
+  "engines": {
+    "node": ">=18"
+  },
   "description": "Local automation & test scripts for KanbanFlow v2 (MCP server, smoke tests, UI e2e). Local-only; no CI.",
   "scripts": {
     "test:ui": "node scripts/ui-e2e.mjs",

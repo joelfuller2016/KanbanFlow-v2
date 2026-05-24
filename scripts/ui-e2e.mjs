@@ -117,19 +117,34 @@ async function startApp() {
   tempDbDir = mkdtempSync(path.join(os.tmpdir(), "kf-uie2e-"));
   const dbPath = path.join(tempDbDir, "ui-e2e.db");
   log(`Starting app on ${baseUrl} (db ${dbPath})...`);
+
+  // Fail fast on startup problems: capture stderr and surface spawn/early-exit
+  // errors immediately, instead of falling through to the generic health timeout.
+  let started = false;
+  let startupError = null;
+  let stderrTail = "";
   appProc = spawn("dotnet", [dll, "--urls", baseUrl], {
     env: { ...process.env, KANBANFLOW_DB_PATH: dbPath, ASPNETCORE_ENVIRONMENT: "Development" },
-    stdio: "ignore",
+    stdio: ["ignore", "ignore", "pipe"],
   });
-  // wait for health
+  appProc.on("error", (e) => { startupError = `failed to spawn dotnet: ${e.message}`; });
+  appProc.stderr?.on("data", (d) => { stderrTail = (stderrTail + d.toString()).slice(-800); });
+  appProc.on("exit", (code, signal) => {
+    if (!started) {
+      startupError = `app exited before becoming healthy (code=${code}, signal=${signal})` +
+        (stderrTail ? `\n--- stderr ---\n${stderrTail}` : "");
+    }
+  });
+
   for (let i = 0; i < 40; i++) {
+    if (startupError) throw new Error(startupError);
     try {
       const r = await fetch(`${baseUrl}/api/admin/health`);
-      if (r.ok && (await r.json()).status === "ok") { log("App is up."); return; }
+      if (r.ok && (await r.json()).status === "ok") { started = true; log("App is up."); return; }
     } catch { /* not ready */ }
     await sleep(500);
   }
-  throw new Error("App did not become healthy in time");
+  throw new Error("App did not become healthy in time" + (stderrTail ? `\n--- stderr ---\n${stderrTail}` : ""));
 }
 
 function stopApp() {
