@@ -21,10 +21,13 @@ public sealed class TestRunnerService(
 
     public async Task<TestSuiteResult> RunApiTestsAsync(CancellationToken ct = default)
     {
+        var runStart = DateTime.UtcNow;
         var sw = Stopwatch.StartNew();
         using var http = CreateHttpClient();
         var results = new List<TestResult>();
 
+        try
+        {
         // Each test creates an isolated test project (named with a random GUID prefix)
         // and deletes it on completion. This means tests can run in parallel against the
         // live DB without interfering with the user's real projects.
@@ -428,14 +431,24 @@ public sealed class TestRunnerService(
         }
 
         return new TestSuiteResult("API", results, sw.Elapsed.TotalMilliseconds);
+        }
+        finally
+        {
+            // Purge only this run's orphaned audit rows (test-project droppings),
+            // preserving real deleted-project audit history (#85). Fixes #150.
+            await TestAuditCleanup.PurgeOrphanedSinceAsync(dbFactory, runStart, ct);
+        }
     }
 
     public async Task<TestSuiteResult> RunUiTestsAsync(CancellationToken ct = default)
     {
+        var runStart = DateTime.UtcNow;
         var sw = Stopwatch.StartNew();
         using var http = CreateHttpClient();
         var results = new List<TestResult>();
 
+        try
+        {
         results.Add(await RunTest("Home page renders 200 with PageTitle", "UI:Home", async () =>
         {
             var resp = await http.GetAsync("/", ct);
@@ -539,10 +552,18 @@ public sealed class TestRunnerService(
         }));
 
         return new TestSuiteResult("UI", results, sw.Elapsed.TotalMilliseconds);
+        }
+        finally
+        {
+            // Purge only this run's orphaned audit rows (test-project droppings),
+            // preserving real deleted-project audit history (#85). Fixes #150.
+            await TestAuditCleanup.PurgeOrphanedSinceAsync(dbFactory, runStart, ct);
+        }
     }
 
     public async Task<TestSuiteResult> RunServiceTestsAsync(CancellationToken ct = default)
     {
+        var runStart = DateTime.UtcNow;
         var sw = Stopwatch.StartNew();
         var results = new List<TestResult>();
 
@@ -550,6 +571,8 @@ public sealed class TestRunnerService(
         // wrapping each test in a project we delete on completion so they don't leak.
         using var http = CreateHttpClient();
 
+        try
+        {
         results.Add(await RunTest("ChangeStatusAsync writes activity + StatusChange comment", "Service:Task", async () =>
         {
             var (pid, _, taskId) = await CreateProjectFeatureTaskAsync(http, ct);
@@ -1057,6 +1080,13 @@ public sealed class TestRunnerService(
         }));
 
         return new TestSuiteResult("Service", results, sw.Elapsed.TotalMilliseconds);
+        }
+        finally
+        {
+            // Purge only this run's orphaned audit rows (test-project droppings),
+            // preserving real deleted-project audit history (#85). Fixes #150.
+            await TestAuditCleanup.PurgeOrphanedSinceAsync(dbFactory, runStart, ct);
+        }
     }
 
     public async Task<TestSuiteResult> RunAllTestsAsync(CancellationToken ct = default)
