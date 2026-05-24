@@ -22,6 +22,12 @@ public sealed class TestRunnerService(
     public async Task<TestSuiteResult> RunApiTestsAsync(CancellationToken ct = default)
     {
         var runStart = DateTime.UtcNow;
+        // Snapshot the projects that already exist at run start. The runner uses the live DB,
+        // so a user could delete a real, pre-existing project mid-run; excluding these ids from
+        // the cleanup keeps that real project's audit trail intact (see TestAuditCleanup).
+        List<int> preExistingProjectIds;
+        await using (var preDb = await dbFactory.CreateDbContextAsync(ct))
+            preExistingProjectIds = await preDb.Projects.Select(p => p.Id).ToListAsync(ct);
         var sw = Stopwatch.StartNew();
         using var http = CreateHttpClient();
         var results = new List<TestResult>();
@@ -436,13 +442,20 @@ public sealed class TestRunnerService(
         {
             // Purge only this run's orphaned audit rows (test-project droppings),
             // preserving real deleted-project audit history (#85). Fixes #150.
-            await TestAuditCleanup.PurgeOrphanedSinceAsync(dbFactory, runStart, ct);
+            // Use CancellationToken.None so a cancelled run still cleans up after itself.
+            await TestAuditCleanup.PurgeOrphanedSinceAsync(dbFactory, runStart, preExistingProjectIds, CancellationToken.None);
         }
     }
 
     public async Task<TestSuiteResult> RunUiTestsAsync(CancellationToken ct = default)
     {
         var runStart = DateTime.UtcNow;
+        // Snapshot the projects that already exist at run start. The runner uses the live DB,
+        // so a user could delete a real, pre-existing project mid-run; excluding these ids from
+        // the cleanup keeps that real project's audit trail intact (see TestAuditCleanup).
+        List<int> preExistingProjectIds;
+        await using (var preDb = await dbFactory.CreateDbContextAsync(ct))
+            preExistingProjectIds = await preDb.Projects.Select(p => p.Id).ToListAsync(ct);
         var sw = Stopwatch.StartNew();
         using var http = CreateHttpClient();
         var results = new List<TestResult>();
@@ -557,13 +570,20 @@ public sealed class TestRunnerService(
         {
             // Purge only this run's orphaned audit rows (test-project droppings),
             // preserving real deleted-project audit history (#85). Fixes #150.
-            await TestAuditCleanup.PurgeOrphanedSinceAsync(dbFactory, runStart, ct);
+            // Use CancellationToken.None so a cancelled run still cleans up after itself.
+            await TestAuditCleanup.PurgeOrphanedSinceAsync(dbFactory, runStart, preExistingProjectIds, CancellationToken.None);
         }
     }
 
     public async Task<TestSuiteResult> RunServiceTestsAsync(CancellationToken ct = default)
     {
         var runStart = DateTime.UtcNow;
+        // Snapshot the projects that already exist at run start. The runner uses the live DB,
+        // so a user could delete a real, pre-existing project mid-run; excluding these ids from
+        // the cleanup keeps that real project's audit trail intact (see TestAuditCleanup).
+        List<int> preExistingProjectIds;
+        await using (var preDb = await dbFactory.CreateDbContextAsync(ct))
+            preExistingProjectIds = await preDb.Projects.Select(p => p.Id).ToListAsync(ct);
         var sw = Stopwatch.StartNew();
         var results = new List<TestResult>();
 
@@ -1085,7 +1105,8 @@ public sealed class TestRunnerService(
         {
             // Purge only this run's orphaned audit rows (test-project droppings),
             // preserving real deleted-project audit history (#85). Fixes #150.
-            await TestAuditCleanup.PurgeOrphanedSinceAsync(dbFactory, runStart, ct);
+            // Use CancellationToken.None so a cancelled run still cleans up after itself.
+            await TestAuditCleanup.PurgeOrphanedSinceAsync(dbFactory, runStart, preExistingProjectIds, CancellationToken.None);
         }
     }
 
