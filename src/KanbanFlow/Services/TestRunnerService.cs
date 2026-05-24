@@ -636,6 +636,32 @@ public sealed class TestRunnerService(
                     if (ideaId is int iid) await http.DeleteAsync($"/api/ideas/{iid}", ct);
                 }
             }));
+
+            results.Add(await RunTest("Idea POST/PATCH with blank enum returns 422", "API:Idea", async () =>
+            {
+                // A present-but-blank enum body field must be rejected (422), not
+                // silently treated as "leave unchanged"/default (CodeRabbit, #185).
+                int? ideaId = null;
+                try
+                {
+                    var postBlank = await http.PostAsJsonAsync("/api/ideas", new { title = "blank enum", priority = " " }, Json, ct);
+                    if (postBlank.StatusCode != HttpStatusCode.UnprocessableEntity)
+                        throw new Exception($"POST blank priority expected 422, got {(int)postBlank.StatusCode}");
+
+                    var create = await http.PostAsJsonAsync("/api/ideas", new { title = "blank enum patch target" }, Json, ct);
+                    if (create.StatusCode != HttpStatusCode.Created)
+                        throw new Exception($"Create idea expected 201, got {(int)create.StatusCode}");
+                    ideaId = (await create.Content.ReadFromJsonAsync<JsonElement>(Json, ct)).GetProperty("id").GetInt32();
+
+                    var patchBlank = await http.PatchAsJsonAsync($"/api/ideas/{ideaId}", new { status = " " }, Json, ct);
+                    if (patchBlank.StatusCode != HttpStatusCode.UnprocessableEntity)
+                        throw new Exception($"PATCH blank status expected 422, got {(int)patchBlank.StatusCode}");
+                }
+                finally
+                {
+                    if (ideaId is int iid) await http.DeleteAsync($"/api/ideas/{iid}", ct);
+                }
+            }));
         }
         finally
         {

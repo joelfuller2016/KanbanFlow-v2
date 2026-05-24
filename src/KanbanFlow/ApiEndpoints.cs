@@ -551,9 +551,10 @@ public static class ApiEndpoints
         app.MapPost("/api/ideas", async (IdeaCreateDto dto, Services.IIdeaService ideaSvc, CancellationToken ct) =>
         {
             TaskPriority? priority = null;
-            if (!string.IsNullOrWhiteSpace(dto.Priority))
+            if (dto.Priority is not null)
             {
-                if (!Enum.TryParse<TaskPriority>(dto.Priority, ignoreCase: true, out var p) || !Enum.IsDefined(p))
+                var raw = dto.Priority.Trim();
+                if (raw.Length == 0 || !Enum.TryParse<TaskPriority>(raw, ignoreCase: true, out var p) || !Enum.IsDefined(p))
                     return Results.UnprocessableEntity(new { message = $"Invalid priority: {dto.Priority}. Valid values: {string.Join(", ", Enum.GetNames<TaskPriority>())}" });
                 priority = p;
             }
@@ -582,17 +583,19 @@ public static class ApiEndpoints
         app.MapPatch("/api/ideas/{id:int}", async (int id, IdeaUpdateDto dto, Services.IIdeaService ideaSvc, CancellationToken ct) =>
         {
             IdeaStatus? status = null;
-            if (!string.IsNullOrWhiteSpace(dto.Status))
+            if (dto.Status is not null)
             {
-                if (!Enum.TryParse<IdeaStatus>(dto.Status, ignoreCase: true, out var s) || !Enum.IsDefined(s))
+                var raw = dto.Status.Trim();
+                if (raw.Length == 0 || !Enum.TryParse<IdeaStatus>(raw, ignoreCase: true, out var s) || !Enum.IsDefined(s))
                     return Results.UnprocessableEntity(new { message = $"Invalid status: {dto.Status}. Valid values: {string.Join(", ", Enum.GetNames<IdeaStatus>())}" });
                 status = s;
             }
 
             TaskPriority? priority = null;
-            if (!string.IsNullOrWhiteSpace(dto.Priority))
+            if (dto.Priority is not null)
             {
-                if (!Enum.TryParse<TaskPriority>(dto.Priority, ignoreCase: true, out var p) || !Enum.IsDefined(p))
+                var raw = dto.Priority.Trim();
+                if (raw.Length == 0 || !Enum.TryParse<TaskPriority>(raw, ignoreCase: true, out var p) || !Enum.IsDefined(p))
                     return Results.UnprocessableEntity(new { message = $"Invalid priority: {dto.Priority}. Valid values: {string.Join(", ", Enum.GetNames<TaskPriority>())}" });
                 priority = p;
             }
