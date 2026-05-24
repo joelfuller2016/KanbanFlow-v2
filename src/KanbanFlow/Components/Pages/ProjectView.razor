@@ -519,8 +519,9 @@ else
         {
             // Pooled client via IHttpClientFactory — avoids the socket-exhaustion of
             // newing an HttpClient per click (#158). Callers pass absolute URIs, so no
-            // BaseAddress is needed. Factory clients are not disposed by design.
-            var client = HttpClientFactory.CreateClient();
+            // BaseAddress is needed. Disposing the wrapper is safe; the pooled handler
+            // is owned by the factory and survives.
+            using var client = HttpClientFactory.CreateClient();
             await load(client);
         }
         catch (OperationCanceledException)
