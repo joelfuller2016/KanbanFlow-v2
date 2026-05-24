@@ -1,8 +1,8 @@
 # AI Orientation Briefing — schema (Phase 0, issue #173)
 
-> **Status: design / read-only.** No entities, migrations, or endpoints ship in this phase.
+> **Status: design / read-only.** No entities, schema changes, or endpoints ship in this phase.
 > This is the reviewable artifact that locks the `get_project_briefing` shape (and the
-> Milestone addition it depends on) **before** any migration — design from evidence, not theory.
+> Milestone addition it depends on) **before** any schema change — design from evidence, not theory.
 > Defaults shown for the [open questions](#open-questions) can change without reworking the build.
 
 ## Purpose
@@ -107,7 +107,7 @@ Derivations: **Blocked** = has an unmet dependency OR an open `Blocked` comment.
   "activeMilestone": { "id": 4, "name": "M3 — Briefing + sequencing", "goal": "Make the process AI-legible", "tasksDone": 3, "tasksTotal": 9, "target": "2026-06-15" },
   "now": [
     { "taskId": 142, "name": "Add get_project_briefing tool", "claimedBy": "agent-opus", "claimedAgoHours": 1.5, "latestNote": { "type": "Handoff", "text": "schema validated; wiring MCP next" }, "stalled": false },
-    { "taskId": 139, "name": "Milestone EF migration", "claimedBy": "agent-sonnet", "claimedAgoHours": 26.0, "latestNote": { "type": "Blocked", "text": "waiting on schema sign-off" }, "stalled": true }
+    { "taskId": 139, "name": "Milestone schema (EnsureMilestoneTable)", "claimedBy": "agent-sonnet", "claimedAgoHours": 26.0, "latestNote": { "type": "Blocked", "text": "waiting on schema sign-off" }, "stalled": true }
   ],
   "next": [
     { "taskId": 145, "name": "Requirement↔Task links", "priority": "High", "estimate": "M", "milestone": "M3 — Briefing + sequencing", "ready": true, "reason": "Top because: High priority, Ready, in active milestone, no open blockers, unclaimed." },
@@ -128,7 +128,7 @@ expands specific tasks via `get_task`.
 
 ## Maps to the phased plan (#173)
 
-- **Phase 1** ships `Milestone` + `TaskItem.MilestoneId`/`Estimate` + Requirement↔Task (migration + backfill).
+- **Phase 1** ships `Milestone` + `TaskItem.MilestoneId`/`Estimate` + Requirement↔Task via this repo's existing **`EnsureCreated` + `EnsureXxx` startup schema-evolution pattern** (raw `CREATE TABLE IF NOT EXISTS` / `PRAGMA table_info` / `ALTER TABLE` in `Program.cs` — **not** EF migrations; see `EnsureTaskClaimColumns`/`EnsureActivityEventTable`), plus a default-milestone backfill.
 - **Phase 2** ships the `workflow` block + Ready/Blocked/Stalled derivation.
 - **Phase 3** ships rollups + recent-activity (read `ActivityEvent`) in services/REST.
 - **Phase 4** ships `get_project_briefing` to exactly this schema, makes `get_next_tasks` honor the precedence above, adds `get_recent_activity`.
