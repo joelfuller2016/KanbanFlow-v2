@@ -10,7 +10,7 @@
 - **What:** a single-file (.NET 10 + SQLite) app where a project — its features, tasks, subtasks, requirements, acceptance criteria, decisions, and dependencies — is structured data.
 - **For humans:** a drag-and-drop kanban board + project outline.
 - **For agents:** the *same* data over a REST API and an MCP server, plus a `next-tasks` engine that answers "what should I work on next?" with reasoning.
-- **Guarantee:** every change (human *or* agent) writes an immutable `ActivityEvent`, so the next agent inherits the full causal history.
+- **Guarantee:** every **task** mutation (human *or* agent) writes an immutable `ActivityEvent` — full-entity audit coverage is landing via the service-layer work (#88) — so agents inherit the causal history.
 - **Scope:** local-first, single-user, single-trust-boundary (agent + owner on one machine). No auth, no multi-tenancy, no cloud.
 
 ---
@@ -143,7 +143,7 @@ flowchart TD
     T --> AC["AcceptanceCriterion<br/><small>checklist item</small>"]
     T --> S["Subtask"]
     S -->|"recursive: sub-subtasks"| S
-    T --> C["TaskComment<br/><small>Note · Decision · Handoff · Verification · system</small>"]
+    T --> C["TaskComment<br/><small>user: Note/Decision/Question/Blocked/Handoff/Verification · + system types</small>"]
     T --> D["TaskDependency<br/><small>DAG · cycle-protected</small>"]
     P -. "every change" .-> AE[["ActivityEvent<br/><small>append-only · survives entity deletion</small>"]]
 ```
@@ -160,10 +160,10 @@ The whole point of the system: an agent asks for direction and gets a ranked, de
 
 ```mermaid
 flowchart LR
-    A["🤖 agent"] --> N["GET /api/projects/{id}/next-tasks<br/>?actor= &amp;limit="]
+    A["🤖 agent"] --> N["GET /api/projects/{id}/next-tasks?limit="]
     N --> CHK{"task has an<br/>open blocker?"}
     CHK -- yes --> BLK["→ blockedTasks<br/>(excluded from picks)"]
-    CHK -- no --> RANK["rank by:<br/>priority → status → age → unclaimed"]
+    CHK -- no --> RANK["rank by:<br/>priority → status → oldest updated"]
     RANK --> REC["recommendations[]<br/>each with a human-readable <b>reason</b>"]
     REC --> SC["GET /api/tasks/{id}/context<br/>criteria + subtasks + deps + comments + activity"]
     SC --> ACT["agent executes →<br/>status change · comment · claim"]
@@ -181,7 +181,7 @@ flowchart TD
     RST["REST endpoint"] --> SVC
     MCP["MCP tool"] --> SVC["ITaskService.&lt;Mutate&gt;Async(actor)"]
     SVC --> V{"validate<br/>enums · project boundary · claim owner"}
-    V -- invalid --> E["422 / 409 / 404<br/>uniform error shape"]
+    V -- invalid --> E["422 / 409 / 404<br/>{ message } (+ context on some)"]
     V -- ok --> M["apply mutation"]
     M --> EV["ActivityEvent<br/>before/after snapshot + message"]
     M --> CM["typed TaskComment<br/>StatusChange · Created · …"]
