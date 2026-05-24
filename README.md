@@ -297,7 +297,7 @@ These aren't oversights — they're deliberate exclusions for v2:
 |----------|--------|
 | Authentication / authorisation | Single-trust-boundary tool. Agent + owner on one machine. |
 | Multi-tenancy | One DB, one user. Per-project ownership scoping is not a v2 goal. |
-| HTTPS, security headers, rate limiting | Local-loopback only. Bind to `127.0.0.1`. |
+| HTTPS, security headers, rate limiting | **Open access by design** — trust the network; no enforced loopback / CORS / source-IP restrictions. Hardening deferred to #84. |
 | Real-time human collaboration (multiple humans on the same board) | Single-user UX; auto-poll or refresh on demand. |
 | Notifications (email, Slack, etc.) | The agent is the integration. |
 | External integrations (GitHub, Jira, Linear) | Could be a later module; not v2. |
