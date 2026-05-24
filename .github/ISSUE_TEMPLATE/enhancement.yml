@@ -10,7 +10,7 @@ body:
     id: priority
     attributes:
       label: Priority
-      options: ["P1 (should have)", "P2 (nice to have)"]
+      options: ["P0 (critical / blocker)", "P1 (should have)", "P2 (nice to have)", "P3 (low / someday)"]
     validations:
       required: true
   - type: dropdown
@@ -18,6 +18,19 @@ body:
     attributes:
       label: Area
       options: ["ui", "api", "ai-agent", "tech-debt", "docs", "other"]
+    validations:
+      required: true
+  - type: dropdown
+    id: milestone
+    attributes:
+      label: Milestone (execution phase — see the roadmap #163)
+      options:
+        - "M1 — Correctness & Audit Trail"
+        - "M2 — Tech-debt & Foundation"
+        - "M3 — Agent API Surface"
+        - "M4 — UI / UX Polish"
+        - "M5 — Docs & Process"
+        - "Unsequenced (needs triage)"
     validations:
       required: true
   - type: textarea
@@ -31,7 +44,25 @@ body:
     id: proposal
     attributes:
       label: Proposed scope
-      description: What should change? Files, endpoints, components, behavior.
+      description: What should change? Files, endpoints, components, behavior. Note anything explicitly OUT of scope.
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Evidence
+      description: "Cite the current code — `file:line @ <commit>` — proving the gap / current behavior."
+      placeholder: "src/KanbanFlow/ApiEndpoints.cs:297 @ 0f65117 — signature has no `actor` param …"
+    validations:
+      required: true
+  - type: textarea
+    id: fix-plan
+    attributes:
+      label: Fix plan (HOW)
+      description: Numbered, concrete steps naming the files/methods to change.
+      placeholder: |
+        1. …
+        2. …
     validations:
       required: true
   - type: textarea
@@ -44,3 +75,24 @@ body:
         - [ ] ...
     validations:
       required: true
+  - type: textarea
+    id: test-plan
+    attributes:
+      label: Test plan
+      description: Real tests that prove it — xUnit and/or smoke-api.ps1. No fakes.
+      placeholder: |
+        - xUnit: …
+        - scripts/smoke-api.ps1: …
+    validations:
+      required: true
+  - type: checkboxes
+    id: analysis
+    attributes:
+      label: Analysis done (see docs/issue-quality-checklist.md)
+      options:
+        - label: Read the actual code; evidence cites file:line @ commit
+          required: true
+        - label: Verified repo conventions (EnsureXxx not EF migrations; no GitHub Actions; audit trail; no fake tests)
+          required: true
+        - label: Searched existing issues/PRs for duplicates / conflicts and linked them
+          required: true
