@@ -554,7 +554,7 @@ public static class ApiEndpoints
             if (!string.IsNullOrWhiteSpace(dto.Priority))
             {
                 if (!Enum.TryParse<TaskPriority>(dto.Priority, ignoreCase: true, out var p) || !Enum.IsDefined(p))
-                    return Results.UnprocessableEntity(new { message = $"Invalid priority '{dto.Priority}'." });
+                    return Results.UnprocessableEntity(new { message = $"Invalid priority: {dto.Priority}. Valid values: {string.Join(", ", Enum.GetNames<TaskPriority>())}" });
                 priority = p;
             }
 
@@ -585,7 +585,7 @@ public static class ApiEndpoints
             if (!string.IsNullOrWhiteSpace(dto.Status))
             {
                 if (!Enum.TryParse<IdeaStatus>(dto.Status, ignoreCase: true, out var s) || !Enum.IsDefined(s))
-                    return Results.UnprocessableEntity(new { message = $"Invalid status '{dto.Status}'." });
+                    return Results.UnprocessableEntity(new { message = $"Invalid status: {dto.Status}. Valid values: {string.Join(", ", Enum.GetNames<IdeaStatus>())}" });
                 status = s;
             }
 
@@ -593,7 +593,7 @@ public static class ApiEndpoints
             if (!string.IsNullOrWhiteSpace(dto.Priority))
             {
                 if (!Enum.TryParse<TaskPriority>(dto.Priority, ignoreCase: true, out var p) || !Enum.IsDefined(p))
-                    return Results.UnprocessableEntity(new { message = $"Invalid priority '{dto.Priority}'." });
+                    return Results.UnprocessableEntity(new { message = $"Invalid priority: {dto.Priority}. Valid values: {string.Join(", ", Enum.GetNames<TaskPriority>())}" });
                 priority = p;
             }
 

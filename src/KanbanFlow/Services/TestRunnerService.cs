@@ -429,7 +429,7 @@ public sealed class TestRunnerService(
                 try
                 {
                     var create = await http.PostAsJsonAsync("/api/ideas",
-                        new { title = "Round-trip idea", body = "the body", plan = "the plan", tags = "ai,backend", priority = "High" }, Json, ct);
+                        new { title = "Round-trip idea", body = "the body", plan = "the plan", tags = "ai,backend", priority = TaskPriority.High.ToString() }, Json, ct);
                     if (create.StatusCode != HttpStatusCode.Created)
                         throw new Exception($"POST /api/ideas expected 201, got {(int)create.StatusCode}");
                     var created = await create.Content.ReadFromJsonAsync<JsonElement>(Json, ct);
@@ -440,9 +440,9 @@ public sealed class TestRunnerService(
                         throw new Exception("Created idea body mismatch");
                     if (created.GetProperty("plan").GetString() != "the plan")
                         throw new Exception("Created idea plan mismatch");
-                    if (created.GetProperty("status").GetString() != "New")
-                        throw new Exception($"New idea should start status 'New', got '{created.GetProperty("status").GetString()}'");
-                    if (created.GetProperty("priority").GetString() != "High")
+                    if (created.GetProperty("status").GetString() != IdeaStatus.New.ToString())
+                        throw new Exception($"New idea should start status '{IdeaStatus.New}', got '{created.GetProperty("status").GetString()}'");
+                    if (created.GetProperty("priority").GetString() != TaskPriority.High.ToString())
                         throw new Exception($"Created idea priority mismatch, got '{created.GetProperty("priority").GetString()}'");
 
                     var got = await http.GetFromJsonAsync<JsonElement>($"/api/ideas/{ideaId}", Json, ct);
@@ -515,14 +515,14 @@ public sealed class TestRunnerService(
                     ideaId = (await create.Content.ReadFromJsonAsync<JsonElement>(Json, ct)).GetProperty("id").GetInt32();
 
                     var patch = await http.PatchAsJsonAsync($"/api/ideas/{ideaId}",
-                        new { title = "renamed", status = "Triaging" }, Json, ct);
+                        new { title = "renamed", status = IdeaStatus.Triaging.ToString() }, Json, ct);
                     if (patch.StatusCode != HttpStatusCode.OK)
                         throw new Exception($"PATCH /api/ideas/{ideaId} expected 200, got {(int)patch.StatusCode}");
 
                     var got = await http.GetFromJsonAsync<JsonElement>($"/api/ideas/{ideaId}", Json, ct);
                     if (got.GetProperty("title").GetString() != "renamed")
                         throw new Exception($"PATCH did not persist title, got '{got.GetProperty("title").GetString()}'");
-                    if (got.GetProperty("status").GetString() != "Triaging")
+                    if (got.GetProperty("status").GetString() != IdeaStatus.Triaging.ToString())
                         throw new Exception($"PATCH did not persist status, got '{got.GetProperty("status").GetString()}'");
 
                     var missing = await http.PatchAsJsonAsync("/api/ideas/99999999", new { title = "nope" }, Json, ct);
@@ -578,8 +578,8 @@ public sealed class TestRunnerService(
                         throw new Exception($"Promote result projectId should be > 0, got {projectId}");
 
                     var got = await http.GetFromJsonAsync<JsonElement>($"/api/ideas/{ideaId}", Json, ct);
-                    if (got.GetProperty("status").GetString() != "Promoted")
-                        throw new Exception($"Promoted idea status should be 'Promoted', got '{got.GetProperty("status").GetString()}'");
+                    if (got.GetProperty("status").GetString() != IdeaStatus.Promoted.ToString())
+                        throw new Exception($"Promoted idea status should be '{IdeaStatus.Promoted}', got '{got.GetProperty("status").GetString()}'");
                     if (got.GetProperty("promotedProjectId").GetInt32() != projectId)
                         throw new Exception("Idea.promotedProjectId does not match the new project id");
 
