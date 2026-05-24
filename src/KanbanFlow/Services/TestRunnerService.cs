@@ -771,6 +771,19 @@ public sealed class TestRunnerService(
                 throw new Exception("Settings page HTML missing 'Run Tests' marker");
         }));
 
+        results.Add(await RunTest("Ideas page renders 200 with header marker", "UI:Ideas", async () =>
+        {
+            var resp = await http.GetAsync("/ideas", ct);
+            if (!resp.IsSuccessStatusCode)
+                throw new Exception($"GET /ideas returned {(int)resp.StatusCode}");
+            var html = await resp.Content.ReadAsStringAsync(ct);
+            if (!html.Contains("KanbanFlow", StringComparison.OrdinalIgnoreCase))
+                throw new Exception("Ideas page HTML missing brand marker");
+            // The Ideas inbox SSR-renders its "Ideas" header even before the interactive circuit boots.
+            if (!html.Contains("Ideas", StringComparison.OrdinalIgnoreCase))
+                throw new Exception("Ideas page HTML missing 'Ideas' marker");
+        }));
+
         results.Add(await RunTest("Project view renders 200 for a freshly-created project", "UI:ProjectView", async () =>
         {
             // Don't depend on seed project id=1 — it can be deleted by other tests
