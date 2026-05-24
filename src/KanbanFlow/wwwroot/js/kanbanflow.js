@@ -180,7 +180,7 @@ window.KanbanFlow = {
         // wrongly exclude them. getClientRects() is empty only when the element isn't rendered
         // (e.g. display:none while the dialog is closed).
         return Array.prototype.slice.call(dialog.querySelectorAll(
-            'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+            'a[href]:not([tabindex="-1"]), button:not([disabled]):not([tabindex="-1"]), input:not([disabled]):not([tabindex="-1"]), select:not([disabled]):not([tabindex="-1"]), textarea:not([disabled]):not([tabindex="-1"]), [tabindex]:not([tabindex="-1"])'
         )).filter(function (el) { return el.getClientRects().length > 0; });
     },
 
@@ -188,8 +188,12 @@ window.KanbanFlow = {
         if (!dialog) {
             return;
         }
-        // Remember the opener so focus can be restored when the dialog closes.
-        dialog._kfOpener = document.activeElement;
+        // Remember the opener so focus can be restored when the dialog closes. Capture only
+        // once per open (cleared in destroyDialog) so a re-init can't overwrite it with an
+        // element inside the dialog.
+        if (!dialog._kfOpener) {
+            dialog._kfOpener = document.activeElement;
+        }
 
         var preferred = dialog.querySelector('[data-dialog-autofocus]');
         var focusables = this._dialogFocusables(dialog);
@@ -202,7 +206,7 @@ window.KanbanFlow = {
             if (event.key === 'Escape') {
                 event.preventDefault();
                 if (dotNetRef) {
-                    dotNetRef.invokeMethodAsync('CloseFromJs');
+                    dotNetRef.invokeMethodAsync('CloseFromJs').catch(function () { /* component/circuit disposed */ });
                 }
                 return;
             }

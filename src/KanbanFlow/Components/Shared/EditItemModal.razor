@@ -369,9 +369,10 @@
     {
         if (IsOpen && !_dialogInited)
         {
+            _dialogInited = true;   // set before the await so a re-render mid-init can't double-call
             _selfRef ??= DotNetObjectReference.Create(this);
-            await JS.InvokeVoidAsync("KanbanFlow.initDialog", dialogRef, _selfRef);
-            _dialogInited = true;
+            try { await JS.InvokeVoidAsync("KanbanFlow.initDialog", dialogRef, _selfRef); }
+            catch (Microsoft.JSInterop.JSDisconnectedException) { /* circuit gone during teardown */ }
         }
         else if (!IsOpen && _dialogInited)
         {
