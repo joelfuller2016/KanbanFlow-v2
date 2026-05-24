@@ -5,6 +5,7 @@
 @inject NavigationManager Nav
 @inject IJSRuntime JS
 @inject ITaskService TaskSvc
+@inject IHttpClientFactory HttpClientFactory
 @implements IAsyncDisposable
 
 <PageTitle>@(project?.Name ?? "Project") - KanbanFlow</PageTitle>
@@ -516,7 +517,11 @@ else
 
         try
         {
-            using var client = new HttpClient();
+            // Pooled client via IHttpClientFactory — avoids the socket-exhaustion of
+            // newing an HttpClient per click (#158). Callers pass absolute URIs, so no
+            // BaseAddress is needed. Disposing the wrapper is safe; the pooled handler
+            // is owned by the factory and survives.
+            using var client = HttpClientFactory.CreateClient();
             await load(client);
         }
         catch (OperationCanceledException)
