@@ -334,8 +334,9 @@ public sealed class TestRunnerService(
                         throw new Exception($"Bob should claim after release, got {(int)bobClaim.StatusCode}");
 
                     var task = await http.GetFromJsonAsync<JsonElement>($"/api/tasks/{taskId}", Json, ct);
-                    if (task.TryGetProperty("claimedBy", out var cb) && cb.ValueKind == JsonValueKind.String
-                        && cb.GetString() != "bob")
+                    if (!task.TryGetProperty("claimedBy", out var cb) || cb.ValueKind != JsonValueKind.String)
+                        throw new Exception("Expected claimedBy to be a string after re-claim (task not claimed?)");
+                    if (cb.GetString() != "bob")
                         throw new Exception($"Expected claimedBy 'bob' after re-claim, got '{cb.GetString()}'");
                 }
                 finally { await TryDeleteProjectAsync(http, innerPid, ct); }
@@ -348,6 +349,8 @@ public sealed class TestRunnerService(
                 {
                     var t2 = await http.PostAsJsonAsync($"/api/features/{featureId}/tasks",
                         new { name = "Blocked task", status = "Todo", priority = "Medium" }, Json, ct);
+                    if (t2.StatusCode != HttpStatusCode.Created)
+                        throw new Exception($"Create blocked task expected 201, got {(int)t2.StatusCode}");
                     var blockedId = (await t2.Content.ReadFromJsonAsync<JsonElement>(Json, ct)).GetProperty("id").GetInt32();
 
                     // blockedId depends on blockerId; blocker is not Done yet
@@ -376,6 +379,7 @@ public sealed class TestRunnerService(
 
                     var nt2 = await http.GetFromJsonAsync<JsonElement>($"/api/projects/{innerPid}/next-tasks?limit=25", Json, ct);
                     if (!RecsContain(nt2, blockedId)) throw new Exception("Blocked task should be recommended after blocker Done");
+                    if (BlockedContain(nt2, blockedId)) throw new Exception("Blocked task should no longer be in blockedTasks after blocker Done");
                     var blockedCtx2 = await http.GetFromJsonAsync<JsonElement>($"/api/tasks/{blockedId}/context", Json, ct);
                     if (blockedCtx2.GetProperty("isBlocked").GetBoolean()) throw new Exception("context.isBlocked should be false after blocker Done");
                     if (blockedCtx2.GetProperty("openBlockerCount").GetInt32() != 0) throw new Exception("context.openBlockerCount should be 0 after blocker Done");
