@@ -1,0 +1,8 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/KanbanFlow/KanbanFlow.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/KanbanFlow.Tests/KanbanFlow.Tests.csproj" />
+  </Folder>
+</Solution>
