@@ -734,6 +734,8 @@ public sealed class TestRunnerService(
                 // path (Subtask.ChildSubtasks Restrict FK) is actually exercised — see R1.
                 var parentResp = await http.PostAsJsonAsync($"/api/tasks/{taskId}/subtasks",
                     new { text = "parent subtask" }, Json, ct);
+                if (parentResp.StatusCode != HttpStatusCode.Created)
+                    throw new Exception($"Parent subtask create failed: {(int)parentResp.StatusCode}");
                 var parentId = (await parentResp.Content.ReadFromJsonAsync<JsonElement>(Json, ct))
                     .GetProperty("id").GetInt32();
                 var childResp = await http.PostAsJsonAsync($"/api/tasks/{taskId}/subtasks",

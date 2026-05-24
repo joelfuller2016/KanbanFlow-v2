@@ -323,6 +323,8 @@ public sealed class TaskService(IDbContextFactory<AppDbContext> dbFactory) : ITa
 
     public async Task<TaskItem> CreateAsync(TaskCreate dto, string? actor, CancellationToken ct = default)
     {
+        ArgumentNullException.ThrowIfNull(dto);
+
         await using var db = await dbFactory.CreateDbContextAsync(ct);
 
         // Validate up-front so we never persist a half-built task. Service is the trust
@@ -366,6 +368,12 @@ public sealed class TaskService(IDbContextFactory<AppDbContext> dbFactory) : ITa
             CompletedAt = status == WorkStatus.Done ? DateTime.UtcNow : null
         };
 
+        // Atomic create + audit: the first save assigns task.Id (needed by the comment +
+        // activity event), the second persists those audit rows. Wrap both in one
+        // transaction so a failure can't leave a task without its Created comment /
+        // TaskCreated event. EF Core + SQLite supports explicit transactions.
+        await using var tx = await db.Database.BeginTransactionAsync(ct);
+
         db.Tasks.Add(task);
         // First save assigns task.Id so the comment + activity event can reference it.
         await db.SaveChangesAsync(ct);
@@ -387,6 +395,7 @@ public sealed class TaskService(IDbContextFactory<AppDbContext> dbFactory) : ITa
             $"Task '{task.Name}' created");
 
         await db.SaveChangesAsync(ct);
+        await tx.CommitAsync(ct);
         return task;
     }
 
@@ -587,24 +596,34 @@ public sealed class TaskService(IDbContextFactory<AppDbContext> dbFactory) : ITa
         if (subtasks.Count == 0)
             return;
 
+        // Build id -> parentSubtaskId once (O(n)), then memoize each node's depth so the
+        // ordering is O(n) total instead of O(n²) (the old per-node FirstOrDefault scan).
+        var parentById = subtasks.ToDictionary(s => s.Id, s => s.ParentSubtaskId);
+        var depthCache = new Dictionary<int, int>(subtasks.Count);
+
         var ordered = subtasks
-            .OrderByDescending(s => GetSubtaskDepth(s, subtasks))
+            .OrderByDescending(s => GetSubtaskDepth(s.Id, parentById, depthCache))
             .ToList();
 
         db.Subtasks.RemoveRange(ordered);
     }
 
-    private static int GetSubtaskDepth(Subtask subtask, List<Subtask> allSubtasks)
+    // Memoized depth walk: follows parent links via the prebuilt map, caching every node
+    // visited along the way. Stops at a root (null parent) or a parent outside this task's
+    // set (defensive — same break behavior as the original scan).
+    private static int GetSubtaskDepth(int id, Dictionary<int, int?> parentById, Dictionary<int, int> depthCache)
     {
-        var depth = 0;
-        var current = subtask;
-        while (current.ParentSubtaskId.HasValue)
-        {
-            var parent = allSubtasks.FirstOrDefault(s => s.Id == current.ParentSubtaskId.Value);
-            if (parent is null) break;
-            depth++;
-            current = parent;
-        }
+        if (depthCache.TryGetValue(id, out var cached))
+            return cached;
+
+        var parentId = parentById[id];
+        int depth;
+        if (parentId is null || !parentById.ContainsKey(parentId.Value))
+            depth = 0;
+        else
+            depth = GetSubtaskDepth(parentId.Value, parentById, depthCache) + 1;
+
+        depthCache[id] = depth;
         return depth;
     }
 }

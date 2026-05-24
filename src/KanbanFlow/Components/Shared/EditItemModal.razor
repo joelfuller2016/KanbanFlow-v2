@@ -421,7 +421,13 @@
                     break;
             }
 
-            await db.SaveChangesAsync();
+            // The Task path mutates through ITaskService (its own DbContext) and has
+            // already persisted; the outer save would be a no-op that muddies the
+            // unit-of-work, so skip it. Project/Feature edits mutate the outer `db`
+            // above and still need this save.
+            if (EditMode != EditItemType.Task)
+                await db.SaveChangesAsync();
+
             await OnSaved.InvokeAsync();
             await OnClose.InvokeAsync();
         }

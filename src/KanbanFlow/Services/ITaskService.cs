@@ -82,11 +82,16 @@ public interface ITaskService
     /// to satisfy the self-referential <c>Subtask.ChildSubtasks</c> Restrict FK;
     /// acceptance criteria are removed explicitly; comments and both dependency
     /// directions are removed by EF cascade. Emits a <c>TaskDeleted</c> activity
-    /// event <em>before</em> removal (the audit row has no project FK so it survives).
-    /// Closes the UI half of #88 for deletes.
+    /// event <em>before</em> removal; the audit row survives the delete because
+    /// <see cref="ActivityEvent"/> has no FK to the <see cref="TaskItem"/> entity
+    /// (its <c>EntityId</c> is a plain int, not a foreign key). Note the event still
+    /// carries the <c>ProjectId</c> for attribution. Closes the UI half of #88 for deletes.
     /// </summary>
     /// <param name="taskId">Target task id.</param>
-    /// <param name="actor">Actor label; null falls back to "System" on the activity event.</param>
+    /// <param name="actor">
+    /// Actor label. A blank/null actor is stored as <c>null</c> on the activity event
+    /// (no "System" fallback there — only authored comments fall back to "System").
+    /// </param>
     /// <param name="ct">Cancellation token.</param>
     /// <exception cref="TaskNotFoundException">The task does not exist.</exception>
     Task DeleteAsync(int taskId, string? actor, CancellationToken ct = default);

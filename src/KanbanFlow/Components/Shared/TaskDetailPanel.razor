@@ -982,7 +982,7 @@
             // Route the comment through ITaskService so the UI emits a TaskCommentAdded
             // audit event identical to the REST/MCP surfaces (#88).
             var comment = await TaskSvc.AddCommentAsync(
-                taskId, newCommentText, author: "You", type: newCommentType, actor: "You");
+                taskId, newCommentText, author: "User", type: newCommentType, actor: "User");
 
             if (IsCurrentCommentSave(taskId, saveVersion))
             {

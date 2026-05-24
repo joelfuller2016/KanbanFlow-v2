@@ -1047,21 +1047,29 @@ public static class ApiEndpoints
             if (string.IsNullOrWhiteSpace(dto.Name))
                 return Results.UnprocessableEntity(new { message = "Name is required." });
 
-            // Validate status enum
+            // Validate status enum. Enum.TryParse alone accepts numeric strings like "999"
+            // (any in-range int), so pair it with Enum.IsDefined to reject out-of-range
+            // values at the edge — mirroring the PUT /api/tasks/{id} validation exactly.
             WorkStatus? status = null;
             if (dto.Status is not null)
             {
-                if (!Enum.TryParse<WorkStatus>(dto.Status, ignoreCase: true, out var parsedStatus))
+                if (!Enum.TryParse<WorkStatus>(dto.Status, ignoreCase: true, out var parsedStatus)
+                    || !Enum.IsDefined(typeof(WorkStatus), parsedStatus))
+                {
                     return Results.UnprocessableEntity(new { message = $"Invalid status: {dto.Status}. Valid values: {string.Join(", ", Enum.GetNames<WorkStatus>())}" });
+                }
                 status = parsedStatus;
             }
 
-            // Validate priority enum
+            // Validate priority enum (same numeric-string guard as status).
             TaskPriority? priority = null;
             if (dto.Priority is not null)
             {
-                if (!Enum.TryParse<TaskPriority>(dto.Priority, ignoreCase: true, out var parsedPriority))
+                if (!Enum.TryParse<TaskPriority>(dto.Priority, ignoreCase: true, out var parsedPriority)
+                    || !Enum.IsDefined(typeof(TaskPriority), parsedPriority))
+                {
                     return Results.UnprocessableEntity(new { message = $"Invalid priority: {dto.Priority}. Valid values: {string.Join(", ", Enum.GetNames<TaskPriority>())}" });
+                }
                 priority = parsedPriority;
             }
 

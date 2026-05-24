@@ -17,8 +17,11 @@ wrapper (`scripts/mcp-server.mjs`).
       .WithHttpTransport(options => options.Stateless = true)
       .WithToolsFromAssembly();
   // …
-  app.MapMcp("/mcp");
+  app.MapMcp("/mcp").RequireHost("localhost", "127.0.0.1");
   ```
+
+  The native MCP endpoint is **loopback-only** (`RequireHost("localhost", "127.0.0.1")`):
+  it has no auth by design and shares the same trust boundary as the REST API.
 
 - The Node wrapper is **left in place** as the stdio fallback and the full 36-tool surface.
 
@@ -88,6 +91,8 @@ write extraction.
 }
 ```
 Start the app first: `dotnet run --project src/KanbanFlow/KanbanFlow.csproj --urls http://127.0.0.1:5123`.
+
+> The `url` host must be a loopback name (`localhost` or `127.0.0.1`) — `app.MapMcp("/mcp").RequireHost("localhost", "127.0.0.1")` rejects any other host. The endpoint is unauthenticated by design (same trust boundary as REST).
 
 ## Path to full coverage (next steps)
 
