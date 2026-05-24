@@ -95,7 +95,7 @@ else
                     <div class="modal-body">
                         @if (saveError is not null)
                         {
-                            <div class="alert alert-danger">@saveError</div>
+                            <div class="alert alert-danger" role="alert" aria-live="assertive" aria-atomic="true">@saveError</div>
                         }
                         <div class="mb-3">
                             <label class="form-label" for="project-name">Name <span class="text-danger">*</span></label>
@@ -139,7 +139,7 @@ else
                 <div class="modal-body">
                     @if (deleteError is not null)
                     {
-                        <div class="alert alert-danger">@deleteError</div>
+                        <div class="alert alert-danger" role="alert" aria-live="assertive" aria-atomic="true">@deleteError</div>
                     }
                     <p>Delete <strong>@deletingProject.Name</strong> and all its features and tasks?</p>
                     <p class="text-muted small mb-0">This action cannot be undone.</p>
