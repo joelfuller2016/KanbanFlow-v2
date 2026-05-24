@@ -680,6 +680,33 @@ public sealed class TestRunnerService(
                     if (ideaId is int iid) await http.DeleteAsync($"/api/ideas/{iid}", ct);
                 }
             }));
+
+            results.Add(await RunTest("Project activity stays queryable after the project is deleted (#85)", "API:Activity", async () =>
+            {
+                var (innerPid, _, taskId) = await CreateProjectFeatureTaskAsync(http, ct);
+                var deleted = false;
+                try
+                {
+                    var patch = await http.PatchAsJsonAsync($"/api/tasks/{taskId}/status",
+                        new { status = "InProgress", actor = "test-runner" }, Json, ct);
+                    if (!patch.IsSuccessStatusCode) throw new Exception($"Status change failed: {(int)patch.StatusCode}");
+                    var before = await http.GetFromJsonAsync<JsonElement>($"/api/projects/{innerPid}/activity", Json, ct);
+                    if (before.GetArrayLength() == 0) throw new Exception("Expected activity before deletion");
+
+                    var del = await http.DeleteAsync($"/api/projects/{innerPid}", ct);
+                    if (del.StatusCode != HttpStatusCode.NoContent) throw new Exception($"DELETE project expected 204, got {(int)del.StatusCode}");
+                    deleted = true;
+
+                    // #85: retained audit must still be retrievable after the project row is gone.
+                    var resp = await http.GetAsync($"/api/projects/{innerPid}/activity", ct);
+                    if (resp.StatusCode != HttpStatusCode.OK)
+                        throw new Exception($"Activity should stay queryable after deletion (#85), got {(int)resp.StatusCode}");
+                    var after = await resp.Content.ReadFromJsonAsync<JsonElement>(Json, ct);
+                    if (after.GetArrayLength() == 0)
+                        throw new Exception("Retained activity events should still be returned after project deletion");
+                }
+                finally { if (!deleted) await TryDeleteProjectAsync(http, innerPid, ct); }
+            }));
         }
         finally
         {
