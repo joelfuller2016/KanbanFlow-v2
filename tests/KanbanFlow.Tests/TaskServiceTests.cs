@@ -348,13 +348,32 @@ public sealed class TaskServiceTests
             () => svc.UpdateAsync(404, new TaskUpdate(Name: "x"), "x"));
     }
 
-    // ── DeleteAsync (documents the current stub; update this test when #88 lands) ─
+    // ── DeleteAsync (implemented by the #88 service-layer extraction) ──────────────
+    // Full cascade + audit-survival coverage lives in TaskServiceMutationTests; this
+    // case documents the headline contract here so the suite no longer asserts the
+    // old NotImplementedException stub.
     [Fact]
-    public async Task Delete_IsNotYetImplemented()
+    public async Task Delete_RemovesTask_AndAuditEventSurvives()
+    {
+        using var f = new SqliteTestFactory();
+        var id = SeedTask(f);
+        var svc = new TaskService(f);
+
+        await svc.DeleteAsync(id, "tester");
+
+        using var db = f.CreateDbContext();
+        Assert.False(await db.Tasks.AnyAsync(t => t.Id == id));
+        // ActivityEvent has no task FK, so the TaskDeleted audit row outlives the task.
+        var ev = await db.ActivityEvents.SingleAsync(e => e.EventType == "TaskDeleted" && e.EntityId == id);
+        Assert.Equal("tester", ev.Actor);
+    }
+
+    [Fact]
+    public async Task Delete_MissingTask_ThrowsTaskNotFound()
     {
         using var f = new SqliteTestFactory();
         var svc = new TaskService(f);
 
-        await Assert.ThrowsAsync<NotImplementedException>(() => svc.DeleteAsync(1, "x"));
+        await Assert.ThrowsAsync<TaskNotFoundException>(() => svc.DeleteAsync(999, "x"));
     }
 }
