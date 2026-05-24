@@ -10,7 +10,7 @@ body:
     id: priority
     attributes:
       label: Priority
-      options: ["P1 (should have)", "P2 (nice to have)"]
+      options: ["P0 (must — blocker/correctness)", "P1 (should have)", "P2 (nice to have)", "P3 (low / someday)"]
     validations:
       required: true
   - type: dropdown

@@ -25,6 +25,14 @@ body:
     validations:
       required: true
   - type: textarea
+    id: evidence
+    attributes:
+      label: Evidence
+      description: "Ground the task in specific code — `file:line @ <commit>`."
+      placeholder: "src/KanbanFlow/Services/TaskService.cs:469 @ <commit> — …"
+    validations:
+      required: true
+  - type: textarea
     id: fix-plan
     attributes:
       label: Fix plan (HOW)
@@ -51,3 +59,14 @@ body:
       description: Real tests that prove it (xUnit / scripts/smoke-api.ps1) — no fakes.
     validations:
       required: true
+  - type: checkboxes
+    id: analysis
+    attributes:
+      label: Analysis done (see docs/issue-quality-checklist.md)
+      options:
+        - label: Read the actual code; evidence cites file:line @ commit
+          required: true
+        - label: Verified repo conventions (EnsureXxx not EF migrations; no GitHub Actions; audit trail; no fake tests)
+          required: true
+        - label: Searched existing issues/PRs for duplicates / conflicts and linked them
+          required: true
