@@ -17,11 +17,12 @@ wrapper (`scripts/mcp-server.mjs`).
       .WithHttpTransport(options => options.Stateless = true)
       .WithToolsFromAssembly();
   // …
-  app.MapMcp("/mcp").RequireHost("localhost", "127.0.0.1");
+  app.MapMcp("/mcp");
   ```
 
-  The native MCP endpoint is **loopback-only** (`RequireHost("localhost", "127.0.0.1")`):
-  it has no auth by design and shares the same trust boundary as the REST API.
+  The native MCP endpoint is **open access** (no `RequireHost`): no auth by design,
+  trust-the-network — same as the unrestricted REST API + open CORS. Loopback/CORS
+  hardening is deferred to issue #84.
 
 - The Node wrapper is **left in place** as the stdio fallback and the full 36-tool surface.
 
@@ -51,10 +52,10 @@ go through `ITaskService`, whose write logic was lifted out of `ApiEndpoints.cs`
 and MCP all emit identical `ActivityEvent`s. This closes the task/comment half of the #88
 audit-bypass bug — the Blazor UI no longer writes to EF directly for task/comment mutations.
 
-These five write tools are mutation-capable and **unauthenticated by design**, so they are
-reachable only on the loopback-bound `/mcp` endpoint (`app.MapMcp("/mcp").RequireHost("localhost", "127.0.0.1")`,
-see above) — the same single-trust-boundary as the REST API. A non-loopback `--urls` cannot
-expose them.
+These five write tools are mutation-capable and **unauthenticated by design**. `/mcp` is
+**open access** (no `RequireHost`) — same trust-the-network posture as the unrestricted REST
+API + open CORS. If you bind to a non-loopback `--urls`, they are reachable from the network;
+that is intentional for the single-user local tool, with loopback/CORS hardening deferred to #84.
 
 Remaining (phase 2): feature / requirement / subtask / acceptance-criterion / dependency
 write extraction.
@@ -98,7 +99,7 @@ write extraction.
 ```
 Start the app first: `dotnet run --project src/KanbanFlow/KanbanFlow.csproj --urls http://127.0.0.1:5123`.
 
-> The `url` host must be a loopback name (`localhost` or `127.0.0.1`) — `app.MapMcp("/mcp").RequireHost("localhost", "127.0.0.1")` rejects any other host. The endpoint is unauthenticated by design (same trust boundary as REST).
+> `/mcp` is **open access** — no `RequireHost`, so any host/origin works (match the `url` to your `--urls`). The endpoint is unauthenticated by design (trust-the-network; same posture as the REST API + open CORS). Loopback/CORS hardening is deferred to #84.
 
 ## Path to full coverage (next steps)
 
