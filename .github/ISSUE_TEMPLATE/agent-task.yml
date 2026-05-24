@@ -1,0 +1,36 @@
+name: "Agent task"
+description: "A machine-fillable task for an AI agent to execute"
+labels: ["ai-agent", "enhancement"]
+title: "P_: "
+body:
+  - type: markdown
+    attributes:
+      value: "Structured so an AI agent can pick this up and execute it with full context. Replace `P_` with the priority."
+  - type: textarea
+    id: goal
+    attributes:
+      label: Goal
+      description: One sentence — what should be true when this is done?
+    validations:
+      required: true
+  - type: textarea
+    id: context
+    attributes:
+      label: Context bundle
+      description: Files, endpoints, models, and prior issues/PRs the agent needs.
+      placeholder: |
+        - Relevant files: src/...
+        - Related issues: #...
+        - Constraints: NO GitHub Actions; route mutations through ITaskService; audit trail is sacred.
+    validations:
+      required: true
+  - type: textarea
+    id: done-when
+    attributes:
+      label: Done when
+      description: Binary, verifiable completion criteria.
+      placeholder: |
+        - [ ] ...
+        - [ ] `dotnet test` passes
+    validations:
+      required: true
