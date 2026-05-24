@@ -24,6 +24,8 @@ builder.Services.AddDbContextFactory<AppDbContext>(options => options.UseSqlite(
 
 // Audit-aware service layer (issue #88: route REST + UI mutations through one place)
 builder.Services.AddScoped<ITaskService, TaskService>();
+// Ideas inbox service (#180) — same single-audit-boundary rule as ITaskService.
+builder.Services.AddScoped<IIdeaService, IdeaService>();
 
 // Real process start time, captured once at app boot. Construct eagerly so the
 // timestamp captured by AppStartupInfo's constructor is the boot time, not the
@@ -68,6 +70,7 @@ using (var scope = app.Services.CreateScope())
     EnsureTaskDependencyTable(db);
     EnsureAcceptanceCriteriaTable(db);
     EnsureActivityEventTable(db);
+    EnsureIdeaTable(db);
     SeedData.Initialize(db);
 }
 
@@ -166,6 +169,56 @@ CREATE TABLE IF NOT EXISTS AcceptanceCriteria (
 );
 CREATE INDEX IF NOT EXISTS IX_AcceptanceCriteria_TaskItemId ON AcceptanceCriteria (TaskItemId);";
         command.ExecuteNonQuery();
+    }
+    finally
+    {
+        db.Database.CloseConnection();
+    }
+}
+
+static void EnsureIdeaTable(AppDbContext db)
+{
+    if (!db.Database.IsSqlite())
+        return;
+
+    // Ideas is a new table (#180). EnsureCreated() builds it for fresh databases; this
+    // patcher adds it (idempotently) to databases created before the feature landed —
+    // same Ensure* pattern as the other tables (adds to the EF-migrations debt, #86).
+    const string createIdeasTableSql = """
+        CREATE TABLE IF NOT EXISTS Ideas (
+            Id INTEGER NOT NULL CONSTRAINT PK_Ideas PRIMARY KEY AUTOINCREMENT,
+            Title TEXT NOT NULL,
+            Body TEXT NULL,
+            Plan TEXT NULL,
+            Status INTEGER NOT NULL,
+            Tags TEXT NULL,
+            Priority INTEGER NULL,
+            PromotedProjectId INTEGER NULL,
+            CreatedAt TEXT NOT NULL,
+            UpdatedAt TEXT NOT NULL,
+            CONSTRAINT FK_Ideas_Projects_PromotedProjectId FOREIGN KEY (PromotedProjectId)
+                REFERENCES Projects (Id) ON DELETE SET NULL
+        )
+        """;
+
+    db.Database.OpenConnection();
+    try
+    {
+        var connection = db.Database.GetDbConnection();
+
+        using (var createTable = connection.CreateCommand())
+        {
+            createTable.CommandText = createIdeasTableSql;
+            createTable.ExecuteNonQuery();
+        }
+
+        using var statusIndex = connection.CreateCommand();
+        statusIndex.CommandText = "CREATE INDEX IF NOT EXISTS IX_Ideas_Status_CreatedAt ON Ideas (Status, CreatedAt)";
+        statusIndex.ExecuteNonQuery();
+
+        using var fkIndex = connection.CreateCommand();
+        fkIndex.CommandText = "CREATE INDEX IF NOT EXISTS IX_Ideas_PromotedProjectId ON Ideas (PromotedProjectId)";
+        fkIndex.ExecuteNonQuery();
     }
     finally
     {

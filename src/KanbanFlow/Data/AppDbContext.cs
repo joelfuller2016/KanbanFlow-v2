@@ -16,6 +16,7 @@ public class AppDbContext : DbContext
     public DbSet<TaskComment> TaskComments => Set<TaskComment>();
     public DbSet<TaskDependency> TaskDependencies => Set<TaskDependency>();
     public DbSet<ActivityEvent> ActivityEvents => Set<ActivityEvent>();
+    public DbSet<Idea> Ideas => Set<Idea>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -68,6 +69,20 @@ public class AppDbContext : DbContext
             e.Ignore(a => a.Project);
             e.HasIndex(a => new { a.ProjectId, a.CreatedAt });
             e.HasIndex(a => new { a.EntityType, a.EntityId, a.CreatedAt });
+        });
+
+        modelBuilder.Entity<Idea>(e =>
+        {
+            // Ideas are the pre-project inbox (#180). The promoted-project link is optional
+            // and SetNull on delete, so removing a project never deletes its originating idea.
+            e.HasOne(i => i.PromotedProject)
+                .WithMany()
+                .HasForeignKey(i => i.PromotedProjectId)
+                .OnDelete(DeleteBehavior.SetNull);
+            e.HasIndex(i => new { i.Status, i.CreatedAt });
+            // EF auto-indexes FK columns, but declare it explicitly so the model is
+            // self-documenting and matches the EnsureIdeaTable patcher (IX_Ideas_PromotedProjectId).
+            e.HasIndex(i => i.PromotedProjectId);
         });
     }
 }
