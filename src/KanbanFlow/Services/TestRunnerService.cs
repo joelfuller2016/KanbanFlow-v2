@@ -420,6 +420,222 @@ public sealed class TestRunnerService(
                 }
                 finally { await TryDeleteProjectAsync(http, innerPid, ct); }
             }));
+
+            // ── Idea CRUD (#180 Phase 2): ideas are not project-scoped, so most tests POST directly ──
+
+            results.Add(await RunTest("Idea create + get round-trip", "API:Idea", async () =>
+            {
+                int? ideaId = null;
+                try
+                {
+                    var create = await http.PostAsJsonAsync("/api/ideas",
+                        new { title = "Round-trip idea", body = "the body", plan = "the plan", tags = "ai,backend", priority = "High" }, Json, ct);
+                    if (create.StatusCode != HttpStatusCode.Created)
+                        throw new Exception($"POST /api/ideas expected 201, got {(int)create.StatusCode}");
+                    var created = await create.Content.ReadFromJsonAsync<JsonElement>(Json, ct);
+                    ideaId = created.GetProperty("id").GetInt32();
+                    if (created.GetProperty("title").GetString() != "Round-trip idea")
+                        throw new Exception("Created idea title mismatch");
+                    if (created.GetProperty("body").GetString() != "the body")
+                        throw new Exception("Created idea body mismatch");
+                    if (created.GetProperty("plan").GetString() != "the plan")
+                        throw new Exception("Created idea plan mismatch");
+                    if (created.GetProperty("status").GetString() != "New")
+                        throw new Exception($"New idea should start status 'New', got '{created.GetProperty("status").GetString()}'");
+                    if (created.GetProperty("priority").GetString() != "High")
+                        throw new Exception($"Created idea priority mismatch, got '{created.GetProperty("priority").GetString()}'");
+
+                    var got = await http.GetFromJsonAsync<JsonElement>($"/api/ideas/{ideaId}", Json, ct);
+                    if (got.GetProperty("id").GetInt32() != ideaId)
+                        throw new Exception("GET /api/ideas/{id} returned the wrong id");
+                    if (got.GetProperty("title").GetString() != "Round-trip idea")
+                        throw new Exception("GET idea title does not match created title");
+                    if (got.GetProperty("tags").GetString() != "ai,backend")
+                        throw new Exception($"GET idea tags mismatch, got '{got.GetProperty("tags").GetString()}'");
+                }
+                finally
+                {
+                    if (ideaId is int iid) await http.DeleteAsync($"/api/ideas/{iid}", ct);
+                }
+            }));
+
+            results.Add(await RunTest("Idea create with blank title returns 422", "API:Idea", async () =>
+            {
+                var resp = await http.PostAsJsonAsync("/api/ideas", new { title = "  " }, Json, ct);
+                if (resp.StatusCode != HttpStatusCode.UnprocessableEntity)
+                    throw new Exception($"Expected 422 for blank title, got {(int)resp.StatusCode}");
+            }));
+
+            results.Add(await RunTest("Idea list filters by tag (case-insensitive) and q", "API:Idea", async () =>
+            {
+                int? idA = null;
+                int? idB = null;
+                try
+                {
+                    var ra = await http.PostAsJsonAsync("/api/ideas",
+                        new { title = "alpha kanban", tags = "ai,backend" }, Json, ct);
+                    if (ra.StatusCode != HttpStatusCode.Created)
+                        throw new Exception($"Create idea A expected 201, got {(int)ra.StatusCode}");
+                    idA = (await ra.Content.ReadFromJsonAsync<JsonElement>(Json, ct)).GetProperty("id").GetInt32();
+
+                    var rb = await http.PostAsJsonAsync("/api/ideas",
+                        new { title = "beta", tags = "frontend" }, Json, ct);
+                    if (rb.StatusCode != HttpStatusCode.Created)
+                        throw new Exception($"Create idea B expected 201, got {(int)rb.StatusCode}");
+                    idB = (await rb.Content.ReadFromJsonAsync<JsonElement>(Json, ct)).GetProperty("id").GetInt32();
+
+                    // Uppercase tag query proves case-insensitive substring matching.
+                    var byTag = await http.GetFromJsonAsync<JsonElement>("/api/ideas?tag=BACKEND&limit=500", Json, ct);
+                    if (byTag.ValueKind != JsonValueKind.Array)
+                        throw new Exception($"Expected JSON array from ?tag, got {byTag.ValueKind}");
+                    if (!byTag.EnumerateArray().Any(i => i.GetProperty("id").GetInt32() == idA))
+                        throw new Exception("?tag=BACKEND should include idea A (tags 'ai,backend')");
+                    if (byTag.EnumerateArray().Any(i => i.GetProperty("id").GetInt32() == idB))
+                        throw new Exception("?tag=BACKEND should NOT include idea B (tags 'frontend')");
+
+                    var byQ = await http.GetFromJsonAsync<JsonElement>("/api/ideas?q=kanban&limit=500", Json, ct);
+                    if (!byQ.EnumerateArray().Any(i => i.GetProperty("id").GetInt32() == idA))
+                        throw new Exception("?q=kanban should include idea A ('alpha kanban')");
+                }
+                finally
+                {
+                    if (idA is int a) await http.DeleteAsync($"/api/ideas/{a}", ct);
+                    if (idB is int b) await http.DeleteAsync($"/api/ideas/{b}", ct);
+                }
+            }));
+
+            results.Add(await RunTest("Idea PATCH updates title + status; unknown id 404", "API:Idea", async () =>
+            {
+                int? ideaId = null;
+                try
+                {
+                    var create = await http.PostAsJsonAsync("/api/ideas", new { title = "before rename" }, Json, ct);
+                    if (create.StatusCode != HttpStatusCode.Created)
+                        throw new Exception($"Create idea expected 201, got {(int)create.StatusCode}");
+                    ideaId = (await create.Content.ReadFromJsonAsync<JsonElement>(Json, ct)).GetProperty("id").GetInt32();
+
+                    var patch = await http.PatchAsJsonAsync($"/api/ideas/{ideaId}",
+                        new { title = "renamed", status = "Triaging" }, Json, ct);
+                    if (patch.StatusCode != HttpStatusCode.OK)
+                        throw new Exception($"PATCH /api/ideas/{ideaId} expected 200, got {(int)patch.StatusCode}");
+
+                    var got = await http.GetFromJsonAsync<JsonElement>($"/api/ideas/{ideaId}", Json, ct);
+                    if (got.GetProperty("title").GetString() != "renamed")
+                        throw new Exception($"PATCH did not persist title, got '{got.GetProperty("title").GetString()}'");
+                    if (got.GetProperty("status").GetString() != "Triaging")
+                        throw new Exception($"PATCH did not persist status, got '{got.GetProperty("status").GetString()}'");
+
+                    var missing = await http.PatchAsJsonAsync("/api/ideas/99999999", new { title = "nope" }, Json, ct);
+                    if (missing.StatusCode != HttpStatusCode.NotFound)
+                        throw new Exception($"PATCH unknown idea expected 404, got {(int)missing.StatusCode}");
+                }
+                finally
+                {
+                    if (ideaId is int iid) await http.DeleteAsync($"/api/ideas/{iid}", ct);
+                }
+            }));
+
+            results.Add(await RunTest("Idea delete returns 204 then 404; unknown id 404", "API:Idea", async () =>
+            {
+                var create = await http.PostAsJsonAsync("/api/ideas", new { title = "to delete" }, Json, ct);
+                if (create.StatusCode != HttpStatusCode.Created)
+                    throw new Exception($"Create idea expected 201, got {(int)create.StatusCode}");
+                var ideaId = (await create.Content.ReadFromJsonAsync<JsonElement>(Json, ct)).GetProperty("id").GetInt32();
+
+                var del = await http.DeleteAsync($"/api/ideas/{ideaId}", ct);
+                if (del.StatusCode != HttpStatusCode.NoContent)
+                    throw new Exception($"DELETE /api/ideas/{ideaId} expected 204, got {(int)del.StatusCode}");
+
+                var gone = await http.GetAsync($"/api/ideas/{ideaId}", ct);
+                if (gone.StatusCode != HttpStatusCode.NotFound)
+                    throw new Exception($"GET after delete expected 404, got {(int)gone.StatusCode}");
+
+                var delMissing = await http.DeleteAsync("/api/ideas/99999999", ct);
+                if (delMissing.StatusCode != HttpStatusCode.NotFound)
+                    throw new Exception($"DELETE unknown idea expected 404, got {(int)delMissing.StatusCode}");
+            }));
+
+            results.Add(await RunTest("Idea promote creates project; re-promote returns 422", "API:Idea", async () =>
+            {
+                int? ideaId = null;
+                int? projectId = null;
+                try
+                {
+                    var create = await http.PostAsJsonAsync("/api/ideas",
+                        new { title = "to promote", body = "b", plan = "p" }, Json, ct);
+                    if (create.StatusCode != HttpStatusCode.Created)
+                        throw new Exception($"Create idea expected 201, got {(int)create.StatusCode}");
+                    ideaId = (await create.Content.ReadFromJsonAsync<JsonElement>(Json, ct)).GetProperty("id").GetInt32();
+
+                    var promote = await http.PostAsJsonAsync($"/api/ideas/{ideaId}/promote", new { actor = "test-runner" }, Json, ct);
+                    if (promote.StatusCode != HttpStatusCode.OK)
+                        throw new Exception($"POST /api/ideas/{ideaId}/promote expected 200, got {(int)promote.StatusCode}");
+                    var promoted = await promote.Content.ReadFromJsonAsync<JsonElement>(Json, ct);
+                    if (promoted.GetProperty("ideaId").GetInt32() != ideaId)
+                        throw new Exception("Promote result ideaId does not match the promoted idea");
+                    projectId = promoted.GetProperty("projectId").GetInt32();
+                    if (projectId <= 0)
+                        throw new Exception($"Promote result projectId should be > 0, got {projectId}");
+
+                    var got = await http.GetFromJsonAsync<JsonElement>($"/api/ideas/{ideaId}", Json, ct);
+                    if (got.GetProperty("status").GetString() != "Promoted")
+                        throw new Exception($"Promoted idea status should be 'Promoted', got '{got.GetProperty("status").GetString()}'");
+                    if (got.GetProperty("promotedProjectId").GetInt32() != projectId)
+                        throw new Exception("Idea.promotedProjectId does not match the new project id");
+
+                    var project = await http.GetAsync($"/api/projects/{projectId}", ct);
+                    if (project.StatusCode != HttpStatusCode.OK)
+                        throw new Exception($"GET /api/projects/{projectId} expected 200 (project created), got {(int)project.StatusCode}");
+
+                    var rePromote = await http.PostAsJsonAsync($"/api/ideas/{ideaId}/promote", new { actor = "test-runner" }, Json, ct);
+                    if (rePromote.StatusCode != HttpStatusCode.UnprocessableEntity)
+                        throw new Exception($"Re-promote of an already-promoted idea expected 422, got {(int)rePromote.StatusCode}");
+                }
+                finally
+                {
+                    if (projectId is int proj) await TryDeleteProjectAsync(http, proj, ct);
+                    if (ideaId is int iid) await http.DeleteAsync($"/api/ideas/{iid}", ct);
+                }
+            }));
+
+            results.Add(await RunTest("Idea activity survives delete (#85 audit pattern)", "API:Idea", async () =>
+            {
+                int? ideaId = null;
+                try
+                {
+                    var create = await http.PostAsJsonAsync("/api/ideas", new { title = "audit idea" }, Json, ct);
+                    if (create.StatusCode != HttpStatusCode.Created)
+                        throw new Exception($"Create idea expected 201, got {(int)create.StatusCode}");
+                    ideaId = (await create.Content.ReadFromJsonAsync<JsonElement>(Json, ct)).GetProperty("id").GetInt32();
+
+                    // PATCH writes an IdeaUpdated activity event.
+                    var patch = await http.PatchAsJsonAsync($"/api/ideas/{ideaId}", new { title = "audit idea (edited)" }, Json, ct);
+                    if (patch.StatusCode != HttpStatusCode.OK)
+                        throw new Exception($"PATCH idea expected 200, got {(int)patch.StatusCode}");
+
+                    var before = await http.GetFromJsonAsync<JsonElement>($"/api/ideas/{ideaId}/activity", Json, ct);
+                    if (before.ValueKind != JsonValueKind.Array)
+                        throw new Exception($"Activity expected JSON array, got {before.ValueKind}");
+                    if (before.GetArrayLength() < 1)
+                        throw new Exception("Idea activity should have >= 1 event after a PATCH");
+
+                    var del = await http.DeleteAsync($"/api/ideas/{ideaId}", ct);
+                    if (del.StatusCode != HttpStatusCode.NoContent)
+                        throw new Exception($"DELETE idea expected 204, got {(int)del.StatusCode}");
+
+                    // The audit trail must survive deletion (events have no idea FK).
+                    var after = await http.GetAsync($"/api/ideas/{ideaId}/activity", ct);
+                    if (after.StatusCode != HttpStatusCode.OK)
+                        throw new Exception($"Activity after delete expected 200 (audit survives), got {(int)after.StatusCode}");
+                    var afterBody = await after.Content.ReadFromJsonAsync<JsonElement>(Json, ct);
+                    if (afterBody.GetArrayLength() < 1)
+                        throw new Exception("Idea activity should still have >= 1 event after the idea is deleted");
+                }
+                finally
+                {
+                    if (ideaId is int iid) await http.DeleteAsync($"/api/ideas/{iid}", ct);
+                }
+            }));
         }
         finally
         {

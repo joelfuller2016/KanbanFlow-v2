@@ -18,6 +18,7 @@ public static class ApiEndpoints
         app.MapRequirementEndpoints();
         app.MapTaskCommentEndpoints();
         app.MapActivityEndpoints();
+        app.MapIdeaEndpoints();
         return app;
     }
 
@@ -499,6 +500,177 @@ public static class ApiEndpoints
                 if (!taskExists)
                     return Results.NotFound(new { message = $"Task {id} not found." });
             }
+
+            return Results.Ok(events.Select(MapActivityEvent));
+        });
+    }
+
+    // ── Idea Endpoints ─────────────────────────────────────────────────
+    // The Ideas inbox (#180). Every mutation routes through IIdeaService so each
+    // change emits a uniform ActivityEvent — the single-audit-boundary rule (#88).
+    // Idea activity events are keyed by EntityType = "Idea" + the idea id, mirroring
+    // how tasks use EntityType == "Task" (see the /api/tasks/{id}/activity endpoint).
+
+    private static void MapIdeaEndpoints(this WebApplication app)
+    {
+        // GET /api/ideas — list newest-first with optional filters.
+        app.MapGet("/api/ideas", async (string? status, string? tag, string? q, int? limit, int? offset, Services.IIdeaService ideaSvc, CancellationToken ct) =>
+        {
+            // Parse the status filter at the edge. A blank/absent status means "no
+            // filter"; a present-but-invalid value is a client error (422) rather
+            // than being silently ignored.
+            IdeaStatus? statusFilter = null;
+            if (!string.IsNullOrWhiteSpace(status))
+            {
+                if (!Enum.TryParse<IdeaStatus>(status, ignoreCase: true, out var parsed)
+                    || !Enum.IsDefined(typeof(IdeaStatus), parsed))
+                {
+                    return Results.UnprocessableEntity(new { message = $"Invalid status: {status}. Valid values: {string.Join(", ", Enum.GetNames<IdeaStatus>())}" });
+                }
+                statusFilter = parsed;
+            }
+
+            // The service clamps limit (1..500) and floors offset (>= 0) itself.
+            var items = await ideaSvc.ListAsync(statusFilter, tag, q, limit ?? 100, offset ?? 0, ct);
+            return Results.Ok(items.Select(MapIdea));
+        });
+
+        // GET /api/ideas/{id} — one idea, or 404.
+        app.MapGet("/api/ideas/{id:int}", async (int id, Services.IIdeaService ideaSvc, CancellationToken ct) =>
+        {
+            var idea = await ideaSvc.GetByIdAsync(id, ct);
+            if (idea is null)
+                return Results.NotFound(new { message = $"Idea {id} not found." });
+
+            return Results.Ok(MapIdea(idea));
+        });
+
+        // POST /api/ideas — create (201). Priority arrives as a string and is parsed
+        // at the edge (a present-but-invalid value is 422); the service validates the
+        // title (non-empty, <= 500 chars).
+        app.MapPost("/api/ideas", async (IdeaCreateDto dto, Services.IIdeaService ideaSvc, CancellationToken ct) =>
+        {
+            TaskPriority? priority = null;
+            if (!string.IsNullOrWhiteSpace(dto.Priority))
+            {
+                if (!Enum.TryParse<TaskPriority>(dto.Priority, ignoreCase: true, out var p) || !Enum.IsDefined(p))
+                    return Results.UnprocessableEntity(new { message = $"Invalid priority '{dto.Priority}'." });
+                priority = p;
+            }
+
+            try
+            {
+                var create = new Services.IdeaCreate(
+                    Title: dto.Title,
+                    Body: dto.Body,
+                    Plan: dto.Plan,
+                    Tags: dto.Tags,
+                    Priority: priority);
+                var idea = await ideaSvc.CreateAsync(create, dto.Actor, ct);
+
+                return Results.Created($"/api/ideas/{idea.Id}", MapIdea(idea));
+            }
+            catch (Services.ValidationException ex)
+            {
+                return Results.UnprocessableEntity(new { message = ex.Message });
+            }
+        });
+
+        // PATCH /api/ideas/{id} — partial update (200). null/absent DTO fields mean
+        // "leave unchanged". Status/Priority arrive as strings and are parsed at the
+        // edge (a present-but-invalid value is 422), mirroring the GET ?status= filter.
+        app.MapPatch("/api/ideas/{id:int}", async (int id, IdeaUpdateDto dto, Services.IIdeaService ideaSvc, CancellationToken ct) =>
+        {
+            IdeaStatus? status = null;
+            if (!string.IsNullOrWhiteSpace(dto.Status))
+            {
+                if (!Enum.TryParse<IdeaStatus>(dto.Status, ignoreCase: true, out var s) || !Enum.IsDefined(s))
+                    return Results.UnprocessableEntity(new { message = $"Invalid status '{dto.Status}'." });
+                status = s;
+            }
+
+            TaskPriority? priority = null;
+            if (!string.IsNullOrWhiteSpace(dto.Priority))
+            {
+                if (!Enum.TryParse<TaskPriority>(dto.Priority, ignoreCase: true, out var p) || !Enum.IsDefined(p))
+                    return Results.UnprocessableEntity(new { message = $"Invalid priority '{dto.Priority}'." });
+                priority = p;
+            }
+
+            try
+            {
+                var update = new Services.IdeaUpdate(
+                    Title: dto.Title,
+                    Body: dto.Body,
+                    Plan: dto.Plan,
+                    Status: status,
+                    Tags: dto.Tags,
+                    Priority: priority);
+                var idea = await ideaSvc.UpdateAsync(id, update, dto.Actor, ct);
+
+                return Results.Ok(MapIdea(idea));
+            }
+            catch (Services.IdeaNotFoundException)
+            {
+                return Results.NotFound(new { message = $"Idea {id} not found." });
+            }
+            catch (Services.ValidationException ex)
+            {
+                return Results.UnprocessableEntity(new { message = ex.Message });
+            }
+        });
+
+        // DELETE /api/ideas/{id} — delete (204). No actor param on this route, matching
+        // the task DELETE; the audit row is written before removal by the service.
+        app.MapDelete("/api/ideas/{id:int}", async (int id, Services.IIdeaService ideaSvc, CancellationToken ct) =>
+        {
+            try
+            {
+                await ideaSvc.DeleteAsync(id, actor: null, ct);
+                return Results.NoContent();
+            }
+            catch (Services.IdeaNotFoundException)
+            {
+                return Results.NotFound(new { message = $"Idea {id} not found." });
+            }
+        });
+
+        // POST /api/ideas/{id}/promote — promote the idea into a new project (200).
+        // The body is optional (it only carries an actor), so dto may be null.
+        // Promoting an already-promoted idea throws ValidationException → 422 (not 409).
+        app.MapPost("/api/ideas/{id:int}/promote", async (int id, IdeaPromoteDto? dto, Services.IIdeaService ideaSvc, CancellationToken ct) =>
+        {
+            try
+            {
+                var result = await ideaSvc.PromoteAsync(id, dto?.Actor, ct);
+                return Results.Ok(new { ideaId = result.IdeaId, projectId = result.ProjectId });
+            }
+            catch (Services.IdeaNotFoundException)
+            {
+                return Results.NotFound(new { message = $"Idea {id} not found." });
+            }
+            catch (Services.ValidationException ex)
+            {
+                return Results.UnprocessableEntity(new { message = ex.Message });
+            }
+        });
+
+        // GET /api/ideas/{id}/activity — durable idea event trail. Mirrors the
+        // /api/tasks/{id}/activity endpoint: events are keyed by EntityType = "Idea".
+        app.MapGet("/api/ideas/{id:int}/activity", async (int id, int? limit, AppDbContext db, CancellationToken ct) =>
+        {
+            var take = Math.Clamp(limit ?? 100, 1, 500);
+            var events = await db.ActivityEvents
+                .Where(e => e.EntityType == "Idea" && e.EntityId == id)
+                .AsNoTracking()
+                .OrderByDescending(e => e.CreatedAt)
+                .Take(take)
+                .ToListAsync(ct);
+
+            // Only probe for existence when there are no events, so a real-but-quiet
+            // idea returns an empty trail rather than a 404.
+            if (events.Count == 0 && !await db.Ideas.AnyAsync(i => i.Id == id, ct))
+                return Results.NotFound(new { message = $"Idea {id} not found." });
 
             return Results.Ok(events.Select(MapActivityEvent));
         });
@@ -2097,6 +2269,22 @@ public static class ApiEndpoints
         AcceptanceCriteriaDoneCount = t.AcceptanceCriteria.Count(c => c.Completed)
     };
 
+    // Idea list/single/create/update projection. Field set deliberately matches
+    // IdeaService.IdeaActivitySnapshot so REST output and audit snapshots stay aligned.
+    private static object MapIdea(Idea idea) => new
+    {
+        idea.Id,
+        idea.Title,
+        idea.Body,
+        idea.Plan,
+        status = idea.Status.ToString(),
+        idea.Tags,
+        priority = idea.Priority?.ToString(),   // nullable enum
+        idea.PromotedProjectId,
+        idea.CreatedAt,
+        idea.UpdatedAt
+    };
+
     private static readonly string[] AllowedUserCommentTypes =
     [
         nameof(CommentType.Note),
@@ -2480,3 +2668,13 @@ public record RequirementAssignDto(int? FeatureId, int? TaskItemId);
 public record TaskCommentDto(string? Text, string? Author, string? Type);
 
 public record TaskDependencyDto(int? TaskItemId, int? BlockedTaskId, int? DependsOnTaskItemId, int? BlockingTaskItemId, int? BlockingTaskId, string? Type);
+
+// Idea inbox DTOs (#180). Priority/Status are freeform strings parsed at the edge:
+// the repo has no JsonStringEnumConverter, so typed enum fields can't bind from JSON
+// strings like "High"/"Triaging" (they'd 400). This mirrors the /api/tasks/{id}/status
+// convention — accept the enum as a string and parse it manually.
+public record IdeaCreateDto(string Title, string? Body, string? Plan, string? Tags, string? Priority, string? Actor);
+
+public record IdeaUpdateDto(string? Title, string? Body, string? Plan, string? Status, string? Tags, string? Priority, string? Actor);
+
+public record IdeaPromoteDto(string? Actor);

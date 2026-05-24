@@ -221,7 +221,7 @@ The agent can author, modify, and remove every entity. Mutations preserve audit 
 
 | # | Requirement | Status |
 |---|-------------|--------|
-| R-2.1 | Every entity has full REST CRUD: list, get, create, update, delete. | ✅ 46 endpoints in `ApiEndpoints.cs`. |
+| R-2.1 | Every entity has full REST CRUD: list, get, create, update, delete. | ✅ 53 endpoints in `ApiEndpoints.cs`. |
 | R-2.2 | Every REST capability has at least one MCP tool. | ❌ MCP exposes 11 of ~40 needed tools — see §6. |
 | R-2.3 | Mutations through the UI go through the **same shared service layer** as REST mutations, so audit events, claim semantics, and validation are produced once and applied everywhere. | ❌ Issue #88 — UI components write directly to EF, bypassing audit. **Highest-priority refactor.** |
 | R-2.4 | All entity mutations produce an `ActivityEvent` row. | ✅ for REST (9 emission sites in `ApiEndpoints.cs`); ❌ for UI (R-2.3). |

@@ -230,7 +230,7 @@ Requirements are organised by **capability**, not by entity. Every capability mu
 
 | # | Requirement |
 |---|-------------|
-| R-2.1 | Every entity has full REST CRUD: list, get, create, update, delete. *(✅ REST implemented for all 9 entities, 46 endpoints.)* |
+| R-2.1 | Every entity has full REST CRUD: list, get, create, update, delete. *(✅ REST implemented for all entities, 53 endpoints.)* |
 | R-2.2 | Every REST capability has at least one MCP tool. *(❌ MCP currently exposes 11 of ~40 needed tools — see "MCP roadmap" below.)* |
 | R-2.3 | Mutations through the UI go through the **same shared service layer** as REST mutations, so audit events, claim semantics, and validation are produced once and applied everywhere. *(❌ currently broken — UI components write directly to EF, bypassing audit. This is issue #88 and the highest-priority refactor.)* |
 | R-2.4 | All entity mutations produce an `ActivityEvent` row. *(✅ for REST; ❌ for UI — see R-2.3.)* |
@@ -267,7 +267,7 @@ Requirements are organised by **capability**, not by entity. Every capability mu
 | R-5.1 | The API publishes an OpenAPI document (`/openapi.json`) covering every endpoint, request body, and response shape. *(✅ implemented — `Microsoft.AspNetCore.OpenApi` serves `/openapi/v1.json`; `/openapi.json` 302s to it. Response shapes still loosen pending the records refactor, R-5.2.)* |
 | R-5.2 | Response types are strongly typed (records), not anonymous. *(❌ ~25 distinct anonymous shapes are constructed inline in `ApiEndpoints.cs`.)* |
 | R-5.3 | Each MCP tool has a rich description that explains its purpose, parameters, and the kind of follow-up the agent typically does after calling it. *(⚠️ tool descriptions exist but are terse; could be expanded.)* |
-| R-5.4 | `docs/requirements.md` lists every endpoint, kept in sync with the code. *(❌ currently lists 23 endpoints; code has 46. Plan: regenerate from OpenAPI once R-5.1 lands.)* |
+| R-5.4 | `docs/requirements.md` lists every endpoint, kept in sync with the code. *(❌ currently lists 23 endpoints; code has 53. Plan: regenerate from OpenAPI once R-5.1 lands.)* |
 | R-5.5 | Errors use a uniform shape: `{ "message": string, "errors"?: Record<string, string[]>, "details"?: Record<string, unknown> }`. *(⚠️ partially consistent — some endpoints add bonus fields ad-hoc.)* |
 
 ### C-6. Be operationally simple
@@ -437,9 +437,13 @@ The OpenAPI document (R-5.1) is now the source of truth: GET `/openapi/v1.json` 
 /api/task-dependencies/{id}                 # get/delete
 /api/requirements/{id}                      # get/update/delete
 /api/requirements/{id}/assign               # PATCH assign feature/task
+/api/ideas                                  # list (?status= ?tag= ?q= ?limit= ?offset=)/create
+/api/ideas/{id}                             # get/update/delete
+/api/ideas/{id}/promote                     # POST promote idea to a project
+/api/ideas/{id}/activity                    # audit log per idea
 ```
 
-46 endpoints total. Every list endpoint and every detail endpoint will be paginated once R-1.4 lands; richer response shapes follow with the records refactor (R-5.2).
+53 endpoints total. Ideas (`/api/ideas`) are the pre-project "inbox" — capture raw ideas, then promote one into a full project (#180). Every list endpoint and every detail endpoint will be paginated once R-1.4 lands; richer response shapes follow with the records refactor (R-5.2).
 
 ---
 
