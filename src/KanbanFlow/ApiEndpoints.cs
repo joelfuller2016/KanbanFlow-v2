@@ -446,17 +446,21 @@ public static class ApiEndpoints
             });
         });
 
-        // DELETE /api/projects/{id} — cascade delete
-        app.MapDelete("/api/projects/{id:int}", async (int id, AppDbContext db) =>
+        // DELETE /api/projects/{id} — FK-safe, audited cascade delete.
+        // Routes through ITaskService.DeleteProjectAsync so the leaf-first child cleanup
+        // and the ProjectDeleted audit event are produced identically for REST and the
+        // Blazor UI (#155). Mirrors the task-delete endpoint's exception mapping.
+        app.MapDelete("/api/projects/{id:int}", async (int id, Services.ITaskService taskSvc, CancellationToken ct) =>
         {
-            var project = await db.Projects.FindAsync(id);
-            if (project is null)
+            try
+            {
+                await taskSvc.DeleteProjectAsync(id, actor: null, ct);
+                return Results.NoContent();
+            }
+            catch (Services.ProjectNotFoundException)
+            {
                 return Results.NotFound(new { message = $"Project {id} not found." });
-
-            await DeleteProjectChildrenAsync(db, id);
-            db.Projects.Remove(project);
-            await db.SaveChangesAsync();
-            return Results.NoContent();
+            }
         });
     }
 
@@ -2223,7 +2227,7 @@ public static class ApiEndpoints
         return false;
     }
 
-    private static async Task DeleteProjectChildrenAsync(AppDbContext db, int projectId)
+    internal static async Task DeleteProjectChildrenAsync(AppDbContext db, int projectId)
     {
         var projectFeatureIds = await db.Features
             .Where(f => f.ProjectId == projectId)

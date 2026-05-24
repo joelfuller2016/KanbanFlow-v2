@@ -433,6 +433,37 @@ public sealed class TaskService(IDbContextFactory<AppDbContext> dbFactory) : ITa
         await db.SaveChangesAsync(ct);
     }
 
+    public async Task DeleteProjectAsync(int projectId, string? actor, CancellationToken ct = default)
+    {
+        await using var db = await dbFactory.CreateDbContextAsync(ct);
+        var project = await db.Projects.FirstOrDefaultAsync(p => p.Id == projectId, ct);
+        if (project is null)
+            throw new ProjectNotFoundException(projectId);
+
+        // Snapshot + emit the audit event BEFORE removal. ActivityEvent has no FK to the
+        // project (Project is Ignored in AppDbContext), so the row survives the delete.
+        AddActivityEvent(
+            db, projectId, "Project", projectId, actor,
+            "ProjectDeleted", ProjectActivitySnapshot(project), null,
+            $"Project '{project.Name}' deleted");
+
+        // FK-safe child cleanup (features -> tasks -> leaf-first subtasks + acceptance criteria
+        // + comments; requirement links nulled) — shared with the REST delete path so both
+        // surfaces behave identically (#155). A single SaveChanges makes the children removal,
+        // the project removal, and the audit row one atomic unit.
+        await KanbanFlow.ApiEndpoints.DeleteProjectChildrenAsync(db, projectId);
+        db.Projects.Remove(project);
+        await db.SaveChangesAsync(ct);
+    }
+
+    private static object ProjectActivitySnapshot(Project project) => new
+    {
+        project.Id,
+        project.Name,
+        project.Description,
+        project.Goals
+    };
+
     public async Task<TaskItem> ClaimAsync(int taskId, string actor, CancellationToken ct = default)
     {
         // The REST endpoint maps a blank actor to 422; surface it as a ValidationException.
