@@ -5,7 +5,7 @@
 
 **Designed for AI agents to read, write, and navigate structured project knowledge — and to be told *what to work on next, with the context they need to do it*.** Humans use the kanban UI; agents use the REST API and MCP server. It's not a kanban app with an API bolted on — the board is one view of a project knowledge graph that is equally exposed as REST + MCP.
 
-### In one minute
+## In one minute
 
 - **What:** a single-file (.NET 10 + SQLite) app where a project — its features, tasks, subtasks, requirements, acceptance criteria, decisions, and dependencies — is structured data.
 - **For humans:** a drag-and-drop kanban board + project outline.
@@ -160,12 +160,12 @@ The whole point of the system: an agent asks for direction and gets a ranked, de
 
 ```mermaid
 flowchart LR
-    A["🤖 agent"] --> N["GET /projects/{id}/next-tasks<br/>?actor= &limit="]
+    A["🤖 agent"] --> N["GET /api/projects/{id}/next-tasks<br/>?actor= &amp;limit="]
     N --> CHK{"task has an<br/>open blocker?"}
     CHK -- yes --> BLK["→ blockedTasks<br/>(excluded from picks)"]
     CHK -- no --> RANK["rank by:<br/>priority → status → age → unclaimed"]
     RANK --> REC["recommendations[]<br/>each with a human-readable <b>reason</b>"]
-    REC --> SC["GET /tasks/{id}/context<br/>criteria + subtasks + deps + comments + activity"]
+    REC --> SC["GET /api/tasks/{id}/context<br/>criteria + subtasks + deps + comments + activity"]
     SC --> ACT["agent executes →<br/>status change · comment · claim"]
     ACT --> AUD[["ActivityEvent recorded"]]
     AUD -. "next session inherits the history" .-> A
@@ -264,7 +264,7 @@ Requirements are organised by **capability**, not by entity. Every capability mu
 
 | # | Requirement |
 |---|-------------|
-| R-5.1 | The API publishes an OpenAPI document (`/openapi.json`) covering every endpoint, request body, and response shape. *(❌ not implemented — `Microsoft.AspNetCore.OpenApi` not wired up. Required for agents to discover the surface without reading source.)* |
+| R-5.1 | The API publishes an OpenAPI document (`/openapi.json`) covering every endpoint, request body, and response shape. *(✅ implemented — `Microsoft.AspNetCore.OpenApi` serves `/openapi/v1.json`; `/openapi.json` 302s to it. Response shapes still loosen pending the records refactor, R-5.2.)* |
 | R-5.2 | Response types are strongly typed (records), not anonymous. *(❌ ~25 distinct anonymous shapes are constructed inline in `ApiEndpoints.cs`.)* |
 | R-5.3 | Each MCP tool has a rich description that explains its purpose, parameters, and the kind of follow-up the agent typically does after calling it. *(⚠️ tool descriptions exist but are terse; could be expanded.)* |
 | R-5.4 | `docs/requirements.md` lists every endpoint, kept in sync with the code. *(❌ currently lists 23 endpoints; code has 46. Plan: regenerate from OpenAPI once R-5.1 lands.)* |
