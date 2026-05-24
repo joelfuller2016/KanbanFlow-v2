@@ -14,7 +14,7 @@
 #     ./scripts/master-health.ps1
 #     ./scripts/master-health.ps1 -Branch main
 #
-# Requires: pwsh 7+, git, gh (authenticated), .NET SDK (per global.json).
+# Requires: pwsh 7+, git, gh (authenticated), .NET 10 SDK.
 # Exit: 0 = branch healthy; 1 = branch red (issue opened/updated); 2 = script error.
 # ─────────────────────────────────────────────────────────────────────────────
 #requires -Version 7.0
@@ -45,18 +45,24 @@ try {
     $icon = $result.Ok ? '✅' : '❌'
     Write-Host "$icon $Branch @ $sha : $($result.Summary)" -ForegroundColor ($result.Ok ? 'Green' : 'Red')
 
-    # Is there already an open tracking issue?
-    $existing = gh issue list -R $Repo --state open --search "$title in:title" --json number --jq '.[0].number // empty' 2>$null
+    # Is there already an open tracking issue? Quote the title so search is exact
+    # (unquoted, GitHub ANDs the words and can match unrelated issues).
+    $search = '"' + $title + '" in:title'
+    $existing = gh issue list -R $Repo --state open --search $search --json number --jq '.[0].number // empty'
+    if ($LASTEXITCODE -ne 0) { throw "failed to query tracking issues for $Repo" }
 
     if (-not $result.Ok) {
+        $safeDetail = Protect-CiLog -Text $result.Detail
         $body = "Automated **$Branch** health check failed at $bt$sha$bt.`n`n**$($result.Summary)**`n`n" +
-                "<details><summary>last output lines</summary>`n`n$fence`n$($result.Detail)`n$fence`n</details>`n`n" +
+                "<details><summary>last output lines</summary>`n`n$fence`n$safeDetail`n$fence`n</details>`n`n" +
                 "<sub>Posted by scripts/master-health.ps1 — CI without GitHub Actions (#147).</sub>"
         if ($existing) {
             gh issue comment $existing -R $Repo --body $body | Out-Null
+            if ($LASTEXITCODE -ne 0) { throw "failed to comment on tracking issue #$existing" }
             Write-Host "Updated tracking issue #$existing" -ForegroundColor Yellow
         } else {
             gh issue create -R $Repo --title $title --label $IssueLabel --body $body | Out-Null
+            if ($LASTEXITCODE -ne 0) { throw "failed to create tracking issue for $Branch" }
             Write-Host 'Opened a new tracking issue' -ForegroundColor Yellow
         }
         exit 1
@@ -64,7 +70,9 @@ try {
 
     if ($existing) {
         gh issue comment $existing -R $Repo --body "✅ $Branch is green again at $bt$sha$bt ($($result.Summary)). Auto-closing." | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw "failed to post recovery comment on issue #$existing" }
         gh issue close $existing -R $Repo | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw "failed to close issue #$existing" }
         Write-Host "Closed recovered tracking issue #$existing" -ForegroundColor Green
     }
     Write-Host "$Branch healthy."

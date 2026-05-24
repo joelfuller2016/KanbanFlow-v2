@@ -18,7 +18,7 @@ scheduler** run the same gate the bots can't. See issue #147.
 
 All scripts are self-contained (they work in a dedicated clone under the temp dir,
 never touching your working tree) and require: PowerShell 7+, `git`, `gh`
-(authenticated), and the .NET SDK from `global.json`.
+(authenticated), and the **.NET 10 SDK**.
 
 ## Usage
 
@@ -44,6 +44,7 @@ never touching your working tree) and require: PowerShell 7+, `git`, `gh`
 The scripts are scheduler-agnostic. Two supported options:
 
 ### A. Local — Windows Task Scheduler
+
 The SDK is guaranteed (your dev box has .NET 10); runs only while the machine is on.
 
 ```powershell
@@ -55,12 +56,14 @@ Register-ScheduledTask -TaskName 'kbf2-pr-ci' -Action $action -Trigger $trigger
 ```
 
 ### B. Remote — Claude scheduled routine
+
 Always-on (like the `dependabot-automerge-kanbanflow` routine). The cloud env must
-provide the SDK; bootstrap it at the top of the routine prompt if missing:
+provide `gh` (authenticated), `pwsh` 7+, and the .NET 10 SDK; bootstrap whatever
+is missing at the top of the routine prompt:
 
 ```bash
 command -v dotnet || curl -sSL https://dot.net/v1/dotnet-install.sh | bash -s -- --channel 10.0
-git clone https://github.com/joelfuller2016/KanbanFlow-v2 && cd KanbanFlow-v2
+gh repo clone joelfuller2016/KanbanFlow-v2 && cd KanbanFlow-v2   # gh auth handles the private repo
 pwsh ./scripts/pr-ci.ps1 -PostStatus -PostComment
 pwsh ./scripts/master-health.ps1
 ```
@@ -73,8 +76,9 @@ Once `pr-ci.ps1 -PostStatus` is posting the `pr-build-test` status, require it i
 branch protection so red PRs can't merge — real CI, zero Actions:
 
 ```bash
-gh api -X PATCH repos/joelfuller2016/KanbanFlow-v2/branches/master/protection/required_status_checks \
-  -f 'checks[][context]=pr-build-test'
+# Pass a full required_status_checks body (strict + checks list) so the PATCH validates:
+echo '{"strict":false,"checks":[{"context":"pr-build-test"}]}' \
+  | gh api -X PATCH repos/joelfuller2016/KanbanFlow-v2/branches/master/protection/required_status_checks --input -
 ```
 
 This also removes the need for `--admin` merges: `resolve-threads.ps1` clears the
