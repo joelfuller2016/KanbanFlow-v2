@@ -981,7 +981,9 @@ async function callTool(toolName, args) {
     // ── Idea inbox CRUD ──
 
     case "create_idea":
-      if (args.priority !== undefined && args.priority !== null && args.priority !== "")
+      // A present-but-blank enum is invalid (consistent with native tools + REST):
+      // only a genuinely omitted (undefined/null) value stays optional.
+      if (args.priority !== undefined && args.priority !== null)
         assertEnum(args, "priority", ["Low", "Medium", "High", "Critical"]);
       return restJson("/api/ideas", {
         method: "POST",
@@ -1014,9 +1016,11 @@ async function callTool(toolName, args) {
     case "get_idea":
       return restJson(`/api/ideas/${requiredInt(args, "ideaId", { min: 1 })}`);
     case "update_idea":
-      if (args.status !== undefined && args.status !== null && args.status !== "")
+      // A present-but-blank enum is invalid (consistent with native tools + REST):
+      // only a genuinely omitted (undefined/null) value stays optional.
+      if (args.status !== undefined && args.status !== null)
         assertEnum(args, "status", ["New", "Triaging", "Promoted", "Archived", "Rejected"]);
-      if (args.priority !== undefined && args.priority !== null && args.priority !== "")
+      if (args.priority !== undefined && args.priority !== null)
         assertEnum(args, "priority", ["Low", "Medium", "High", "Critical"]);
       return restJson(`/api/ideas/${requiredInt(args, "ideaId", { min: 1 })}`, {
         method: "PATCH",

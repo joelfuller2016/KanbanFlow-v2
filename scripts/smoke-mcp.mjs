@@ -334,21 +334,23 @@ try {
   console.log(`MCP smoke tests passed for project ${projectId}, task ${task.id}.`);
 } finally {
   try {
-    if (promotedProjectId !== undefined) {
-      try {
-        await restJson(`/api/projects/${promotedProjectId}`, { method: "DELETE", expectNoContent: true });
-        console.log(`Cleaned up MCP smoke promoted project ${promotedProjectId}.`);
-      } catch (error) {
-        console.error(`MCP smoke cleanup failed for promoted project ${promotedProjectId}: ${error.message}`);
-        process.exitCode = 1;
-      }
-    }
+    // Delete the idea before the promoted project so cleanup is deterministic
+    // under restrictive FK behavior (the promoted project references the idea).
     if (tempIdeaId !== undefined) {
       try {
         await restJson(`/api/ideas/${tempIdeaId}`, { method: "DELETE", expectNoContent: true });
         console.log(`Cleaned up MCP smoke idea ${tempIdeaId}.`);
       } catch (error) {
         console.error(`MCP smoke cleanup failed for idea ${tempIdeaId}: ${error.message}`);
+        process.exitCode = 1;
+      }
+    }
+    if (promotedProjectId !== undefined) {
+      try {
+        await restJson(`/api/projects/${promotedProjectId}`, { method: "DELETE", expectNoContent: true });
+        console.log(`Cleaned up MCP smoke promoted project ${promotedProjectId}.`);
+      } catch (error) {
+        console.error(`MCP smoke cleanup failed for promoted project ${promotedProjectId}: ${error.message}`);
         process.exitCode = 1;
       }
     }

@@ -330,7 +330,7 @@ Plus a small set of integrity bugs that directly hurt AI accuracy:
 
 The MCP server (`scripts/mcp-server.mjs`) is the agent's primary entry point. **It exposes 41 tools** as of the latest integrated batch (PRs #100, #101, plus the Ideas tools in #180). Every tool forwards to the REST API — single source of truth, no duplicated logic.
 
-### Implemented (36)
+### Implemented (41)
 
 Grouped by capability area:
 
@@ -359,6 +359,10 @@ Grouped by capability area:
 
 **Activity (2)** — C-1
 - `list_project_activity`, `list_task_activity`
+
+**Ideas (5)** — C-2
+- `list_ideas`, `get_idea` (read)
+- `create_idea`, `update_idea`, `promote_idea` (idea inbox → triage → promote to project)
 
 The full machine-readable list is at `tools/list` (JSON-RPC) when the server is running. The OpenAPI document at `/openapi/v1.json` describes the underlying REST surface.
 

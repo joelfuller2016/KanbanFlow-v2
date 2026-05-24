@@ -24,7 +24,7 @@ wrapper (`scripts/mcp-server.mjs`).
   trust-the-network — same as the unrestricted REST API + open CORS. Loopback/CORS
   hardening is deferred to issue #84.
 
-- The Node wrapper is **left in place** as the stdio fallback and the full 36-tool surface.
+- The Node wrapper is **left in place** as the stdio fallback and the full 41-tool surface.
 
 ## Why in-process beats the Node wrapper
 
@@ -44,6 +44,11 @@ one deployable, and mutations reuse the exact audit-aware code path the UI/REST 
 | `add_task_comment` | **`ITaskService.AddCommentAsync`** | mutation (audit-aware) |
 | `claim_task` | **`ITaskService.ClaimAsync`** | mutation (audit-aware) |
 | `release_task` | **`ITaskService.ReleaseAsync`** | mutation (audit-aware) |
+| `list_ideas` | `IIdeaService` | read |
+| `get_idea` | `IIdeaService` | read |
+| `create_idea` | **`IIdeaService.CreateAsync`** | mutation (audit-aware) |
+| `update_idea` | **`IIdeaService.UpdateAsync`** | mutation (audit-aware) |
+| `promote_idea` | **`IIdeaService.PromoteAsync`** | mutation (audit-aware) |
 
 ### Service-layer extraction (done — closes the task/comment half of #88)
 
@@ -76,7 +81,7 @@ write extraction.
 
 - `dotnet build` → **0 warnings, 0 errors**.
 - App started on `http://127.0.0.1:5123` (verified on a scratch port + throwaway DB):
-  - `POST /mcp` `tools/list` → all 10 tools with correct input schemas; write tools emit
+  - `POST /mcp` `tools/list` → all 15 tools with correct input schemas; write tools emit
     `TaskCreated`/`TaskCommentAdded`/`TaskClaimed`/`TaskStatusChanged`/`TaskDeleted` activity
     events attributed to the actor (verified e2e); in-app service tests 17/17.
   - `tools/call list_projects` → real seed data (`Sample Project`, 4 features / 5 tasks).
@@ -106,7 +111,7 @@ Start the app first: `dotnet run --project src/KanbanFlow/KanbanFlow.csproj --ur
 1. **Extract the service layer** (#88) — *done for tasks + comments*. Remaining: move
    feature/subtask/criterion/requirement/dependency write logic out of `ApiEndpoints.cs`
    into services (and add their MCP write tools).
-2. **Grow the native tool surface** to match the Node wrapper (36 tools), curated — see below.
+2. **Grow the native tool surface** to match the Node wrapper (41 tools), curated — see below.
 3. **Retire the Node wrapper** once parity + clients are migrated; keep stdio via a thin
    console host if any client still needs it.
 

@@ -16,8 +16,8 @@ namespace KanbanFlow.Mcp;
 /// JSON-RPC to the REST API over HTTP, these methods call the EF Core data layer and
 /// the audit-aware <see cref="ITaskService"/> DIRECTLY via DI — no extra network hop.
 ///
-/// This is a curated slice (10 tools: 5 read + 5 audit-aware write) proving parity with the
-/// Node wrapper, not yet the full 36-tool surface. See <c>docs/native-mcp-notes.md</c> for the rationale,
+/// This is a curated slice (15 tools: 7 read + 8 audit-aware write) proving parity with the
+/// Node wrapper, not yet the full 41-tool surface. See <c>docs/native-mcp-notes.md</c> for the rationale,
 /// the path to full coverage, and the Kebechet.Api.ToMcp evaluation.
 ///
 /// Tool-design conventions follow Anthropic's mcp-builder skill: snake_case names,
@@ -485,7 +485,7 @@ public static class KanbanMcpTools
 
     [McpServerTool(Name = "promote_idea")]
     [Description("Promote an idea into a new project (Title→Name, Body→Description, Plan→Goals) through the audit-aware service layer (writes IdeaPromoted + ProjectCreatedFromIdea activity events; no HTTP hop). Fails if the idea is already promoted. Returns the idea id and the new project id.")]
-    public static async Task<IdeaPromoteResultDto> PromoteIdea(
+    public static async Task<IdeaPromotionResult> PromoteIdea(
         IIdeaService ideaService,
         [Description("The idea id to promote.")] int ideaId,
         [Description("Optional actor label recorded in the audit trail (default 'mcp-agent').")] string? actor = null,
@@ -494,7 +494,7 @@ public static class KanbanMcpTools
         try
         {
             var result = await ideaService.PromoteAsync(ideaId, NormalizeActor(actor), cancellationToken);
-            return new IdeaPromoteResultDto(
+            return new IdeaPromotionResult(
                 result.IdeaId, result.ProjectId,
                 $"Idea {result.IdeaId} promoted to project {result.ProjectId}");
         }
@@ -520,7 +520,7 @@ public static class KanbanMcpTools
         if (priority is null) return null;
         if (!Enum.TryParse<TaskPriority>(priority, ignoreCase: true, out var parsed) || !Enum.IsDefined(parsed))
             throw new McpException(
-                $"Invalid priority: {priority}. Valid values: {string.Join(", ", Enum.GetNames<TaskPriority>())}");
+                $"Invalid priority '{priority}'. Valid values: {string.Join(", ", Enum.GetNames<TaskPriority>())}.");
         return parsed;
     }
 
@@ -529,7 +529,7 @@ public static class KanbanMcpTools
         if (status is null) return null;
         if (!Enum.TryParse<IdeaStatus>(status, ignoreCase: true, out var parsed) || !Enum.IsDefined(parsed))
             throw new McpException(
-                $"Invalid status: {status}. Valid values: {string.Join(", ", Enum.GetNames<IdeaStatus>())}");
+                $"Invalid status '{status}'. Valid values: {string.Join(", ", Enum.GetNames<IdeaStatus>())}.");
         return parsed;
     }
 
@@ -556,4 +556,4 @@ public sealed record TaskClaimResult(int Id, string Name, string? ClaimedBy, Dat
 
 // ── Idea inbox DTOs (#180 Phase 3) — IdeaResult mirrors the REST MapIdea field set ──
 public sealed record IdeaResult(int Id, string Title, string? Body, string? Plan, string Status, string? Tags, string? Priority, int? PromotedProjectId, DateTime CreatedAt, DateTime UpdatedAt);
-public sealed record IdeaPromoteResultDto(int IdeaId, int ProjectId, string Message);
+public sealed record IdeaPromotionResult(int IdeaId, int ProjectId, string Message);
