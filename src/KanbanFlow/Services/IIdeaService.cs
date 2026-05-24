@@ -26,8 +26,8 @@ public interface IIdeaService
 
     /// <summary>
     /// List ideas newest-first with optional filters. <paramref name="tag"/> and
-    /// <paramref name="search"/> are case-insensitive substring matches (parameterized
-    /// LIKE); <paramref name="search"/> matches title or body. <paramref name="limit"/>
+    /// <paramref name="search"/> are case-insensitive substring matches (case-folded
+    /// <c>Contains</c>); <paramref name="search"/> matches title or body. <paramref name="limit"/>
     /// is clamped to 1..500 and <paramref name="offset"/> floored at 0.
     /// </summary>
     Task<IReadOnlyList<Idea>> ListAsync(

@@ -149,7 +149,8 @@ public sealed class IdeaServiceTests
         SeedIdea(f, "b", tags: "frontend");
         var svc = new IdeaService(f);
 
-        var tagged = await svc.ListAsync(tag: "backend");
+        // Upper-case query proves the match is BOTH substring and case-insensitive.
+        var tagged = await svc.ListAsync(tag: "BACKEND");
         Assert.Equal("a", Assert.Single(tagged).Title);
     }
 
@@ -162,7 +163,8 @@ public sealed class IdeaServiceTests
         SeedIdea(f, "unrelated", body: "nothing here");
         var svc = new IdeaService(f);
 
-        var hits = await svc.ListAsync(search: "kanban");
+        // Upper-case query proves case-insensitive matching across title and body.
+        var hits = await svc.ListAsync(search: "KANBAN");
         Assert.Equal(2, hits.Count);
         Assert.DoesNotContain(hits, i => i.Title == "unrelated");
     }

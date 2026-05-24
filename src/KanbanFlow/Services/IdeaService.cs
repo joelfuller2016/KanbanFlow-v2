@@ -55,7 +55,8 @@ public sealed class IdeaService(IDbContextFactory<AppDbContext> dbFactory) : IId
         // Service is the trust boundary — REST, MCP, and Blazor callers all flow through here (#88).
         if (string.IsNullOrWhiteSpace(dto.Title))
             throw new ValidationException("Title cannot be empty or whitespace.");
-        if (dto.Title.Length > MaxTitleLength)
+        var title = dto.Title.Trim();
+        if (title.Length > MaxTitleLength)
             throw new ValidationException($"Title cannot exceed {MaxTitleLength} characters.");
         if (dto.Priority is not null && !Enum.IsDefined(dto.Priority.Value))
             throw new ValidationException($"Invalid priority '{dto.Priority.Value}'.");
@@ -64,7 +65,7 @@ public sealed class IdeaService(IDbContextFactory<AppDbContext> dbFactory) : IId
 
         var idea = new Idea
         {
-            Title = dto.Title.Trim(),
+            Title = title,
             Body = Normalize(dto.Body),
             Plan = Normalize(dto.Plan),
             Tags = Normalize(dto.Tags),
@@ -110,13 +111,15 @@ public sealed class IdeaService(IDbContextFactory<AppDbContext> dbFactory) : IId
             query = query.Where(i => i.Status == status);
         if (!string.IsNullOrWhiteSpace(tag))
         {
-            var t = tag.Trim();
-            query = query.Where(i => i.Tags != null && i.Tags.Contains(t));
+            // Case-insensitive substring match (EF translates ToLower() to SQLite lower()).
+            var t = tag.Trim().ToLower();
+            query = query.Where(i => i.Tags != null && i.Tags.ToLower().Contains(t));
         }
         if (!string.IsNullOrWhiteSpace(search))
         {
-            var s = search.Trim();
-            query = query.Where(i => i.Title.Contains(s) || (i.Body != null && i.Body.Contains(s)));
+            var s = search.Trim().ToLower();
+            query = query.Where(i =>
+                i.Title.ToLower().Contains(s) || (i.Body != null && i.Body.ToLower().Contains(s)));
         }
 
         return await query
@@ -141,9 +144,9 @@ public sealed class IdeaService(IDbContextFactory<AppDbContext> dbFactory) : IId
 
         if (dto.Title is not null)
         {
-            var title = dto.Title.Trim();
-            if (string.IsNullOrEmpty(title))
+            if (string.IsNullOrWhiteSpace(dto.Title))
                 throw new ValidationException("Title cannot be empty or whitespace.");
+            var title = dto.Title.Trim();
             if (title.Length > MaxTitleLength)
                 throw new ValidationException($"Title cannot exceed {MaxTitleLength} characters.");
             if (idea.Title != title) { idea.Title = title; changed = true; }
@@ -196,15 +199,18 @@ public sealed class IdeaService(IDbContextFactory<AppDbContext> dbFactory) : IId
         if (idea is null)
             throw new IdeaNotFoundException(ideaId);
 
-        // Emit the audit event BEFORE removal. ActivityEvent has no FK to the idea, so the
-        // row survives the delete (same audit-survives-deletion guarantee as tasks, #85/#88).
+        // Snapshot + queue the audit event from the pre-removal state, then queue the delete.
+        // ActivityEvent has no FK to the idea, so the row survives the delete (same
+        // audit-survives-deletion guarantee as tasks, #85/#88).
         AddActivityEvent(
             db, IdeaProjectId(idea), "Idea", idea.Id, actor,
             "IdeaDeleted", IdeaActivitySnapshot(idea), null,
             $"Idea '{idea.Title}' deleted");
-        await db.SaveChangesAsync(ct);
-
         db.Ideas.Remove(idea);
+
+        // Single SaveChanges so the audit insert and the delete commit atomically in one EF
+        // transaction (matches TaskService.DeleteAsync) — never an IdeaDeleted row with the idea
+        // still present.
         await db.SaveChangesAsync(ct);
     }
 

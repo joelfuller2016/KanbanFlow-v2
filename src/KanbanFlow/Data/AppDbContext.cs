@@ -80,6 +80,9 @@ public class AppDbContext : DbContext
                 .HasForeignKey(i => i.PromotedProjectId)
                 .OnDelete(DeleteBehavior.SetNull);
             e.HasIndex(i => new { i.Status, i.CreatedAt });
+            // EF auto-indexes FK columns, but declare it explicitly so the model is
+            // self-documenting and matches the EnsureIdeaTable patcher (IX_Ideas_PromotedProjectId).
+            e.HasIndex(i => i.PromotedProjectId);
         });
     }
 }
