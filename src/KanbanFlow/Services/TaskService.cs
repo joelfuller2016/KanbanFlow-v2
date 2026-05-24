@@ -470,8 +470,12 @@ public sealed class TaskService(IDbContextFactory<AppDbContext> dbFactory) : ITa
         var trimmedActor = actor.Trim();
 
         await using var db = await dbFactory.CreateDbContextAsync(ct);
+        // #195: AsNoTracking — the claim is persisted via the conditional ExecuteUpdateAsync
+        // below, so the loaded entity is only for validation + the audit snapshot. Not tracking
+        // it stops SaveChanges from emitting a redundant Tasks UPDATE next to the event insert.
         var task = await db.Tasks
             .Include(t => t.Feature)
+            .AsNoTracking()
             .FirstOrDefaultAsync(t => t.Id == taskId, ct);
         if (task is null)
             throw new TaskNotFoundException(taskId);
@@ -520,7 +524,7 @@ public sealed class TaskService(IDbContextFactory<AppDbContext> dbFactory) : ITa
                 ?? throw new TaskNotFoundException(taskId);
             if (string.Equals(current.ClaimedBy, trimmedActor, StringComparison.OrdinalIgnoreCase))
             {
-                // Reconcile the stale tracked entity with the concurrent winner's values.
+                // Reconcile the stale loaded entity with the concurrent winner's values.
                 task.ClaimedBy = current.ClaimedBy;
                 task.ClaimedAt = current.ClaimedAt;
                 task.UpdatedAt = current.UpdatedAt;
@@ -529,7 +533,7 @@ public sealed class TaskService(IDbContextFactory<AppDbContext> dbFactory) : ITa
             throw new TaskClaimConflictException(taskId, current.ClaimedBy!, current.ClaimedAt);
         }
 
-        // We won the claim. Mirror the persisted values onto the tracked entity so the audit
+        // We won the claim. Mirror the persisted values onto the loaded entity so the audit
         // snapshot + return value are accurate, then emit the TaskClaimed event.
         task.ClaimedBy = trimmedActor;
         task.ClaimedAt = now;
@@ -552,8 +556,11 @@ public sealed class TaskService(IDbContextFactory<AppDbContext> dbFactory) : ITa
         var trimmedActor = actor.Trim();
 
         await using var db = await dbFactory.CreateDbContextAsync(ct);
+        // #195: AsNoTracking — release is persisted via the conditional ExecuteUpdateAsync below;
+        // not tracking the loaded entity stops SaveChanges from emitting a redundant Tasks UPDATE.
         var task = await db.Tasks
             .Include(t => t.Feature)
+            .AsNoTracking()
             .FirstOrDefaultAsync(t => t.Id == taskId, ct);
         if (task is null)
             throw new TaskNotFoundException(taskId);
@@ -600,14 +607,14 @@ public sealed class TaskService(IDbContextFactory<AppDbContext> dbFactory) : ITa
             if (!string.IsNullOrWhiteSpace(current.ClaimedBy)
                 && !string.Equals(current.ClaimedBy, trimmedActor, StringComparison.OrdinalIgnoreCase))
                 throw new TaskClaimConflictException(taskId, current.ClaimedBy!, current.ClaimedAt);
-            // Reconcile the stale tracked entity with the already-released DB state.
+            // Reconcile the stale loaded entity with the already-released DB state.
             task.ClaimedBy = current.ClaimedBy;
             task.ClaimedAt = current.ClaimedAt;
             task.UpdatedAt = current.UpdatedAt;
             return task;
         }
 
-        // Mirror onto the tracked entity for an accurate audit snapshot + return value.
+        // Mirror onto the loaded entity for an accurate audit snapshot + return value.
         task.ClaimedBy = null;
         task.ClaimedAt = null;
         task.UpdatedAt = now;
