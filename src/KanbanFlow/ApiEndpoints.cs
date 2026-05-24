@@ -1958,21 +1958,11 @@ public static class ApiEndpoints
                     return Results.UnprocessableEntity(new { message = $"Invalid status: {dto.Status}. Valid values: {string.Join(", ", Enum.GetNames<RequirementStatus>())}" });
             }
 
-            // Validate feature if provided
-            if (dto.FeatureId.HasValue)
-            {
-                var featureExists = await db.Features.AnyAsync(f => f.Id == dto.FeatureId.Value);
-                if (!featureExists)
-                    return Results.NotFound(new { message = $"Feature {dto.FeatureId.Value} not found." });
-            }
-
-            // Validate task if provided
-            if (dto.TaskItemId.HasValue)
-            {
-                var taskExists = await db.Tasks.AnyAsync(t => t.Id == dto.TaskItemId.Value);
-                if (!taskExists)
-                    return Results.NotFound(new { message = $"Task {dto.TaskItemId.Value} not found." });
-            }
+            // Validate feature/task links exist AND belong to this project (#82). Missing → 404,
+            // cross-project → 422 (mirrors the CrossProjectReassignmentException convention).
+            var linkValidation = await ValidateRequirementLinksScopedAsync(projectId, dto.FeatureId, dto.TaskItemId, db);
+            if (MapRequirementLinkError(linkValidation) is { } linkError)
+                return linkError;
 
             var maxSort = await db.Requirements
                 .Where(r => r.ProjectId == projectId)
@@ -2025,6 +2015,14 @@ public static class ApiEndpoints
             if (dto.Status is not null && !Enum.TryParse<RequirementStatus>(dto.Status, ignoreCase: true, out _))
                 return Results.UnprocessableEntity(new { message = $"Invalid status: {dto.Status}. Valid values: {string.Join(", ", Enum.GetNames<RequirementStatus>())}" });
 
+            // Validate feature/task links exist AND belong to this requirement's project (#82).
+            // PUT previously applied NO link validation, so it could point a requirement at a
+            // non-existent or cross-project feature/task — now identical to POST/PATCH.
+            // Missing → 404, cross-project → 422.
+            var linkValidation = await ValidateRequirementLinksScopedAsync(requirement.ProjectId, dto.FeatureId, dto.TaskItemId, db);
+            if (MapRequirementLinkError(linkValidation) is { } linkError)
+                return linkError;
+
             requirement.Text = dto.Text.Trim();
             requirement.Description = dto.Description?.Trim();
             requirement.Priority = dto.Priority is not null ? Enum.Parse<RequirementPriority>(dto.Priority, ignoreCase: true) : requirement.Priority;
@@ -2073,35 +2071,18 @@ public static class ApiEndpoints
 
             var before = RequirementActivitySnapshot(requirement);
 
+            // Validate feature/task links exist AND belong to this requirement's project (#82)
+            // before mutating. A value of 0 clears the link and is skipped by the validator.
+            // Missing → 404, cross-project → 422.
+            var linkValidation = await ValidateRequirementLinksScopedAsync(requirement.ProjectId, dto.FeatureId, dto.TaskItemId, db);
+            if (MapRequirementLinkError(linkValidation) is { } linkError)
+                return linkError;
+
             if (dto.FeatureId.HasValue)
-            {
-                if (dto.FeatureId.Value == 0)
-                {
-                    requirement.FeatureId = null;
-                }
-                else
-                {
-                    var featureExists = await db.Features.AnyAsync(f => f.Id == dto.FeatureId.Value);
-                    if (!featureExists)
-                        return Results.NotFound(new { message = $"Feature {dto.FeatureId.Value} not found." });
-                    requirement.FeatureId = dto.FeatureId.Value;
-                }
-            }
+                requirement.FeatureId = dto.FeatureId.Value == 0 ? null : dto.FeatureId.Value;
 
             if (dto.TaskItemId.HasValue)
-            {
-                if (dto.TaskItemId.Value == 0)
-                {
-                    requirement.TaskItemId = null;
-                }
-                else
-                {
-                    var taskExists = await db.Tasks.AnyAsync(t => t.Id == dto.TaskItemId.Value);
-                    if (!taskExists)
-                        return Results.NotFound(new { message = $"Task {dto.TaskItemId.Value} not found." });
-                    requirement.TaskItemId = dto.TaskItemId.Value;
-                }
-            }
+                requirement.TaskItemId = dto.TaskItemId.Value == 0 ? null : dto.TaskItemId.Value;
 
             requirement.UpdatedAt = DateTime.UtcNow;
             // Always emit as a Requirement-typed event so entityType matches the
@@ -2265,6 +2246,66 @@ public static class ApiEndpoints
         requirement.TaskItemId,
         Status = requirement.Status.ToString(),
         Priority = requirement.Priority.ToString()
+    };
+
+    /// <summary>
+    /// Validates that a requirement's optional Feature/Task links exist AND belong to the
+    /// SAME project as the requirement (#82). A linked Feature is checked against its
+    /// <see cref="Feature.ProjectId"/>; a linked TaskItem has no direct ProjectId, so its
+    /// project is its parent <see cref="Feature.ProjectId"/>. A value of 0 means "clear the
+    /// link" and is skipped here (the caller maps 0 → null).
+    /// </summary>
+    /// <returns>
+    /// A <see cref="RequirementLinkValidation"/> distinguishing the outcome so callers can map it
+    /// to the right HTTP status: a missing entity → <c>404 NotFound</c>; an entity that exists but
+    /// lives in another project → <c>422 UnprocessableEntity</c> (matching the
+    /// <c>CrossProjectReassignmentException</c> precedent for the task-move endpoint). Both error
+    /// kinds carry an actionable message; <see cref="RequirementLinkValidation.Valid"/> means OK.
+    /// </returns>
+    internal static async Task<RequirementLinkValidation> ValidateRequirementLinksScopedAsync(
+        int projectId, int? featureId, int? taskItemId, AppDbContext db)
+    {
+        if (featureId.HasValue && featureId.Value != 0)
+        {
+            // Project ids are positive autoincrement values, so a null projection means "no such feature".
+            var featureProjectId = await db.Features
+                .Where(f => f.Id == featureId.Value)
+                .Select(f => (int?)f.ProjectId)
+                .FirstOrDefaultAsync();
+            if (featureProjectId is null)
+                return RequirementLinkValidation.NotFound($"Feature {featureId.Value} not found.");
+            if (featureProjectId.Value != projectId)
+                return RequirementLinkValidation.CrossProject($"Feature {featureId.Value} does not belong to project {projectId}.");
+        }
+
+        if (taskItemId.HasValue && taskItemId.Value != 0)
+        {
+            // A TaskItem has no ProjectId of its own — its project is its parent Feature's project.
+            var taskProjectId = await db.Tasks
+                .Where(t => t.Id == taskItemId.Value)
+                .Select(t => (int?)t.Feature.ProjectId)
+                .FirstOrDefaultAsync();
+            if (taskProjectId is null)
+                return RequirementLinkValidation.NotFound($"Task {taskItemId.Value} not found.");
+            if (taskProjectId.Value != projectId)
+                return RequirementLinkValidation.CrossProject($"Task {taskItemId.Value} does not belong to project {projectId}.");
+        }
+
+        return RequirementLinkValidation.Valid;
+    }
+
+    /// <summary>
+    /// Maps a <see cref="RequirementLinkValidation"/> error to the HTTP result the requirement
+    /// endpoints return, keeping the create/update/assign paths DRY and on the same status
+    /// convention: <c>404 NotFound</c> for a missing entity, <c>422 UnprocessableEntity</c> for an
+    /// entity that exists but belongs to another project (mirrors <c>CrossProjectReassignmentException</c>
+    /// at the task-move endpoint). Returns <c>null</c> when the validation passed.
+    /// </summary>
+    private static IResult? MapRequirementLinkError(RequirementLinkValidation validation) => validation.Kind switch
+    {
+        RequirementLinkErrorKind.NotFound => Results.NotFound(new { message = validation.Message }),
+        RequirementLinkErrorKind.CrossProject => Results.UnprocessableEntity(new { message = validation.Message }),
+        _ => null
     };
 
     private static object MapTaskSummary(TaskItem t) => new
@@ -2514,6 +2555,39 @@ public record ReassignDto(int FeatureId, string? Actor = null);
 public record SubtaskDto(string? Text, bool? Completed, int? SortOrder, int? ParentSubtaskId);
 
 public record AcceptanceCriterionDto(string? Text, bool? Completed, int? SortOrder);
+
+/// <summary>
+/// The kind of failure produced by <see cref="ApiEndpoints.ValidateRequirementLinksScopedAsync"/>,
+/// used to pick the HTTP status: <see cref="None"/> = valid; <see cref="NotFound"/> = the linked
+/// Feature/Task does not exist (→ 404); <see cref="CrossProject"/> = it exists but belongs to a
+/// different project (→ 422).
+/// </summary>
+internal enum RequirementLinkErrorKind
+{
+    None,
+    NotFound,
+    CrossProject
+}
+
+/// <summary>
+/// Result of validating a requirement's Feature/Task links (#82). Distinguishes "not found" from
+/// "exists but cross-project" so the create/update/assign endpoints can return the matching status
+/// (404 vs 422) while sharing a single validator.
+/// </summary>
+internal readonly record struct RequirementLinkValidation(RequirementLinkErrorKind Kind, string? Message)
+{
+    /// <summary>The links are absent or in-project — no error.</summary>
+    public static readonly RequirementLinkValidation Valid = new(RequirementLinkErrorKind.None, null);
+
+    /// <summary>The linked Feature/Task does not exist (caller returns 404).</summary>
+    public static RequirementLinkValidation NotFound(string message) => new(RequirementLinkErrorKind.NotFound, message);
+
+    /// <summary>The linked Feature/Task exists but belongs to another project (caller returns 422).</summary>
+    public static RequirementLinkValidation CrossProject(string message) => new(RequirementLinkErrorKind.CrossProject, message);
+
+    /// <summary><c>true</c> when there is no error.</summary>
+    public bool IsValid => Kind == RequirementLinkErrorKind.None;
+}
 
 public record RequirementDto(string? Text, string? Description, string? Priority, string? Status, int? FeatureId, int? TaskItemId, int? SortOrder);
 
