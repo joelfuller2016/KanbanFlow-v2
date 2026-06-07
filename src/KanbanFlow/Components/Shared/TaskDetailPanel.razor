@@ -473,6 +473,7 @@
             newCommentType = CommentType.Note;
             comments = [];
             commentsError = null;
+            subtaskError = null; // don't carry a stale delete error into a different task
 
             if (taskId is int id)
             {
@@ -502,6 +503,7 @@
     {
         isEditingName = false;
         confirmingDelete = false;
+        subtaskError = null;
         await OnClose.InvokeAsync();
     }
 
