@@ -430,9 +430,16 @@ public static class ApiEndpoints
                 return Results.UnprocessableEntity(new { message = "Name is required." });
 
             project.Name = dto.Name.Trim();
-            project.Description = dto.Description?.Trim();
-            project.Goals = dto.Goals?.Trim();
-            project.Readme = dto.Readme?.Trim();
+            // Partial update: only overwrite a field the caller actually sent. An omitted field arrives
+            // as null and MUST be left untouched (otherwise an MCP rename that sends only `name` would
+            // wipe the project's documentation — #203). An explicit empty/whitespace value clears the
+            // column to null. Mirrors TaskService.UpdateAsync's per-field guards.
+            if (dto.Description is not null)
+                project.Description = string.IsNullOrWhiteSpace(dto.Description) ? null : dto.Description.Trim();
+            if (dto.Goals is not null)
+                project.Goals = string.IsNullOrWhiteSpace(dto.Goals) ? null : dto.Goals.Trim();
+            if (dto.Readme is not null)
+                project.Readme = string.IsNullOrWhiteSpace(dto.Readme) ? null : dto.Readme.Trim();
             project.UpdatedAt = DateTime.UtcNow;
 
             await db.SaveChangesAsync();
@@ -825,7 +832,10 @@ public static class ApiEndpoints
                 return Results.UnprocessableEntity(new { message = "Name is required." });
 
             feature.Name = dto.Name.Trim();
-            feature.Description = dto.Description?.Trim();
+            // Partial update (#203): only overwrite Description when the caller sent it; an omitted
+            // (null) value is preserved, an explicit empty/whitespace value clears it.
+            if (dto.Description is not null)
+                feature.Description = string.IsNullOrWhiteSpace(dto.Description) ? null : dto.Description.Trim();
             if (dto.SortOrder.HasValue) feature.SortOrder = dto.SortOrder.Value;
             if (dto.ParentFeatureId.HasValue)
             {
