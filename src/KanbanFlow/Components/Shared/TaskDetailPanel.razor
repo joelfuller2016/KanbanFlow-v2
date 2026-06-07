@@ -242,6 +242,16 @@
                     }
                 </div>
 
+                @if (subtaskError is not null)
+                {
+                    <div class="alert alert-danger py-2 small d-flex justify-content-between align-items-center"
+                         data-testid="subtask-error" role="alert">
+                        <span>@subtaskError</span>
+                        <button type="button" class="btn-close" style="font-size:.6rem;"
+                                aria-label="Dismiss" @onclick="() => subtaskError = null"></button>
+                    </div>
+                }
+
                 @* Add top-level subtask *@
                 <div class="input-group input-group-sm">
                     <input type="text" class="form-control" placeholder="Add a subtask..." aria-label="New subtask text"
@@ -409,6 +419,9 @@
     // Subtask input
     private string? newSubtaskText;
 
+    // Surfaced when a subtask delete fails (e.g. a transient DB error) instead of faulting the circuit (#204).
+    private string? subtaskError;
+
     // Acceptance criteria input
     private string? newAcceptanceCriterionText;
 
@@ -460,6 +473,7 @@
             newCommentType = CommentType.Note;
             comments = [];
             commentsError = null;
+            subtaskError = null; // don't carry a stale delete error into a different task
 
             if (taskId is int id)
             {
@@ -489,6 +503,7 @@
     {
         isEditingName = false;
         confirmingDelete = false;
+        subtaskError = null;
         await OnClose.InvokeAsync();
     }
 
@@ -831,14 +846,45 @@
 
     private async Task DeleteSubtaskAsync(Subtask subtask)
     {
-        if (Task is null) return;
+        if (Task?.Subtasks is null) return;
+        subtaskError = null;
 
-        Task.Subtasks.Remove(subtask);
+        try
+        {
+            using var db = await DbFactory.CreateDbContextAsync();
+            // Child subtasks are OnDelete(Restrict), so a parent can't be removed before its children.
+            // Route through the shared leaf-first deleter (same path as REST DELETE /api/subtasks/{id})
+            // instead of a single-node Remove that throws an unhandled FK error on a parent (#204).
+            await KanbanFlow.Services.ProjectGraphDeleter.DeleteSubtaskTreeAsync(db, subtask.Id);
+            await db.SaveChangesAsync();
 
-        using var db = await DbFactory.CreateDbContextAsync();
-        db.Subtasks.Remove(db.Subtasks.Attach(subtask).Entity);
-        await db.SaveChangesAsync();
+            // Prune the node + all descendants from the flat in-memory list (linear: build a
+            // parent->children lookup once, then walk down from the deleted node).
+            var childrenByParent = Task.Subtasks
+                .Where(s => s?.ParentSubtaskId is not null)
+                .GroupBy(s => s!.ParentSubtaskId!.Value)
+                .ToDictionary(g => g.Key, g => g.ToList());
+            var removeIds = new HashSet<int>();
+            var stack = new Stack<int>();
+            stack.Push(subtask.Id);
+            while (stack.Count > 0)
+            {
+                var id = stack.Pop();
+                if (!removeIds.Add(id)) continue;
+                if (childrenByParent.TryGetValue(id, out var kids))
+                    foreach (var k in kids) stack.Push(k.Id);
+            }
+            foreach (var s in Task.Subtasks.Where(s => s is not null && removeIds.Contains(s.Id)).ToList())
+                Task.Subtasks.Remove(s);
+        }
+        catch (Exception)
+        {
+            // Keep the message generic — don't leak DB/internal details into the UI.
+            subtaskError = "Couldn't delete the subtask. Please try again.";
+            return;
+        }
 
+        // Outside the try so a parent-update failure doesn't surface a misleading "delete failed" error.
         await OnTaskUpdated.InvokeAsync();
     }
 
