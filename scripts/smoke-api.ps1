@@ -317,6 +317,9 @@ try {
     Invoke-SmokeJson "PUT" "/api/features/$($puFeat.id)" @{ name = "PU Feature Renamed" } | Out-Null
     $puFeatAfter = Invoke-SmokeGet "/api/features/$($puFeat.id)"
     Assert-Truthy ($puFeatAfter.description -eq "feat-desc") "#203: name-only feature PUT wiped description."
+    Invoke-SmokeJson "PUT" "/api/features/$($puFeat.id)" @{ name = "PU Feature Renamed"; description = "" } | Out-Null
+    $puFeatCleared = Invoke-SmokeGet "/api/features/$($puFeat.id)"
+    Assert-Truthy ([string]::IsNullOrEmpty($puFeatCleared.description)) "#203: explicit empty feature description did not clear."
     Invoke-SmokeDelete "/api/projects/$($puProj.id)" | Out-Null
 
     Write-Host "API smoke tests passed."
