@@ -429,11 +429,30 @@ public static class ApiEndpoints
             if (string.IsNullOrWhiteSpace(dto.Name))
                 return Results.UnprocessableEntity(new { message = "Name is required." });
 
-            project.Name = dto.Name.Trim();
-            project.Description = dto.Description?.Trim();
-            project.Goals = dto.Goals?.Trim();
-            project.Readme = dto.Readme?.Trim();
-            project.UpdatedAt = DateTime.UtcNow;
+            // Partial update: only overwrite a field the caller actually sent. An omitted field arrives
+            // as null and MUST be left untouched (otherwise an MCP rename that sends only `name` would
+            // wipe the project's documentation — #203). An explicit empty/whitespace value clears the
+            // column to null. UpdatedAt is bumped only when something actually changed (no-op PUTs don't
+            // churn state). Mirrors TaskService.UpdateAsync's per-field guards.
+            var changed = false;
+            var trimmedName = dto.Name.Trim();
+            if (!string.Equals(project.Name, trimmedName, StringComparison.Ordinal)) { project.Name = trimmedName; changed = true; }
+            if (dto.Description is not null)
+            {
+                var next = string.IsNullOrWhiteSpace(dto.Description) ? null : dto.Description.Trim();
+                if (!string.Equals(project.Description, next, StringComparison.Ordinal)) { project.Description = next; changed = true; }
+            }
+            if (dto.Goals is not null)
+            {
+                var next = string.IsNullOrWhiteSpace(dto.Goals) ? null : dto.Goals.Trim();
+                if (!string.Equals(project.Goals, next, StringComparison.Ordinal)) { project.Goals = next; changed = true; }
+            }
+            if (dto.Readme is not null)
+            {
+                var next = string.IsNullOrWhiteSpace(dto.Readme) ? null : dto.Readme.Trim();
+                if (!string.Equals(project.Readme, next, StringComparison.Ordinal)) { project.Readme = next; changed = true; }
+            }
+            if (changed) project.UpdatedAt = DateTime.UtcNow;
 
             await db.SaveChangesAsync();
 
@@ -824,9 +843,17 @@ public static class ApiEndpoints
             if (string.IsNullOrWhiteSpace(dto.Name))
                 return Results.UnprocessableEntity(new { message = "Name is required." });
 
-            feature.Name = dto.Name.Trim();
-            feature.Description = dto.Description?.Trim();
-            if (dto.SortOrder.HasValue) feature.SortOrder = dto.SortOrder.Value;
+            // Partial update (#203): only overwrite Description when sent (null preserves, empty clears).
+            // UpdatedAt is bumped only when something actually changed.
+            var changed = false;
+            var trimmedName = dto.Name.Trim();
+            if (!string.Equals(feature.Name, trimmedName, StringComparison.Ordinal)) { feature.Name = trimmedName; changed = true; }
+            if (dto.Description is not null)
+            {
+                var next = string.IsNullOrWhiteSpace(dto.Description) ? null : dto.Description.Trim();
+                if (!string.Equals(feature.Description, next, StringComparison.Ordinal)) { feature.Description = next; changed = true; }
+            }
+            if (dto.SortOrder.HasValue && feature.SortOrder != dto.SortOrder.Value) { feature.SortOrder = dto.SortOrder.Value; changed = true; }
             if (dto.ParentFeatureId.HasValue)
             {
                 var newParentFeatureId = dto.ParentFeatureId.Value == 0 ? (int?)null : dto.ParentFeatureId.Value;
@@ -848,9 +875,9 @@ public static class ApiEndpoints
                         return Results.UnprocessableEntity(new { message = "A feature cannot be moved under one of its descendants." });
                 }
 
-                feature.ParentFeatureId = newParentFeatureId;
+                if (feature.ParentFeatureId != newParentFeatureId) { feature.ParentFeatureId = newParentFeatureId; changed = true; }
             }
-            feature.UpdatedAt = DateTime.UtcNow;
+            if (changed) feature.UpdatedAt = DateTime.UtcNow;
 
             await db.SaveChangesAsync();
 

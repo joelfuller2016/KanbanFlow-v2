@@ -301,6 +301,27 @@ try {
 
     Invoke-SmokeDelete "/api/projects/$projectId" | Out-Null
 
+    # --- #203 regression: a partial PUT must preserve omitted fields; an explicit "" clears one ---
+    $puProj = Invoke-SmokeJson "POST" "/api/projects" @{ name = "PU Test"; description = "keep-desc"; goals = "keep-goals"; readme = "keep-readme" }
+    Invoke-SmokeJson "PUT" "/api/projects/$($puProj.id)" @{ name = "PU Renamed" } | Out-Null
+    $puAfter = Invoke-SmokeGet "/api/projects/$($puProj.id)"
+    Assert-Truthy ($puAfter.name -eq "PU Renamed") "#203: name-only PUT did not update name."
+    Assert-Truthy ($puAfter.description -eq "keep-desc") "#203: name-only PUT wiped project description."
+    Assert-Truthy ($puAfter.goals -eq "keep-goals") "#203: name-only PUT wiped project goals."
+    Assert-Truthy ($puAfter.readme -eq "keep-readme") "#203: name-only PUT wiped project readme."
+    Invoke-SmokeJson "PUT" "/api/projects/$($puProj.id)" @{ name = "PU Renamed"; description = "" } | Out-Null
+    $puCleared = Invoke-SmokeGet "/api/projects/$($puProj.id)"
+    Assert-Truthy ([string]::IsNullOrEmpty($puCleared.description)) "#203: explicit empty description did not clear."
+    Assert-Truthy ($puCleared.goals -eq "keep-goals") "#203: clearing description also wiped goals."
+    $puFeat = Invoke-SmokeJson "POST" "/api/projects/$($puProj.id)/features" @{ name = "PU Feature"; description = "feat-desc" }
+    Invoke-SmokeJson "PUT" "/api/features/$($puFeat.id)" @{ name = "PU Feature Renamed" } | Out-Null
+    $puFeatAfter = Invoke-SmokeGet "/api/features/$($puFeat.id)"
+    Assert-Truthy ($puFeatAfter.description -eq "feat-desc") "#203: name-only feature PUT wiped description."
+    Invoke-SmokeJson "PUT" "/api/features/$($puFeat.id)" @{ name = "PU Feature Renamed"; description = "" } | Out-Null
+    $puFeatCleared = Invoke-SmokeGet "/api/features/$($puFeat.id)"
+    Assert-Truthy ([string]::IsNullOrEmpty($puFeatCleared.description)) "#203: explicit empty feature description did not clear."
+    Invoke-SmokeDelete "/api/projects/$($puProj.id)" | Out-Null
+
     Write-Host "API smoke tests passed."
 }
 finally {
