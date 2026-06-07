@@ -844,7 +844,7 @@
 
     private async Task DeleteSubtaskAsync(Subtask subtask)
     {
-        if (Task is null) return;
+        if (Task?.Subtasks is null) return;
         subtaskError = null;
 
         try
@@ -856,27 +856,34 @@
             await KanbanFlow.Services.ProjectGraphDeleter.DeleteSubtaskTreeAsync(db, subtask.Id);
             await db.SaveChangesAsync();
 
-            // Prune the node and all its descendants from the flat in-memory list the tree is built from.
-            var removeIds = new HashSet<int> { subtask.Id };
-            bool changed;
-            do
+            // Prune the node + all descendants from the flat in-memory list (linear: build a
+            // parent->children lookup once, then walk down from the deleted node).
+            var childrenByParent = Task.Subtasks
+                .Where(s => s?.ParentSubtaskId is not null)
+                .GroupBy(s => s!.ParentSubtaskId!.Value)
+                .ToDictionary(g => g.Key, g => g.ToList());
+            var removeIds = new HashSet<int>();
+            var stack = new Stack<int>();
+            stack.Push(subtask.Id);
+            while (stack.Count > 0)
             {
-                changed = false;
-                foreach (var s in Task.Subtasks)
-                {
-                    if (s.ParentSubtaskId is int pid && removeIds.Contains(pid) && removeIds.Add(s.Id))
-                        changed = true;
-                }
-            } while (changed);
-            foreach (var s in Task.Subtasks.Where(s => removeIds.Contains(s.Id)).ToList())
+                var id = stack.Pop();
+                if (!removeIds.Add(id)) continue;
+                if (childrenByParent.TryGetValue(id, out var kids))
+                    foreach (var k in kids) stack.Push(k.Id);
+            }
+            foreach (var s in Task.Subtasks.Where(s => s is not null && removeIds.Contains(s.Id)).ToList())
                 Task.Subtasks.Remove(s);
-
-            await OnTaskUpdated.InvokeAsync();
         }
-        catch (Exception ex)
+        catch (Exception)
         {
-            subtaskError = $"Couldn't delete the subtask. {ex.Message}";
+            // Keep the message generic — don't leak DB/internal details into the UI.
+            subtaskError = "Couldn't delete the subtask. Please try again.";
+            return;
         }
+
+        // Outside the try so a parent-update failure doesn't surface a misleading "delete failed" error.
+        await OnTaskUpdated.InvokeAsync();
     }
 
     private async Task HandleSubtaskKeyDown(KeyboardEventArgs e)
