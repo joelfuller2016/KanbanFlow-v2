@@ -10,13 +10,36 @@ namespace KanbanFlow.Services;
 /// failures, and maps any provider failure to a typed <see cref="LlmResult"/> rather than
 /// throwing (#218). Stateless and thread-safe, so it is registered as a singleton.
 /// </summary>
+/// <param name="chatClient">Underlying chat client (the OpenAI connector pointed at ZeroRouter).</param>
+/// <param name="config">Connection + per-attempt timeout settings; <see cref="LlmOptions.TimeoutMs"/> must be &gt; 0.</param>
+/// <param name="logger">Logger for transient-retry and fail-soft diagnostics.</param>
 public sealed class LlmClient(IChatClient chatClient, LlmOptions config, ILogger<LlmClient> logger) : ILlmClient
 {
+    // Validate the primary-constructor args once, at construction — fail fast on a misconfigured
+    // registration instead of NRE-ing on first use (null config) or throwing deep inside the
+    // per-attempt CancellationTokenSource (TimeoutMs <= 0). Primary-constructor syntax is preserved:
+    // each captured dependency flows through its field initializer, and the non-null + positive-timeout
+    // invariants are enforced by the static ValidateConfig helper below.
+    private readonly IChatClient _chatClient = chatClient ?? throw new ArgumentNullException(nameof(chatClient));
+    private readonly LlmOptions _config = ValidateConfig(config);
+    private readonly ILogger<LlmClient> _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+
     // 1 initial attempt + 1 retry. The retry only fires for transient failures (see IsTransient).
     private const int MaxAttempts = 2;
 
+    private static LlmOptions ValidateConfig(LlmOptions config)
+    {
+        ArgumentNullException.ThrowIfNull(config);
+        if (config.TimeoutMs <= 0)
+            throw new ArgumentException("TimeoutMs must be greater than zero.", nameof(config));
+        return config;
+    }
+
+    /// <inheritdoc />
     public Task<LlmResult> CompleteAsync(string? systemPrompt, string userPrompt, CancellationToken ct = default)
     {
+        // Reject invalid input locally (fail fast) rather than coercing to an empty user turn, which
+        // would hide caller bugs and turn bad input into a wasted remote no-op.
         if (string.IsNullOrWhiteSpace(userPrompt))
             throw new ArgumentException("Value cannot be null or whitespace.", nameof(userPrompt));
 
@@ -27,12 +50,13 @@ public sealed class LlmClient(IChatClient chatClient, LlmOptions config, ILogger
         return CompleteAsync(messages, options: null, ct);
     }
 
+    /// <inheritdoc />
     public async Task<LlmResult> CompleteAsync(
         IReadOnlyList<ChatMessage> messages, LlmCompleteOptions? options, CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(messages);
 
-        var model = options?.Model ?? config.Model;
+        var model = options?.Model ?? _config.Model;
         if (messages.Count == 0)
             return LlmResult.Failure("No messages to send.", model);
 
@@ -50,11 +74,11 @@ public sealed class LlmClient(IChatClient chatClient, LlmOptions config, ILogger
             ct.ThrowIfCancellationRequested();
 
             // Per-attempt timeout, linked to the caller's token so caller-cancel still wins the race.
-            using var timeoutCts = new CancellationTokenSource(config.TimeoutMs);
+            using var timeoutCts = new CancellationTokenSource(_config.TimeoutMs);
             using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(ct, timeoutCts.Token);
             try
             {
-                var response = await chatClient
+                var response = await _chatClient
                     .GetResponseAsync(messages, chatOptions, linkedCts.Token)
                     .ConfigureAwait(false);
                 return LlmResult.Success(response.Text ?? string.Empty, response.ModelId ?? model);
@@ -68,13 +92,13 @@ public sealed class LlmClient(IChatClient chatClient, LlmOptions config, ILogger
             {
                 // Transient (our timeout / transport blip / 5xx): record it and retry once.
                 lastError = ex;
-                logger.LogWarning(
+                _logger.LogWarning(
                     ex, "LLM completion attempt {Attempt}/{Max} failed (transient); retrying.", attempt, MaxAttempts);
             }
             catch (Exception ex)
             {
                 // Non-transient, or the final attempt failed: fail soft with a typed result.
-                logger.LogWarning(ex, "LLM completion failed (model {Model}); returning fail-soft result.", model);
+                _logger.LogWarning(ex, "LLM completion failed (model {Model}); returning fail-soft result.", model);
                 return LlmResult.Failure(Describe(ex), model);
             }
         }

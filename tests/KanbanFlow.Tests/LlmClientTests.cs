@@ -281,10 +281,61 @@ public sealed class LlmClientTests
     }
 
     [Fact]
-    public void CompleteAsync_StringOverload_BlankUserPrompt_Throws()
+    public void FromEnvironment_NonHttpScheme_FallsBackToDefault()
     {
-        var client = NewClient(new FakeChatClient((_, _, _) => Task.FromResult(Reply("x", "m"))));
-        Assert.Throws<ArgumentException>(() => client.CompleteAsync(null, "   ", CancellationToken.None));
+        // Valid URI but a non-HTTP(S) scheme ⇒ fall back to the default.
+        var env = new Dictionary<string, string?> { ["ZEROROUTER_URL"] = "ftp://example.com/v1" };
+        var options = LlmOptions.FromEnvironment(k => env.GetValueOrDefault(k));
+        Assert.Equal(LlmOptions.DefaultBaseUrl, options.BaseUrl);
+    }
+
+    [Fact]
+    public void FromEnvironment_UrlMissingV1Suffix_AppendsV1()
+    {
+        // Missing /v1 ⇒ appended (the OpenAI client appends `chat/completions` without inserting /v1).
+        var env = new Dictionary<string, string?> { ["ZEROROUTER_URL"] = "http://host:1234" };
+        var options = LlmOptions.FromEnvironment(k => env.GetValueOrDefault(k));
+        Assert.Equal("http://host:1234/v1", options.BaseUrl);
+    }
+
+    [Fact]
+    public void FromEnvironment_UrlWithV1Suffix_IsUnchanged()
+    {
+        // A valid absolute HTTP URL already ending in /v1 is preserved as-is.
+        var env = new Dictionary<string, string?> { ["ZEROROUTER_URL"] = "http://host:1234/v1" };
+        var options = LlmOptions.FromEnvironment(k => env.GetValueOrDefault(k));
+        Assert.Equal("http://host:1234/v1", options.BaseUrl);
+    }
+
+    // ── constructor validation ─────────────────────────────────────────────────────
+    [Fact]
+    public void Constructor_NullChatClient_Throws() =>
+        Assert.Throws<ArgumentNullException>(
+            () => new LlmClient(null!, new LlmOptions(), NullLogger<LlmClient>.Instance));
+
+    [Fact]
+    public void Constructor_NonPositiveTimeout_Throws()
+    {
+        var fake = new FakeChatClient((_, _, _) => Task.FromResult(Reply("x", "m")));
+        // TimeoutMs <= 0 would throw deep inside CancellationTokenSource at first use; reject at ctor.
+        Assert.Throws<ArgumentException>(
+            () => new LlmClient(fake, new LlmOptions { TimeoutMs = 0 }, NullLogger<LlmClient>.Instance));
+    }
+
+    // ── string-overload input guard ────────────────────────────────────────────────
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    public async Task CompleteAsync_StringOverload_BlankUserPrompt_Throws(string? userPrompt)
+    {
+        var fake = new FakeChatClient((_, _, _) => Task.FromResult(Reply("x", "m")));
+        var client = NewClient(fake);
+
+        // null/blank user prompt fails fast locally instead of sending an empty user turn.
+        await Assert.ThrowsAsync<ArgumentException>(
+            () => client.CompleteAsync("a system prompt", userPrompt!, CancellationToken.None));
+        Assert.Equal(0, fake.CallCount); // guarded locally ⇒ provider never called
     }
 
     /// <summary>

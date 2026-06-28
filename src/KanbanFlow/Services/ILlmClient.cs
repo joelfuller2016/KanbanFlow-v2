@@ -35,9 +35,12 @@ public interface ILlmClient
 /// <summary>
 /// Outcome of an <see cref="ILlmClient"/> call. <see cref="Ok"/> distinguishes a real
 /// completion (<see cref="Text"/> set) from a fail-soft provider error (<see cref="Error"/>
-/// set). <see cref="Model"/> is the model id the provider reported (or the requested model
-/// on failure), for diagnostics.
+/// set).
 /// </summary>
+/// <param name="Ok"><c>true</c> for a real completion; <c>false</c> for a fail-soft provider error.</param>
+/// <param name="Text">The assistant's reply text on success; <c>null</c> on failure.</param>
+/// <param name="Model">Model id the provider reported, or the requested model on failure (for diagnostics).</param>
+/// <param name="Error">Fail-soft error description on failure; <c>null</c> on success.</param>
 public sealed record LlmResult(bool Ok, string? Text, string? Model, string? Error)
 {
     /// <summary>A successful completion: <paramref name="text"/> produced by <paramref name="model"/>.</summary>
@@ -51,5 +54,13 @@ public sealed record LlmResult(bool Ok, string? Text, string? Model, string? Err
 /// Optional per-call overrides for <see cref="ILlmClient.CompleteAsync(IReadOnlyList{ChatMessage}, LlmCompleteOptions?, CancellationToken)"/>.
 /// Any <c>null</c> member falls back to the configured <see cref="LlmOptions"/> default.
 /// </summary>
+/// <param name="Model">
+/// Per-call model id override. <b>Note:</b> whether the override takes effect depends on the
+/// provider/connector. For the OpenAI connector the model is bound at <see cref="IChatClient"/>
+/// construction (<c>GetChatClient(model)</c> in <c>Program.cs</c>), so the configured default model
+/// is what ships unless the connector honors <see cref="ChatOptions.ModelId"/> per request.
+/// </param>
+/// <param name="Temperature">Sampling temperature; <c>null</c> uses the provider/connector default.</param>
+/// <param name="MaxOutputTokens">Maximum tokens to generate; <c>null</c> uses the provider/connector default.</param>
 public sealed record LlmCompleteOptions(
     string? Model = null, float? Temperature = null, int? MaxOutputTokens = null);

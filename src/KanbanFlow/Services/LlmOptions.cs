@@ -74,13 +74,30 @@ public sealed record LlmOptions
             return null;
         }
 
-        var rawUrl = First("ZEROROUTER_URL", "KANBANFLOW_LLM_URL");
-        if (rawUrl is not null && !Uri.TryCreate(rawUrl, UriKind.Absolute, out _))
-            rawUrl = null;
+        // Validate + normalize the base URL at bind time. Program.cs does `new Uri(BaseUrl)` when it
+        // registers the OpenAI client, so a malformed value would otherwise crash startup — but #218
+        // is optional and fail-soft, so an unparseable or non-HTTP(S) URL falls back to the default
+        // rather than throwing. The /v1 suffix is required (the OpenAI client appends
+        // `chat/completions` without inserting /v1), so a missing suffix is appended here to head off
+        // the most common first-run 404.
+        static string NormalizeBaseUrl(string value)
+        {
+            if (!Uri.TryCreate(value, UriKind.Absolute, out var uri)
+                || (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps))
+            {
+                return DefaultBaseUrl;
+            }
+
+            var path = uri.AbsolutePath.TrimEnd('/');
+            if (!path.EndsWith("/v1", StringComparison.OrdinalIgnoreCase))
+                path = string.IsNullOrEmpty(path) ? "/v1" : $"{path}/v1";
+
+            return new UriBuilder(uri) { Path = path }.Uri.ToString().TrimEnd('/');
+        }
 
         var options = new LlmOptions
         {
-            BaseUrl = rawUrl ?? DefaultBaseUrl,
+            BaseUrl = NormalizeBaseUrl(First("ZEROROUTER_URL", "KANBANFLOW_LLM_URL") ?? DefaultBaseUrl),
             Model = First("KANBANFLOW_LLM_MODEL") ?? DefaultModel,
             ApiKey = First("ZEROROUTER_API_KEY", "KANBANFLOW_LLM_KEY") ?? DefaultApiKey,
         };
