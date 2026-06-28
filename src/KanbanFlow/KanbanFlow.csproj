@@ -18,6 +18,15 @@
     <PackageReference Include="Microsoft.AspNetCore.OpenApi" Version="10.0.9" />
     <PackageReference Include="Microsoft.EntityFrameworkCore.Sqlite" Version="10.0.9" />
     <PackageReference Include="ModelContextProtocol.AspNetCore" Version="1.4.0" />
+    <!-- Security pin (#214): EF Core Sqlite 10.0.9 drags in the native SQLite binary
+         SQLitePCLRaw.lib.e_sqlite3 2.1.11, flagged by advisory GHSA-2m69-gcr7-jv3q
+         (vulnerable range <= 2.1.11). That breaks the -warnaserror PR gate (NU1903).
+         3.50.3 is the patched build (bundles SQLite 3.50.3). The bundle/provider
+         packages depend on lib.e_sqlite3 with an open-ended minimum (>= 2.1.11), so
+         this upgrade satisfies the graph without NU1608 and keeps the managed layer
+         EF Core was built against. Only the native lib is flagged, so only it is
+         pinned. This flows transitively into KanbanFlow.Tests via the ProjectReference. -->
+    <PackageReference Include="SQLitePCLRaw.lib.e_sqlite3" Version="3.50.3" />
   </ItemGroup>
 
 </Project>
