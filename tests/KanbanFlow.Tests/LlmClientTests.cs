@@ -130,7 +130,11 @@ public sealed class LlmClientTests
         // cancellation, since the caller token below is never cancelled).
         var fake = new FakeChatClient(async (_, _, token) =>
         {
-            await Task.Delay(Timeout.Infinite, token);
+            var wait = Task.Delay(Timeout.Infinite, token);
+            var watchdog = Task.Delay(TimeSpan.FromSeconds(2));
+            if (await Task.WhenAny(wait, watchdog) == watchdog)
+                throw new TimeoutException("Test watchdog: LlmClient did not cancel the attempt token.");
+            await wait;
             return Reply("unreachable", "m");
         });
         var client = NewClient(fake, new LlmOptions { Model = "test-default-model", TimeoutMs = 30 });
@@ -266,6 +270,21 @@ public sealed class LlmClientTests
         var env = new Dictionary<string, string?> { ["KANBANFLOW_LLM_TIMEOUT_MS"] = "0" };
         var options = LlmOptions.FromEnvironment(k => env.GetValueOrDefault(k));
         Assert.Equal(LlmOptions.DefaultTimeoutMs, options.TimeoutMs);
+    }
+
+    [Fact]
+    public void FromEnvironment_MalformedUrl_FallsBackToDefault()
+    {
+        var env = new Dictionary<string, string?> { ["ZEROROUTER_URL"] = "not-a-valid-url" };
+        var options = LlmOptions.FromEnvironment(k => env.GetValueOrDefault(k));
+        Assert.Equal(LlmOptions.DefaultBaseUrl, options.BaseUrl);
+    }
+
+    [Fact]
+    public void CompleteAsync_StringOverload_BlankUserPrompt_Throws()
+    {
+        var client = NewClient(new FakeChatClient((_, _, _) => Task.FromResult(Reply("x", "m"))));
+        Assert.Throws<ArgumentException>(() => client.CompleteAsync(null, "   ", CancellationToken.None));
     }
 
     /// <summary>

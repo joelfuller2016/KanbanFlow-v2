@@ -74,9 +74,13 @@ public sealed record LlmOptions
             return null;
         }
 
+        var rawUrl = First("ZEROROUTER_URL", "KANBANFLOW_LLM_URL");
+        if (rawUrl is not null && !Uri.TryCreate(rawUrl, UriKind.Absolute, out _))
+            rawUrl = null;
+
         var options = new LlmOptions
         {
-            BaseUrl = First("ZEROROUTER_URL", "KANBANFLOW_LLM_URL") ?? DefaultBaseUrl,
+            BaseUrl = rawUrl ?? DefaultBaseUrl,
             Model = First("KANBANFLOW_LLM_MODEL") ?? DefaultModel,
             ApiKey = First("ZEROROUTER_API_KEY", "KANBANFLOW_LLM_KEY") ?? DefaultApiKey,
         };

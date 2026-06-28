@@ -17,10 +17,13 @@ public sealed class LlmClient(IChatClient chatClient, LlmOptions config, ILogger
 
     public Task<LlmResult> CompleteAsync(string? systemPrompt, string userPrompt, CancellationToken ct = default)
     {
+        if (string.IsNullOrWhiteSpace(userPrompt))
+            throw new ArgumentException("Value cannot be null or whitespace.", nameof(userPrompt));
+
         var messages = new List<ChatMessage>(2);
         if (!string.IsNullOrWhiteSpace(systemPrompt))
             messages.Add(new ChatMessage(ChatRole.System, systemPrompt));
-        messages.Add(new ChatMessage(ChatRole.User, userPrompt ?? string.Empty));
+        messages.Add(new ChatMessage(ChatRole.User, userPrompt));
         return CompleteAsync(messages, options: null, ct);
     }
 
@@ -76,8 +79,8 @@ public sealed class LlmClient(IChatClient chatClient, LlmOptions config, ILogger
             }
         }
 
-        // Reached only when the LAST attempt was a transient failure (the retry branch records the
-        // error and loops without returning). Surface it as the fail-soft result.
+        // Compiler-required fallback; unreachable in practice — the final-attempt catch always
+        // returns before the loop exits normally.
         return LlmResult.Failure(Describe(lastError), model);
     }
 
