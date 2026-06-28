@@ -73,6 +73,23 @@ dotnet run --project src/KanbanFlow/KanbanFlow.csproj --urls http://127.0.0.1:51
 
 > **Note on URL.** The launch profile defaults to `http://localhost:5148`, but the MCP wrapper and smoke tests assume `http://127.0.0.1:5123`. Use the `--urls` flag above (or set `KANBANFLOW_API_URL` to match) to keep everything aligned. Standardising on `:5123` is on the roadmap.
 
+### LLM connection (optional — #218)
+
+KanbanFlow can talk to an OpenAI-compatible LLM endpoint (default: a local ZeroRouter at `http://localhost:5256/v1`) through the `ILlmClient` service — the foundation for upcoming AI features (memory #220, AI-PM #226). It is **fail-soft**: when the endpoint is unreachable nothing crashes and no request 500s; calls return a typed error result. All settings are optional environment variables:
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `ZEROROUTER_URL` (or `KANBANFLOW_LLM_URL`) | `http://localhost:5256/v1` | OpenAI-compatible base URL — must include the `/v1` suffix |
+| `KANBANFLOW_LLM_MODEL` | `gpt-4o-mini` | Model id (the router maps it to a provider) |
+| `ZEROROUTER_API_KEY` (or `KANBANFLOW_LLM_KEY`) | `zerorouter` | Credential — ZeroRouter is open, so the placeholder is fine (never masked) |
+| `KANBANFLOW_LLM_TIMEOUT_MS` | `30000` | Per-attempt request timeout |
+
+Check connectivity with the self-test endpoint — it returns `{ ok, model, url, latencyMs, reply?, error? }`, reporting `ok: false` with a clean error (HTTP 200, never a 500) when the endpoint is down:
+
+```powershell
+curl http://127.0.0.1:5123/api/admin/llm-ping
+```
+
 ### Tests (all local — no CI)
 
 ```powershell

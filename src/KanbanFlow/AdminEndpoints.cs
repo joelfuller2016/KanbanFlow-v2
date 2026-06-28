@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using KanbanFlow.Services;
 
 namespace KanbanFlow;
@@ -43,6 +44,31 @@ public static class AdminEndpoints
             return result.AllPassed
                 ? Results.Ok(result)
                 : Results.UnprocessableEntity(result);
+        });
+
+        // GET /api/admin/llm-ping — user-runnable self-test of the LLM wiring (#218). Sends a
+        // trivial prompt through ILlmClient and reports the outcome. ALWAYS returns 200: when
+        // ZeroRouter is down/misconfigured it reports { ok: false, error } (fail-soft) instead of
+        // a 500, so the probe itself proves the no-crash contract. url + model are surfaced for
+        // diagnostics (open-access: nothing is secret, but the key is simply not echoed here).
+        app.MapGet("/api/admin/llm-ping", async (ILlmClient llm, LlmOptions options, CancellationToken ct) =>
+        {
+            var stopwatch = Stopwatch.StartNew();
+            var result = await llm.CompleteAsync(
+                "You are a health check. Reply with the single word: pong",
+                "ping",
+                ct);
+            stopwatch.Stop();
+
+            return Results.Ok(new
+            {
+                ok = result.Ok,
+                model = result.Model ?? options.Model,
+                url = options.BaseUrl,
+                latencyMs = Math.Round(stopwatch.Elapsed.TotalMilliseconds, 1),
+                reply = result.Text,
+                error = result.Error
+            });
         });
 
         return app;

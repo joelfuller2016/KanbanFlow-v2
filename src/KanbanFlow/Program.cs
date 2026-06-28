@@ -1,8 +1,12 @@
+using System.ClientModel;
+using System.ClientModel.Primitives;
 using KanbanFlow;
 using KanbanFlow.Components;
 using KanbanFlow.Data;
 using KanbanFlow.Services;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.AI;
+using OpenAI;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -38,6 +42,29 @@ builder.Services.AddScoped<ITestRunnerService, TestRunnerService>();
 
 // Markdown rendering (R-4.2: server-rendered, sanitized)
 builder.Services.AddSingleton<IMarkdownRenderer, MarkdownRenderer>();
+
+// LLM foundation (#218): provider-agnostic chat completions via ZeroRouter's OpenAI-compatible
+// API. Config is read from the environment the same way KANBANFLOW_DB_PATH is above (see
+// LlmOptions.FromEnvironment). The IChatClient is constructed once from the OpenAI connector and
+// is thread-safe + stateless, so it and the ILlmClient wrapper are singletons — the OpenAI client
+// pools connections internally, so we never create a per-call HttpClient (no socket exhaustion).
+var llmOptions = LlmOptions.FromEnvironment(Environment.GetEnvironmentVariable);
+builder.Services.AddSingleton(llmOptions);
+builder.Services.AddSingleton<IChatClient>(_ =>
+    new OpenAIClient(
+            new ApiKeyCredential(llmOptions.ApiKey),
+            new OpenAIClientOptions
+            {
+                Endpoint = new Uri(llmOptions.BaseUrl),
+                // LlmClient owns resilience (per-attempt timeout + a single transient retry, #218).
+                // Disable the OpenAI SDK's own retry so we don't double-retry: with the default
+                // 3 internal retries + backoff, a provider-down ping took ~16s and contradicted the
+                // documented single-retry contract. 0 here ⇒ one transport attempt per LlmClient try.
+                RetryPolicy = new ClientRetryPolicy(maxRetries: 0)
+            })
+        .GetChatClient(llmOptions.Model)
+        .AsIChatClient());
+builder.Services.AddSingleton<ILlmClient, LlmClient>();
 
 // OpenAPI document generation (R-5.1: /openapi.json discovery)
 builder.Services.AddOpenApi();
