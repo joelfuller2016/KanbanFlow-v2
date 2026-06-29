@@ -66,6 +66,27 @@ builder.Services.AddSingleton<IChatClient>(_ =>
         .AsIChatClient());
 builder.Services.AddSingleton<ILlmClient, LlmClient>();
 
+// Embeddings foundation (#219): provider-agnostic text embeddings via the SAME ZeroRouter
+// OpenAI-compatible endpoint as chat. EmbeddingOptions reuses LlmOptions' URL/key/timeout binding
+// (single-sourced endpoint resolution) and adds the embed model + dimensionality. The
+// IEmbeddingGenerator is built once from the OpenAI connector (thread-safe, pools connections) and,
+// like the chat client, has the SDK's own retry disabled so EmbeddingService owns resilience
+// (per-attempt timeout + a single transient retry). Generator + service are singletons; the
+// service's content-hash cache means identical text is embedded once.
+var embeddingOptions = EmbeddingOptions.FromEnvironment(Environment.GetEnvironmentVariable);
+builder.Services.AddSingleton(embeddingOptions);
+builder.Services.AddSingleton<IEmbeddingGenerator<string, Embedding<float>>>(_ =>
+    new OpenAIClient(
+            new ApiKeyCredential(embeddingOptions.ApiKey),
+            new OpenAIClientOptions
+            {
+                Endpoint = new Uri(embeddingOptions.BaseUrl),
+                RetryPolicy = new ClientRetryPolicy(maxRetries: 0)
+            })
+        .GetEmbeddingClient(embeddingOptions.Model)
+        .AsIEmbeddingGenerator());
+builder.Services.AddSingleton<IEmbeddingService, EmbeddingService>();
+
 // OpenAPI document generation (R-5.1: /openapi.json discovery)
 builder.Services.AddOpenApi();
 

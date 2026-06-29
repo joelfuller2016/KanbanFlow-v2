@@ -90,6 +90,22 @@ Check connectivity with the self-test endpoint — it returns `{ ok, model, url,
 curl http://127.0.0.1:5123/api/admin/llm-ping
 ```
 
+### Embeddings (optional — #219)
+
+KanbanFlow can also generate **text embeddings** through the same ZeroRouter endpoint, via the `IEmbeddingService` — the retrieval foundation for semantic recall (memory store #220, duplicate/similar detection). Identical text is embedded once (content-hash cache), batches are deduped and chunked, and it is **fail-soft** like the chat client: when the endpoint is down nothing crashes and no request 500s. It reuses the URL / key / timeout settings above and adds:
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `KANBANFLOW_EMBED_MODEL` | `text-embedding-3-small` | Embedding model id (the router maps it to a provider) |
+| `KANBANFLOW_EMBED_DIMENSIONS` | *(provider-native)* | Optional requested output dimensionality (e.g. `768`, `1536`); only sent when set |
+| `KANBANFLOW_EMBED_BATCH_SIZE` | `256` | Max texts per provider call — larger batches are split into chunks |
+
+Check connectivity with the self-test endpoint — it returns `{ ok, model, url, dimensions, latencyMs, error? }`, reporting `ok: false` with a clean error (HTTP 200, never a 500) when the endpoint is down, and the live vector length in `dimensions` when it is up:
+
+```powershell
+curl http://127.0.0.1:5123/api/admin/embed-ping
+```
+
 ### Tests (all local — no CI)
 
 ```powershell
