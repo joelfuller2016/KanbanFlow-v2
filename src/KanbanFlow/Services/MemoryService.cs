@@ -374,20 +374,42 @@ public sealed class MemoryService(IDbContextFactory<AppDbContext> dbFactory) : I
             throw new ValidationException($"Memory node {id} is superseded; set embeddings on the current version.");
 
         var before = MemoryActivitySnapshot(node);
+        var blob = EmbeddingCodec.Pack(vector);
 
-        // Derived metadata — written in place (NOT a bi-temporal supersession). Pack via the shared
-        // codec so the layout matches what VectorSearch.Unpack reads back (#222).
-        node.EmbeddingBlob = EmbeddingCodec.Pack(vector);
+        // Atomic write: the WHERE predicate mirrors the live-row guard above, so a concurrent
+        // supersede or delete racing between the read and the write cannot embed a historical row.
+        // Zero rows updated means the node transitioned out of 'current' after our read (#256 review).
+        await using var tx = await db.Database.BeginTransactionAsync(ct);
+
+        var updated = await db.MemoryNodes
+            .Where(m => m.Id == id && m.ValidTo == null && m.SupersededById == null)
+            .ExecuteUpdateAsync(s => s
+                .SetProperty(m => m.EmbeddingBlob, blob)
+                .SetProperty(m => m.EmbeddingDim, vector.Length), ct);
+
+        if (updated == 0)
+        {
+            var stillExists = await db.MemoryNodes.AnyAsync(m => m.Id == id, ct);
+            if (!stillExists)
+                throw new MemoryNodeNotFoundException(id);
+            throw new ValidationException($"Memory node {id} was modified concurrently; set embeddings on the current version.");
+        }
+
+        // ExecuteUpdateAsync bypasses EF change tracking, so detach the stale tracked entity and
+        // apply the written values to build the after-snapshot for the audit event.
+        db.Entry(node).State = EntityState.Detached;
+        node.EmbeddingBlob = blob;
         node.EmbeddingDim = vector.Length;
 
-        // One MemoryEmbedded event in the same SaveChanges (atomic, like SupersedeAsync) — the #88
-        // single-audit-boundary rule the memory store inherits.
+        // One MemoryEmbedded event committed in the same transaction — the #88 single-audit-boundary
+        // rule the memory store inherits.
         AddActivityEvent(
             db, MemoryProjectId(node), "MemoryNode", node.Id, actor,
             "MemoryEmbedded", before, MemoryActivitySnapshot(node),
             $"Memory {node.Id} embedded ({vector.Length}-dim)");
 
         await db.SaveChangesAsync(ct);
+        await tx.CommitAsync(ct);
         return node;
     }
 

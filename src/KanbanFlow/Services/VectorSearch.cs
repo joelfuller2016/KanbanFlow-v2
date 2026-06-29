@@ -35,9 +35,13 @@ public sealed class VectorSearch(IDbContextFactory<AppDbContext> dbFactory) : IV
         if (k <= 0)
             throw new ValidationException("k (result count) must be greater than zero.");
 
-        // Match the trimmed form stored by MemoryService (ScopeKey is persisted trimmed); a null key
-        // matches nothing (ScopeKey is NOT NULL), yielding an empty result rather than throwing.
-        var key = scopeKey?.Trim();
+        // Reject blank scopeKey: the write path normalises ScopeKey to non-blank, so a blank search key
+        // cannot match any live node and is most likely a caller bug — reject consistently with the other
+        // validation checks above and with MemoryService's write-path guard.
+        if (string.IsNullOrWhiteSpace(scopeKey))
+            throw new ValidationException("scopeKey cannot be null or whitespace.");
+
+        var key = scopeKey.Trim();
 
         await using var db = await dbFactory.CreateDbContextAsync(ct);
 
@@ -58,7 +62,15 @@ public sealed class VectorSearch(IDbContextFactory<AppDbContext> dbFactory) : IV
             if (blob is null)
                 continue; // defensive: the WHERE already excludes nulls (also narrows the nullable).
 
-            var vector = EmbeddingCodec.Unpack(blob);
+            float[] vector;
+            try
+            {
+                vector = EmbeddingCodec.Unpack(blob);
+            }
+            catch (ArgumentException)
+            {
+                continue; // corrupted/partial blob (length not a multiple of 4) — skip, never crash
+            }
 
             // A candidate embedded under a different model/dimensionality cannot be compared — skip it
             // (the corpus may legitimately be mixed), never throw.
@@ -70,6 +82,7 @@ public sealed class VectorSearch(IDbContextFactory<AppDbContext> dbFactory) : IV
 
         return hits
             .OrderByDescending(h => h.Score)
+            .ThenBy(h => h.Id)    // stable tie-break: deterministic top-k and consistent #223 fusion
             .Take(k)
             .ToList();
     }

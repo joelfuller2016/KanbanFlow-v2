@@ -740,6 +740,16 @@ public sealed class MemoryServiceTests
             () => svc.SetEmbeddingAsync(id, Array.Empty<float>(), null));
     }
 
+    [Fact]
+    public async Task SetEmbedding_NullVector_ThrowsArgumentNullException()
+    {
+        using var f = new SqliteTestFactory();
+        var id = SeedNode(f);
+        var svc = new MemoryService(f);
+        await Assert.ThrowsAsync<ArgumentNullException>(
+            () => svc.SetEmbeddingAsync(id, null!, null));
+    }
+
     // ── schema (SchemaPatcher / EnsureCreated) ──────────────────────────────────────
     [Fact]
     public void FreshDb_MemoryTablesAndIndexesExist()

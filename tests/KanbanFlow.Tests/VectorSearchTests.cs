@@ -170,4 +170,36 @@ public sealed class VectorSearchTests
         using var f = new SqliteTestFactory();
         Assert.True(new VectorSearch(f).IsAvailable);
     }
+
+    [Fact]
+    public async Task Search_ZeroNormQuery_ReturnsZeroScores()
+    {
+        // CosineSimilarity returns 0 when normA == 0 (all-zero query); search must not produce NaN
+        // and must return a valid zero-scored result rather than crashing or skipping silently.
+        using var f = new SqliteTestFactory();
+        var svc = new MemoryService(f);
+        await SeedEmbeddedNode(f, svc, "1", new[] { 1f, 0f, 0f }, "A");
+
+        var search = new VectorSearch(f);
+        var hits = await search.SearchAsync(MemoryScope.Project, "1", new[] { 0f, 0f, 0f }, 5);
+
+        Assert.Single(hits);
+        Assert.Equal(0.0, hits[0].Score);
+    }
+
+    [Fact]
+    public async Task Search_ZeroNormStoredEmbedding_ReturnsZeroScore()
+    {
+        // A stored all-zero embedding is a valid (though degenerate) input — search must return
+        // score 0, not crash or produce NaN.
+        using var f = new SqliteTestFactory();
+        var svc = new MemoryService(f);
+        await SeedEmbeddedNode(f, svc, "1", new[] { 0f, 0f, 0f }, "zero-vec");
+
+        var search = new VectorSearch(f);
+        var hits = await search.SearchAsync(MemoryScope.Project, "1", new[] { 1f, 0f, 0f }, 5);
+
+        Assert.Single(hits);
+        Assert.Equal(0.0, hits[0].Score);
+    }
 }
