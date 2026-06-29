@@ -95,6 +95,57 @@ public static class AdminEndpoints
             });
         });
 
+        // POST /api/admin/memory/reindex[?force=true] — (re)embed current memory nodes (#222). By
+        // default it embeds only nodes still missing a vector (EmbeddingBlob == null); force=true
+        // re-embeds every current node (e.g. after an embed-model change). Each node's content is
+        // embedded via IEmbeddingService and persisted through MemoryService.SetEmbeddingAsync (one
+        // MemoryEmbedded audit event per node, #88). Fail-soft like embed-ping: when ZeroRouter is
+        // down each embed returns ok:false and is counted as failed — the batch never crashes. A node
+        // superseded/deleted mid-run is counted as skipped. No auth by charter (open-access). Returns
+        // a per-run tally { embedded, skipped, failed, model }.
+        app.MapPost("/api/admin/memory/reindex", async (
+            bool? force, IEmbeddingService embeddings, IMemoryService memory, EmbeddingOptions options, CancellationToken ct) =>
+        {
+            var reembedAll = force ?? false;
+
+            // Snapshot the current nodes up front (ListAsync already excludes superseded versions);
+            // pick those still needing a vector unless a full re-embed was requested. The corpus is
+            // small (single-user local tool), so a snapshot + per-node write is fine.
+            var current = await memory.ListAsync(includeSuperseded: false, ct: ct);
+            var pending = reembedAll
+                ? current
+                : current.Where(node => node.EmbeddingBlob is null).ToList();
+
+            int embedded = 0, skipped = 0, failed = 0;
+            foreach (var node in pending)
+            {
+                var result = await embeddings.EmbedAsync(node.Content, ct);
+                if (!result.Ok || result.Vector is null || result.Vector.Length == 0)
+                {
+                    // ZeroRouter down/erroring, or a provider that reports Ok with a null/empty
+                    // vector: fail-soft (never thrown) — count and keep going (Gemini review, PR #256).
+                    failed++;
+                    continue;
+                }
+
+                try
+                {
+                    await memory.SetEmbeddingAsync(node.Id, result.Vector, "reindex", ct);
+                    embedded++;
+                }
+                catch (MemoryNodeNotFoundException)
+                {
+                    skipped++; // hard-deleted between the snapshot and the write
+                }
+                catch (ValidationException)
+                {
+                    skipped++; // superseded/retired between the snapshot and the write
+                }
+            }
+
+            return Results.Ok(new { embedded, skipped, failed, model = options.Model });
+        });
+
         return app;
     }
 }

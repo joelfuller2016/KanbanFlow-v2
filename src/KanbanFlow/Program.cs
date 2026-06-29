@@ -30,9 +30,13 @@ builder.Services.AddDbContextFactory<AppDbContext>(options => options.UseSqlite(
 builder.Services.AddScoped<ITaskService, TaskService>();
 // Ideas inbox service (#180) — same single-audit-boundary rule as ITaskService.
 builder.Services.AddScoped<IIdeaService, IdeaService>();
-// Bi-temporal memory store (#221) — same single-audit-boundary rule. Schema + service only;
-// embeddings/index/retrieval are #222/#223/#224.
+// Bi-temporal memory store (#221) — same single-audit-boundary rule.
 builder.Services.AddScoped<IMemoryService, MemoryService>();
+// Brute-force cosine vector search over MemoryNode.EmbeddingBlob (#222, retargeted by the #249
+// spike): NO sqlite-vec/vec0/native extension — EF + EmbeddingBlob is the source of truth and the
+// cosine is computed in C# over the tiny current-node corpus. Same IDbContextFactory pattern as the
+// memory store; #223 fuses it with FTS5 + RRF.
+builder.Services.AddScoped<IVectorSearch, VectorSearch>();
 
 // Real process start time, captured once at app boot. Construct eagerly so the
 // timestamp captured by AppStartupInfo's constructor is the boot time, not the

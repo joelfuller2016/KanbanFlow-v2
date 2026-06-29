@@ -356,6 +356,63 @@ public sealed class MemoryService(IDbContextFactory<AppDbContext> dbFactory) : I
         return relation;
     }
 
+    public async Task<MemoryNode> SetEmbeddingAsync(int id, float[] vector, string? actor, CancellationToken ct = default)
+    {
+        // A null vector is a caller bug (typed float[] contract); an empty vector is invalid input.
+        // Same split CreateNodeAsync uses: ArgumentNullException for null, ValidationException for empty.
+        ArgumentNullException.ThrowIfNull(vector);
+        if (vector.Length == 0)
+            throw new ValidationException("Embedding vector cannot be empty.");
+
+        await using var db = await dbFactory.CreateDbContextAsync(ct);
+        var node = await db.MemoryNodes.FirstOrDefaultAsync(m => m.Id == id, ct);
+        if (node is null)
+            throw new MemoryNodeNotFoundException(id);
+        // Embeddings attach only to the live row — a retired/superseded version is historical (mirrors
+        // AddObservation's guard). Re-embed the current version instead.
+        if (node.ValidTo is not null || node.SupersededById is not null)
+            throw new ValidationException($"Memory node {id} is superseded; set embeddings on the current version.");
+
+        var before = MemoryActivitySnapshot(node);
+        var blob = EmbeddingCodec.Pack(vector);
+
+        // Atomic write: the WHERE predicate mirrors the live-row guard above, so a concurrent
+        // supersede or delete racing between the read and the write cannot embed a historical row.
+        // Zero rows updated means the node transitioned out of 'current' after our read (#256 review).
+        await using var tx = await db.Database.BeginTransactionAsync(ct);
+
+        var updated = await db.MemoryNodes
+            .Where(m => m.Id == id && m.ValidTo == null && m.SupersededById == null)
+            .ExecuteUpdateAsync(s => s
+                .SetProperty(m => m.EmbeddingBlob, blob)
+                .SetProperty(m => m.EmbeddingDim, vector.Length), ct);
+
+        if (updated == 0)
+        {
+            var stillExists = await db.MemoryNodes.AnyAsync(m => m.Id == id, ct);
+            if (!stillExists)
+                throw new MemoryNodeNotFoundException(id);
+            throw new ValidationException($"Memory node {id} was modified concurrently; set embeddings on the current version.");
+        }
+
+        // ExecuteUpdateAsync bypasses EF change tracking, so detach the stale tracked entity and
+        // apply the written values to build the after-snapshot for the audit event.
+        db.Entry(node).State = EntityState.Detached;
+        node.EmbeddingBlob = blob;
+        node.EmbeddingDim = vector.Length;
+
+        // One MemoryEmbedded event committed in the same transaction — the #88 single-audit-boundary
+        // rule the memory store inherits.
+        AddActivityEvent(
+            db, MemoryProjectId(node), "MemoryNode", node.Id, actor,
+            "MemoryEmbedded", before, MemoryActivitySnapshot(node),
+            $"Memory {node.Id} embedded ({vector.Length}-dim)");
+
+        await db.SaveChangesAsync(ct);
+        await tx.CommitAsync(ct);
+        return node;
+    }
+
     /// <summary>Trim to null: blank strings become <c>null</c> for clean storage.</summary>
     private static string? Normalize(string? value) =>
         string.IsNullOrWhiteSpace(value) ? null : value.Trim();

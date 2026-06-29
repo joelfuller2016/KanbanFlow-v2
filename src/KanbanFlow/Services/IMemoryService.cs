@@ -12,9 +12,10 @@ namespace KanbanFlow.Services;
 ///
 /// Memory is never overwritten: <see cref="UpdateNodeAsync"/> and <see cref="SupersedeAsync"/>
 /// retire the prior row (stamping <see cref="MemoryNode.ValidTo"/> / <see cref="MemoryNode.SupersededById"/>)
-/// so the full history stays queryable. This issue is schema + service only — embedding generation,
-/// the vector index, and retrieval are #222/#223/#224; the <see cref="MemoryNode.EmbeddingBlob"/> column
-/// stays <c>null</c> until then.
+/// so the full history stays queryable. Embeddings are attached after the fact via
+/// <see cref="SetEmbeddingAsync"/> (#222) and searched by <see cref="IVectorSearch"/>; retrieval/MCP
+/// surfacing is #223/#224. An embedding is derived metadata, so it is written in place rather than as
+/// a bi-temporal version (a content change drops the stale vector — see <see cref="UpdateNodeAsync"/>).
 /// </summary>
 public interface IMemoryService
 {
@@ -90,6 +91,21 @@ public interface IMemoryService
     Task<MemoryRelation> AddRelationAsync(
         string fromType, int fromId, string relationType, string toType, int toId,
         string? actor, CancellationToken ct = default);
+
+    /// <summary>
+    /// Attach (or replace) the semantic embedding for a node's <see cref="MemoryNode.Content"/>,
+    /// updating <see cref="MemoryNode.EmbeddingBlob"/> (packed via <see cref="EmbeddingCodec"/>) and
+    /// <see cref="MemoryNode.EmbeddingDim"/> <em>in place</em>. Unlike a content edit this is NOT a
+    /// bi-temporal supersession — an embedding is derived metadata, so the current row is updated
+    /// directly and no new version is created. Used by the reindex path (#222) and the retrieval
+    /// pipeline (#223). Emits exactly one <c>MemoryEmbedded</c> event. Only a <em>current</em> node can
+    /// be embedded: a retired (<see cref="MemoryNode.ValidTo"/>) or superseded
+    /// (<see cref="MemoryNode.SupersededById"/>) row is historical and rejected.
+    /// </summary>
+    /// <exception cref="MemoryNodeNotFoundException">The node does not exist.</exception>
+    /// <exception cref="ValidationException">The node is retired/superseded, or <paramref name="vector"/> is empty.</exception>
+    /// <exception cref="ArgumentNullException"><paramref name="vector"/> is <c>null</c>.</exception>
+    Task<MemoryNode> SetEmbeddingAsync(int id, float[] vector, string? actor, CancellationToken ct = default);
 }
 
 /// <summary>Create payload for <see cref="IMemoryService.CreateNodeAsync"/>.</summary>
