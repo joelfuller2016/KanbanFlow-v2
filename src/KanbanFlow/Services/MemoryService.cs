@@ -70,6 +70,9 @@ public sealed class MemoryService(IDbContextFactory<AppDbContext> dbFactory) : I
             throw new ValidationException($"Invalid memory type '{dto.Type}'.");
         if (!Enum.IsDefined(dto.Scope))
             throw new ValidationException($"Invalid memory scope '{dto.Scope}'.");
+        if (dto.Scope == MemoryScope.Project
+            && (!int.TryParse(dto.ScopeKey.Trim(), out var projectId) || projectId <= 0))
+            throw new ValidationException("Project-scoped memories require a positive integer project id as ScopeKey.");
 
         await using var db = await dbFactory.CreateDbContextAsync(ct);
 
@@ -260,6 +263,8 @@ public sealed class MemoryService(IDbContextFactory<AppDbContext> dbFactory) : I
         var node = await db.MemoryNodes.FirstOrDefaultAsync(m => m.Id == nodeId, ct);
         if (node is null)
             throw new MemoryNodeNotFoundException(nodeId);
+        if (node.ValidTo is not null || node.SupersededById is not null)
+            throw new ValidationException($"Memory node {nodeId} is superseded; add observations to the current version.");
 
         var observation = new Observation
         {
@@ -296,6 +301,8 @@ public sealed class MemoryService(IDbContextFactory<AppDbContext> dbFactory) : I
             throw new ValidationException("Relation type cannot be empty or whitespace.");
         if (string.IsNullOrWhiteSpace(toType))
             throw new ValidationException("Relation toType cannot be empty or whitespace.");
+        if (fromId <= 0 || toId <= 0)
+            throw new ValidationException("Relation endpoint ids must be positive.");
 
         var fromTypeTrimmed = fromType.Trim();
         var toTypeTrimmed = toType.Trim();

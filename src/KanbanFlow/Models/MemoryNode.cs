@@ -13,6 +13,13 @@ namespace KanbanFlow.Models;
 /// </summary>
 public class MemoryNode
 {
+    public MemoryNode()
+    {
+        var now = DateTime.UtcNow;
+        CreatedAt = now;
+        ValidFrom = now;
+    }
+
     public int Id { get; set; }
 
     /// <summary>Kind of memory (stored as <c>int</c> — same enum-as-int convention as <see cref="IdeaStatus"/>).</summary>
@@ -40,11 +47,11 @@ public class MemoryNode
     /// <summary>Optional confidence in [0,1] (or any caller scale); <c>null</c> when unknown.</summary>
     public double? Confidence { get; set; }
 
-    public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
+    public DateTime CreatedAt { get; set; }
 
     // ── bi-temporal validity ─────────────────────────────────────────────────────
     /// <summary>Start of this version's validity window (defaults to creation time).</summary>
-    public DateTime ValidFrom { get; set; } = DateTime.UtcNow;
+    public DateTime ValidFrom { get; set; }
 
     /// <summary>
     /// End of this version's validity window. <c>null</c> means "currently valid". Set when

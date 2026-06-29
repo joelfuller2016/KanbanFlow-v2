@@ -23,20 +23,32 @@ public static class SchemaPatcher
     /// </summary>
     public static void EnsureMemoryTables(AppDbContext db)
     {
+        ArgumentNullException.ThrowIfNull(db);
+
         if (!db.Database.IsSqlite())
             return;
 
         db.Database.OpenConnection();
+        Exception? patchException = null;
         try
         {
             EnsureMemoryTables(db.Database.GetDbConnection());
         }
+        catch (Exception ex)
+        {
+            patchException = ex;
+            throw;
+        }
         finally
         {
-            // Best-effort cleanup: swallow a CloseConnection failure so it can't mask
-            // the real exception thrown by the patch batch above (Gemini review, PR #252).
-            try { db.Database.CloseConnection(); }
-            catch { /* connection cleanup is best-effort */ }
+            try
+            {
+                db.Database.CloseConnection();
+            }
+            catch when (patchException is not null)
+            {
+                // Preserve the patch failure; cleanup is best-effort only on failure path.
+            }
         }
     }
 
@@ -51,9 +63,11 @@ public static class SchemaPatcher
     {
         ArgumentNullException.ThrowIfNull(connection);
 
+        using var transaction = connection.BeginTransaction();
+
         // MemoryNodes first — Observations references it. Column types mirror the EF model:
         // enums + ints → INTEGER, DateTime → TEXT, double? → REAL, byte[]? → BLOB.
-        Execute(connection, """
+        Execute(connection, transaction, """
             CREATE TABLE IF NOT EXISTS MemoryNodes (
                 Id INTEGER NOT NULL CONSTRAINT PK_MemoryNodes PRIMARY KEY AUTOINCREMENT,
                 Type INTEGER NOT NULL,
@@ -74,7 +88,7 @@ public static class SchemaPatcher
             )
             """);
 
-        Execute(connection, """
+        Execute(connection, transaction, """
             CREATE TABLE IF NOT EXISTS Observations (
                 Id INTEGER NOT NULL CONSTRAINT PK_Observations PRIMARY KEY AUTOINCREMENT,
                 MemoryNodeId INTEGER NOT NULL,
@@ -87,7 +101,7 @@ public static class SchemaPatcher
             """);
 
         // No-FK discriminator edges (like ActivityEvent) — endpoints are (Type, Id) pairs.
-        Execute(connection, """
+        Execute(connection, transaction, """
             CREATE TABLE IF NOT EXISTS MemoryRelations (
                 Id INTEGER NOT NULL CONSTRAINT PK_MemoryRelations PRIMARY KEY AUTOINCREMENT,
                 FromType TEXT NOT NULL,
@@ -99,16 +113,19 @@ public static class SchemaPatcher
             )
             """);
 
-        Execute(connection, "CREATE INDEX IF NOT EXISTS IX_MemoryNodes_Scope_ScopeKey_Type ON MemoryNodes (Scope, ScopeKey, Type)");
-        Execute(connection, "CREATE INDEX IF NOT EXISTS IX_MemoryNodes_SupersededById ON MemoryNodes (SupersededById)");
-        Execute(connection, "CREATE INDEX IF NOT EXISTS IX_Observations_MemoryNodeId ON Observations (MemoryNodeId)");
-        Execute(connection, "CREATE INDEX IF NOT EXISTS IX_MemoryRelations_FromType_FromId ON MemoryRelations (FromType, FromId)");
-        Execute(connection, "CREATE INDEX IF NOT EXISTS IX_MemoryRelations_ToType_ToId ON MemoryRelations (ToType, ToId)");
+        Execute(connection, transaction, "CREATE INDEX IF NOT EXISTS IX_MemoryNodes_Scope_ScopeKey_Type ON MemoryNodes (Scope, ScopeKey, Type)");
+        Execute(connection, transaction, "CREATE INDEX IF NOT EXISTS IX_MemoryNodes_SupersededById ON MemoryNodes (SupersededById)");
+        Execute(connection, transaction, "CREATE INDEX IF NOT EXISTS IX_Observations_MemoryNodeId ON Observations (MemoryNodeId)");
+        Execute(connection, transaction, "CREATE INDEX IF NOT EXISTS IX_MemoryRelations_FromType_FromId ON MemoryRelations (FromType, FromId)");
+        Execute(connection, transaction, "CREATE INDEX IF NOT EXISTS IX_MemoryRelations_ToType_ToId ON MemoryRelations (ToType, ToId)");
+
+        transaction.Commit();
     }
 
-    private static void Execute(DbConnection connection, string sql)
+    private static void Execute(DbConnection connection, DbTransaction transaction, string sql)
     {
         using var command = connection.CreateCommand();
+        command.Transaction = transaction;
         command.CommandText = sql;
         command.ExecuteNonQuery();
     }

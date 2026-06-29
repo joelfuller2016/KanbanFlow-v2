@@ -19,6 +19,8 @@ public sealed class EmbeddingCodecTests
 
         // float32 is preserved bit-for-bit through the codec (no precision loss, no reordering).
         Assert.Equal(vector, restored);
+        // Byte-level verification catches -0.0f == 0.0f and NaN sign/payload differences.
+        Assert.Equal(blob, EmbeddingCodec.Pack(restored));
         Assert.Equal(vector.Length * sizeof(float), blob.Length);
     }
 

@@ -173,6 +173,18 @@ public sealed class MemoryServiceTests
             () => svc.CreateNodeAsync(new MemoryNodeCreate(MemoryType.Semantic, (MemoryScope)42, "1", "x"), null));
     }
 
+    [Theory]
+    [InlineData("0")]
+    [InlineData("-1")]
+    [InlineData("abc")]
+    public async Task CreateNode_ProjectScope_NonPositiveOrNonNumericScopeKey_Throws(string scopeKey)
+    {
+        using var f = new SqliteTestFactory();
+        var svc = new MemoryService(f);
+        await Assert.ThrowsAsync<ValidationException>(
+            () => svc.CreateNodeAsync(new MemoryNodeCreate(MemoryType.Semantic, MemoryScope.Project, scopeKey, "x"), null));
+    }
+
     // ── GetNodeAsync ──────────────────────────────────────────────────────────────
     [Fact]
     public async Task GetNode_ReturnsNull_WhenMissing()
@@ -619,6 +631,31 @@ public sealed class MemoryServiceTests
         await Assert.ThrowsAsync<ValidationException>(() => svc.AddRelationAsync("", 1, "rel", "Task", 2, null));
         await Assert.ThrowsAsync<ValidationException>(() => svc.AddRelationAsync("MemoryNode", 1, "  ", "Task", 2, null));
         await Assert.ThrowsAsync<ValidationException>(() => svc.AddRelationAsync("MemoryNode", 1, "rel", "", 2, null));
+    }
+
+    [Theory]
+    [InlineData(0, 1)]
+    [InlineData(-1, 1)]
+    [InlineData(1, 0)]
+    [InlineData(1, -5)]
+    public async Task AddRelation_NonPositiveId_Throws(int fromId, int toId)
+    {
+        using var f = new SqliteTestFactory();
+        var svc = new MemoryService(f);
+        await Assert.ThrowsAsync<ValidationException>(
+            () => svc.AddRelationAsync("MemoryNode", fromId, "rel", "Task", toId, null));
+    }
+
+    [Fact]
+    public async Task AddObservation_OnSupersededNode_Throws()
+    {
+        using var f = new SqliteTestFactory();
+        var svc = new MemoryService(f);
+        var node = await svc.CreateNodeAsync(new MemoryNodeCreate(MemoryType.Semantic, MemoryScope.Project, "1", "v1"), null);
+        await svc.SupersedeAsync(node.Id, null);
+
+        await Assert.ThrowsAsync<ValidationException>(
+            () => svc.AddObservationAsync(node.Id, "observation on retired node", null, null));
     }
 
     // ── schema (SchemaPatcher / EnsureCreated) ──────────────────────────────────────
