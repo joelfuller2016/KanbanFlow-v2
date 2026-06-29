@@ -373,6 +373,24 @@ public sealed class MemorySearchTests
             () => search.SearchAsync(MemoryScope.Project, "1", "q", 5, new RetrievalOptions { RecencyHalfLifeHours = 0 }));
     }
 
+    [Fact]
+    public async Task Search_RecencyHalfLife_HalvesAtConfiguredAge()
+    {
+        // Pin the public half-life contract: a node last accessed exactly one RecencyHalfLifeHours ago
+        // must score 0.5 on recency (true half-life), not e^-1 ≈ 0.37 (CodeRabbit review, PR #257).
+        using var f = new SqliteTestFactory();
+        var svc = new MemoryService(f);
+        var id = await CreateNode(svc, "1", "halflife token");
+
+        var opts = new RetrievalOptions(); // default RecencyHalfLifeHours
+        var oneHalfLifeAgo = DateTime.UtcNow.AddHours(-opts.RecencyHalfLifeHours);
+        await SetStats(f, id, oneHalfLifeAgo, oneHalfLifeAgo);
+
+        var search = NewSearch(f, EmbeddingDown());
+        var hit = Assert.Single(await search.SearchAsync(MemoryScope.Project, "1", "halflife", 5, opts));
+        Assert.Equal(0.5, hit.RecencyScore, 3); // 0.5 at one half-life (returned score is pre-bump)
+    }
+
     /// <summary>
     /// Minimal hand-written embedding transport (no Moq) so the REAL <see cref="EmbeddingService"/>
     /// runs: <paramref name="map"/> returns the vector for an input, or <c>null</c> to throw (a downed

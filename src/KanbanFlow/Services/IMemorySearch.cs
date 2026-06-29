@@ -105,5 +105,11 @@ public sealed class RetrievalOptions
     /// When <c>true</c>, retired/superseded versions are eligible candidates (their historical content
     /// stays FTS-matchable). Default <c>false</c> — only current nodes are recalled.
     /// </summary>
+    /// <remarks>
+    /// Known limitation: this currently affects the keyword, recency, and usefulness signals only. The
+    /// vector signal delegates to <see cref="IVectorSearch"/>, which ranks CURRENT versions only, so a
+    /// superseded candidate never receives a vector rank (it can still surface via the other signals).
+    /// Full superseded-aware vector ranking is a tracked follow-up (#258).
+    /// </remarks>
     public bool IncludeSuperseded { get; init; }
 }
