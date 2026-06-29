@@ -30,6 +30,9 @@ builder.Services.AddDbContextFactory<AppDbContext>(options => options.UseSqlite(
 builder.Services.AddScoped<ITaskService, TaskService>();
 // Ideas inbox service (#180) — same single-audit-boundary rule as ITaskService.
 builder.Services.AddScoped<IIdeaService, IdeaService>();
+// Bi-temporal memory store (#221) — same single-audit-boundary rule. Schema + service only;
+// embeddings/index/retrieval are #222/#223/#224.
+builder.Services.AddScoped<IMemoryService, MemoryService>();
 
 // Real process start time, captured once at app boot. Construct eagerly so the
 // timestamp captured by AppStartupInfo's constructor is the boot time, not the
@@ -119,6 +122,7 @@ using (var scope = app.Services.CreateScope())
     EnsureAcceptanceCriteriaTable(db);
     EnsureActivityEventTable(db);
     EnsureIdeaTable(db);
+    SchemaPatcher.EnsureMemoryTables(db);
     SeedData.Initialize(db);
 }
 
