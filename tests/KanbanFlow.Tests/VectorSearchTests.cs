@@ -202,4 +202,54 @@ public sealed class VectorSearchTests
         Assert.Single(hits);
         Assert.Equal(0.0, hits[0].Score);
     }
+
+    [Fact]
+    public async Task Search_TieBreak_DeterministicById()
+    {
+        // Two nodes with identical embeddings tie on cosine; the result order must be a stable
+        // ascending-Id sort (not DB-materialisation order), and identical across repeated calls.
+        using var f = new SqliteTestFactory();
+        var svc = new MemoryService(f);
+        var id1 = await SeedEmbeddedNode(f, svc, "1", new[] { 1f, 1f, 0f }, "tie-A");
+        var id2 = await SeedEmbeddedNode(f, svc, "1", new[] { 1f, 1f, 0f }, "tie-B");
+
+        var search = new VectorSearch(f);
+        var first = await search.SearchAsync(MemoryScope.Project, "1", new[] { 1f, 1f, 0f }, 10);
+        var second = await search.SearchAsync(MemoryScope.Project, "1", new[] { 1f, 1f, 0f }, 10);
+
+        Assert.Equal(new[] { id1, id2 }, first.Select(h => h.Id).ToArray());  // ascending-Id tie order
+        Assert.Equal(first[0].Score, first[1].Score);                          // genuine tie
+        Assert.Equal(first.Select(h => h.Id), second.Select(h => h.Id));       // stable across calls
+    }
+
+    [Fact]
+    public async Task Search_SkipsMalformedBlob_WithoutCrashing()
+    {
+        // A corrupt/partial EmbeddingBlob (length not a multiple of 4) must be skipped, not crash the
+        // whole search. Insert one directly (bypassing SetEmbeddingAsync, which only writes valid
+        // float32) alongside one validly-embedded node.
+        using var f = new SqliteTestFactory();
+        var svc = new MemoryService(f);
+        var validId = await SeedEmbeddedNode(f, svc, "1", new[] { 1f, 0f, 0f }, "valid");
+
+        await using (var db = await f.CreateDbContextAsync())
+        {
+            db.MemoryNodes.Add(new MemoryNode
+            {
+                Type = MemoryType.Semantic,
+                Scope = MemoryScope.Project,
+                ScopeKey = "1",
+                Content = "malformed-blob",
+                EmbeddingBlob = new byte[] { 1, 2, 3 }, // length 3 — not a whole number of float32s
+                EmbeddingDim = 0
+            });
+            await db.SaveChangesAsync();
+        }
+
+        var search = new VectorSearch(f);
+        var hits = await search.SearchAsync(MemoryScope.Project, "1", new[] { 1f, 0f, 0f }, 10);
+
+        Assert.Single(hits);                 // only the valid node; the malformed blob is skipped
+        Assert.Equal(validId, hits[0].Id);
+    }
 }
