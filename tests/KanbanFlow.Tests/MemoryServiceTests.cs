@@ -140,6 +140,21 @@ public sealed class MemoryServiceTests
             () => svc.CreateNodeAsync(new MemoryNodeCreate(MemoryType.Semantic, MemoryScope.Project, "1", content), null));
     }
 
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    public async Task CreateNode_BlankScopeKey_Throws(string? scopeKey)
+    {
+        // ScopeKey pins the node's placement and resolves its audit ProjectId; a blank key would store
+        // an unscoped row and misattribute the audit to project 0 (scopeKey! deliberately probes the
+        // null-contract violation a misbehaving caller could make).
+        using var f = new SqliteTestFactory();
+        var svc = new MemoryService(f);
+        await Assert.ThrowsAsync<ValidationException>(
+            () => svc.CreateNodeAsync(new MemoryNodeCreate(MemoryType.Semantic, MemoryScope.Project, scopeKey!, "content"), null));
+    }
+
     [Fact]
     public async Task CreateNode_InvalidType_Throws()
     {
@@ -285,9 +300,11 @@ public sealed class MemoryServiceTests
             await seed.SaveChangesAsync();
         }
 
+        // An explicit Content change ("v1" -> "v2") is what makes the prior vector stale.
         var updated = await svc.UpdateNodeAsync(created.Id, new MemoryNodeUpdate(Content: "v2"), null);
+        Assert.Equal("v2", updated.Content);
 
-        // New version starts unembedded (content changed ⇒ prior vector is stale).
+        // New version starts unembedded (content changed ⇒ prior vector is stale; #222/#223 re-embeds).
         Assert.Null(updated.EmbeddingBlob);
         Assert.Null(updated.EmbeddingDim);
 
@@ -296,6 +313,41 @@ public sealed class MemoryServiceTests
         var prior = await db.MemoryNodes.FindAsync(created.Id);
         Assert.NotNull(prior!.EmbeddingBlob);
         Assert.Equal(3, prior.EmbeddingDim);
+    }
+
+    [Fact]
+    public async Task UpdateNode_MetadataOnlyChange_CarriesEmbeddingForward()
+    {
+        using var f = new SqliteTestFactory();
+        var svc = new MemoryService(f);
+        var created = await svc.CreateNodeAsync(new MemoryNodeCreate(MemoryType.Semantic, MemoryScope.Project, "1", "stable content"), null);
+
+        // Simulate #222 having embedded the node.
+        var vector = EmbeddingCodec.Pack([1f, 2f, 3f]);
+        using (var seed = f.CreateDbContext())
+        {
+            var n = await seed.MemoryNodes.FindAsync(created.Id);
+            n!.EmbeddingBlob = vector;
+            n.EmbeddingDim = 3;
+            await seed.SaveChangesAsync();
+        }
+
+        // A metadata-only edit (Tags/Source/Confidence; Content carried forward) keeps the content — so
+        // the embedding still matches and must NOT be cleared.
+        var updated = await svc.UpdateNodeAsync(
+            created.Id, new MemoryNodeUpdate(Tags: "alpha,beta", Source: "agent", Confidence: 0.42), null);
+
+        // A new bi-temporal version is still created, but it carries the prior vector forward unchanged.
+        Assert.NotEqual(created.Id, updated.Id);
+        Assert.Equal("stable content", updated.Content);
+        Assert.Equal(vector, updated.EmbeddingBlob);
+        Assert.Equal(3, updated.EmbeddingDim);
+
+        // ...and that is what actually persisted on the new row.
+        using var db = f.CreateDbContext();
+        var newRow = await db.MemoryNodes.FindAsync(updated.Id);
+        Assert.Equal(vector, newRow!.EmbeddingBlob);
+        Assert.Equal(3, newRow.EmbeddingDim);
     }
 
     [Fact]
@@ -502,6 +554,61 @@ public sealed class MemoryServiceTests
         Assert.Equal(node.Id, persisted.FromId);
         Assert.Equal("Task", persisted.ToType);
         Assert.Equal(taskId, persisted.ToId);
+
+        // The audit attributes to the From-side MemoryNode (the only memory endpoint): EntityId is that
+        // node's id and ProjectId is resolved from its scope (project "1"), never 0.
+        var ev = Assert.Single(NodeEvents(f, node.Id), e => e.EventType == "RelationAdded");
+        Assert.Equal("MemoryNode", ev.EntityType);
+        Assert.Equal(node.Id, ev.EntityId);
+        Assert.Equal(1, ev.ProjectId);
+    }
+
+    [Fact]
+    public async Task AddRelation_ToMemoryNode_AttributesAuditToToNode()
+    {
+        using var f = new SqliteTestFactory();
+        var svc = new MemoryService(f);
+        var taskId = SeedTask(f);
+        var node = await svc.CreateNodeAsync(new MemoryNodeCreate(MemoryType.Decision, MemoryScope.Project, "1", "explains the task"), null);
+
+        // From is a non-memory card; the MemoryNode is the To endpoint, so the audit attributes to it.
+        var relation = await svc.AddRelationAsync("Task", taskId, "explained_by", "MemoryNode", node.Id, "agent");
+
+        using var db = f.CreateDbContext();
+        var persisted = await db.MemoryRelations.FindAsync(relation.Id);
+        Assert.NotNull(persisted);
+        Assert.Equal("Task", persisted!.FromType);
+        Assert.Equal(taskId, persisted.FromId);
+        Assert.Equal("MemoryNode", persisted.ToType);
+        Assert.Equal(node.Id, persisted.ToId);
+
+        // Audit attributed to the To-side MemoryNode: EntityId == the To node id, project-scoped (not 0).
+        var ev = Assert.Single(NodeEvents(f, node.Id), e => e.EventType == "RelationAdded");
+        Assert.Equal("MemoryNode", ev.EntityType);
+        Assert.Equal(node.Id, ev.EntityId);
+        Assert.Equal(1, ev.ProjectId);
+    }
+
+    [Fact]
+    public async Task AddRelation_NoMemoryNodeEndpoint_Throws()
+    {
+        using var f = new SqliteTestFactory();
+        var svc = new MemoryService(f);
+
+        // Neither endpoint is a MemoryNode — a memory relation must touch the memory graph.
+        await Assert.ThrowsAsync<ValidationException>(
+            () => svc.AddRelationAsync("Task", 1, "blocks", "Project", 2, null));
+    }
+
+    [Fact]
+    public async Task AddRelation_MissingMemoryNode_Throws()
+    {
+        using var f = new SqliteTestFactory();
+        var svc = new MemoryService(f);
+
+        // The chosen MemoryNode endpoint must exist (mirrors GetNodeAsync's not-found contract).
+        await Assert.ThrowsAsync<MemoryNodeNotFoundException>(
+            () => svc.AddRelationAsync("MemoryNode", 999, "relates_to", "Task", 1, null));
     }
 
     [Fact]

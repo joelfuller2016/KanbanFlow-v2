@@ -62,6 +62,10 @@ public sealed class MemoryService(IDbContextFactory<AppDbContext> dbFactory) : I
         // Service is the trust boundary — REST, MCP, and Blazor callers all flow through here (#88).
         if (string.IsNullOrWhiteSpace(dto.Content))
             throw new ValidationException("Content cannot be empty or whitespace.");
+        // ScopeKey identifies the node's placement (and resolves its project id for the audit event).
+        // A blank key would store an unscoped row and misattribute the audit to ProjectId 0 — reject it.
+        if (string.IsNullOrWhiteSpace(dto.ScopeKey))
+            throw new ValidationException("ScopeKey cannot be empty or whitespace.");
         if (!Enum.IsDefined(dto.Type))
             throw new ValidationException($"Invalid memory type '{dto.Type}'.");
         if (!Enum.IsDefined(dto.Scope))
@@ -74,7 +78,7 @@ public sealed class MemoryService(IDbContextFactory<AppDbContext> dbFactory) : I
         {
             Type = dto.Type,
             Scope = dto.Scope,
-            ScopeKey = dto.ScopeKey?.Trim() ?? string.Empty,
+            ScopeKey = dto.ScopeKey.Trim(),
             Content = dto.Content.Trim(),
             Tags = Normalize(dto.Tags),
             Source = Normalize(dto.Source),
@@ -171,6 +175,11 @@ public sealed class MemoryService(IDbContextFactory<AppDbContext> dbFactory) : I
         var now = DateTime.UtcNow;
         var before = MemoryActivitySnapshot(current);
 
+        // The embedding is derived from Content, so only a real content change invalidates it. A null
+        // dto.Content carries the value forward (never a change); a metadata-only edit (Tags/Source/
+        // Confidence) keeps Content — and therefore the prior vector — intact.
+        var contentChanged = dto.Content is not null && newContent != current.Content;
+
         var replacement = new MemoryNode
         {
             Type = current.Type,
@@ -182,10 +191,11 @@ public sealed class MemoryService(IDbContextFactory<AppDbContext> dbFactory) : I
             Confidence = newConfidence,
             CreatedAt = now,
             ValidFrom = now,
-            // Content changed ⇒ the prior embedding is stale. Leave the new row unembedded so the
-            // embedding pipeline (#222/#223) re-embeds it; never carry the prior vector forward.
-            EmbeddingBlob = null,
-            EmbeddingDim = null
+            // Content changed ⇒ the prior embedding is stale: leave the new row unembedded so the
+            // pipeline (#222/#223) re-embeds it. Metadata-only change ⇒ carry the prior vector forward
+            // unchanged (it still matches the unchanged content).
+            EmbeddingBlob = contentChanged ? null : current.EmbeddingBlob,
+            EmbeddingDim = contentChanged ? null : current.EmbeddingDim
         };
 
         // Atomic supersede: insert the new version (assigns its id), then stamp the prior row so it
@@ -287,14 +297,32 @@ public sealed class MemoryService(IDbContextFactory<AppDbContext> dbFactory) : I
         if (string.IsNullOrWhiteSpace(toType))
             throw new ValidationException("Relation toType cannot be empty or whitespace.");
 
+        var fromTypeTrimmed = fromType.Trim();
+        var toTypeTrimmed = toType.Trim();
+
+        // A memory relation must touch a memory node: the audit event is attributed to that node
+        // (EntityType "MemoryNode" + the node's project scope), so an edge with no memory endpoint has
+        // nothing valid to attribute to. Require at least one side to be a MemoryNode.
+        var fromIsNode = string.Equals(fromTypeTrimmed, "MemoryNode", StringComparison.Ordinal);
+        var toIsNode = string.Equals(toTypeTrimmed, "MemoryNode", StringComparison.Ordinal);
+        if (!fromIsNode && !toIsNode)
+            throw new ValidationException("A memory relation must have a MemoryNode endpoint (FromType or ToType must be \"MemoryNode\").");
+
         await using var db = await dbFactory.CreateDbContextAsync(ct);
+
+        // The audited node: prefer From when it is the MemoryNode, else To. Load it so we can resolve
+        // its project scope and reject a dangling memory id (consistent with GetNodeAsync's lookup).
+        var memoryNodeId = fromIsNode ? fromId : toId;
+        var memoryNode = await db.MemoryNodes.FirstOrDefaultAsync(m => m.Id == memoryNodeId, ct);
+        if (memoryNode is null)
+            throw new MemoryNodeNotFoundException(memoryNodeId);
 
         var relation = new MemoryRelation
         {
-            FromType = fromType.Trim(),
+            FromType = fromTypeTrimmed,
             FromId = fromId,
             RelationType = relationType.Trim(),
-            ToType = toType.Trim(),
+            ToType = toTypeTrimmed,
             ToId = toId,
             CreatedAt = DateTime.UtcNow
         };
@@ -305,11 +333,11 @@ public sealed class MemoryService(IDbContextFactory<AppDbContext> dbFactory) : I
         db.MemoryRelations.Add(relation);
         await db.SaveChangesAsync(ct);
 
-        // Attributed to the source endpoint. EntityType is the memory subsystem's "MemoryNode" (#221);
-        // in the common case FromType is "MemoryNode" so EntityId is a real node id. ProjectId is 0:
-        // relations are cross-cutting edges with no single project scope (legal — no FK on the event).
+        // Attributed to the MemoryNode endpoint (#221): EntityType "MemoryNode", EntityId the node's id,
+        // and ProjectId resolved from THAT node's scope (the same helper CreateNodeAsync uses) — so a
+        // project-scoped node attributes to its project rather than 0.
         AddActivityEvent(
-            db, 0, "MemoryNode", relation.FromId, actor,
+            db, MemoryProjectId(memoryNode), "MemoryNode", memoryNode.Id, actor,
             "RelationAdded", null,
             new { relation.Id, relation.FromType, relation.FromId, relation.RelationType, relation.ToType, relation.ToId, relation.CreatedAt },
             $"Relation '{relation.RelationType}' {relation.FromType}:{relation.FromId} -> {relation.ToType}:{relation.ToId}");

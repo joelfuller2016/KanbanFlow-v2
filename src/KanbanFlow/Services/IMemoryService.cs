@@ -79,11 +79,13 @@ public interface IMemoryService
 
     /// <summary>
     /// Add a directed graph edge <c>(fromType, fromId) --relationType--&gt; (toType, toId)</c>. The
-    /// endpoints are discriminator pairs (no hard FK), so an edge may target a memory node or an
-    /// existing card id (Task / Project / …). Emits a <c>RelationAdded</c> event. Validates non-empty
-    /// type discriminators and relation verb.
+    /// endpoints are discriminator pairs (no hard FK), so an edge may span a memory node and an
+    /// existing card id (Task / Project / …) — but at least one endpoint MUST be a <c>"MemoryNode"</c>.
+    /// Emits a <c>RelationAdded</c> event attributed to that MemoryNode endpoint (its id + the project
+    /// scope resolved from it). Validates non-empty type discriminators and relation verb.
     /// </summary>
-    /// <exception cref="ValidationException"><paramref name="fromType"/>, <paramref name="relationType"/>, or <paramref name="toType"/> empty/whitespace.</exception>
+    /// <exception cref="ValidationException"><paramref name="fromType"/>, <paramref name="relationType"/>, or <paramref name="toType"/> empty/whitespace, or neither endpoint is a <c>"MemoryNode"</c>.</exception>
+    /// <exception cref="MemoryNodeNotFoundException">The chosen MemoryNode endpoint does not exist.</exception>
     Task<MemoryRelation> AddRelationAsync(
         string fromType, int fromId, string relationType, string toType, int toId,
         string? actor, CancellationToken ct = default);

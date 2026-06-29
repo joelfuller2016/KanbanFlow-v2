@@ -70,7 +70,8 @@ public class MemoryNode
     /// <summary>
     /// The semantic embedding for <see cref="Content"/>, packed as float32 little-endian via
     /// <see cref="EmbeddingCodec"/>. <c>null</c> until the embedding pipeline (#222/#223) fills it.
-    /// Cleared on a bi-temporal update so the stale vector is never reused for the new content.
+    /// Cleared only on a <em>content-changing</em> bi-temporal update (a metadata-only edit carries the
+    /// prior vector forward), so a stale vector is never reused for changed content.
     /// </summary>
     public byte[]? EmbeddingBlob { get; set; }
 
