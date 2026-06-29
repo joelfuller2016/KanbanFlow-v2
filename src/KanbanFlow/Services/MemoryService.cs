@@ -323,6 +323,8 @@ public sealed class MemoryService(IDbContextFactory<AppDbContext> dbFactory) : I
         var memoryNode = await db.MemoryNodes.FirstOrDefaultAsync(m => m.Id == memoryNodeId, ct);
         if (memoryNode is null)
             throw new MemoryNodeNotFoundException(memoryNodeId);
+        if (memoryNode.ValidTo is not null || memoryNode.SupersededById is not null)
+            throw new ValidationException($"Memory node {memoryNode.Id} is superseded; add relations to the current version.");
 
         var relation = new MemoryRelation
         {

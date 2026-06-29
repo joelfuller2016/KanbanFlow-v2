@@ -45,8 +45,9 @@ public interface IMemoryService
     /// <summary>
     /// Bi-temporal update: does NOT overwrite. Inserts a new version with the updated content and
     /// stamps the prior row's <see cref="MemoryNode.ValidTo"/> + <see cref="MemoryNode.SupersededById"/>
-    /// (pointing at the new row), so the prior version stays intact and queryable. The new row starts
-    /// unembedded (the prior vector is stale and is never copied forward). <c>null</c> fields on
+    /// (pointing at the new row), so the prior version stays intact and queryable. When <c>Content</c>
+    /// changes the new row starts unembedded (the stale vector is dropped so #222/#223 re-embeds); a
+    /// metadata-only edit carries the prior vector forward. <c>null</c> fields on
     /// <paramref name="dto"/> mean "carry forward unchanged"; idempotent when nothing actually changes
     /// (no new row, no event). Emits a <c>MemoryUpdated</c> event.
     /// </summary>

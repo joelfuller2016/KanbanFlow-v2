@@ -658,6 +658,18 @@ public sealed class MemoryServiceTests
             () => svc.AddObservationAsync(node.Id, "observation on retired node", null, null));
     }
 
+    [Fact]
+    public async Task AddRelation_OnRetiredMemoryNode_Throws()
+    {
+        using var f = new SqliteTestFactory();
+        var svc = new MemoryService(f);
+        var node = await svc.CreateNodeAsync(new MemoryNodeCreate(MemoryType.Semantic, MemoryScope.Project, "1", "v1"), null);
+        await svc.SupersedeAsync(node.Id, null);
+
+        await Assert.ThrowsAsync<ValidationException>(
+            () => svc.AddRelationAsync("MemoryNode", node.Id, "relates_to", "Task", 5, null));
+    }
+
     // ── schema (SchemaPatcher / EnsureCreated) ──────────────────────────────────────
     [Fact]
     public void FreshDb_MemoryTablesAndIndexesExist()
