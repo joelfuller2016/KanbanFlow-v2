@@ -175,8 +175,13 @@ public static class AdminEndpoints
                 }
                 finally
                 {
+                    // Best-effort close so a cleanup failure can't mask the FTS-rebuild error
+                    // (Gemini review, PR #257). CloseAsync() is parameterless — no CancellationToken.
                     if (openedByUs)
-                        await connection.CloseAsync();
+                    {
+                        try { await connection.CloseAsync(); }
+                        catch { /* connection cleanup is best-effort */ }
+                    }
                 }
             }
             catch

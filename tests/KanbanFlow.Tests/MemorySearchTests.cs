@@ -333,6 +333,20 @@ public sealed class MemorySearchTests
         Assert.Equal(id, Assert.Single(hits).Id);
     }
 
+    [Fact]
+    public async Task Search_NonPositiveRrfKOrHalfLife_Throws()
+    {
+        using var f = new SqliteTestFactory();
+        var search = NewSearch(f, EmbeddingDown());
+
+        // Degenerate fusion options are rejected up front (before any DB/embed work) so the RRF and
+        // recency math can't divide by zero or produce NaN (Gemini review, PR #257).
+        await Assert.ThrowsAsync<ValidationException>(
+            () => search.SearchAsync(MemoryScope.Project, "1", "q", 5, new RetrievalOptions { RrfK = 0 }));
+        await Assert.ThrowsAsync<ValidationException>(
+            () => search.SearchAsync(MemoryScope.Project, "1", "q", 5, new RetrievalOptions { RecencyHalfLifeHours = 0 }));
+    }
+
     /// <summary>
     /// Minimal hand-written embedding transport (no Moq) so the REAL <see cref="EmbeddingService"/>
     /// runs: <paramref name="map"/> returns the vector for an input, or <c>null</c> to throw (a downed

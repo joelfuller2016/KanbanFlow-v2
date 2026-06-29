@@ -34,6 +34,12 @@ public sealed partial class MemorySearch(
             throw new ValidationException("k (result count) must be greater than zero.");
 
         opts ??= new RetrievalOptions();
+        // Guard the fusion math against degenerate options: RrfK == 0 and a zero/negative half-life
+        // would produce divide-by-zero / NaN / infinity in the RRF and recency terms (Gemini review, PR #257).
+        if (opts.RecencyHalfLifeHours <= 0)
+            throw new ValidationException("RecencyHalfLifeHours must be greater than zero.");
+        if (opts.RrfK <= 0)
+            throw new ValidationException("RrfK must be greater than zero.");
         var key = (scopeKey ?? string.Empty).Trim();
         var now = DateTime.UtcNow;
 
@@ -134,8 +140,13 @@ public sealed partial class MemorySearch(
         }
         finally
         {
+            // Best-effort close: don't let a cleanup failure mask the real exception from the search
+            // body. (DbConnection.CloseAsync() is parameterless — there is no CancellationToken overload.)
             if (openedByUs)
-                await connection.CloseAsync();
+            {
+                try { await connection.CloseAsync(); }
+                catch { /* connection cleanup is best-effort */ }
+            }
         }
     }
 
