@@ -157,6 +157,18 @@ public static class AdminEndpoints
             {
                 var nodesForFts = await memory.ListAsync(includeSuperseded: false, ct: ct);
                 await using var db = await dbFactory.CreateDbContextAsync(ct);
+
+                // Load all observations in one batch so the rebuild matches the dual-write's
+                // combined searchable text (Content + observations), not just Content alone.
+                var allNodeIds = nodesForFts.Select(n => n.Id).ToList();
+                var observationsByNode = (await db.Observations
+                    .Where(o => allNodeIds.Contains(o.MemoryNodeId))
+                    .OrderBy(o => o.Id)
+                    .Select(o => new { o.MemoryNodeId, o.Content })
+                    .ToListAsync(ct))
+                    .GroupBy(o => o.MemoryNodeId)
+                    .ToDictionary(g => g.Key, g => g.Select(o => o.Content).ToList());
+
                 var connection = db.Database.GetDbConnection();
                 var openedByUs = connection.State != ConnectionState.Open;
                 if (openedByUs)
@@ -167,7 +179,10 @@ public static class AdminEndpoints
                     await MemoryFts.DeleteAllAsync(connection, tx, ct);
                     foreach (var node in nodesForFts)
                     {
-                        await MemoryFts.UpsertAsync(connection, tx, node.Id, node.Content, ct);
+                        var searchable = observationsByNode.TryGetValue(node.Id, out var obs) && obs.Count > 0
+                            ? node.Content + " " + string.Join(" ", obs)
+                            : node.Content;
+                        await MemoryFts.UpsertAsync(connection, tx, node.Id, searchable, ct);
                         ftsReindexed++;
                     }
 
@@ -184,9 +199,14 @@ public static class AdminEndpoints
                     }
                 }
             }
-            catch
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception ex)
             {
                 // Best-effort reconciler — never fail the reindex on an FTS rebuild error.
+                app.Logger.LogWarning(ex, "FTS rebuild failed during memory reindex.");
                 ftsReindexed = 0;
             }
 

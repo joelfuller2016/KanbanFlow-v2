@@ -55,16 +55,17 @@ public sealed class MemorySearchTests
     }
 
     // ── signal isolation: each weight surfaces a different winner ──────────────────────
-    private enum Signal { Vector, Keyword, Recency }
+    private enum Signal { Vector, Keyword, Recency, Usefulness }
 
     [Fact]
     public async Task Search_SignalIsolation_WeightsChangeWinner()
     {
         // Vector-heavy ⇒ the vector-nearest node wins; keyword-heavy ⇒ the keyword-exact node wins;
-        // recency-heavy ⇒ the most-recently-accessed node wins — three DIFFERENT rows.
+        // recency-heavy ⇒ the most-recently-accessed node wins; usefulness-heavy ⇒ the high-access node wins.
         await RunSignalScenario(new RetrievalOptions { VectorWeight = 1000 }, expectedWinner: Signal.Vector);
         await RunSignalScenario(new RetrievalOptions { KeywordWeight = 1000 }, expectedWinner: Signal.Keyword);
         await RunSignalScenario(new RetrievalOptions { RecencyWeight = 1000 }, expectedWinner: Signal.Recency);
+        await RunSignalScenario(new RetrievalOptions { UsefulnessWeight = 1000 }, expectedWinner: Signal.Usefulness);
     }
 
     private static async Task RunSignalScenario(RetrievalOptions weights, Signal expectedWinner)
@@ -75,29 +76,34 @@ public sealed class MemorySearchTests
 
         var queryVector = new[] { 1f, 0f, 0f }; // the query "apple" embeds to this
 
-        // V: vector-nearest (embedding == query), content has NO "apple", ancient.
+        // V: vector-nearest (embedding == query), content has NO "apple", ancient, low access.
         var vector = await CreateNode(svc, "1", "oranges lemons and grapefruit");
         await svc.SetEmbeddingAsync(vector, queryVector, null);
-        // K: keyword-exact ("apple"), embedding orthogonal to the query, ancient.
+        // K: keyword-exact ("apple"), embedding orthogonal to the query, ancient, low access.
         var keyword = await CreateNode(svc, "1", "apple pie and pastry");
         await svc.SetEmbeddingAsync(keyword, new[] { 0f, 1f, 0f }, null);
-        // R: most-recently-accessed, embedding orthogonal, content has NO "apple".
+        // R: most-recently-accessed, embedding orthogonal, content has NO "apple", low access.
         var recency = await CreateNode(svc, "1", "banana split dessert");
         await svc.SetEmbeddingAsync(recency, new[] { 0f, 0f, 1f }, null);
+        // U: high access count, ancient, embedding orthogonal, content has NO "apple".
+        var usefulness = await CreateNode(svc, "1", "pear tart filling");
+        await svc.SetEmbeddingAsync(usefulness, new[] { 0f, 1f, 1f }, null);
 
         var ancient = DateTime.UtcNow.AddHours(-1000);
         var fresh = DateTime.UtcNow;
         await SetStats(f, vector, ancient, ancient);
         await SetStats(f, keyword, ancient, ancient);
         await SetStats(f, recency, fresh, fresh);
+        await SetStats(f, usefulness, ancient, ancient, accessCount: 50);
 
         var search = NewSearch(f, EmbeddingReturning(queryVector));
-        var hits = await search.SearchAsync(MemoryScope.Project, "1", "apple", 3, weights);
+        var hits = await search.SearchAsync(MemoryScope.Project, "1", "apple", 4, weights);
 
         var expectedId = expectedWinner switch
         {
             Signal.Vector => vector,
             Signal.Keyword => keyword,
+            Signal.Usefulness => usefulness,
             _ => recency
         };
         Assert.Equal(expectedId, hits[0].Id);
@@ -314,6 +320,26 @@ public sealed class MemorySearchTests
         var hits = await search.SearchAsync(MemoryScope.Project, "2", "alpha", 10, new RetrievalOptions());
 
         Assert.Empty(hits);
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-1)]
+    public async Task Search_InvalidK_Throws(int k)
+    {
+        using var f = new SqliteTestFactory();
+        var search = NewSearch(f, EmbeddingDown());
+        await Assert.ThrowsAnyAsync<Exception>(() =>
+            search.SearchAsync(MemoryScope.Project, "1", "alpha", k, new RetrievalOptions()));
+    }
+
+    [Fact]
+    public async Task Search_BlankScopeKey_Throws()
+    {
+        using var f = new SqliteTestFactory();
+        var search = NewSearch(f, EmbeddingDown());
+        await Assert.ThrowsAnyAsync<Exception>(() =>
+            search.SearchAsync(MemoryScope.Project, "   ", "alpha", 10, new RetrievalOptions()));
     }
 
     [Fact]

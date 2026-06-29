@@ -40,7 +40,11 @@ public sealed partial class MemorySearch(
             throw new ValidationException("RecencyHalfLifeHours must be greater than zero.");
         if (opts.RrfK <= 0)
             throw new ValidationException("RrfK must be greater than zero.");
+        if (opts.VectorWeight < 0 || opts.KeywordWeight < 0 || opts.RecencyWeight < 0 || opts.UsefulnessWeight < 0)
+            throw new ValidationException("Signal weights cannot be negative.");
         var key = (scopeKey ?? string.Empty).Trim();
+        if (key.Length == 0)
+            throw new ValidationException("scopeKey must not be blank.");
         var now = DateTime.UtcNow;
 
         await using var db = await dbFactory.CreateDbContextAsync(ct);
@@ -87,7 +91,7 @@ public sealed partial class MemorySearch(
             foreach (var c in candidates)
             {
                 var ageHours = Math.Max(0, (now - (c.LastAccessedAt ?? c.CreatedAt)).TotalHours);
-                recencyScore[c.Id] = Math.Exp(-ageHours / opts.RecencyHalfLifeHours);
+                recencyScore[c.Id] = Math.Exp(-Math.Log(2) * ageHours / opts.RecencyHalfLifeHours);
                 usefulnessScore[c.Id] = Math.Log(1 + Math.Max(0, c.AccessCount));
             }
 
