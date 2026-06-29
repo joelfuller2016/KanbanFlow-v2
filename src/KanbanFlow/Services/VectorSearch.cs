@@ -96,6 +96,8 @@ public sealed class VectorSearch(IDbContextFactory<AppDbContext> dbFactory) : IV
         if (normA == 0 || normB == 0)
             return 0;
 
-        return dot / (normA * normB);
+        // Clamp to the documented VectorHit.Score range: FP rounding can nudge the quotient a
+        // hair outside [-1, 1] (e.g. 1.0000000000000002) (Gemini review, PR #256).
+        return Math.Clamp(dot / (normA * normB), -1.0, 1.0);
     }
 }

@@ -120,9 +120,10 @@ public static class AdminEndpoints
             foreach (var node in pending)
             {
                 var result = await embeddings.EmbedAsync(node.Content, ct);
-                if (!result.Ok)
+                if (!result.Ok || result.Vector is null || result.Vector.Length == 0)
                 {
-                    // ZeroRouter down/erroring: fail-soft (never thrown) — count and keep going.
+                    // ZeroRouter down/erroring, or a provider that reports Ok with a null/empty
+                    // vector: fail-soft (never thrown) — count and keep going (Gemini review, PR #256).
                     failed++;
                     continue;
                 }
