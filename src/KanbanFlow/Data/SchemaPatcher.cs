@@ -33,7 +33,10 @@ public static class SchemaPatcher
         }
         finally
         {
-            db.Database.CloseConnection();
+            // Best-effort cleanup: swallow a CloseConnection failure so it can't mask
+            // the real exception thrown by the patch batch above (Gemini review, PR #252).
+            try { db.Database.CloseConnection(); }
+            catch { /* connection cleanup is best-effort */ }
         }
     }
 
