@@ -356,6 +356,41 @@ public sealed class MemoryService(IDbContextFactory<AppDbContext> dbFactory) : I
         return relation;
     }
 
+    public async Task<MemoryNode> SetEmbeddingAsync(int id, float[] vector, string? actor, CancellationToken ct = default)
+    {
+        // A null vector is a caller bug (typed float[] contract); an empty vector is invalid input.
+        // Same split CreateNodeAsync uses: ArgumentNullException for null, ValidationException for empty.
+        ArgumentNullException.ThrowIfNull(vector);
+        if (vector.Length == 0)
+            throw new ValidationException("Embedding vector cannot be empty.");
+
+        await using var db = await dbFactory.CreateDbContextAsync(ct);
+        var node = await db.MemoryNodes.FirstOrDefaultAsync(m => m.Id == id, ct);
+        if (node is null)
+            throw new MemoryNodeNotFoundException(id);
+        // Embeddings attach only to the live row — a retired/superseded version is historical (mirrors
+        // AddObservation's guard). Re-embed the current version instead.
+        if (node.ValidTo is not null || node.SupersededById is not null)
+            throw new ValidationException($"Memory node {id} is superseded; set embeddings on the current version.");
+
+        var before = MemoryActivitySnapshot(node);
+
+        // Derived metadata — written in place (NOT a bi-temporal supersession). Pack via the shared
+        // codec so the layout matches what VectorSearch.Unpack reads back (#222).
+        node.EmbeddingBlob = EmbeddingCodec.Pack(vector);
+        node.EmbeddingDim = vector.Length;
+
+        // One MemoryEmbedded event in the same SaveChanges (atomic, like SupersedeAsync) — the #88
+        // single-audit-boundary rule the memory store inherits.
+        AddActivityEvent(
+            db, MemoryProjectId(node), "MemoryNode", node.Id, actor,
+            "MemoryEmbedded", before, MemoryActivitySnapshot(node),
+            $"Memory {node.Id} embedded ({vector.Length}-dim)");
+
+        await db.SaveChangesAsync(ct);
+        return node;
+    }
+
     /// <summary>Trim to null: blank strings become <c>null</c> for clean storage.</summary>
     private static string? Normalize(string? value) =>
         string.IsNullOrWhiteSpace(value) ? null : value.Trim();

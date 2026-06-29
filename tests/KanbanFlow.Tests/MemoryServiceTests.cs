@@ -670,6 +670,76 @@ public sealed class MemoryServiceTests
             () => svc.AddRelationAsync("MemoryNode", node.Id, "relates_to", "Task", 5, null));
     }
 
+    // ── SetEmbeddingAsync (#222) ────────────────────────────────────────────────────
+    [Fact]
+    public async Task SetEmbedding_PersistsBlobAndDim_AndEmitsMemoryEmbeddedEvent()
+    {
+        using var f = new SqliteTestFactory();
+        var svc = new MemoryService(f);
+        var node = await svc.CreateNodeAsync(
+            new MemoryNodeCreate(MemoryType.Semantic, MemoryScope.Project, "5", "embed me"), "author");
+
+        var vector = new[] { 0.25f, -0.5f, 0.75f, 1.5f };
+        var returned = await svc.SetEmbeddingAsync(node.Id, vector, "embedder");
+
+        // The current row is updated IN PLACE — same id back, no new bi-temporal version.
+        Assert.Equal(node.Id, returned.Id);
+        Assert.Null(returned.ValidTo);
+        Assert.Null(returned.SupersededById);
+        Assert.Equal(4, returned.EmbeddingDim);
+
+        using var db = f.CreateDbContext();
+        var persisted = await db.MemoryNodes.FindAsync(node.Id);
+        Assert.NotNull(persisted);
+        Assert.NotNull(persisted!.EmbeddingBlob);
+        Assert.Equal(4, persisted.EmbeddingDim);
+        // Round-trips through the shared codec exactly (the layout VectorSearch reads back).
+        Assert.Equal(vector, EmbeddingCodec.Unpack(persisted.EmbeddingBlob!));
+        // Still exactly one row total — embedding is not a supersession.
+        Assert.Equal(1, await db.MemoryNodes.CountAsync());
+
+        // Exactly one MemoryEmbedded event, attributed to the project scope id (5).
+        var ev = Assert.Single(NodeEvents(f, node.Id), e => e.EventType == "MemoryEmbedded");
+        Assert.Equal("MemoryNode", ev.EntityType);
+        Assert.Equal(node.Id, ev.EntityId);
+        Assert.Equal("embedder", ev.Actor);
+        Assert.Equal(5, ev.ProjectId);
+        Assert.NotNull(ev.BeforeJson);
+        Assert.NotNull(ev.AfterJson);
+    }
+
+    [Fact]
+    public async Task SetEmbedding_OnRetiredNode_Throws()
+    {
+        using var f = new SqliteTestFactory();
+        var svc = new MemoryService(f);
+        var node = await svc.CreateNodeAsync(new MemoryNodeCreate(MemoryType.Semantic, MemoryScope.Project, "1", "v1"), null);
+        await svc.SupersedeAsync(node.Id, null);
+
+        // A retired (ValidTo-stamped) row is historical — embeddings only attach to the live version.
+        await Assert.ThrowsAsync<ValidationException>(
+            () => svc.SetEmbeddingAsync(node.Id, new[] { 1f, 2f, 3f }, null));
+    }
+
+    [Fact]
+    public async Task SetEmbedding_MissingNode_Throws()
+    {
+        using var f = new SqliteTestFactory();
+        var svc = new MemoryService(f);
+        await Assert.ThrowsAsync<MemoryNodeNotFoundException>(
+            () => svc.SetEmbeddingAsync(404, new[] { 1f, 2f, 3f }, null));
+    }
+
+    [Fact]
+    public async Task SetEmbedding_EmptyVector_Throws()
+    {
+        using var f = new SqliteTestFactory();
+        var id = SeedNode(f);
+        var svc = new MemoryService(f);
+        await Assert.ThrowsAsync<ValidationException>(
+            () => svc.SetEmbeddingAsync(id, Array.Empty<float>(), null));
+    }
+
     // ── schema (SchemaPatcher / EnsureCreated) ──────────────────────────────────────
     [Fact]
     public void FreshDb_MemoryTablesAndIndexesExist()
