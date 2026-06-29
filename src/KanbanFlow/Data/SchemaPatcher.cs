@@ -122,6 +122,64 @@ public static class SchemaPatcher
         transaction.Commit();
     }
 
+    /// <summary>
+    /// Ensure the FTS5 keyword index <c>fts_memory</c> exists. No-op on non-SQLite providers. This is
+    /// a SQLite virtual table (FTS5, built into the pinned <c>SQLitePCLRaw.lib.e_sqlite3</c>, #214 — no
+    /// new dependency), so it is NOT part of <see cref="AppDbContext"/>.EnsureCreated()'s EF model and
+    /// must be patched in separately (alongside <see cref="EnsureMemoryTables(AppDbContext)"/>). Opens
+    /// and closes the context connection like the other startup patchers.
+    /// </summary>
+    public static void EnsureMemoryFtsTable(AppDbContext db)
+    {
+        ArgumentNullException.ThrowIfNull(db);
+
+        if (!db.Database.IsSqlite())
+            return;
+
+        db.Database.OpenConnection();
+        Exception? patchException = null;
+        try
+        {
+            EnsureMemoryFtsTable(db.Database.GetDbConnection());
+        }
+        catch (Exception ex)
+        {
+            patchException = ex;
+            throw;
+        }
+        finally
+        {
+            try
+            {
+                db.Database.CloseConnection();
+            }
+            catch when (patchException is not null)
+            {
+                // Preserve the patch failure; cleanup is best-effort only on failure path.
+            }
+        }
+    }
+
+    /// <summary>
+    /// Connection-level worker: creates the standalone FTS5 table <c>fts_memory(content)</c> against
+    /// an already-open connection. Public so tests can drive it directly against a raw SQLite
+    /// connection. Safe to call repeatedly (<c>IF NOT EXISTS</c>). The single <c>content</c> column is
+    /// indexed by <c>rowid</c>, which the dual-write (<see cref="Services.MemoryService"/>) and the
+    /// reconciler keep aligned 1:1 with <see cref="Models.MemoryNode.Id"/>. The <c>unicode61</c>
+    /// tokenizer with <c>remove_diacritics 2</c> gives accent-insensitive matching.
+    /// </summary>
+    public static void EnsureMemoryFtsTable(DbConnection connection)
+    {
+        ArgumentNullException.ThrowIfNull(connection);
+
+        using var transaction = connection.BeginTransaction();
+
+        Execute(connection, transaction,
+            "CREATE VIRTUAL TABLE IF NOT EXISTS fts_memory USING fts5(content, tokenize='unicode61 remove_diacritics 2')");
+
+        transaction.Commit();
+    }
+
     private static void Execute(DbConnection connection, DbTransaction transaction, string sql)
     {
         using var command = connection.CreateCommand();

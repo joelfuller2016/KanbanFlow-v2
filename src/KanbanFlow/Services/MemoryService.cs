@@ -2,6 +2,7 @@ using System.Text.Json;
 using KanbanFlow.Data;
 using KanbanFlow.Models;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Storage;
 
 namespace KanbanFlow.Services;
 
@@ -97,6 +98,10 @@ public sealed class MemoryService(IDbContextFactory<AppDbContext> dbFactory) : I
 
         db.MemoryNodes.Add(node);
         await db.SaveChangesAsync(ct);
+
+        // FTS dual-write (#223): index the new node's content for keyword recall. Additive and on the
+        // SAME connection + transaction as the insert, so it rolls back with the node on any failure.
+        await MemoryFts.UpsertAsync(db.Database.GetDbConnection(), tx.GetDbTransaction(), node.Id, node.Content, ct);
 
         AddActivityEvent(
             db, MemoryProjectId(node), "MemoryNode", node.Id, actor,
@@ -209,6 +214,11 @@ public sealed class MemoryService(IDbContextFactory<AppDbContext> dbFactory) : I
         db.MemoryNodes.Add(replacement);
         await db.SaveChangesAsync(ct);
 
+        // FTS dual-write (#223): index the NEW version's content under its new id. The prior row's FTS
+        // entry is deliberately left in place — it is filtered out at search time by the current-node
+        // candidate join, and (with IncludeSuperseded) keeps the historical content matchable.
+        await MemoryFts.UpsertAsync(db.Database.GetDbConnection(), tx.GetDbTransaction(), replacement.Id, replacement.Content, ct);
+
         current.ValidTo = now;
         current.SupersededById = replacement.Id;
 
@@ -279,6 +289,19 @@ public sealed class MemoryService(IDbContextFactory<AppDbContext> dbFactory) : I
 
         db.Observations.Add(observation);
         await db.SaveChangesAsync(ct);
+
+        // FTS dual-write (#223): an observation enriches the parent node's searchable text without
+        // superseding it, so recompute the node's FTS content as its own Content plus every
+        // observation's content (the just-added one is now persisted in this transaction) and upsert it.
+        var observationContents = await db.Observations
+            .Where(o => o.MemoryNodeId == nodeId)
+            .OrderBy(o => o.Id)
+            .Select(o => o.Content)
+            .ToListAsync(ct);
+        var combined = observationContents.Count == 0
+            ? node.Content
+            : node.Content + " " + string.Join(" ", observationContents);
+        await MemoryFts.UpsertAsync(db.Database.GetDbConnection(), tx.GetDbTransaction(), node.Id, combined, ct);
 
         AddActivityEvent(
             db, MemoryProjectId(node), "MemoryNode", node.Id, actor,

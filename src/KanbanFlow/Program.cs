@@ -37,6 +37,10 @@ builder.Services.AddScoped<IMemoryService, MemoryService>();
 // cosine is computed in C# over the tiny current-node corpus. Same IDbContextFactory pattern as the
 // memory store; #223 fuses it with FTS5 + RRF.
 builder.Services.AddScoped<IVectorSearch, VectorSearch>();
+// Hybrid memory retrieval (#223): fuses FTS5 BM25 + the brute-force cosine IVectorSearch + recency +
+// usefulness via Reciprocal Rank Fusion. Still NO sqlite-vec/vec0/SK connector — FTS5 ships with the
+// pinned e_sqlite3 (#214). Same IDbContextFactory pattern; consumed by the memory MCP/REST surface (#224).
+builder.Services.AddScoped<IMemorySearch, MemorySearch>();
 
 // Real process start time, captured once at app boot. Construct eagerly so the
 // timestamp captured by AppStartupInfo's constructor is the boot time, not the
@@ -127,6 +131,7 @@ using (var scope = app.Services.CreateScope())
     EnsureActivityEventTable(db);
     EnsureIdeaTable(db);
     SchemaPatcher.EnsureMemoryTables(db);
+    SchemaPatcher.EnsureMemoryFtsTable(db);
     SeedData.Initialize(db);
 }
 

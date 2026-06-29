@@ -1,5 +1,8 @@
+using System.Data;
 using System.Diagnostics;
+using KanbanFlow.Data;
 using KanbanFlow.Services;
+using Microsoft.EntityFrameworkCore;
 
 namespace KanbanFlow;
 
@@ -102,9 +105,12 @@ public static class AdminEndpoints
         // MemoryEmbedded audit event per node, #88). Fail-soft like embed-ping: when ZeroRouter is
         // down each embed returns ok:false and is counted as failed — the batch never crashes. A node
         // superseded/deleted mid-run is counted as skipped. No auth by charter (open-access). Returns
-        // a per-run tally { embedded, skipped, failed, model }.
+        // a per-run tally { embedded, skipped, failed, ftsReindexed, model }. After re-embedding it
+        // also rebuilds the FTS5 keyword index (#223) from the current nodes — the reconciler that
+        // self-heals any missed dual-write — fail-soft so an FTS hiccup never fails the reindex.
         app.MapPost("/api/admin/memory/reindex", async (
-            bool? force, IEmbeddingService embeddings, IMemoryService memory, EmbeddingOptions options, CancellationToken ct) =>
+            bool? force, IEmbeddingService embeddings, IMemoryService memory, EmbeddingOptions options,
+            IDbContextFactory<AppDbContext> dbFactory, CancellationToken ct) =>
         {
             var reembedAll = force ?? false;
 
@@ -143,7 +149,68 @@ public static class AdminEndpoints
                 }
             }
 
-            return Results.Ok(new { embedded, skipped, failed, model = options.Model });
+            // FTS reconciler (#223): rebuild fts_memory from the current nodes (DELETE all, re-INSERT
+            // each), so a dual-write that was ever missed self-heals. Best-effort: a rebuild failure is
+            // swallowed and reported as 0 reindexed rather than failing the whole reindex.
+            var ftsReindexed = 0;
+            try
+            {
+                var nodesForFts = await memory.ListAsync(includeSuperseded: false, ct: ct);
+                await using var db = await dbFactory.CreateDbContextAsync(ct);
+
+                // Load all observations in one batch so the rebuild matches the dual-write's
+                // combined searchable text (Content + observations), not just Content alone.
+                var allNodeIds = nodesForFts.Select(n => n.Id).ToList();
+                var observationsByNode = (await db.Observations
+                    .Where(o => allNodeIds.Contains(o.MemoryNodeId))
+                    .OrderBy(o => o.Id)
+                    .Select(o => new { o.MemoryNodeId, o.Content })
+                    .ToListAsync(ct))
+                    .GroupBy(o => o.MemoryNodeId)
+                    .ToDictionary(g => g.Key, g => g.Select(o => o.Content).ToList());
+
+                var connection = db.Database.GetDbConnection();
+                var openedByUs = connection.State != ConnectionState.Open;
+                if (openedByUs)
+                    await connection.OpenAsync(ct);
+                try
+                {
+                    await using var tx = await connection.BeginTransactionAsync(ct);
+                    await MemoryFts.DeleteAllAsync(connection, tx, ct);
+                    foreach (var node in nodesForFts)
+                    {
+                        var searchable = observationsByNode.TryGetValue(node.Id, out var obs) && obs.Count > 0
+                            ? node.Content + " " + string.Join(" ", obs)
+                            : node.Content;
+                        await MemoryFts.UpsertAsync(connection, tx, node.Id, searchable, ct);
+                        ftsReindexed++;
+                    }
+
+                    await tx.CommitAsync(ct);
+                }
+                finally
+                {
+                    // Best-effort close so a cleanup failure can't mask the FTS-rebuild error
+                    // (Gemini review, PR #257). CloseAsync() is parameterless — no CancellationToken.
+                    if (openedByUs)
+                    {
+                        try { await connection.CloseAsync(); }
+                        catch { /* connection cleanup is best-effort */ }
+                    }
+                }
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                // Best-effort reconciler — never fail the reindex on an FTS rebuild error.
+                app.Logger.LogWarning(ex, "FTS rebuild failed during memory reindex.");
+                ftsReindexed = 0;
+            }
+
+            return Results.Ok(new { embedded, skipped, failed, ftsReindexed, model = options.Model });
         });
 
         return app;

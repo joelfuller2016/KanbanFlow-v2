@@ -30,6 +30,13 @@ public sealed class SqliteTestFactory : IDbContextFactory<AppDbContext>, IDispos
 
         using var ctx = new AppDbContext(_options);
         ctx.Database.EnsureCreated();
+
+        // EnsureCreated() builds the EF-modeled tables, but the FTS5 keyword index (#223) is a virtual
+        // table outside the EF model — create it on the shared open connection (the same code path
+        // Program.cs runs at startup) so MemoryService's dual-write and MemorySearch have a table to
+        // hit. Use the DbConnection overload directly on the already-open connection (the AppDbContext
+        // overload would open/close via EF, and closing this in-memory connection would drop the DB).
+        SchemaPatcher.EnsureMemoryFtsTable(_connection);
     }
 
     public AppDbContext CreateDbContext() => new(_options);
