@@ -31,12 +31,15 @@ public sealed class EmbeddingService : IEmbeddingService
     private readonly ILogger<EmbeddingService> _logger;
     private readonly EmbeddingGenerationOptions? _generationOptions;
 
-    // Bounded, thread-safe content-hash → vector cache. The dictionary keeps reads lock-free on the
-    // hot path; the parallel queue records insertion order so we can trim oldest-first once the
-    // dictionary exceeds capacity, giving a hard memory bound under a stream of distinct text. An
-    // approximate FIFO (not strict LRU) is plenty for this single-user local tool: a key re-added
-    // after eviction may be dropped a little early, which only costs one recompute, never correctness.
-    private readonly ConcurrentDictionary<string, float[]> _cache = new(StringComparer.Ordinal);
+    // Bounded, thread-safe content-hash → (vector + provider-reported model) cache. The dictionary
+    // keeps reads lock-free on the hot path; the parallel queue records insertion order so we can
+    // trim oldest-first once the dictionary exceeds capacity, giving a hard memory bound under a
+    // stream of distinct text. An approximate FIFO (not strict LRU) is plenty for this single-user
+    // local tool: a key re-added after eviction may be dropped a little early, which only costs one
+    // recompute, never correctness. The cached array is owned by the cache and never handed out —
+    // every read returns a defensive copy (see Clone), so a caller mutating EmbedResult.Vector can
+    // never poison a future hit.
+    private readonly ConcurrentDictionary<string, CacheEntry> _cache = new(StringComparer.Ordinal);
     private readonly ConcurrentQueue<string> _insertionOrder = new();
     private readonly int _capacity;
 
@@ -94,15 +97,17 @@ public sealed class EmbeddingService : IEmbeddingService
 
         var key = CacheKey(text);
         if (_cache.TryGetValue(key, out var cached))
-            return EmbedResult.Success(cached, _config.Model);
+            // Return the provider-reported model the hit was stored with (consistent with a fresh
+            // result) and a defensive copy so the caller can't mutate the cached array.
+            return EmbedResult.Success(Clone(cached.Vector), cached.Model);
 
         var outcome = await GenerateAsync(new[] { text }, ct).ConfigureAwait(false);
         if (!outcome.Ok)
             return EmbedResult.Failure(outcome.Error!, outcome.Model);
 
         var vector = outcome.Vectors![0];
-        CacheStore(key, vector);
-        return EmbedResult.Success(vector, outcome.Model);
+        CacheStore(key, vector, outcome.Model);
+        return EmbedResult.Success(Clone(vector), outcome.Model);
     }
 
     /// <inheritdoc />
@@ -113,35 +118,51 @@ public sealed class EmbeddingService : IEmbeddingService
         if (texts.Count == 0)
             return Array.Empty<EmbedResult>();
 
-        // Per-input cache keys. Validate up-front so a null element fails fast (a null in a typed
-        // string batch is a caller bug); blank/whitespace entries are passed through to the provider
-        // unchanged (one bad entry must not nuke the whole batch — the batch path favors resilience).
+        // One result slot per input, filled deterministically so every index gets a defined result
+        // regardless of concurrent cache eviction (#251 F1). Slots are populated three ways below: a
+        // blank short-circuit, an early-captured cache hit, or this run's fresh/failed embeddings.
+        var results = new EmbedResult?[texts.Count];
         var keys = new string[texts.Count];
+        var missTextByKey = new Dictionary<string, string>(StringComparer.Ordinal);
+        var missOrder = new List<string>();
+
+        // Classify every input up-front, before any provider call:
+        //   • null element → caller bug (a null in a typed string batch) → fail fast.
+        //   • blank/space  → fail soft locally and DO NOT send it to the provider (#251 F3): a 4xx on
+        //                    one blank would otherwise sink the whole chunk and its batch-mates.
+        //   • cache hit    → capture its vector + model NOW (defensive copy), so a later eviction
+        //                    can't leave a hole or return a wrong value (#251 F1/F2/F4).
+        //   • otherwise    → a miss, deduped by key in first-seen order (embedded exactly once).
         for (var i = 0; i < texts.Count; i++)
         {
             var text = texts[i];
             if (text is null)
                 throw new ArgumentException($"Batch element [{i}] is null.", nameof(texts));
-            keys[i] = CacheKey(text);
-        }
 
-        // Collect distinct cache misses, preserving first-seen order and deduped by key, so identical
-        // text is embedded exactly once and already-cached text triggers no provider call.
-        var missTextByKey = new Dictionary<string, string>(StringComparer.Ordinal);
-        var missOrder = new List<string>();
-        for (var i = 0; i < texts.Count; i++)
-        {
-            var key = keys[i];
-            if (_cache.ContainsKey(key) || missTextByKey.ContainsKey(key))
+            if (string.IsNullOrWhiteSpace(text))
+            {
+                results[i] = EmbedResult.Failure("Cannot embed empty or whitespace input.", _config.Model);
                 continue;
-            missTextByKey[key] = texts[i];
-            missOrder.Add(key);
+            }
+
+            var key = CacheKey(text);
+            keys[i] = key;
+            if (_cache.TryGetValue(key, out var hit))
+            {
+                results[i] = EmbedResult.Success(Clone(hit.Vector), hit.Model);
+                continue;
+            }
+
+            if (missTextByKey.TryAdd(key, text))
+                missOrder.Add(key);
         }
 
         // Embed the misses in provider-safe chunks. A chunk that fails (after its retry) fails soft:
-        // its keys get an error and are NOT cached, while successful chunks + cache hits are unaffected.
+        // its keys get an error and are NOT cached, while successful chunks + captured hits are
+        // unaffected. Capture each fresh (vector, model) here keyed by content hash; we assemble from
+        // THIS run's results, never by re-reading the cache, so eviction can't fake a failure (F1).
+        var freshByKey = new Dictionary<string, CacheEntry>(StringComparer.Ordinal);
         var errorByKey = new Dictionary<string, string>(StringComparer.Ordinal);
-        var modelByKey = new Dictionary<string, string>(StringComparer.Ordinal);
         for (var start = 0; start < missOrder.Count; start += _config.MaxBatchSize)
         {
             var chunkKeys = missOrder.GetRange(start, Math.Min(_config.MaxBatchSize, missOrder.Count - start));
@@ -154,8 +175,9 @@ public sealed class EmbeddingService : IEmbeddingService
             {
                 for (var j = 0; j < chunkKeys.Count; j++)
                 {
-                    CacheStore(chunkKeys[j], outcome.Vectors![j]);
-                    modelByKey[chunkKeys[j]] = outcome.Model;
+                    var vector = outcome.Vectors![j];
+                    CacheStore(chunkKeys[j], vector, outcome.Model);
+                    freshByKey[chunkKeys[j]] = new CacheEntry(vector, outcome.Model);
                 }
             }
             else
@@ -165,18 +187,19 @@ public sealed class EmbeddingService : IEmbeddingService
             }
         }
 
-        // Assemble results in input order. Every input is now a cache hit (pre-existing or just
-        // stored) or belongs to a failed chunk.
-        var results = new EmbedResult[texts.Count];
+        // Fill the remaining (miss) slots from this run's results — a fresh success (defensive copy)
+        // or the typed chunk error. Blank short-circuits and captured hits are already populated.
         for (var i = 0; i < texts.Count; i++)
         {
+            if (results[i] is not null)
+                continue;
+
             var key = keys[i];
-            if (_cache.TryGetValue(key, out var vector))
-                results[i] = EmbedResult.Success(vector, modelByKey.GetValueOrDefault(key) ?? _config.Model);
-            else
-                results[i] = EmbedResult.Failure(errorByKey.GetValueOrDefault(key) ?? "Embedding failed.", _config.Model);
+            results[i] = freshByKey.TryGetValue(key, out var fresh)
+                ? EmbedResult.Success(Clone(fresh.Vector), fresh.Model)
+                : EmbedResult.Failure(errorByKey.GetValueOrDefault(key) ?? "Embedding failed.", _config.Model);
         }
-        return results;
+        return results!;
     }
 
     /// <summary>
@@ -256,16 +279,23 @@ public sealed class EmbeddingService : IEmbeddingService
         return Convert.ToHexString(SHA256.HashData(payload));
     }
 
-    private void CacheStore(string key, float[] vector)
+    private void CacheStore(string key, float[] vector, string model)
     {
         // First writer wins; a concurrent duplicate add is a no-op (the vector is identical for the
-        // same key anyway). Only a genuinely new key advances the eviction queue + count.
-        if (!_cache.TryAdd(key, vector))
+        // same key anyway). Only a genuinely new key advances the eviction queue + count. The cache
+        // takes ownership of `vector` — callers always receive a Clone, never this instance.
+        if (!_cache.TryAdd(key, new CacheEntry(vector, model)))
             return;
         _insertionOrder.Enqueue(key);
         while (_cache.Count > _capacity && _insertionOrder.TryDequeue(out var oldest))
             _cache.TryRemove(oldest, out _);
     }
+
+    /// <summary>
+    /// Defensive copy of a cached vector so a caller mutating <see cref="EmbedResult.Vector"/> can
+    /// never poison the array the cache holds (and therefore the next hit) (#251 F4).
+    /// </summary>
+    private static float[] Clone(float[] vector) => (float[])vector.Clone();
 
     /// <summary>
     /// Transient = worth a single retry: a request timeout, a raw transport exception, or a 5xx from
@@ -299,6 +329,13 @@ public sealed class EmbeddingService : IEmbeddingService
     /// </summary>
     private static Exception Unwrap(Exception ex) =>
         ex is AggregateException ae ? ae.Flatten().InnerException ?? ae : ex;
+
+    /// <summary>
+    /// A cached embedding: the vector plus the model the provider reported when it was produced, so a
+    /// cache hit returns the same model a fresh result would (#251 F2). The vector is owned by the
+    /// cache; reads hand out a <see cref="Clone(float[])"/>, never this instance (#251 F4).
+    /// </summary>
+    private readonly record struct CacheEntry(float[] Vector, string Model);
 
     /// <summary>Internal outcome of a single provider call: aligned vectors on success, or a typed error.</summary>
     private readonly record struct GenerateOutcome(bool Ok, float[][]? Vectors, string Model, string? Error)

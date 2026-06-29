@@ -27,7 +27,9 @@ public interface IEmbeddingService
     /// count). Duplicate texts within the batch are embedded once; already-cached texts issue no
     /// provider call; the remaining misses go out in provider-safe chunks. A provider failure fails
     /// only the affected items soft (<see cref="EmbedResult.Ok"/> = <c>false</c>) — cache hits and
-    /// other chunks still succeed — and never throws.
+    /// other chunks still succeed — and never throws. A <c>null</c> element throws (a typed-batch
+    /// caller bug); a blank/whitespace element fails soft locally and is never sent to the provider,
+    /// so one bad entry cannot sink its batch-mates.
     /// </summary>
     Task<IReadOnlyList<EmbedResult>> EmbedBatchAsync(IReadOnlyList<string> texts, CancellationToken ct = default);
 }

@@ -96,6 +96,51 @@ public sealed class EmbeddingServiceTests
         Assert.Equal(4, fake.CallCount);
     }
 
+    [Fact]
+    public async Task EmbedAsync_CacheHit_ReturnsProviderReportedModel_NotConfiguredModel()
+    {
+        // The provider reports a model id ("m-reported") that differs from the configured/requested
+        // model. A fresh result already surfaces the reported model; #251 F2: a cache HIT must too,
+        // not fall back to _config.Model.
+        const string reported = "m-reported";
+        var fake = new FakeEmbeddingGenerator((inputs, _, _) => Task.FromResult(
+            new GeneratedEmbeddings<Embedding<float>>(
+                inputs.Select(t => new Embedding<float>(new[] { (float)t.Length }) { ModelId = reported }))));
+        var service = NewService(fake, new EmbeddingOptions { Model = "configured-model", TimeoutMs = 5_000 });
+
+        var miss = await service.EmbedAsync("text", CancellationToken.None); // fresh ⇒ provider model
+        var hit = await service.EmbedAsync("text", CancellationToken.None);  // served from cache
+
+        Assert.Equal(1, fake.CallCount);          // second call hit the cache (no provider call)
+        Assert.Equal(reported, miss.Model);       // fresh result reports the provider's model
+        Assert.Equal(reported, hit.Model);        // F2: cache hit is consistent with the fresh result
+        Assert.NotEqual("configured-model", hit.Model);
+    }
+
+    [Fact]
+    public async Task EmbedAsync_CacheHit_ReturnsDefensiveCopy_NotSharedWithCache()
+    {
+        // #251 F4: a cache hit must hand back a COPY of the cached vector. Two hits return distinct
+        // array instances, and mutating one must not poison the cached value seen by the next hit.
+        var fake = new FakeEmbeddingGenerator((inputs, _, _) => CannedBatch(inputs));
+        var service = NewService(fake);
+
+        await service.EmbedAsync("dup", CancellationToken.None);            // prime (miss ⇒ store)
+        var hit1 = await service.EmbedAsync("dup", CancellationToken.None); // cache hit #1
+        var hit2 = await service.EmbedAsync("dup", CancellationToken.None); // cache hit #2
+
+        Assert.True(hit1.Ok);
+        Assert.True(hit2.Ok);
+        Assert.NotSame(hit1.Vector, hit2.Vector); // each hit gets its own array instance...
+        Assert.Equal(hit1.Vector, hit2.Vector);   // ...equal by value
+
+        hit1.Vector[0] = -999f;                    // a caller poisoning the array it received
+
+        var hit3 = await service.EmbedAsync("dup", CancellationToken.None);
+        Assert.Equal(new[] { 3f, 'd', 3.5f }, hit3.Vector); // "dup".Length=3, 'd'=100 — cache intact
+        Assert.Equal(1, fake.CallCount);           // every repeat served from cache (one provider call)
+    }
+
     // ── batch: dedup + cache + order ─────────────────────────────────────────────────
     [Fact]
     public async Task EmbedBatchAsync_DedupesAndEmbedsOnlyDistinctMisses()
@@ -267,6 +312,48 @@ public sealed class EmbeddingServiceTests
         Assert.Equal(3, results[0].Dimensions);
         Assert.False(results[1].Ok);           // "b" failed soft
         Assert.Contains("boom for b", results[1].Error);
+    }
+
+    [Fact]
+    public async Task EmbedBatchAsync_CacheHitCapturedEarly_SurvivesConcurrentEviction()
+    {
+        // #251 F1: an item that is a cache HIT when the batch starts must still return its real
+        // vector even if the batch's own stores evict it (TOCTOU). Capacity 1 ⇒ embedding the two
+        // misses evicts the primed "a" before results are assembled; the early capture must hold.
+        var fake = new FakeEmbeddingGenerator((inputs, _, _) => CannedBatch(inputs));
+        var service = NewService(fake, capacity: 1);
+
+        var primed = await service.EmbedAsync("a", CancellationToken.None); // "a" is the sole cache entry
+        Assert.True(primed.Ok);
+
+        var results = await service.EmbedBatchAsync(new[] { "a", "b", "c" }, CancellationToken.None);
+
+        Assert.Equal(3, results.Count);
+        Assert.All(results, r => Assert.True(r.Ok));      // none degraded into a spurious failure
+        Assert.Equal(primed.Vector, results[0].Vector);   // "a" returned its real (early-captured) vector
+        Assert.Equal(new[] { 1f, 'a', 3.5f }, results[0].Vector); // "a".Length=1, 'a'=97
+    }
+
+    [Fact]
+    public async Task EmbedBatchAsync_BlankEntry_FailsSoftLocally_OnlyValidsGoToProvider()
+    {
+        // #251 F3: a blank/whitespace entry must NOT be sent to the provider (a 4xx on it would sink
+        // the whole chunk). It fails soft locally with a clear error (not a zero vector), while the
+        // valid entries embed normally in a single provider call.
+        var fake = new FakeEmbeddingGenerator((inputs, _, _) => CannedBatch(inputs));
+        var service = NewService(fake);
+
+        var results = await service.EmbedBatchAsync(new[] { "alpha", "   ", "beta" }, CancellationToken.None);
+
+        Assert.Equal(3, results.Count);
+        Assert.True(results[0].Ok);                  // valid ⇒ embedded
+        Assert.True(results[2].Ok);                  // valid ⇒ embedded
+        Assert.False(results[1].Ok);                 // blank ⇒ fail soft, no provider call
+        Assert.Empty(results[1].Vector);             // NOT a (semantically wrong) zero vector
+        Assert.Equal(0, results[1].Dimensions);
+        Assert.False(string.IsNullOrWhiteSpace(results[1].Error));
+        Assert.Equal(1, fake.CallCount);             // a single provider call...
+        Assert.Equal(new[] { "alpha", "beta" }, fake.LastRequested); // ...for only the two valid texts
     }
 
     // ── input guards ─────────────────────────────────────────────────────────────────
