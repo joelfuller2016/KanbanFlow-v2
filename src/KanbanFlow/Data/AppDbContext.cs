@@ -17,6 +17,9 @@ public class AppDbContext : DbContext
     public DbSet<TaskDependency> TaskDependencies => Set<TaskDependency>();
     public DbSet<ActivityEvent> ActivityEvents => Set<ActivityEvent>();
     public DbSet<Idea> Ideas => Set<Idea>();
+    public DbSet<MemoryNode> MemoryNodes => Set<MemoryNode>();
+    public DbSet<Observation> Observations => Set<Observation>();
+    public DbSet<MemoryRelation> MemoryRelations => Set<MemoryRelation>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -83,6 +86,31 @@ public class AppDbContext : DbContext
             // EF auto-indexes FK columns, but declare it explicitly so the model is
             // self-documenting and matches the EnsureIdeaTable patcher (IX_Ideas_PromotedProjectId).
             e.HasIndex(i => i.PromotedProjectId);
+        });
+
+        modelBuilder.Entity<MemoryNode>(e =>
+        {
+            // SupersededById is left a plain scalar (no self-FK) so a bi-temporal supersede
+            // never risks a cascade on the prior row.
+            // Primary recall path: filter by scope + scope key + type.
+            e.HasIndex(m => new { m.Scope, m.ScopeKey, m.Type });
+            // Walk the supersession chain / find replaced versions.
+            e.HasIndex(m => m.SupersededById);
+        });
+
+        modelBuilder.Entity<Observation>(e =>
+        {
+            // Detail rows cascade with their parent memory node.
+            e.HasOne(o => o.MemoryNode).WithMany().HasForeignKey(o => o.MemoryNodeId).OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<MemoryRelation>(e =>
+        {
+            // No-FK discriminator edges (FromType/FromId → ToType/ToId), like ActivityEvent's audit
+            // rows: an edge can point at memory nodes or existing card ids without cascade coupling.
+            // Index both endpoints so edges are queryable from either side.
+            e.HasIndex(r => new { r.FromType, r.FromId });
+            e.HasIndex(r => new { r.ToType, r.ToId });
         });
     }
 }
