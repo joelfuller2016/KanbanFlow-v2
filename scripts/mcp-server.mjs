@@ -7,7 +7,13 @@ const parsedRestTimeoutMs = Number.parseInt(process.env.KANBANFLOW_MCP_TIMEOUT_M
 const restTimeoutMs = Number.isFinite(parsedRestTimeoutMs) && parsedRestTimeoutMs >= minRestTimeoutMs
   ? parsedRestTimeoutMs
   : defaultRestTimeoutMs;
+// Two independent protocol hops, deliberately versioned separately (PR #259 review):
+// - protocolVersion is what THIS stdio wrapper speaks to its client (the widely-supported
+//   2024-11-05 revision the wrapper's handlers implement).
+// - nativeProtocolVersion is the header sent on the HTTP hop to the app's native /mcp server
+//   (the revision the ModelContextProtocol.AspNetCore 1.4 SDK negotiates).
 const protocolVersion = "2024-11-05";
+const nativeProtocolVersion = "2025-06-18";
 let inputBuffer = Buffer.alloc(0);
 
 const tools = [
@@ -589,6 +595,184 @@ const tools = [
       },
       required: ["ideaId"]
     }
+  },
+
+  // ── Knowledge-graph memory tools (#224) — official MCP memory server contract ──
+  // These proxy to the NATIVE MCP server at POST {API}/mcp (stateless Streamable HTTP) rather
+  // than a REST route: the knowledge-graph semantics (name resolution, dupe skipping, cascade)
+  // live in the native tools, and forwarding keeps one source of truth. Shapes match
+  // modelcontextprotocol/servers src/memory exactly; scopeKey/actor are optional extensions.
+
+  {
+    name: "create_entities",
+    description: "Create multiple new entities in the knowledge-graph memory. Entities whose name already exists are ignored; returns only the newly created entities.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        entities: {
+          type: "array",
+          description: "Entities to create.",
+          items: {
+            type: "object",
+            properties: {
+              name: { type: "string", description: "Unique entity name (identity text)." },
+              entityType: { type: "string", description: "Free-form entity type label (e.g. 'person', 'project')." },
+              observations: { type: "array", items: { type: "string" }, description: "Optional atomic facts about the entity." }
+            },
+            required: ["name", "entityType"]
+          }
+        },
+        scopeKey: { type: "string", description: "Optional memory namespace key (default 'knowledge-graph')." },
+        actor: { type: "string", description: "Optional actor label recorded in the audit trail." }
+      },
+      required: ["entities"]
+    }
+  },
+  {
+    name: "create_relations",
+    description: "Create multiple new relations between existing knowledge-graph entities (directed, active voice). Exact duplicates are skipped; errors if a referenced entity does not exist.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        relations: {
+          type: "array",
+          description: "Relations to create.",
+          items: {
+            type: "object",
+            properties: {
+              from: { type: "string", description: "Source entity name." },
+              to: { type: "string", description: "Target entity name." },
+              relationType: { type: "string", description: "Active-voice relation verb (e.g. 'works_at')." }
+            },
+            required: ["from", "to", "relationType"]
+          }
+        },
+        scopeKey: { type: "string", description: "Optional memory namespace key (default 'knowledge-graph')." },
+        actor: { type: "string", description: "Optional actor label recorded in the audit trail." }
+      },
+      required: ["relations"]
+    }
+  },
+  {
+    name: "add_observations",
+    description: "Add new observations to existing knowledge-graph entities. Already-present observations are skipped; returns the observations actually added per entity. Errors if an entity does not exist.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        observations: {
+          type: "array",
+          description: "Additions per entity.",
+          items: {
+            type: "object",
+            properties: {
+              entityName: { type: "string", description: "Name of the entity to add observations to." },
+              contents: { type: "array", items: { type: "string" }, description: "Observation strings to add." }
+            },
+            required: ["entityName", "contents"]
+          }
+        },
+        scopeKey: { type: "string", description: "Optional memory namespace key (default 'knowledge-graph')." },
+        actor: { type: "string", description: "Optional actor label recorded in the audit trail." }
+      },
+      required: ["observations"]
+    }
+  },
+  {
+    name: "delete_entities",
+    description: "Delete entities from the knowledge-graph memory by name, cascading their relations. Missing names are silently skipped. Deletion is a soft-supersede — audit history remains.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        entityNames: { type: "array", items: { type: "string" }, description: "Names of the entities to delete." },
+        scopeKey: { type: "string", description: "Optional memory namespace key (default 'knowledge-graph')." },
+        actor: { type: "string", description: "Optional actor label recorded in the audit trail." }
+      },
+      required: ["entityNames"]
+    }
+  },
+  {
+    name: "delete_observations",
+    description: "Delete specific observations from knowledge-graph entities. Missing entities or observations are silently skipped.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        deletions: {
+          type: "array",
+          description: "Deletions per entity.",
+          items: {
+            type: "object",
+            properties: {
+              entityName: { type: "string", description: "Name of the entity to delete observations from." },
+              observations: { type: "array", items: { type: "string" }, description: "Observation strings to remove." }
+            },
+            required: ["entityName", "observations"]
+          }
+        },
+        scopeKey: { type: "string", description: "Optional memory namespace key (default 'knowledge-graph')." },
+        actor: { type: "string", description: "Optional actor label recorded in the audit trail." }
+      },
+      required: ["deletions"]
+    }
+  },
+  {
+    name: "delete_relations",
+    description: "Delete relations from the knowledge-graph memory (matched exactly). Missing relations or entities are silently skipped.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        relations: {
+          type: "array",
+          description: "Relations to delete.",
+          items: {
+            type: "object",
+            properties: {
+              from: { type: "string", description: "Source entity name." },
+              to: { type: "string", description: "Target entity name." },
+              relationType: { type: "string", description: "Relation verb to match." }
+            },
+            required: ["from", "to", "relationType"]
+          }
+        },
+        scopeKey: { type: "string", description: "Optional memory namespace key (default 'knowledge-graph')." },
+        actor: { type: "string", description: "Optional actor label recorded in the audit trail." }
+      },
+      required: ["relations"]
+    }
+  },
+  {
+    name: "read_graph",
+    description: "Read the entire knowledge-graph memory: every current entity and the relations between them (capped at the first 1000 entities).",
+    inputSchema: {
+      type: "object",
+      properties: {
+        scopeKey: { type: "string", description: "Optional memory namespace key (default 'knowledge-graph')." }
+      }
+    }
+  },
+  {
+    name: "search_nodes",
+    description: "Search the knowledge-graph memory (hybrid semantic + keyword retrieval; degrades to keyword when embeddings are unavailable). Returns matching entities plus only the relations between them.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        query: { type: "string", description: "Free-text query; matches names, types, and observations." },
+        k: { type: "integer", minimum: 1, maximum: 100, description: "Optional max entities to return (default 10)." },
+        scopeKey: { type: "string", description: "Optional memory namespace key (default 'knowledge-graph')." }
+      },
+      required: ["query"]
+    }
+  },
+  {
+    name: "open_nodes",
+    description: "Open specific knowledge-graph entities by name: returns those entities plus only the relations between them. Missing names are silently skipped.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        names: { type: "array", items: { type: "string" }, description: "Names of the entities to open." },
+        scopeKey: { type: "string", description: "Optional memory namespace key (default 'knowledge-graph')." }
+      },
+      required: ["names"]
+    }
   }
 ];
 
@@ -1040,9 +1224,123 @@ async function callTool(toolName, args) {
         body: { actor: optionalString(args, "actor") }
       });
 
+    // ── Knowledge-graph memory tools (#224) — forwarded to the native MCP server ──
+    // The graph semantics live in the native tools; the wrapper forwards the call verbatim so
+    // stdio clients get exactly the same behavior (single source of truth, no drift).
+
+    case "create_entities":
+    case "create_relations":
+    case "add_observations":
+    case "delete_entities":
+    case "delete_observations":
+    case "delete_relations":
+    case "read_graph":
+    case "search_nodes":
+    case "open_nodes":
+      return nativeMcpToolCall(toolName, args);
+
     default:
       throw new McpError(-32601, `Unknown tool: ${toolName}`);
   }
+}
+
+// ── Native MCP forwarding (#224) ─────────────────────────────────────
+// POST a single JSON-RPC tools/call to the app's native Streamable HTTP MCP endpoint (/mcp).
+// The native server runs stateless (Program.cs), so no initialize handshake or session id is
+// needed. The response may be plain JSON or a text/event-stream frame — both are handled.
+
+let nativeMcpNextId = 1;
+
+async function nativeMcpToolCall(toolName, args) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), restTimeoutMs);
+  const requestId = nativeMcpNextId++;
+
+  let response;
+  let text;
+  try {
+    response = await fetch(`${apiBaseUrl}/mcp`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json, text/event-stream",
+        "MCP-Protocol-Version": nativeProtocolVersion
+      },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: requestId,
+        method: "tools/call",
+        params: { name: toolName, arguments: args }
+      }),
+      signal: controller.signal
+    });
+    text = await response.text();
+  } catch (error) {
+    if (error.name === "AbortError") {
+      throw new McpError(-32000, `Native MCP request timed out after ${restTimeoutMs}ms.`, { tool: toolName, timeoutMs: restTimeoutMs });
+    }
+    throw new McpError(-32000, `Native MCP request failed: ${error.message}`, { tool: toolName });
+  } finally {
+    clearTimeout(timeout);
+  }
+
+  if (!response.ok) {
+    throw new McpError(-32000, `Native MCP ${response.status} ${response.statusText}: ${text}`, {
+      status: response.status,
+      statusText: response.statusText,
+      tool: toolName
+    });
+  }
+
+  const contentType = response.headers.get("content-type") || "";
+  const message = contentType.includes("text/event-stream")
+    ? extractSseJsonRpcMessage(text, requestId)
+    : parseJsonOrText(text);
+
+  if (!isPlainObject(message)) {
+    throw new McpError(-32000, `Native MCP returned an unparseable response for ${toolName}.`, { body: text });
+  }
+  if (message.error) {
+    throw new McpError(message.error.code ?? -32000, message.error.message, message.error.data);
+  }
+
+  const result = message.result ?? {};
+  const inner = Array.isArray(result.content)
+    ? result.content.find(item => item?.type === "text")?.text
+    : undefined;
+  if (result.isError) {
+    throw new McpError(-32000, inner || `Native MCP tool ${toolName} failed.`, { tool: toolName });
+  }
+  // Prefer structuredContent when the SDK emits it; otherwise the text content carries the
+  // tool's JSON-serialized return value.
+  if (result.structuredContent !== undefined && result.structuredContent !== null) {
+    return result.structuredContent;
+  }
+  return inner === undefined ? null : parseJsonOrText(inner);
+}
+
+// Pull the JSON-RPC message with the matching id out of an SSE body ("data: {...}" lines,
+// events separated by blank lines). Falls back to the last parsed message when ids are absent.
+function extractSseJsonRpcMessage(body, requestId) {
+  let lastParsed = null;
+  for (const rawEvent of body.split(/\r?\n\r?\n/)) {
+    const dataLines = rawEvent
+      .split(/\r?\n/)
+      .filter(line => line.startsWith("data:"))
+      .map(line => line.slice(5).trimStart());
+    if (dataLines.length === 0) continue;
+
+    try {
+      const parsed = JSON.parse(dataLines.join("\n"));
+      lastParsed = parsed;
+      if (isPlainObject(parsed) && parsed.id === requestId) {
+        return parsed;
+      }
+    } catch {
+      // Not JSON (keep scanning) — e.g. a comment/heartbeat frame.
+    }
+  }
+  return lastParsed;
 }
 
 function optionalString(args, name) {

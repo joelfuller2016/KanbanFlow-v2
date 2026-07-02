@@ -28,6 +28,10 @@ const runMarker = `mcp-smoke-${Date.now()}-${Math.random().toString(16).slice(2)
 let tempFeatureId;
 let tempIdeaId;
 let promotedProjectId;
+// Knowledge-graph smoke entities (#224) — unique per run; cleaned up via delete_entities.
+const kgEntityA = `Smoke Entity A ${runMarker}`;
+const kgEntityB = `Smoke Entity B ${runMarker}`;
+let kgEntitiesCreated = false;
 
 server.stdout.on("data", chunk => {
   buffer = Buffer.concat([buffer, chunk]);
@@ -119,7 +123,17 @@ try {
     "list_ideas",
     "get_idea",
     "update_idea",
-    "promote_idea"
+    "promote_idea",
+    // Knowledge-graph memory (#224) — the official MCP memory server 9-tool contract
+    "create_entities",
+    "create_relations",
+    "add_observations",
+    "delete_entities",
+    "delete_observations",
+    "delete_relations",
+    "read_graph",
+    "search_nodes",
+    "open_nodes"
   ]) {
     if (!toolNames.has(requiredTool)) {
       throw new Error(`Missing MCP tool: ${requiredTool}`);
@@ -320,6 +334,99 @@ try {
     throw new Error(`list_task_activity did not return an array: ${JSON.stringify(taskActivity)}`);
   }
 
+  // Knowledge-graph memory round-trip (#224): create_entities -> (dupe skip) -> create_relations
+  // -> add_observations -> search_nodes -> open_nodes -> read_graph -> delete_* cleanup. These
+  // tools forward to the native /mcp endpoint, so this also smokes the wrapper->native proxy.
+  const obsToken = `obstoken${runMarker.replace(/[^a-zA-Z0-9]/g, "")}`;
+  const createdEntities = await callTool("create_entities", {
+    entities: [
+      { name: kgEntityA, entityType: "smoke-test", observations: [`created by smoke run ${runMarker}`] },
+      { name: kgEntityB, entityType: "smoke-test" }
+    ],
+    actor: "mcp-smoke"
+  });
+  kgEntitiesCreated = true;
+  if (!Array.isArray(createdEntities) || createdEntities.length !== 2) {
+    throw new Error(`create_entities did not return 2 created entities: ${JSON.stringify(createdEntities)}`);
+  }
+  if (createdEntities[0]?.name !== kgEntityA || createdEntities[0]?.entityType !== "smoke-test") {
+    throw new Error(`create_entities returned unexpected entity shape: ${JSON.stringify(createdEntities[0])}`);
+  }
+
+  const dupeEntities = await callTool("create_entities", {
+    entities: [{ name: kgEntityA, entityType: "smoke-test" }]
+  });
+  if (!Array.isArray(dupeEntities) || dupeEntities.length !== 0) {
+    throw new Error(`create_entities should skip existing names: ${JSON.stringify(dupeEntities)}`);
+  }
+
+  const createdRelations = await callTool("create_relations", {
+    relations: [{ from: kgEntityA, to: kgEntityB, relationType: "relates_to" }],
+    actor: "mcp-smoke"
+  });
+  if (!Array.isArray(createdRelations) || createdRelations.length !== 1 || createdRelations[0]?.relationType !== "relates_to") {
+    throw new Error(`create_relations did not return the created relation: ${JSON.stringify(createdRelations)}`);
+  }
+  const dupeRelations = await callTool("create_relations", {
+    relations: [{ from: kgEntityA, to: kgEntityB, relationType: "relates_to" }]
+  });
+  if (!Array.isArray(dupeRelations) || dupeRelations.length !== 0) {
+    throw new Error(`create_relations should skip exact duplicates: ${JSON.stringify(dupeRelations)}`);
+  }
+
+  const additions = await callTool("add_observations", {
+    observations: [{ entityName: kgEntityA, contents: [obsToken] }],
+    actor: "mcp-smoke"
+  });
+  if (!Array.isArray(additions) || additions[0]?.entityName !== kgEntityA
+    || !Array.isArray(additions[0]?.addedObservations) || !additions[0].addedObservations.includes(obsToken)) {
+    throw new Error(`add_observations did not report the added observation: ${JSON.stringify(additions)}`);
+  }
+
+  const searchResult = await callTool("search_nodes", { query: obsToken, k: 10 });
+  if (!Array.isArray(searchResult?.entities) || !searchResult.entities.some(e => e?.name === kgEntityA)) {
+    throw new Error(`search_nodes did not surface the observed entity: ${JSON.stringify(searchResult)}`);
+  }
+
+  const opened = await callTool("open_nodes", { names: [kgEntityA, kgEntityB, `missing ${runMarker}`] });
+  if (!Array.isArray(opened?.entities) || opened.entities.length !== 2) {
+    throw new Error(`open_nodes should return the 2 existing entities and skip the missing name: ${JSON.stringify(opened)}`);
+  }
+  if (!Array.isArray(opened?.relations)
+    || !opened.relations.some(r => r?.from === kgEntityA && r?.to === kgEntityB && r?.relationType === "relates_to")) {
+    throw new Error(`open_nodes did not include the relation between opened entities: ${JSON.stringify(opened)}`);
+  }
+
+  const wholeGraph = await callTool("read_graph", {});
+  if (!Array.isArray(wholeGraph?.entities) || !wholeGraph.entities.some(e => e?.name === kgEntityA)) {
+    throw new Error(`read_graph did not include the smoke entity: ${JSON.stringify(wholeGraph?.entities?.length)}`);
+  }
+
+  const observationDeletion = await callTool("delete_observations", {
+    deletions: [{ entityName: kgEntityA, observations: [obsToken] }]
+  });
+  if (observationDeletion?.deletedCount !== 1) {
+    throw new Error(`delete_observations should report 1 deletion: ${JSON.stringify(observationDeletion)}`);
+  }
+  const relationDeletion = await callTool("delete_relations", {
+    relations: [{ from: kgEntityA, to: kgEntityB, relationType: "relates_to" }]
+  });
+  if (relationDeletion?.deletedCount !== 1) {
+    throw new Error(`delete_relations should report 1 deletion: ${JSON.stringify(relationDeletion)}`);
+  }
+
+  const entityDeletion = await callTool("delete_entities", {
+    entityNames: [kgEntityA, kgEntityB, `missing ${runMarker}`]
+  });
+  if (!Array.isArray(entityDeletion?.deleted) || entityDeletion.deleted.length !== 2) {
+    throw new Error(`delete_entities should delete both smoke entities and skip the missing name: ${JSON.stringify(entityDeletion)}`);
+  }
+  kgEntitiesCreated = false;
+  const afterDelete = await callTool("open_nodes", { names: [kgEntityA, kgEntityB] });
+  if (!Array.isArray(afterDelete?.entities) || afterDelete.entities.length !== 0) {
+    throw new Error(`Deleted knowledge-graph entities still open: ${JSON.stringify(afterDelete)}`);
+  }
+
   await callTool("get_next_tasks", { projectId, limit: 3 });
   await callTool("claim_task", { taskId: task.id, actor: "mcp-smoke" });
   const commentText = `MCP smoke test comment ${runMarker}`;
@@ -334,6 +441,17 @@ try {
   console.log(`MCP smoke tests passed for project ${projectId}, task ${task.id}.`);
 } finally {
   try {
+    // Knowledge-graph smoke entities: delete_entities is a silent no-op on missing names, so
+    // this is safe to run even when the happy path already deleted them.
+    if (kgEntitiesCreated) {
+      try {
+        await callTool("delete_entities", { entityNames: [kgEntityA, kgEntityB] });
+        console.log("Cleaned up MCP smoke knowledge-graph entities.");
+      } catch (error) {
+        console.error(`MCP smoke cleanup failed for knowledge-graph entities: ${error.message}`);
+        process.exitCode = 1;
+      }
+    }
     // Delete the idea before the promoted project so cleanup is deterministic
     // under restrictive FK behavior (the promoted project references the idea).
     if (tempIdeaId !== undefined) {
