@@ -575,6 +575,62 @@ public sealed class McpKnowledgeGraphToolsTests
         }
     }
 
+    // ── beyond the graph-read cap: mutation dedupe/cascade must stay correct ─────────────
+    [Fact]
+    public async Task KgMutations_DedupeAndCascade_StayCorrectBeyondGraphReadCap()
+    {
+        using var f = new SqliteTestFactory();
+        var svc = NewService(f);
+
+        // Fill the namespace past the ReadGraphAsync cap with direct inserts (bulk, one SaveChanges —
+        // the fillers only need to occupy the capped oldest-first window; FTS/audit are irrelevant
+        // to them). Targets created AFTERWARDS land beyond that window.
+        await using (var db = await f.CreateDbContextAsync())
+        {
+            db.MemoryNodes.AddRange(Enumerable.Range(1, MemoryService.ReadGraphNodeCap + 5)
+                .Select(i => new MemoryNode
+                {
+                    Type = MemoryType.Semantic,
+                    Scope = MemoryScope.Agent,
+                    ScopeKey = Kg,
+                    Content = $"filler {i:D4}"
+                }));
+            await db.SaveChangesAsync();
+        }
+
+        await KanbanMcpTools.CreateEntities(svc,
+        [
+            new MemoryEntityInput("Beyond A", "person", ["already observed"]),
+            new MemoryEntityInput("Beyond B", "person")
+        ]);
+        var firstEdge = await KanbanMcpTools.CreateRelations(svc,
+            [new MemoryRelationInput("Beyond A", "Beyond B", "knows")]);
+        Assert.Single(firstEdge);
+        var beyondA = await NodeByName(f, "Beyond A");
+
+        // Sanity: the capped graph read genuinely cannot see the targets (they're beyond the window)…
+        var graph = await svc.ReadGraphAsync(MemoryScope.Agent, Kg);
+        Assert.Equal(MemoryService.ReadGraphNodeCap, graph.Nodes.Count);
+        Assert.DoesNotContain(graph.Nodes, n => n.Content == "Beyond A");
+
+        // …yet the official dedupe still holds: an already-present observation and an exact-duplicate
+        // relation are both skipped (id-targeted reads, not the capped graph — Gemini, PR #259).
+        var additions = await KanbanMcpTools.AddObservations(svc,
+            [new MemoryObservationInput("Beyond A", ["already observed"])]);
+        Assert.Empty(additions.Single().AddedObservations);
+        var duplicateEdge = await KanbanMcpTools.CreateRelations(svc,
+            [new MemoryRelationInput("Beyond A", "Beyond B", "knows")]);
+        Assert.Empty(duplicateEdge);
+
+        // …and delete_entities still cascades the edge (no dangling relation rows survive).
+        var deletion = await KanbanMcpTools.DeleteEntities(svc, ["Beyond A"]);
+        Assert.Equal(["Beyond A"], deletion.Deleted);
+        await using (var db = await f.CreateDbContextAsync())
+        {
+            Assert.False(await db.MemoryRelations.AnyAsync(r => r.FromId == beyondA.Id || r.ToId == beyondA.Id));
+        }
+    }
+
     /// <summary>Downed embedding transport (mirrors MemorySearchTests) — always throws, so the real
     /// EmbeddingService fail-softs and the retrieval degrades to keyword + recency.</summary>
     private sealed class StubEmbeddingGenerator : IEmbeddingGenerator<string, Embedding<float>>

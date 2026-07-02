@@ -431,8 +431,8 @@ public sealed class MemoryService(IDbContextFactory<AppDbContext> dbFactory) : I
 
         await using var db = await dbFactory.CreateDbContextAsync(ct);
 
-        // Current nodes only, oldest first (deterministic), capped at 1000 so a runaway namespace
-        // can't produce an unbounded payload (documented on the interface).
+        // Current nodes only, oldest first (deterministic), capped so a runaway namespace can't
+        // produce an unbounded payload (documented on the interface).
         var nodes = await db.MemoryNodes.AsNoTracking()
             .Where(m => m.Scope == scope && m.ScopeKey == key
                 && m.ValidTo == null && m.SupersededById == null)
@@ -461,8 +461,42 @@ public sealed class MemoryService(IDbContextFactory<AppDbContext> dbFactory) : I
         return new MemoryGraph(nodes, observations, relations);
     }
 
-    /// <summary>Node cap for <see cref="ReadGraphAsync"/> — see the interface doc.</summary>
-    internal const int ReadGraphNodeCap = 1000;
+    /// <summary>
+    /// Node cap for <see cref="ReadGraphAsync"/> — see the interface doc. Held at 900 (not 1000):
+    /// the follow-up Contains queries bind one host parameter per node id, and SQLite's
+    /// SQLITE_LIMIT_VARIABLE_NUMBER floor is 999 on conservative builds — 900 leaves headroom for
+    /// the handful of extra parameters EF adds (Gemini review, PR #259).
+    /// </summary>
+    internal const int ReadGraphNodeCap = 900;
+
+    public async Task<IReadOnlyList<Observation>> GetObservationsForNodesAsync(
+        IReadOnlyCollection<int> nodeIds, CancellationToken ct = default)
+    {
+        if (nodeIds is null || nodeIds.Count == 0)
+            return [];
+
+        await using var db = await dbFactory.CreateDbContextAsync(ct);
+        return await db.Observations.AsNoTracking()
+            .Where(o => nodeIds.Contains(o.MemoryNodeId))
+            .OrderBy(o => o.Id)
+            .ToListAsync(ct);
+    }
+
+    public async Task<IReadOnlyList<MemoryRelation>> GetMemoryNodeRelationsAsync(
+        IReadOnlyCollection<int> nodeIds, CancellationToken ct = default)
+    {
+        if (nodeIds is null || nodeIds.Count == 0)
+            return [];
+
+        await using var db = await dbFactory.CreateDbContextAsync(ct);
+        // Either endpoint may match: the delete_entities cascade needs every KG edge touching a
+        // node, and the create_relations dedupe needs the exact tuples among the request's endpoints.
+        return await db.MemoryRelations.AsNoTracking()
+            .Where(r => r.FromType == "MemoryNode" && r.ToType == "MemoryNode"
+                && (nodeIds.Contains(r.FromId) || nodeIds.Contains(r.ToId)))
+            .OrderBy(r => r.Id)
+            .ToListAsync(ct);
+    }
 
     public async Task<MemoryRelation> AddRelationAsync(
         string fromType, int fromId, string relationType, string toType, int toId,

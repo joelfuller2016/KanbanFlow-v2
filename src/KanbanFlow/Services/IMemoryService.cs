@@ -115,12 +115,36 @@ public interface IMemoryService
     /// every observation on those nodes, and the relations BETWEEN those nodes (both endpoints
     /// <c>"MemoryNode"</c> ids inside the returned node set — edges to other card types or to
     /// out-of-scope nodes are excluded). Nodes are ordered by id ascending and capped at
-    /// <b>1000</b> (oldest first, deterministic) so a runaway namespace can't produce an unbounded
-    /// payload; observations/relations cover the returned nodes only. A read — no audit event and no
-    /// access-stat bump (consistent with <see cref="ListAsync"/>).
+    /// <b>900</b> (oldest first, deterministic — <c>MemoryService.ReadGraphNodeCap</c>, kept under
+    /// SQLite's conservative 999 host-parameter floor) so a runaway namespace can't produce an
+    /// unbounded payload; observations/relations cover the returned nodes only. A read — no audit
+    /// event and no access-stat bump (consistent with <see cref="ListAsync"/>). Mutation paths that
+    /// need dedupe/cascade data must NOT rely on this capped read — use the id-targeted
+    /// <see cref="GetObservationsForNodesAsync"/> / <see cref="GetMemoryNodeRelationsAsync"/> instead.
     /// </summary>
     /// <exception cref="ValidationException"><paramref name="scope"/> undefined or <paramref name="scopeKey"/> blank.</exception>
     Task<MemoryGraph> ReadGraphAsync(MemoryScope scope, string scopeKey, CancellationToken ct = default);
+
+    /// <summary>
+    /// All observations on the given nodes — an id-targeted read for mutation plumbing (the
+    /// add_observations dedupe, #224) that stays correct regardless of namespace size, unlike the
+    /// capped <see cref="ReadGraphAsync"/>. Parameter count is bounded by the caller's request, not
+    /// the corpus. Empty <paramref name="nodeIds"/> returns empty. A plumbing read — no audit event
+    /// and no access-stat bump.
+    /// </summary>
+    Task<IReadOnlyList<Observation>> GetObservationsForNodesAsync(
+        IReadOnlyCollection<int> nodeIds, CancellationToken ct = default);
+
+    /// <summary>
+    /// Current <c>MemoryNode</c>↔<c>MemoryNode</c> relations touching ANY of the given node ids
+    /// (either endpoint) — an id-targeted read for mutation plumbing (the create_relations dedupe and
+    /// the delete_entities cascade, #224) that stays correct regardless of namespace size, unlike the
+    /// capped <see cref="ReadGraphAsync"/>. Mixed-type edges (Task/Project endpoints) are excluded,
+    /// matching the knowledge-graph tools' edge model. Empty <paramref name="nodeIds"/> returns
+    /// empty. A plumbing read — no audit event and no access-stat bump.
+    /// </summary>
+    Task<IReadOnlyList<MemoryRelation>> GetMemoryNodeRelationsAsync(
+        IReadOnlyCollection<int> nodeIds, CancellationToken ct = default);
 
     /// <summary>
     /// Add a directed graph edge <c>(fromType, fromId) --relationType--&gt; (toType, toId)</c>. The
@@ -174,7 +198,7 @@ public sealed record MemoryNodeUpdate(
 
 /// <summary>
 /// One scope's memory graph, returned by <see cref="IMemoryService.ReadGraphAsync"/>: the current
-/// nodes (capped at 1000, id ascending), their observations, and the relations between them.
+/// nodes (capped at 900, id ascending), their observations, and the relations between them.
 /// </summary>
 public sealed record MemoryGraph(
     IReadOnlyList<MemoryNode> Nodes,

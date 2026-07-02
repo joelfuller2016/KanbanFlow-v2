@@ -720,8 +720,13 @@ public static class ApiEndpoints
         // REST-remembered fact is recallable by search_nodes and vice versa). Enums arrive as
         // strings and are parsed at the edge (present-but-invalid ⇒ 422, mirroring the idea
         // endpoints); the service validates content/scopeKey.
-        app.MapPost("/api/memory", async (MemoryCreateDto dto, Services.IMemoryService memorySvc, CancellationToken ct) =>
+        app.MapPost("/api/memory", async (MemoryCreateDto? dto, Services.IMemoryService memorySvc, CancellationToken ct) =>
         {
+            // A literal JSON `null` body binds dto as null — return a clean 400 instead of an NRE
+            // 500 (Gemini review, PR #259).
+            if (dto is null)
+                return Results.BadRequest(new { message = "Request body is required: { content, type?, scope?, scopeKey?, tags?, source?, confidence?, actor? }." });
+
             var type = MemoryType.Semantic;
             if (dto.Type is not null)
             {

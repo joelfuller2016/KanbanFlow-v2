@@ -522,7 +522,11 @@ public static class KanbanMcpTools
     // optional scopeKey so agents can partition graphs, and the zero-arg default always works.
     // Mutations route ONLY through IMemoryService (the #88 single audit boundary); search_nodes reads
     // through IMemorySearch (#223 hybrid retrieval, degrades to keyword+recency without ZeroRouter).
-    // Reads that shape the graph use ReadGraphAsync, which caps at 1000 nodes (documented there).
+    // Reads that SHAPE output (read_graph / search_nodes / open_nodes) use ReadGraphAsync, which
+    // caps at 900 nodes (documented there). Mutation plumbing (dedupe + cascade) deliberately does
+    // NOT ride that capped read — it uses the id-targeted GetObservationsForNodesAsync /
+    // GetMemoryNodeRelationsAsync so correctness never degrades as the namespace grows
+    // (Gemini review, PR #259).
 
     private const string DefaultKnowledgeGraphScopeKey = "knowledge-graph";
 
@@ -613,21 +617,25 @@ public static class KanbanMcpTools
         var who = NormalizeActor(actor);
         var byName = await CurrentNodesByNameAsync(memoryService, key, cancellationToken);
 
-        // Existing edges between in-namespace nodes, for the official skip-exact-duplicates behavior.
-        var graph = await memoryService.ReadGraphAsync(MemoryScope.Agent, key, cancellationToken);
-        var existing = graph.Relations
+        // Resolve every endpoint BEFORE mutating (a missing entity fails the whole batch cleanly,
+        // matching create_entities' validate-first shape), and collect the endpoint ids so the
+        // duplicate check below is id-targeted — correct at any namespace size, unlike the capped
+        // graph read (Gemini review, PR #259).
+        var resolved = relations
+            .Select(r => (From: ResolveEntity(byName, r.From), To: ResolveEntity(byName, r.To), Verb: r.RelationType.Trim()))
+            .ToList();
+        var endpointIds = resolved.SelectMany(r => new[] { r.From.Id, r.To.Id }).ToHashSet();
+
+        // Existing edges touching the request's endpoints, for the official skip-exact-duplicates behavior.
+        var existing = (await memoryService.GetMemoryNodeRelationsAsync(endpointIds, cancellationToken))
             .Select(r => (r.FromId, r.RelationType, r.ToId))
             .ToHashSet();
 
         var created = new List<MemoryRelationDto>();
         try
         {
-            foreach (var relation in relations)
+            foreach (var (fromNode, toNode, verb) in resolved)
             {
-                var fromNode = ResolveEntity(byName, relation.From);
-                var toNode = ResolveEntity(byName, relation.To);
-                var verb = relation.RelationType.Trim();
-
                 if (!existing.Add((fromNode.Id, verb, toNode.Id)))
                     continue; // official behavior: skip exact duplicates (including in-batch repeats)
 
@@ -671,23 +679,28 @@ public static class KanbanMcpTools
         var who = NormalizeActor(actor);
         var byName = await CurrentNodesByNameAsync(memoryService, key, cancellationToken);
 
-        // Existing observation contents per node, for the official skip-already-present dedupe.
-        var graph = await memoryService.ReadGraphAsync(MemoryScope.Agent, key, cancellationToken);
-        var existingByNode = graph.Observations
+        // Resolve every target BEFORE mutating (validate-first, like create_entities), then fetch
+        // existing observation contents id-targeted — correct at any namespace size, unlike the
+        // capped graph read (Gemini review, PR #259).
+        var targets = observations
+            .Select(a => (Node: ResolveEntity(byName, a.EntityName), a.Contents))
+            .ToList();
+        var targetIds = targets.Select(t => t.Node.Id).ToHashSet();
+
+        var existingByNode = (await memoryService.GetObservationsForNodesAsync(targetIds, cancellationToken))
             .GroupBy(o => o.MemoryNodeId)
             .ToDictionary(g => g.Key, g => g.Select(o => o.Content).ToHashSet(StringComparer.Ordinal));
 
         var results = new List<ObservationAdditionResult>();
         try
         {
-            foreach (var addition in observations)
+            foreach (var (node, contents) in targets)
             {
-                var node = ResolveEntity(byName, addition.EntityName);
                 if (!existingByNode.TryGetValue(node.Id, out var present))
                     existingByNode[node.Id] = present = new HashSet<string>(StringComparer.Ordinal);
 
                 var added = new List<string>();
-                foreach (var content in addition.Contents ?? [])
+                foreach (var content in contents ?? [])
                 {
                     var trimmed = content.Trim();
                     if (!present.Add(trimmed))
@@ -723,7 +736,16 @@ public static class KanbanMcpTools
         var key = NormalizeScopeKey(scopeKey);
         var who = NormalizeActor(actor);
         var byName = await CurrentNodesByNameAsync(memoryService, key, cancellationToken);
-        var graph = await memoryService.ReadGraphAsync(MemoryScope.Agent, key, cancellationToken);
+
+        // Cascade source: edges touching the DELETED nodes, fetched id-targeted so no edge is missed
+        // when the namespace outgrows the capped graph read (Gemini review, PR #259).
+        var doomedIds = entityNames
+            .Where(n => !string.IsNullOrWhiteSpace(n))
+            .Select(n => n.Trim())
+            .Where(byName.ContainsKey)
+            .Select(n => byName[n].Id)
+            .ToHashSet();
+        var cascadeEdges = await memoryService.GetMemoryNodeRelationsAsync(doomedIds, cancellationToken);
 
         var deleted = new List<string>();
         try
@@ -734,9 +756,9 @@ public static class KanbanMcpTools
                 if (!byName.TryGetValue(name, out var node))
                     continue; // silent no-op on missing names, per contract
 
-                // Cascade: remove every in-graph edge touching the node before retiring it, so the
-                // deletion is explicit in the audit trail (not just invisible-by-filtering).
-                foreach (var relation in graph.Relations.Where(r => r.FromId == node.Id || r.ToId == node.Id))
+                // Cascade: remove every knowledge-graph edge touching the node before retiring it, so
+                // the deletion is explicit in the audit trail (not just invisible-by-filtering).
+                foreach (var relation in cascadeEdges.Where(r => r.FromId == node.Id || r.ToId == node.Id))
                 {
                     await memoryService.DeleteRelationAsync(
                         relation.FromType, relation.FromId, relation.RelationType,
@@ -840,7 +862,7 @@ public static class KanbanMcpTools
     }
 
     [McpServerTool(Name = "read_graph")]
-    [Description("Read the entire knowledge-graph memory: every current entity ({name, entityType, observations}) and the relations between them. Capped at the first 1000 entities (oldest first). Start here to see what the graph already knows.")]
+    [Description("Read the entire knowledge-graph memory: every current entity ({name, entityType, observations}) and the relations between them. Capped at the first 900 entities (oldest first). Start here to see what the graph already knows.")]
     public static async Task<KnowledgeGraph> ReadGraph(
         IMemoryService memoryService,
         [Description("Optional memory namespace key (default 'knowledge-graph').")] string? scopeKey = null,
@@ -952,6 +974,10 @@ public static class KanbanMcpTools
     /// </summary>
     private static KnowledgeGraph ShapeGraph(MemoryGraph graph, IReadOnlyList<MemoryNode> selected)
     {
+        // Defensive: a duplicate id in the selection (e.g. an upstream ranking edge case) must not
+        // crash the ToDictionary below — first occurrence wins (Gemini review, PR #259).
+        selected = selected.DistinctBy(n => n.Id).ToList();
+
         var observationsByNode = graph.Observations
             .GroupBy(o => o.MemoryNodeId)
             .ToDictionary(g => g.Key, g => (IReadOnlyList<string>)g.Select(o => o.Content).ToList());
