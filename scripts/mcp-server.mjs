@@ -7,7 +7,13 @@ const parsedRestTimeoutMs = Number.parseInt(process.env.KANBANFLOW_MCP_TIMEOUT_M
 const restTimeoutMs = Number.isFinite(parsedRestTimeoutMs) && parsedRestTimeoutMs >= minRestTimeoutMs
   ? parsedRestTimeoutMs
   : defaultRestTimeoutMs;
+// Two independent protocol hops, deliberately versioned separately (PR #259 review):
+// - protocolVersion is what THIS stdio wrapper speaks to its client (the widely-supported
+//   2024-11-05 revision the wrapper's handlers implement).
+// - nativeProtocolVersion is the header sent on the HTTP hop to the app's native /mcp server
+//   (the revision the ModelContextProtocol.AspNetCore 1.4 SDK negotiates).
 const protocolVersion = "2024-11-05";
+const nativeProtocolVersion = "2025-06-18";
 let inputBuffer = Buffer.alloc(0);
 
 const tools = [
@@ -1258,7 +1264,7 @@ async function nativeMcpToolCall(toolName, args) {
       headers: {
         "Content-Type": "application/json",
         Accept: "application/json, text/event-stream",
-        "MCP-Protocol-Version": "2025-06-18"
+        "MCP-Protocol-Version": nativeProtocolVersion
       },
       body: JSON.stringify({
         jsonrpc: "2.0",

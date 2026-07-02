@@ -324,6 +324,10 @@ public sealed class MemoryService(IDbContextFactory<AppDbContext> dbFactory) : I
         var node = await db.MemoryNodes.FirstOrDefaultAsync(m => m.Id == nodeId, ct);
         if (node is null)
             throw new MemoryNodeNotFoundException(nodeId);
+        // Historical versions are immutable — the same current-only guard the Add* mutations
+        // enforce, so a retired row's observations can't be edited (Copilot review, PR #259).
+        if (node.ValidTo is not null || node.SupersededById is not null)
+            throw new ValidationException($"Memory node {nodeId} is superseded; delete observations on the current version.");
 
         var matches = await db.Observations
             .Where(o => o.MemoryNodeId == nodeId && o.Content == needle)

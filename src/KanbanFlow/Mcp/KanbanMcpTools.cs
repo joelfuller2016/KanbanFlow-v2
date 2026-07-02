@@ -522,11 +522,11 @@ public static class KanbanMcpTools
     // optional scopeKey so agents can partition graphs, and the zero-arg default always works.
     // Mutations route ONLY through IMemoryService (the #88 single audit boundary); search_nodes reads
     // through IMemorySearch (#223 hybrid retrieval, degrades to keyword+recency without ZeroRouter).
-    // Reads that SHAPE output (read_graph / search_nodes / open_nodes) use ReadGraphAsync, which
-    // caps at 900 nodes (documented there). Mutation plumbing (dedupe + cascade) deliberately does
-    // NOT ride that capped read — it uses the id-targeted GetObservationsForNodesAsync /
-    // GetMemoryNodeRelationsAsync so correctness never degrades as the namespace grows
-    // (Gemini review, PR #259).
+    // ONLY read_graph rides the capped ReadGraphAsync (a whole-graph payload bound, documented
+    // there). Everything else — name resolution, mutation dedupe + cascade, and the
+    // search_nodes/open_nodes output shaping — is uncapped or id-targeted
+    // (ListAsync / GetObservationsForNodesAsync / GetMemoryNodeRelationsAsync), so correctness
+    // never degrades as the namespace grows (Gemini + Copilot reviews, PR #259).
 
     private const string DefaultKnowledgeGraphScopeKey = "knowledge-graph";
 
@@ -901,19 +901,20 @@ public static class KanbanMcpTools
             throw new McpException(ex.Message);
         }
 
-        var graph = await memoryService.ReadGraphAsync(MemoryScope.Agent, key, cancellationToken);
-        var nodesById = graph.Nodes.ToDictionary(n => n.Id);
-
         // The hybrid retrieval ranks EVERY candidate (recency/usefulness are query-independent), but
         // the official contract returns MATCHING entities. Keep only hits carrying a query-driven
         // signal — a keyword (BM25) or vector (cosine) rank — in their ranked order, best first.
-        // Hits beyond the graph read cap are skipped.
+        // Resolution is id-targeted (uncapped ListAsync + per-id reads), so a match is never
+        // silently dropped by the read_graph cap (Copilot review, PR #259); the ContainsKey guard
+        // only drops a hit whose node was retired between the search and this read.
+        var byId = (await memoryService.ListAsync(MemoryScope.Agent, key, type: null, includeSuperseded: false, cancellationToken))
+            .ToDictionary(n => n.Id);
         var matched = hits
-            .Where(h => (h.KeywordRank is not null || h.VectorRank is not null) && nodesById.ContainsKey(h.Id))
-            .Select(h => nodesById[h.Id])
+            .Where(h => (h.KeywordRank is not null || h.VectorRank is not null) && byId.ContainsKey(h.Id))
+            .Select(h => byId[h.Id])
             .ToList();
 
-        return ShapeGraph(graph, matched);
+        return await ShapeSelectionAsync(memoryService, matched, cancellationToken);
     }
 
     [McpServerTool(Name = "open_nodes")]
@@ -928,15 +929,19 @@ public static class KanbanMcpTools
             throw new McpException("names is required: pass an array of entity names to open.");
 
         var key = NormalizeScopeKey(scopeKey);
-        var graph = await memoryService.ReadGraphAsync(MemoryScope.Agent, key, cancellationToken);
 
-        var wanted = names
+        // Name resolution is uncapped (ListAsync-backed), so only genuinely MISSING names are
+        // skipped — a node beyond the read_graph cap still opens (Copilot review, PR #259).
+        var byName = await CurrentNodesByNameAsync(memoryService, key, cancellationToken);
+        var matched = names
             .Where(n => !string.IsNullOrWhiteSpace(n))
             .Select(n => n.Trim())
-            .ToHashSet(StringComparer.Ordinal);
-        var matched = graph.Nodes.Where(n => wanted.Contains(n.Content)).ToList();
+            .Distinct(StringComparer.Ordinal)
+            .Where(byName.ContainsKey)
+            .Select(n => byName[n])
+            .ToList();
 
-        return ShapeGraph(graph, matched);
+        return await ShapeSelectionAsync(memoryService, matched, cancellationToken);
     }
 
     // Blank/omitted scopeKey ⇒ the shared agent knowledge graph, so the zero-arg defaults always work.
@@ -965,6 +970,25 @@ public static class KanbanMcpTools
         return byName.TryGetValue(trimmed, out var node)
             ? node
             : throw new McpException($"Entity '{trimmed}' not found in the knowledge graph. Create it with create_entities first, or list what exists with read_graph.");
+    }
+
+    /// <summary>
+    /// Shape a chosen set of CURRENT nodes into the official contract's <see cref="KnowledgeGraph"/>
+    /// using id-targeted reads (observations + relations for exactly those nodes) — never the capped
+    /// <see cref="IMemoryService.ReadGraphAsync"/>, so search_nodes/open_nodes stay correct at any
+    /// namespace size (Copilot review, PR #259). <see cref="ShapeGraph"/> keeps the between-selected
+    /// relation rule.
+    /// </summary>
+    private static async Task<KnowledgeGraph> ShapeSelectionAsync(
+        IMemoryService memoryService, IReadOnlyList<MemoryNode> selected, CancellationToken ct)
+    {
+        if (selected.Count == 0)
+            return new KnowledgeGraph([], []);
+
+        var ids = selected.Select(n => n.Id).ToHashSet();
+        var observations = await memoryService.GetObservationsForNodesAsync(ids, ct);
+        var relations = await memoryService.GetMemoryNodeRelationsAsync(ids, ct);
+        return ShapeGraph(new MemoryGraph(selected, observations, relations), selected);
     }
 
     /// <summary>

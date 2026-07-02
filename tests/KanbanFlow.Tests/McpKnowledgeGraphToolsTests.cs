@@ -629,6 +629,13 @@ public sealed class McpKnowledgeGraphToolsTests
         {
             Assert.False(await db.MemoryRelations.AnyAsync(r => r.FromId == beyondA.Id || r.ToId == beyondA.Id));
         }
+
+        // The read tools are id-targeted too: an entity beyond the read_graph cap still opens by
+        // name and still surfaces as a search match (only read_graph itself keeps the payload cap).
+        var opened = await KanbanMcpTools.OpenNodes(svc, ["Beyond B", "not a real entity"]);
+        Assert.Equal("Beyond B", Assert.Single(opened.Entities).Name);
+        var found = await KanbanMcpTools.SearchNodes(NewSearch(f), svc, "beyond", k: 5);
+        Assert.Contains(found.Entities, e => e.Name == "Beyond B");
     }
 
     /// <summary>Downed embedding transport (mirrors MemorySearchTests) — always throws, so the real

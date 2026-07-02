@@ -778,7 +778,9 @@ public static class ApiEndpoints
             }
 
             var key = string.IsNullOrWhiteSpace(scopeKey) ? "knowledge-graph" : scopeKey.Trim();
-            var take = k ?? 10;
+            // Clamp like the search_nodes MCP tool (1-100): keeps ranking work and payload size
+            // bounded on this open endpoint (Copilot review, PR #259).
+            var take = Math.Clamp(k ?? 10, 1, 100);
 
             try
             {

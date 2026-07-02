@@ -800,6 +800,23 @@ public sealed class MemoryServiceTests
     }
 
     [Fact]
+    public async Task DeleteObservation_RetiredNode_Throws_HistoryIsImmutable()
+    {
+        // Historical versions are immutable: the same current-only guard the Add* mutations enforce
+        // (Copilot review, PR #259) — a superseded row's observations cannot be deleted.
+        using var f = new SqliteTestFactory();
+        var svc = new MemoryService(f);
+        var node = await svc.CreateNodeAsync(new MemoryNodeCreate(MemoryType.Semantic, MemoryScope.Project, "3", "victim fact"), null);
+        await svc.AddObservationAsync(node.Id, "frozen detail", null, null);
+        await svc.SupersedeAsync(node.Id, null);
+
+        await Assert.ThrowsAsync<ValidationException>(
+            () => svc.DeleteObservationAsync(node.Id, "frozen detail", null));
+        using var db = f.CreateDbContext();
+        Assert.Equal(1, await db.Observations.CountAsync(o => o.MemoryNodeId == node.Id)); // untouched
+    }
+
+    [Fact]
     public async Task DeleteObservation_RemovesAllExactMatches_InOneAuditedBatch()
     {
         using var f = new SqliteTestFactory();
