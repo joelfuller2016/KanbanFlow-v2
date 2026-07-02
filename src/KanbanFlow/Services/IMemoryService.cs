@@ -80,6 +80,49 @@ public interface IMemoryService
     Task<Observation> AddObservationAsync(int nodeId, string content, string? source, string? actor, CancellationToken ct = default);
 
     /// <summary>
+    /// Remove every observation on <paramref name="nodeId"/> whose content exactly matches
+    /// <paramref name="content"/> (trimmed). Observations are additive detail rows — removing one is
+    /// NOT a bi-temporal supersession, so the rows are hard-deleted and exactly one
+    /// <c>ObservationDeleted</c> event is emitted for the batch (#224). When nothing matches this is a
+    /// silent no-op (no event). Because observations feed the node's combined FTS text (#223), the
+    /// node's <c>fts_memory</c> entry is recomputed in the same transaction so the deleted text stops
+    /// keyword-matching.
+    /// </summary>
+    /// <returns>The number of observation rows removed (0 on a no-op).</returns>
+    /// <exception cref="MemoryNodeNotFoundException">The node does not exist.</exception>
+    /// <exception cref="ValidationException">Content empty/whitespace.</exception>
+    Task<int> DeleteObservationAsync(int nodeId, string content, string? actor, CancellationToken ct = default);
+
+    /// <summary>
+    /// Remove every relation exactly matching
+    /// <c>(fromType, fromId) --relationType--&gt; (toType, toId)</c> (types/verb trimmed, ordinal
+    /// match). Relations are no-FK edges, so this is a hard delete of the edge rows only; exactly one
+    /// <c>RelationDeleted</c> event is emitted for the batch, attributed to the MemoryNode endpoint
+    /// (mirroring <see cref="AddRelationAsync"/>). When nothing matches this is a silent no-op (no
+    /// event). Unlike <see cref="AddRelationAsync"/>, a missing/retired MemoryNode endpoint does not
+    /// block the delete — the edge is being removed, so cleanup is always allowed (ProjectId falls
+    /// back to 0 when the node no longer resolves).
+    /// </summary>
+    /// <returns>The number of relation rows removed (0 on a no-op).</returns>
+    /// <exception cref="ValidationException"><paramref name="fromType"/>, <paramref name="relationType"/>, or <paramref name="toType"/> empty/whitespace, a non-positive endpoint id, or neither endpoint is a <c>"MemoryNode"</c>.</exception>
+    Task<int> DeleteRelationAsync(
+        string fromType, int fromId, string relationType, string toType, int toId,
+        string? actor, CancellationToken ct = default);
+
+    /// <summary>
+    /// Read the memory graph for one scope/key in a single call (#224): the CURRENT nodes
+    /// (<see cref="MemoryNode.ValidTo"/> and <see cref="MemoryNode.SupersededById"/> both unset),
+    /// every observation on those nodes, and the relations BETWEEN those nodes (both endpoints
+    /// <c>"MemoryNode"</c> ids inside the returned node set — edges to other card types or to
+    /// out-of-scope nodes are excluded). Nodes are ordered by id ascending and capped at
+    /// <b>1000</b> (oldest first, deterministic) so a runaway namespace can't produce an unbounded
+    /// payload; observations/relations cover the returned nodes only. A read — no audit event and no
+    /// access-stat bump (consistent with <see cref="ListAsync"/>).
+    /// </summary>
+    /// <exception cref="ValidationException"><paramref name="scope"/> undefined or <paramref name="scopeKey"/> blank.</exception>
+    Task<MemoryGraph> ReadGraphAsync(MemoryScope scope, string scopeKey, CancellationToken ct = default);
+
+    /// <summary>
     /// Add a directed graph edge <c>(fromType, fromId) --relationType--&gt; (toType, toId)</c>. The
     /// endpoints are discriminator pairs (no hard FK), so an edge may span a memory node and an
     /// existing card id (Task / Project / …) — but at least one endpoint MUST be a <c>"MemoryNode"</c>.
@@ -128,3 +171,12 @@ public sealed record MemoryNodeUpdate(
     string? Tags = null,
     string? Source = null,
     double? Confidence = null);
+
+/// <summary>
+/// One scope's memory graph, returned by <see cref="IMemoryService.ReadGraphAsync"/>: the current
+/// nodes (capped at 1000, id ascending), their observations, and the relations between them.
+/// </summary>
+public sealed record MemoryGraph(
+    IReadOnlyList<MemoryNode> Nodes,
+    IReadOnlyList<Observation> Observations,
+    IReadOnlyList<MemoryRelation> Relations);

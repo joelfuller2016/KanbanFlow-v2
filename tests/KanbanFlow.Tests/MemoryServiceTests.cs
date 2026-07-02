@@ -750,6 +750,226 @@ public sealed class MemoryServiceTests
             () => svc.SetEmbeddingAsync(id, null!, null));
     }
 
+    // ── DeleteObservationAsync (#224) ───────────────────────────────────────────────
+    /// <summary>Count of FTS rows matching <paramref name="token"/> — proves keyword-search consistency.</summary>
+    private static long FtsMatchCount(SqliteTestFactory f, string token)
+    {
+        using var db = f.CreateDbContext();
+        var conn = db.Database.GetDbConnection();
+        if (conn.State != System.Data.ConnectionState.Open)
+            conn.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT count(*) FROM fts_memory WHERE fts_memory MATCH $match";
+        var p = cmd.CreateParameter();
+        p.ParameterName = "$match";
+        p.Value = "\"" + token + "\"";
+        cmd.Parameters.Add(p);
+        return (long)cmd.ExecuteScalar()!;
+    }
+
+    [Fact]
+    public async Task DeleteObservation_RemovesRow_EmitsObservationDeleted_AndFtsStopsMatching()
+    {
+        using var f = new SqliteTestFactory();
+        var svc = new MemoryService(f);
+        var node = await svc.CreateNodeAsync(new MemoryNodeCreate(MemoryType.Semantic, MemoryScope.Project, "3", "base fact"), null);
+        await svc.AddObservationAsync(node.Id, "keeper detail", null, null);
+        await svc.AddObservationAsync(node.Id, "doomed obstoken", null, null);
+        Assert.Equal(1, FtsMatchCount(f, "obstoken")); // dual-write indexed the observation text
+
+        var removed = await svc.DeleteObservationAsync(node.Id, "  doomed obstoken  ", "cleaner"); // trims like Add
+
+        Assert.Equal(1, removed);
+        using (var db = f.CreateDbContext())
+        {
+            var remaining = await db.Observations.Where(o => o.MemoryNodeId == node.Id).ToListAsync();
+            Assert.Equal("keeper detail", Assert.Single(remaining).Content);
+        }
+
+        // FTS recompute: the deleted text no longer keyword-matches, the kept texts still do.
+        Assert.Equal(0, FtsMatchCount(f, "obstoken"));
+        Assert.Equal(1, FtsMatchCount(f, "keeper"));
+        Assert.Equal(1, FtsMatchCount(f, "base"));
+
+        // Exactly one ObservationDeleted event (delete shape: Before = what was removed, After = null).
+        var ev = Assert.Single(NodeEvents(f, node.Id), e => e.EventType == "ObservationDeleted");
+        Assert.Equal("cleaner", ev.Actor);
+        Assert.Equal(3, ev.ProjectId);
+        Assert.NotNull(ev.BeforeJson);
+        Assert.Null(ev.AfterJson);
+    }
+
+    [Fact]
+    public async Task DeleteObservation_RemovesAllExactMatches_InOneAuditedBatch()
+    {
+        using var f = new SqliteTestFactory();
+        var svc = new MemoryService(f);
+        var node = await svc.CreateNodeAsync(new MemoryNodeCreate(MemoryType.Semantic, MemoryScope.Project, "1", "fact"), null);
+        await svc.AddObservationAsync(node.Id, "dup note", null, null);
+        await svc.AddObservationAsync(node.Id, "dup note", null, null);
+
+        var removed = await svc.DeleteObservationAsync(node.Id, "dup note", null);
+
+        Assert.Equal(2, removed);
+        using var db = f.CreateDbContext();
+        Assert.Equal(0, await db.Observations.CountAsync(o => o.MemoryNodeId == node.Id));
+        // One event for the whole batch, not one per row.
+        Assert.Single(NodeEvents(f, node.Id), e => e.EventType == "ObservationDeleted");
+    }
+
+    [Fact]
+    public async Task DeleteObservation_NoMatch_IsSilentNoOp_NoEvent()
+    {
+        using var f = new SqliteTestFactory();
+        var svc = new MemoryService(f);
+        var node = await svc.CreateNodeAsync(new MemoryNodeCreate(MemoryType.Semantic, MemoryScope.Project, "1", "fact"), null);
+        await svc.AddObservationAsync(node.Id, "still here", null, null);
+
+        var removed = await svc.DeleteObservationAsync(node.Id, "never existed", null);
+
+        Assert.Equal(0, removed);
+        using var db = f.CreateDbContext();
+        Assert.Equal(1, await db.Observations.CountAsync(o => o.MemoryNodeId == node.Id));
+        Assert.DoesNotContain(NodeEvents(f, node.Id), e => e.EventType == "ObservationDeleted");
+    }
+
+    [Fact]
+    public async Task DeleteObservation_MissingNode_Throws()
+    {
+        using var f = new SqliteTestFactory();
+        var svc = new MemoryService(f);
+        await Assert.ThrowsAsync<MemoryNodeNotFoundException>(() => svc.DeleteObservationAsync(404, "x", null));
+    }
+
+    [Fact]
+    public async Task DeleteObservation_BlankContent_Throws()
+    {
+        using var f = new SqliteTestFactory();
+        var id = SeedNode(f);
+        var svc = new MemoryService(f);
+        await Assert.ThrowsAsync<ValidationException>(() => svc.DeleteObservationAsync(id, "   ", null));
+    }
+
+    // ── DeleteRelationAsync (#224) ──────────────────────────────────────────────────
+    [Fact]
+    public async Task DeleteRelation_RemovesRow_EmitsRelationDeleted()
+    {
+        using var f = new SqliteTestFactory();
+        var svc = new MemoryService(f);
+        var taskId = SeedTask(f);
+        var node = await svc.CreateNodeAsync(new MemoryNodeCreate(MemoryType.Decision, MemoryScope.Project, "1", "decided"), null);
+        var relation = await svc.AddRelationAsync("MemoryNode", node.Id, "decided", "Task", taskId, null);
+
+        var removed = await svc.DeleteRelationAsync("MemoryNode", node.Id, " decided ", "Task", taskId, "cleaner");
+
+        Assert.Equal(1, removed);
+        using var db = f.CreateDbContext();
+        Assert.Null(await db.MemoryRelations.FindAsync(relation.Id)); // hard-deleted edge row
+
+        // One RelationDeleted event, attributed to the MemoryNode endpoint + its project scope.
+        var ev = Assert.Single(NodeEvents(f, node.Id), e => e.EventType == "RelationDeleted");
+        Assert.Equal("cleaner", ev.Actor);
+        Assert.Equal(node.Id, ev.EntityId);
+        Assert.Equal(1, ev.ProjectId);
+        Assert.NotNull(ev.BeforeJson);
+        Assert.Null(ev.AfterJson);
+    }
+
+    [Fact]
+    public async Task DeleteRelation_NoMatch_IsSilentNoOp_NoEvent()
+    {
+        using var f = new SqliteTestFactory();
+        var svc = new MemoryService(f);
+        var node = await svc.CreateNodeAsync(new MemoryNodeCreate(MemoryType.Decision, MemoryScope.Project, "1", "decided"), null);
+        await svc.AddRelationAsync("MemoryNode", node.Id, "decided", "Task", 5, null);
+
+        // Same endpoints, different verb ⇒ no exact match ⇒ nothing removed, no event.
+        var removed = await svc.DeleteRelationAsync("MemoryNode", node.Id, "supersedes", "Task", 5, null);
+
+        Assert.Equal(0, removed);
+        using var db = f.CreateDbContext();
+        Assert.Equal(1, await db.MemoryRelations.CountAsync());
+        Assert.DoesNotContain(NodeEvents(f, node.Id), e => e.EventType == "RelationDeleted");
+    }
+
+    [Fact]
+    public async Task DeleteRelation_InvalidPattern_Throws()
+    {
+        using var f = new SqliteTestFactory();
+        var svc = new MemoryService(f);
+        await Assert.ThrowsAsync<ValidationException>(() => svc.DeleteRelationAsync("", 1, "rel", "Task", 2, null));
+        await Assert.ThrowsAsync<ValidationException>(() => svc.DeleteRelationAsync("MemoryNode", 1, " ", "Task", 2, null));
+        await Assert.ThrowsAsync<ValidationException>(() => svc.DeleteRelationAsync("MemoryNode", 1, "rel", "", 2, null));
+        await Assert.ThrowsAsync<ValidationException>(() => svc.DeleteRelationAsync("MemoryNode", 0, "rel", "Task", 2, null));
+        // Neither endpoint is a MemoryNode — same guard as AddRelationAsync.
+        await Assert.ThrowsAsync<ValidationException>(() => svc.DeleteRelationAsync("Task", 1, "rel", "Project", 2, null));
+    }
+
+    // ── ReadGraphAsync (#224) ───────────────────────────────────────────────────────
+    [Fact]
+    public async Task ReadGraph_ReturnsCurrentNodesObservationsAndRelationsAmongThem()
+    {
+        using var f = new SqliteTestFactory();
+        var svc = new MemoryService(f);
+        var taskId = SeedTask(f);
+
+        var n1 = await svc.CreateNodeAsync(new MemoryNodeCreate(MemoryType.Semantic, MemoryScope.Agent, "kg", "node one"), null);
+        var n2 = await svc.CreateNodeAsync(new MemoryNodeCreate(MemoryType.Semantic, MemoryScope.Agent, "kg", "node two"), null);
+        await svc.AddObservationAsync(n1.Id, "detail one", null, null);
+        await svc.AddRelationAsync("MemoryNode", n1.Id, "relates_to", "MemoryNode", n2.Id, null);   // in-graph edge
+        await svc.AddRelationAsync("MemoryNode", n1.Id, "decided", "Task", taskId, null);            // non-memory endpoint ⇒ excluded
+        var other = await svc.CreateNodeAsync(new MemoryNodeCreate(MemoryType.Semantic, MemoryScope.Agent, "other-key", "elsewhere"), null);
+        await svc.AddRelationAsync("MemoryNode", n1.Id, "relates_to", "MemoryNode", other.Id, null); // out-of-scope endpoint ⇒ excluded
+
+        var graph = await svc.ReadGraphAsync(MemoryScope.Agent, "kg");
+
+        Assert.Equal(new[] { n1.Id, n2.Id }, graph.Nodes.Select(n => n.Id).ToArray()); // id ascending
+        var observation = Assert.Single(graph.Observations);
+        Assert.Equal(n1.Id, observation.MemoryNodeId);
+        Assert.Equal("detail one", observation.Content);
+        var relation = Assert.Single(graph.Relations);
+        Assert.Equal(n1.Id, relation.FromId);
+        Assert.Equal(n2.Id, relation.ToId);
+        Assert.Equal("relates_to", relation.RelationType);
+    }
+
+    [Fact]
+    public async Task ReadGraph_ExcludesSupersededNodes()
+    {
+        using var f = new SqliteTestFactory();
+        var svc = new MemoryService(f);
+        var kept = await svc.CreateNodeAsync(new MemoryNodeCreate(MemoryType.Semantic, MemoryScope.Agent, "kg", "kept"), null);
+        var retired = await svc.CreateNodeAsync(new MemoryNodeCreate(MemoryType.Semantic, MemoryScope.Agent, "kg", "retired"), null);
+        await svc.SupersedeAsync(retired.Id, null);
+        var updatedFrom = await svc.CreateNodeAsync(new MemoryNodeCreate(MemoryType.Semantic, MemoryScope.Agent, "kg", "v1"), null);
+        var updatedTo = await svc.UpdateNodeAsync(updatedFrom.Id, new MemoryNodeUpdate(Content: "v2"), null);
+
+        var graph = await svc.ReadGraphAsync(MemoryScope.Agent, "kg");
+
+        // Only the current versions: the plain-retired node and the pre-update row are excluded.
+        Assert.Equal(new[] { kept.Id, updatedTo.Id }, graph.Nodes.Select(n => n.Id).ToArray());
+    }
+
+    [Fact]
+    public async Task ReadGraph_EmptyScope_ReturnsEmptyGraph()
+    {
+        using var f = new SqliteTestFactory();
+        var svc = new MemoryService(f);
+        var graph = await svc.ReadGraphAsync(MemoryScope.Agent, "nothing-here");
+        Assert.Empty(graph.Nodes);
+        Assert.Empty(graph.Observations);
+        Assert.Empty(graph.Relations);
+    }
+
+    [Fact]
+    public async Task ReadGraph_InvalidInputs_Throw()
+    {
+        using var f = new SqliteTestFactory();
+        var svc = new MemoryService(f);
+        await Assert.ThrowsAsync<ValidationException>(() => svc.ReadGraphAsync((MemoryScope)42, "kg"));
+        await Assert.ThrowsAsync<ValidationException>(() => svc.ReadGraphAsync(MemoryScope.Agent, "   "));
+    }
+
     // ── schema (SchemaPatcher / EnsureCreated) ──────────────────────────────────────
     [Fact]
     public void FreshDb_MemoryTablesAndIndexesExist()

@@ -314,6 +314,156 @@ public sealed class MemoryService(IDbContextFactory<AppDbContext> dbFactory) : I
         return observation;
     }
 
+    public async Task<int> DeleteObservationAsync(int nodeId, string content, string? actor, CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(content))
+            throw new ValidationException("Observation content cannot be empty or whitespace.");
+        var needle = content.Trim();
+
+        await using var db = await dbFactory.CreateDbContextAsync(ct);
+        var node = await db.MemoryNodes.FirstOrDefaultAsync(m => m.Id == nodeId, ct);
+        if (node is null)
+            throw new MemoryNodeNotFoundException(nodeId);
+
+        var matches = await db.Observations
+            .Where(o => o.MemoryNodeId == nodeId && o.Content == needle)
+            .ToListAsync(ct);
+
+        // Silent no-op when nothing matches: no rows change, so no audit noise (#224 — mirrors the
+        // official MCP memory server's delete_observations semantics at the service boundary).
+        if (matches.Count == 0)
+            return 0;
+
+        // Atomic delete + FTS recompute + audit: one transaction so the keyword index can never
+        // keep matching text whose observation row was removed (or vice versa).
+        await using var tx = await db.Database.BeginTransactionAsync(ct);
+
+        db.Observations.RemoveRange(matches);
+        await db.SaveChangesAsync(ct);
+
+        // Observations feed the node's combined searchable text (#223): recompute Content + the
+        // REMAINING observations and re-upsert, so the deleted text stops keyword-matching.
+        var remaining = await db.Observations
+            .Where(o => o.MemoryNodeId == nodeId)
+            .OrderBy(o => o.Id)
+            .Select(o => o.Content)
+            .ToListAsync(ct);
+        var combined = remaining.Count == 0
+            ? node.Content
+            : node.Content + " " + string.Join(" ", remaining);
+        await MemoryFts.UpsertAsync(db.Database.GetDbConnection(), tx.GetDbTransaction(), node.Id, combined, ct);
+
+        // Exactly one ObservationDeleted event for the batch (#88): Before carries what was removed,
+        // After is null — the same delete-shape TaskDeleted uses.
+        AddActivityEvent(
+            db, MemoryProjectId(node), "MemoryNode", node.Id, actor,
+            "ObservationDeleted",
+            new { MemoryNodeId = nodeId, Content = needle, Count = matches.Count }, null,
+            $"{matches.Count} observation(s) deleted from memory {node.Id}");
+
+        await db.SaveChangesAsync(ct);
+        await tx.CommitAsync(ct);
+        return matches.Count;
+    }
+
+    public async Task<int> DeleteRelationAsync(
+        string fromType, int fromId, string relationType, string toType, int toId,
+        string? actor, CancellationToken ct = default)
+    {
+        // Same edge validation as AddRelationAsync — a malformed pattern is a caller bug, not a no-op.
+        if (string.IsNullOrWhiteSpace(fromType))
+            throw new ValidationException("Relation fromType cannot be empty or whitespace.");
+        if (string.IsNullOrWhiteSpace(relationType))
+            throw new ValidationException("Relation type cannot be empty or whitespace.");
+        if (string.IsNullOrWhiteSpace(toType))
+            throw new ValidationException("Relation toType cannot be empty or whitespace.");
+        if (fromId <= 0 || toId <= 0)
+            throw new ValidationException("Relation endpoint ids must be positive.");
+
+        var fromTypeTrimmed = fromType.Trim();
+        var toTypeTrimmed = toType.Trim();
+        var relationTrimmed = relationType.Trim();
+
+        var fromIsNode = string.Equals(fromTypeTrimmed, "MemoryNode", StringComparison.Ordinal);
+        var toIsNode = string.Equals(toTypeTrimmed, "MemoryNode", StringComparison.Ordinal);
+        if (!fromIsNode && !toIsNode)
+            throw new ValidationException("A memory relation must have a MemoryNode endpoint (FromType or ToType must be \"MemoryNode\").");
+
+        await using var db = await dbFactory.CreateDbContextAsync(ct);
+
+        var matches = await db.MemoryRelations
+            .Where(r => r.FromType == fromTypeTrimmed && r.FromId == fromId
+                && r.RelationType == relationTrimmed
+                && r.ToType == toTypeTrimmed && r.ToId == toId)
+            .ToListAsync(ct);
+
+        // Silent no-op when the edge does not exist: no rows change, so no audit noise (#224).
+        if (matches.Count == 0)
+            return 0;
+
+        // Attribution mirrors AddRelationAsync (the MemoryNode endpoint, preferring From). Unlike
+        // add, a missing/retired node does NOT block the delete — the edge is being removed, so
+        // cleanup is always allowed; ProjectId simply falls back to 0 when the node can't resolve.
+        var memoryNodeId = fromIsNode ? fromId : toId;
+        var memoryNode = await db.MemoryNodes.FirstOrDefaultAsync(m => m.Id == memoryNodeId, ct);
+
+        db.MemoryRelations.RemoveRange(matches);
+
+        // Exactly one RelationDeleted event for the batch, committed in the same SaveChanges as the
+        // removal (single atomic save — no window where the edge is gone but unaudited, #88).
+        AddActivityEvent(
+            db, memoryNode is null ? 0 : MemoryProjectId(memoryNode), "MemoryNode", memoryNodeId, actor,
+            "RelationDeleted",
+            new { FromType = fromTypeTrimmed, FromId = fromId, RelationType = relationTrimmed, ToType = toTypeTrimmed, ToId = toId, Count = matches.Count }, null,
+            $"Relation '{relationTrimmed}' {fromTypeTrimmed}:{fromId} -> {toTypeTrimmed}:{toId} deleted");
+
+        await db.SaveChangesAsync(ct);
+        return matches.Count;
+    }
+
+    public async Task<MemoryGraph> ReadGraphAsync(MemoryScope scope, string scopeKey, CancellationToken ct = default)
+    {
+        if (!Enum.IsDefined(scope))
+            throw new ValidationException($"Invalid memory scope '{scope}'.");
+        if (string.IsNullOrWhiteSpace(scopeKey))
+            throw new ValidationException("ScopeKey cannot be empty or whitespace.");
+        var key = scopeKey.Trim();
+
+        await using var db = await dbFactory.CreateDbContextAsync(ct);
+
+        // Current nodes only, oldest first (deterministic), capped at 1000 so a runaway namespace
+        // can't produce an unbounded payload (documented on the interface).
+        var nodes = await db.MemoryNodes.AsNoTracking()
+            .Where(m => m.Scope == scope && m.ScopeKey == key
+                && m.ValidTo == null && m.SupersededById == null)
+            .OrderBy(m => m.Id)
+            .Take(ReadGraphNodeCap)
+            .ToListAsync(ct);
+
+        if (nodes.Count == 0)
+            return new MemoryGraph([], [], []);
+
+        var nodeIds = nodes.Select(n => n.Id).ToList();
+
+        var observations = await db.Observations.AsNoTracking()
+            .Where(o => nodeIds.Contains(o.MemoryNodeId))
+            .OrderBy(o => o.Id)
+            .ToListAsync(ct);
+
+        // Relations BETWEEN the returned nodes only: both endpoints must be MemoryNode ids inside
+        // the set. Edges to other card types (Task/Project/…) or out-of-scope nodes are excluded.
+        var relations = await db.MemoryRelations.AsNoTracking()
+            .Where(r => r.FromType == "MemoryNode" && r.ToType == "MemoryNode"
+                && nodeIds.Contains(r.FromId) && nodeIds.Contains(r.ToId))
+            .OrderBy(r => r.Id)
+            .ToListAsync(ct);
+
+        return new MemoryGraph(nodes, observations, relations);
+    }
+
+    /// <summary>Node cap for <see cref="ReadGraphAsync"/> — see the interface doc.</summary>
+    internal const int ReadGraphNodeCap = 1000;
+
     public async Task<MemoryRelation> AddRelationAsync(
         string fromType, int fromId, string relationType, string toType, int toId,
         string? actor, CancellationToken ct = default)

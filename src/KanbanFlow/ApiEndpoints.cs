@@ -19,6 +19,7 @@ public static class ApiEndpoints
         app.MapTaskCommentEndpoints();
         app.MapActivityEndpoints();
         app.MapIdeaEndpoints();
+        app.MapMemoryEndpoints();
         return app;
     }
 
@@ -703,6 +704,104 @@ public static class ApiEndpoints
                 return Results.NotFound(new { message = $"Idea {id} not found." });
 
             return Results.Ok(events.Select(MapActivityEvent));
+        });
+    }
+
+    // ── Memory Endpoints (#224) ────────────────────────────────────────
+    // mem0-style remember/recall over the bi-temporal memory store (#221) + hybrid retrieval
+    // (#223). Remember routes through IMemoryService (one MemoryCreated ActivityEvent, #88);
+    // recall is a read via IMemorySearch (no event — only the un-audited access-stat bump).
+    // Open access by charter: no auth, no RequireHost — trust the network.
+
+    private static void MapMemoryEndpoints(this WebApplication app)
+    {
+        // POST /api/memory — remember. Defaults: type=Semantic, scope=Agent,
+        // scopeKey="knowledge-graph" (the same namespace the MCP knowledge-graph tools use, so a
+        // REST-remembered fact is recallable by search_nodes and vice versa). Enums arrive as
+        // strings and are parsed at the edge (present-but-invalid ⇒ 422, mirroring the idea
+        // endpoints); the service validates content/scopeKey.
+        app.MapPost("/api/memory", async (MemoryCreateDto dto, Services.IMemoryService memorySvc, CancellationToken ct) =>
+        {
+            var type = MemoryType.Semantic;
+            if (dto.Type is not null)
+            {
+                var raw = dto.Type.Trim();
+                if (raw.Length == 0 || !Enum.TryParse<MemoryType>(raw, ignoreCase: true, out var parsedType) || !Enum.IsDefined(parsedType))
+                    return Results.UnprocessableEntity(new { message = $"Invalid type: {dto.Type}. Valid values: {string.Join(", ", Enum.GetNames<MemoryType>())}" });
+                type = parsedType;
+            }
+
+            var scope = MemoryScope.Agent;
+            if (dto.Scope is not null)
+            {
+                var raw = dto.Scope.Trim();
+                if (raw.Length == 0 || !Enum.TryParse<MemoryScope>(raw, ignoreCase: true, out var parsedScope) || !Enum.IsDefined(parsedScope))
+                    return Results.UnprocessableEntity(new { message = $"Invalid scope: {dto.Scope}. Valid values: {string.Join(", ", Enum.GetNames<MemoryScope>())}" });
+                scope = parsedScope;
+            }
+
+            var scopeKey = string.IsNullOrWhiteSpace(dto.ScopeKey) ? "knowledge-graph" : dto.ScopeKey;
+
+            try
+            {
+                var node = await memorySvc.CreateNodeAsync(
+                    new Services.MemoryNodeCreate(type, scope, scopeKey, dto.Content, dto.Tags, dto.Source, dto.Confidence),
+                    dto.Actor, ct);
+                return Results.Created($"/api/memory/{node.Id}", MapMemoryNode(node));
+            }
+            catch (Services.ValidationException ex)
+            {
+                return Results.UnprocessableEntity(new { message = ex.Message });
+            }
+        });
+
+        // GET /api/memory/search — recall: ranked hybrid retrieval with per-signal fields so a
+        // result is explainable. Defaults: scope=Agent, scopeKey="knowledge-graph", k=10.
+        // Blank q ⇒ 422 (an everything-matches recency scan is a caller mistake at this edge);
+        // bad scope ⇒ 422; bad k ⇒ 422 (the service's ValidationException surfaces as 422).
+        app.MapGet("/api/memory/search", async (string? q, string? scope, string? scopeKey, int? k, Services.IMemorySearch memorySearch, CancellationToken ct) =>
+        {
+            if (string.IsNullOrWhiteSpace(q))
+                return Results.UnprocessableEntity(new { message = "Query parameter 'q' is required and must be non-empty." });
+
+            var parsedScope = MemoryScope.Agent;
+            if (!string.IsNullOrWhiteSpace(scope))
+            {
+                if (!Enum.TryParse<MemoryScope>(scope.Trim(), ignoreCase: true, out var s) || !Enum.IsDefined(s))
+                    return Results.UnprocessableEntity(new { message = $"Invalid scope: {scope}. Valid values: {string.Join(", ", Enum.GetNames<MemoryScope>())}" });
+                parsedScope = s;
+            }
+
+            var key = string.IsNullOrWhiteSpace(scopeKey) ? "knowledge-graph" : scopeKey.Trim();
+            var take = k ?? 10;
+
+            try
+            {
+                var hits = await memorySearch.SearchAsync(parsedScope, key, q, take, opts: null, ct);
+                return Results.Ok(new
+                {
+                    Query = q,
+                    Scope = parsedScope.ToString(),
+                    ScopeKey = key,
+                    K = take,
+                    Count = hits.Count,
+                    Hits = hits.Select(h => new
+                    {
+                        h.Id,
+                        h.Content,
+                        h.FusedScore,
+                        h.VectorRank,
+                        h.KeywordRank,
+                        h.RecencyScore,
+                        h.UsefulnessScore
+                    })
+                });
+            }
+            catch (Services.ValidationException ex)
+            {
+                // e.g. k <= 0 — a caller mistake, same 422 contract as the enum parses above.
+                return Results.UnprocessableEntity(new { message = ex.Message });
+            }
         });
     }
 
@@ -2387,6 +2486,29 @@ public static class ApiEndpoints
         idea.UpdatedAt
     };
 
+    // Memory node projection (#224). Enums → strings (no JsonStringEnumConverter in this repo);
+    // vector bytes are never serialized — presence + shape only, matching MemoryService's
+    // audit-snapshot convention.
+    private static object MapMemoryNode(MemoryNode node) => new
+    {
+        node.Id,
+        Type = node.Type.ToString(),
+        Scope = node.Scope.ToString(),
+        node.ScopeKey,
+        node.Content,
+        node.Tags,
+        node.Source,
+        node.Confidence,
+        node.CreatedAt,
+        node.ValidFrom,
+        node.ValidTo,
+        node.SupersededById,
+        node.AccessCount,
+        node.LastAccessedAt,
+        HasEmbedding = node.EmbeddingBlob is not null,
+        node.EmbeddingDim
+    };
+
     private static readonly string[] AllowedUserCommentTypes =
     [
         nameof(CommentType.Note),
@@ -2650,3 +2772,8 @@ public record IdeaCreateDto(string Title, string? Body, string? Plan, string? Ta
 public record IdeaUpdateDto(string? Title, string? Body, string? Plan, string? Status, string? Tags, string? Priority, string? Actor);
 
 public record IdeaPromoteDto(string? Actor);
+
+// Remember payload (#224). Type/Scope arrive as strings and are parsed at the edge (422 on a
+// present-but-invalid value); null Type/Scope/ScopeKey take the documented defaults
+// (Semantic / Agent / "knowledge-graph"). Actor is recorded in the audit trail by the service.
+public record MemoryCreateDto(string Content, string? Type, string? Scope, string? ScopeKey, string? Tags, string? Source, double? Confidence, string? Actor);

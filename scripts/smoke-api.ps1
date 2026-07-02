@@ -40,6 +40,20 @@ function Assert-SmokePostFailure([string]$Path, $Body, [int[]]$ExpectedStatusCod
     throw "$Message Expected HTTP failure but request succeeded."
 }
 
+function Assert-SmokeGetFailure([string]$Path, [int[]]$ExpectedStatusCodes, [string]$Message) {
+    Write-Host "GET $Path (expecting failure)"
+    try {
+        Invoke-WebRequest -Method Get -Uri "$BaseUrl$Path" -TimeoutSec 5 -UseBasicParsing -ErrorAction Stop | Out-Null
+    }
+    catch {
+        $statusCode = [int]$_.Exception.Response.StatusCode
+        if ($ExpectedStatusCodes -contains $statusCode) { return }
+        throw "$Message Expected HTTP $($ExpectedStatusCodes -join '/') but got $statusCode. $($_.Exception.Message)"
+    }
+
+    throw "$Message Expected HTTP failure but request succeeded."
+}
+
 function Assert-SmokePatchFailure([string]$Path, $Body, [int[]]$ExpectedStatusCodes, [string]$Message) {
     Write-Host "PATCH $Path (expecting failure)"
     try {
@@ -321,6 +335,40 @@ try {
     $puFeatCleared = Invoke-SmokeGet "/api/features/$($puFeat.id)"
     Assert-Truthy ([string]::IsNullOrEmpty($puFeatCleared.description)) "#203: explicit empty feature description did not clear."
     Invoke-SmokeDelete "/api/projects/$($puProj.id)" | Out-Null
+
+    # OpenAPI document generation exercises the Microsoft.OpenApi security pin (GHSA-v5pm-xwqc-g5wc,
+    # pinned in KanbanFlow.csproj): the doc is only built on request, so probe it explicitly.
+    $openapi = Invoke-SmokeGet "/openapi/v1.json"
+    Assert-Truthy $openapi.paths "GET /openapi/v1.json did not return an OpenAPI document with paths."
+
+    # --- #224: mem0-style remember/recall over the memory store ---
+    $memToken = "memtoken$([Guid]::NewGuid().ToString('N'))"
+    $memNode = Invoke-SmokeJson "Post" "/api/memory" @{ content = "API smoke remembered fact $memToken"; type = "Semantic"; tags = "smoke"; source = "api-smoke"; confidence = 0.9; actor = "api-smoke" }
+    Assert-Truthy $memNode.id "POST /api/memory did not return a node id."
+    Assert-Truthy ($memNode.type -eq "Semantic") "POST /api/memory did not echo the type as a string."
+    Assert-Truthy ($memNode.scope -eq "Agent") "POST /api/memory did not default scope to Agent."
+    Assert-Truthy ($memNode.scopeKey -eq "knowledge-graph") "POST /api/memory did not default scopeKey to knowledge-graph."
+    Assert-Truthy ($null -eq $memNode.validTo) "POST /api/memory returned a retired node."
+    Assert-Truthy (-not $memNode.hasEmbedding) "POST /api/memory should start unembedded."
+
+    # Remember writes its audit event through the service; a second node proves recall ranking has >1 candidate.
+    Invoke-SmokeJson "Post" "/api/memory" @{ content = "API smoke unrelated fact $([Guid]::NewGuid().ToString('N'))" } | Out-Null
+
+    Assert-SmokePostFailure "/api/memory" @{ content = "bad enum"; type = "NotAType" } @(422) "Invalid memory type validation failed."
+    Assert-SmokePostFailure "/api/memory" @{ content = "bad enum"; scope = "NotAScope" } @(422) "Invalid memory scope validation failed."
+    Assert-SmokePostFailure "/api/memory" @{ content = "   " } @(422) "Blank memory content validation failed."
+
+    $recall = Invoke-SmokeGet "/api/memory/search?q=$memToken&k=5"
+    Assert-Truthy ($recall.count -ge 1) "GET /api/memory/search did not recall the remembered fact."
+    $recallHit = $recall.hits | Where-Object { $_.id -eq $memNode.id } | Select-Object -First 1
+    Assert-Truthy $recallHit "GET /api/memory/search hits did not include the remembered node."
+    Assert-Truthy ($null -ne $recallHit.fusedScore) "Recall hit is missing fusedScore."
+    Assert-Truthy ($null -ne $recallHit.keywordRank) "Recall hit is missing its keyword rank (FTS dual-write broken?)."
+    Assert-Truthy ($recall.hits[0].id -eq $memNode.id) "The keyword-matching node should outrank the unrelated one."
+
+    Assert-SmokeGetFailure "/api/memory/search?q=" @(422) "Blank recall query validation failed."
+    Assert-SmokeGetFailure "/api/memory/search?q=$memToken&k=0" @(422) "Non-positive recall k validation failed."
+    Assert-SmokeGetFailure "/api/memory/search?q=$memToken&scope=NotAScope" @(422) "Invalid recall scope validation failed."
 
     Write-Host "API smoke tests passed."
 }
