@@ -264,6 +264,93 @@ public sealed class TaskServiceTests
             () => svc.ReassignToFeatureAsync(taskId, otherProjectFeatureId, "x"));
     }
 
+    [Fact]
+    public async Task Reassign_AppendsToEndOfDestinationFeature()
+    {
+        // #207: the moved task must be appended to the END of the destination feature, NOT keep its
+        // source-feature SortOrder (which would collide with an existing destination task since
+        // SortOrder is per-feature). Destination already holds tasks at SortOrder 0 and 1.
+        using var f = new SqliteTestFactory();
+        int taskId, destFeatureId;
+        using (var db = f.CreateDbContext())
+        {
+            var p = new Project { Name = "P" };
+            var src = new Feature { Name = "src", Project = p };
+            var dst = new Feature { Name = "dst", Project = p };
+            var moving = new TaskItem { Name = "moving", Feature = src, Status = WorkStatus.Todo, SortOrder = 0 };
+            var d0 = new TaskItem { Name = "d0", Feature = dst, Status = WorkStatus.Todo, SortOrder = 0 };
+            var d1 = new TaskItem { Name = "d1", Feature = dst, Status = WorkStatus.Todo, SortOrder = 1 };
+            db.AddRange(moving, d0, d1);
+            db.SaveChanges();
+            taskId = moving.Id;
+            destFeatureId = dst.Id;
+        }
+        var svc = new TaskService(f);
+
+        var result = await svc.ReassignToFeatureAsync(taskId, destFeatureId, "alice");
+
+        Assert.Equal(destFeatureId, result.FeatureId);
+        Assert.Equal(2, result.SortOrder); // appended after the existing 0 and 1
+
+        using var check = f.CreateDbContext();
+        var sortOrders = await check.Tasks
+            .Where(t => t.FeatureId == destFeatureId)
+            .Select(t => t.SortOrder)
+            .ToListAsync();
+        Assert.Equal(3, sortOrders.Count);
+        Assert.Equal(sortOrders.Count, sortOrders.Distinct().Count()); // no duplicate SortOrder
+    }
+
+    [Fact]
+    public async Task Reassign_ToEmptyDestinationFeature_SortOrderZero()
+    {
+        // #207: appending into an empty destination feature yields SortOrder 0 (maxSort -1 + 1).
+        using var f = new SqliteTestFactory();
+        var (taskId, emptyDestFeatureId, _) = SeedForReassign(f); // f1b has no tasks
+        var svc = new TaskService(f);
+
+        var result = await svc.ReassignToFeatureAsync(taskId, emptyDestFeatureId, "alice");
+
+        Assert.Equal(emptyDestFeatureId, result.FeatureId);
+        Assert.Equal(0, result.SortOrder);
+    }
+
+    [Fact]
+    public async Task FeatureTaskList_WithDuplicateSortOrder_IsDeterministicByIdTieBreak()
+    {
+        // #207 AC: feature task lists must return a STABLE order even when two rows share a SortOrder
+        // (legacy data or a concurrent create/reassign). The read paths (GET /api/features/{id}/tasks,
+        // project tree, board, and the ProjectOutline/KanbanColumn UI loops) now order by
+        // SortOrder THEN Id. This exercises that exact ordering contract over real SQLite with a
+        // deliberate SortOrder collision. (Endpoint-level HTTP coverage is tracked by #202.)
+        using var f = new SqliteTestFactory();
+        int featureId, lowerId, higherId;
+        using (var db = f.CreateDbContext())
+        {
+            var p = new Project { Name = "P" };
+            var feat = new Feature { Name = "F", Project = p };
+            var a = new TaskItem { Name = "a", Feature = feat, Status = WorkStatus.Todo, SortOrder = 5 };
+            var b = new TaskItem { Name = "b", Feature = feat, Status = WorkStatus.Todo, SortOrder = 5 }; // tie
+            db.AddRange(a, b);
+            db.SaveChanges();
+            featureId = feat.Id;
+            lowerId = Math.Min(a.Id, b.Id);
+            higherId = Math.Max(a.Id, b.Id);
+        }
+
+        // Two independent reads must return the SAME deterministic order (lower Id first) despite the tie.
+        for (var read = 0; read < 2; read++)
+        {
+            using var db = f.CreateDbContext();
+            var ordered = await db.Tasks
+                .Where(t => t.FeatureId == featureId)
+                .OrderBy(t => t.SortOrder).ThenBy(t => t.Id)
+                .Select(t => t.Id)
+                .ToListAsync();
+            Assert.Equal(new[] { lowerId, higherId }, ordered);
+        }
+    }
+
     // ── UpdateAsync (validation + field-diff audit) ────────────────────────────
     [Fact]
     public async Task Update_EmptyName_ThrowsValidation()

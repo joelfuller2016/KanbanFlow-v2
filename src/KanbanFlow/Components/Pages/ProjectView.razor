@@ -798,6 +798,7 @@ else
                 .Include(t => t.Feature)
                 .Where(t => t.Status == status && t.Feature.ProjectId == Id)
                 .OrderBy(t => t.SortOrder)
+                .ThenBy(t => t.Id) // #207: deterministic pre-reindex read when SortOrder ties
                 .ToListAsync(_cts.Token);
 
             columnTasks.Remove(task);
@@ -838,6 +839,7 @@ else
             var featureTasks = await db.Tasks
                 .Where(t => t.FeatureId == newFeatureId)
                 .OrderBy(t => t.SortOrder)
+                .ThenBy(t => t.Id) // #207: deterministic pre-reindex read when SortOrder ties
                 .ToListAsync(_cts.Token);
 
             featureTasks.Remove(task);
