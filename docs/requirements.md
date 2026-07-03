@@ -241,11 +241,11 @@ Given a project, the API tells an agent what to work on next, with reasoning and
 | # | Requirement | Status |
 |---|-------------|--------|
 | R-3.1 | `GET /api/projects/{id}/next-tasks?actor={name}&limit={n}` returns priority-sorted, dependency-aware next tasks. | ✅ |
-| R-3.2 | Each recommendation includes a `reason` string ("Top because: P0 requirement linked, no open blockers, oldest unclaimed"). | ✅ `BuildNextTaskReason` (`ApiEndpoints.cs:2280`). |
+| R-3.2 | Each recommendation includes a `reason` string (e.g. "Top because: Critical priority, no open blockers, unclaimed."). | ✅ Shared `TaskRanking.RankNextTasks` (`Services/TaskRanking.cs`), used by REST + MCP. |
 | R-3.3 | Tasks blocked by incomplete dependencies are excluded from `next-tasks` results. | ✅ |
 | R-3.4 | Per-task context endpoint (see R-1.6) returns the bundle an agent needs without further round-trips. | ⚠️ Partial. |
 | R-3.5 | `next-tasks` accepts `actor` and de-prioritises tasks claimed by other actors. | ✅ |
-| R-3.6 | Recommendation algorithm is documented in `docs/` so agents (and humans) can predict ranking. | ❌ Lives only in `BuildNextTaskReason` source. |
+| R-3.6 | Recommendation algorithm is documented in `docs/` so agents (and humans) can predict ranking. | ⚠️ Now single-sourced + XML-documented in `TaskRanking.RankNextTasks` (`Services/TaskRanking.cs`, shared by REST + MCP); a dedicated `docs/` write-up is still pending. |
 
 **Ranking rules (current):**
 1. Tasks with incomplete acceptance criteria (the closest to done)

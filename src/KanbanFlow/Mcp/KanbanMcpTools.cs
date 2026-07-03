@@ -142,8 +142,6 @@ public static class KanbanMcpTools
         [Description("Maximum results (default 5, clamped to 1-50).")] int limit = 5,
         CancellationToken cancellationToken = default)
     {
-        limit = Math.Clamp(limit, 1, 50);
-
         await using var db = await dbFactory.CreateDbContextAsync(cancellationToken);
 
         if (!await db.Projects.AsNoTracking().AnyAsync(p => p.Id == projectId, cancellationToken))
@@ -161,24 +159,18 @@ public static class KanbanMcpTools
             .Include(t => t.Dependencies)
             .ToListAsync(cancellationToken);
 
-        return openTasks
-            .Select(t =>
-            {
-                var hasOpenBlocker = t.Dependencies.Any(d =>
-                    !statusById.TryGetValue(d.DependsOnTaskItemId, out var s) || s != WorkStatus.Done);
-                var claimedByOther = !string.IsNullOrWhiteSpace(t.ClaimedBy)
-                    && !string.Equals(t.ClaimedBy, actor, StringComparison.OrdinalIgnoreCase);
-                return (Task: t, HasOpenBlocker: hasOpenBlocker, ClaimedByOther: claimedByOther);
-            })
-            .Where(x => !x.HasOpenBlocker)
-            .OrderBy(x => x.ClaimedByOther)                                   // unclaimed / own first
-            .ThenByDescending(x => x.Task.Priority)                           // Critical → Low
-            .ThenBy(x => x.Task.Status == WorkStatus.InProgress ? 0 : 1)      // in-progress first
-            .ThenBy(x => x.Task.Id)                                           // stable, oldest first
-            .Take(limit)
-            .Select(x => new NextTask(
-                x.Task.Id, x.Task.Name, x.Task.Status.ToString(), x.Task.Priority.ToString(),
-                x.Task.ClaimedBy, BuildReason(x.Task, x.ClaimedByOther)))
+        // Shared ranker (#151/#188): identical canonical order, actor de-prioritisation, reason
+        // strings, and 1–50 limit clamp as the REST GET /api/projects/{id}/next-tasks endpoint.
+        // Build the depends-on lookup from each open task's Dependencies navigation
+        // (TaskItemId → DependsOnTaskItemId).
+        var dependsOnByTask = openTasks
+            .SelectMany(t => t.Dependencies)
+            .ToLookup(d => d.TaskItemId, d => d.DependsOnTaskItemId);
+
+        return TaskRanking.RankNextTasks(openTasks, statusById, dependsOnByTask, actor, limit)
+            .Select(r => new NextTask(
+                r.Task.Id, r.Task.Name, r.Task.Status.ToString(), r.Task.Priority.ToString(),
+                r.Task.ClaimedBy, r.Reason))
             .ToList();
     }
 
@@ -380,16 +372,6 @@ public static class KanbanMcpTools
         {
             throw new McpException(ex.Message);
         }
-    }
-
-    private static string BuildReason(TaskItem task, bool claimedByOther)
-    {
-        var parts = new List<string> { $"{task.Priority} priority" };
-        if (task.Status == WorkStatus.InProgress) parts.Add("already in progress");
-        parts.Add("no open blockers");
-        if (claimedByOther) parts.Add($"claimed by {task.ClaimedBy} (deprioritised)");
-        else if (string.IsNullOrWhiteSpace(task.ClaimedBy)) parts.Add("unclaimed");
-        return "Top because: " + string.Join(", ", parts) + ".";
     }
 
     // ── Ideas inbox tools (#180 Phase 3) — native parity with the /api/ideas REST surface ──
