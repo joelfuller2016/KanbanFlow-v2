@@ -328,12 +328,6 @@ try {
     throw new Error(`delete_acceptance_criterion did not remove criterion ${createdAc.id}: ${JSON.stringify(acAfterDelete)}`);
   }
 
-  // Activity spot-check: list_task_activity should return an array (the round-trips above generate events).
-  const taskActivity = await callTool("list_task_activity", { taskId: task.id, limit: 5 });
-  if (!Array.isArray(taskActivity)) {
-    throw new Error(`list_task_activity did not return an array: ${JSON.stringify(taskActivity)}`);
-  }
-
   // Knowledge-graph memory round-trip (#224): create_entities -> (dupe skip) -> create_relations
   // -> add_observations -> search_nodes -> open_nodes -> read_graph -> delete_* cleanup. These
   // tools forward to the native /mcp endpoint, so this also smokes the wrapper->native proxy.
@@ -437,6 +431,20 @@ try {
   }
   await callTool("update_task_status", { taskId: task.id, status: "Review" });
   await callTool("release_task", { taskId: task.id, actor: "mcp-smoke" });
+
+  // Activity spot-check (#168): mirror scripts/smoke-api.ps1 — the workflow above (claim,
+  // comment, status change) must surface as real events, not merely "an array". Assert a
+  // non-empty feed AND the three expected eventTypes so a silently-empty result fails loudly.
+  const taskActivity = await callTool("list_task_activity", { taskId: task.id, limit: 50 });
+  if (!Array.isArray(taskActivity) || taskActivity.length === 0) {
+    throw new Error(`list_task_activity did not return a non-empty array: ${JSON.stringify(taskActivity)}`);
+  }
+  const activityEventTypes = new Set(taskActivity.map(event => event?.eventType));
+  for (const expectedEventType of ["TaskClaimed", "TaskCommentAdded", "TaskStatusChanged"]) {
+    if (!activityEventTypes.has(expectedEventType)) {
+      throw new Error(`list_task_activity is missing expected event ${expectedEventType}: got ${JSON.stringify([...activityEventTypes])}`);
+    }
+  }
 
   console.log(`MCP smoke tests passed for project ${projectId}, task ${task.id}.`);
 } finally {

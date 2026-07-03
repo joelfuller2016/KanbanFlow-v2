@@ -131,6 +131,63 @@ the high-value **workflow** tools (`get_next_tasks`, `get_step_context`, `move`/
 with WIP checks, etc.) natively; consider a generator only to backfill breadth, or as scaffolding
 to hand-edit.
 
+## Wrapper ↔ native deltas to close before the #231 cutover
+
+#231 tracks retiring the Node stdio wrapper (`scripts/mcp-server.mjs`) in favour of the
+in-process native `/mcp` server. **Until that cutover the Node wrapper remains the production
+tool surface** — currently **50 tools** (11 read + 10 authoring + 5 subtask + 5 acceptance-criterion
++ 3 dependency + 2 activity + 5 idea + 9 knowledge-graph).
+
+> Historical counts elsewhere are stale: this file's "41-tool surface" (above) and some issues'
+> "36" predate the idea-inbox tools (#180, +5) and the knowledge-graph memory tools (#224, +9).
+> The live count, verified from `scripts/mcp-server.mjs` (`node --check` + tool grep), is **50**.
+
+The deltas below were catalogued while hardening the wrapper (#168). They are **recorded here
+only** — do NOT add the missing tools or change these shapes in the wrapper; they are inputs to
+the #231 native cutover.
+
+### 1. Protocol-version negotiation (#3)
+
+- **Wrapper:** advertises a **hardcoded** `protocolVersion` of `2024-11-05` in its `initialize`
+  result and does not negotiate against the client's requested version. On the HTTP hop to the
+  native server it sends a fixed `MCP-Protocol-Version: 2025-06-18` header (`nativeProtocolVersion`).
+- **Native:** the `ModelContextProtocol.AspNetCore` SDK performs the standard MCP version
+  negotiation during the initialize handshake rather than pinning one revision.
+- **Cutover impact:** clients that today see `2024-11-05` from the wrapper will negotiate a newer
+  revision against the native server — confirm target clients accept the negotiated version.
+
+### 2. Response-shape differences (#5)
+
+- **`get_next_tasks`:**
+  - *Wrapper* returns the REST payload verbatim — an **object**:
+    `{ projectId, generatedAt, count, recommendations: [...], blockedTaskCount, blockedTasks: [...] }`.
+  - *Native* returns a **flat array** of ranked recommendations (`IReadOnlyList<NextTask>`), with
+    no `blockedTasks` envelope.
+  - Both share the same ranker (#151) — identical canonical order, actor de-prioritisation, and
+    1–50 limit clamp; only the envelope differs.
+- **`get_project_context`:**
+  - *Wrapper* returns the REST `/context` payload (deeply nested: metadata + summary counts +
+    requirements + nested features → tasks → subtasks → comments).
+  - *Native* returns a flatter `ProjectContext` (project docs + all features with `parentFeatureId`
+    + a flat task list).
+- **Cutover impact:** any client parsing `recommendations`/`blockedTasks`, or walking the deep
+  context tree, must adapt to the native flat shapes (or the native tools must be reshaped to match).
+
+### 3. REST capabilities with no wrapper tool (#7)
+
+~26 REST endpoints have no corresponding wrapper tool (and, by extension, no native tool yet),
+including:
+
+- **Requirements** — full CRUD **plus** assignment to features/tasks (no `*_requirement` tools exist).
+- **Features** — `GET /api/features/{id}` (fetch one) and list-features (the wrapper only
+  creates/updates/deletes features).
+- **Comments** — `DELETE /api/comments/{id}` (the wrapper can add a comment but not delete one).
+
+**Decision:** the wrapper is intentionally a curated **workflow** surface, not 1:1 REST parity.
+Do **not** backfill these ~26 tools into the wrapper. Close the gap (if desired) **natively** as
+part of #231, hand-curating high-value tools rather than auto-generating one tool per endpoint
+(see "Auto-generation options" above).
+
 ## References
 
 - C# MCP SDK: <https://github.com/modelcontextprotocol/csharp-sdk> ·

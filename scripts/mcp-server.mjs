@@ -16,6 +16,12 @@ const protocolVersion = "2024-11-05";
 const nativeProtocolVersion = "2025-06-18";
 let inputBuffer = Buffer.alloc(0);
 
+// Requests we've received an id for but not yet answered (crash-safety, #168). A fatal
+// async fault (see the process handlers below) reports a -32603 internal error for these so
+// a client isn't left hanging; a request's id is cleared the moment it is answered so the
+// fault path and the request's own completion can never both emit a frame for the same id.
+const inFlightRequestIds = new Set();
+
 const tools = [
   {
     name: "list_projects",
@@ -87,7 +93,7 @@ const tools = [
       type: "object",
       properties: {
         projectId: { type: "integer", description: "Project id to inspect." },
-        limit: { type: "integer", minimum: 1, maximum: 25, description: "Optional maximum number of recommendations." }
+        limit: { type: "integer", minimum: 1, maximum: 50, description: "Optional maximum number of recommendations (1–50). Matches the REST clamp (#151) and the native tool." }
       },
       required: ["projectId"]
     }
@@ -106,14 +112,14 @@ const tools = [
   },
   {
     name: "release_task",
-    description: "Release a task claimed by the same actor.",
+    description: "Release a task claimed by the same actor. Actor defaults to \"mcp-agent\" when omitted.",
     inputSchema: {
       type: "object",
       properties: {
         taskId: { type: "integer", description: "Task id to release." },
-        actor: { type: "string", description: "Actor releasing the task." }
+        actor: { type: "string", description: "Optional actor releasing the task. Defaults to \"mcp-agent\" (mirrors the native tool)." }
       },
-      required: ["taskId", "actor"]
+      required: ["taskId"]
     }
   },
   {
@@ -784,6 +790,33 @@ process.stdin.on("data", chunk => {
 process.stdin.on("end", () => process.exit(0));
 process.stdin.resume();
 
+// Crash-safety (#168): a rejected promise with no catch handler, or a throw in a callback
+// outside the per-request try/catch, would otherwise terminate this long-running stdio
+// wrapper and silently drop every subsequent request. Log the fault to STDERR only — stdout
+// carries the JSON-RPC framing and any stray byte there corrupts the stream — answer any
+// in-flight request with an internal error (the -32603 is itself a JSON-RPC frame and so
+// correctly goes to stdout), and stay alive. process.exit is deliberately NOT called: a
+// single bad turn must not take the server down.
+function reportFatal(kind, reason) {
+  try {
+    const detail = reason instanceof Error ? (reason.stack || reason.message) : String(reason);
+    process.stderr.write(`[kanbanflow-mcp] ${kind}: ${detail}\n`);
+  } catch {
+    // stderr itself is unavailable — nothing safe is left to do.
+  }
+  // Snapshot the ids: writeError clears each from the set as it responds.
+  for (const id of [...inFlightRequestIds]) {
+    try {
+      writeError(id, -32603, `Internal error (${kind}).`);
+    } catch {
+      // A failed write must not re-enter the fault handler.
+    }
+  }
+}
+
+process.on("unhandledRejection", reason => reportFatal("unhandledRejection", reason));
+process.on("uncaughtException", error => reportFatal("uncaughtException", error));
+
 class McpError extends Error {
   constructor(code, message, data = undefined) {
     super(message);
@@ -826,11 +859,22 @@ function handleRawMessage(rawMessage) {
     return;
   }
 
-  handleMessage(message).catch(error => {
-    if (hasRequestId(message)) {
-      writeError(message.id, error.code || -32000, error.message, error.data);
-    }
-  });
+  // Track answerable request ids (crash-safety #168) so reportFatal can respond -32603 for an
+  // in-flight request instead of leaving the client hanging. The id is removed once the request
+  // settles; claimResponse also removes it on the first response so no id is answered twice.
+  const trackedId = isPlainObject(message) && hasRequestId(message)
+    && isValidJsonRpcId(message.id) && message.id !== null ? message.id : undefined;
+  if (trackedId !== undefined) inFlightRequestIds.add(trackedId);
+
+  handleMessage(message)
+    .catch(error => {
+      if (hasRequestId(message)) {
+        writeError(message.id, error.code || -32000, error.message, error.data);
+      }
+    })
+    .finally(() => {
+      if (trackedId !== undefined) inFlightRequestIds.delete(trackedId);
+    });
 }
 
 async function handleMessage(message) {
@@ -951,7 +995,7 @@ async function callTool(toolName, args) {
       return restJson(`/api/projects/${requiredInt(args, "projectId")}/context`);
     case "get_next_tasks": {
       const projectId = requiredInt(args, "projectId");
-      const limit = optionalInt(args, "limit", { min: 1, max: 25 });
+      const limit = optionalInt(args, "limit", { min: 1, max: 50 });
       const query = limit === undefined ? "" : `?limit=${encodeURIComponent(limit)}`;
       return restJson(`/api/projects/${projectId}/next-tasks${query}`);
     }
@@ -963,7 +1007,8 @@ async function callTool(toolName, args) {
     case "release_task":
       return restJson(`/api/tasks/${requiredInt(args, "taskId")}/release`, {
         method: "POST",
-        body: { actor: requiredString(args, "actor") }
+        // Actor is optional and defaults to "mcp-agent", mirroring the native tool (#168).
+        body: { actor: optionalString(args, "actor") ?? "mcp-agent" }
       });
     case "update_task_status":
       assertEnum(args, "status", ["Backlog", "Todo", "InProgress", "Review", "Done"]);
@@ -1409,32 +1454,51 @@ function parseJsonOrText(text) {
   }
 }
 
-function requiredInt(args, name, { min = undefined, max = undefined } = {}) {
-  const value = Number(args[name]);
-  if (!Number.isInteger(value)) {
+// Integer coercion is deliberately strict (#168): only a real number, or a base-10 integer
+// STRING, is accepted. Number() alone silently coerces bad input — Number(true)===1,
+// Number([5])===5, Number("")===0, Number("  ")===0, Number(" 3 ")===3 — so those types (and
+// whitespace-padded / decimal / hex / exponent strings) are rejected BEFORE coercion. Anything
+// that isn't an integer after that throws JSON-RPC invalid-params (-32602).
+function coerceInt(rawValue, name) {
+  let value;
+  if (typeof rawValue === "number") {
+    value = rawValue;
+  } else if (typeof rawValue === "string" && /^[+-]?\d+$/.test(rawValue)) {
+    value = Number(rawValue);
+  } else {
     throw new McpError(-32602, `${name} must be an integer.`);
   }
-  if (min !== undefined && value < min) {
-    throw new McpError(-32602, `${name} must be greater than or equal to ${min}.`);
-  }
-  if (max !== undefined && value > max) {
-    throw new McpError(-32602, `${name} must be less than or equal to ${max}.`);
+  // Number.isSafeInteger (not isInteger): a huge id string like "99999999999999999999" would
+  // Number()-round to a nearby float that is still "integer" but a WRONG entity id — reject it.
+  // Ids here are 32-bit DB keys, so the safe-integer range is far more than enough (#168 review).
+  if (!Number.isSafeInteger(value)) {
+    throw new McpError(-32602, `${name} must be a safe integer.`);
   }
   return value;
 }
 
-function optionalInt(args, name, { min = undefined, max = undefined } = {}) {
-  if (args[name] === undefined || args[name] === null || args[name] === "") return undefined;
-  const value = Number(args[name]);
-  if (!Number.isInteger(value)) {
-    throw new McpError(-32602, `${name} must be an integer.`);
-  }
+function assertIntRange(value, name, min, max) {
   if (min !== undefined && value < min) {
     throw new McpError(-32602, `${name} must be greater than or equal to ${min}.`);
   }
   if (max !== undefined && value > max) {
     throw new McpError(-32602, `${name} must be less than or equal to ${max}.`);
   }
+}
+
+function requiredInt(args, name, { min = undefined, max = undefined } = {}) {
+  const value = coerceInt(args[name], name);
+  assertIntRange(value, name, min, max);
+  return value;
+}
+
+function optionalInt(args, name, { min = undefined, max = undefined } = {}) {
+  // Only null/undefined mean "not provided". An explicit "" (or any other non-integer value) is a
+  // provided-but-invalid value, so it is rejected by coerceInt (-32602) rather than silently
+  // falling back to the default — keeping the strict-int guarantee for optional params too (#168 review).
+  if (args[name] === undefined || args[name] === null) return undefined;
+  const value = coerceInt(args[name], name);
+  assertIntRange(value, name, min, max);
   return value;
 }
 
@@ -1470,12 +1534,24 @@ function optionalBool(args, name) {
 }
 
 function writeResult(id, result) {
+  if (!claimResponse(id)) return;
   writeMessage({ jsonrpc: "2.0", id, result });
 }
 
 function writeError(id, code, message, data = undefined) {
+  if (!claimResponse(id)) return;
   const error = data === undefined ? { code, message } : { code, message, data };
   writeMessage({ jsonrpc: "2.0", id, error });
+}
+
+// Guarantees at most one response per tracked request id (#168). Protocol-level responses with
+// a null id (e.g. parse errors) always pass through. A tracked id is cleared here on first use
+// so a fatal-fault -32603 (reportFatal) and the request's own completion can't both frame it.
+function claimResponse(id) {
+  if (id === null || id === undefined) return true;
+  if (!inFlightRequestIds.has(id)) return false;
+  inFlightRequestIds.delete(id);
+  return true;
 }
 
 function writeMessage(message) {
