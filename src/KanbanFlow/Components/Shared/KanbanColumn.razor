@@ -17,7 +17,7 @@
     </div>
 
     <div class="flex-grow-1 overflow-auto board-column-cards" data-status="@Status" data-testid="board-column-@Status-cards">
-        @foreach (var task in Tasks.OrderBy(t => t.SortOrder))
+        @foreach (var task in Tasks.OrderBy(t => t.SortOrder).ThenBy(t => t.Id))
         {
             <KanbanCard Task="task" OnToggleTaskDone="OnToggleTaskDone" OnOpenTaskDetail="OnOpenTaskDetail" />
         }

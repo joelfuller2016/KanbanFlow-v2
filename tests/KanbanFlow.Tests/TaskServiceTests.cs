@@ -315,6 +315,42 @@ public sealed class TaskServiceTests
         Assert.Equal(0, result.SortOrder);
     }
 
+    [Fact]
+    public async Task FeatureTaskList_WithDuplicateSortOrder_IsDeterministicByIdTieBreak()
+    {
+        // #207 AC: feature task lists must return a STABLE order even when two rows share a SortOrder
+        // (legacy data or a concurrent create/reassign). The read paths (GET /api/features/{id}/tasks,
+        // project tree, board, and the ProjectOutline/KanbanColumn UI loops) now order by
+        // SortOrder THEN Id. This exercises that exact ordering contract over real SQLite with a
+        // deliberate SortOrder collision. (Endpoint-level HTTP coverage is tracked by #202.)
+        using var f = new SqliteTestFactory();
+        int featureId, lowerId, higherId;
+        using (var db = f.CreateDbContext())
+        {
+            var p = new Project { Name = "P" };
+            var feat = new Feature { Name = "F", Project = p };
+            var a = new TaskItem { Name = "a", Feature = feat, Status = WorkStatus.Todo, SortOrder = 5 };
+            var b = new TaskItem { Name = "b", Feature = feat, Status = WorkStatus.Todo, SortOrder = 5 }; // tie
+            db.AddRange(a, b);
+            db.SaveChanges();
+            featureId = feat.Id;
+            lowerId = Math.Min(a.Id, b.Id);
+            higherId = Math.Max(a.Id, b.Id);
+        }
+
+        // Two independent reads must return the SAME deterministic order (lower Id first) despite the tie.
+        for (var read = 0; read < 2; read++)
+        {
+            using var db = f.CreateDbContext();
+            var ordered = await db.Tasks
+                .Where(t => t.FeatureId == featureId)
+                .OrderBy(t => t.SortOrder).ThenBy(t => t.Id)
+                .Select(t => t.Id)
+                .ToListAsync();
+            Assert.Equal(new[] { lowerId, higherId }, ordered);
+        }
+    }
+
     // ── UpdateAsync (validation + field-diff audit) ────────────────────────────
     [Fact]
     public async Task Update_EmptyName_ThrowsValidation()

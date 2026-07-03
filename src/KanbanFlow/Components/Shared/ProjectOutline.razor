@@ -165,7 +165,7 @@
         @if (isExpanded)
         {
             <div class="feature-tasks" data-testid="outline-feature-@feature.Id-tasks" data-feature-id="@feature.Id">
-            @foreach (var task in feature.Tasks.OrderBy(t => t.SortOrder))
+            @foreach (var task in feature.Tasks.OrderBy(t => t.SortOrder).ThenBy(t => t.Id))
             {
                 var taskHasSubtasks = task.Subtasks.Count > 0;
                 var taskIsExpanded = ExpandedTasks.Contains(task.Id);

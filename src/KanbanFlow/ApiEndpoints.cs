@@ -239,6 +239,7 @@ public static class ApiEndpoints
                 DoneCount = feature.Tasks.Count(t => t.Status == WorkStatus.Done),
                 Tasks = feature.Tasks
                     .OrderBy(t => t.SortOrder)
+                    .ThenBy(t => t.Id) // #207: deterministic tie-break when SortOrder ties (legacy/concurrent dupes)
                     .Select(task => MapTaskContext(task, feature)),
                 Children = project.Features
                     .Where(f => f.ParentFeatureId == feature.Id)
@@ -869,7 +870,7 @@ public static class ApiEndpoints
                 feature.UpdatedAt,
                 TaskCount = feature.Tasks.Count,
                 DoneCount = feature.Tasks.Count(t => t.Status == WorkStatus.Done),
-                Tasks = feature.Tasks.OrderBy(t => t.SortOrder).Select(t => new
+                Tasks = feature.Tasks.OrderBy(t => t.SortOrder).ThenBy(t => t.Id).Select(t => new
                 {
                     t.Id,
                     t.Name,
@@ -1031,6 +1032,7 @@ public static class ApiEndpoints
                 .AsSplitQuery() // #157: avoid the tasks x subtasks x criteria cartesian blow-up
                 .AsNoTracking()
                 .OrderBy(t => t.SortOrder)
+                .ThenBy(t => t.Id) // #207: deterministic tie-break when SortOrder ties
                 .ToListAsync();
 
             return Results.Ok(tasks.Select(MapTaskSummary));
@@ -1092,6 +1094,7 @@ public static class ApiEndpoints
                 .AsSplitQuery() // #157: avoid the tasks x subtasks x criteria cartesian blow-up
                 .AsNoTracking()
                 .OrderBy(t => t.SortOrder)
+                .ThenBy(t => t.Id) // #207: deterministic tie-break when SortOrder ties
                 .ToListAsync();
 
             var board = Enum.GetValues<WorkStatus>()
