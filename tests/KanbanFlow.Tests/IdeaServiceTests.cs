@@ -1,5 +1,7 @@
+using KanbanFlow.Data;
 using KanbanFlow.Models;
 using KanbanFlow.Services;
+using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 
 namespace KanbanFlow.Tests;
@@ -312,6 +314,15 @@ public sealed class IdeaServiceTests
         var ideaPromoted = Assert.Single(IdeaEvents(f, idea.Id), e => e.EventType == "IdeaPromoted");
         Assert.Equal(result.ProjectId, ideaPromoted.ProjectId);
 
+        // Regression guard (#206 adversarial finding): the `after` snapshot MUST reflect the PROMOTED
+        // state. Marking the tracked entity Unchanged reverts its values to the originally-loaded ones,
+        // so the snapshot has to be captured before that revert — otherwise this IdeaPromoted event's
+        // after-json would falsely record Status=New / promotedProjectId=null. Status serializes as its
+        // enum name; PromotedProjectId as the project id (camelCase, JsonSerializerDefaults.Web).
+        Assert.Contains("\"status\":\"Promoted\"", ideaPromoted.AfterJson);
+        Assert.Contains($"\"promotedProjectId\":{result.ProjectId}", ideaPromoted.AfterJson);
+        Assert.Contains("\"status\":\"New\"", ideaPromoted.BeforeJson);        // before ≠ after
+
         var projectEvent = db.ActivityEvents.Single(
             e => e.EntityType == "Project" && e.EntityId == result.ProjectId
                  && e.EventType == "ProjectCreatedFromIdea");
@@ -358,5 +369,168 @@ public sealed class IdeaServiceTests
         var stillThere = await check.Ideas.FindAsync(idea.Id);
         Assert.NotNull(stillThere);
         Assert.Null(stillThere!.PromotedProjectId);
+    }
+
+    [Fact]
+    public async Task Promote_Twice_SecondThrows_NoDuplicateProject()
+    {
+        // #206 defect A: a second promote must reject without creating a second project row or a
+        // duplicate audit pair (the pre-existing double-promote guard, re-verified end to end).
+        using var f = new SqliteTestFactory();
+        var svc = new IdeaService(f);
+        var idea = await svc.CreateAsync(new IdeaCreate("build once"), "promoter");
+
+        var result = await svc.PromoteAsync(idea.Id, "promoter");
+
+        using (var db = f.CreateDbContext())
+        {
+            Assert.Single(db.Projects.ToList());
+            var linked = await db.Ideas.FindAsync(idea.Id);
+            Assert.Equal(IdeaStatus.Promoted, linked!.Status);
+            Assert.Equal(result.ProjectId, linked.PromotedProjectId);
+            Assert.Single(db.ActivityEvents.Where(e => e.EventType == "ProjectCreatedFromIdea").ToList());
+        }
+        Assert.Single(IdeaEvents(f, idea.Id), e => e.EventType == "IdeaPromoted");
+
+        await Assert.ThrowsAsync<ValidationException>(() => svc.PromoteAsync(idea.Id, "promoter"));
+
+        // Still exactly one project and one of each audit event — no orphan, no duplicate.
+        using (var db = f.CreateDbContext())
+        {
+            Assert.Single(db.Projects.ToList());
+            Assert.Single(db.ActivityEvents.Where(e => e.EventType == "ProjectCreatedFromIdea").ToList());
+        }
+        Assert.Single(IdeaEvents(f, idea.Id), e => e.EventType == "IdeaPromoted");
+    }
+
+    [Fact]
+    public async Task Promote_OrphanedIdea_ThrowsClearMessage()
+    {
+        // #206 defect B: after the promoted project is deleted, OnDelete(SetNull) nulls the link
+        // but leaves Status == Promoted. Re-promoting must not render a blank "...to project ."
+        // — it must explain the project was removed.
+        using var f = new SqliteTestFactory();
+        var svc = new IdeaService(f);
+        var idea = await svc.CreateAsync(new IdeaCreate("orphan me"), null);
+        var result = await svc.PromoteAsync(idea.Id, null);
+
+        using (var db = f.CreateDbContext())
+        {
+            db.Projects.Remove((await db.Projects.FindAsync(result.ProjectId))!);
+            await db.SaveChangesAsync();
+        }
+        using (var db = f.CreateDbContext())
+        {
+            var orphan = await db.Ideas.FindAsync(idea.Id);
+            Assert.Equal(IdeaStatus.Promoted, orphan!.Status); // orphan state: promoted but unlinked
+            Assert.Null(orphan.PromotedProjectId);
+        }
+
+        var ex = await Assert.ThrowsAsync<ValidationException>(() => svc.PromoteAsync(idea.Id, null));
+        Assert.DoesNotContain("project .", ex.Message);
+        Assert.Contains("removed", ex.Message);
+    }
+
+    [Fact]
+    public async Task Promote_Concurrent_OnlyOneWins_NoOrphanProject()
+    {
+        // #206 defect A, true-concurrency form: two overlapping promotes of the same idea. Exactly
+        // one wins; the loser's conditional UPDATE matches 0 rows and rolls back its just-inserted
+        // project (the rows==0 path). Needs a file-backed DB so each context gets its own
+        // connection — the shared :memory: factory cannot hold two overlapping transactions.
+        using var f = new FileSqliteFactory();
+        var svc = new IdeaService(f);
+        int ideaId;
+        using (var db = f.CreateDbContext())
+        {
+            var idea = new Idea { Title = "race" };
+            db.Add(idea);
+            db.SaveChanges();
+            ideaId = idea.Id;
+        }
+
+        var t1 = Task.Run(() => svc.PromoteAsync(ideaId, "a"));
+        var t2 = Task.Run(() => svc.PromoteAsync(ideaId, "b"));
+
+        var successes = 0;
+        var failures = 0;
+        foreach (var t in new[] { t1, t2 })
+        {
+            // The loser is rejected — normally a ValidationException from the rows==0 guard, but under
+            // write contention it may instead surface a transient store exception (e.g. SQLITE_BUSY);
+            // both are acceptable "did not win" outcomes. The post-state assertions below prove the
+            // loser left no corruption regardless of which it was.
+            try { await t; successes++; }
+            catch (Exception) { failures++; }
+        }
+
+        Assert.Equal(1, successes);
+        Assert.Equal(1, failures);
+
+        using var check = f.CreateDbContext();
+        Assert.Single(check.Projects.ToList()); // no orphan from the loser's rolled-back insert
+        var promoted = check.Ideas.Single(i => i.Id == ideaId);
+        Assert.Equal(IdeaStatus.Promoted, promoted.Status);
+        Assert.NotNull(promoted.PromotedProjectId);
+        Assert.Single(check.ActivityEvents
+            .Where(e => e.EventType == "IdeaPromoted" && e.EntityId == ideaId).ToList());
+        Assert.Single(check.ActivityEvents
+            .Where(e => e.EventType == "ProjectCreatedFromIdea").ToList());
+    }
+
+    /// <summary>
+    /// A file-backed SQLite <see cref="IDbContextFactory{AppDbContext}"/> for the concurrency test.
+    /// Unlike <see cref="SqliteTestFactory"/> (one shared <c>:memory:</c> connection, which cannot
+    /// hold two overlapping transactions), this points every context at a temp file so each gets
+    /// its OWN connection. WAL plus Microsoft.Data.Sqlite's command-timeout busy retry let the
+    /// loser's write wait for the winner's commit rather than failing outright.
+    /// </summary>
+    private sealed class FileSqliteFactory : IDbContextFactory<AppDbContext>, IDisposable
+    {
+        private readonly string _path;
+        private readonly DbContextOptions<AppDbContext> _options;
+
+        public FileSqliteFactory()
+        {
+            _path = Path.Combine(Path.GetTempPath(), $"kf-promote-{Guid.NewGuid():N}.db");
+            var connectionString = new SqliteConnectionStringBuilder
+            {
+                DataSource = _path,
+                // Microsoft.Data.Sqlite retries SQLITE_BUSY/LOCKED for up to DefaultTimeout seconds,
+                // so a blocked concurrent writer waits for the other transaction to commit.
+                DefaultTimeout = 30
+            }.ToString();
+
+            _options = new DbContextOptionsBuilder<AppDbContext>()
+                .UseSqlite(connectionString)
+                .Options;
+
+            using var ctx = new AppDbContext(_options);
+            ctx.Database.EnsureCreated();
+
+            // WAL persists in the file header (set once, on a raw connection so no EF transaction
+            // wraps the journal_mode change) — better reader/writer concurrency for the race.
+            using var conn = new SqliteConnection(connectionString);
+            conn.Open();
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = "PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000;";
+            cmd.ExecuteNonQuery();
+        }
+
+        public AppDbContext CreateDbContext() => new(_options);
+
+        public Task<AppDbContext> CreateDbContextAsync(CancellationToken cancellationToken = default)
+            => Task.FromResult(new AppDbContext(_options));
+
+        public void Dispose()
+        {
+            // Return pooled connections so the file handle releases, then delete db + WAL/SHM.
+            SqliteConnection.ClearAllPools();
+            foreach (var p in new[] { _path, _path + "-wal", _path + "-shm" })
+            {
+                try { if (File.Exists(p)) File.Delete(p); }
+                catch (IOException) { /* temp file, best-effort cleanup */ }
+            }
+        }
     }
 }

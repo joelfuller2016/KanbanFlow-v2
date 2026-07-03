@@ -220,8 +220,11 @@ public sealed class IdeaService(IDbContextFactory<AppDbContext> dbFactory) : IId
         var idea = await db.Ideas.FirstOrDefaultAsync(i => i.Id == ideaId, ct);
         if (idea is null)
             throw new IdeaNotFoundException(ideaId);
+        // Fast-path reject for the common (non-concurrent) double-promote. The authoritative
+        // guard is the conditional UPDATE below — this snapshot read can go stale under a
+        // concurrent promote, so it is an optimization, not the race protection.
         if (idea.Status == IdeaStatus.Promoted || idea.PromotedProjectId is not null)
-            throw new ValidationException($"Idea {ideaId} is already promoted to project {idea.PromotedProjectId}.");
+            throw AlreadyPromoted(idea);
 
         var ideaBefore = IdeaActivitySnapshot(idea);
 
@@ -233,16 +236,44 @@ public sealed class IdeaService(IDbContextFactory<AppDbContext> dbFactory) : IId
             Readme = ComposeProjectReadme(idea)
         };
 
-        // Atomic promote: create the project (assigns its id), link + flip the idea, then
-        // audit both sides — one transaction so we never leave a half-promoted idea.
+        // Atomic promote: create the project (assigns its id), then flip the idea with a
+        // conditional UPDATE, then audit both sides — one transaction so we never leave a
+        // half-promoted idea.
         await using var tx = await db.Database.BeginTransactionAsync(ct);
 
         db.Projects.Add(project);
         await db.SaveChangesAsync(ct);
 
+        // Conditional flip closes the check-then-act race: only promote while the idea is still
+        // un-promoted. A concurrent PromoteAsync that commits first sets these columns, so our
+        // WHERE then matches 0 rows and we roll back — never a second project or orphaned row.
+        // ExecuteUpdate runs inside the ambient transaction opened above.
+        var now = DateTime.UtcNow;
+        var rows = await db.Ideas
+            .Where(i => i.Id == ideaId && i.Status != IdeaStatus.Promoted && i.PromotedProjectId == null)
+            .ExecuteUpdateAsync(s => s
+                .SetProperty(i => i.Status, IdeaStatus.Promoted)
+                .SetProperty(i => i.PromotedProjectId, project.Id)
+                .SetProperty(i => i.UpdatedAt, now), ct);
+        if (rows == 0)
+        {
+            // A concurrent promote won: undo our just-inserted project (no orphan) and report
+            // against the now-committed state.
+            await tx.RollbackAsync(ct);
+            var current = await db.Ideas.AsNoTracking().FirstOrDefaultAsync(i => i.Id == ideaId, ct);
+            throw current is null ? new IdeaNotFoundException(ideaId) : AlreadyPromoted(current);
+        }
+
+        // Reflect the committed flip on the tracked entity and capture the `after` audit snapshot
+        // from those promoted values NOW — before suppressing the redundant write. Marking the entry
+        // Unchanged reverts its current values to the originally-loaded (pre-promotion) ones, so the
+        // snapshot MUST be taken first; then Unchanged stops SaveChanges from re-issuing an UPDATE
+        // (ExecuteUpdate already persisted the flip). Order is load-bearing — do not move ideaAfter.
         idea.Status = IdeaStatus.Promoted;
         idea.PromotedProjectId = project.Id;
-        idea.UpdatedAt = DateTime.UtcNow;
+        idea.UpdatedAt = now;
+        var ideaAfter = IdeaActivitySnapshot(idea);
+        db.Entry(idea).State = EntityState.Unchanged;
 
         AddActivityEvent(
             db, project.Id, "Project", project.Id, actor,
@@ -251,13 +282,23 @@ public sealed class IdeaService(IDbContextFactory<AppDbContext> dbFactory) : IId
             $"Project '{project.Name}' created from idea {idea.Id}");
         AddActivityEvent(
             db, project.Id, "Idea", idea.Id, actor,
-            "IdeaPromoted", ideaBefore, IdeaActivitySnapshot(idea),
+            "IdeaPromoted", ideaBefore, ideaAfter,
             $"Idea '{idea.Title}' promoted to project {project.Id}");
 
         await db.SaveChangesAsync(ct);
         await tx.CommitAsync(ct);
         return new IdeaPromoteResult(idea.Id, project.Id);
     }
+
+    /// <summary>
+    /// Message for an already-promoted idea. Names the target project when the link is intact,
+    /// or explains the orphan case (Status is Promoted but the project was removed, nulling the
+    /// FK via OnDelete(SetNull)) rather than rendering a blank "project .".
+    /// </summary>
+    private static ValidationException AlreadyPromoted(Idea idea) => new(
+        idea.PromotedProjectId is int pid
+            ? $"Idea {idea.Id} is already promoted to project {pid}."
+            : $"Idea {idea.Id} is already marked promoted; its project was removed.");
 
     /// <summary>Trim to null: blank strings become <c>null</c> for clean storage.</summary>
     private static string? Normalize(string? value) =>
