@@ -202,13 +202,13 @@ public sealed class TaskRankingTests
             actor: "alice", limit: 5, dependsOnByTask: NoDeps);
 
         var claimed = result.Single(r => r.Task.Id == 1).Reason;
-        Assert.Contains("Critical priority", claimed);
+        Assert.Contains($"{TaskPriority.Critical} priority", claimed);
         Assert.Contains("already in progress", claimed);
         Assert.Contains("no open blockers", claimed);
         Assert.Contains("claimed by bob (deprioritised)", claimed);
 
         var unclaimed = result.Single(r => r.Task.Id == 2).Reason;
-        Assert.Contains("Low priority", unclaimed);
+        Assert.Contains($"{TaskPriority.Low} priority", unclaimed);
         Assert.Contains("unclaimed", unclaimed);
     }
 
