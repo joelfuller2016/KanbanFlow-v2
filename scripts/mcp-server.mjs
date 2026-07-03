@@ -1468,8 +1468,11 @@ function coerceInt(rawValue, name) {
   } else {
     throw new McpError(-32602, `${name} must be an integer.`);
   }
-  if (!Number.isInteger(value)) {
-    throw new McpError(-32602, `${name} must be an integer.`);
+  // Number.isSafeInteger (not isInteger): a huge id string like "99999999999999999999" would
+  // Number()-round to a nearby float that is still "integer" but a WRONG entity id — reject it.
+  // Ids here are 32-bit DB keys, so the safe-integer range is far more than enough (#168 review).
+  if (!Number.isSafeInteger(value)) {
+    throw new McpError(-32602, `${name} must be a safe integer.`);
   }
   return value;
 }
@@ -1490,8 +1493,10 @@ function requiredInt(args, name, { min = undefined, max = undefined } = {}) {
 }
 
 function optionalInt(args, name, { min = undefined, max = undefined } = {}) {
-  // null/undefined/"" still mean "not provided" (unchanged); validate strictly when present.
-  if (args[name] === undefined || args[name] === null || args[name] === "") return undefined;
+  // Only null/undefined mean "not provided". An explicit "" (or any other non-integer value) is a
+  // provided-but-invalid value, so it is rejected by coerceInt (-32602) rather than silently
+  // falling back to the default — keeping the strict-int guarantee for optional params too (#168 review).
+  if (args[name] === undefined || args[name] === null) return undefined;
   const value = coerceInt(args[name], name);
   assertIntRange(value, name, min, max);
   return value;

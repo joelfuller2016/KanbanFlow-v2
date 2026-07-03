@@ -357,7 +357,9 @@ async function main() {
       // no marker class; only failed rows get `table-danger`, so passed = total - failed.
       const resultsTable = page.locator('[data-testid="settings-test-results"]');
       const totalRows = await resultsTable.locator("tbody tr").count();
-      const failedRows = await resultsTable.locator("tr.table-danger").count();
+      // Scope failed rows to the SAME tbody as totalRows so passedRows can never go negative if a
+      // non-body element ever carries table-danger (#168 review).
+      const failedRows = await resultsTable.locator("tbody tr.table-danger").count();
       const passedRows = totalRows - failedRows;
       assert(failedRows === 0, `expected 0 failed rows in the UI, found ${failedRows}`);
       // Guard against a vacuous pass: a table that rendered zero rows also has zero failures.
