@@ -2167,20 +2167,22 @@ public static class ApiEndpoints
             if (MapRequirementLinkError(linkValidation) is { } linkError)
                 return linkError;
 
-            requirement.Text = dto.Text.Trim();
-            // Partial update: an omitted Description (null) is PRESERVED; an explicit empty/whitespace
-            // value clears it. Without this, a partial update sending only Text would wipe the stored
-            // description (#260, sibling of the project PUT #203 fix). Single-sourced + unit-tested via
-            // NormalizeOptionalText; mirrors PUT /api/projects/{id}.
-            requirement.Description = NormalizeOptionalText(dto.Description, requirement.Description);
-            if (newPriority is not null) requirement.Priority = newPriority.Value;
-            if (newStatus is not null) requirement.Status = newStatus.Value;
-            // 0 clears the link (→ null); a non-zero id was validated above. Same rule as the
-            // validator-skip and the create path — single-sourced via NormalizeLink (#82).
-            if (dto.FeatureId.HasValue) requirement.FeatureId = NormalizeLink(dto.FeatureId);
-            if (dto.TaskItemId.HasValue) requirement.TaskItemId = NormalizeLink(dto.TaskItemId);
-            if (dto.SortOrder.HasValue) requirement.SortOrder = dto.SortOrder.Value;
-            requirement.UpdatedAt = DateTime.UtcNow;
+            // Partial update mirrors PUT /api/projects/{id} (#203): only overwrite a field the caller
+            // actually sent, and bump UpdatedAt only when something truly changed so a no-op PUT (identical
+            // values resent) doesn't churn state. An omitted Description (null) is PRESERVED; an explicit
+            // empty/whitespace value clears it (#260) — single-sourced via NormalizeOptionalText. Enums
+            // apply only when explicitly provided; 0 clears a link (→ null) via NormalizeLink (#82).
+            var changed = false;
+            var trimmedText = dto.Text.Trim();
+            if (!string.Equals(requirement.Text, trimmedText, StringComparison.Ordinal)) { requirement.Text = trimmedText; changed = true; }
+            var nextDescription = NormalizeOptionalText(dto.Description, requirement.Description);
+            if (!string.Equals(requirement.Description, nextDescription, StringComparison.Ordinal)) { requirement.Description = nextDescription; changed = true; }
+            if (newPriority is not null && requirement.Priority != newPriority.Value) { requirement.Priority = newPriority.Value; changed = true; }
+            if (newStatus is not null && requirement.Status != newStatus.Value) { requirement.Status = newStatus.Value; changed = true; }
+            if (dto.FeatureId.HasValue) { var next = NormalizeLink(dto.FeatureId); if (requirement.FeatureId != next) { requirement.FeatureId = next; changed = true; } }
+            if (dto.TaskItemId.HasValue) { var next = NormalizeLink(dto.TaskItemId); if (requirement.TaskItemId != next) { requirement.TaskItemId = next; changed = true; } }
+            if (dto.SortOrder.HasValue && requirement.SortOrder != dto.SortOrder.Value) { requirement.SortOrder = dto.SortOrder.Value; changed = true; }
+            if (changed) requirement.UpdatedAt = DateTime.UtcNow;
 
             await db.SaveChangesAsync();
 

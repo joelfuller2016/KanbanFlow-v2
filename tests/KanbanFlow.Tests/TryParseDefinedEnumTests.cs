@@ -126,6 +126,29 @@ public sealed class TryParseDefinedEnumTests
         Assert.Equal(expected, value);
     }
 
+    // ── Whitespace-PADDED valid input: Enum.TryParse trims surrounding whitespace, so a padded name or
+    //    numeric id still parses to the defined member. Locks this boundary down (only null/blank/
+    //    whitespace-ONLY input is rejected — see the Rejects_NullOrBlank_* cases below). ──
+
+    [Theory]
+    [InlineData(" P0 ", RequirementPriority.P0)]
+    [InlineData("\tP1", RequirementPriority.P1)]
+    [InlineData(" 2 ", RequirementPriority.P2)]
+    public void Accepts_WhitespacePaddedValidInput_RequirementPriority(string raw, RequirementPriority expected)
+    {
+        Assert.True(ApiEndpoints.TryParseDefinedEnum<RequirementPriority>(raw, out var value));
+        Assert.Equal(expected, value);
+    }
+
+    [Theory]
+    [InlineData(" Open ", RequirementStatus.Open)]
+    [InlineData(" 1 ", RequirementStatus.InProgress)]
+    public void Accepts_WhitespacePaddedValidInput_RequirementStatus(string raw, RequirementStatus expected)
+    {
+        Assert.True(ApiEndpoints.TryParseDefinedEnum<RequirementStatus>(raw, out var value));
+        Assert.Equal(expected, value);
+    }
+
     // ── null / empty / whitespace → false (all three enums). ──
 
     [Theory]
