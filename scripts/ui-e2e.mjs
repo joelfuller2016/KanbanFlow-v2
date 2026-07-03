@@ -353,8 +353,15 @@ async function main() {
       await page.locator('[data-testid="settings-test-results"]').waitFor({ state: "visible" });
       // green summary badge present, and no failing rows
       await page.locator(".badge.text-bg-success").first().waitFor({ state: "visible" });
-      const failedRows = await page.locator("tr.table-danger").count();
+      // Count rows inside the results table (not the header summary badge). Passed rows carry
+      // no marker class; only failed rows get `table-danger`, so passed = total - failed.
+      const resultsTable = page.locator('[data-testid="settings-test-results"]');
+      const totalRows = await resultsTable.locator("tbody tr").count();
+      const failedRows = await resultsTable.locator("tr.table-danger").count();
+      const passedRows = totalRows - failedRows;
       assert(failedRows === 0, `expected 0 failed rows in the UI, found ${failedRows}`);
+      // Guard against a vacuous pass: a table that rendered zero rows also has zero failures.
+      assert(passedRows > 0, `expected at least one passed row in the UI, found ${passedRows} of ${totalRows}`);
     });
 
     // ── Cleanup of API-created data (best effort) ──
