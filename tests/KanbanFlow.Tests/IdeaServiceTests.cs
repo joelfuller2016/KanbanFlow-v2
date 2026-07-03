@@ -457,11 +457,12 @@ public sealed class IdeaServiceTests
         foreach (var t in new[] { t1, t2 })
         {
             // The loser is rejected — normally a ValidationException from the rows==0 guard, but under
-            // write contention it may instead surface a transient store exception (e.g. SQLITE_BUSY);
-            // both are acceptable "did not win" outcomes. The post-state assertions below prove the
-            // loser left no corruption regardless of which it was.
+            // write contention it may instead surface a transient store exception (DbUpdateException /
+            // SqliteException, e.g. SQLITE_BUSY). ONLY those are acceptable "did not win" outcomes;
+            // anything else (NullReference, InvalidOperation, …) is a real regression and must fail the
+            // test loudly, so it propagates rather than being miscounted as a loss.
             try { await t; successes++; }
-            catch (Exception) { failures++; }
+            catch (Exception ex) when (ex is ValidationException or DbUpdateException or SqliteException) { failures++; }
         }
 
         Assert.Equal(1, successes);
@@ -498,7 +499,11 @@ public sealed class IdeaServiceTests
                 DataSource = _path,
                 // Microsoft.Data.Sqlite retries SQLITE_BUSY/LOCKED for up to DefaultTimeout seconds,
                 // so a blocked concurrent writer waits for the other transaction to commit.
-                DefaultTimeout = 30
+                DefaultTimeout = 30,
+                // Disable pooling for this temp DB: Dispose can then delete the file once connections
+                // close, WITHOUT a process-global SqliteConnection.ClearAllPools() that would disturb
+                // other Microsoft.Data.Sqlite tests running in parallel.
+                Pooling = false
             }.ToString();
 
             _options = new DbContextOptionsBuilder<AppDbContext>()
@@ -524,8 +529,8 @@ public sealed class IdeaServiceTests
 
         public void Dispose()
         {
-            // Return pooled connections so the file handle releases, then delete db + WAL/SHM.
-            SqliteConnection.ClearAllPools();
+            // Pooling is disabled on the connection string, so closed connections release the file
+            // handle immediately — no process-global ClearAllPools() needed. Delete db + WAL/SHM.
             foreach (var p in new[] { _path, _path + "-wal", _path + "-shm" })
             {
                 try { if (File.Exists(p)) File.Delete(p); }
