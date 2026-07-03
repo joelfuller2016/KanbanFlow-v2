@@ -1434,11 +1434,12 @@ public static class ApiEndpoints
             }
         });
 
-        // PUT /api/tasks/{id} — update. Routes through ITaskService.UpdateAsync so
-        // every field change emits a uniform audit event regardless of caller (#88).
-        // SortOrder is applied inline after the service call because it is a UI
-        // concern (drag-and-drop reorder) outside the audit-tracked TaskUpdate fields.
-        app.MapPut("/api/tasks/{id:int}", async (int id, TaskDto dto, Services.ITaskService taskSvc, AppDbContext db, CancellationToken ct) =>
+        // PUT /api/tasks/{id} — update. Routes through ITaskService.UpdateAsync so every
+        // field change emits a uniform audit event regardless of caller (#88), and so the
+        // whole update — audited fields AND the SortOrder reorder — persists in ONE atomic
+        // transaction (#190). SortOrder rides along non-audited: it emits no activity
+        // event/comment, and the response still reflects task.SortOrder exactly as before.
+        app.MapPut("/api/tasks/{id:int}", async (int id, TaskDto dto, Services.ITaskService taskSvc, CancellationToken ct) =>
         {
             if (string.IsNullOrWhiteSpace(dto.Name))
                 return Results.UnprocessableEntity(new { message = "Name is required." });
@@ -1468,27 +1469,16 @@ public static class ApiEndpoints
 
             try
             {
+                // SortOrder folds into the single service transaction (#190) — it persists
+                // atomically with the audited fields, non-audited, in one SaveChanges.
                 var update = new Services.TaskUpdate(
                     Name: dto.Name,
                     Description: dto.Description,
                     Status: newStatus,
                     Priority: newPriority,
-                    Assignee: dto.Assignee);
+                    Assignee: dto.Assignee,
+                    SortOrder: dto.SortOrder);
                 var task = await taskSvc.UpdateAsync(id, update, dto.Actor, ct);
-
-                // Apply SortOrder outside the service: it is a UI-only reorder concern
-                // not modeled by TaskUpdate. We persist it on the same context here.
-                if (dto.SortOrder.HasValue && task.SortOrder != dto.SortOrder.Value)
-                {
-                    var tracked = await db.Tasks.FirstOrDefaultAsync(t => t.Id == id, ct);
-                    if (tracked is not null)
-                    {
-                        tracked.SortOrder = dto.SortOrder.Value;
-                        tracked.UpdatedAt = DateTime.UtcNow;
-                        await db.SaveChangesAsync(ct);
-                        task = tracked;
-                    }
-                }
 
                 return Results.Ok(new
                 {

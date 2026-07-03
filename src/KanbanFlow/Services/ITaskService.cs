@@ -176,10 +176,16 @@ public sealed record TaskCreate(
     string? Assignee = null,
     int? SortOrder = null);
 
-/// <summary>Update payload for <see cref="ITaskService.UpdateAsync"/>. Optional fields are <c>null</c> for unchanged.</summary>
+/// <summary>
+/// Update payload for <see cref="ITaskService.UpdateAsync"/>. Optional fields are
+/// <c>null</c> for unchanged. <see cref="SortOrder"/> is a non-audited reorder concern:
+/// it persists in the SAME transaction as the audited fields (#190) yet never emits an
+/// activity event or comment (the #88 audit boundary).
+/// </summary>
 public sealed record TaskUpdate(
     string? Name = null,
     string? Description = null,
     WorkStatus? Status = null,
     TaskPriority? Priority = null,
-    string? Assignee = null);
+    string? Assignee = null,
+    int? SortOrder = null);
