@@ -276,7 +276,7 @@ Requirements are organised by **capability**, not by entity. Every capability mu
 | # | Requirement |
 |---|-------------|
 | R-3.1 | `GET /api/projects/{id}/next-tasks?actor={name}&limit={n}` returns priority-sorted, dependency-aware next tasks. *(✅ implemented.)* |
-| R-3.2 | Each recommendation includes a human-readable `reason` ("Top because: P0 requirement linked, no open blockers, oldest unclaimed"). *(✅ implemented via `BuildNextTaskReason`.)* |
+| R-3.2 | Each recommendation includes a human-readable `reason` ("Top because: P0 requirement linked, no open blockers, oldest unclaimed"). *(✅ implemented via the shared `TaskRanking.BuildReason`, used by both the REST endpoint and MCP `get_next_tasks`.)* |
 | R-3.3 | Tasks blocked by incomplete dependencies are excluded from `next-tasks` results. *(✅ implemented.)* |
 | R-3.4 | A "step context" endpoint returns everything an agent needs to act on a single task without re-querying the graph: full description, all acceptance criteria, all subtasks recursively, all dependencies (resolved to task names + status), recent comments (latest first), related requirements, recent activity events touching this task. *(⚠️ partial — `GET /api/tasks/{id}` returns subtasks + criteria; comments and dependencies require separate calls. Consolidate into a `GET /api/tasks/{id}/context` for AI consumption.)* |
 | R-3.5 | `next-tasks` accepts an optional `actor` parameter and de-prioritises tasks already claimed by other actors. *(✅ implemented.)* |

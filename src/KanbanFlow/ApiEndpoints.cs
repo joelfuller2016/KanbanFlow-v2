@@ -299,13 +299,11 @@ public static class ApiEndpoints
         });
 
         // GET /api/projects/{id}/next-tasks — small ranked list of recommended next work
-        app.MapGet("/api/projects/{id:int}/next-tasks", async (int id, int? limit, AppDbContext db) =>
+        app.MapGet("/api/projects/{id:int}/next-tasks", async (int id, int? limit, string? actor, AppDbContext db) =>
         {
             var projectExists = await db.Projects.AnyAsync(p => p.Id == id);
             if (!projectExists)
                 return Results.NotFound(new { message = $"Project {id} not found." });
-
-            var take = Math.Clamp(limit ?? 5, 1, 25);
 
             var projectTasks = await db.Tasks
                 .Include(t => t.Feature)
@@ -335,30 +333,35 @@ public static class ApiEndpoints
                 .Where(x => x.UnfinishedBlockers.Count > 0)
                 .ToList();
 
-            var recommendations = projectTasks
-                .Where(t => t.Status != WorkStatus.Done && !dependenciesByBlockedTask[t.Id]
-                    .Any(d => tasksById.TryGetValue(d.DependsOnTaskItemId, out var blocker) && blocker.Status != WorkStatus.Done))
-                .OrderByDescending(t => PriorityRank(t.Priority))
-                .ThenByDescending(t => StatusRank(t.Status))
-                .ThenBy(t => t.UpdatedAt)
-                .Take(take)
-                .Select((task, index) => new
+            // Rank via the shared TaskRanking service (#151/#188) so this endpoint and the MCP
+            // get_next_tasks tool can never drift: identical canonical order, actor de-prioritisation,
+            // reason strings, and 1–50 limit clamp. We hand the ranker the open tasks, the
+            // project-wide status map (to resolve blockers), and a depends-on lookup; it filters
+            // blocked tasks and orders the rest. Only the result ORDER changes from the old inline
+            // ranking (now actor-aware + deterministic by Id) — the response shape is unchanged.
+            var openTasks = projectTasks.Where(t => t.Status != WorkStatus.Done).ToList();
+            var statusById = projectTasks.ToDictionary(t => t.Id, t => t.Status);
+            var dependsOnByTask = dependencies.ToLookup(d => d.TaskItemId, d => d.DependsOnTaskItemId);
+
+            var recommendations = Services.TaskRanking
+                .RankNextTasks(openTasks, statusById, dependsOnByTask, actor, limit ?? 5)
+                .Select((ranked, index) => new
                 {
                     Rank = index + 1,
-                    task.Id,
-                    task.FeatureId,
-                    FeatureName = task.Feature.Name,
-                    task.Name,
-                    task.Description,
-                    Status = task.Status.ToString(),
-                    Priority = task.Priority.ToString(),
-                    task.Assignee,
-                    task.ClaimedBy,
-                    task.ClaimedAt,
-                    task.UpdatedAt,
-                    IsBlocked = false,
+                    ranked.Task.Id,
+                    ranked.Task.FeatureId,
+                    FeatureName = ranked.Task.Feature.Name,
+                    ranked.Task.Name,
+                    ranked.Task.Description,
+                    Status = ranked.Task.Status.ToString(),
+                    Priority = ranked.Task.Priority.ToString(),
+                    ranked.Task.Assignee,
+                    ranked.Task.ClaimedBy,
+                    ranked.Task.ClaimedAt,
+                    ranked.Task.UpdatedAt,
+                    ranked.IsBlocked,
                     BlockedByUnfinishedTasks = false,
-                    Reason = BuildNextTaskReason(task)
+                    ranked.Reason
                 })
                 .ToList();
 
@@ -2688,39 +2691,6 @@ public static class ApiEndpoints
     }
 
     private sealed record TaskClaimState(int Id, string Name, string? ClaimedBy, DateTime? ClaimedAt, DateTime UpdatedAt);
-
-    private static int PriorityRank(TaskPriority priority) => priority switch
-    {
-        TaskPriority.Critical => 4,
-        TaskPriority.High => 3,
-        TaskPriority.Medium => 2,
-        TaskPriority.Low => 1,
-        _ => 0
-    };
-
-    private static int StatusRank(WorkStatus status) => status switch
-    {
-        WorkStatus.InProgress => 3,
-        WorkStatus.Todo => 2,
-        WorkStatus.Backlog => 1,
-        WorkStatus.Review => 0,
-        WorkStatus.Done => -1,
-        _ => 0
-    };
-
-    private static string BuildNextTaskReason(TaskItem task)
-    {
-        var status = task.Status switch
-        {
-            WorkStatus.InProgress => "already in progress",
-            WorkStatus.Todo => "ready to start",
-            WorkStatus.Backlog => "available in the backlog",
-            WorkStatus.Review => "waiting for review attention",
-            _ => task.Status.ToString().ToLowerInvariant()
-        };
-
-        return $"{task.Priority} priority task that is {status}; last updated {task.UpdatedAt:u}.";
-    }
 
     private static string BuildBlockedTaskReason(TaskItem task, IReadOnlyCollection<TaskItem> unfinishedBlockers)
     {
