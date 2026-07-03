@@ -167,7 +167,16 @@ public sealed class TaskService(IDbContextFactory<AppDbContext> dbFactory) : ITa
 
         var before = TaskActivitySnapshot(task);
 
+        // #207: SortOrder is per-feature, so keeping the source-feature SortOrder would collide with an
+        // existing task in the destination (feature-scoped views order by SortOrder with no Id tie-break
+        // → silent, non-deterministic order). Append to the END of the destination, mirroring CreateAsync.
+        // MaxAsync runs before SaveChanges while the task still has its OLD FeatureId in the DB, so it
+        // correctly excludes the moved task and yields a clean, collision-free append.
+        var maxSort = await db.Tasks
+            .Where(t => t.FeatureId == newFeatureId)
+            .MaxAsync(t => (int?)t.SortOrder, ct) ?? -1;
         task.FeatureId = newFeatureId;
+        task.SortOrder = maxSort + 1;
         task.UpdatedAt = DateTime.UtcNow;
 
         db.TaskComments.Add(new TaskComment

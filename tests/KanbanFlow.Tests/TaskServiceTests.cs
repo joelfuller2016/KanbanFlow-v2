@@ -264,6 +264,57 @@ public sealed class TaskServiceTests
             () => svc.ReassignToFeatureAsync(taskId, otherProjectFeatureId, "x"));
     }
 
+    [Fact]
+    public async Task Reassign_AppendsToEndOfDestinationFeature()
+    {
+        // #207: the moved task must be appended to the END of the destination feature, NOT keep its
+        // source-feature SortOrder (which would collide with an existing destination task since
+        // SortOrder is per-feature). Destination already holds tasks at SortOrder 0 and 1.
+        using var f = new SqliteTestFactory();
+        int taskId, destFeatureId;
+        using (var db = f.CreateDbContext())
+        {
+            var p = new Project { Name = "P" };
+            var src = new Feature { Name = "src", Project = p };
+            var dst = new Feature { Name = "dst", Project = p };
+            var moving = new TaskItem { Name = "moving", Feature = src, Status = WorkStatus.Todo, SortOrder = 0 };
+            var d0 = new TaskItem { Name = "d0", Feature = dst, Status = WorkStatus.Todo, SortOrder = 0 };
+            var d1 = new TaskItem { Name = "d1", Feature = dst, Status = WorkStatus.Todo, SortOrder = 1 };
+            db.AddRange(moving, d0, d1);
+            db.SaveChanges();
+            taskId = moving.Id;
+            destFeatureId = dst.Id;
+        }
+        var svc = new TaskService(f);
+
+        var result = await svc.ReassignToFeatureAsync(taskId, destFeatureId, "alice");
+
+        Assert.Equal(destFeatureId, result.FeatureId);
+        Assert.Equal(2, result.SortOrder); // appended after the existing 0 and 1
+
+        using var check = f.CreateDbContext();
+        var sortOrders = await check.Tasks
+            .Where(t => t.FeatureId == destFeatureId)
+            .Select(t => t.SortOrder)
+            .ToListAsync();
+        Assert.Equal(3, sortOrders.Count);
+        Assert.Equal(sortOrders.Count, sortOrders.Distinct().Count()); // no duplicate SortOrder
+    }
+
+    [Fact]
+    public async Task Reassign_ToEmptyDestinationFeature_SortOrderZero()
+    {
+        // #207: appending into an empty destination feature yields SortOrder 0 (maxSort -1 + 1).
+        using var f = new SqliteTestFactory();
+        var (taskId, emptyDestFeatureId, _) = SeedForReassign(f); // f1b has no tasks
+        var svc = new TaskService(f);
+
+        var result = await svc.ReassignToFeatureAsync(taskId, emptyDestFeatureId, "alice");
+
+        Assert.Equal(emptyDestFeatureId, result.FeatureId);
+        Assert.Equal(0, result.SortOrder);
+    }
+
     // ── UpdateAsync (validation + field-diff audit) ────────────────────────────
     [Fact]
     public async Task Update_EmptyName_ThrowsValidation()
