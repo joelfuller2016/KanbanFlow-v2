@@ -155,6 +155,26 @@ public sealed class TaskRankingTests
     }
 
     [Fact]
+    public void RankNextTasks_TrimsActor_DoesNotDeprioritiseOwnClaimWithSurroundingWhitespace()
+    {
+        // #151 review: ClaimedBy is trimmed on write, so an actor arriving with surrounding whitespace
+        // ("  bob  ") must still match a task claimed by "bob" and NOT be de-prioritised. Without the
+        // trim this would order [3, 2] (bob's task sunk); with it, bob's own claim stays first.
+        var open = new[]
+        {
+            Task(2, TaskPriority.High, claimedBy: "bob"),
+            Task(3, TaskPriority.High),
+        };
+
+        var result = TaskRanking.RankNextTasks(
+            open, StatusById((2, WorkStatus.Todo), (3, WorkStatus.Todo)),
+            actor: "  bob  ", limit: 5, dependsOnByTask: NoDeps);
+
+        Assert.Equal([2, 3], result.Select(r => r.Task.Id));
+        Assert.False(result.Single(r => r.Task.Id == 2).ClaimedByOther);
+    }
+
+    [Fact]
     public void RankNextTasks_WithNullActor_StillDeprioritisesAnyClaimedTask_Consistently()
     {
         // Canonical MCP behaviour preserved (#151): with no actor a claimed task counts as

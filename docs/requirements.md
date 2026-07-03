@@ -241,7 +241,7 @@ Given a project, the API tells an agent what to work on next, with reasoning and
 | # | Requirement | Status |
 |---|-------------|--------|
 | R-3.1 | `GET /api/projects/{id}/next-tasks?actor={name}&limit={n}` returns priority-sorted, dependency-aware next tasks. | ✅ |
-| R-3.2 | Each recommendation includes a `reason` string ("Top because: P0 requirement linked, no open blockers, oldest unclaimed"). | ✅ Shared `TaskRanking.BuildReason` (`Services/TaskRanking.cs`), used by REST + MCP. |
+| R-3.2 | Each recommendation includes a `reason` string (e.g. "Top because: Critical priority, no open blockers, unclaimed."). | ✅ Shared `TaskRanking.RankNextTasks` (`Services/TaskRanking.cs`), used by REST + MCP. |
 | R-3.3 | Tasks blocked by incomplete dependencies are excluded from `next-tasks` results. | ✅ |
 | R-3.4 | Per-task context endpoint (see R-1.6) returns the bundle an agent needs without further round-trips. | ⚠️ Partial. |
 | R-3.5 | `next-tasks` accepts `actor` and de-prioritises tasks claimed by other actors. | ✅ |

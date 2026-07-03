@@ -37,9 +37,9 @@ public static class TaskRanking
     /// dependencies simply yield an empty sequence.
     /// </param>
     /// <param name="actor">
-    /// Optional actor label; a task claimed by a DIFFERENT actor is de-prioritised. When
-    /// <c>null</c>/blank, no claim de-prioritises (an actor never matches a claim, so a claimed
-    /// task is treated as claimed-by-other only when an actor is supplied — see remarks).
+    /// Optional actor label (trimmed before comparison). A task claimed by a DIFFERENT actor is
+    /// de-prioritised. When <c>null</c>/blank, EVERY claimed task is treated as claimed-by-other and
+    /// sinks (a claim can never equal a null actor) — matching historic MCP behaviour; see remarks.
     /// </param>
     /// <param name="limit">Maximum number of results; clamped to the range 1–50.</param>
     /// <remarks>
@@ -60,6 +60,9 @@ public static class TaskRanking
         ArgumentNullException.ThrowIfNull(dependsOnByTask);
 
         var clampedLimit = Math.Clamp(limit, 1, 50);
+        // Normalize the actor exactly as ClaimedBy is normalized on write (trim, blank→null), so an
+        // actor like "alice " matches a task claimed by "alice" and is NOT wrongly de-prioritised (#151 review).
+        var normalizedActor = string.IsNullOrWhiteSpace(actor) ? null : actor.Trim();
 
         return openTasks
             .Select(task =>
@@ -69,7 +72,7 @@ public static class TaskRanking
                 var hasOpenBlocker = dependsOnByTask[task.Id].Any(dependsOnId =>
                     !statusById.TryGetValue(dependsOnId, out var status) || status != WorkStatus.Done);
                 var claimedByOther = !string.IsNullOrWhiteSpace(task.ClaimedBy)
-                    && !string.Equals(task.ClaimedBy, actor, StringComparison.OrdinalIgnoreCase);
+                    && !string.Equals(task.ClaimedBy, normalizedActor, StringComparison.OrdinalIgnoreCase);
                 return (Task: task, HasOpenBlocker: hasOpenBlocker, ClaimedByOther: claimedByOther);
             })
             .Where(x => !x.HasOpenBlocker)

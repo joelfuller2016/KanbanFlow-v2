@@ -313,8 +313,12 @@ public static class ApiEndpoints
 
             var taskIds = projectTasks.Select(t => t.Id).ToList();
             var tasksById = projectTasks.ToDictionary(t => t.Id);
+            // Include EVERY dependency of a project task, even one whose target is outside the project's
+            // task set: the shared ranker treats a target missing from statusById as an unfinished blocker
+            // and excludes the task — matching MCP get_next_tasks (which loads all of a task's dependencies).
+            // Filtering the target to in-project here would let such a task slip into recommendations (#188 review).
             var dependencies = await db.TaskDependencies
-                .Where(d => d.ProjectId == id && taskIds.Contains(d.TaskItemId) && taskIds.Contains(d.DependsOnTaskItemId))
+                .Where(d => d.ProjectId == id && taskIds.Contains(d.TaskItemId))
                 .AsNoTracking()
                 .ToListAsync();
             var dependenciesByBlockedTask = dependencies.ToLookup(d => d.TaskItemId);
