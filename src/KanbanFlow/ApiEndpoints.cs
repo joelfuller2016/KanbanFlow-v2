@@ -1707,7 +1707,7 @@ public static class ApiEndpoints
         // POST /api/tasks/{taskId}/dependencies — create a dependency for a task
         app.MapPost("/api/tasks/{taskId:int}/dependencies", async (int taskId, TaskDependencyDto dto, AppDbContext db) =>
         {
-            if (!Enum.TryParse<TaskDependencyType>(dto.Type ?? nameof(TaskDependencyType.DependsOn), ignoreCase: true, out var type))
+            if (!TryParseDefinedEnum<TaskDependencyType>(dto.Type ?? nameof(TaskDependencyType.DependsOn), out var type))
                 return Results.UnprocessableEntity(new { message = $"Invalid dependency type: {dto.Type}. Valid values: {string.Join(", ", Enum.GetNames<TaskDependencyType>())}" });
 
             var (blockedTaskId, blockingTaskId, missingTaskMessage) = ResolveDependencyTaskIds(taskId, dto, type);
@@ -2078,18 +2078,12 @@ public static class ApiEndpoints
                 return Results.UnprocessableEntity(new { message = "Text is required." });
 
             RequirementPriority priority = RequirementPriority.P1;
-            if (dto.Priority is not null)
-            {
-                if (!Enum.TryParse<RequirementPriority>(dto.Priority, ignoreCase: true, out priority))
-                    return Results.UnprocessableEntity(new { message = $"Invalid priority: {dto.Priority}. Valid values: {string.Join(", ", Enum.GetNames<RequirementPriority>())}" });
-            }
+            if (dto.Priority is not null && !TryParseDefinedEnum<RequirementPriority>(dto.Priority, out priority))
+                return Results.UnprocessableEntity(new { message = $"Invalid priority: {dto.Priority}. Valid values: {string.Join(", ", Enum.GetNames<RequirementPriority>())}" });
 
             RequirementStatus status = RequirementStatus.Open;
-            if (dto.Status is not null)
-            {
-                if (!Enum.TryParse<RequirementStatus>(dto.Status, ignoreCase: true, out status))
-                    return Results.UnprocessableEntity(new { message = $"Invalid status: {dto.Status}. Valid values: {string.Join(", ", Enum.GetNames<RequirementStatus>())}" });
-            }
+            if (dto.Status is not null && !TryParseDefinedEnum<RequirementStatus>(dto.Status, out status))
+                return Results.UnprocessableEntity(new { message = $"Invalid status: {dto.Status}. Valid values: {string.Join(", ", Enum.GetNames<RequirementStatus>())}" });
 
             // Validate feature/task links exist AND belong to this project (#82). Missing → 404,
             // cross-project → 422 (mirrors the CrossProjectReassignmentException convention).
@@ -2145,11 +2139,25 @@ public static class ApiEndpoints
             if (string.IsNullOrWhiteSpace(dto.Text))
                 return Results.UnprocessableEntity(new { message = "Text is required." });
 
-            if (dto.Priority is not null && !Enum.TryParse<RequirementPriority>(dto.Priority, ignoreCase: true, out _))
-                return Results.UnprocessableEntity(new { message = $"Invalid priority: {dto.Priority}. Valid values: {string.Join(", ", Enum.GetNames<RequirementPriority>())}" });
+            // Parse each enum ONCE at validation time and reuse the captured value below (#153 — the
+            // handler previously validated with `out _` then RE-PARSED via Enum.Parse). TryParseDefinedEnum
+            // pairs Enum.TryParse with Enum.IsDefined so numeric strings like "99" are rejected (#205),
+            // matching the create path and the task endpoints.
+            RequirementPriority? newPriority = null;
+            if (dto.Priority is not null)
+            {
+                if (!TryParseDefinedEnum<RequirementPriority>(dto.Priority, out var parsedPriority))
+                    return Results.UnprocessableEntity(new { message = $"Invalid priority: {dto.Priority}. Valid values: {string.Join(", ", Enum.GetNames<RequirementPriority>())}" });
+                newPriority = parsedPriority;
+            }
 
-            if (dto.Status is not null && !Enum.TryParse<RequirementStatus>(dto.Status, ignoreCase: true, out _))
-                return Results.UnprocessableEntity(new { message = $"Invalid status: {dto.Status}. Valid values: {string.Join(", ", Enum.GetNames<RequirementStatus>())}" });
+            RequirementStatus? newStatus = null;
+            if (dto.Status is not null)
+            {
+                if (!TryParseDefinedEnum<RequirementStatus>(dto.Status, out var parsedStatus))
+                    return Results.UnprocessableEntity(new { message = $"Invalid status: {dto.Status}. Valid values: {string.Join(", ", Enum.GetNames<RequirementStatus>())}" });
+                newStatus = parsedStatus;
+            }
 
             // Validate feature/task links exist AND belong to this requirement's project (#82).
             // PUT previously applied NO link validation, so it could point a requirement at a
@@ -2160,9 +2168,13 @@ public static class ApiEndpoints
                 return linkError;
 
             requirement.Text = dto.Text.Trim();
-            requirement.Description = dto.Description?.Trim();
-            requirement.Priority = dto.Priority is not null ? Enum.Parse<RequirementPriority>(dto.Priority, ignoreCase: true) : requirement.Priority;
-            requirement.Status = dto.Status is not null ? Enum.Parse<RequirementStatus>(dto.Status, ignoreCase: true) : requirement.Status;
+            // Partial update: an omitted Description (null) is PRESERVED; an explicit empty/whitespace
+            // value clears it. Without this, a partial update sending only Text would wipe the stored
+            // description (#260, sibling of the project PUT #203 fix). Single-sourced + unit-tested via
+            // NormalizeOptionalText; mirrors PUT /api/projects/{id}.
+            requirement.Description = NormalizeOptionalText(dto.Description, requirement.Description);
+            if (newPriority is not null) requirement.Priority = newPriority.Value;
+            if (newStatus is not null) requirement.Status = newStatus.Value;
             // 0 clears the link (→ null); a non-zero id was validated above. Same rule as the
             // validator-skip and the create path — single-sourced via NormalizeLink (#82).
             if (dto.FeatureId.HasValue) requirement.FeatureId = NormalizeLink(dto.FeatureId);
@@ -2457,6 +2469,27 @@ public static class ApiEndpoints
     /// surface as a 500 (#82 regression).
     /// </summary>
     internal static int? NormalizeLink(int? id) => id is null or 0 ? null : id;
+
+    /// <summary>
+    /// Parses <paramref name="raw"/> to <typeparamref name="TEnum"/> case-insensitively, rejecting
+    /// null/blank AND undefined values. Enum.TryParse alone accepts any in-range numeric string
+    /// (e.g. "99"), so it is paired with Enum.IsDefined — mirroring the task-endpoint validation (#89/#205).
+    /// </summary>
+    internal static bool TryParseDefinedEnum<TEnum>(string? raw, out TEnum value) where TEnum : struct, Enum
+    {
+        value = default;
+        if (string.IsNullOrWhiteSpace(raw)) return false;
+        return Enum.TryParse(raw, ignoreCase: true, out value) && Enum.IsDefined(value);
+    }
+
+    /// <summary>
+    /// Applies a partial-update string field: an omitted value (<paramref name="incoming"/> is null)
+    /// PRESERVES <paramref name="current"/>; an explicit empty/whitespace value CLEARS the column to
+    /// null; otherwise the trimmed value is used. Single-sources the #203/#260 partial-update rule —
+    /// a rename that omits the field must NOT wipe it — so it stays consistent and unit-testable.
+    /// </summary>
+    internal static string? NormalizeOptionalText(string? incoming, string? current) =>
+        incoming is null ? current : (string.IsNullOrWhiteSpace(incoming) ? null : incoming.Trim());
 
     private static object MapTaskSummary(TaskItem t) => new
     {
