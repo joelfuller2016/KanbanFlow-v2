@@ -208,8 +208,8 @@ public sealed class TaskService(IDbContextFactory<AppDbContext> dbFactory) : ITa
         if (task.Feature is null)
             throw new InvalidOperationException($"Task {taskId} has no feature; cannot resolve project for audit.");
 
-        // No-op: caller passed nothing to change.
-        if (dto.Name is null && dto.Description is null && dto.Status is null && dto.Priority is null && dto.Assignee is null)
+        // No-op: caller passed nothing to change (SortOrder included — #190).
+        if (dto.Name is null && dto.Description is null && dto.Status is null && dto.Priority is null && dto.Assignee is null && dto.SortOrder is null)
             return task;
 
         // Validate up-front so we never do half a mutation. Service is the trust boundary
@@ -230,6 +230,7 @@ public sealed class TaskService(IDbContextFactory<AppDbContext> dbFactory) : ITa
         var oldStatus = task.Status;
         var changedFields = new List<string>();
         var statusChanged = false;
+        var sortOrderChanged = false;
         WorkStatus newStatus = oldStatus;
 
         if (dto.Name is not null && task.Name != dto.Name.Trim())
@@ -277,8 +278,20 @@ public sealed class TaskService(IDbContextFactory<AppDbContext> dbFactory) : ITa
             }
         }
 
-        // All proposed values matched current state → idempotent, skip audit.
-        if (changedFields.Count == 0)
+        // #190: fold SortOrder into THIS save so the whole PUT is one atomic transaction
+        // (the endpoint previously persisted it on a SECOND context, leaving a partial-write
+        // window). SortOrder is a UI reorder concern, so it is deliberately NOT added to
+        // changedFields — it rides along silently and must NOT emit an activity event or
+        // comment (the #88 audit boundary).
+        if (dto.SortOrder.HasValue && task.SortOrder != dto.SortOrder.Value)
+        {
+            task.SortOrder = dto.SortOrder.Value;
+            sortOrderChanged = true;
+        }
+
+        // All proposed values matched current state → idempotent, skip save + audit.
+        // sortOrderChanged keeps a SortOrder-only reorder from being dropped as a no-op (#190).
+        if (changedFields.Count == 0 && !sortOrderChanged)
             return task;
 
         task.UpdatedAt = DateTime.UtcNow;

@@ -48,6 +48,35 @@ public sealed class TaskServiceMutationTests
         return (feature.Id, task.Id);
     }
 
+    /// <summary>
+    /// Seeds Project → Feature → Task with an explicit Name and SortOrder and a deliberately
+    /// stale UpdatedAt (10 minutes ago) so any real save's UpdatedAt bump is unambiguous even at
+    /// coarse clock resolution. Returns the task id and its persisted UpdatedAt, re-read from a
+    /// fresh context so later comparisons are DB-value vs DB-value (no in-memory vs round-tripped gap).
+    /// </summary>
+    private static (int taskId, DateTime seededUpdatedAt) SeedTaskForUpdate(
+        SqliteTestFactory f, string name = "Original", int sortOrder = 5)
+    {
+        int taskId;
+        using (var db = f.CreateDbContext())
+        {
+            var task = new TaskItem
+            {
+                Name = name,
+                Feature = new Feature { Name = "Feat", Project = new Project { Name = "Proj" } },
+                Status = WorkStatus.Todo,
+                SortOrder = sortOrder,
+                UpdatedAt = DateTime.UtcNow.AddMinutes(-10)
+            };
+            db.Add(task);
+            db.SaveChanges();
+            taskId = task.Id;
+        }
+        using var read = f.CreateDbContext();
+        var persisted = read.Tasks.AsNoTracking().Single(t => t.Id == taskId);
+        return (taskId, persisted.UpdatedAt);
+    }
+
     // ── CreateAsync ────────────────────────────────────────────────────────────
     [Fact]
     public async Task Create_PersistsTask_WritesCreatedCommentAndActivityEvent()
@@ -427,5 +456,128 @@ public sealed class TaskServiceMutationTests
 
         await Assert.ThrowsAsync<TaskNotFoundException>(
             () => svc.AddCommentAsync(99999, "hi", "x", CommentType.Note, "x"));
+    }
+
+    // ── UpdateAsync — atomic SortOrder (#190) ───────────────────────────────────
+    // #190: PUT /api/tasks/{id} used to persist the audited fields (TaskService.UpdateAsync,
+    // one context) and SortOrder (endpoint, a SECOND context) in two separate transactions —
+    // a partial-write window. SortOrder now folds into the service's single SaveChanges so the
+    // whole update is atomic, while staying NON-audited (the #88 boundary): a SortOrder change
+    // adds no TaskUpdated event and no "Updated: SortOrder" comment.
+
+    // The defect-proving test: with a single fused save, a save failure rolls BOTH the audited
+    // field AND SortOrder back together. (The old two-context design could commit the field
+    // save and then fail the separate SortOrder save, leaving a partial write.)
+    [Fact]
+    public async Task Update_SaveFailure_RollsBackFieldAndSortOrderTogether()
+    {
+        using var f = new SqliteTestFactory();
+        var (taskId, _) = SeedTaskForUpdate(f, name: "Original", sortOrder: 5);
+        // Real service, but every SaveChangesAsync throws — simulating the fused field+SortOrder
+        // persist failing. Both mutations must roll back together.
+        var svc = new TaskService(new ThrowOnSaveFactory(f));
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => svc.UpdateAsync(taskId, new TaskUpdate(Name: "Changed", SortOrder: 9), "svc-test"));
+        // Prove the throw came from the (fused) save, not the feature-null guard — so the
+        // rollback assertions below are meaningful.
+        Assert.Contains("simulated", ex.Message);
+
+        // Re-query a fresh, normal context: NEITHER Name NOR SortOrder may have persisted.
+        using var db = f.CreateDbContext();
+        var task = await db.Tasks.FindAsync(taskId);
+        Assert.Equal("Original", task!.Name);
+        Assert.Equal(5, task.SortOrder);
+    }
+
+    [Fact]
+    public async Task Update_ChangesFieldAndSortOrder_PersistsBothInOneTransaction()
+    {
+        using var f = new SqliteTestFactory();
+        var (taskId, _) = SeedTaskForUpdate(f, name: "Original", sortOrder: 5);
+        var svc = new TaskService(f);
+
+        var result = await svc.UpdateAsync(taskId, new TaskUpdate(Name: "Changed", SortOrder: 9), "svc-test");
+
+        Assert.Equal("Changed", result.Name);
+        Assert.Equal(9, result.SortOrder);
+
+        using var db = f.CreateDbContext();
+        var task = await db.Tasks.FindAsync(taskId);
+        Assert.Equal("Changed", task!.Name);
+        Assert.Equal(9, task.SortOrder);
+
+        // Exactly ONE field-change audit trail: one TaskUpdated event + one Note comment for
+        // the Name change. SortOrder rides along silently — it adds neither, and it must not
+        // leak into the note text (#88).
+        Assert.Equal(1, await db.ActivityEvents.CountAsync(e => e.EntityId == taskId && e.EventType == "TaskUpdated"));
+        var note = await db.TaskComments.SingleAsync(c => c.TaskItemId == taskId && c.Type == CommentType.Note);
+        Assert.Equal("Updated: Name", note.Text);
+        Assert.DoesNotContain("SortOrder", note.Text);
+    }
+
+    // #88 guard: a SortOrder-only update saves the row + bumps UpdatedAt but writes ZERO audit.
+    [Fact]
+    public async Task Update_SortOrderOnlyChange_PersistsWithoutAuditEvent()
+    {
+        using var f = new SqliteTestFactory();
+        var (taskId, seededUpdatedAt) = SeedTaskForUpdate(f, name: "Original", sortOrder: 5);
+        var svc = new TaskService(f);
+
+        // Only SortOrder changes; every audited field is null (unchanged).
+        var result = await svc.UpdateAsync(taskId, new TaskUpdate(SortOrder: 9), "svc-test");
+
+        Assert.Equal(9, result.SortOrder);
+
+        using var db = f.CreateDbContext();
+        var task = await db.Tasks.FindAsync(taskId);
+        Assert.Equal(9, task!.SortOrder);
+        Assert.Equal("Original", task.Name);          // audited fields untouched
+        Assert.True(task.UpdatedAt > seededUpdatedAt); // row really was saved
+        // The audit boundary: no TaskUpdated (or any) event, and no comment, for a bare reorder.
+        Assert.Equal(0, await db.ActivityEvents.CountAsync(e => e.EntityId == taskId));
+        Assert.Equal(0, await db.TaskComments.CountAsync(c => c.TaskItemId == taskId));
+    }
+
+    // Regression: an all-null / no-op update must still short-circuit — no SaveChanges, no
+    // UpdatedAt churn, no audit rows.
+    [Fact]
+    public async Task Update_NoOp_AllNull_PerformsNoSaveNoAudit()
+    {
+        using var f = new SqliteTestFactory();
+        var (taskId, seededUpdatedAt) = SeedTaskForUpdate(f, name: "Original", sortOrder: 5);
+        var svc = new TaskService(f);
+
+        var result = await svc.UpdateAsync(taskId, new TaskUpdate(), "svc-test");
+
+        Assert.Equal("Original", result.Name);
+        Assert.Equal(5, result.SortOrder);
+
+        using var db = f.CreateDbContext();
+        var task = await db.Tasks.FindAsync(taskId);
+        Assert.Equal(seededUpdatedAt, task!.UpdatedAt); // no UpdatedAt churn
+        Assert.Equal(0, await db.ActivityEvents.CountAsync(e => e.EntityId == taskId));
+        Assert.Equal(0, await db.TaskComments.CountAsync(c => c.TaskItemId == taskId));
+    }
+
+    // Regression: a PUT carrying a SortOrder value EQUAL to the current one is a no-op — the
+    // widened idempotent guard treats it as unchanged, so there is no save and no audit.
+    [Fact]
+    public async Task Update_UnchangedSortOrder_AddsNoAuditRowsNoChurn()
+    {
+        using var f = new SqliteTestFactory();
+        var (taskId, seededUpdatedAt) = SeedTaskForUpdate(f, name: "Original", sortOrder: 5);
+        var svc = new TaskService(f);
+
+        // SortOrder carried but identical to the current value; everything else null.
+        var result = await svc.UpdateAsync(taskId, new TaskUpdate(SortOrder: 5), "svc-test");
+
+        Assert.Equal(5, result.SortOrder);
+
+        using var db = f.CreateDbContext();
+        var task = await db.Tasks.FindAsync(taskId);
+        Assert.Equal(seededUpdatedAt, task!.UpdatedAt); // unchanged SortOrder = no churn
+        Assert.Equal(0, await db.ActivityEvents.CountAsync(e => e.EntityId == taskId));
+        Assert.Equal(0, await db.TaskComments.CountAsync(c => c.TaskItemId == taskId));
     }
 }
