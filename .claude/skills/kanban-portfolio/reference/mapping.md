@@ -35,7 +35,8 @@ sync doesn't use that, because GitHub milestones aren't hierarchical.
 
 ### Issue → TaskItem
 
-Matched by parsing the **`#<n> ` prefix** off the task title (`/^#(\d+)\s/`).
+Matched by parsing the **`#<n>` prefix** off the task title — the trailing space is part of the
+key, as the regex shows (`/^#(\d+)\s/`).
 
 ```text
 Task title:  "#287 Add kanban-portfolio skill: reconcile GitHub -> board"
@@ -154,6 +155,64 @@ The endpoint rejects any payload without it — **422 `"Name is required."`** (`
 A priority-only or status-only update therefore *must* still send `name`. The sync tracks what
 actually changed separately from what goes on the wire: it computes a diff for change-detection
 and logging, then always includes `name` in the request.
+
+## Comments → TaskComment
+
+Four GitHub surfaces are mirrored onto the task, time-ordered:
+
+| Source | `TaskComment.Type` | Header shown |
+|---|---|---|
+| Issue comment | `Comment` | `[issue comment]` → deep-link |
+| PR conversation comment | `Comment` | `[PR #N comment]` |
+| PR review, `APPROVED` | **`Verification`** | `[PR #N review · APPROVED]` |
+| PR review, `CHANGES_REQUESTED` | **`Blocked`** | `[PR #N review · CHANGES_REQUESTED]` |
+| PR review, other / `COMMENTED` | `Comment` | as above |
+| Inline review comment | `Comment` | `[PR #N · path/to/file.cs:146]` |
+
+`Author` is the real GitHub login. A review with no body **and** no verdict is skipped — GitHub
+emits one of those per inline batch and it carries no information.
+
+### Idempotency: the node id
+
+Every GitHub comment has a stable, globally-unique node id (`IC_kwDO…`, `PRRC_…`). It is stamped
+into the body as an HTML comment:
+
+```markdown
+<!-- gh:IC_kwDOSA8y6s8AAAABJyCuHA -->
+_[issue comment](https://github.com/o/r/issues/149#issuecomment-4528407542)_
+
+…the body…
+```
+
+On re-sync the existing `TaskComment`s are read back, their markers parsed, and anything already
+seen is skipped. `TaskComment` has no external-id column, so this is the same no-schema-change
+trick as the `#<n>` task-title prefix (the trailing space is part of the key) — and it has the
+same fragility: **edit a mirrored comment's text and you strip the id**, so the next sync re-adds
+it as a duplicate.
+
+The marker is hidden **only where the body is rendered as Markdown** — `MarkdownRenderer`
+sanitises HTML comments away, which is why `EditItemModal` had to be switched to
+`<MarkdownContent>`. It is **plainly visible everywhere the raw text is read**: `GET /api/tasks/{id}/comments`,
+a `curl`, and an agent pulling the comment over MCP all see the `<!-- gh:… -->` line. That is
+acceptable (it is a short, self-describing marker) but it is not invisible, and callers that
+display raw comment text should expect it.
+
+### Comments on a PR that closes no issue
+
+A PR with no `Closes #N` has no task to attach its comments to (Dependabot PRs are the usual
+case — one had 48 comments). Those are **counted and reported, never silently dropped**:
+
+```text
+! 48 comment(s) on PRs that close no issue — no task to attach them to, NOT mirrored.
+```
+
+### Size
+
+Bot review bodies are the only real size risk — a single CodeRabbit review measured **110,574
+chars**. Bodies are mirrored whole by default (the board is meant to be the complete record) and
+each is capped to its own scroll box in the UI so one comment can't swallow the timeline. If
+agents start paying for it in context, `--max-comment-chars N` truncates with a pointer back to
+GitHub.
 
 ## Drift
 

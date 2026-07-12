@@ -37,6 +37,35 @@
                               @bind="editDescription"></textarea>
                 </div>
 
+                @* GitHub links. The portfolio sync stamps the issue/PR URLs into a mirrored task's
+                   description, but the description is an editable textarea (raw markdown, by design)
+                   so those URLs are dead text you cannot click. Surface them as real links. Hand-made
+                   tasks have no sync block, so nothing renders. *@
+                @if (GitHubIssueUrl is not null || GitHubPrUrl is not null)
+                {
+                    @* aria-label carries the "opens in a new tab" warning: target="_blank" moves the
+                       user out of the app with no announcement otherwise, and the ↗ glyph conveys
+                       that only visually — so it is aria-hidden and the label says it in words. *@
+                    <div class="mb-3 d-flex gap-2 flex-wrap" data-testid="edit-item-github-links">
+                        @if (GitHubIssueUrl is not null)
+                        {
+                            <a class="btn btn-sm btn-outline-secondary" href="@GitHubIssueUrl"
+                               target="_blank" rel="noopener noreferrer"
+                               aria-label="@($"GitHub issue #{GitHubIssueNumber} (opens in a new tab)")">
+                                Issue #@GitHubIssueNumber <span aria-hidden="true">↗</span>
+                            </a>
+                        }
+                        @if (GitHubPrUrl is not null)
+                        {
+                            <a class="btn btn-sm btn-outline-primary" href="@GitHubPrUrl"
+                               target="_blank" rel="noopener noreferrer"
+                               aria-label="@($"GitHub pull request #{GitHubPrNumber} (opens in a new tab)")">
+                                PR #@GitHubPrNumber <span aria-hidden="true">↗</span>
+                            </a>
+                        }
+                    </div>
+                }
+
                 @* Project-only fields *@
                 @if (EditMode == EditItemType.Project)
                 {
@@ -179,7 +208,14 @@
                                         <small class="text-muted fw-medium">@(comment.Author ?? "System")</small>
                                         <small class="text-muted ms-auto" style="font-size: 0.65rem;">@comment.CreatedAt.ToString("MMM d, h:mm tt")</small>
                                     </div>
-                                    <small>@comment.Text</small>
+                                    @* Comment bodies are markdown — a plain `@comment.Text` HTML-encodes them, so a
+                                       mirrored GitHub comment renders as raw `**bold**` and its links are dead text.
+                                       MarkdownContent (already used by TaskDetailPanel/Home/ProjectView) renders +
+                                       sanitises. Bot reviews can be very long, so each body is capped to a scrollable
+                                       box rather than pushing the rest of the timeline off-screen. *@
+                                    <div class="task-comment-body small">
+                                        <MarkdownContent Markdown="@comment.Text" />
+                                    </div>
                                 </div>
                             }
                         </div>
@@ -240,6 +276,61 @@
     private string? editDescription;
     private string? editGoals;
     private string? editReadme;
+
+    // Pulled out of the `<!-- kanbanflow-sync -->` block that scripts/portfolio-sync.mjs writes
+    // into a mirrored task's description. The block is isolated FIRST and the labels are matched
+    // only inside it — matching the whole description would render chips for a hand-written
+    // description that merely happens to contain "**Issue:** https://github.com/...", which is
+    // not what this claims to do and would present unverified text as a trusted link.
+    private static readonly System.Text.RegularExpressions.Regex SyncBlockRe = new(
+        @"<!--\s*kanbanflow-sync\s*-->(.*?)<!--\s*/kanbanflow-sync\s*-->",
+        System.Text.RegularExpressions.RegexOptions.Compiled | System.Text.RegularExpressions.RegexOptions.Singleline);
+    // Anchored on the literal labels the sync emits, and a real URL is required — so
+    // "**Open PR:** none" matches nothing. A hand-made task has no block and gets no links.
+    private static readonly System.Text.RegularExpressions.Regex GitHubIssueRe = new(
+        @"\*\*Issue:\*\*\s*(https://github\.com/[^\s)]+/issues/(\d+))",
+        System.Text.RegularExpressions.RegexOptions.Compiled);
+    private static readonly System.Text.RegularExpressions.Regex GitHubPrRe = new(
+        @"\*\*Open PR:\*\*\s*(https://github\.com/[^\s)]+/pull/(\d+))",
+        System.Text.RegularExpressions.RegexOptions.Compiled);
+
+    // Resolved once per description change, NOT on every render. These are read from the markup,
+    // and the Name field binds on `oninput` — so computed properties here would re-run four
+    // regexes on every keystroke, against a description that hasn't changed.
+    private string? GitHubIssueUrl;
+    private string? GitHubIssueNumber;
+    private string? GitHubPrUrl;
+    private string? GitHubPrNumber;
+    private string? gitHubLinksSource;
+
+    private void RefreshGitHubLinks()
+    {
+        // Cheap guard: the description only changes when a different item is loaded (or the user
+        // edits it), so skip the regex entirely when the source text is unchanged.
+        if (ReferenceEquals(gitHubLinksSource, editDescription) && gitHubLinksSource is not null) return;
+        gitHubLinksSource = editDescription;
+
+        GitHubIssueUrl = GitHubIssueNumber = GitHubPrUrl = GitHubPrNumber = null;
+        if (string.IsNullOrEmpty(editDescription)) return;
+
+        // Only the sync block is authoritative — see SyncBlockRe. No block, no chips.
+        var block = SyncBlockRe.Match(editDescription);
+        if (!block.Success) return;
+        var syncBlock = block.Groups[1].Value;
+
+        var issue = GitHubIssueRe.Match(syncBlock);
+        if (issue.Success)
+        {
+            GitHubIssueUrl = issue.Groups[1].Value;
+            GitHubIssueNumber = issue.Groups[2].Value;
+        }
+        var pr = GitHubPrRe.Match(syncBlock);
+        if (pr.Success)
+        {
+            GitHubPrUrl = pr.Groups[1].Value;
+            GitHubPrNumber = pr.Groups[2].Value;
+        }
+    }
     private int editParentFeatureId;
     private int editFeatureId;
     private int editStatus;
@@ -269,6 +360,7 @@
             newCommentText = null;
             taskSubtasks = [];
             taskComments = [];
+            RefreshGitHubLinks();
 
             if (EditMode == EditItemType.Task && EditTaskId.HasValue)
             {
