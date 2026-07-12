@@ -1,3 +1,4 @@
+using System.Globalization;
 using KanbanFlow.Models;
 
 namespace KanbanFlow.Services;
@@ -93,12 +94,64 @@ public static class IdeaBadge
 
             var preview = heading is null ? line : $"{heading}: {line}";
 
-            return preview.Length > PlanPreviewMaxLength
-                ? string.Concat(preview.AsSpan(0, PlanPreviewMaxLength).TrimEnd(), "…")
-                : preview;
+            if (preview.Length <= PlanPreviewMaxLength)
+                return preview;
+
+            var cut = GraphemeSafeCut(preview, PlanPreviewMaxLength);
+
+            // A single grapheme longer than the ENTIRE cap (a base char under ~120 stacked combining
+            // marks — "Zalgo" text). There is no honest prefix to show, so say what we always say
+            // when a plan has no readable content: the generic tooltip, never a broken half-glyph.
+            return cut == 0
+                ? PlanFallback
+                : string.Concat(preview.AsSpan(0, cut).TrimEnd(), "…");
         }
 
         // A plan that is nothing BUT headings still deserves its most specific one as the tooltip.
         return heading ?? PlanFallback;
+    }
+
+    /// <summary>
+    /// How many UTF-16 chars of <paramref name="text"/> fit within <paramref name="maxLength"/>
+    /// without cutting a grapheme cluster in half. Returns 0 if even the first cluster does not fit.
+    ///
+    /// <para>A <c>char</c> is not a character. Slicing blindly at the cap corrupts the tooltip two
+    /// distinct ways, and only the first is a "broken" string in the .NET sense:</para>
+    ///
+    /// <list type="number">
+    /// <item><description><b>A split surrogate pair.</b> 🎯 is stored as two <c>char</c>s; keeping
+    /// only the first leaves a LONE SURROGATE, which is not a character at all. UTF-8 cannot encode
+    /// it, so the moment Blazor serialises the <c>title</c> attribute the encoder substitutes U+FFFD
+    /// and the user sees �.</description></item>
+    /// <item><description><b>A split grapheme cluster.</b> Subtler, and the reason this is not just
+    /// a <c>char.IsHighSurrogate</c> check: 🇺🇸 is ONE glyph made of TWO surrogate pairs. Cutting
+    /// between them splits no pair — the result is perfectly well-formed UTF-16 — but it renders as
+    /// a stray lone regional indicator (🇺). Same for skin-tone modifiers, ZWJ sequences (👨‍👩‍👧‍👦) and
+    /// combining accents: all well-formed, all wrong.</description></item>
+    /// </list>
+    ///
+    /// <para><see cref="StringInfo.GetNextTextElementLength(ReadOnlySpan{char})"/> is the only thing
+    /// that gets BOTH right, so the walk is by text element, never by <c>char</c>. It costs at most
+    /// <paramref name="maxLength"/> iterations over an already-capped string.</para>
+    /// </summary>
+    private static int GraphemeSafeCut(string text, int maxLength)
+    {
+        if (text.Length <= maxLength)
+            return text.Length;
+
+        var cut = 0;
+        while (cut < maxLength)
+        {
+            var next = StringInfo.GetNextTextElementLength(text.AsSpan(cut));
+
+            // `next <= 0` cannot happen here (cut < maxLength < text.Length, so the span is never
+            // empty), but a zero-width element would spin this loop forever. Cheap insurance.
+            if (next <= 0 || cut + next > maxLength)
+                break;
+
+            cut += next;
+        }
+
+        return cut;
     }
 }

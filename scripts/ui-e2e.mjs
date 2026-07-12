@@ -716,15 +716,45 @@ async function main() {
       // re-rendering. When SortableJS keeps the node it moved, the re-render is a no-op (same
       // items, same order => zero diff edits) and the drifted order simply STAYS on screen, a
       // lie the server never agreed to, until something forces a refresh.
+      //
+      // ── Settling this drop has NO NATURAL SIGNAL, which is why it used to be a bare sleep(900).
+      // Two facts conspire. kanbanflow.js reverts the dragged node SYNCHRONOUSLY inside onEnd,
+      // *before* it calls into Blazor, so the DOM is already canonical the instant the mouse comes
+      // up; and on a healthy board LoadIdeas' re-render is then a NO-OP DIFF that changes nothing.
+      // So "poll until the order is canonical" is worse than the sleep, not better: it returns TRUE
+      // immediately, BEFORE the round-trip lands, and would sail straight past a re-render that
+      // corrupts the board — the exact bug this guard exists to catch. The sleep at least waited.
+      //
+      // So MANUFACTURE a signal. This idea is created out-of-band while the board is open, and the
+      // page has no timer, no SignalR push and no polling — LoadIdeas runs ONLY when an interaction
+      // asks it to. The open board therefore CANNOT know about this card until the drop's own reload
+      // fetches it. Its appearance is proof that LoadIdeas ran AND that Blazor applied the resulting
+      // render batch (batches are applied atomically, so New's cards are settled with it).
+      //
+      // It also kills the sleep's blind spot: if the drop never fired at all, OnCardMoved never runs,
+      // LoadIdeas never runs, this card never appears — and the assertions below go RED instead of
+      // passing on a board nobody actually dragged.
+      const barrier = await mkIdea("Barrier", "Low");
+      assert(await page.locator(`[data-testid="idea-card-${barrier.id}"]`).count() === 0,
+        "precondition: the open board must not already know about the out-of-band barrier idea");
+
       await dragCardTo(page, `[data-testid="idea-card-${bottom.id}"]`,
         `[data-testid="board-column-New-cards"]`);
-      await page.waitForTimeout(900); // no status change to poll — this drop is a pure re-render
+
+      // The reload has landed exactly when the card it fetched is on screen. On a CORRUPT board the
+      // diff can wedge and never draw it — so don't die here with an opaque Playwright timeout; fall
+      // through and let the assertions below say precisely what the board is drawing and why that is
+      // wrong. Generous timeout: this waits on a real signal, so a slow box costs time, never a flake.
+      await page.locator(`[data-testid="idea-card-${barrier.id}"]`)
+        .waitFor({ state: "visible", timeout: 15000 })
+        .catch(() => {});
 
       const settled = await readBoardDom(page, IDEA_COLUMNS);
       assertBoardTruthful(settled, ideaTruth(await api("GET", "/api/ideas?limit=500")),
         "after dropping an idea out of canonical order inside its own column");
-      assert(settled.New.cardIds.join(",") === [top.id, bottom.id].join(","),
-        `an in-column drop must snap back to the canonical order [${[top.id, bottom.id]}] ` +
+      const canonical = [top.id, bottom.id, barrier.id];
+      assert(settled.New.cardIds.join(",") === canonical.join(","),
+        `an in-column drop must snap back to the canonical order [${canonical}] ` +
         `(Priority desc) — the board is still drawing [${settled.New.cardIds}]`);
     });
 
