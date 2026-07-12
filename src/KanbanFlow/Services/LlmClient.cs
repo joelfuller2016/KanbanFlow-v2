@@ -30,7 +30,10 @@ public sealed class LlmClient(IChatClient chatClient, LlmOptions config, ILogger
 
     // Test seam (InternalsVisibleTo = KanbanFlow.Tests). Chains through the primary constructor so
     // the DI-visible public ctor keeps its 3-parameter shape — the container never has to resolve a
-    // TimeProvider, and production behaviour is byte-identical.
+    // TimeProvider, and production behaviour is byte-identical. The parameter is deliberately
+    // NULLABLE: a non-nullable one would make the `?? TimeProvider.System` fallback below
+    // unreachable — a guard that advertises a behaviour it can never provide — and would diverge
+    // from EmbeddingService, whose seam already takes `TimeProvider?`. Don't tighten it back.
     internal LlmClient(IChatClient chatClient, LlmOptions config, ILogger<LlmClient> logger, TimeProvider? timeProvider)
         : this(chatClient, config, logger)
     {
