@@ -144,7 +144,7 @@ public sealed class LlmClientTests
         // Now the timeout is driven by a FakeTimeProvider: the test advances the clock rather than
         // racing it. Deterministic, no watchdog, no wall-clock dependency.
         var time = new FakeTimeProvider();
-        var enteredClient = new SemaphoreSlim(0);
+        using var enteredClient = new SemaphoreSlim(0);
 
         var fake = new FakeChatClient(async (_, _, token) =>
         {

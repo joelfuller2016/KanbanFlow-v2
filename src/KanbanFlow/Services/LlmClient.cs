@@ -31,7 +31,7 @@ public sealed class LlmClient(IChatClient chatClient, LlmOptions config, ILogger
     // Test seam (InternalsVisibleTo = KanbanFlow.Tests). Chains through the primary constructor so
     // the DI-visible public ctor keeps its 3-parameter shape — the container never has to resolve a
     // TimeProvider, and production behaviour is byte-identical.
-    internal LlmClient(IChatClient chatClient, LlmOptions config, ILogger<LlmClient> logger, TimeProvider timeProvider)
+    internal LlmClient(IChatClient chatClient, LlmOptions config, ILogger<LlmClient> logger, TimeProvider? timeProvider)
         : this(chatClient, config, logger)
     {
         _timeProvider = timeProvider ?? TimeProvider.System;

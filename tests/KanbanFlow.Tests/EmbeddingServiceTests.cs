@@ -267,7 +267,7 @@ public sealed class EmbeddingServiceTests
         // Now the per-attempt timeout is driven by a FakeTimeProvider: the test ADVANCES the clock
         // rather than waiting on it. No race, no watchdog, no wall-clock dependency.
         var time = new FakeTimeProvider();
-        var enteredGenerator = new SemaphoreSlim(0);
+        using var enteredGenerator = new SemaphoreSlim(0);
 
         var fake = new FakeEmbeddingGenerator(async (_, _, token) =>
         {
