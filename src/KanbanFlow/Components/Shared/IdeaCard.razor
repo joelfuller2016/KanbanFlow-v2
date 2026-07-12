@@ -152,8 +152,6 @@
     /// </summary>
     [Parameter] public EventCallback<(Idea Idea, IdeaStatus Target)> OnMoveTo { get; set; }
 
-    private const int PlanPreviewMaxLength = 120;
-
     private bool IsPromoted => Idea.Status == IdeaStatus.Promoted;
 
     private bool HasPlan => !string.IsNullOrWhiteSpace(Idea.Plan);
@@ -185,7 +183,10 @@
             ? []
             : Idea.Tags.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
 
-        planTooltip = BuildPlanPreview(Idea.Plan);
+        // Lives in IdeaBadge, not here: a `.razor` @code block is unreachable from a unit test, and
+        // this is a pure string function with real edge cases (stacked headings, elision). Same
+        // reason IdeaBadge exists at all — the repo has no bUnit.
+        planTooltip = IdeaBadge.PlanPreview(Idea.Plan);
 
         // Promotion is one-way: IdeaService refuses a status change into AND out of Promoted, so a
         // promoted idea has no legal move targets. Never offer an operation the service will refuse.
@@ -194,49 +195,4 @@
             : [.. Enum.GetValues<IdeaStatus>().Where(s => s != IdeaStatus.Promoted && s != Idea.Status)];
     }
 
-    /// <summary>
-    /// The plan's opening line(s), stripped of markdown chrome and capped, for the chip's tooltip:
-    /// "**Problem** Zero agent presence in the UI." → "Problem Zero agent presence in the UI."
-    /// A plan that opens with an ATX heading ("# Scope") would otherwise yield a one-word tooltip,
-    /// so a heading is folded into the line that follows it → "Scope: Prove the branch renders."
-    /// A `title` is a mouse-only affordance; `aria-label="Has a plan"` carries the screen reader, and
-    /// the full plan is one Enter away in the modal (accepted gap — accessibility.md §7).
-    /// </summary>
-    private static string BuildPlanPreview(string? plan)
-    {
-        if (string.IsNullOrWhiteSpace(plan))
-            return "Has a plan";
-
-        string? heading = null;
-
-        foreach (var rawLine in plan.Split('\n'))
-        {
-            var trimmed = rawLine.Trim();
-            var isHeading = trimmed.StartsWith('#');
-
-            var line = trimmed.Replace("**", "").Replace("`", "")
-                              .TrimStart('#', '>', '-', '*', '_', ' ')
-                              .Trim();
-
-            if (line.Length == 0)
-                continue;
-
-            // A bare heading is a label, not content — hold it and prepend it to the next real line.
-            // Always update (not only when null) so consecutive headings use the most specific one.
-            if (isHeading)
-            {
-                heading = line;
-                continue;
-            }
-
-            var preview = heading is null ? line : $"{heading}: {line}";
-
-            return preview.Length > PlanPreviewMaxLength
-                ? string.Concat(preview.AsSpan(0, PlanPreviewMaxLength).TrimEnd(), "…")
-                : preview;
-        }
-
-        // A plan that is nothing but a heading still deserves its heading as the tooltip.
-        return heading ?? "Has a plan";
-    }
 }

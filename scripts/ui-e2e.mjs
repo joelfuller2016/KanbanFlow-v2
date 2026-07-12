@@ -151,8 +151,13 @@ async function readBoardDom(page, statuses) {
 
 // The two boards' canonical column orders, restated from the source so the DOM is checked
 // against the SERVER's truth and not against itself:
-//   /ideas        Priority desc, CreatedAt desc  (Ideas.OrderIdeas — an Idea has no SortOrder)
-//   /project/{id} SortOrder asc, Id asc          (ProjectView.OrderTasksInColumn)
+//   /ideas        Priority desc, CreatedAt desc, Id desc  (Ideas.OrderIdeas — an Idea has no SortOrder)
+//   /project/{id} SortOrder asc, Id asc                   (ProjectView.OrderTasksInColumn)
+// Both end in a UNIQUE key, so both comparisons are TOTAL and this "truth" is a single order rather
+// than a set of acceptable ones. Ideas.OrderIdeas grew its `Id desc` for exactly that reason (#300):
+// CreatedAt defaults to UtcNow, two ideas made in the same tick at the same priority tie on both of
+// the other keys, and a guard that compares the DOM against an ambiguous truth FLAPS instead of
+// failing. Mirror of the C# — change one, change the other.
 const PRIORITY_RANK = { Critical: 3, High: 2, Medium: 1, Low: 0 };
 function groupBy(items, statusOf, compare) {
   const out = {};
@@ -162,7 +167,8 @@ function groupBy(items, statusOf, compare) {
 }
 const ideaTruth = (ideas) => groupBy(ideas, (i) => i.status, (a, b) =>
   (PRIORITY_RANK[b.priority] ?? -1) - (PRIORITY_RANK[a.priority] ?? -1) ||
-  new Date(b.createdAt) - new Date(a.createdAt));
+  new Date(b.createdAt) - new Date(a.createdAt) ||
+  b.id - a.id);
 const taskTruth = (tasks) => groupBy(tasks, (t) => t.status, (a, b) =>
   a.sortOrder - b.sortOrder || a.id - b.id);
 
@@ -720,6 +726,75 @@ async function main() {
       assert(settled.New.cardIds.join(",") === [top.id, bottom.id].join(","),
         `an in-column drop must snap back to the canonical order [${[top.id, bottom.id]}] ` +
         `(Priority desc) — the board is still drawing [${settled.New.cardIds}]`);
+    });
+
+    // ── Regression guard (#300): a REFUSED move must not fail SILENTLY ────────────────────────
+    // ApplyStatusAsync's error path ends in `await LoadIdeas()` — that reload IS the snap-back —
+    // and LoadIdeas clears `loadError` on every successful load. So the move error it had just set
+    // was wiped by the very reload that returned the card to its real column: the card jumped home
+    // and the board said NOTHING about why. A silent snap-back is precisely the "the UI lies to
+    // you" failure this board was rebuilt to kill, so it gets a test that can see it.
+    //
+    // The refusal is REAL, not injected. IdeaService has exactly ONE status rule — the Promoted
+    // boundary may not be crossed (#283 in, #285 out) — and ApplyStatusAsync's own pre-check reads
+    // the board's IN-MEMORY copy of the idea. Promote out-of-band (a second tab, the MCP server's
+    // promote_idea, an agent on the API) and that copy is stale: the pre-check waves the drag
+    // through, the service loads the idea fresh, and refuses. That is a race this app can genuinely
+    // lose — three writers share one DB — and it is the only way a drag can be refused at all.
+    await test("Ideas board: a move the service refuses says WHY, and does not take effect", async () => {
+      for (const i of await api("GET", "/api/ideas?limit=500")) {
+        await api("DELETE", `/api/ideas/${i.id}`).catch(() => {});
+      }
+      const stale = await api("POST", "/api/ideas", { title: `E2E Refused ${stamp}`, priority: "Critical" });
+
+      await page.goto(`${baseUrl}/ideas`);
+      await page.locator(`[data-testid="idea-card-${stale.id}"]`).waitFor({ state: "visible" });
+      await waitForSortableArmed(page, "New");
+
+      // Out-of-band promote. The open board never hears about it, and keeps drawing the card in New.
+      const promoted = await api("POST", `/api/ideas/${stale.id}/promote`, { actor: "e2e" });
+      assert(promoted.projectId > 0, `promote did not create a project: ${JSON.stringify(promoted)}`);
+
+      // Drag the now-stale card New -> Triaging. The service refuses: it is really Promoted.
+      await dragCardTo(page, `[data-testid="idea-card-${stale.id}"]`,
+        `[data-testid="board-column-Triaging-cards"]`);
+
+      // 1. The user must be TOLD. THIS is the assertion that is RED before the fix, and it is
+      //    deliberately testid-AGNOSTIC: the question is "does the board say ANYTHING at all?",
+      //    and pinning it to one testid would let the answer come back "no, but the right box was
+      //    missing" — a weaker claim than the bug deserves. Pre-fix NO danger alert paints at all:
+      //    ApplyStatusAsync sets `loadError`, then its own snap-back reload nulls it on the way out.
+      const anyError = page.locator('.alert-danger[role="alert"]');
+      try {
+        await anyError.first().waitFor({ state: "visible", timeout: 8000 });
+      } catch {
+        throw new Error("a refused move told the user NOTHING — the card snapped back and no " +
+          "page-level error ever appeared (no visible .alert-danger[role=alert] on /ideas)");
+      }
+      const msg = ((await anyError.first().textContent()) ?? "").replace(/\s+/g, " ").trim();
+
+      // 2. ...and told WHY, in the service's own actionable words — never a bare "move failed".
+      assert(/promot/i.test(msg) && /Triaging/.test(msg),
+        `the refusal must name the reason AND the target it refused — the banner reads "${msg}"`);
+
+      // 3. It must ride the MOVE channel, not the load channel. A move error parked in `loadError`
+      //    IS the bug: LoadIdeas owns that field and clears it (`loadError = null`) on every
+      //    successful load — including the snap-back reload the error path itself awaits.
+      await page.locator('[data-testid="idea-move-error"]').waitFor({ state: "visible", timeout: 3000 });
+
+      // 4. The gesture must not have taken effect. The card belongs in Promoted — where it REALLY
+      //    is — and never in Triaging, where the user dropped it. (This half already passed: the
+      //    reload snaps the card back. It is the EXPLANATION that was missing, which is exactly
+      //    what makes the bug so easy to miss — the board looks right and lies by omission.)
+      await page.locator(`[data-testid="board-column-Promoted-cards"] [data-task-id="${stale.id}"]`)
+        .waitFor({ state: "visible", timeout: 8000 });
+      const settled = await readBoardDom(page, IDEA_COLUMNS);
+      assert(!settled.Triaging.cardIds.includes(stale.id),
+        `the refused card is still sitting in Triaging [${settled.Triaging.cardIds}] — the drop was never undone`);
+      assertBoardTruthful(settled, ideaTruth(await api("GET", "/api/ideas?limit=500")), "after a refused move");
+
+      await api("DELETE", `/api/projects/${promoted.projectId}`).catch(() => {});
+      await api("DELETE", `/api/ideas/${stale.id}`).catch(() => {});
     });
 
     // ── Scenario E: Settings -> Run all shows an all-passed result table ──

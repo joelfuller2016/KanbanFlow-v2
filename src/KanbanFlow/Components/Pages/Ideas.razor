@@ -28,12 +28,37 @@
     </div>
 }
 
-@* Page-level error (filter/load/move failures). Mutation errors surface inside their own modals. *@
+@* Page-level LOAD/filter error. Owned by LoadIdeas, which is the only thing that sets or clears it.
+   Mutation errors surface inside their own modals. *@
 @if (loadError is not null)
 {
     <div class="alert alert-danger alert-dismissible fade show" role="alert" aria-live="assertive" aria-atomic="true" data-testid="idea-load-error">
         @loadError
         <button type="button" class="btn-close" @onclick="() => loadError = null" aria-label="Dismiss error"></button>
+    </div>
+}
+
+@* A REFUSED or failed MOVE (drag OR the ⋮ "Move to" menu). Its own banner and — load-bearing — its
+   own FIELD, not a second writer of `loadError`.
+
+   ApplyStatusAsync's error path *ends in* `await LoadIdeas()`, because that reload IS the snap-back
+   that returns the card to its real column. LoadIdeas clears `loadError` on every successful load
+   (it owns that field). So a move error parked in `loadError` was erased by the very reload that
+   moved the card home: the card jumped back and the board said NOTHING about why. A drag that
+   silently un-does itself is exactly the "the UI lies to you" failure this board was rebuilt to
+   kill — and it was sitting in the rebuild. (Copilot, PR #300.) One field, one owner; nobody
+   clears anybody else's.
+
+   The message is the service's own, verbatim: IdeaService writes its refusals to be actionable
+   ("…promotion is permanent… omit `status` from the update to change them"), so paraphrasing it
+   into "Move failed" would throw away the only part the user can act on. `role="alert"` +
+   aria-live="assertive" is what announces it to a screen reader — the polite board announcer
+   deliberately says nothing here, since a rejected gesture is not a move to narrate. *@
+@if (moveError is not null)
+{
+    <div class="alert alert-danger alert-dismissible fade show" role="alert" aria-live="assertive" aria-atomic="true" data-testid="idea-move-error">
+        @moveError
+        <button type="button" class="btn-close" @onclick="() => moveError = null" aria-label="Dismiss error"></button>
     </div>
 }
 
@@ -303,8 +328,14 @@ else
     private ElementReference promoteModalDialog;
     private bool shouldFocusPromoteModal;
 
-    // ── Page-level load/filter/move error ──
+    // ── Page-level load/filter error. OWNED BY LoadIdeas: it alone sets and clears this field. ──
     private string? loadError;
+
+    // ── A refused or failed status MOVE (drag, or the ⋮ "Move to" menu). A SEPARATE field on
+    //    purpose — see the banner's comment in the markup. Move failures used to be written into
+    //    `loadError`, where the snap-back reload that ApplyStatusAsync itself awaits wiped them
+    //    before they could ever paint, so a refused drag said nothing at all. ──
+    private string? moveError;
 
     private bool HasActiveFilter =>
         !string.IsNullOrWhiteSpace(searchFilter)
@@ -334,8 +365,21 @@ else
     // LINQ-to-Objects, so descending puts un-prioritised ideas LAST — which is what we want.
     // NOTE: KanbanBoard defaults OrderColumnBy to OrderBy(IdOf). Omitting it here would silently
     // order the board by Id and this entire ordering rule would vanish without a compiler peep.
+    //
+    // `Id desc` is the TOTAL-ORDER tie-breaker, and it is not decoration (Copilot, PR #300).
+    // CreatedAt defaults to DateTime.UtcNow, whose resolution is coarser than a fast insert loop:
+    // two ideas created in the same tick with the same priority tie on BOTH keys, and OrderBy is
+    // only guaranteed stable with respect to its input — which arrives from a fresh EF query with
+    // no ORDER BY of its own. So the board could draw those two cards in either order, on any given
+    // load, for no reason the user could ever see. Id is unique and monotonic, so appending it makes
+    // the comparison total and the render deterministic. This also keeps the #294 render-integrity
+    // guard honest: it compares the DOM against the API's order, and a coin-flip tie would make
+    // that guard flap rather than fail. The JS mirror of this rule (`ideaTruth` in
+    // scripts/ui-e2e.mjs) states the same three keys — change one, change the other.
     private static IEnumerable<Idea> OrderIdeas(IEnumerable<Idea> items) =>
-        items.OrderByDescending(i => i.Priority).ThenByDescending(i => i.CreatedAt).ThenByDescending(i => i.Id);
+        items.OrderByDescending(i => i.Priority)
+             .ThenByDescending(i => i.CreatedAt)
+             .ThenByDescending(i => i.Id);
 
     // The rule, stated once and always visible — not an error raised after the user has already
     // committed the gesture. (A lambda here would need nested double quotes inside a Razor attribute,
@@ -505,6 +549,10 @@ else
 
     private async Task ApplyStatusAsync(Idea idea, IdeaStatus target)
     {
+        // This attempt supersedes the last one's verdict: never leave a stale refusal on screen
+        // beside a move that has just worked.
+        moveError = null;
+
         // A within-column drop (or a drag that found no target and came home) fires onEnd with
         // evt.to === evt.from. Skip the write — but still reload: SortableJS left the DOM showing
         // whatever order the user dragged, which the server does not have. The reload snaps the card
@@ -520,6 +568,15 @@ else
         // move a promoted idea could make. Both crossings are refused by IdeaService.UpdateAsync
         // anyway (#283 in, #285 out), so if a future JS change ever routed one here, refuse it before
         // the service has to raise an error the user never needed to see.
+        //
+        // It is a courtesy, NOT a guarantee, and the difference is the whole reason the catch below
+        // has to be able to speak: `idea` is this circuit's IN-MEMORY copy, and it goes stale the
+        // moment anything else writes the row — a second tab, the MCP server's promote_idea, an agent
+        // on the API. Promote an idea out-of-band while this board is open and its card keeps sitting
+        // in New; drag it, and `idea.Status` still reads New, so this guard waves the drag straight
+        // through to a service that will (correctly) refuse it. That is the ONE refusal a drag can
+        // actually provoke, it is a race three writers on one DB can genuinely lose, and it is
+        // covered by an e2e guard (scripts/ui-e2e.mjs, "a move the service refuses says WHY").
         if (target == IdeaStatus.Promoted || idea.Status == IdeaStatus.Promoted)
         {
             await LoadIdeas();
@@ -552,11 +609,20 @@ else
         catch (OperationCanceledException) { /* circuit teardown */ }
         catch (ValidationException ex)
         {
-            // Reload first (snaps the card back to its real column), then set the error so
-            // LoadIdeas' own `loadError = null` on success doesn't wipe our message.
-            var moveError = ex.Message;
+            // The service refused the transition. TWO things have to happen, and only one of them
+            // used to:
+            //   1. the card goes back where it really belongs — that is LoadIdeas, below; and
+            //   2. the user is TOLD WHY — which is this line, and it must land on `moveError`, not
+            //      on `loadError`, because LoadIdeas nulls `loadError` on its way out and would
+            //      erase the message before it ever painted. A card that silently snaps home is a
+            //      board lying by omission. (Copilot, PR #300.)
+            // Verbatim, not paraphrased: IdeaService writes its refusals to be acted on ("…omit
+            // `status` from the update to change them"), and "Move failed" throws that away.
+            // Same ordering rule as `announcement` above — set BEFORE the reload, because a
+            // [JSInvokable] gets no automatic StateHasChanged and LoadIdeas' render is the only
+            // one in this path.
+            moveError = ex.Message;
             await LoadIdeas();
-            loadError = moveError;
         }
         catch (IdeaNotFoundException)
         {
@@ -565,9 +631,9 @@ else
         }
         catch (Exception ex)
         {
-            var moveError = $"Move failed: {ex.Message}";
+            // Same bug, same fix, same ordering (see the ValidationException branch above).
+            moveError = $"Move failed: {ex.Message}";
             await LoadIdeas();
-            loadError = moveError;
         }
     }
 

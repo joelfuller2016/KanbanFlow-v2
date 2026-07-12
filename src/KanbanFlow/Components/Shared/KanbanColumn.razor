@@ -21,7 +21,15 @@
            .visually-hidden is an out-of-flow, clipped 1px box, so the rendered heading, the count
            badge and the collapsed rail's rotated label are all pixel-for-pixel unchanged.
            The count stays INSIDE the heading on purpose — it belongs to the name (accessibility.md
-           §1); it just needs a noun to mean anything. *@
+           §1); it just needs a noun to mean anything.
+
+           The separating space lives INSIDE the C# string literal (" items", not " " + "items"),
+           which is the only place a space is safe. Written as markup whitespace between the badge's
+           `@Items.Count` and the noun that follows it, it sits at a Razor transition boundary, and
+           the accessible name is computed from concatenated text nodes — so anything that drops it
+           yields the single token "3items", which assistive tech reads as a word, not as a count
+           and a noun. A string literal cannot be trimmed by a parser, an editor, or a formatter.
+           (Copilot, PR #300.) *@
         <h3 id="@HeadingId" class="h6 fw-semibold mb-0">
             @if (!IsDragEnabled)
             {
@@ -30,7 +38,7 @@
                 </svg>
             }
             @DisplayName<span class="visually-hidden"> column,</span>
-            <span class="badge bg-secondary">@Items.Count<span class="visually-hidden"> @(Items.Count == 1 ? "item" : "items")</span></span>
+            <span class="badge bg-secondary">@Items.Count<span class="visually-hidden">@(Items.Count == 1 ? " item" : " items")</span></span>
         </h3>
         @if (IsTerminal)
         {
