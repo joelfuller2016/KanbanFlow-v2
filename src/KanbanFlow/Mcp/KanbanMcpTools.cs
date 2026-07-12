@@ -441,7 +441,7 @@ public static class KanbanMcpTools
         [Description("New title (<= 500 chars), or omit to leave unchanged.")] string? title = null,
         [Description("New markdown body, or omit.")] string? body = null,
         [Description("New markdown plan, or omit.")] string? plan = null,
-        [Description("New status: New | Triaging | Archived | Rejected (case-insensitive), or omit. 'Promoted' is derived and is rejected here — promote_idea is its only writer (it also creates the linked project).")] string? status = null,
+        [Description("New status: New | Triaging | Archived | Rejected (case-insensitive), or omit. 'Promoted' is derived and terminal: it is rejected here (promote_idea is its only writer — it also creates the linked project), and an idea that is ALREADY promoted cannot be moved to any other status either. Its other fields stay editable — just omit status.")] string? status = null,
         [Description("New comma-separated tags, or omit.")] string? tags = null,
         [Description("New priority: Low | Medium | High | Critical (case-insensitive), or omit.")] string? priority = null,
         [Description("Optional actor label recorded in the audit trail (default 'mcp-agent').")] string? actor = null,

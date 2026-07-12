@@ -170,18 +170,11 @@ public sealed class IdeaService(IDbContextFactory<AppDbContext> dbFactory) : IId
         {
             if (!Enum.IsDefined(dto.Status.Value))
                 throw new ValidationException($"Invalid status '{dto.Status.Value}'.");
-            // `Promoted` is DERIVED, never settable here (#283). Enum.IsDefined alone waved it
-            // through, but PromoteAsync is its only legitimate writer: that method creates the
-            // Project and sets Status + PromotedProjectId together, in one transaction. Setting it
-            // here would strand the idea as promoted-with-no-project — a state PromoteAsync then
-            // refuses forever (:226) and no IdeaUpdate field can repair (IdeaUpdate has no
-            // PromotedProjectId), i.e. permanently unrecoverable. Refusing at the service closes all
-            // three callers at once (PATCH /api/ideas/{id}, MCP update_idea, IdeaModal) — the #88
+            // One predicate, both directions (#283 + #285). Refusing at the service closes all three
+            // callers at once — PATCH /api/ideas/{id}, MCP update_idea, IdeaModal — per the #88
             // single-boundary rule.
-            if (dto.Status.Value == IdeaStatus.Promoted)
-                throw new ValidationException(
-                    "Promoted is a derived status and cannot be set directly. " +
-                    "Use POST /api/ideas/{id}/promote (MCP: promote_idea) to promote an idea.");
+            if (!IsStatusTransitionAllowed(idea.Status, dto.Status.Value))
+                throw new ValidationException(StatusTransitionRefusal(idea, dto.Status.Value));
             if (idea.Status != dto.Status.Value) { idea.Status = dto.Status.Value; changed = true; }
         }
         if (dto.Priority is not null)
@@ -301,6 +294,47 @@ public sealed class IdeaService(IDbContextFactory<AppDbContext> dbFactory) : IId
         await tx.CommitAsync(ct);
         return new IdeaPromoteResult(idea.Id, project.Id);
     }
+
+    /// <summary>
+    /// THE status-transition rule, in one place: <b><see cref="IdeaStatus.Promoted"/> is derived and
+    /// terminal.</b> Every other transition is free — ideas are a triage inbox, not a workflow.
+    ///
+    /// <para><b>Derived</b> (#283): nothing may transition <em>into</em> <c>Promoted</c> here.
+    /// <see cref="PromoteAsync"/> is its only legitimate writer, because it alone also creates the
+    /// <see cref="Project"/> and sets <see cref="Idea.PromotedProjectId"/> in the same transaction.
+    /// Setting it here would strand the idea as promoted-with-no-project.</para>
+    ///
+    /// <para><b>Terminal</b> (#285): nothing may transition <em>out of</em> <c>Promoted</c> here.
+    /// <see cref="IdeaUpdate"/> carries no <c>PromotedProjectId</c> field, so moving a promoted idea
+    /// back to <c>New</c> would leave its project link dangling with no way to ever clear it.</para>
+    ///
+    /// <para>Both strandings are permanently unrecoverable, which is why this is a hard refusal rather
+    /// than a repair. Together they keep <c>Status == Promoted</c> and <c>PromotedProjectId != null</c>
+    /// in step across every public write path. A self-transition (<paramref name="from"/> ==
+    /// <paramref name="to"/>) is always allowed: it changes nothing, so it cannot break either rule, and
+    /// it keeps PATCH idempotent for clients that round-trip the whole entity.</para>
+    ///
+    /// <para>This predicate exists because the rule used to be implicit, and got re-implemented — badly
+    /// — at each new site: #89, then #283, then #285, all the same shape. It now lives here, once.</para>
+    /// </summary>
+    private static bool IsStatusTransitionAllowed(IdeaStatus from, IdeaStatus to) =>
+        from == to || (from != IdeaStatus.Promoted && to != IdeaStatus.Promoted);
+
+    /// <summary>
+    /// The actionable refusal for a transition <see cref="IsStatusTransitionAllowed"/> rejected. A
+    /// disallowed transition always crosses the <see cref="IdeaStatus.Promoted"/> boundary in exactly
+    /// one direction, so <paramref name="to"/> alone picks the message. Each one names what the caller
+    /// CAN do instead of only saying no.
+    /// </summary>
+    private static string StatusTransitionRefusal(Idea idea, IdeaStatus to) =>
+        to == IdeaStatus.Promoted
+            // Into Promoted (#283) — point at the one path that promotes properly.
+            ? "Promoted is a derived status and cannot be set directly. " +
+              "Use POST /api/ideas/{id}/promote (MCP: promote_idea) to promote an idea."
+            // Out of Promoted (#285) — promotion is one-way; the rest of the idea is still editable.
+            : $"Idea {idea.Id} is promoted, and promotion is permanent: its status cannot be changed to " +
+              $"{to}. Every other field (title, body, plan, tags, priority) is still editable — omit " +
+              "`status` from the update to change them.";
 
     /// <summary>
     /// Message for an already-promoted idea. Names the target project when the link is intact,

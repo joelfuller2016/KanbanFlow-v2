@@ -75,33 +75,42 @@
 
                 @* Status — edit only (create always starts New).
 
-                   `Promoted` is a DERIVED status (#283): PromoteAsync is its only legitimate writer,
-                   because only PromoteAsync also creates the Project and links it via PromotedProjectId.
-                   Offering it here let a user strand the idea as promoted-with-no-project — a state that
-                   PromoteAsync refuses forever and no update can repair. So it is never a choice.
-                   It IS still rendered (disabled) when the idea is ALREADY promoted, so the select shows
-                   the idea's real status instead of silently falling back to "New". *@
+                   `Promoted` is DERIVED and TERMINAL (#283/#285), and the SELECT ITSELF is disabled for a
+                   promoted idea — not merely its `Promoted` <option>. A disabled option only stops that
+                   option being re-picked; it leaves the select live, so a user could still open a promoted
+                   idea and choose `New`, sending the idea out of Promoted with PromotedProjectId left
+                   dangling (nothing can ever clear it — IdeaUpdate has no such field). Disabling the whole
+                   control is what actually makes the status un-changeable. The promoted <option> is still
+                   RENDERED so the select displays the idea's real status rather than falling back to "New".
+
+                   For any non-promoted idea the select is live, minus the `Promoted` option — you cannot
+                   promote from here either; only PromoteAsync may write it, because it alone also creates
+                   the Project and links it. Both directions are enforced for real at the service
+                   (IdeaService.IsStatusTransitionAllowed); this is the UI half. *@
                 @if (!IsNew)
                 {
                     <div class="mb-3">
                         <label class="form-label small text-muted mb-1" for="idea-status">Status</label>
-                        <select id="idea-status" class="form-select form-select-sm" data-testid="idea-status-select" @bind="status">
+                        <select id="idea-status" class="form-select form-select-sm" data-testid="idea-status-select"
+                                disabled="@isPromoted" @bind="status">
+                            @* `Promoted` is rendered ONLY for an idea that already has it — so the select
+                               displays the idea's real status instead of falling back to "New" — and is
+                               never offered to anything else. No option-level `disabled` is needed: when
+                               the idea is promoted the whole select is disabled, and when it isn't, this
+                               option isn't rendered at all. *@
                             @foreach (var s in Enum.GetValues<IdeaStatus>())
                             {
-                                if (s != IdeaStatus.Promoted)
+                                if (s != IdeaStatus.Promoted || isPromoted)
                                 {
                                     <option value="@((int)s)">@s</option>
-                                }
-                                else if (isPromoted)
-                                {
-                                    <option value="@((int)s)" disabled>@s</option>
                                 }
                             }
                         </select>
                         @if (isPromoted)
                         {
                             <div class="form-text small" data-testid="idea-status-promoted-hint">
-                                Promoted is set by the Promote action — it can't be chosen here.
+                                Promotion is permanent — this idea's status can't be changed.
+                                Every other field is still editable.
                             </div>
                         }
                     </div>
@@ -146,9 +155,10 @@
     // A string intermediary is the robust way to give a nullable enum select a blank "None" option.
     private string priorityRaw = "";
     private int status; // edit-only; backs the IdeaStatus select by its int value
-    // True when the loaded idea is ALREADY promoted. `Promoted` is derived (#283): it is never an
-    // offered choice, but it must still display for an idea that has it — and must never be sent
-    // back to UpdateAsync, which rejects it. See SelectedStatus.
+    // True when the loaded idea is ALREADY promoted. `Promoted` is derived and terminal (#283/#285):
+    // it is never an offered choice, it must still DISPLAY for an idea that has it, its select is
+    // disabled so the status cannot be changed at all, and no status is ever sent back to UpdateAsync
+    // (which refuses every transition across the Promoted boundary). See SelectedStatus.
     private bool isPromoted;
     private string? errorMessage;
     private bool showTitleRequired;
@@ -215,12 +225,21 @@
     private TaskPriority? SelectedPriority =>
         string.IsNullOrEmpty(priorityRaw) ? null : (TaskPriority)int.Parse(priorityRaw);
 
-    // The status to SEND on save, or null for "leave unchanged". An already-promoted idea round-trips
-    // its own status through the select, and IdeaService.UpdateAsync rejects `Promoted` outright
-    // (#283) — so send null and let the rest of the edit through, instead of failing the whole save
-    // and leaving promoted ideas uneditable.
+    // The status to SEND on save, or null for "leave unchanged".
+    //
+    // A promoted idea NEVER sends a status. Keyed on `isPromoted` — the IDEA's state — and not on the
+    // currently-SELECTED value, which was the bug (#285, CodeRabbit on PR #286): keying on the selected
+    // value only nulled out while the select still read `Promoted`, so a user who changed it to `New`
+    // sent `New` and moved the idea out of Promoted with its PromotedProjectId left dangling. The select
+    // is disabled for a promoted idea, so this is now belt-and-braces — but it is the belt: no UI path
+    // can send a status for a promoted idea, whatever the control does.
+    //
+    // Sending null (not the status) is also what keeps a promoted idea EDITABLE: UpdateAsync refuses any
+    // status transition across the Promoted boundary, so echoing `Promoted` back would throw and block
+    // the whole save — title, body, tags and all. null = "leave unchanged" lets the rest through.
+    // (For a non-promoted idea `status` can never be Promoted: that option is not rendered.)
     private IdeaStatus? SelectedStatus =>
-        (IdeaStatus)status == IdeaStatus.Promoted ? null : (IdeaStatus)status;
+        isPromoted ? null : (IdeaStatus)status;
 
     private async Task HandleKeyDown(KeyboardEventArgs e)
     {

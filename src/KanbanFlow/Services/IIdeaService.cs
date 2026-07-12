@@ -41,11 +41,19 @@ public interface IIdeaService
     /// </summary>
     /// <exception cref="IdeaNotFoundException">The idea does not exist.</exception>
     /// <exception cref="ValidationException">
-    /// Title empty/too long, an enum value undefined, or <paramref name="dto"/> sets
-    /// <see cref="IdeaStatus.Promoted"/> — a derived status that only <see cref="PromoteAsync"/> may
-    /// write, since it alone also creates the <see cref="Project"/> and links it via
-    /// <see cref="Idea.PromotedProjectId"/>. Leave <see cref="IdeaUpdate.Status"/> <c>null</c> to edit
-    /// an already-promoted idea's other fields.
+    /// Title empty/too long, an enum value undefined, or <paramref name="dto"/> requests a status
+    /// transition that crosses the <see cref="IdeaStatus.Promoted"/> boundary. <c>Promoted</c> is
+    /// <b>derived and terminal</b>, so this method refuses it in both directions:
+    /// <list type="bullet">
+    /// <item><description><b>Into</b> <c>Promoted</c> — only <see cref="PromoteAsync"/> may write it, since
+    /// it alone also creates the <see cref="Project"/> and links it via
+    /// <see cref="Idea.PromotedProjectId"/> (#283).</description></item>
+    /// <item><description><b>Out of</b> <c>Promoted</c> — promotion is permanent; moving a promoted idea to
+    /// another status would leave its project link dangling, and <see cref="IdeaUpdate"/> has no
+    /// <c>PromotedProjectId</c> field with which to clear it (#285).</description></item>
+    /// </list>
+    /// Every other transition is allowed. Leave <see cref="IdeaUpdate.Status"/> <c>null</c> to edit an
+    /// already-promoted idea's other fields — those stay fully editable.
     /// </exception>
     Task<Idea> UpdateAsync(int ideaId, IdeaUpdate dto, string? actor, CancellationToken ct = default);
 

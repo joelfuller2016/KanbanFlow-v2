@@ -580,7 +580,7 @@ const tools = [
           // advertising it would hand agents a status that always 400s. promote_idea is its only
           // writer. (list_ideas keeps it — filtering by promoted ideas is legitimate.)
           enum: ["New", "Triaging", "Archived", "Rejected"],
-          description: "New status. 'Promoted' is derived — use promote_idea, which also creates the linked project."
+          description: "New status. 'Promoted' is derived and terminal — use promote_idea (it also creates the linked project); an already-promoted idea cannot be moved to another status either, though its other fields stay editable."
         },
         tags: { type: "string", description: "New comma-separated tags." },
         priority: {

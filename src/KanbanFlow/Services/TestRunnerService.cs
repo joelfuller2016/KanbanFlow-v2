@@ -162,7 +162,7 @@ public sealed class TestRunnerService(
                 }
                 finally
                 {
-                    await TryDeleteProjectAsync(http, innerPid, ct);
+                    await TryDeleteProjectAsync(http, innerPid);
                 }
             }));
 
@@ -177,7 +177,7 @@ public sealed class TestRunnerService(
                 }
                 finally
                 {
-                    await TryDeleteProjectAsync(http, innerPid, ct);
+                    await TryDeleteProjectAsync(http, innerPid);
                 }
             }));
 
@@ -197,7 +197,7 @@ public sealed class TestRunnerService(
                 }
                 finally
                 {
-                    await TryDeleteProjectAsync(http, innerPid, ct);
+                    await TryDeleteProjectAsync(http, innerPid);
                 }
             }));
 
@@ -214,7 +214,7 @@ public sealed class TestRunnerService(
                 }
                 finally
                 {
-                    await TryDeleteProjectAsync(http, innerPid, ct);
+                    await TryDeleteProjectAsync(http, innerPid);
                 }
             }));
 
@@ -230,7 +230,7 @@ public sealed class TestRunnerService(
                 }
                 finally
                 {
-                    await TryDeleteProjectAsync(http, innerPid, ct);
+                    await TryDeleteProjectAsync(http, innerPid);
                 }
             }));
 
@@ -246,7 +246,7 @@ public sealed class TestRunnerService(
                 }
                 finally
                 {
-                    await TryDeleteProjectAsync(http, innerPid, ct);
+                    await TryDeleteProjectAsync(http, innerPid);
                 }
             }));
 
@@ -268,7 +268,7 @@ public sealed class TestRunnerService(
                 }
                 finally
                 {
-                    await TryDeleteProjectAsync(http, innerPid, ct);
+                    await TryDeleteProjectAsync(http, innerPid);
                 }
             }));
 
@@ -322,7 +322,7 @@ public sealed class TestRunnerService(
                 }
                 finally
                 {
-                    await TryDeleteProjectAsync(http, innerPid, ct);
+                    await TryDeleteProjectAsync(http, innerPid);
                 }
             }));
 
@@ -357,7 +357,7 @@ public sealed class TestRunnerService(
                     if (cb.GetString() != "bob")
                         throw new Exception($"Expected claimedBy 'bob' after re-claim, got '{cb.GetString()}'");
                 }
-                finally { await TryDeleteProjectAsync(http, innerPid, ct); }
+                finally { await TryDeleteProjectAsync(http, innerPid); }
             }));
 
             results.Add(await RunTest("Dependency blocks next-tasks until blocker is Done", "API:AI", async () =>
@@ -402,7 +402,7 @@ public sealed class TestRunnerService(
                     if (blockedCtx2.GetProperty("isBlocked").GetBoolean()) throw new Exception("context.isBlocked should be false after blocker Done");
                     if (blockedCtx2.GetProperty("openBlockerCount").GetInt32() != 0) throw new Exception("context.openBlockerCount should be 0 after blocker Done");
                 }
-                finally { await TryDeleteProjectAsync(http, innerPid, ct); }
+                finally { await TryDeleteProjectAsync(http, innerPid); }
             }));
 
             results.Add(await RunTest("Requirement create / assign / delete round-trip", "API:Requirement", async () =>
@@ -436,7 +436,7 @@ public sealed class TestRunnerService(
                     if (list2.EnumerateArray().Any(r => r.GetProperty("id").GetInt32() == reqId))
                         throw new Exception("Deleted requirement still present in GET list");
                 }
-                finally { await TryDeleteProjectAsync(http, innerPid, ct); }
+                finally { await TryDeleteProjectAsync(http, innerPid); }
             }));
 
             // ── Idea CRUD (#180 Phase 2): ideas are not project-scoped, so most tests POST directly ──
@@ -473,7 +473,7 @@ public sealed class TestRunnerService(
                 }
                 finally
                 {
-                    if (ideaId is int iid) await http.DeleteAsync($"/api/ideas/{iid}", ct);
+                    if (ideaId is int iid) await TryDeleteIdeaAsync(http, iid);
                 }
             }));
 
@@ -517,8 +517,8 @@ public sealed class TestRunnerService(
                 }
                 finally
                 {
-                    if (idA is int a) await http.DeleteAsync($"/api/ideas/{a}", ct);
-                    if (idB is int b) await http.DeleteAsync($"/api/ideas/{b}", ct);
+                    if (idA is int a) await TryDeleteIdeaAsync(http, a);
+                    if (idB is int b) await TryDeleteIdeaAsync(http, b);
                 }
             }));
 
@@ -549,7 +549,7 @@ public sealed class TestRunnerService(
                 }
                 finally
                 {
-                    if (ideaId is int iid) await http.DeleteAsync($"/api/ideas/{iid}", ct);
+                    if (ideaId is int iid) await TryDeleteIdeaAsync(http, iid);
                 }
             }));
 
@@ -611,8 +611,8 @@ public sealed class TestRunnerService(
                 }
                 finally
                 {
-                    if (projectId is int proj) await TryDeleteProjectAsync(http, proj, ct);
-                    if (ideaId is int iid) await http.DeleteAsync($"/api/ideas/{iid}", ct);
+                    if (projectId is int proj) await TryDeleteProjectAsync(http, proj);
+                    if (ideaId is int iid) await TryDeleteIdeaAsync(http, iid);
                 }
             }));
 
@@ -651,7 +651,7 @@ public sealed class TestRunnerService(
                 }
                 finally
                 {
-                    if (ideaId is int iid) await http.DeleteAsync($"/api/ideas/{iid}", ct);
+                    if (ideaId is int iid) await TryDeleteIdeaAsync(http, iid);
                 }
             }));
 
@@ -677,7 +677,7 @@ public sealed class TestRunnerService(
                 }
                 finally
                 {
-                    if (ideaId is int iid) await http.DeleteAsync($"/api/ideas/{iid}", ct);
+                    if (ideaId is int iid) await TryDeleteIdeaAsync(http, iid);
                 }
             }));
 
@@ -705,13 +705,13 @@ public sealed class TestRunnerService(
                     if (after.GetArrayLength() == 0)
                         throw new Exception("Retained activity events should still be returned after project deletion");
                 }
-                finally { if (!deleted) await TryDeleteProjectAsync(http, innerPid, ct); }
+                finally { if (!deleted) await TryDeleteProjectAsync(http, innerPid); }
             }));
         }
         finally
         {
             if (scratchProjectId is int pid)
-                await TryDeleteProjectAsync(http, pid, ct);
+                await TryDeleteProjectAsync(http, pid);
         }
 
         return new TestSuiteResult("API", results, sw.Elapsed.TotalMilliseconds);
@@ -775,7 +775,7 @@ public sealed class TestRunnerService(
             }
             finally
             {
-                await TryDeleteProjectAsync(http, pid, ct);
+                await TryDeleteProjectAsync(http, pid);
             }
         }));
 
@@ -826,7 +826,7 @@ public sealed class TestRunnerService(
             }
             finally
             {
-                await http.DeleteAsync($"/api/ideas/{ideaId}", ct);
+                await TryDeleteIdeaAsync(http, ideaId);
             }
         }));
 
@@ -860,7 +860,7 @@ public sealed class TestRunnerService(
             }
             finally
             {
-                await TryDeleteProjectAsync(http, pid, ct);
+                await TryDeleteProjectAsync(http, pid);
             }
         }));
 
@@ -973,7 +973,7 @@ public sealed class TestRunnerService(
             }
             finally
             {
-                await TryDeleteProjectAsync(http, pid, ct);
+                await TryDeleteProjectAsync(http, pid);
             }
         }));
 
@@ -996,7 +996,7 @@ public sealed class TestRunnerService(
             }
             finally
             {
-                await TryDeleteProjectAsync(http, pid, ct);
+                await TryDeleteProjectAsync(http, pid);
             }
         }));
 
@@ -1014,7 +1014,7 @@ public sealed class TestRunnerService(
             }
             finally
             {
-                await TryDeleteProjectAsync(http, pid, ct);
+                await TryDeleteProjectAsync(http, pid);
             }
         }));
 
@@ -1098,7 +1098,7 @@ public sealed class TestRunnerService(
             }
             finally
             {
-                await TryDeleteProjectAsync(http, pid, ct);
+                await TryDeleteProjectAsync(http, pid);
             }
         }));
 
@@ -1127,7 +1127,7 @@ public sealed class TestRunnerService(
             }
             finally
             {
-                await TryDeleteProjectAsync(http, pid, ct);
+                await TryDeleteProjectAsync(http, pid);
             }
         }));
 
@@ -1187,7 +1187,7 @@ public sealed class TestRunnerService(
             }
             finally
             {
-                await TryDeleteProjectAsync(http, pid, ct);
+                await TryDeleteProjectAsync(http, pid);
             }
         }));
 
@@ -1240,7 +1240,7 @@ public sealed class TestRunnerService(
             }
             finally
             {
-                await TryDeleteProjectAsync(http, pid, ct);
+                await TryDeleteProjectAsync(http, pid);
             }
         }));
 
@@ -1271,7 +1271,7 @@ public sealed class TestRunnerService(
             }
             finally
             {
-                await TryDeleteProjectAsync(http, pid, ct);
+                await TryDeleteProjectAsync(http, pid);
             }
         }));
 
@@ -1304,7 +1304,7 @@ public sealed class TestRunnerService(
             }
             finally
             {
-                await TryDeleteProjectAsync(http, pid, ct);
+                await TryDeleteProjectAsync(http, pid);
             }
         }));
 
@@ -1332,7 +1332,7 @@ public sealed class TestRunnerService(
             }
             finally
             {
-                await TryDeleteProjectAsync(http, pid, ct);
+                await TryDeleteProjectAsync(http, pid);
             }
         }));
 
@@ -1358,8 +1358,8 @@ public sealed class TestRunnerService(
             }
             finally
             {
-                await TryDeleteProjectAsync(http, pidA, ct);
-                if (pidB.HasValue) await TryDeleteProjectAsync(http, pidB.Value, ct);
+                await TryDeleteProjectAsync(http, pidA);
+                if (pidB.HasValue) await TryDeleteProjectAsync(http, pidB.Value);
             }
         }));
 
@@ -1381,7 +1381,7 @@ public sealed class TestRunnerService(
             }
             finally
             {
-                await TryDeleteProjectAsync(http, pid, ct);
+                await TryDeleteProjectAsync(http, pid);
             }
         }));
 
@@ -1412,7 +1412,7 @@ public sealed class TestRunnerService(
                 var hasEvent = await db.ActivityEvents.AnyAsync(e => e.EntityType == "Task" && e.EntityId == taskId && e.EventType == "TaskStatusChanged", ct);
                 if (!hasEvent) throw new Exception("ToggleDone should write a TaskStatusChanged event");
             }
-            finally { await TryDeleteProjectAsync(http, pid, ct); }
+            finally { await TryDeleteProjectAsync(http, pid); }
         }));
 
         results.Add(await RunTest("ToggleDoneAsync un-completes subtasks when toggled off Done", "Service:Task", async () =>
@@ -1432,7 +1432,7 @@ public sealed class TestRunnerService(
                 var withSubs = await db.Tasks.Include(t => t.Subtasks).AsNoTracking().FirstAsync(t => t.Id == taskId, ct);
                 if (withSubs.Subtasks.Any(x => x.Completed)) throw new Exception("Subtasks should be un-completed after toggling off Done");
             }
-            finally { await TryDeleteProjectAsync(http, pid, ct); }
+            finally { await TryDeleteProjectAsync(http, pid); }
         }));
 
         results.Add(await RunTest("MarkdownRenderer strips javascript: links", "Service:Markdown", () =>
@@ -1583,8 +1583,43 @@ public sealed class TestRunnerService(
         return (pid, fid, tid);
     }
 
-    private static async Task TryDeleteProjectAsync(HttpClient http, int projectId, CancellationToken ct)
+    /// <summary>
+    /// Best-effort cleanup DELETE for a scratch row this runner seeded. One helper so the three
+    /// cleanup rules live in exactly one place:
+    /// <list type="number">
+    /// <item><description><b>Never the request's <c>CancellationToken</c>.</b> If the caller cancelled,
+    /// a <c>ct</c>-bound DELETE is never sent — and the seeded row is left behind in the <b>live user
+    /// database</b>. This runner has no test DB: it is driven from <c>/settings</c> and
+    /// <c>POST /api/admin/run-tests</c> against the real one, so a skipped cleanup is junk in real user
+    /// data. Cancellation stops the <em>tests</em>, not the tidying-up.</description></item>
+    /// <item><description><b>Never throws.</b> These calls sit in <c>finally</c> blocks; an exception here
+    /// would replace — and so hide — the test's original exception.</description></item>
+    /// <item><description><b>Never silent.</b> A swallowed failure means invisible junk in real user data,
+    /// so every failure is logged.</description></item>
+    /// </list>
+    /// A 404 counts as success: the row is already gone, which is the entire goal.
+    /// </summary>
+    private async Task TryCleanupAsync(HttpClient http, string route)
     {
-        try { await http.DeleteAsync($"/api/projects/{projectId}", ct); } catch { /* best-effort cleanup */ }
+        try
+        {
+            // CancellationToken.None is deliberate — see rule 1 above.
+            var resp = await http.DeleteAsync(route, CancellationToken.None);
+            if (!resp.IsSuccessStatusCode && resp.StatusCode != HttpStatusCode.NotFound)
+                logger.LogWarning(
+                    "Test cleanup DELETE {Route} returned {StatusCode}; a scratch row may be left behind in the live database.",
+                    route, (int)resp.StatusCode);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex,
+                "Test cleanup DELETE {Route} failed; a scratch row may be left behind in the live database.", route);
+        }
     }
+
+    private Task TryDeleteProjectAsync(HttpClient http, int projectId) =>
+        TryCleanupAsync(http, $"/api/projects/{projectId}");
+
+    private Task TryDeleteIdeaAsync(HttpClient http, int ideaId) =>
+        TryCleanupAsync(http, $"/api/ideas/{ideaId}");
 }
