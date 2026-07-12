@@ -189,7 +189,7 @@ function plan(dryRun, verb, what) {
 async function ensureProject(repo, dryRun) {
   const shortName = repo.split("/").pop();
   const projects = await api("GET", "/api/projects");
-  const existing = projects.find((p) => p.name === shortName);
+  const existing = projects.find((p) => p.name.toLowerCase() === shortName.toLowerCase());
   if (existing) return existing.id;
 
   plan(dryRun, "create project", shortName);
@@ -268,7 +268,7 @@ async function syncTasks(repo, projectId, issues, prByIssue, featureIds, actor, 
 
     plan(dryRun, "update task", `${desiredName}  ${JSON.stringify(patch)}`);
     if (dryRun) continue;
-    await api("PUT", `/api/tasks/${task.id}`, { ...patch, actor });
+    await api("PUT", `/api/tasks/${task.id}`, { name: desiredName, ...patch, actor });
     stats.tasksUpdated++;
   }
 
@@ -276,7 +276,7 @@ async function syncTasks(repo, projectId, issues, prByIssue, featureIds, actor, 
   // trail is sacred) — surface it and let a human decide.
   const seen = new Set(issues.map((i) => i.number));
   for (const [n, t] of byIssueNumber) {
-    if (!seen.has(n)) stats.drift.push(`${repo}: task "${t.name}" has no matching open issue #${n} (closed or deleted?)`);
+    if (!seen.has(n) && t.status !== "Done") stats.drift.push(`${repo}: task "${t.name}" has no matching open issue #${n} (closed or deleted?)`);
   }
 }
 
@@ -285,6 +285,8 @@ async function syncRepo(repo, args) {
   const [issues, prs] = await Promise.all([fetchIssues(repo, args.includeClosed), fetchOpenPrs(repo)]);
   const prByIssue = mapIssueToOpenPr(prs);
   console.log(`  ${issues.length} issues · ${prs.length} open PRs · ${prByIssue.size} issues with a linked PR`);
+  if (issues.length >= GH_PAGE_LIMIT) console.warn(`  ⚠ issues may be truncated (fetched ${issues.length} = limit); consider raising GH_PAGE_LIMIT`);
+  if (prs.length >= GH_PAGE_LIMIT) console.warn(`  ⚠ PRs may be truncated (fetched ${prs.length} = limit); consider raising GH_PAGE_LIMIT`);
 
   const projectId = await ensureProject(repo, args.dryRun);
   const featureNames = [...new Set(issues.map(featureNameFor))].sort();

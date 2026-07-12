@@ -84,7 +84,7 @@ env: KANBANFLOW_API_URL (default http://127.0.0.1:5123), KANBANFLOW_PORTFOLIO_RE
   }
 
   const repos = resolveRepos(args);
-  const shortNames = new Map(repos.map((r) => [r.split("/").pop(), r]));
+  const shortNames = new Map(repos.map((r) => [r.split("/").pop().toLowerCase(), r]));
 
   let projects;
   try {
@@ -95,7 +95,7 @@ env: KANBANFLOW_API_URL (default http://127.0.0.1:5123), KANBANFLOW_PORTFOLIO_RE
     return;
   }
 
-  const tracked = projects.filter((p) => shortNames.has(p.name));
+  const tracked = projects.filter((p) => shortNames.has(p.name.toLowerCase()));
   if (tracked.length === 0) {
     console.log(`No synced projects on the board at ${apiBaseUrl}.`);
     console.log(`Run:  node scripts/portfolio-sync.mjs`);
@@ -113,7 +113,7 @@ env: KANBANFLOW_API_URL (default http://127.0.0.1:5123), KANBANFLOW_PORTFOLIO_RE
     const stale = tasks.filter((t) => t.status === "InProgress" && daysSince(t.updatedAt) > TASK_PROGRESS_STALE_DAYS);
     return {
       name: p.name,
-      repo: shortNames.get(p.name),
+      repo: shortNames.get(p.name.toLowerCase()),
       backlog: count("Backlog"), todo: count("Todo"), prog: count("InProgress"),
       review: count("Review"), done: count("Done"),
       top, stale, tasks,
