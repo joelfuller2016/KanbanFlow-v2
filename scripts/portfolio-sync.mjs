@@ -261,13 +261,12 @@ function priorityFromLabel(name) {
   const pn = /^p([0-3])\b/.exec(n);
   if (pn) return PN_LEVELS[Number(pn[1])];
 
-  // "priority:high", "high-priority", "priority: medium", "priority-critical"
-  if (n.includes("priority")) {
-    for (const [word, level] of Object.entries(SEVERITY_WORDS)) {
-      if (n.includes(word)) return level;
-    }
-    return null;
-  }
+  // "priority:high", "priority: medium", "priority-critical", "high-priority"
+  // Use anchored patterns so "priority:critical-path" or "not-priority-medium" are rejected.
+  const priFirst = /^priority[:\-]\s*(critical|high|medium|low)$/.exec(n);
+  if (priFirst) return SEVERITY_WORDS[priFirst[1]];
+  const priSecond = /^(critical|high|medium|low)[:\-]priority$/.exec(n);
+  if (priSecond) return SEVERITY_WORDS[priSecond[1]];
 
   // A label that IS a severity word, exactly — not one that merely contains it.
   return SEVERITY_WORDS[n] ?? null;
