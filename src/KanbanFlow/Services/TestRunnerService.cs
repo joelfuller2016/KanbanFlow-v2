@@ -815,14 +815,28 @@ public sealed class TestRunnerService(
                     throw new Exception($"GET /ideas returned {(int)resp.StatusCode}");
                 var html = await resp.Content.ReadAsStringAsync(ct);
 
-                if (!html.Contains("data-testid=\"ideas-grid\"", StringComparison.Ordinal))
-                    throw new Exception("Ideas page rendered no idea grid (data-testid=\"ideas-grid\" missing — empty state, or the list is broken)");
+                // #280: /ideas is a status board, not a flat grid — `ideas-grid` is gone. Assert the
+                // board rendered AND that the card landed in the *New* column, which is a strictly
+                // stronger check than the old one: it tests the pipeline (CreateAsync always starts an
+                // idea at New, and the board fans it into that column) instead of a wrapper div.
+                if (!html.Contains("data-testid=\"kanban-board\"", StringComparison.Ordinal))
+                    throw new Exception("Ideas page rendered no board (data-testid=\"kanban-board\" missing — empty state, or the list is broken)");
 
                 var card = $"data-testid=\"idea-card-{ideaId}\"";
                 if (!html.Contains(card, StringComparison.Ordinal))
                     throw new Exception($"Idea {ideaId} did not render as an idea card ({card} not found in the page HTML)");
                 if (!html.Contains(title, StringComparison.Ordinal))
                     throw new Exception($"Idea card {ideaId} rendered without its title '{title}'");
+
+                // Columns render in IdeaStatus order (New, Triaging, …), so a card belonging to New
+                // must appear between New's card container and the next column's root.
+                var newColumn = html.IndexOf("data-testid=\"board-column-New-cards\"", StringComparison.Ordinal);
+                var nextColumn = html.IndexOf("data-testid=\"board-column-Triaging\"", StringComparison.Ordinal);
+                var cardAt = html.IndexOf(card, StringComparison.Ordinal);
+                if (newColumn < 0 || nextColumn < 0)
+                    throw new Exception("Ideas board rendered without its New/Triaging columns");
+                if (cardAt < newColumn || cardAt > nextColumn)
+                    throw new Exception($"A newly created idea must render in the New column, but card {ideaId} is outside it");
             }
             finally
             {

@@ -60,6 +60,18 @@ async function waitForApiStatus(taskId, expected, timeoutMs = 6000) {
   throw new Error(`expected status ${expected}, got ${last}`);
 }
 
+// Status persistence after an idea drag, same reasoning as waitForApiStatus above.
+async function waitForIdeaStatus(ideaId, expected, timeoutMs = 8000) {
+  const deadline = Date.now() + timeoutMs;
+  let last;
+  do {
+    last = (await api("GET", `/api/ideas/${ideaId}`)).status;
+    if (last === expected) return;
+    await sleep(200);
+  } while (Date.now() < deadline);
+  throw new Error(`expected idea status ${expected}, got ${last}`);
+}
+
 async function test(name, fn) {
   const started = Date.now();
   try {
@@ -107,6 +119,112 @@ async function dragCardTo(page, cardSelector, targetColumnSelector) {
   await page.mouse.move(tx, ty);
   await page.waitForTimeout(60);
   await page.mouse.up();
+}
+
+// ── Board render-truth harness (#294) ────────────────────────────────────────────────
+// Reads what a board is actually DRAWING: per column, the count badge (which the component
+// computes from the MODEL) and the ids of the card roots rendered beside it (which the Blazor
+// DIFF puts there). Only a card root carries data-task-id, on both boards.
+const IDEA_COLUMNS = ["New", "Triaging", "Promoted", "Archived", "Rejected"];
+const TASK_COLUMNS = ["Backlog", "Todo", "InProgress", "Review", "Done"];
+
+async function readBoardDom(page, statuses) {
+  return page.evaluate((sts) => {
+    const board = {};
+    for (const s of sts) {
+      const col = document.querySelector(`[data-testid="board-column-${s}"]`);
+      if (!col) continue;
+      board[s] = {
+        badge: parseInt(col.querySelector("h3 .badge")?.textContent ?? "", 10),
+        // A collapsed terminal rail renders NO cards by design (KanbanColumn: `@if (!Collapsed)`),
+        // so "badge === cards drawn" is only a claim about an expanded column.
+        collapsed: col.classList.contains("kanban-column-collapsed"),
+        cardIds: Array.from(
+          document.querySelectorAll(`[data-testid="board-column-${s}-cards"] [data-task-id]`),
+          (el) => Number(el.getAttribute("data-task-id")),
+        ),
+      };
+    }
+    return board;
+  }, statuses);
+}
+
+// The two boards' canonical column orders, restated from the source so the DOM is checked
+// against the SERVER's truth and not against itself:
+//   /ideas        Priority desc, CreatedAt desc  (Ideas.OrderIdeas — an Idea has no SortOrder)
+//   /project/{id} SortOrder asc, Id asc          (ProjectView.OrderTasksInColumn)
+const PRIORITY_RANK = { Critical: 3, High: 2, Medium: 1, Low: 0 };
+function groupBy(items, statusOf, compare) {
+  const out = {};
+  for (const item of items) (out[statusOf(item)] ??= []).push(item);
+  for (const key of Object.keys(out)) out[key] = out[key].sort(compare).map((i) => i.id);
+  return out;
+}
+const ideaTruth = (ideas) => groupBy(ideas, (i) => i.status, (a, b) =>
+  (PRIORITY_RANK[b.priority] ?? -1) - (PRIORITY_RANK[a.priority] ?? -1) ||
+  new Date(b.createdAt) - new Date(a.createdAt));
+const taskTruth = (tasks) => groupBy(tasks, (t) => t.status, (a, b) =>
+  a.sortOrder - b.sortOrder || a.id - b.id);
+
+// The assertion #294 would have failed on. The badge is rendered from the model; the cards are
+// put there by the render diff. A column whose badge contradicts the cards drawn beside it is a
+// board disagreeing with ITSELF on screen — no server call, no error, nothing else can see it.
+function assertBoardTruthful(dom, truth, ctx) {
+  for (const [status, col] of Object.entries(dom)) {
+    const expected = truth[status] ?? [];
+    assert(col.badge === expected.length,
+      `${ctx}: ${status} badge says ${col.badge}, the API holds ${expected.length} [${expected}]`);
+    if (col.collapsed) {
+      assert(col.cardIds.length === 0,
+        `${ctx}: collapsed rail ${status} drew ${col.cardIds.length} card(s) [${col.cardIds}]`);
+      continue;
+    }
+    assert(col.badge === col.cardIds.length,
+      `${ctx}: ${status} counts ${col.badge} but DRAWS ${col.cardIds.length} card(s) [${col.cardIds}] ` +
+      `— the column's own badge contradicts the cards rendered beside it`);
+    assert(col.cardIds.join(",") === expected.join(","),
+      `${ctx}: ${status} draws [${col.cardIds}] but the API holds [${expected}]`);
+  }
+}
+
+// Which cards changed column between two DOM snapshots, as "id: From -> To".
+function domColumnMoves(before, after, statuses) {
+  const moves = [];
+  for (const to of statuses) {
+    for (const id of after[to]?.cardIds ?? []) {
+      const from = statuses.find((s) => before[s]?.cardIds.includes(id));
+      if (from && from !== to) moves.push(`${id}: ${from} -> ${to}`);
+    }
+  }
+  return moves;
+}
+
+// Terminal rails (Archived/Rejected on /ideas) start collapsed and draw no cards, so open them
+// before snapshotting — otherwise "badge === cards drawn" has nothing to say about them. The
+// retry loop doubles as a wait for the interactive circuit: the toggle is an @onclick, so a
+// click that lands on the SSR HTML is a no-op (same handoff clickUntil guards against).
+async function expandColumn(page, status) {
+  const col = page.locator(`[data-testid="board-column-${status}"]`);
+  const isCollapsed = () => col.evaluate((e) => e.classList.contains("kanban-column-collapsed"));
+  for (let i = 0; i < 8; i++) {
+    if (!(await isCollapsed())) return;
+    try { await page.locator(`[data-testid="board-column-${status}-collapse-toggle"]`).click({ timeout: 2000 }); }
+    catch { /* circuit not live yet */ }
+    await sleep(400);
+  }
+  assert(!(await isCollapsed()), `the ${status} rail never expanded`);
+}
+
+// A drag fired before SortableJS is bound is a silent no-op: the card follows the cursor (the
+// browser's own text-drag) and nothing happens. Binding is deferred — OnAfterRenderAsync waits for
+// the interactive circuit, then 100ms, then calls initBoardDragDrop — so a test that navigates and
+// drags immediately is racing it. `Sortable.get(el)` is the framework's own "is this container
+// armed?" question, so ask that rather than sleeping and hoping.
+async function waitForSortableArmed(page, status) {
+  await page.waitForFunction((s) => {
+    const el = document.querySelector(`[data-testid="board-column-${s}-cards"]`);
+    return !!el && !!window.Sortable && window.Sortable.get(el) != null;
+  }, status, { timeout: 15000 });
 }
 
 async function startApp() {
@@ -309,6 +427,64 @@ async function main() {
       );
     });
 
+    // ── Regression guard (#294): a drag must not corrupt the RENDER ───────────────────────────
+    // SortableJS physically relocates the dragged card's <div> BEFORE Blazor is told anything.
+    // Blazor's renderer keeps its own logical-children array per `.board-column-cards` container
+    // and never re-reads the DOM, so after a drop its model and the real DOM disagree. Worse,
+    // KanbanColumn draws its cards as `@foreach (var item in Items) { @CardTemplate(item) }`,
+    // which compiles to `AddContent(seq, CardTemplate(item))` — one REGION per card, all sharing
+    // ONE sequence number — so the diff pairs cards POSITIONALLY. It therefore hands card N+1's
+    // parameters to the component instance that owns card N's DOM node… which SortableJS has
+    // already moved into a different column. The board then draws cards in columns they are not
+    // in, while the database is perfectly correct and a refresh heals it — so every server-side
+    // test, and every drag test that only checks "the card I dragged arrived", stays green.
+    //
+    // The seed is what makes this catch it: the dragged card must NOT be the last card in its
+    // column. Dragging the LAST card is self-healing (the diff's trailing removal happens to
+    // delete exactly the node Sortable moved), which is why every drag scenario above — each of
+    // which drags the only card in its column — has never seen this.
+    //
+    // Asserted: (a) exactly one card changes column in the DOM, (b) every column's count badge
+    // equals the number of cards actually drawn beside it, (c) the DOM equals the API.
+    const dragProj = await api("POST", "/api/projects", { name: `E2E Drag ${stamp}` });
+    const dragFeature = await api("POST", `/api/projects/${dragProj.id}/features`, { name: "E2E Drag Feature" });
+    await test("Project board: dragging ONE card moves exactly one card, and every badge matches its cards", async () => {
+      const mkTask = (label, sortOrder, status) => api("POST", `/api/features/${dragFeature.id}/tasks`,
+        { name: `E2E Drag ${label} ${stamp}`, status, sortOrder });
+      const t1 = await mkTask("Todo A", 10, "Todo");
+      const t2 = await mkTask("Todo B", 20, "Todo"); // the one we drag — deliberately NOT last
+      const t3 = await mkTask("Todo C", 30, "Todo");
+      await mkTask("Parked", 10, "InProgress");      // a bystander the drag must not disturb
+
+      await page.goto(`${baseUrl}/project/${dragProj.id}`);
+      for (const t of [t1, t2, t3]) {
+        await page.locator(`[data-testid="board-column-Todo-cards"] [data-testid="board-card-${t.id}"]`)
+          .waitFor({ state: "visible" });
+      }
+
+      await waitForSortableArmed(page, "Todo");
+      await waitForSortableArmed(page, "InProgress");
+
+      const before = await readBoardDom(page, TASK_COLUMNS);
+      assert(before.Todo.cardIds.join(",") === [t1.id, t2.id, t3.id].join(","),
+        `seed: Todo must draw [${[t1.id, t2.id, t3.id]}], got [${before.Todo.cardIds}]`);
+      assert(before.Todo.cardIds.indexOf(t2.id) < before.Todo.cardIds.length - 1,
+        "seed is not discriminating: the dragged card must not be the LAST card in its column");
+
+      await dragCardTo(page, `[data-testid="board-card-${t2.id}"]`,
+        `[data-testid="board-column-InProgress-cards"]`);
+      await waitForApiStatus(t2.id, "InProgress");
+      await page.waitForTimeout(600); // let the re-render land
+
+      const after = await readBoardDom(page, TASK_COLUMNS);
+      const truth = taskTruth(await api("GET", `/api/features/${dragFeature.id}/tasks`));
+      assertBoardTruthful(after, truth, "after dragging one task Todo -> InProgress");
+
+      const moves = domColumnMoves(before, after, TASK_COLUMNS);
+      assert(moves.length === 1 && moves[0] === `${t2.id}: Todo -> InProgress`,
+        `exactly ONE card may change column — the DOM moved [${moves.join("; ") || "nothing"}]`);
+    });
+
     // ── Scenario F: Ideas inbox — create / edit / filter / promote / delete ──
     // The harness boots a fresh scratch DB each run (mkdtempSync), so the ideas table
     // starts empty: assert the empty state first, then drive the full lifecycle through
@@ -389,10 +565,15 @@ async function main() {
       await page.locator(`[data-testid="idea-card-promote-${createdIdea.id}"]`).click();
       await page.locator('[data-testid="idea-promote-confirm"]').waitFor({ state: "visible" });
       await page.locator('[data-testid="idea-promote-confirm"]').click();
-      // success banner with an "Open new project" link appears, and the card now shows Promoted
+      // success banner with an "Open new project" link appears, and the card has MOVED to the
+      // Promoted column. #280 turned /ideas into a status board: the column IS the status, so the
+      // card no longer carries a status badge (two grey pills meaning different things). Asserting
+      // the column instead of a label is strictly stronger — it tests the promote pipeline rather
+      // than a string.
       await page.locator('[data-testid="idea-promote-success-link"]').waitFor({ state: "visible" });
-      await page.locator(`[data-testid="idea-card-status-${createdIdea.id}"]`)
-        .getByText("Promoted", { exact: true }).waitFor({ state: "visible" });
+      await page.locator(
+        `[data-testid="board-column-Promoted-cards"] [data-testid="idea-card-${createdIdea.id}"]`,
+      ).waitFor({ state: "visible" });
     });
 
     // ── Regression guard: an ALREADY-PROMOTED idea must still be editable ──
@@ -470,6 +651,77 @@ async function main() {
       await page.locator(`[data-testid="idea-card-${createdIdea.id}"]`).waitFor({ state: "detached" });
     });
 
+    // ── Regression guard (#294), ideas board ──────────────────────────────────────────────────
+    // The same guard as the project board's above, on the board where the UX review actually saw
+    // it: drag ONE idea into Archived and two cards move. See that comment for the mechanism.
+    // The ideas board is the harder case — a moved idea can land ANYWHERE in the destination's
+    // canonical order (`Priority desc, CreatedAt desc`), not just at the end — so the seed makes
+    // the dragged card sort FIRST in Archived, ahead of the bystander already sitting there.
+    await test("Ideas board: dragging ONE card moves exactly one card, and every badge matches its cards", async () => {
+      // Clean slate: the seed IS the board, so every assertion below is exact.
+      for (const i of await api("GET", "/api/ideas?limit=500")) {
+        await api("DELETE", `/api/ideas/${i.id}`).catch(() => {});
+      }
+      // Distinct priorities all round: OrderIdeas is `Priority desc, CreatedAt desc`, so priority
+      // alone fixes every column's order and the assertions never race the clock.
+      const mkIdea = (label, priority) => api("POST", "/api/ideas", { title: `E2E Drag ${label} ${stamp}`, priority });
+      const top = await mkIdea("Top", "Critical");
+      const mid = await mkIdea("Mid", "High");    // the one we drag — deliberately NOT last
+      const bottom = await mkIdea("Bottom", "Medium");
+      const parked = await mkIdea("Parked", "Low"); // a bystander in the destination column
+      await api("PATCH", `/api/ideas/${parked.id}`, { status: "Archived" });
+
+      await page.goto(`${baseUrl}/ideas`);
+      await page.locator(`[data-testid="idea-card-${top.id}"]`).waitFor({ state: "visible" });
+      // Archived/Rejected are terminal rails and start collapsed, drawing no cards at all. Open
+      // them so "badge === cards drawn" is a claim about EVERY column on the board.
+      await expandColumn(page, "Archived");
+      await expandColumn(page, "Rejected");
+      await waitForSortableArmed(page, "New");
+      await waitForSortableArmed(page, "Archived");
+
+      const before = await readBoardDom(page, IDEA_COLUMNS);
+      assert(before.New.cardIds.join(",") === [top.id, mid.id, bottom.id].join(","),
+        `seed: New must draw [${[top.id, mid.id, bottom.id]}], got [${before.New.cardIds}]`);
+      assert(before.New.cardIds.indexOf(mid.id) < before.New.cardIds.length - 1,
+        "seed is not discriminating: the dragged card must not be the LAST card in its column");
+
+      await dragCardTo(page, `[data-testid="idea-card-${mid.id}"]`,
+        `[data-testid="board-column-Archived-cards"]`);
+      await waitForIdeaStatus(mid.id, "Archived");
+      await page.waitForTimeout(600); // let the re-render land
+
+      const after = await readBoardDom(page, IDEA_COLUMNS);
+      const truth = ideaTruth(await api("GET", "/api/ideas?limit=500"));
+      // The moved idea (High) must sort AHEAD of the bystander (Low) — i.e. NOT at the end.
+      assert(truth.Archived.join(",") === [mid.id, parked.id].join(","),
+        `precondition: Archived's canonical order must be [${[mid.id, parked.id]}], API says [${truth.Archived}]`);
+      assertBoardTruthful(after, truth, "after dragging one idea New -> Archived");
+
+      const moves = domColumnMoves(before, after, IDEA_COLUMNS);
+      assert(moves.length === 1 && moves[0] === `${mid.id}: New -> Archived`,
+        `exactly ONE card may change column — the DOM moved [${moves.join("; ") || "nothing"}]`);
+
+      // ── The same bug, in-column. An Idea has NO SortOrder: a column's order is DERIVED
+      // (`Priority desc, CreatedAt desc`), so dropping a card at a position the server cannot
+      // represent must snap back. Ideas.ApplyStatusAsync says so in as many words — "the reload
+      // snaps the card back to its canonical slot, so the board teaches its own rule instead of
+      // quietly drifting" — and that claim is only TRUE if Blazor still owns the DOM it is
+      // re-rendering. When SortableJS keeps the node it moved, the re-render is a no-op (same
+      // items, same order => zero diff edits) and the drifted order simply STAYS on screen, a
+      // lie the server never agreed to, until something forces a refresh.
+      await dragCardTo(page, `[data-testid="idea-card-${bottom.id}"]`,
+        `[data-testid="board-column-New-cards"]`);
+      await page.waitForTimeout(900); // no status change to poll — this drop is a pure re-render
+
+      const settled = await readBoardDom(page, IDEA_COLUMNS);
+      assertBoardTruthful(settled, ideaTruth(await api("GET", "/api/ideas?limit=500")),
+        "after dropping an idea out of canonical order inside its own column");
+      assert(settled.New.cardIds.join(",") === [top.id, bottom.id].join(","),
+        `an in-column drop must snap back to the canonical order [${[top.id, bottom.id]}] ` +
+        `(Priority desc) — the board is still drawing [${settled.New.cardIds}]`);
+    });
+
     // ── Scenario E: Settings -> Run all shows an all-passed result table ──
     await test("Settings 'Run all' reports an all-passed result", async () => {
       await page.goto(`${baseUrl}/settings`);
@@ -493,6 +745,7 @@ async function main() {
     // ── Cleanup of API-created data (best effort) ──
     await api("DELETE", `/api/projects/${proj.id}`).catch(() => {});
     await api("DELETE", `/api/projects/${orderProj.id}`).catch(() => {});
+    await api("DELETE", `/api/projects/${dragProj.id}`).catch(() => {});
     // delete the modal-created project too
     const all = await api("GET", "/api/projects");
     const modalProj = all.find((p) => p.name === modalProjectName);

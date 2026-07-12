@@ -1,7 +1,8 @@
 @page "/ideas"
 @rendermode InteractiveServer
 @inject IIdeaService IdeaSvc
-@implements IDisposable
+@inject IJSRuntime JS
+@implements IAsyncDisposable
 
 <PageTitle>Ideas - KanbanFlow</PageTitle>
 
@@ -27,7 +28,7 @@
     </div>
 }
 
-@* Page-level error (filter/load failures). Mutation errors surface inside their own modals. *@
+@* Page-level error (filter/load/move failures). Mutation errors surface inside their own modals. *@
 @if (loadError is not null)
 {
     <div class="alert alert-danger alert-dismissible fade show" role="alert" aria-live="assertive" aria-atomic="true" data-testid="idea-load-error">
@@ -61,6 +62,12 @@
     </div>
 </div>
 
+@* Every status change — drag OR the ⋮ "Move to" menu — announces here. `polite`, never `assertive`:
+   a card move is not an emergency and must not interrupt whatever the user is reading. Promotion is
+   NOT announced here — it already has the aria-live success banner above, and duplicating it would
+   speak the same event twice. *@
+<div class="visually-hidden" aria-live="polite" aria-atomic="true" data-testid="ideas-board-announcer">@announcement</div>
+
 @if (ideas is null)
 {
     <div class="text-center py-5" aria-busy="true">
@@ -71,6 +78,11 @@
 }
 else if (ideas.Count == 0)
 {
+    @* No board here, deliberately. Five empty columns tell a brand-new user nothing about what an
+       idea IS, and when a filter matches nothing they state "your pipeline is empty" — which is a
+       lie; the truth is "your filter matched nothing". One honest sentence beats a broken-looking
+       board. The empty-column placeholders below therefore only ever appear when the pipeline is
+       genuinely empty *in that status*, which keeps them meaningful. *@
     <div class="text-center py-5" data-testid="ideas-empty-state">
         <div class="text-muted mb-3">
             <svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" fill="currentColor" class="bi bi-lightbulb" viewBox="0 0 16 16" aria-hidden="true">
@@ -93,17 +105,60 @@ else if (ideas.Count == 0)
 }
 else
 {
-    <div class="row g-4" data-testid="ideas-grid">
-        @foreach (var idea in ideas)
-        {
-            <div class="col-md-4" @key="idea.Id">
-                <IdeaCard Idea="idea"
-                          OnEdit="OpenEditModal"
-                          OnDelete="OpenDeleteModal"
-                          OnPromote="OpenPromoteModal" />
-            </div>
-        }
-    </div>
+    @* The status board (#280). The column IS the status, so the card no longer carries a status badge.
+       Type arguments are passed EXPLICITLY: with inferred type arguments Razor closes an
+       EventCallback<T> handler before T is known and it degrades to `object` (CS1503) — the compiler
+       error it produces points somewhere useless, so don't discover this the hard way.
+
+       @key re-creates the board whenever the *column set* changes (status filter on/off). That is
+       load-bearing, not a tic: KanbanBoard seeds its collapse dictionary once per status
+       (`if (!collapsed.ContainsKey(status))`), so without a fresh instance a status-focused Archived
+       column would stay stuck as a 3rem rail with its cards hidden and no toggle to open it. *@
+    <KanbanBoard TItem="Idea" TStatus="IdeaStatus"
+                 @key="StatusFilter"
+                 @ref="board"
+                 Items="ideas"
+                 StatusOf="i => i.Status"
+                 IdOf="i => i.Id"
+                 Statuses="VisibleStatuses"
+                 OrderColumnBy="OrderIdeas"
+                 IsDragEnabled="s => s != IdeaStatus.Promoted"
+                 IsTerminal="IsTerminalColumn"
+                 InertHint="InertHintFor"
+                 Guidance="Drag cards between New, Triaging, Archived and Rejected. Promoting is one-way — use the Promote button on a card.">
+        <CardTemplate Context="idea">
+            <IdeaCard @key="idea.Id"
+                      Idea="idea"
+                      OnEdit="OpenEditModal"
+                      OnDelete="OpenDeleteModal"
+                      OnPromote="OpenPromoteModal"
+                      OnMoveTo="MoveIdea" />
+        </CardTemplate>
+        <ColumnEmptyTemplate Context="status">
+            @if (status == IdeaStatus.New)
+            {
+                @* The ONLY column with an add affordance: CreateAsync always starts an idea at New,
+                   so "add straight to Triaging" is not a real operation and must not be offered.
+                   pe-auto re-enables pointer events — the placeholder sits in a pe-none overlay so
+                   that drops fall through to the SortableJS container underneath it (#290). *@
+                <button type="button"
+                        class="btn btn-link text-decoration-none border rounded w-100 h-100 d-flex flex-column align-items-center justify-content-center text-muted pe-auto"
+                        style="border-style: dashed !important;"
+                        @onclick="OpenCreateModal"
+                        data-testid="add-idea-New-button">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" fill="currentColor" viewBox="0 0 16 16" aria-hidden="true">
+                        <path fill-rule="evenodd" d="M8 2a.5.5 0 0 1 .5.5v5h5a.5.5 0 0 1 0 1h-5v5a.5.5 0 0 1-1 0v-5h-5a.5.5 0 0 1 0-1h5v-5A.5.5 0 0 1 8 2"/>
+                    </svg>
+                    <span class="small">New idea</span>
+                </button>
+            }
+            else
+            {
+                @* A quiet line, never a disabled button — a disabled control invites a click it will refuse. *@
+                <div class="text-muted small text-center p-3">@EmptyLineFor(status)</div>
+            }
+        </ColumnEmptyTemplate>
+    </KanbanBoard>
 }
 
 @* ── Create / Edit modal ── *@
@@ -115,7 +170,12 @@ else
 @* ── Delete confirmation modal (mirrors Home.razor's delete modal) ── *@
 @if (showDeleteModal && deletingIdea is not null)
 {
-    <div class="modal fade show d-block" tabindex="-1" role="dialog" aria-modal="true" aria-labelledby="delete-idea-modal-title" style="background-color: rgba(0,0,0,0.5);" data-testid="idea-delete-modal">
+    @* Esc cancels. The dialog is hand-rolled (not a Bootstrap-managed modal), and only IdeaModal
+       wires KanbanFlow.initDialog, so nothing was listening for Escape here at all: the confirm
+       could only be dismissed by mouse. keydown bubbles from the focused .modal-content, so one
+       handler on the backdrop element catches it. *@
+    <div class="modal fade show d-block" tabindex="-1" role="dialog" aria-modal="true" aria-labelledby="delete-idea-modal-title" style="background-color: rgba(0,0,0,0.5);" data-testid="idea-delete-modal"
+         @onkeydown="OnDeleteModalKeyDown">
         <div class="modal-dialog">
             <div class="modal-content" tabindex="-1" @ref="deleteModalDialog">
                 <div class="modal-header">
@@ -146,9 +206,17 @@ else
 }
 
 @* ── Promote confirmation modal ── *@
+@* Promotion creates a real Project, writes two ActivityEvents, and there is NO un-promote path
+   anywhere in the system (IdeaService refuses to move a promoted idea's status at all, #285). A
+   one-way door needs a deliberate press and a confirm, not a slip of the wrist — which is exactly
+   why promotion is a button + this modal and NOT a drag. This is the one confirm that stays. *@
 @if (showPromoteModal && promotingIdea is not null)
 {
-    <div class="modal fade show d-block" tabindex="-1" role="dialog" aria-modal="true" aria-labelledby="promote-idea-modal-title" style="background-color: rgba(0,0,0,0.5);" data-testid="idea-promote-modal">
+    @* #296 AC4 — Esc cancels, with no side effects. It never did: see the note on the delete modal.
+       A confirm you cannot back out of with the keyboard is pure friction, which is precisely what
+       this issue is about. *@
+    <div class="modal fade show d-block" tabindex="-1" role="dialog" aria-modal="true" aria-labelledby="promote-idea-modal-title" style="background-color: rgba(0,0,0,0.5);" data-testid="idea-promote-modal"
+         @onkeydown="OnPromoteModalKeyDown">
         <div class="modal-dialog">
             <div class="modal-content" tabindex="-1" @ref="promoteModalDialog">
                 <div class="modal-header">
@@ -160,8 +228,21 @@ else
                     {
                         <div class="alert alert-danger" role="alert" aria-live="assertive" aria-atomic="true">@promoteError</div>
                     }
+                    @* #296 — say the thing that justifies the confirm. Promotion is a one-way door:
+                       it creates a real Project and IdeaService refuses every status change into or
+                       out of Promoted (#283/#285), so there is no un-promote path anywhere in the
+                       system. The old copy ("marks the idea as promoted") described that in flat,
+                       reversible-sounding language — friction with the one fact that earns it left
+                       out, which is the worst of both worlds against the no-roadblocks charter.
+                       Plain sentences, normal body weight, no red and no alarm: promotion is a good
+                       thing to do, it just cannot be taken back. The weight lives in the button's
+                       label, not in scare-formatting. *@
                     <p>Promote <strong>@promotingIdea.Title</strong> to a new project?</p>
-                    <p class="text-muted small mb-0">This creates a project and marks the idea as promoted.</p>
+                    <p class="mb-0">
+                        This creates a new project from the idea, and it can't be undone. A promoted
+                        idea stays promoted — you won't be able to un-promote it or move it to another
+                        column afterwards.
+                    </p>
                 </div>
                 <div class="modal-footer">
                     <button type="button" class="btn btn-secondary" @onclick="ClosePromoteModal">Cancel</button>
@@ -170,7 +251,7 @@ else
                         {
                             <span class="spinner-border spinner-border-sm me-1" role="status" aria-hidden="true"></span>
                         }
-                        Promote
+                        Promote — can't be undone
                     </button>
                 </div>
             </div>
@@ -185,6 +266,21 @@ else
     private string? tagFilter;
     // "" = all statuses, otherwise the IdeaStatus int value as a string (robust select binding).
     private string statusFilterRaw = "";
+
+    // The board owns the collapse map, so revealing a terminal rail after a drop has to go through it.
+    // Re-assigned automatically whenever @key="StatusFilter" re-creates the board; null before the
+    // first render and while the empty state is showing, hence every call site null-conditionals it.
+    private KanbanBoard<Idea, IdeaStatus>? board;
+
+    // ── Board: drag-and-drop plumbing (mirrors ProjectView.razor — do not invent a second pattern) ──
+    private DotNetObjectReference<Ideas>? dotNetRef;
+    private bool sortablesInitialized;
+    private bool hasRenderedInteractively;
+    private readonly CancellationTokenSource _cts = new();
+
+    // The aria-live receipt for a status change from ANY source (drag or the ⋮ menu). A sighted user
+    // sees the card physically move; without this a screen-reader user gets nothing at all.
+    private string? announcement;
 
     // ── Create / Edit modal state ──
     private bool showModal;
@@ -207,7 +303,7 @@ else
     private ElementReference promoteModalDialog;
     private bool shouldFocusPromoteModal;
 
-    // ── Page-level load/filter error ──
+    // ── Page-level load/filter/move error ──
     private string? loadError;
 
     private bool HasActiveFilter =>
@@ -218,6 +314,44 @@ else
     private IdeaStatus? StatusFilter =>
         string.IsNullOrEmpty(statusFilterRaw) ? null : (IdeaStatus)int.Parse(statusFilterRaw);
 
+    // ── Board configuration ──
+
+    // The status filter focuses a COLUMN, it does not filter cards. On a status board a card-filter
+    // would be a tautology: ListAsync(status: Triaging) returns only Triaging ideas, so the other
+    // four columns would render permanently empty — a board that looks broken. `null` => all five.
+    private IReadOnlyList<IdeaStatus>? VisibleStatuses =>
+        StatusFilter is IdeaStatus s ? [s] : null;
+
+    // Archived/Rejected are terminal, so they collapse to rails — but NOT while one of them is the
+    // focused column: you asked for that column specifically, and handing you a 3rem rail would be
+    // obtuse. The @key on <KanbanBoard> is what makes this take effect (see the markup comment).
+    private bool IsTerminalColumn(IdeaStatus status) =>
+        StatusFilter is null && status is IdeaStatus.Archived or IdeaStatus.Rejected;
+
+    // Idea has NO SortOrder column and we are not adding one, so a column's order is DERIVED:
+    // priority first, then newest. TaskPriority is { Low=0, Medium=1, High=2, Critical=3 }, so
+    // descending runs Critical -> Low. Priority is NULLABLE and null sorts below every value in
+    // LINQ-to-Objects, so descending puts un-prioritised ideas LAST — which is what we want.
+    // NOTE: KanbanBoard defaults OrderColumnBy to OrderBy(IdOf). Omitting it here would silently
+    // order the board by Id and this entire ordering rule would vanish without a compiler peep.
+    private static IEnumerable<Idea> OrderIdeas(IEnumerable<Idea> items) =>
+        items.OrderByDescending(i => i.Priority).ThenByDescending(i => i.CreatedAt);
+
+    // The rule, stated once and always visible — not an error raised after the user has already
+    // committed the gesture. (A lambda here would need nested double quotes inside a Razor attribute,
+    // which does not parse; a method group is the honest way to write it.)
+    private static string? InertHintFor(IdeaStatus status) =>
+        status == IdeaStatus.Promoted ? "Promote from a card. One-way." : null;
+
+    private static string EmptyLineFor(IdeaStatus status) => status switch
+    {
+        IdeaStatus.Triaging => "Nothing in triage.",
+        IdeaStatus.Promoted => "Nothing promoted yet. Promote an idea from its card.",
+        IdeaStatus.Archived => "Nothing archived.",
+        IdeaStatus.Rejected => "Nothing rejected.",
+        _ => "Nothing here.",
+    };
+
     protected override async Task OnInitializedAsync()
     {
         await LoadIdeas();
@@ -225,6 +359,28 @@ else
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
+        hasRenderedInteractively = true;
+
+        // Bind SortableJS once the board's DOM exists. `ideas` is non-null the moment the first load
+        // returns; an empty list renders the page-level empty state instead of the board, so
+        // initBoardDragDrop simply finds no `.board-column-cards` and no-ops — and every later reload
+        // re-binds anyway (see LoadIdeas).
+        if (ideas is not null && !sortablesInitialized)
+        {
+            sortablesInitialized = true;
+            dotNetRef = DotNetObjectReference.Create(this);
+            try
+            {
+                // Small delay to ensure the DOM is fully rendered before SortableJS init.
+                await Task.Delay(100, _cts.Token);
+                await JS.InvokeVoidAsync("KanbanFlow.initBoardDragDrop", _cts.Token, dotNetRef);
+            }
+            catch (OperationCanceledException) { }
+            catch (JSDisconnectedException) { }
+            catch (ObjectDisposedException) { }
+            catch (InvalidOperationException) { }
+        }
+
         if (shouldFocusDeleteModal && showDeleteModal)
         {
             shouldFocusDeleteModal = false;
@@ -250,12 +406,17 @@ else
             var results = await IdeaSvc.ListAsync(
                 status: StatusFilter,
                 tag: string.IsNullOrWhiteSpace(tagFilter) ? null : tagFilter.Trim(),
-                search: string.IsNullOrWhiteSpace(searchFilter) ? null : searchFilter.Trim());
+                search: string.IsNullOrWhiteSpace(searchFilter) ? null : searchFilter.Trim(),
+                ct: _cts.Token);
             // A newer reload superseded this one — discard the stale result.
             if (generation != reloadGeneration) return;
-            // ListAsync already returns newest-first; materialise for @key iteration.
+            // The board re-derives its own per-column order (OrderIdeas); materialise for @key iteration.
             ideas = [.. results];
             loadError = null;
+        }
+        catch (OperationCanceledException)
+        {
+            return; // circuit teardown — nothing to report
         }
         catch (Exception ex)
         {
@@ -263,10 +424,16 @@ else
             loadError = $"Failed to load ideas: {ex.Message}";
             ideas ??= [];
         }
+
+        // EVERY reload replaces the column DOM, which orphans the SortableJS instances bound to the
+        // old nodes — drag then works exactly once and silently dies. Re-binding here, rather than at
+        // each call site, is what makes that impossible to forget. It is a no-op before the first
+        // interactive render (dotNetRef is still null).
+        await ReinitializeSortables();
     }
 
     // Re-query on filter change. Keep the current results on screen while loading so live
-    // filtering doesn't flicker the grid to a spinner on every keystroke; the reload-generation
+    // filtering doesn't flicker the board to a spinner on every keystroke; the reload-generation
     // guard in LoadIdeas discards any stale (out-of-order) result.
     private async Task ReloadIdeas() => await LoadIdeas();
 
@@ -285,18 +452,138 @@ else
         await ReloadIdeas();
     }
 
-    public void Dispose()
-    {
-        debounceCts?.Cancel();
-        debounceCts?.Dispose();
-    }
-
     private async Task ClearFilters()
     {
         searchFilter = null;
         tagFilter = null;
         statusFilterRaw = "";
         await ReloadIdeas();
+    }
+
+    // ── Drag-and-drop ──
+
+    /// <summary>
+    /// Called by kanbanflow.js (onEnd) after SortableJS has ALREADY moved the DOM node. The gesture
+    /// is optimistic whether we design for it or not, so we don't fight it: the server is the truth
+    /// and LoadIdeas' re-render IS the snap-back — if the write fails, the reload puts the card back
+    /// in its real column for free, with no rollback state to get wrong.
+    /// </summary>
+    /// <param name="newIndex">
+    /// IGNORED, deliberately. Idea has no SortOrder column; a column's order is derived
+    /// (Priority desc, CreatedAt desc — see OrderIdeas). The parameter exists only because the shared
+    /// kanbanflow.js contract passes it. Change an idea's PRIORITY to change its position.
+    /// </param>
+    [JSInvokable]
+    public async Task OnCardMoved(int ideaId, string newStatus, int newIndex)
+    {
+        // Reject undefined enum values up-front. data-status carries the ENUM NAME ("Triaging"),
+        // never a display name — a failed TryParse here would swallow the drop with no error at all.
+        if (!Enum.TryParse<IdeaStatus>(newStatus, out var target)
+            || !Enum.IsDefined(typeof(IdeaStatus), target))
+        {
+            return;
+        }
+
+        var idea = ideas?.FirstOrDefault(i => i.Id == ideaId);
+        if (idea is null)
+        {
+            // Dragged a card we no longer know about (deleted in another tab). The reload tells the truth.
+            await LoadIdeas();
+            return;
+        }
+
+        await ApplyStatusAsync(idea, target);
+    }
+
+    /// <summary>
+    /// The ⋮ → "Move to" path. Keyboard and touch users get here; the mouse gets here via OnCardMoved.
+    /// ONE handler, two entry points — and it is the WCAG 2.2 §2.5.7 (Dragging Movements) conformance
+    /// mechanism, not a nice-to-have: without it the board is mouse-only and fails the criterion.
+    /// </summary>
+    private async Task MoveIdea((Idea Idea, IdeaStatus Target) move) =>
+        await ApplyStatusAsync(move.Idea, move.Target);
+
+    private async Task ApplyStatusAsync(Idea idea, IdeaStatus target)
+    {
+        // A within-column drop (or a drag that found no target and came home) fires onEnd with
+        // evt.to === evt.from. Skip the write — but still reload: SortableJS left the DOM showing
+        // whatever order the user dragged, which the server does not have. The reload snaps the card
+        // back to its canonical slot, so the board teaches its own rule instead of quietly drifting.
+        if (idea.Status == target)
+        {
+            await LoadIdeas();
+            return;
+        }
+
+        // Belt and braces. The Promoted column emits no `.board-column-cards`, so SortableJS never
+        // binds it — it is neither a drop target nor a drag source — and the ⋮ menu never offers a
+        // move a promoted idea could make. Both crossings are refused by IdeaService.UpdateAsync
+        // anyway (#283 in, #285 out), so if a future JS change ever routed one here, refuse it before
+        // the service has to raise an error the user never needed to see.
+        if (target == IdeaStatus.Promoted || idea.Status == IdeaStatus.Promoted)
+        {
+            await LoadIdeas();
+            return;
+        }
+
+        try
+        {
+            // In-process through IIdeaService, NOT the HTTP API: the service is the single audit
+            // boundary (#88) and writes the IdeaUpdated ActivityEvent for this mutation.
+            await IdeaSvc.UpdateAsync(idea.Id, new IdeaUpdate(Status: target), actor: "User", _cts.Token);
+
+            // Archived/Rejected are live drop targets that render as 3rem rails, so a card dropped into
+            // one lands somewhere the user cannot see it — the gesture succeeds and looks like it did
+            // nothing. Open the rail so the card is visible where it actually went (interactions.md §4).
+            // Deliberately on BOTH paths, not just the drag: a ⋮ → "Move to Archived" needs the same
+            // answer to "where did it go?", and the keyboard user needs it most. Expand() is a no-op
+            // unless the column really is collapsed, so this stays honest for every other target.
+            board?.Expand(target);
+
+            // Set the announcement BEFORE the reload, not after. A [JSInvokable] method — unlike an
+            // EventCallback handler — does NOT get an automatic StateHasChanged when it returns, so
+            // the only render in this path is the one inside LoadIdeas. Assigning `announcement`
+            // after it left the aria-live region empty until some unrelated later render: the drag
+            // path announced nothing at all. (Verified in the browser; the ⋮ menu path was fine,
+            // which is exactly how a bug like this hides.)
+            announcement = $"Moved {idea.Title} to {target}.";
+            await LoadIdeas();
+        }
+        catch (OperationCanceledException) { /* circuit teardown */ }
+        catch (ValidationException ex)
+        {
+            // The service refused the transition. The reload returns the card to its real column.
+            loadError = ex.Message;
+            await LoadIdeas();
+        }
+        catch (IdeaNotFoundException)
+        {
+            // It vanished mid-drag. The reload tells the truth; no error worth showing.
+            await LoadIdeas();
+        }
+        catch (Exception ex)
+        {
+            loadError = $"Move failed: {ex.Message}";
+            await LoadIdeas();
+        }
+    }
+
+    private async Task ReinitializeSortables()
+    {
+        StateHasChanged();
+        await Task.Yield();
+        if (dotNetRef is not null)
+        {
+            try
+            {
+                // initBoardDragDrop destroys the previous instances before re-binding (kanbanflow.js:53).
+                await JS.InvokeVoidAsync("KanbanFlow.initBoardDragDrop", _cts.Token, dotNetRef);
+            }
+            catch (OperationCanceledException) { }
+            catch (JSDisconnectedException) { }
+            catch (ObjectDisposedException) { }
+            catch (InvalidOperationException) { }
+        }
     }
 
     // ── Create / Edit ──
@@ -340,6 +627,16 @@ else
         deletingIdea = null;
     }
 
+    // Esc cancels — never while the confirmed action is already in flight, or the modal would
+    // vanish out from under a write the user can no longer see the result of.
+    private void OnDeleteModalKeyDown(KeyboardEventArgs e)
+    {
+        if (e.Key == "Escape" && !isDeleting)
+        {
+            CloseDeleteModal();
+        }
+    }
+
     private async Task ConfirmDelete()
     {
         if (deletingIdea is null) return;
@@ -349,7 +646,7 @@ else
 
         try
         {
-            await IdeaSvc.DeleteAsync(deletingIdea.Id, "User");
+            await IdeaSvc.DeleteAsync(deletingIdea.Id, "User", _cts.Token);
             showDeleteModal = false;
             deletingIdea = null;
             await LoadIdeas();
@@ -388,6 +685,16 @@ else
         promotingIdea = null;
     }
 
+    // #296 AC4. Same rule as delete: not while the promote is in flight — that one really is a
+    // one-way door, and dismissing the dialog mid-write would hide its outcome.
+    private void OnPromoteModalKeyDown(KeyboardEventArgs e)
+    {
+        if (e.Key == "Escape" && !isPromoting)
+        {
+            ClosePromoteModal();
+        }
+    }
+
     private async Task ConfirmPromote()
     {
         if (promotingIdea is null) return;
@@ -397,10 +704,11 @@ else
 
         try
         {
-            var result = await IdeaSvc.PromoteAsync(promotingIdea.Id, "User");
+            var result = await IdeaSvc.PromoteAsync(promotingIdea.Id, "User", _cts.Token);
             showPromoteModal = false;
             promotingIdea = null;
             promoteSuccess = result;
+            // The promoted card just changed columns, so LoadIdeas re-binds the sortables for us.
             await LoadIdeas();
         }
         catch (ValidationException ex)
@@ -420,5 +728,27 @@ else
         {
             isPromoting = false;
         }
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        _cts.Cancel();
+        debounceCts?.Cancel();
+
+        try
+        {
+            // Only if a circuit ever existed — a prerender teardown has no JS to talk to.
+            if (hasRenderedInteractively)
+            {
+                await JS.InvokeVoidAsync("KanbanFlow.destroySortables");
+            }
+        }
+        catch (JSDisconnectedException) { }
+        catch (ObjectDisposedException) { }
+        catch (InvalidOperationException) { }
+
+        dotNetRef?.Dispose();
+        debounceCts?.Dispose();
+        _cts.Dispose();
     }
 }

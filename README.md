@@ -8,7 +8,7 @@
 ## In one minute
 
 - **What:** a single-file (.NET 10 + SQLite) app where a project — its features, tasks, subtasks, requirements, acceptance criteria, decisions, and dependencies — is structured data.
-- **For humans:** a drag-and-drop kanban board, project outline, and an **Ideas inbox** (`/ideas`) for capturing, triaging, and promoting ideas into projects.
+- **For humans:** a drag-and-drop kanban board, project outline, and an **Ideas board** (`/ideas`) for capturing, triaging, and promoting ideas into projects.
 - **For agents:** the *same* data over a REST API and an MCP server, plus a `next-tasks` engine that answers "what should I work on next?" with reasoning.
 - **Guarantee:** every **task** mutation (human *or* agent) writes an immutable `ActivityEvent` — full-entity audit coverage is landing via the service-layer work (#88) — so agents inherit the causal history.
 - **Scope:** local-first, single-user, single-trust-boundary (agent + owner on one machine). No auth, no multi-tenancy, no cloud.
@@ -512,7 +512,7 @@ The OpenAPI document (R-5.1) is now the source of truth: GET `/openapi/v1.json` 
 /api/ideas/{id}/activity                    # audit log per idea
 ```
 
-60 endpoints total. Ideas (`/api/ideas`) are the pre-project "inbox" — capture raw ideas, then promote one into a full project (#180). `Promoted` is a **derived, terminal** status: only `POST /api/ideas/{id}/promote` (MCP `promote_idea`) sets it, since only that path also creates the linked project. So `PATCH /api/ideas/{id}` and MCP `update_idea` refuse to move an idea *into* `Promoted` (#283) **or back out of it** (#285) — promotion is permanent — and return 422 pointing at the promote endpoint. Every other status transition is free, and a promoted idea's other fields (title, body, plan, tags, priority) stay fully editable. Humans manage them in the browser at the **Ideas inbox** (`/ideas`): search and filter by status or tag, create/edit ideas (markdown body + plan), and promote an idea into a project — all through the same audited `IIdeaService` as REST + MCP (the #88 boundary). Collection/list endpoints will gain consistent pagination once R-1.4 lands; richer response shapes follow with the records refactor (R-5.2).
+60 endpoints total. Ideas (`/api/ideas`) are the pre-project "inbox" — capture raw ideas, then promote one into a full project (#180). `Promoted` is a **derived, terminal** status: only `POST /api/ideas/{id}/promote` (MCP `promote_idea`) sets it, since only that path also creates the linked project. So `PATCH /api/ideas/{id}` and MCP `update_idea` refuse to move an idea *into* `Promoted` (#283) **or back out of it** (#285) — promotion is permanent — and return 422 pointing at the promote endpoint. Every other status transition is free, and a promoted idea's other fields (title, body, plan, tags, priority) stay fully editable. Humans manage them in the browser at the **Ideas board** (`/ideas`) — a status board whose columns *are* the `IdeaStatus` pipeline: drag a card to re-triage it, promote from the card itself, and tell at a glance which ideas already carry a plan. `Promoted` is **inert** — you can neither drag into it nor out of it, matching the service rule above — so promotion always goes through the confirm. Search and status/tag filters still apply, now to the board. Every mutation lands through the same audited `IIdeaService` as REST + MCP (the #88 boundary). Collection/list endpoints will gain consistent pagination once R-1.4 lands; richer response shapes follow with the records refactor (R-5.2).
 
 ---
 

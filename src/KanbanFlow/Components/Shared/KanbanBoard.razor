@@ -1,29 +1,163 @@
-<section class="flex-grow-1 d-flex flex-column overflow-hidden" aria-labelledby="kanban-board-heading">
+@* Generic kanban board. Fans @Items out into one column per status and lets the caller supply the
+   card markup, the column header action and the per-status empty state, so the task board
+   (/project/{id}) and the ideas board (/ideas) share one shell instead of forking it.
+
+   SortableJS contract (wwwroot/js/kanbanflow.js — breaking any of these kills drag SILENTLY):
+     1. A droppable column's card container emits class="board-column-cards" + data-status="{enum
+        name}". kanbanflow.js:56 binds Sortable to that class only, so a column with
+        IsDragEnabled=false is neither a drop target nor a drag source (put:false + pull:false)
+        with zero JS changes.
+     2. Each card root emits data-task-id="{id}" — owned by CardTemplate's root, not by the board.
+     3. The hosting page owns [JSInvokable] OnCardMoved(int id, string newStatus, int newIndex).
+        data-status must be the ENUM NAME ("InProgress"), never the display name ("In Progress"):
+        the page's Enum.TryParse silently swallows a failed parse and the drop is lost.
+     4. CardTemplate's root carries @key="{the item's identity}" (#294). KanbanColumn's card loop
+        diffs POSITIONALLY (see the comment there), so without it a re-render after a drag writes
+        one card's content into another card's DOM node and the board draws cards in columns they
+        are not in — silently, with the database perfectly correct. kanbanflow.js reverting the
+        drag's DOM mutation is the other half; a board needs both. *@
+@typeparam TItem
+@typeparam TStatus where TStatus : struct, Enum
+
+@* `kanban-board-shell` makes this section a CONTAINING BLOCK (position: relative — app.css). Without
+   it the board leaks a page-wide horizontal scrollbar onto any page that is not /project/{id}:
+   Bootstrap's `.visually-hidden` is `position: absolute !important`, KanbanColumn puts two of them in
+   every column heading ("column," / "items"), and an absolutely-positioned box is only clipped by
+   ancestors in its CONTAINING-BLOCK chain. With every ancestor static, those spans resolve against
+   the initial containing block and sail straight through this section's own `overflow-hidden` — so a
+   column sitting at x≈900 drags the VIEWPORT's scroll area out to 932px while body.scrollWidth still
+   reads a perfectly innocent 390. /project/{id} never showed it only because `.project-shell` happens
+   to be `position: relative` and was quietly catching them (#280). *@
+<section class="kanban-board-shell flex-grow-1 d-flex flex-column overflow-hidden" aria-labelledby="kanban-board-heading">
     <div class="border-bottom bg-white px-3 py-2">
-        <h2 id="kanban-board-heading" class="h6 mb-1">Board</h2>
-        <p id="kanban-board-guidance" class="small text-muted mb-0" data-testid="kanban-board-guidance">
-            Drag cards between columns. Click a card for details.
-        </p>
+        <h2 id="kanban-board-heading" class="h6 mb-1">@BoardLabel</h2>
+        <p id="kanban-board-guidance" class="small text-muted mb-0" data-testid="kanban-board-guidance">@Guidance</p>
     </div>
 
     <div class="flex-grow-1 d-flex overflow-auto p-2 gap-2"
          style="min-width: 0;"
          data-testid="kanban-board"
          aria-describedby="kanban-board-guidance">
-        @foreach (var status in Enum.GetValues<WorkStatus>())
+        @foreach (var status in resolvedStatuses)
         {
-            var tasksInColumn = AllTasks.Where(t => t.Status == status).ToList();
-            <KanbanColumn Status="status"
-                          Tasks="tasksInColumn"
-                          OnAddTask="OnAddTask"
-                          OnToggleTaskDone="OnToggleTaskDone"
-                          OnOpenTaskDetail="OnOpenTaskDetail" />
+            <KanbanColumn TItem="TItem" TStatus="TStatus"
+                          @key="status"
+                          Status="status"
+                          Items="ItemsFor(status)"
+                          CardTemplate="CardTemplate"
+                          DisplayName="@DisplayNameFor(status)"
+                          IsDragEnabled="IsDragEnabledFor(status)"
+                          IsTerminal="IsTerminalFor(status)"
+                          Collapsed="IsCollapsed(status)"
+                          CollapsedChanged="CollapsedChangedFor(status)"
+                          InertHint="@InertHint?.Invoke(status)"
+                          HeaderActions="ColumnHeaderActions?.Invoke(status)"
+                          EmptyTemplate="ColumnEmptyTemplate?.Invoke(status)" />
         }
     </div>
 </section>
+
 @code {
-    [Parameter, EditorRequired] public IReadOnlyList<TaskItem> AllTasks { get; set; } = [];
-    [Parameter] public EventCallback<WorkStatus> OnAddTask { get; set; }
-    [Parameter] public EventCallback<TaskItem> OnToggleTaskDone { get; set; }
-    [Parameter] public EventCallback<TaskItem> OnOpenTaskDetail { get; set; }
+    /// <summary>Every item on the board; the board fans them out into one column per status.</summary>
+    [Parameter, EditorRequired] public IReadOnlyList<TItem> Items { get; set; } = [];
+
+    /// <summary>Maps an item to the column it belongs in.</summary>
+    [Parameter, EditorRequired] public Func<TItem, TStatus> StatusOf { get; set; } = default!;
+
+    /// <summary>Maps an item to its identity. Also the default intra-column order.</summary>
+    [Parameter, EditorRequired] public Func<TItem, int> IdOf { get; set; } = default!;
+
+    /// <summary>Renders one card. Its root element owns <c>data-task-id</c> (SortableJS contract 2).</summary>
+    [Parameter, EditorRequired] public RenderFragment<TItem> CardTemplate { get; set; } = default!;
+
+    /// <summary>Which columns to render. <c>null</c> renders every value of <typeparamref name="TStatus"/>.</summary>
+    [Parameter] public IReadOnlyList<TStatus>? Statuses { get; set; }
+
+    /// <summary>Orders the items inside a column. Defaults to ascending <see cref="IdOf"/>.</summary>
+    [Parameter] public Func<IEnumerable<TItem>, IEnumerable<TItem>>? OrderColumnBy { get; set; }
+
+    /// <summary>Column heading text. Defaults to the enum name.</summary>
+    [Parameter] public Func<TStatus, string>? DisplayName { get; set; }
+
+    /// <summary>Whether a column takes part in drag-and-drop. Defaults to <c>true</c> for every column.</summary>
+    [Parameter] public Func<TStatus, bool>? IsDragEnabled { get; set; }
+
+    /// <summary>Whether a column is terminal, and so renders as a collapsible rail. Defaults to <c>false</c>.</summary>
+    [Parameter] public Func<TStatus, bool>? IsTerminal { get; set; }
+
+    /// <summary>One-line hint shown inside a column that does not accept drags.</summary>
+    [Parameter] public Func<TStatus, string?>? InertHint { get; set; }
+
+    /// <summary>Action rendered in a column's header (e.g. the task board's "+ Task" button).</summary>
+    [Parameter] public RenderFragment<TStatus>? ColumnHeaderActions { get; set; }
+
+    /// <summary>Placeholder rendered when a column has no items. Falls back to a quiet muted line.</summary>
+    [Parameter] public RenderFragment<TStatus>? ColumnEmptyTemplate { get; set; }
+
+    /// <summary>The board's heading.</summary>
+    [Parameter] public string BoardLabel { get; set; } = "Board";
+
+    /// <summary>The guidance line under the heading; the board's <c>aria-describedby</c> target.</summary>
+    [Parameter] public string? Guidance { get; set; }
+
+    // Collapse is a board-level layout concern — collapsing one column changes how the remaining
+    // width is shared — so the board owns the state and one re-render settles the whole row.
+    // Session-only by design: it is not persisted (see design/ui/interactions.md §4).
+    private readonly Dictionary<TStatus, bool> collapsed = [];
+    private IReadOnlyList<TStatus> resolvedStatuses = [];
+
+    protected override void OnParametersSet()
+    {
+        resolvedStatuses = Statuses ?? Enum.GetValues<TStatus>();
+
+        // Seed once per status: terminal columns start collapsed. A status already in the map keeps
+        // whatever the user last chose, so a re-render never re-collapses a column they opened.
+        foreach (var status in resolvedStatuses)
+        {
+            if (!collapsed.ContainsKey(status))
+            {
+                collapsed[status] = IsTerminalFor(status);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Opens a collapsed column. The board owns the collapse map (collapsing one column re-shares the
+    /// row's width, so no single column can own that decision), which left the hosting page unable to
+    /// react to its own drops: a card dragged into a collapsed terminal rail simply VANISHED into a
+    /// 3rem strip — the rail is a live drop target by design, but a silent one. This is the setter the
+    /// map was missing, so the page can reveal where the card actually landed (design/ui/interactions.md §4).
+    ///
+    /// A no-op unless the column is genuinely collapsed, which makes it safe to call after ANY move:
+    /// a board that declares no terminal columns (the task board — it never passes IsTerminal, so
+    /// nothing is ever collapsed) can never have a collapsed column to open.
+    /// </summary>
+    public void Expand(TStatus status)
+    {
+        if (!IsCollapsed(status))
+        {
+            return;
+        }
+
+        collapsed[status] = false;
+        StateHasChanged();
+    }
+
+    private IReadOnlyList<TItem> ItemsFor(TStatus status)
+    {
+        // EqualityComparer, not ==: an unconstrained-ish generic cannot use the equality operator.
+        var inColumn = Items.Where(item => EqualityComparer<TStatus>.Default.Equals(StatusOf(item), status));
+        return [.. OrderColumnBy is null ? inColumn.OrderBy(IdOf) : OrderColumnBy(inColumn)];
+    }
+
+    private string DisplayNameFor(TStatus status) => DisplayName?.Invoke(status) ?? status.ToString() ?? string.Empty;
+
+    private bool IsDragEnabledFor(TStatus status) => IsDragEnabled?.Invoke(status) ?? true;
+
+    private bool IsTerminalFor(TStatus status) => IsTerminal?.Invoke(status) ?? false;
+
+    private bool IsCollapsed(TStatus status) => collapsed.TryGetValue(status, out var value) && value;
+
+    private EventCallback<bool> CollapsedChangedFor(TStatus status) =>
+        EventCallback.Factory.Create<bool>(this, value => collapsed[status] = value);
 }

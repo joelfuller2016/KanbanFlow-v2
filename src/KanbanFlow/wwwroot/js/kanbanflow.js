@@ -48,6 +48,39 @@ window.KanbanFlow = {
         }
     },
 
+    // ── #294: hand the DOM back to Blazor before telling it anything ──
+    //
+    // SortableJS physically relocates the dragged node the instant you let go — but every node on
+    // these boards is BLAZOR's. Blazor's renderer keeps its own logical-children array per
+    // container and never re-reads the DOM, so the moment Sortable moves a card, Blazor's model of
+    // the page and the page itself disagree. Its next re-render then patches by that stale model
+    // and lands the edits on the wrong nodes: KanbanColumn draws its cards as
+    // `@foreach (var item in Items) { @CardTemplate(item) }`, which compiles to one same-sequence
+    // REGION per card, so the diff pairs cards POSITIONALLY — card N+1's content is written into
+    // the component instance that owns card N's node, and that node is now in another column. Drag
+    // one card and a second, untouched card visually teleports after it, while the database stays
+    // perfectly correct and a refresh heals the display. Nothing throws. Every server-side test
+    // stays green. (Reproduced on BOTH boards — the task board only looked immune because a column
+    // with one card is the self-healing case.)
+    //
+    // So put the node back exactly where Blazor last rendered it, and let the re-render from server
+    // truth perform the move. Blazor is the single source of truth and its re-render IS the
+    // snap-back — which is also the only way an in-column drop can snap back to a DERIVED order
+    // (an Idea has no SortOrder; its column is ordered `Priority desc, CreatedAt desc`, an order
+    // the server cannot adopt from a drop). Same approach as vuedraggable/react-sortablejs.
+    //
+    // Remove the node FIRST, then read `from.children[oldIndex]`: with it out of the way that index
+    // is exactly the sibling it originally sat in front of (`undefined` => append at the end). Doing
+    // it in that order is what makes a same-container reorder correct too — there the node is still
+    // among `from.children` and would skew the index.
+    _revertDraggedNode: function (evt) {
+        var item = evt.item;
+        if (item.parentNode) {
+            item.parentNode.removeChild(item);
+        }
+        evt.from.insertBefore(item, evt.from.children[evt.oldIndex] || null);
+    },
+
     initBoardDragDrop: function (dotNetRef) {
         // Destroy any existing board sortables first
         this._boardSortables.forEach(function (s) { s.destroy(); });
@@ -63,9 +96,12 @@ window.KanbanFlow = {
                 fallbackOnBody: true,
                 swapThreshold: 0.65,
                 onEnd: function (evt) {
+                    // Read the drop BEFORE undoing it — the revert moves the node, so `evt.to` is
+                    // the only record of where the user actually dropped it.
                     var taskId = parseInt(evt.item.dataset.taskId);
                     var newStatus = evt.to.dataset.status;
                     var newIndex = evt.newIndex;
+                    window.KanbanFlow._revertDraggedNode(evt);
                     dotNetRef.invokeMethodAsync('OnCardMoved', taskId, newStatus, newIndex);
                 }
             });
@@ -86,9 +122,13 @@ window.KanbanFlow = {
                 chosenClass: 'kanban-chosen',
                 fallbackOnBody: true,
                 onEnd: function (evt) {
+                    // Same contract as the board (#294): the outline's task lists are Blazor's DOM
+                    // too, and OnTaskReordered re-renders them from the server. Hand the node back
+                    // before invoking .NET.
                     var taskId = parseInt(evt.item.dataset.taskId);
                     var newFeatureId = parseInt(evt.to.dataset.featureId);
                     var newIndex = evt.newIndex;
+                    window.KanbanFlow._revertDraggedNode(evt);
                     dotNetRef.invokeMethodAsync('OnTaskReordered', taskId, newFeatureId, newIndex);
                 }
             });
