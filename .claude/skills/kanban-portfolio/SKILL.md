@@ -78,7 +78,7 @@ blocked PR reads as blocked on the board.
 
 Agents get this for free: `get_task` over MCP already returns `comments`.
 
-Dedupe is by GitHub node id, stamped invisibly into each body — so a re-sync mirrors nothing new.
+Dedupe is by GitHub node id, stamped into each body and hidden only when rendered as Markdown — so a re-sync mirrors nothing new.
 **Don't edit a mirrored comment's text**; you'll strip the id and the next sync will re-add it.
 
 `--no-comments` skips the whole thing. `--max-comment-chars N` caps each body — worth setting if

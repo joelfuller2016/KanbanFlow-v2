@@ -122,7 +122,10 @@ async function fetchOpenPrs(repo, withComments) {
     await Promise.all(list.map(async (pr) => {
       pr.inlineComments = await gh([
         "api", `repos/${repo}/pulls/${pr.number}/comments`, "--paginate",
-      ]).catch(() => []);
+      ]).catch((err) => {
+        console.warn(`  ! ${repo}#${pr.number}: failed to fetch inline PR comments — ${err.message}`);
+        return [];
+      });
     }));
   }
   return list;
@@ -360,7 +363,7 @@ async function syncComments(issue, linkedPr, taskId, args) {
 
   // Only reachable for a task that exists on the board, so a read here is safe and cheap —
   // and we only pay it for issues that actually have comments.
-  const existing = args.dryRun ? [] : await api("GET", `/api/tasks/${taskId}/comments`);
+  const existing = taskId ? await api("GET", `/api/tasks/${taskId}/comments`) : [];
   const seen = new Set((existing || []).map((c) => ghIdOf(c.text)).filter(Boolean));
 
   for (const c of incoming) {

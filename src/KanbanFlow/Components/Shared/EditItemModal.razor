@@ -49,6 +49,7 @@
                             <a class="btn btn-sm btn-outline-secondary" href="@GitHubIssueUrl"
                                target="_blank" rel="noopener noreferrer">
                                 Issue #@GitHubIssueNumber ↗
+                                <span class="visually-hidden">(opens in new tab)</span>
                             </a>
                         }
                         @if (GitHubPrUrl is not null)
@@ -56,6 +57,7 @@
                             <a class="btn btn-sm btn-outline-primary" href="@GitHubPrUrl"
                                target="_blank" rel="noopener noreferrer">
                                 PR #@GitHubPrNumber ↗
+                                <span class="visually-hidden">(opens in new tab)</span>
                             </a>
                         }
                     </div>
