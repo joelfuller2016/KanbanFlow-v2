@@ -827,6 +827,181 @@ async function main() {
       await api("DELETE", `/api/ideas/${stale.id}`).catch(() => {});
     });
 
+    // ── Regression guard (#293): an OPEN ⋮ menu must be CLICKABLE, not merely VISIBLE ─────────
+    // app.css:604 — `.board-card:has(.dropdown-menu.show) { z-index: 3 }` — is ONE line, it is
+    // load-bearing, and nothing held it down: revert it and `dotnet build`, `dotnet test` and this
+    // very suite all stay green while Promote and Delete quietly stop working on every idea card
+    // that has another card underneath it.
+    //
+    // The mechanism is stated in full beside the rule. In short: `.board-card:hover` lifts the card
+    // with `transform: translateY(-1px)`, and a transform CREATES A STACKING CONTEXT. The pointer is
+    // on the card — it must be; you just clicked that card's ⋮ — so the card becomes a stacking
+    // context and the menu's `z-index: 1000` is scoped to the CARD instead of the board. The card
+    // itself sits at `z-index: auto`, so the NEXT card (also auto, but later in DOM order) paints
+    // over the whole subtree, menu included. The menu is not hidden and not clipped. It is BURIED.
+    //
+    // TWO things kept this bug alive, and the guard has to beat both:
+    //
+    //  1. VISIBILITY SEES NOTHING. A buried button is painted, has a box, has size, is not
+    //     `display:none` and is not clipped — Playwright's visibility checks, and every assertion in
+    //     this file above this one, call it perfectly fine. Only a HIT TEST (`elementFromPoint`) can
+    //     say that the pixel under the cursor belongs to somebody else. So this asserts what a CLICK
+    //     WOULD REACH, never what is drawn.
+    //
+    //  2. THE BUG EVAPORATES IF YOU LOOK AWAY. No hover => no transform => no stacking context =>
+    //     the menu is on top and everything passes on definitively broken code. Moving the mouse off
+    //     the card — or scrolling, which moves the pointer relative to the page — is enough to erase
+    //     it. A first draft of this guard clicked the ⋮ and then scrolled, and reported GREEN against
+    //     a deliberately sabotaged stylesheet. So: hover the card, open the menu with a click that
+    //     lands INSIDE it, and hit-test from `page.evaluate` — which cannot move the pointer — with
+    //     no scroll and no locator walk in between.
+    //
+    // The preconditions below are this test's "can it still fail?" proof. Each is a real way the
+    // guard could rot into a green that means nothing: the pointer must still be ON the card at the
+    // moment of the hit-test (P1), the hover-lift that creates the stacking context must still exist
+    // (P2), the card must have a sibling BELOW it — that sibling is what does the burying (P3) — and
+    // the menu must actually SPILL past the card's bottom edge, or there is nothing to bury (P4).
+    await test("Ideas board: every item of an open ⋮ menu is hit-testable, not buried under the next card", async () => {
+      const viewport = page.viewportSize();
+      try {
+        // Tall enough that the whole menu opens DOWNWARD and inside the viewport. Popper flips a
+        // dropdown upward when it runs out of room below, which would put it over the cards ABOVE
+        // the target — no sibling underneath it, no burial, vacuous pass. P4 catches a flip, but
+        // it is better not to provoke one. Width is unchanged (>= 992px stays the desktop layout).
+        await page.setViewportSize({ width: viewport?.width ?? 1280, height: 1000 });
+
+        // Clean slate: the seed IS the board, so "first card in New" is exact.
+        for (const i of await api("GET", "/api/ideas?limit=500")) {
+          await api("DELETE", `/api/ideas/${i.id}`).catch(() => {});
+        }
+        // Distinct priorities fix New's order outright (`Priority desc`), so the target is the FIRST
+        // card and the other two sit under it. The target carries NO body and NO tags on purpose: it
+        // must be the SHORT card. A tall target would swallow its own menu, nothing would spill past
+        // its bottom edge, no sibling could bury anything — and P4 would (correctly) call the seed
+        // undiscriminating. The two cards below it are what the menu gets buried under.
+        const mkIdea = (label, priority, body) => api("POST", "/api/ideas",
+          { title: `E2E Menu ${label} ${stamp}`, priority, body });
+        const target = await mkIdea("Target", "Critical", null);
+        await mkIdea("Under", "High", "The card that paints over the open menu.");
+        await mkIdea("Below", "Medium", "And the one under that.");
+
+        await page.goto(`${baseUrl}/ideas`);
+        const card = page.locator(`[data-testid="idea-card-${target.id}"]`);
+        await card.waitFor({ state: "visible" });
+        // Not needed by the dropdown (Bootstrap's own JS runs it), but it is this file's settled
+        // "the board has finished standing itself up" signal: LoadIdeas' re-render, and the deferred
+        // initBoardDragDrop behind it, are done — so nothing replaces the card DOM mid-hit-test.
+        await waitForSortableArmed(page, "New");
+
+        // ⚠️ FROM HERE THE POINTER MUST NOT LEAVE THE CARD. hover() scrolls the card into view and
+        // parks the mouse on it; the ⋮ lives inside the card, so clicking it keeps `:hover` live
+        // (hover matches every ancestor of the hovered node). No scrollIntoView, no boundingBox
+        // walk, no goto, nothing else until the hit-test has run.
+        await card.hover();
+        const menu = page.locator(`[data-testid="idea-card-${target.id}"] .dropdown-menu.show`);
+        await clickUntil(
+          () => page.locator(`[data-testid="idea-card-menu-${target.id}"]`).click(),
+          menu,
+        );
+
+        // ONE evaluate: it cannot move the mouse, so the card is still hovered, still transformed,
+        // still a stacking context — the exact state a real user is in when they reach for Delete.
+        const probe = await page.evaluate((id) => {
+          const cardEl = document.querySelector(`[data-testid="idea-card-${id}"]`);
+          if (!cardEl) return { error: `the card for idea ${id} is not in the DOM` };
+          const menuEl = cardEl.querySelector(".dropdown-menu.show");
+          const cardRect = cardEl.getBoundingClientRect();
+          const style = getComputedStyle(cardEl);
+          // The opening tag of whatever is actually painted at that point — the tell.
+          const tagOf = (el) => {
+            if (!el) return "null (nothing is painted there)";
+            const attrs = [...el.attributes].map((a) => ` ${a.name}="${a.value}"`).join("");
+            return `<${el.tagName.toLowerCase()}${attrs}>`.slice(0, 140);
+          };
+          const siblings = [...document.querySelectorAll('[data-testid="board-column-New-cards"] [data-task-id]')];
+          const idx = siblings.indexOf(cardEl);
+          return {
+            hovered: cardEl.matches(":hover"),
+            transform: style.transform,
+            zIndex: style.zIndex,
+            menuOpen: !!menuEl,
+            cardsBelow: idx < 0 ? -1 : siblings.length - 1 - idx,
+            // `.dropdown-item` is exactly the actionable items — the dividers and the "Move to"
+            // header carry no such class and are not things a user can click.
+            items: [...(menuEl?.querySelectorAll(".dropdown-item") ?? [])].map((el) => {
+              const r = el.getBoundingClientRect();
+              const cx = r.left + r.width / 2;
+              const cy = r.top + r.height / 2;
+              const hit = document.elementFromPoint(cx, cy);
+              return {
+                testid: el.getAttribute("data-testid"),
+                label: (el.textContent ?? "").trim(),
+                // Does this item spill past the card, into the sibling's box? (P4)
+                spillsPastCard: cy > cardRect.bottom,
+                inViewport: cx >= 0 && cx <= window.innerWidth && cy >= 0 && cy <= window.innerHeight,
+                // THE question: would a click here land on this item, or on somebody else's markup?
+                reachable: !!hit && el.contains(hit),
+                hit: tagOf(hit),
+              };
+            }),
+          };
+        }, target.id);
+
+        assert(!probe.error, probe.error ?? "");
+        assert(probe.menuOpen, "the ⋮ menu never opened — there is nothing to hit-test");
+
+        // ── P1-P4: the preconditions that make a green here MEAN something ──────────────────────
+        assert(probe.hovered,
+          "PRECONDITION: the pointer is no longer over the card at the moment of the hit-test. " +
+          "No hover => no transform => no stacking context => the menu is on top and this test " +
+          "passes on BROKEN code. Something above moved the mouse or scrolled the page.");
+        assert(probe.transform !== "none",
+          `PRECONDITION: the hovered card has no transform (computed \`${probe.transform}\`), so it ` +
+          "is not a stacking context and the bug this guard exists for cannot occur. The hover-lift " +
+          "(.board-card:hover { transform: translateY(-1px) }) is what creates it — if that is gone, " +
+          "app.css:604 may be dead code, and this guard must be re-derived rather than left green.");
+        assert(probe.cardsBelow >= 1,
+          `seed is not discriminating: the card under test has ${probe.cardsBelow} card(s) below it in ` +
+          "New. The burying element IS the next card — with none, nothing can paint over the menu.");
+        const spill = probe.items.filter((i) => i.spillsPastCard);
+        assert(spill.length > 0,
+          "seed is not discriminating: no menu item extends past the card's bottom edge, so the menu " +
+          "sits entirely inside its own card and the sibling below has nothing to bury. (Either the " +
+          "target card grew a body/tags and is now too tall, the menu lost items, or Popper flipped " +
+          "the menu upward for want of room below it.)");
+
+        // ── P5: the items whose burial IS the bug must actually be on the menu ──────────────────
+        const rendered = probe.items.map((i) => i.testid);
+        for (const required of [
+          `idea-card-move-${target.id}-Rejected`,
+          `idea-card-promote-${target.id}`,
+          `idea-card-delete-${target.id}`,
+        ]) {
+          assert(rendered.includes(required),
+            `the open menu does not render ${required} — it renders [${rendered}]. These are the ` +
+            "three items the bug buried; a menu without them cannot demonstrate anything.");
+        }
+
+        // ── P6: elementFromPoint is viewport-relative, so an off-screen centre returns null for a ──
+        //    reason that has nothing to do with burial. Say so, rather than blaming the z-index.
+        const offscreen = probe.items.filter((i) => !i.inViewport);
+        assert(offscreen.length === 0,
+          `PRECONDITION: ${offscreen.map((i) => i.label).join(", ")} lie outside the viewport, where ` +
+          "elementFromPoint can see nothing at all. Give the page more height.");
+
+        // ── THE ASSERTION. Not "is it visible" — "would a click get there". ─────────────────────
+        const buried = probe.items.filter((i) => !i.reachable);
+        assert(buried.length === 0,
+          `${buried.length} of ${probe.items.length} items in the open ⋮ menu are BURIED — they are ` +
+          `painted, but a click at their centre lands on somebody else's markup (the card owning the ` +
+          `open menu is painting at z-index: ${probe.zIndex}):\n` +
+          buried.map((i) => `    BURIED  ${i.label.padEnd(10)} [${i.testid}]  elementFromPoint = ${i.hit}`).join("\n") +
+          "\n  This is what app.css:604 (.board-card:has(.dropdown-menu.show) { z-index: 3 }) prevents.");
+      } finally {
+        if (viewport) await page.setViewportSize(viewport);
+      }
+    });
+
     // ── Scenario E: Settings -> Run all shows an all-passed result table ──
     await test("Settings 'Run all' reports an all-passed result", async () => {
       await page.goto(`${baseUrl}/settings`);
