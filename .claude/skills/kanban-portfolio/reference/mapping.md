@@ -35,7 +35,8 @@ sync doesn't use that, because GitHub milestones aren't hierarchical.
 
 ### Issue → TaskItem
 
-Matched by parsing the **`#<n> ` prefix** off the task title (`/^#(\d+)\s/`).
+Matched by parsing the **`#<n>` prefix** off the task title — the trailing space is part of the
+key, as the regex shows (`/^#(\d+)\s/`).
 
 ```text
 Task title:  "#287 Add kanban-portfolio skill: reconcile GitHub -> board"
@@ -185,12 +186,16 @@ _[issue comment](https://github.com/o/r/issues/149#issuecomment-4528407542)_
 
 On re-sync the existing `TaskComment`s are read back, their markers parsed, and anything already
 seen is skipped. `TaskComment` has no external-id column, so this is the same no-schema-change
-trick as the `#<n>` task-title prefix — and it has the same fragility: **edit a mirrored
-comment's text and you strip the id**, so the next sync re-adds it as a duplicate.
+trick as the `#<n>` task-title prefix (the trailing space is part of the key) — and it has the
+same fragility: **edit a mirrored comment's text and you strip the id**, so the next sync re-adds
+it as a duplicate.
 
-The marker is *invisible* in the UI because `MarkdownRenderer` sanitises HTML comments away —
-but only where the comment is rendered as Markdown. It is visible anywhere the text is printed
-raw, which is why `EditItemModal` had to be fixed to use `<MarkdownContent>`.
+The marker is hidden **only where the body is rendered as Markdown** — `MarkdownRenderer`
+sanitises HTML comments away, which is why `EditItemModal` had to be switched to
+`<MarkdownContent>`. It is **plainly visible everywhere the raw text is read**: `GET /api/tasks/{id}/comments`,
+a `curl`, and an agent pulling the comment over MCP all see the `<!-- gh:… -->` line. That is
+acceptable (it is a short, self-describing marker) but it is not invisible, and callers that
+display raw comment text should expect it.
 
 ### Comments on a PR that closes no issue
 

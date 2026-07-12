@@ -63,7 +63,7 @@ Corollaries you must not violate:
 |---|---|---|
 | Repo | **Project** | `Name == <repo>` |
 | Milestone | **Feature** | `Name == <milestone>`; no milestone → `Unsorted` |
-| Issue | **TaskItem** | the `#<n> ` prefix on the task title |
+| Issue | **TaskItem** | the `#<n>` prefix on the task title (trailing space included) |
 | Label `P0`/`P1`/`P2`/`P3` | **Priority** `Critical`/`High`/`Medium`/`Low` | default `Medium` |
 | Issue state + linked PR | **Status** | open → `Backlog` · assigned → `InProgress` · linked open PR → `Review` · closed → `Done` |
 | Issue + PR comments, reviews, inline review comments | **TaskComment** | the GitHub node id (`IC_kwDO…`) |
@@ -78,8 +78,11 @@ blocked PR reads as blocked on the board.
 
 Agents get this for free: `get_task` over MCP already returns `comments`.
 
-Dedupe is by GitHub node id, stamped into each body and hidden only when rendered as Markdown — so a re-sync mirrors nothing new.
-**Don't edit a mirrored comment's text**; you'll strip the id and the next sync will re-add it.
+Dedupe is by GitHub node id, stamped into each body as an HTML comment — so a re-sync mirrors
+nothing new. The marker is hidden **only where the body is rendered as Markdown** (the task modal);
+it is plainly visible in raw text — over the REST API, in a `curl`, and to an agent reading the
+comment over MCP. **Don't edit a mirrored comment's text**; you'll strip the id and the next sync
+will re-add it as a duplicate.
 
 `--no-comments` skips the whole thing. `--max-comment-chars N` caps each body — worth setting if
 bot reviews (CodeRabbit bodies run past 100k chars) start costing agents real context.
@@ -89,7 +92,7 @@ Two things about this are load-bearing, not cosmetic:
 - **Milestone → Feature is required.** Tasks are created at `POST /api/features/{featureId}/tasks`
   — a task *must* have a Feature parent. Milestones are also what keeps a 400-task board
   readable: each project's tasks group under ~7 milestone buckets.
-- **The `#<n> ` title prefix is the idempotency key.** It is how a re-sync recognises a task
+- **The `#<n>` title prefix is the idempotency key** (the trailing space is part of it). It is how a re-sync recognises a task
   it already created, and it needs no schema change. (A durable `TaskItem.IssueNumber` column
   is tracked in #237; until it lands, don't strip the prefix — you'll orphan the task.)
 

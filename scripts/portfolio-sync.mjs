@@ -118,14 +118,21 @@ async function fetchOpenPrs(repo, withComments) {
   // Inline review comments (the file:line ones) are not exposed on `gh pr list` — they need
   // the REST endpoint, one call per PR. Fan them out rather than spawning `gh` serially:
   // a repo with a deep PR queue would otherwise pay the full process-spawn latency per PR.
+  //
+  // A failure here is REPORTED, never swallowed. `.catch(() => [])` alone would make an auth /
+  // rate-limit / network error indistinguishable from "this PR genuinely has no inline comments"
+  // — the board would quietly lose a whole review and still look like a complete mirror, which
+  // is the exact failure mode the truncation warning above exists to prevent.
   if (withComments) {
     await Promise.all(list.map(async (pr) => {
-      pr.inlineComments = await gh([
-        "api", `repos/${repo}/pulls/${pr.number}/comments`, "--paginate",
-      ]).catch((err) => {
-        console.warn(`  ! ${repo}#${pr.number}: failed to fetch inline PR comments — ${err.message}`);
-        return [];
-      });
+      try {
+        pr.inlineComments = await gh(["api", `repos/${repo}/pulls/${pr.number}/comments`, "--paginate"]);
+      } catch (err) {
+        pr.inlineComments = [];
+        console.warn(`  ! ${repo} PR #${pr.number}: could NOT fetch inline review comments — ${err.message}`);
+        console.warn(`    Its file:line review comments are MISSING from the board. Re-run once the cause is fixed.`);
+        stats.commentFetchFailures++;
+      }
     }));
   }
   return list;
@@ -313,7 +320,7 @@ async function api(method, path, body) {
 const stats = {
   projectsCreated: 0, featuresCreated: 0, tasksCreated: 0,
   tasksUpdated: 0, tasksMoved: 0, tasksUnchanged: 0,
-  commentsCreated: 0, commentsUnchanged: 0,
+  commentsCreated: 0, commentsUnchanged: 0, commentFetchFailures: 0,
   biggestComment: { chars: 0, author: null, issue: null },
   drift: [],
 };
@@ -357,13 +364,20 @@ async function ensureFeatures(projectId, names, dryRun) {
 
 // Mirror an issue's (and its linked PR's) GitHub comments onto the task, skipping any whose
 // node id is already present. Returns nothing; updates stats.
+// taskId is null ONLY on the dry-run "this task would be created" path — a task that does not
+// exist yet cannot have comments, so an empty dedupe set is correct there. Everywhere else a real
+// id is required, and the guard below enforces that rather than trusting the call sites.
 async function syncComments(issue, linkedPr, taskId, args) {
   const incoming = collectComments(issue, linkedPr);
   if (incoming.length === 0) return;
 
-  // Only reachable for a task that exists on the board, so a read here is safe and cheap —
-  // and we only pay it for issues that actually have comments.
-  const existing = taskId ? await api("GET", `/api/tasks/${taskId}/comments`) : [];
+  // Dedupe against what is already on the task. This read is gated on whether the task EXISTS
+  // (taskId != null) — deliberately NOT on dry-run. Gating it on dryRun was a real bug: a
+  // --dry-run against an already-synced board skipped the read, so `seen` was always empty and
+  // every previously-mirrored comment was reported as "would add". A preview that overstates its
+  // own writes is worse than no preview — it is exactly the lie --dry-run exists to prevent.
+  // Reads are safe under --dry-run; only writes are suppressed.
+  const existing = taskId == null ? [] : await api("GET", `/api/tasks/${taskId}/comments`);
   const seen = new Set((existing || []).map((c) => ghIdOf(c.text)).filter(Boolean));
 
   for (const c of incoming) {
@@ -371,6 +385,9 @@ async function syncComments(issue, linkedPr, taskId, args) {
     const text = commentTextFor(c, args.maxCommentChars);
     plan(args.dryRun, "add comment", `#${issue.number} ← ${c.author} [${c.type}] ${c.body.length.toLocaleString()} chars`);
     if (args.dryRun) { stats.commentsCreated++; continue; }
+    if (taskId == null) {
+      throw new Error(`syncComments: taskId is null outside --dry-run (issue #${issue.number}) — refusing to POST to /api/tasks/null/comments`);
+    }
     await api("POST", `/api/tasks/${taskId}/comments`, { text, author: c.author, type: c.type });
     stats.commentsCreated++;
     if (c.body.length > stats.biggestComment.chars) {
@@ -570,6 +587,10 @@ env: KANBANFLOW_API_URL (default http://127.0.0.1:5123), KANBANFLOW_PORTFOLIO_RE
   if (args.comments) {
     console.log(`comments mirrored:${String(stats.commentsCreated).padStart(4)}`);
     console.log(`comments existing:${String(stats.commentsUnchanged).padStart(4)}`);
+    if (stats.commentFetchFailures > 0) {
+      console.log(`\n  ! ${stats.commentFetchFailures} PR(s) whose inline review comments could NOT be fetched — the board is INCOMPLETE for those. See the warnings above.`);
+      process.exitCode = 1;
+    }
     if (stats.biggestComment.chars > 20_000) {
       const b = stats.biggestComment;
       console.log(`\n  ! biggest comment: ${b.chars.toLocaleString()} chars from ${b.author} on #${b.issue}.`);

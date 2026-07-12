@@ -43,21 +43,24 @@
                    tasks have no sync block, so nothing renders. *@
                 @if (GitHubIssueUrl is not null || GitHubPrUrl is not null)
                 {
+                    @* aria-label carries the "opens in a new tab" warning: target="_blank" moves the
+                       user out of the app with no announcement otherwise, and the ↗ glyph conveys
+                       that only visually — so it is aria-hidden and the label says it in words. *@
                     <div class="mb-3 d-flex gap-2 flex-wrap" data-testid="edit-item-github-links">
                         @if (GitHubIssueUrl is not null)
                         {
                             <a class="btn btn-sm btn-outline-secondary" href="@GitHubIssueUrl"
-                               target="_blank" rel="noopener noreferrer">
-                                Issue #@GitHubIssueNumber ↗
-                                <span class="visually-hidden">(opens in new tab)</span>
+                               target="_blank" rel="noopener noreferrer"
+                               aria-label="@($"GitHub issue #{GitHubIssueNumber} (opens in a new tab)")">
+                                Issue #@GitHubIssueNumber <span aria-hidden="true">↗</span>
                             </a>
                         }
                         @if (GitHubPrUrl is not null)
                         {
                             <a class="btn btn-sm btn-outline-primary" href="@GitHubPrUrl"
-                               target="_blank" rel="noopener noreferrer">
-                                PR #@GitHubPrNumber ↗
-                                <span class="visually-hidden">(opens in new tab)</span>
+                               target="_blank" rel="noopener noreferrer"
+                               aria-label="@($"GitHub pull request #{GitHubPrNumber} (opens in a new tab)")">
+                                PR #@GitHubPrNumber <span aria-hidden="true">↗</span>
                             </a>
                         }
                     </div>
@@ -275,9 +278,15 @@
     private string? editReadme;
 
     // Pulled out of the `<!-- kanbanflow-sync -->` block that scripts/portfolio-sync.mjs writes
-    // into a mirrored task's description. Anchored on the literal labels the sync emits
-    // ("**Issue:**" / "**Open PR:**") and require a real URL, so "**Open PR:** none" matches
-    // nothing. A hand-made task has no block and gets no links.
+    // into a mirrored task's description. The block is isolated FIRST and the labels are matched
+    // only inside it — matching the whole description would render chips for a hand-written
+    // description that merely happens to contain "**Issue:** https://github.com/...", which is
+    // not what this claims to do and would present unverified text as a trusted link.
+    private static readonly System.Text.RegularExpressions.Regex SyncBlockRe = new(
+        @"<!--\s*kanbanflow-sync\s*-->(.*?)<!--\s*/kanbanflow-sync\s*-->",
+        System.Text.RegularExpressions.RegexOptions.Compiled | System.Text.RegularExpressions.RegexOptions.Singleline);
+    // Anchored on the literal labels the sync emits, and a real URL is required — so
+    // "**Open PR:** none" matches nothing. A hand-made task has no block and gets no links.
     private static readonly System.Text.RegularExpressions.Regex GitHubIssueRe = new(
         @"\*\*Issue:\*\*\s*(https://github\.com/[^\s)]+/issues/(\d+))",
         System.Text.RegularExpressions.RegexOptions.Compiled);
@@ -304,13 +313,18 @@
         GitHubIssueUrl = GitHubIssueNumber = GitHubPrUrl = GitHubPrNumber = null;
         if (string.IsNullOrEmpty(editDescription)) return;
 
-        var issue = GitHubIssueRe.Match(editDescription);
+        // Only the sync block is authoritative — see SyncBlockRe. No block, no chips.
+        var block = SyncBlockRe.Match(editDescription);
+        if (!block.Success) return;
+        var syncBlock = block.Groups[1].Value;
+
+        var issue = GitHubIssueRe.Match(syncBlock);
         if (issue.Success)
         {
             GitHubIssueUrl = issue.Groups[1].Value;
             GitHubIssueNumber = issue.Groups[2].Value;
         }
-        var pr = GitHubPrRe.Match(editDescription);
+        var pr = GitHubPrRe.Match(syncBlock);
         if (pr.Success)
         {
             GitHubPrUrl = pr.Groups[1].Value;
