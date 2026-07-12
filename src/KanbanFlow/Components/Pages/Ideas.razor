@@ -335,7 +335,7 @@ else
     // NOTE: KanbanBoard defaults OrderColumnBy to OrderBy(IdOf). Omitting it here would silently
     // order the board by Id and this entire ordering rule would vanish without a compiler peep.
     private static IEnumerable<Idea> OrderIdeas(IEnumerable<Idea> items) =>
-        items.OrderByDescending(i => i.Priority).ThenByDescending(i => i.CreatedAt);
+        items.OrderByDescending(i => i.Priority).ThenByDescending(i => i.CreatedAt).ThenByDescending(i => i.Id);
 
     // The rule, stated once and always visible — not an error raised after the user has already
     // committed the gesture. (A lambda here would need nested double quotes inside a Razor attribute,
@@ -552,9 +552,11 @@ else
         catch (OperationCanceledException) { /* circuit teardown */ }
         catch (ValidationException ex)
         {
-            // The service refused the transition. The reload returns the card to its real column.
-            loadError = ex.Message;
+            // Reload first (snaps the card back to its real column), then set the error so
+            // LoadIdeas' own `loadError = null` on success doesn't wipe our message.
+            var moveError = ex.Message;
             await LoadIdeas();
+            loadError = moveError;
         }
         catch (IdeaNotFoundException)
         {
@@ -563,8 +565,9 @@ else
         }
         catch (Exception ex)
         {
-            loadError = $"Move failed: {ex.Message}";
+            var moveError = $"Move failed: {ex.Message}";
             await LoadIdeas();
+            loadError = moveError;
         }
     }
 

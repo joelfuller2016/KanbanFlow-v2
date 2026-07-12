@@ -222,7 +222,8 @@
                 continue;
 
             // A bare heading is a label, not content — hold it and prepend it to the next real line.
-            if (isHeading && heading is null)
+            // Always update (not only when null) so consecutive headings use the most specific one.
+            if (isHeading)
             {
                 heading = line;
                 continue;
