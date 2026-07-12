@@ -84,6 +84,8 @@ env: KANBANFLOW_API_URL (default http://127.0.0.1:5123), KANBANFLOW_PORTFOLIO_RE
   }
 
   const repos = resolveRepos(args);
+  // Keyed lower-case: the sync matches projects to repos case-insensitively, so the report
+  // must too — otherwise a project named "zerorouter" is silently absent from the standup.
   const shortNames = new Map(repos.map((r) => [r.split("/").pop().toLowerCase(), r]));
 
   let projects;

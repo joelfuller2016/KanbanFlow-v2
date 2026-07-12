@@ -66,24 +66,44 @@ async function gh(args) {
   return JSON.parse(stdout || "[]");
 }
 
-async function fetchIssues(repo, includeClosed) {
-  // --search "-is:pr" is redundant for `gh issue list` but the state filter is not: by
-  // default gh returns only open issues.
-  return gh([
-    "issue", "list", "-R", repo,
-    "--state", includeClosed ? "all" : "open",
-    "--limit", String(GH_PAGE_LIMIT),
-    "--json", "number,title,body,labels,milestone,assignees,state,updatedAt,url",
+const ISSUE_FIELDS = "number,title,body,labels,milestone,assignees,state,updatedAt,url";
+
+// Never truncate silently: a board that quietly drops issues past the limit still *looks*
+// like a full mirror, which is the one thing this tool must not do.
+function warnIfTruncated(repo, kind, list) {
+  if (list.length >= GH_PAGE_LIMIT) {
+    console.warn(`  ! ${repo}: ${kind} hit the ${GH_PAGE_LIMIT} fetch limit — the mirror may be INCOMPLETE. Raise GH_PAGE_LIMIT.`);
+  }
+  return list;
+}
+
+async function fetchOpenIssues(repo) {
+  const list = await gh([
+    "issue", "list", "-R", repo, "--state", "open",
+    "--limit", String(GH_PAGE_LIMIT), "--json", ISSUE_FIELDS,
   ]);
+  return warnIfTruncated(repo, "open issues", list);
+}
+
+// Closed issues are fetched even when we aren't mirroring them, because a task already on
+// the board whose issue has since been closed must still converge to Done. Without this the
+// close is invisible (the issue simply vanishes from the open set) and the task is instead
+// mis-reported as drift forever. Cheap by default: numbers only.
+async function fetchClosedIssues(repo, full) {
+  const list = await gh([
+    "issue", "list", "-R", repo, "--state", "closed",
+    "--limit", String(GH_PAGE_LIMIT), "--json", full ? ISSUE_FIELDS : "number",
+  ]);
+  return warnIfTruncated(repo, "closed issues", list);
 }
 
 async function fetchOpenPrs(repo) {
-  return gh([
-    "pr", "list", "-R", repo,
-    "--state", "open",
+  const list = await gh([
+    "pr", "list", "-R", repo, "--state", "open",
     "--limit", String(GH_PAGE_LIMIT),
     "--json", "number,title,body,url,updatedAt,reviewDecision,isDraft",
   ]);
+  return warnIfTruncated(repo, "open PRs", list);
 }
 
 // "Closes #12", "fixes #34", "resolved: #56" — GitHub's own closing-keyword vocabulary.
@@ -179,7 +199,7 @@ async function api(method, path, body) {
 
 const stats = {
   projectsCreated: 0, featuresCreated: 0, tasksCreated: 0,
-  tasksUpdated: 0, tasksUnchanged: 0, drift: [],
+  tasksUpdated: 0, tasksMoved: 0, tasksUnchanged: 0, drift: [],
 };
 
 function plan(dryRun, verb, what) {
@@ -189,6 +209,8 @@ function plan(dryRun, verb, what) {
 async function ensureProject(repo, dryRun) {
   const shortName = repo.split("/").pop();
   const projects = await api("GET", "/api/projects");
+  // Case-insensitive: "ZeroRouter" and "zerorouter" are the same repo, and creating a second
+  // project for the same repo would fork the mirror permanently.
   const existing = projects.find((p) => p.name.toLowerCase() === shortName.toLowerCase());
   if (existing) return existing.id;
 
@@ -217,7 +239,7 @@ async function ensureFeatures(projectId, names, dryRun) {
   return byName;
 }
 
-async function syncTasks(repo, projectId, issues, prByIssue, featureIds, actor, dryRun) {
+async function syncTasks(repo, projectId, issues, closedNumbers, prByIssue, featureIds, actor, dryRun) {
   const existing = projectId ? await api("GET", `/api/projects/${projectId}/tasks`) : [];
   const byIssueNumber = new Map();
   for (const t of existing) {
@@ -230,13 +252,14 @@ async function syncTasks(repo, projectId, issues, prByIssue, featureIds, actor, 
     const desiredName = taskNameFor(issue);
     const desiredPriority = derivePriority(issue);
     const desiredStatus = deriveStatus(issue, linkedPr);
-    const featureId = featureIds.get(featureNameFor(issue));
+    const featureName = featureNameFor(issue);
+    const featureId = featureIds.get(featureName);
     const task = byIssueNumber.get(issue.number);
 
     if (!task) {
       plan(dryRun, "create task", `${desiredName}  [${desiredStatus}/${desiredPriority}]`);
       if (dryRun) continue;
-      if (featureId == null) throw new Error(`No feature id for "${featureNameFor(issue)}" (issue #${issue.number})`);
+      if (featureId == null) throw new Error(`No feature id for "${featureName}" (issue #${issue.number})`);
       await api("POST", `/api/features/${featureId}/tasks`, {
         name: desiredName,
         description: descriptionFor(issue, linkedPr),
@@ -246,6 +269,16 @@ async function syncTasks(repo, projectId, issues, prByIssue, featureIds, actor, 
       });
       stats.tasksCreated++;
       continue;
+    }
+
+    // The issue's milestone changed on GitHub -> the task belongs under a different Feature.
+    // featureId is not settable through PUT /api/tasks/{id}; reassignment is its own verb.
+    if (featureId != null && task.featureId !== featureId) {
+      plan(dryRun, "move task", `${desiredName} -> feature "${featureName}"`);
+      if (!dryRun) {
+        await api("PATCH", `/api/tasks/${task.id}/feature`, { featureId, actor });
+        stats.tasksMoved++;
+      }
     }
 
     // Task exists. GitHub owns the title and the priority — always reconcile those.
@@ -268,30 +301,56 @@ async function syncTasks(repo, projectId, issues, prByIssue, featureIds, actor, 
 
     plan(dryRun, "update task", `${desiredName}  ${JSON.stringify(patch)}`);
     if (dryRun) continue;
-    await api("PUT", `/api/tasks/${task.id}`, { name: desiredName, ...patch, actor });
+    // PUT /api/tasks/{id} rejects any payload without `name` — 422 "Name is required."
+    // (ApiEndpoints.cs:1451). So `name` always goes on the wire, even when unchanged;
+    // `patch` exists only to detect *whether* anything differs and to log what.
+    await api("PUT", `/api/tasks/${task.id}`, { ...patch, name: desiredName, actor });
     stats.tasksUpdated++;
   }
 
-  // A task on the board whose issue is gone from GitHub. Never auto-delete (the audit
-  // trail is sacred) — surface it and let a human decide.
-  const seen = new Set(issues.map((i) => i.number));
-  for (const [n, t] of byIssueNumber) {
-    if (!seen.has(n) && t.status !== "Done") stats.drift.push(`${repo}: task "${t.name}" has no matching open issue #${n} (closed or deleted?)`);
+  // Board tasks whose issue was not in the set we just processed. Two very different cases —
+  // conflating them is what made every closed issue look like drift.
+  const processed = new Set(issues.map((i) => i.number));
+  for (const [n, task] of byIssueNumber) {
+    if (processed.has(n)) continue;
+
+    if (closedNumbers.has(n)) {
+      // Closed on GitHub since the last sync. This is the *only* path by which a close
+      // reaches the board when --include-closed is off: the issue is simply absent from the
+      // open set, so without this it would never converge to Done.
+      if (task.status === "Done") { stats.tasksUnchanged++; continue; }
+      plan(dryRun, "close task", `${task.name} -> Done (issue #${n} closed)`);
+      if (dryRun) continue;
+      await api("PATCH", `/api/tasks/${task.id}/status`, { status: "Done", actor });
+      stats.tasksUpdated++;
+      continue;
+    }
+
+    // Genuinely absent from GitHub — deleted or transferred. Never auto-delete (the audit
+    // trail is sacred); surface it and let a human decide.
+    stats.drift.push(`${repo}: task "${task.name}" has no matching issue #${n} on GitHub (deleted or transferred?)`);
   }
 }
 
 async function syncRepo(repo, args) {
   console.log(`\n${repo}`);
-  const [issues, prs] = await Promise.all([fetchIssues(repo, args.includeClosed), fetchOpenPrs(repo)]);
+  const [openIssues, closed, prs] = await Promise.all([
+    fetchOpenIssues(repo),
+    fetchClosedIssues(repo, args.includeClosed),
+    fetchOpenPrs(repo),
+  ]);
+  const closedNumbers = new Set(closed.map((i) => i.number));
+  // With --include-closed, closed issues are mirrored as tasks too. Without it they are still
+  // fetched (numbers only) so an already-synced task can converge to Done when its issue closes.
+  const issues = args.includeClosed ? [...openIssues, ...closed] : openIssues;
+
   const prByIssue = mapIssueToOpenPr(prs);
-  console.log(`  ${issues.length} issues · ${prs.length} open PRs · ${prByIssue.size} issues with a linked PR`);
-  if (issues.length >= GH_PAGE_LIMIT) console.warn(`  ⚠ issues may be truncated (fetched ${issues.length} = limit); consider raising GH_PAGE_LIMIT`);
-  if (prs.length >= GH_PAGE_LIMIT) console.warn(`  ⚠ PRs may be truncated (fetched ${prs.length} = limit); consider raising GH_PAGE_LIMIT`);
+  console.log(`  ${openIssues.length} open${args.includeClosed ? ` + ${closed.length} closed` : ""} issues · ${prs.length} open PRs · ${prByIssue.size} issues with a linked PR`);
 
   const projectId = await ensureProject(repo, args.dryRun);
   const featureNames = [...new Set(issues.map(featureNameFor))].sort();
   const featureIds = await ensureFeatures(projectId, featureNames, args.dryRun);
-  await syncTasks(repo, projectId, issues, prByIssue, featureIds, args.actor, args.dryRun);
+  await syncTasks(repo, projectId, issues, closedNumbers, prByIssue, featureIds, args.actor, args.dryRun);
 }
 
 async function main() {
@@ -334,6 +393,7 @@ env: KANBANFLOW_API_URL (default http://127.0.0.1:5123), KANBANFLOW_PORTFOLIO_RE
   console.log(`features created: ${stats.featuresCreated}`);
   console.log(`tasks created:    ${stats.tasksCreated}`);
   console.log(`tasks updated:    ${stats.tasksUpdated}`);
+  console.log(`tasks moved:      ${stats.tasksMoved}`);
   console.log(`tasks unchanged:  ${stats.tasksUnchanged}`);
   if (stats.drift.length) {
     console.log(`\n── drift (${stats.drift.length}) — board and GitHub disagree ──`);

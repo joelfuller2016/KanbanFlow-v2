@@ -102,8 +102,10 @@ empty board as "nothing to do."
 - **`gh` must be authenticated.** The sync shells out to `gh issue list` / `gh pr list`.
 - **`--dry-run` before any first sync into a board that already has hand-made projects** — a repo
   whose name collides with an existing project name will adopt that project, not create one.
-- **Closed issues are skipped by default.** The board mirrors *open* work. `--include-closed`
-  backfills them as `Done` if you want the history.
+- **Closed issues are not mirrored by default, but closes still land.** The board mirrors *open*
+  work; `--include-closed` backfills the rest as `Done`. Either way, a task whose issue gets
+  closed **does** converge to `Done` — the sync always fetches closed issue *numbers* so a close
+  can't go unseen. (`--dry-run` will show these as `close task`.)
 - **Don't run the sync against the live board to test it.** Use a scratch port and a throwaway
   DB: `KANBANFLOW_DB_PATH=$TEMP/x.db dotnet run … --urls http://127.0.0.1:5199`.
 

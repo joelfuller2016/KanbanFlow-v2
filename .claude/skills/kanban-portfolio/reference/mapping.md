@@ -124,6 +124,37 @@ Acceptable: the convention in these repos is `Closes #N` in the body, enforced b
 The block is machine-readable and human-visible. The body is truncated at 1500 chars — 400
 tasks × full issue bodies is a lot of payload, and the canonical text is one click away.
 
+## Closed issues — fetched even when not mirrored
+
+Closed issue **numbers are always fetched**, regardless of `--include-closed`. This is not an
+optimisation detail; it is load-bearing.
+
+Without it, a close is *invisible*. When an issue you already synced gets closed, it simply
+drops out of the open set — so a sync that only ever looked at open issues would never see
+the close, would never advance the task to `Done`, and would instead report the task as drift
+("no matching issue") **forever**. Every completed issue would accumulate as permanent noise.
+
+So:
+
+| `--include-closed` | Closed issues fetched | Closed issues become tasks | Existing task converges to `Done` |
+|---|---|---|---|
+| off (default) | numbers only (cheap) | no | **yes** |
+| on | full fields | yes | yes |
+
+## Feature reassignment
+
+If an issue's milestone changes on GitHub, its task must move to the new milestone's Feature.
+`featureId` is **not settable through `PUT /api/tasks/{id}`** — reassignment is its own verb:
+`PATCH /api/tasks/{id}/feature` with `{ featureId, actor }`. The sync moves the task; it never
+deletes and recreates it (that would orphan its comments, criteria, and audit history).
+
+## `PUT /api/tasks/{id}` always needs `name`
+
+The endpoint rejects any payload without it — **422 `"Name is required."`** (`ApiEndpoints.cs:1451`).
+A priority-only or status-only update therefore *must* still send `name`. The sync tracks what
+actually changed separately from what goes on the wire: it computes a diff for change-detection
+and logging, then always includes `name` in the request.
+
 ## Drift
 
 Drift is a disagreement the sync **refuses to resolve on its own**. It reports and moves on.
@@ -131,10 +162,20 @@ Drift is a disagreement the sync **refuses to resolve on its own**. It reports a
 | Drift | Meaning |
 |---|---|
 | board says `Done`, issue is still open | you finished it but never closed the issue — *or* you closed the wrong task |
-| task's issue no longer appears in the open set | the issue was closed or deleted; the task is now stranded |
+| task's issue is in neither the open nor the closed set | the issue was deleted or transferred to another repo; the task is stranded |
+
+Note the second row is narrow *by design*. It fires only when an issue is genuinely absent from
+GitHub — **not** when it is merely closed (that path converges to `Done`, above).
 
 Deletion is never automatic. The audit trail is sacred, and a stranded task is evidence of
 something — losing it silently is worse than showing it.
+
+## Truncation is never silent
+
+`gh` is called with a fetch limit. If a repo's issue or PR count reaches it, the sync **warns
+loudly** that the mirror may be incomplete. A board that quietly drops issues past the limit
+still *looks* like a full mirror, and a false complete picture is worse than an obviously
+partial one.
 
 ## What the sync does not do
 
@@ -142,7 +183,7 @@ something — losing it silently is worse than showing it.
 - **Does not touch SQLite/EF.** All writes go through REST so `ActivityEvent` stays complete.
 - **Does not create acceptance criteria, subtasks, or dependencies.** Those are authored by
   humans and agents doing real work (`kanban-project-ops`), not derived from an issue.
-- **Does not sync closed issues** unless `--include-closed`.
+- **Does not delete anything** — not a task, not an emptied Feature.
 - **Does not use the native MCP server.** It can't: the 24 native tools include `list_projects`
   and `get_project_context` but **no `create_project`** — an agent on `/mcp` cannot onboard a
   project. Tracked as a parity gap in #231. Until then the sync uses REST
