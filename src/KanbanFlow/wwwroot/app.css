@@ -351,13 +351,28 @@ h1:focus {
 
 /* A mirrored GitHub comment can be enormous (bot code-review bodies run to 100k+ chars).
    Cap each one to its own scroll box so a single comment can't push the rest of the
-   activity timeline off-screen, and fade the cut edge so it reads as "there's more". */
+   activity timeline off-screen.
+
+   The "there's more" affordance is a scroll shadow, not a mask. A mask-image gradient
+   would fade the bottom of EVERY comment — including one-liners that don't overflow at
+   all, which then look truncated when they aren't. This works instead by layering two
+   background pairs: the solid "cover" gradients are `local` (they scroll with the
+   content) while the radial "shadow" gradients are `scroll` (fixed to the box). When the
+   content is flush against an edge, its cover sits over the shadow and hides it — so a
+   shadow is only ever visible on an edge that actually has more content past it, and a
+   short comment shows none. Cover colour must track the activity panel's #f8f9fa. */
 .task-comment-body {
     max-height: 14rem;
     overflow-y: auto;
     overscroll-behavior: contain;
-    -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 1.25rem), transparent 100%);
-    mask-image: linear-gradient(to bottom, #000 calc(100% - 1.25rem), transparent 100%);
+    background:
+        linear-gradient(#f8f9fa 30%, rgba(248, 249, 250, 0)) center top,
+        linear-gradient(rgba(248, 249, 250, 0), #f8f9fa 70%) center bottom,
+        radial-gradient(farthest-side at 50% 0, rgba(0, 0, 0, 0.14), rgba(0, 0, 0, 0)) center top,
+        radial-gradient(farthest-side at 50% 100%, rgba(0, 0, 0, 0.14), rgba(0, 0, 0, 0)) center bottom;
+    background-repeat: no-repeat;
+    background-size: 100% 2rem, 100% 2rem, 100% 0.5rem, 100% 0.5rem;
+    background-attachment: local, local, scroll, scroll;
 }
 /* Long bot comments lean on <details> and wide tables — keep both inside the box. */
 .task-comment-body table { display: block; overflow-x: auto; max-width: 100%; }

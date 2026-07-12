@@ -283,16 +283,37 @@
         @"\*\*Open PR:\*\*\s*(https://github\.com/[^\s)]+/pull/(\d+))",
         System.Text.RegularExpressions.RegexOptions.Compiled);
 
-    private string? GitHubIssueUrl => SyncBlockMatch(GitHubIssueRe, 1);
-    private string? GitHubIssueNumber => SyncBlockMatch(GitHubIssueRe, 2);
-    private string? GitHubPrUrl => SyncBlockMatch(GitHubPrRe, 1);
-    private string? GitHubPrNumber => SyncBlockMatch(GitHubPrRe, 2);
+    // Resolved once per description change, NOT on every render. These are read from the markup,
+    // and the Name field binds on `oninput` — so computed properties here would re-run four
+    // regexes on every keystroke, against a description that hasn't changed.
+    private string? GitHubIssueUrl;
+    private string? GitHubIssueNumber;
+    private string? GitHubPrUrl;
+    private string? GitHubPrNumber;
+    private string? gitHubLinksSource;
 
-    private string? SyncBlockMatch(System.Text.RegularExpressions.Regex re, int group)
+    private void RefreshGitHubLinks()
     {
-        if (string.IsNullOrEmpty(editDescription)) return null;
-        var m = re.Match(editDescription);
-        return m.Success ? m.Groups[group].Value : null;
+        // Cheap guard: the description only changes when a different item is loaded (or the user
+        // edits it), so skip the regex entirely when the source text is unchanged.
+        if (ReferenceEquals(gitHubLinksSource, editDescription) && gitHubLinksSource is not null) return;
+        gitHubLinksSource = editDescription;
+
+        GitHubIssueUrl = GitHubIssueNumber = GitHubPrUrl = GitHubPrNumber = null;
+        if (string.IsNullOrEmpty(editDescription)) return;
+
+        var issue = GitHubIssueRe.Match(editDescription);
+        if (issue.Success)
+        {
+            GitHubIssueUrl = issue.Groups[1].Value;
+            GitHubIssueNumber = issue.Groups[2].Value;
+        }
+        var pr = GitHubPrRe.Match(editDescription);
+        if (pr.Success)
+        {
+            GitHubPrUrl = pr.Groups[1].Value;
+            GitHubPrNumber = pr.Groups[2].Value;
+        }
     }
     private int editParentFeatureId;
     private int editFeatureId;
@@ -323,6 +344,7 @@
             newCommentText = null;
             taskSubtasks = [];
             taskComments = [];
+            RefreshGitHubLinks();
 
             if (EditMode == EditItemType.Task && EditTaskId.HasValue)
             {

@@ -116,13 +116,14 @@ async function fetchOpenPrs(repo, withComments) {
   warnIfTruncated(repo, "open PRs", list);
 
   // Inline review comments (the file:line ones) are not exposed on `gh pr list` — they need
-  // the REST endpoint, one call per PR. Open-PR counts are small, so this stays cheap.
+  // the REST endpoint, one call per PR. Fan them out rather than spawning `gh` serially:
+  // a repo with a deep PR queue would otherwise pay the full process-spawn latency per PR.
   if (withComments) {
-    for (const pr of list) {
+    await Promise.all(list.map(async (pr) => {
       pr.inlineComments = await gh([
         "api", `repos/${repo}/pulls/${pr.number}/comments`, "--paginate",
       ]).catch(() => []);
-    }
+    }));
   }
   return list;
 }
