@@ -38,11 +38,15 @@ public class Idea
     public Project? PromotedProject { get; set; }
 }
 
+// ON-DISK CONTRACT: persisted as a raw ordinal int (no HasConversion). Append only — never
+// change, reorder, or remove a member. Locked by PersistedEnumOrdinalTests. See CommentType.
+// Note this one is especially exposed: the live DB currently holds only {0,1,3}, so removing
+// or reordering Promoted(2) would look completely harmless here and corrupt every other install.
 public enum IdeaStatus
 {
-    New,
-    Triaging,
-    Promoted,
-    Archived,
-    Rejected
+    New = 0,
+    Triaging = 1,
+    Promoted = 2,
+    Archived = 3,
+    Rejected = 4
 }

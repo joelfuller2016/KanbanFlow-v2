@@ -87,26 +87,30 @@ public class MemoryNode
 }
 
 /// <summary>Kind of memory. Stored as <c>int</c> (no <c>JsonStringEnumConverter</c> in this repo).</summary>
+// ON-DISK CONTRACT: persisted as a raw ordinal int (no HasConversion). Append only — never
+// change, reorder, or remove a member. Locked by PersistedEnumOrdinalTests. See CommentType.
 public enum MemoryType
 {
     /// <summary>A specific event or experience ("on 6/28 the build failed because…").</summary>
-    Episodic,
+    Episodic = 0,
 
     /// <summary>A general fact or concept ("the API base path is /api").</summary>
-    Semantic,
+    Semantic = 1,
 
     /// <summary>A how-to / procedure ("to release, run scripts/verify.ps1 then…").</summary>
-    Procedural,
+    Procedural = 2,
 
     /// <summary>A decision and its rationale ("chose SQLite over Postgres because…").</summary>
-    Decision
+    Decision = 3
 }
 
 /// <summary>What a memory node is scoped to. Stored as <c>int</c>.</summary>
+// ON-DISK CONTRACT: persisted as a raw ordinal int (no HasConversion). Append only — never
+// change, reorder, or remove a member. Locked by PersistedEnumOrdinalTests. See CommentType.
 public enum MemoryScope
 {
-    Project,
-    Feature,
-    Agent,
-    Session
+    Project = 0,
+    Feature = 1,
+    Agent = 2,
+    Session = 3
 }
