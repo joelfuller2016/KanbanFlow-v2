@@ -349,3 +349,17 @@ h1:focus {
 .markdown-body table td, .markdown-body table th { border: 1px solid #dee2e6; padding: 0.25rem 0.5rem; }
 .markdown-body img { max-width: 100%; }
 
+/* A mirrored GitHub comment can be enormous (bot code-review bodies run to 100k+ chars).
+   Cap each one to its own scroll box so a single comment can't push the rest of the
+   activity timeline off-screen, and fade the cut edge so it reads as "there's more". */
+.task-comment-body {
+    max-height: 14rem;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 1.25rem), transparent 100%);
+    mask-image: linear-gradient(to bottom, #000 calc(100% - 1.25rem), transparent 100%);
+}
+/* Long bot comments lean on <details> and wide tables — keep both inside the box. */
+.task-comment-body table { display: block; overflow-x: auto; max-width: 100%; }
+.task-comment-body pre { max-width: 100%; }
+

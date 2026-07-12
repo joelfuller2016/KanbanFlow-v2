@@ -66,6 +66,23 @@ Corollaries you must not violate:
 | Issue | **TaskItem** | the `#<n> ` prefix on the task title |
 | Label `P0`/`P1`/`P2`/`P3` | **Priority** `Critical`/`High`/`Medium`/`Low` | default `Medium` |
 | Issue state + linked PR | **Status** | open → `Backlog` · assigned → `InProgress` · linked open PR → `Review` · closed → `Done` |
+| Issue + PR comments, reviews, inline review comments | **TaskComment** | the GitHub node id (`IC_kwDO…`) |
+
+### Comments (on by default)
+
+The conversation is the part that explains *why* something is stuck, so it comes across too:
+issue comments, PR conversation, PR reviews, and **inline `file:line` review comments** all land
+on the task, authored by the real GitHub login. A PR review's verdict maps onto KanbanFlow's own
+comment vocabulary — `APPROVED` → **Verification**, `CHANGES_REQUESTED` → **Blocked** — so a
+blocked PR reads as blocked on the board.
+
+Agents get this for free: `get_task` over MCP already returns `comments`.
+
+Dedupe is by GitHub node id, stamped invisibly into each body — so a re-sync mirrors nothing new.
+**Don't edit a mirrored comment's text**; you'll strip the id and the next sync will re-add it.
+
+`--no-comments` skips the whole thing. `--max-comment-chars N` caps each body — worth setting if
+bot reviews (CodeRabbit bodies run past 100k chars) start costing agents real context.
 
 Two things about this are load-bearing, not cosmetic:
 

@@ -40,11 +40,16 @@ const GH_PAGE_LIMIT = 500;
 const ADVANCEABLE_TO_REVIEW = new Set(["Backlog", "Todo", "InProgress"]);
 
 function parseArgs(argv) {
-  const args = { dryRun: false, includeClosed: false, repos: null, actor: "portfolio-sync" };
+  const args = {
+    dryRun: false, includeClosed: false, repos: null, actor: "portfolio-sync",
+    comments: true, maxCommentChars: 0, // 0 = no cap; mirror the comment whole
+  };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === "--dry-run") args.dryRun = true;
     else if (a === "--include-closed") args.includeClosed = true;
+    else if (a === "--no-comments") args.comments = false;
+    else if (a === "--max-comment-chars") args.maxCommentChars = Number.parseInt(argv[++i], 10) || 0;
     else if (a === "--repos") args.repos = (argv[++i] || "").split(",").map((r) => r.trim()).filter(Boolean);
     else if (a === "--actor") args.actor = argv[++i] || args.actor;
     else if (a === "--help" || a === "-h") args.help = true;
@@ -66,7 +71,10 @@ async function gh(args) {
   return JSON.parse(stdout || "[]");
 }
 
-const ISSUE_FIELDS = "number,title,body,labels,milestone,assignees,state,updatedAt,url";
+// `comments` rides along on the list call we already make, so issue comments cost zero extra
+// requests. Each carries a stable node id (e.g. `IC_kwDO…`) — that id is the dedupe key that
+// makes comment mirroring idempotent.
+const ISSUE_FIELDS = "number,title,body,labels,milestone,assignees,state,updatedAt,url,comments";
 
 // Never truncate silently: a board that quietly drops issues past the limit still *looks*
 // like a full mirror, which is the one thing this tool must not do.
@@ -97,13 +105,114 @@ async function fetchClosedIssues(repo, full) {
   return warnIfTruncated(repo, "closed issues", list);
 }
 
-async function fetchOpenPrs(repo) {
+async function fetchOpenPrs(repo, withComments) {
+  const fields = withComments
+    ? "number,title,body,url,updatedAt,reviewDecision,isDraft,comments,reviews"
+    : "number,title,body,url,updatedAt,reviewDecision,isDraft";
   const list = await gh([
     "pr", "list", "-R", repo, "--state", "open",
-    "--limit", String(GH_PAGE_LIMIT),
-    "--json", "number,title,body,url,updatedAt,reviewDecision,isDraft",
+    "--limit", String(GH_PAGE_LIMIT), "--json", fields,
   ]);
-  return warnIfTruncated(repo, "open PRs", list);
+  warnIfTruncated(repo, "open PRs", list);
+
+  // Inline review comments (the file:line ones) are not exposed on `gh pr list` — they need
+  // the REST endpoint, one call per PR. Open-PR counts are small, so this stays cheap.
+  if (withComments) {
+    for (const pr of list) {
+      pr.inlineComments = await gh([
+        "api", `repos/${repo}/pulls/${pr.number}/comments`, "--paginate",
+      ]).catch(() => []);
+    }
+  }
+  return list;
+}
+
+// --- GitHub comments -> TaskComments -----------------------------------------------------
+
+// A GitHub comment's node id is stable and globally unique. Stamping it into the comment body
+// makes the mirror idempotent with no schema change: on re-sync we read back what's already on
+// the task and skip anything whose id we've seen. (TaskComment has no external-id column —
+// this is the same trick as the "#<n> " task-title prefix.)
+const GH_ID_MARKER = /<!--\s*gh:([^\s>]+)\s*-->/;
+
+function ghIdOf(commentText) {
+  const m = GH_ID_MARKER.exec(String(commentText || ""));
+  return m ? m[1] : null;
+}
+
+// KanbanFlow's own comment vocabulary carries intent, so a PR review's verdict maps onto it
+// rather than being flattened to a generic Comment. Allowed types (ApiEndpoints.cs:2554):
+// Note, Decision, Question, Blocked, Handoff, Verification, Comment.
+function commentTypeForReview(state) {
+  switch (String(state || "").toUpperCase()) {
+    case "APPROVED": return "Verification";
+    case "CHANGES_REQUESTED": return "Blocked";
+    default: return "Comment";
+  }
+}
+
+// Flatten every GitHub comment surface attached to an issue (and its linked PR) into one
+// ordered list of {ghId, author, type, text} ready to POST.
+function collectComments(issue, linkedPr) {
+  const out = [];
+
+  for (const c of issue.comments || []) {
+    out.push({
+      ghId: c.id,
+      author: c.author?.login || "github",
+      type: "Comment",
+      createdAt: c.createdAt,
+      header: `_[issue comment](${c.url || issue.url})_`,
+      body: c.body || "",
+    });
+  }
+
+  if (linkedPr) {
+    for (const c of linkedPr.comments || []) {
+      out.push({
+        ghId: c.id,
+        author: c.author?.login || "github",
+        type: "Comment",
+        createdAt: c.createdAt,
+        header: `_[PR #${linkedPr.number} comment](${c.url || linkedPr.url})_`,
+        body: c.body || "",
+      });
+    }
+    for (const r of linkedPr.reviews || []) {
+      // A review with no body and no verdict is noise (GitHub emits one per inline batch).
+      const state = String(r.state || "").toUpperCase();
+      if (!r.body && (state === "COMMENTED" || !state)) continue;
+      out.push({
+        ghId: r.id,
+        author: r.author?.login || "github",
+        type: commentTypeForReview(state),
+        createdAt: r.submittedAt || r.createdAt,
+        header: `_[PR #${linkedPr.number} review · **${state || "COMMENTED"}**](${r.url || linkedPr.url})_`,
+        body: r.body || `(no body — ${state})`,
+      });
+    }
+    for (const c of linkedPr.inlineComments || []) {
+      out.push({
+        ghId: c.node_id || String(c.id),
+        author: c.user?.login || "github",
+        type: "Comment",
+        createdAt: c.created_at,
+        header: `_[PR #${linkedPr.number} · \`${c.path}:${c.line ?? c.original_line ?? "?"}\`](${c.html_url || linkedPr.url})_`,
+        body: c.body || "",
+      });
+    }
+  }
+
+  out.sort((a, b) => new Date(a.createdAt || 0) - new Date(b.createdAt || 0));
+  return out;
+}
+
+function commentTextFor(c, maxChars) {
+  let body = c.body;
+  if (maxChars > 0 && body.length > maxChars) {
+    body = `${body.slice(0, maxChars)}\n\n…(truncated at ${maxChars} chars — read it on GitHub)`;
+  }
+  return `<!-- gh:${c.ghId} -->\n${c.header}\n\n${body}`;
 }
 
 // "Closes #12", "fixes #34", "resolved: #56" — GitHub's own closing-keyword vocabulary.
@@ -199,7 +308,10 @@ async function api(method, path, body) {
 
 const stats = {
   projectsCreated: 0, featuresCreated: 0, tasksCreated: 0,
-  tasksUpdated: 0, tasksMoved: 0, tasksUnchanged: 0, drift: [],
+  tasksUpdated: 0, tasksMoved: 0, tasksUnchanged: 0,
+  commentsCreated: 0, commentsUnchanged: 0,
+  biggestComment: { chars: 0, author: null, issue: null },
+  drift: [],
 };
 
 function plan(dryRun, verb, what) {
@@ -239,7 +351,32 @@ async function ensureFeatures(projectId, names, dryRun) {
   return byName;
 }
 
-async function syncTasks(repo, projectId, issues, closedNumbers, prByIssue, featureIds, actor, dryRun) {
+// Mirror an issue's (and its linked PR's) GitHub comments onto the task, skipping any whose
+// node id is already present. Returns nothing; updates stats.
+async function syncComments(issue, linkedPr, taskId, args) {
+  const incoming = collectComments(issue, linkedPr);
+  if (incoming.length === 0) return;
+
+  // Only reachable for a task that exists on the board, so a read here is safe and cheap —
+  // and we only pay it for issues that actually have comments.
+  const existing = args.dryRun ? [] : await api("GET", `/api/tasks/${taskId}/comments`);
+  const seen = new Set((existing || []).map((c) => ghIdOf(c.text)).filter(Boolean));
+
+  for (const c of incoming) {
+    if (seen.has(c.ghId)) { stats.commentsUnchanged++; continue; }
+    const text = commentTextFor(c, args.maxCommentChars);
+    plan(args.dryRun, "add comment", `#${issue.number} ← ${c.author} [${c.type}] ${c.body.length.toLocaleString()} chars`);
+    if (args.dryRun) { stats.commentsCreated++; continue; }
+    await api("POST", `/api/tasks/${taskId}/comments`, { text, author: c.author, type: c.type });
+    stats.commentsCreated++;
+    if (c.body.length > stats.biggestComment.chars) {
+      stats.biggestComment = { chars: c.body.length, author: c.author, issue: issue.number };
+    }
+  }
+}
+
+async function syncTasks(repo, projectId, issues, closedNumbers, prByIssue, featureIds, args) {
+  const { actor, dryRun } = args;
   const existing = projectId ? await api("GET", `/api/projects/${projectId}/tasks`) : [];
   const byIssueNumber = new Map();
   for (const t of existing) {
@@ -254,13 +391,16 @@ async function syncTasks(repo, projectId, issues, closedNumbers, prByIssue, feat
     const desiredStatus = deriveStatus(issue, linkedPr);
     const featureName = featureNameFor(issue);
     const featureId = featureIds.get(featureName);
-    const task = byIssueNumber.get(issue.number);
+    let task = byIssueNumber.get(issue.number);
 
     if (!task) {
       plan(dryRun, "create task", `${desiredName}  [${desiredStatus}/${desiredPriority}]`);
-      if (dryRun) continue;
+      if (dryRun) {
+        if (args.comments) await syncComments(issue, linkedPr, null, args);
+        continue;
+      }
       if (featureId == null) throw new Error(`No feature id for "${featureName}" (issue #${issue.number})`);
-      await api("POST", `/api/features/${featureId}/tasks`, {
+      const created = await api("POST", `/api/features/${featureId}/tasks`, {
         name: desiredName,
         description: descriptionFor(issue, linkedPr),
         status: desiredStatus,
@@ -268,8 +408,11 @@ async function syncTasks(repo, projectId, issues, closedNumbers, prByIssue, feat
         actor,
       });
       stats.tasksCreated++;
+      if (args.comments) await syncComments(issue, linkedPr, created.id, args);
       continue;
     }
+
+    if (args.comments) await syncComments(issue, linkedPr, task.id, args);
 
     // The issue's milestone changed on GitHub -> the task belongs under a different Feature.
     // featureId is not settable through PUT /api/tasks/{id}; reassignment is its own verb.
@@ -337,7 +480,7 @@ async function syncRepo(repo, args) {
   const [openIssues, closed, prs] = await Promise.all([
     fetchOpenIssues(repo),
     fetchClosedIssues(repo, args.includeClosed),
-    fetchOpenPrs(repo),
+    fetchOpenPrs(repo, args.comments),
   ]);
   const closedNumbers = new Set(closed.map((i) => i.number));
   // With --include-closed, closed issues are mirrored as tasks too. Without it they are still
@@ -345,12 +488,31 @@ async function syncRepo(repo, args) {
   const issues = args.includeClosed ? [...openIssues, ...closed] : openIssues;
 
   const prByIssue = mapIssueToOpenPr(prs);
-  console.log(`  ${openIssues.length} open${args.includeClosed ? ` + ${closed.length} closed` : ""} issues · ${prs.length} open PRs · ${prByIssue.size} issues with a linked PR`);
+
+  // A PR that closes no issue has no task to hang its comments on (Dependabot PRs are the
+  // usual case). Count those separately and SAY so — a comment total that silently includes
+  // comments we can't mirror reads as a complete mirror when it isn't.
+  const linkedPrNumbers = new Set([...prByIssue.values()].map((p) => p.number));
+  const countPr = (p) => (p.comments?.length || 0) + (p.reviews?.length || 0) + (p.inlineComments?.length || 0);
+  const orphanedPrComments = args.comments
+    ? prs.filter((p) => !linkedPrNumbers.has(p.number)).reduce((n, p) => n + countPr(p), 0)
+    : 0;
+  const mirrorable = args.comments
+    ? issues.reduce((n, i) => n + (i.comments?.length || 0), 0)
+      + prs.filter((p) => linkedPrNumbers.has(p.number)).reduce((n, p) => n + countPr(p), 0)
+    : 0;
+
+  let line = `  ${openIssues.length} open${args.includeClosed ? ` + ${closed.length} closed` : ""} issues · ${prs.length} open PRs · ${prByIssue.size} issues with a linked PR`;
+  if (args.comments) line += ` · ${mirrorable} GitHub comments`;
+  console.log(line);
+  if (orphanedPrComments > 0) {
+    console.log(`  ! ${orphanedPrComments} comment(s) on PRs that close no issue — no task to attach them to, NOT mirrored.`);
+  }
 
   const projectId = await ensureProject(repo, args.dryRun);
   const featureNames = [...new Set(issues.map(featureNameFor))].sort();
   const featureIds = await ensureFeatures(projectId, featureNames, args.dryRun);
-  await syncTasks(repo, projectId, issues, closedNumbers, prByIssue, featureIds, args.actor, args.dryRun);
+  await syncTasks(repo, projectId, issues, closedNumbers, prByIssue, featureIds, args);
 }
 
 async function main() {
@@ -358,10 +520,16 @@ async function main() {
   if (args.help) {
     console.log(`portfolio-sync — reconcile GitHub into the KanbanFlow board (one-way, idempotent).
 
-  --dry-run           print the write plan, mutate nothing
-  --repos a/b,c/d     override the repo list
-  --include-closed    also mirror closed issues (as Done)
-  --actor <name>      actor recorded on the audit trail (default: portfolio-sync)
+  --dry-run              print the write plan, mutate nothing
+  --repos a/b,c/d        override the repo list
+  --include-closed       also mirror closed issues (as Done)
+  --no-comments          skip GitHub comment mirroring (on by default)
+  --max-comment-chars N  truncate each mirrored comment at N chars (default: no cap)
+  --actor <name>         actor recorded on the audit trail (default: portfolio-sync)
+
+Comments: issue comments, PR conversation, PR reviews (APPROVED -> Verification,
+CHANGES_REQUESTED -> Blocked), and inline file:line review comments are all mirrored onto
+the task, deduped by GitHub node id. Bot reviews are mirrored whole and can be very large.
 
 env: KANBANFLOW_API_URL (default http://127.0.0.1:5123), KANBANFLOW_PORTFOLIO_REPOS`);
     return;
@@ -395,6 +563,15 @@ env: KANBANFLOW_API_URL (default http://127.0.0.1:5123), KANBANFLOW_PORTFOLIO_RE
   console.log(`tasks updated:    ${stats.tasksUpdated}`);
   console.log(`tasks moved:      ${stats.tasksMoved}`);
   console.log(`tasks unchanged:  ${stats.tasksUnchanged}`);
+  if (args.comments) {
+    console.log(`comments mirrored:${String(stats.commentsCreated).padStart(4)}`);
+    console.log(`comments existing:${String(stats.commentsUnchanged).padStart(4)}`);
+    if (stats.biggestComment.chars > 20_000) {
+      const b = stats.biggestComment;
+      console.log(`\n  ! biggest comment: ${b.chars.toLocaleString()} chars from ${b.author} on #${b.issue}.`);
+      console.log(`    Mirrored whole. Use --max-comment-chars N to cap it (agents reading this task over MCP pay for it).`);
+    }
+  }
   if (stats.drift.length) {
     console.log(`\n── drift (${stats.drift.length}) — board and GitHub disagree ──`);
     for (const d of stats.drift) console.log(`  ! ${d}`);

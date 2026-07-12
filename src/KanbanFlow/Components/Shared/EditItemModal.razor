@@ -37,6 +37,30 @@
                               @bind="editDescription"></textarea>
                 </div>
 
+                @* GitHub links. The portfolio sync stamps the issue/PR URLs into a mirrored task's
+                   description, but the description is an editable textarea (raw markdown, by design)
+                   so those URLs are dead text you cannot click. Surface them as real links. Hand-made
+                   tasks have no sync block, so nothing renders. *@
+                @if (GitHubIssueUrl is not null || GitHubPrUrl is not null)
+                {
+                    <div class="mb-3 d-flex gap-2 flex-wrap" data-testid="edit-item-github-links">
+                        @if (GitHubIssueUrl is not null)
+                        {
+                            <a class="btn btn-sm btn-outline-secondary" href="@GitHubIssueUrl"
+                               target="_blank" rel="noopener noreferrer">
+                                Issue #@GitHubIssueNumber ↗
+                            </a>
+                        }
+                        @if (GitHubPrUrl is not null)
+                        {
+                            <a class="btn btn-sm btn-outline-primary" href="@GitHubPrUrl"
+                               target="_blank" rel="noopener noreferrer">
+                                PR #@GitHubPrNumber ↗
+                            </a>
+                        }
+                    </div>
+                }
+
                 @* Project-only fields *@
                 @if (EditMode == EditItemType.Project)
                 {
@@ -179,7 +203,14 @@
                                         <small class="text-muted fw-medium">@(comment.Author ?? "System")</small>
                                         <small class="text-muted ms-auto" style="font-size: 0.65rem;">@comment.CreatedAt.ToString("MMM d, h:mm tt")</small>
                                     </div>
-                                    <small>@comment.Text</small>
+                                    @* Comment bodies are markdown — a plain `@comment.Text` HTML-encodes them, so a
+                                       mirrored GitHub comment renders as raw `**bold**` and its links are dead text.
+                                       MarkdownContent (already used by TaskDetailPanel/Home/ProjectView) renders +
+                                       sanitises. Bot reviews can be very long, so each body is capped to a scrollable
+                                       box rather than pushing the rest of the timeline off-screen. *@
+                                    <div class="task-comment-body small">
+                                        <MarkdownContent Markdown="@comment.Text" />
+                                    </div>
                                 </div>
                             }
                         </div>
@@ -240,6 +271,29 @@
     private string? editDescription;
     private string? editGoals;
     private string? editReadme;
+
+    // Pulled out of the `<!-- kanbanflow-sync -->` block that scripts/portfolio-sync.mjs writes
+    // into a mirrored task's description. Anchored on the literal labels the sync emits
+    // ("**Issue:**" / "**Open PR:**") and require a real URL, so "**Open PR:** none" matches
+    // nothing. A hand-made task has no block and gets no links.
+    private static readonly System.Text.RegularExpressions.Regex GitHubIssueRe = new(
+        @"\*\*Issue:\*\*\s*(https://github\.com/[^\s)]+/issues/(\d+))",
+        System.Text.RegularExpressions.RegexOptions.Compiled);
+    private static readonly System.Text.RegularExpressions.Regex GitHubPrRe = new(
+        @"\*\*Open PR:\*\*\s*(https://github\.com/[^\s)]+/pull/(\d+))",
+        System.Text.RegularExpressions.RegexOptions.Compiled);
+
+    private string? GitHubIssueUrl => SyncBlockMatch(GitHubIssueRe, 1);
+    private string? GitHubIssueNumber => SyncBlockMatch(GitHubIssueRe, 2);
+    private string? GitHubPrUrl => SyncBlockMatch(GitHubPrRe, 1);
+    private string? GitHubPrNumber => SyncBlockMatch(GitHubPrRe, 2);
+
+    private string? SyncBlockMatch(System.Text.RegularExpressions.Regex re, int group)
+    {
+        if (string.IsNullOrEmpty(editDescription)) return null;
+        var m = re.Match(editDescription);
+        return m.Success ? m.Groups[group].Value : null;
+    }
     private int editParentFeatureId;
     private int editFeatureId;
     private int editStatus;
