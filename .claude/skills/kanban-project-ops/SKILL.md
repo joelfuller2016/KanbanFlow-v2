@@ -23,6 +23,11 @@ sacred: never bypass it.
 - You're creating or updating any entity (project, feature, task, subtask, acceptance
   criterion, requirement, dependency, comment) programmatically.
 
+> **Working across more than one project?** This skill operates *inside* a single project. For
+> cross-project status — a standup, "what's in flight everywhere", "what am I forgetting" — or
+> when the board is empty and needs reconciling from GitHub, use the **`kanban-portfolio`**
+> skill instead. It gets you to the right project; this one gets the work done.
+
 ## Two interfaces (same graph)
 
 | Interface | Where | Best for |

@@ -245,6 +245,38 @@ stateDiagram-v2
 
 ---
 
+## Skills (Claude Code)
+
+Two skills ship in `.claude/skills/`. They answer questions at different altitudes — pick by scope, not by preference.
+
+| Skill | Answers | Use when |
+|-------|---------|----------|
+| [`kanban-project-ops`](.claude/skills/kanban-project-ops/SKILL.md) | *"What do I do next **in this project**, and how do I record it?"* | Working a task: `get_next_tasks` → `get_step_context` → `claim_task` → do it → `add_task_comment` → `update_task_status`. |
+| [`kanban-portfolio`](.claude/skills/kanban-portfolio/SKILL.md) | *"What am I working on **across everything**, and where does it stand?"* | Status, standups, "what's in flight", "what am I forgetting" — across more than one repo. Or when the board looks empty. |
+
+### The portfolio loop
+
+KanbanFlow is a knowledge graph, but it is **not self-populating** — the work actually lives in GitHub issues and PRs. `kanban-portfolio` closes that gap: it reconciles GitHub into the board, then reports over it.
+
+```bash
+node scripts/portfolio-sync.mjs --dry-run   # see the write plan, change nothing
+node scripts/portfolio-sync.mjs             # reconcile GitHub → board (idempotent)
+node scripts/portfolio-standup.mjs          # the short report over a big board
+```
+
+`sync` maps repo → **Project**, milestone → **Feature**, issue → **TaskItem** (`P0..P3` labels → priority; a linked open PR → `Review`; a closed issue → `Done`). It needs **no schema change**: the `#<n> ` prefix on a task title is the idempotency key, so a re-sync converges instead of duplicating.
+
+Two invariants make it safe to run on a real board:
+
+- **GitHub is the source of truth; the sync is one-way and never writes to GitHub.**
+- **It advances status but never overrides yours.** Drag a task to `InProgress` and the sync leaves it there. A genuine disagreement (board says `Done`, issue still open) is reported as **drift** — never silently "corrected." A sync that fights its owner gets turned off.
+
+`standup` keeps a several-hundred-task board readable by rolling each project to one row and letting the direction engine (`/next-tasks`) pick what matters, then overlaying live GitHub state — open PRs, PRs stale without review >3d, tasks parked `InProgress` >14d.
+
+Config: `KANBANFLOW_API_URL` (default `http://127.0.0.1:5123`) · `KANBANFLOW_PORTFOLIO_REPOS` (comma-separated `owner/repo`). Requires an authenticated `gh` CLI. Full mapping and drift semantics: [`reference/mapping.md`](.claude/skills/kanban-portfolio/reference/mapping.md).
+
+---
+
 ## Requirements
 
 Requirements are organised by **capability**, not by entity. Every capability must be reachable from both REST and MCP.
