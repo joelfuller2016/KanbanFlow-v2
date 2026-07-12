@@ -73,7 +73,14 @@
                     </select>
                 </div>
 
-                @* Status — edit only (create always starts New) *@
+                @* Status — edit only (create always starts New).
+
+                   `Promoted` is a DERIVED status (#283): PromoteAsync is its only legitimate writer,
+                   because only PromoteAsync also creates the Project and links it via PromotedProjectId.
+                   Offering it here let a user strand the idea as promoted-with-no-project — a state that
+                   PromoteAsync refuses forever and no update can repair. So it is never a choice.
+                   It IS still rendered (disabled) when the idea is ALREADY promoted, so the select shows
+                   the idea's real status instead of silently falling back to "New". *@
                 @if (!IsNew)
                 {
                     <div class="mb-3">
@@ -81,9 +88,22 @@
                         <select id="idea-status" class="form-select form-select-sm" data-testid="idea-status-select" @bind="status">
                             @foreach (var s in Enum.GetValues<IdeaStatus>())
                             {
-                                <option value="@((int)s)">@s</option>
+                                if (s != IdeaStatus.Promoted)
+                                {
+                                    <option value="@((int)s)">@s</option>
+                                }
+                                else if (isPromoted)
+                                {
+                                    <option value="@((int)s)" disabled>@s</option>
+                                }
                             }
                         </select>
+                        @if (isPromoted)
+                        {
+                            <div class="form-text small" data-testid="idea-status-promoted-hint">
+                                Promoted is set by the Promote action — it can't be chosen here.
+                            </div>
+                        }
                     </div>
                 }
             </div>
@@ -126,6 +146,10 @@
     // A string intermediary is the robust way to give a nullable enum select a blank "None" option.
     private string priorityRaw = "";
     private int status; // edit-only; backs the IdeaStatus select by its int value
+    // True when the loaded idea is ALREADY promoted. `Promoted` is derived (#283): it is never an
+    // offered choice, but it must still display for an idea that has it — and must never be sent
+    // back to UpdateAsync, which rejects it. See SelectedStatus.
+    private bool isPromoted;
     private string? errorMessage;
     private bool showTitleRequired;
     private bool isSaving;
@@ -166,6 +190,7 @@
         tags = null;
         priorityRaw = "";
         status = (int)IdeaStatus.New;
+        isPromoted = false;
     }
 
     private async Task LoadIdea(int id)
@@ -183,11 +208,19 @@
         tags = idea.Tags;
         priorityRaw = idea.Priority is TaskPriority p ? ((int)p).ToString() : "";
         status = (int)idea.Status;
+        isPromoted = idea.Status == IdeaStatus.Promoted;
         StateHasChanged();
     }
 
     private TaskPriority? SelectedPriority =>
         string.IsNullOrEmpty(priorityRaw) ? null : (TaskPriority)int.Parse(priorityRaw);
+
+    // The status to SEND on save, or null for "leave unchanged". An already-promoted idea round-trips
+    // its own status through the select, and IdeaService.UpdateAsync rejects `Promoted` outright
+    // (#283) — so send null and let the rest of the edit through, instead of failing the whole save
+    // and leaving promoted ideas uneditable.
+    private IdeaStatus? SelectedStatus =>
+        (IdeaStatus)status == IdeaStatus.Promoted ? null : (IdeaStatus)status;
 
     private async Task HandleKeyDown(KeyboardEventArgs e)
     {
@@ -223,7 +256,7 @@
                         Title: title.Trim(),
                         Body: body,
                         Plan: plan,
-                        Status: (IdeaStatus)status,
+                        Status: SelectedStatus,
                         Tags: tags,
                         Priority: SelectedPriority),
                     actor: "User");

@@ -576,8 +576,11 @@ const tools = [
         plan: { type: "string", description: "New markdown plan." },
         status: {
           type: "string",
-          enum: ["New", "Triaging", "Promoted", "Archived", "Rejected"],
-          description: "New status."
+          // `Promoted` is DERIVED and deliberately absent (#283): the service rejects it here, so
+          // advertising it would hand agents a status that always 400s. promote_idea is its only
+          // writer. (list_ideas keeps it — filtering by promoted ideas is legitimate.)
+          enum: ["New", "Triaging", "Archived", "Rejected"],
+          description: "New status. 'Promoted' is derived — use promote_idea, which also creates the linked project."
         },
         tags: { type: "string", description: "New comma-separated tags." },
         priority: {
@@ -1247,8 +1250,12 @@ async function callTool(toolName, args) {
     case "update_idea":
       // A present-but-blank enum is invalid (consistent with native tools + REST):
       // only a genuinely omitted (undefined/null) value stays optional.
+      // `Promoted` is excluded on purpose (#283): it is derived, and the service refuses to set it
+      // here, so accepting it would only forward a guaranteed rejection. Fail fast, and say where
+      // the status actually comes from. (list_ideas still accepts it as a filter.)
       if (args.status !== undefined && args.status !== null)
-        assertEnum(args, "status", ["New", "Triaging", "Promoted", "Archived", "Rejected"]);
+        assertEnum(args, "status", ["New", "Triaging", "Archived", "Rejected"],
+          "Promoted is a derived status and cannot be set directly — use promote_idea to promote an idea (it also creates the linked project).");
       if (args.priority !== undefined && args.priority !== null)
         assertEnum(args, "priority", ["Low", "Medium", "High", "Critical"]);
       return restJson(`/api/ideas/${requiredInt(args, "ideaId", { min: 1 })}`, {
@@ -1510,9 +1517,13 @@ function requiredString(args, name) {
   return value.trim();
 }
 
-function assertEnum(args, name, allowedValues) {
+// `hint` is optional: when a value is rejected for a reason the allowed-list alone does not explain
+// (e.g. update_idea's `Promoted`, which is derived rather than simply invalid), it appends the
+// remedy. Omitting it yields the original message verbatim, so existing callers are unchanged.
+function assertEnum(args, name, allowedValues, hint) {
   if (!allowedValues.includes(args[name])) {
-    throw new McpError(-32602, `${name} must be one of: ${allowedValues.join(", ")}.`);
+    const remedy = hint ? ` ${hint}` : "";
+    throw new McpError(-32602, `${name} must be one of: ${allowedValues.join(", ")}.${remedy}`);
   }
 }
 

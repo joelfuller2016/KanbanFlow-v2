@@ -255,6 +255,161 @@ public sealed class IdeaServiceTests
             () => svc.UpdateAsync(id, new IdeaUpdate(Status: (IdeaStatus)42), null));
     }
 
+    // ── UpdateAsync + the derived `Promoted` status (#283) ──────────────────────
+
+    /// <summary>
+    /// Every ordered pair of the four <em>settable</em> statuses — i.e. every status except the
+    /// derived <see cref="IdeaStatus.Promoted"/>. Computed from the enum, so a status added later
+    /// is covered automatically.
+    /// </summary>
+    public static TheoryData<IdeaStatus, IdeaStatus> SettableStatusTransitions()
+    {
+        var settable = Enum.GetValues<IdeaStatus>().Where(s => s != IdeaStatus.Promoted).ToArray();
+        var data = new TheoryData<IdeaStatus, IdeaStatus>();
+        foreach (var from in settable)
+        {
+            foreach (var to in settable.Where(t => t != from))
+                data.Add(from, to);
+        }
+        return data;
+    }
+
+    [Fact]
+    public async Task Update_ToPromoted_Throws_AndNamesThePromoteEndpoint()
+    {
+        // #283: `Promoted` IS a defined enum value, so the old Enum.IsDefined-only guard waved it
+        // straight through. The refusal must also be actionable — name the one path that promotes
+        // properly, rather than just saying no.
+        using var f = new SqliteTestFactory();
+        var id = SeedIdea(f, "not yours to promote");
+        var svc = new IdeaService(f);
+
+        var ex = await Assert.ThrowsAsync<ValidationException>(
+            () => svc.UpdateAsync(id, new IdeaUpdate(Status: IdeaStatus.Promoted), "sneaky"));
+
+        Assert.Contains("/api/ideas/{id}/promote", ex.Message);
+    }
+
+    /// <summary>
+    /// THE load-bearing invariant (#283): no public write path may leave an idea
+    /// <c>Status = Promoted</c> with <c>PromotedProjectId = null</c>. That state is a one-way trap —
+    /// <see cref="IdeaService.PromoteAsync"/> refuses an already-promoted idea forever, and
+    /// <see cref="IdeaUpdate"/> carries no <c>PromotedProjectId</c> field, so nothing can ever
+    /// repair it.
+    ///
+    /// Driving <see cref="IIdeaService.UpdateAsync"/> closes ALL THREE public surfaces, because each
+    /// one funnels through this single method (the #88 single-audit-boundary rule):
+    /// <c>PATCH /api/ideas/{id}</c> (ApiEndpoints.cs:648) and MCP <c>update_idea</c>
+    /// (KanbanMcpTools.cs:454) both call it and translate its <see cref="ValidationException"/>
+    /// (→ 422 / McpException), and <c>IdeaModal.razor</c> calls it directly. The only other writer of
+    /// <see cref="Idea.Status"/> anywhere is <see cref="IdeaService.PromoteAsync"/>, which sets it
+    /// together with <see cref="Idea.PromotedProjectId"/> inside one transaction.
+    /// </summary>
+    [Fact]
+    public async Task Update_CannotStrandIdeaAsPromotedWithoutProject_FromAnyStatus()
+    {
+        using var f = new SqliteTestFactory();
+        var svc = new IdeaService(f);
+
+        foreach (var from in Enum.GetValues<IdeaStatus>().Where(s => s != IdeaStatus.Promoted))
+        {
+            var id = SeedIdea(f, $"from-{from}", status: from);
+
+            // On its own...
+            await Assert.ThrowsAsync<ValidationException>(
+                () => svc.UpdateAsync(id, new IdeaUpdate(Status: IdeaStatus.Promoted), "sneaky"));
+
+            // ...and smuggled in beside a legitimate field change, which must NOT partially apply.
+            await Assert.ThrowsAsync<ValidationException>(
+                () => svc.UpdateAsync(
+                    id, new IdeaUpdate(Title: "smuggled", Status: IdeaStatus.Promoted), "sneaky"));
+
+            using var db = f.CreateDbContext();
+            var idea = await db.Ideas.FindAsync(id);
+            Assert.Equal(from, idea!.Status);            // status untouched
+            Assert.Equal($"from-{from}", idea.Title);    // rejected wholesale — no partial write
+            Assert.Null(idea.PromotedProjectId);
+            // A refused mutation is not a mutation: no IdeaUpdated event may be written for it.
+            Assert.DoesNotContain(IdeaEvents(f, id), e => e.EventType == "IdeaUpdated");
+        }
+
+        // The invariant itself, asserted over the whole table: not one orphan exists.
+        using var check = f.CreateDbContext();
+        Assert.DoesNotContain(
+            check.Ideas.ToList(),
+            i => i.Status == IdeaStatus.Promoted && i.PromotedProjectId is null);
+    }
+
+    [Fact]
+    public async Task Update_RejectsPromoted_ButPromoteAsync_StillPromotesProperly()
+    {
+        // The guard lives in UpdateAsync alone. PromoteAsync writes Status through its OWN conditional
+        // ExecuteUpdateAsync (IdeaService.cs:252-257) and never routes through UpdateAsync, so the one
+        // legitimate route to `Promoted` still works — and it is the route that also creates the
+        // Project and sets PromotedProjectId. Bolting the side door must not jam the front door.
+        using var f = new SqliteTestFactory();
+        var svc = new IdeaService(f);
+        var idea = await svc.CreateAsync(new IdeaCreate("promote me properly"), "tester");
+
+        await Assert.ThrowsAsync<ValidationException>(
+            () => svc.UpdateAsync(idea.Id, new IdeaUpdate(Status: IdeaStatus.Promoted), "sneaky"));
+
+        var result = await svc.PromoteAsync(idea.Id, "promoter");
+
+        using var db = f.CreateDbContext();
+        var promoted = await db.Ideas.FindAsync(idea.Id);
+        Assert.Equal(IdeaStatus.Promoted, promoted!.Status);
+        Assert.Equal(result.ProjectId, promoted.PromotedProjectId); // linked, not stranded
+        Assert.NotNull(await db.Projects.FindAsync(result.ProjectId));
+        Assert.Single(IdeaEvents(f, idea.Id), e => e.EventType == "IdeaPromoted");
+    }
+
+    [Fact]
+    public async Task Update_PromotedIdea_OtherFieldsStillEditable_WhenStatusOmitted()
+    {
+        // The guard refuses the *status*, it does not freeze the idea. A promoted idea stays editable
+        // by omitting Status (null = "leave unchanged") — exactly what IdeaModal sends once an idea is
+        // promoted — and it keeps its project link through the edit.
+        using var f = new SqliteTestFactory();
+        var svc = new IdeaService(f);
+        var idea = await svc.CreateAsync(new IdeaCreate("promoted, still editable"), "tester");
+        var result = await svc.PromoteAsync(idea.Id, "promoter");
+
+        var updated = await svc.UpdateAsync(
+            idea.Id, new IdeaUpdate(Title: "retitled after promotion", Tags: "kept"), "editor");
+
+        Assert.Equal("retitled after promotion", updated.Title);
+        Assert.Equal(IdeaStatus.Promoted, updated.Status);
+        Assert.Equal(result.ProjectId, updated.PromotedProjectId);
+
+        using var db = f.CreateDbContext();
+        var persisted = await db.Ideas.FindAsync(idea.Id);
+        Assert.Equal("retitled after promotion", persisted!.Title);
+        Assert.Equal("kept", persisted.Tags);
+        Assert.Equal(IdeaStatus.Promoted, persisted.Status);
+        Assert.Equal(result.ProjectId, persisted.PromotedProjectId); // link survives the edit
+    }
+
+    [Theory]
+    [MemberData(nameof(SettableStatusTransitions))]
+    public async Task Update_EverySettableStatusTransition_StillSucceeds(IdeaStatus from, IdeaStatus to)
+    {
+        // Regression guard for the #283 fix: refusing `Promoted` must leave every other transition
+        // (New <-> Triaging <-> Archived <-> Rejected, all 12 ordered pairs) working and audited.
+        using var f = new SqliteTestFactory();
+        var id = SeedIdea(f, "transition", status: from);
+        var svc = new IdeaService(f);
+
+        var updated = await svc.UpdateAsync(id, new IdeaUpdate(Status: to), "editor");
+        Assert.Equal(to, updated.Status);
+
+        using var db = f.CreateDbContext();
+        var persisted = await db.Ideas.FindAsync(id);
+        Assert.Equal(to, persisted!.Status);
+        Assert.Null(persisted.PromotedProjectId);
+        Assert.Single(IdeaEvents(f, id), e => e.EventType == "IdeaUpdated");
+    }
+
     // ── DeleteAsync ─────────────────────────────────────────────────────────────
     [Fact]
     public async Task Delete_RemovesIdea_AndAuditSurvives()

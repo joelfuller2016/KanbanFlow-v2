@@ -170,6 +170,18 @@ public sealed class IdeaService(IDbContextFactory<AppDbContext> dbFactory) : IId
         {
             if (!Enum.IsDefined(dto.Status.Value))
                 throw new ValidationException($"Invalid status '{dto.Status.Value}'.");
+            // `Promoted` is DERIVED, never settable here (#283). Enum.IsDefined alone waved it
+            // through, but PromoteAsync is its only legitimate writer: that method creates the
+            // Project and sets Status + PromotedProjectId together, in one transaction. Setting it
+            // here would strand the idea as promoted-with-no-project — a state PromoteAsync then
+            // refuses forever (:226) and no IdeaUpdate field can repair (IdeaUpdate has no
+            // PromotedProjectId), i.e. permanently unrecoverable. Refusing at the service closes all
+            // three callers at once (PATCH /api/ideas/{id}, MCP update_idea, IdeaModal) — the #88
+            // single-boundary rule.
+            if (dto.Status.Value == IdeaStatus.Promoted)
+                throw new ValidationException(
+                    "Promoted is a derived status and cannot be set directly. " +
+                    "Use POST /api/ideas/{id}/promote (MCP: promote_idea) to promote an idea.");
             if (idea.Status != dto.Status.Value) { idea.Status = dto.Status.Value; changed = true; }
         }
         if (dto.Priority is not null)

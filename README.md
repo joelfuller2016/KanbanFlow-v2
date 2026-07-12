@@ -480,7 +480,7 @@ The OpenAPI document (R-5.1) is now the source of truth: GET `/openapi/v1.json` 
 /api/ideas/{id}/activity                    # audit log per idea
 ```
 
-53 endpoints total. Ideas (`/api/ideas`) are the pre-project "inbox" — capture raw ideas, then promote one into a full project (#180). Humans manage them in the browser at the **Ideas inbox** (`/ideas`): search and filter by status or tag, create/edit ideas (markdown body + plan), and promote an idea into a project — all through the same audited `IIdeaService` as REST + MCP (the #88 boundary). Collection/list endpoints will gain consistent pagination once R-1.4 lands; richer response shapes follow with the records refactor (R-5.2).
+53 endpoints total. Ideas (`/api/ideas`) are the pre-project "inbox" — capture raw ideas, then promote one into a full project (#180). `Promoted` is a **derived** status: only `POST /api/ideas/{id}/promote` (MCP `promote_idea`) sets it, since only that path also creates the linked project — so `PATCH /api/ideas/{id}` and MCP `update_idea` refuse it (422) and point you at the promote endpoint (#283). Humans manage them in the browser at the **Ideas inbox** (`/ideas`): search and filter by status or tag, create/edit ideas (markdown body + plan), and promote an idea into a project — all through the same audited `IIdeaService` as REST + MCP (the #88 boundary). Collection/list endpoints will gain consistent pagination once R-1.4 lands; richer response shapes follow with the records refactor (R-5.2).
 
 ---
 

@@ -40,7 +40,13 @@ public interface IIdeaService
     /// Validates title/status/priority. Emits an <c>IdeaUpdated</c> event when a field changed.
     /// </summary>
     /// <exception cref="IdeaNotFoundException">The idea does not exist.</exception>
-    /// <exception cref="ValidationException">Title empty/too long or an enum value undefined.</exception>
+    /// <exception cref="ValidationException">
+    /// Title empty/too long, an enum value undefined, or <paramref name="dto"/> sets
+    /// <see cref="IdeaStatus.Promoted"/> — a derived status that only <see cref="PromoteAsync"/> may
+    /// write, since it alone also creates the <see cref="Project"/> and links it via
+    /// <see cref="Idea.PromotedProjectId"/>. Leave <see cref="IdeaUpdate.Status"/> <c>null</c> to edit
+    /// an already-promoted idea's other fields.
+    /// </exception>
     Task<Idea> UpdateAsync(int ideaId, IdeaUpdate dto, string? actor, CancellationToken ct = default);
 
     /// <summary>
