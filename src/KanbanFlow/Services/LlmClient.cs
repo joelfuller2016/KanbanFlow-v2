@@ -24,6 +24,19 @@ public sealed class LlmClient(IChatClient chatClient, LlmOptions config, ILogger
     private readonly LlmOptions _config = ValidateConfig(config);
     private readonly ILogger<LlmClient> _logger = logger ?? throw new ArgumentNullException(nameof(logger));
 
+    // TimeProvider.System in production; a FakeTimeProvider in tests so the per-attempt timeout is
+    // deterministic rather than a wall-clock race the thread pool can lose under load (#262).
+    private readonly TimeProvider _timeProvider = TimeProvider.System;
+
+    // Test seam (InternalsVisibleTo = KanbanFlow.Tests). Chains through the primary constructor so
+    // the DI-visible public ctor keeps its 3-parameter shape — the container never has to resolve a
+    // TimeProvider, and production behaviour is byte-identical.
+    internal LlmClient(IChatClient chatClient, LlmOptions config, ILogger<LlmClient> logger, TimeProvider timeProvider)
+        : this(chatClient, config, logger)
+    {
+        _timeProvider = timeProvider ?? TimeProvider.System;
+    }
+
     // 1 initial attempt + 1 retry. The retry only fires for transient failures (see IsTransient).
     private const int MaxAttempts = 2;
 
@@ -74,7 +87,9 @@ public sealed class LlmClient(IChatClient chatClient, LlmOptions config, ILogger
             ct.ThrowIfCancellationRequested();
 
             // Per-attempt timeout, linked to the caller's token so caller-cancel still wins the race.
-            using var timeoutCts = new CancellationTokenSource(_config.TimeoutMs);
+            // Driven by _timeProvider so a test can advance the clock and fire this deterministically
+            // instead of waiting on a real timeout the thread pool can delay under load (#262).
+            using var timeoutCts = new CancellationTokenSource(TimeSpan.FromMilliseconds(_config.TimeoutMs), _timeProvider);
             using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(ct, timeoutCts.Token);
             try
             {

@@ -1,6 +1,7 @@
 using KanbanFlow.Services;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Time.Testing;
 
 namespace KanbanFlow.Tests;
 
@@ -13,9 +14,19 @@ namespace KanbanFlow.Tests;
 /// </summary>
 public sealed class LlmClientTests
 {
-    private static LlmClient NewClient(IChatClient chat, LlmOptions? config = null) =>
-        new(chat, config ?? new LlmOptions { Model = "test-default-model", TimeoutMs = 5_000 },
-            NullLogger<LlmClient>.Instance);
+    // Generous hang-guard for the rendezvous waits. NOT a race budget — the timeout under test is
+    // driven by a FakeTimeProvider and fires when the test says so. This only stops a genuine deadlock
+    // from hanging the suite, and it lives in the TEST BODY (not inside the fake) so a real bug reads
+    // as "the retry never started" rather than corrupting the asserted string (#262).
+    private static readonly TimeSpan HangGuard = TimeSpan.FromSeconds(30);
+
+    private static LlmClient NewClient(IChatClient chat, LlmOptions? config = null, TimeProvider? timeProvider = null)
+    {
+        var opts = config ?? new LlmOptions { Model = "test-default-model", TimeoutMs = 5_000 };
+        return timeProvider is null
+            ? new LlmClient(chat, opts, NullLogger<LlmClient>.Instance)
+            : new LlmClient(chat, opts, NullLogger<LlmClient>.Instance, timeProvider);
+    }
 
     private static ChatResponse Reply(string text, string? model) =>
         new(new ChatMessage(ChatRole.Assistant, text)) { ModelId = model };
@@ -125,21 +136,37 @@ public sealed class LlmClientTests
     [Fact]
     public async Task CompleteAsync_Timeout_IsTreatedAsTransient_RetriesThenFailsSoft()
     {
-        // The fake blocks until its token is cancelled; the per-attempt timeout (tiny here) fires
-        // and surfaces as a cancellation that the wrapper classifies as transient (NOT a caller
-        // cancellation, since the caller token below is never cancelled).
+        // #262 (twin of the EmbeddingService flake). This test carried the identical defect: a REAL
+        // 30ms per-attempt timeout raced against a 2-second watchdog inside the fake. It was passing
+        // only by luck — under enough load the watchdog wins, throws a TimeoutException (which
+        // IsTransient classifies as NON-transient), and short-circuits the retry under test.
+        //
+        // Now the timeout is driven by a FakeTimeProvider: the test advances the clock rather than
+        // racing it. Deterministic, no watchdog, no wall-clock dependency.
+        var time = new FakeTimeProvider();
+        var enteredClient = new SemaphoreSlim(0);
+
         var fake = new FakeChatClient(async (_, _, token) =>
         {
-            var wait = Task.Delay(Timeout.Infinite, token);
-            var watchdog = Task.Delay(TimeSpan.FromSeconds(2));
-            if (await Task.WhenAny(wait, watchdog) == watchdog)
-                throw new TimeoutException("Test watchdog: LlmClient did not cancel the attempt token.");
-            await wait;
+            // Inside the chat client ⇒ the wrapper has already armed its timeout CTS.
+            enteredClient.Release();
+            // Block until the WRAPPER cancels us — never on a timer of our own.
+            await Task.Delay(Timeout.Infinite, token);
             return Reply("unreachable", "m");
         });
-        var client = NewClient(fake, new LlmOptions { Model = "test-default-model", TimeoutMs = 30 });
+        var client = NewClient(fake, new LlmOptions { Model = "test-default-model", TimeoutMs = 30 }, timeProvider: time);
 
-        var result = await client.CompleteAsync(null, "ping", CancellationToken.None);
+        var call = client.CompleteAsync(null, "ping", CancellationToken.None);
+
+        // Attempt 1: wait until we're in the client, then fire its timeout.
+        Assert.True(await enteredClient.WaitAsync(HangGuard), "attempt 1 never reached the chat client");
+        time.Advance(TimeSpan.FromMilliseconds(31));
+
+        // Attempt 2 (the retry — the thing actually under test).
+        Assert.True(await enteredClient.WaitAsync(HangGuard), "the retry never started — timeout was not treated as transient");
+        time.Advance(TimeSpan.FromMilliseconds(31));
+
+        var result = await call;
 
         Assert.False(result.Ok);
         Assert.Contains("timed out", result.Error);
