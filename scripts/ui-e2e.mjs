@@ -236,6 +236,79 @@ async function main() {
       await waitForApiStatus(created.id, "Done");
     });
 
+    // ── Regression guard: cards inside a column render in SortOrder sequence ──
+    // KanbanColumn.razor orders its cards `OrderBy(t => t.SortOrder).ThenBy(t => t.Id)`, and that
+    // sort lives ONLY in the Razor: ProjectView builds `allTasks` from an unordered
+    // `Features.SelectMany(f => f.Tasks)` (no OrderBy on the Include), so nothing downstream
+    // re-imposes it. Every other board scenario above puts a single card in a column, where a
+    // scrambled sort is invisible. Seed THREE cards whose SortOrder order matches neither their
+    // Id order nor their creation order, then assert the DOM *sequence* (not membership), so
+    // dropping or reversing that OrderBy fails loudly instead of silently scrambling every board.
+    const orderProj = await api("POST", "/api/projects", { name: `E2E Order ${stamp}` });
+    const orderFeature = await api("POST", `/api/projects/${orderProj.id}/features`, { name: "E2E Order Feature" });
+
+    // One feature, so SortOrder (which is per-feature) is unambiguous within the column.
+    // Created Third -> First -> Second on purpose: Ids ascend with creation, SortOrder does not.
+    const orderCards = [];
+    for (const [label, sortOrder] of [["Third", 30], ["First", 10], ["Second", 20]]) {
+      orderCards.push(await api("POST", `/api/features/${orderFeature.id}/tasks`, {
+        name: `E2E Order ${label} ${stamp}`,
+        status: "Todo",
+        sortOrder,
+      }));
+    }
+    const [third, first, second] = orderCards;
+    const expectedCardIds = [first.id, second.id, third.id]; // SortOrder 10, 20, 30
+
+    await test("Todo column renders its cards in SortOrder sequence", async () => {
+      // Guard the seed itself: if these three sequences ever coincide the test proves nothing.
+      // Ids ascend in creation order (third, first, second), so the four candidate orders are
+      // all distinct — SortOrder asc [first,second,third] (correct), Id asc / creation order
+      // [third,first,second] (sort dropped), SortOrder desc [third,second,first] (sort reversed).
+      assert(
+        third.id < first.id && first.id < second.id,
+        `seed is not discriminating: ids ${third.id}, ${first.id}, ${second.id} must ascend in creation order`,
+      );
+      await page.goto(`${baseUrl}/project/${orderProj.id}`);
+      // $$eval does not auto-wait, so wait for every card to render before reading the sequence.
+      for (const id of expectedCardIds) {
+        await page.locator(`[data-testid="board-column-Todo-cards"] [data-testid="board-card-${id}"]`)
+          .waitFor({ state: "visible" });
+      }
+      // Only the card ROOT carries data-task-id — its checkbox and title children reuse the
+      // `board-card-<id>-*` testid prefix, so `[data-task-id]` selects exactly one node per card.
+      const domIds = await page.$$eval(
+        '[data-testid="board-column-Todo-cards"] [data-task-id]',
+        (els) => els.map((e) => Number(e.getAttribute("data-task-id"))),
+      );
+      assert(
+        domIds.join(",") === expectedCardIds.join(","),
+        `cards must render in SortOrder order — expected [${expectedCardIds}], got [${domIds}]`,
+      );
+    });
+
+    // ── Regression guard: columns render left-to-right in WorkStatus order ──
+    // KanbanBoard.razor lays the columns out by iterating `Enum.GetValues<WorkStatus>()`. The
+    // per-column `waitFor(visible)` loops above are order-independent and pass for ANY permutation,
+    // so assert the DOM sequence here — a reordered board is otherwise invisible to this suite.
+    await test("Board renders its columns in WorkStatus order, left to right", async () => {
+      const expectedColumns = ["Backlog", "Todo", "InProgress", "Review", "Done"]; // WorkStatus enum order
+      await page.goto(`${baseUrl}/project/${orderProj.id}`);
+      for (const status of expectedColumns) {
+        await page.locator(`[data-testid="board-column-${status}"]`).waitFor({ state: "visible" });
+      }
+      // Direct children only: each column's card container reuses the `board-column-<status>-`
+      // testid prefix but sits a level deeper, so `>` keeps this to the five column roots.
+      const domColumns = await page.$$eval(
+        '[data-testid="kanban-board"] > [data-testid^="board-column-"]',
+        (els) => els.map((e) => e.getAttribute("data-testid").replace("board-column-", "")),
+      );
+      assert(
+        domColumns.join(",") === expectedColumns.join(","),
+        `columns must render in WorkStatus order — expected [${expectedColumns}], got [${domColumns}]`,
+      );
+    });
+
     // ── Scenario F: Ideas inbox — create / edit / filter / promote / delete ──
     // The harness boots a fresh scratch DB each run (mkdtempSync), so the ideas table
     // starts empty: assert the empty state first, then drive the full lifecycle through
@@ -322,6 +395,57 @@ async function main() {
         .getByText("Promoted", { exact: true }).waitFor({ state: "visible" });
     });
 
+    // ── Regression guard: an ALREADY-PROMOTED idea must still be editable ──
+    // #283 has two halves. The service half (IdeaService.UpdateAsync rejects Status=Promoted) is
+    // covered by xUnit. The UI half is IdeaModal's `SelectedStatus`, which sends null instead of
+    // Promoted on save — and it is the ONLY thing stopping the new guard from making every promoted
+    // idea permanently uneditable: the modal used to send `Status: (IdeaStatus)status`
+    // unconditionally, so editing a promoted idea's TITLE would now throw ValidationException and
+    // block the whole save. Nothing tested that half (there is no bUnit, and the edit above happens
+    // BEFORE the promote), so `SelectedStatus` could be reverted with the suite still fully green.
+    // Sequenced here, between promote and delete, and deliberately BEFORE the project-link scenario
+    // — that one deletes the promoted project, which would leave PromotedProjectId dangling and make
+    // the "promotion undisturbed" assertion below meaningless.
+    const ideaTitlePromotedEdit = `${ideaTitle} (edited after promote)`;
+    await test("An already-promoted idea can still be edited, promotion intact", async () => {
+      const before = await api("GET", `/api/ideas/${createdIdea.id}`);
+      assert(before.status === "Promoted", `precondition: expected Promoted, got ${before.status}`);
+      assert(before.promotedProjectId > 0, "precondition: promoted idea has no promotedProjectId");
+
+      // IdeaCard offers Edit for a promoted idea (only Promote is hidden), so re-open the modal on it.
+      await clickUntil(
+        () => page.locator(`[data-testid="idea-card-menu-${createdIdea.id}"]`).click(),
+        page.locator(`[data-testid="idea-card-edit-${createdIdea.id}"]`),
+      );
+      await page.locator(`[data-testid="idea-card-edit-${createdIdea.id}"]`).click();
+      await page.locator("#idea-title").waitFor({ state: "visible" });
+      // Change a field that has NOTHING to do with status — the status select is left untouched,
+      // still showing (disabled) Promoted, exactly as a real user would leave it.
+      await page.locator("#idea-title").fill(ideaTitlePromotedEdit);
+      await page.locator('[data-testid="idea-save-button"]').click();
+
+      // SaveIdea() awaits UpdateAsync BEFORE OnClose, so the modal closes only if the save actually
+      // succeeded. If the modal sends Promoted back, UpdateAsync (#283) throws ValidationException,
+      // SaveIdea catches it and the modal stays open with the message inline — quote it in the failure.
+      try {
+        await page.locator('[data-testid="idea-modal"]').waitFor({ state: "hidden", timeout: 8000 });
+      } catch {
+        const inline = await page.locator('[data-testid="idea-modal"] [role="alert"]').first()
+          .textContent().catch(() => null);
+        throw new Error("saving a promoted idea was rejected — the modal stayed open: " +
+          `${(inline ?? "(no inline error rendered)").trim()}`);
+      }
+      await page.getByText(ideaTitlePromotedEdit, { exact: true }).waitFor({ state: "visible" });
+
+      // Trust the DB, not the DOM: the edit must have persisted AND left the promotion untouched.
+      const after = await api("GET", `/api/ideas/${createdIdea.id}`);
+      assert(after.title === ideaTitlePromotedEdit,
+        `title did not persist — expected "${ideaTitlePromotedEdit}", got "${after.title}"`);
+      assert(after.status === "Promoted", `the edit disturbed the promotion — status is now ${after.status}`);
+      assert(after.promotedProjectId === before.promotedProjectId,
+        `the edit disturbed the promotion link — promotedProjectId ${before.promotedProjectId} -> ${after.promotedProjectId}`);
+    });
+
     await test("The promoted idea's project link opens a real board", async () => {
       // confirm the promote actually created a project, and its board route renders
       const promoted = await api("GET", `/api/ideas/${createdIdea.id}`);
@@ -368,6 +492,7 @@ async function main() {
 
     // ── Cleanup of API-created data (best effort) ──
     await api("DELETE", `/api/projects/${proj.id}`).catch(() => {});
+    await api("DELETE", `/api/projects/${orderProj.id}`).catch(() => {});
     // delete the modal-created project too
     const all = await api("GET", "/api/projects");
     const modalProj = all.find((p) => p.name === modalProjectName);

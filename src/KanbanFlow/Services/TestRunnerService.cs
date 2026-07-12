@@ -162,7 +162,7 @@ public sealed class TestRunnerService(
                 }
                 finally
                 {
-                    await TryDeleteProjectAsync(http, innerPid, ct);
+                    await TryDeleteProjectAsync(http, innerPid);
                 }
             }));
 
@@ -177,7 +177,7 @@ public sealed class TestRunnerService(
                 }
                 finally
                 {
-                    await TryDeleteProjectAsync(http, innerPid, ct);
+                    await TryDeleteProjectAsync(http, innerPid);
                 }
             }));
 
@@ -197,7 +197,7 @@ public sealed class TestRunnerService(
                 }
                 finally
                 {
-                    await TryDeleteProjectAsync(http, innerPid, ct);
+                    await TryDeleteProjectAsync(http, innerPid);
                 }
             }));
 
@@ -214,7 +214,7 @@ public sealed class TestRunnerService(
                 }
                 finally
                 {
-                    await TryDeleteProjectAsync(http, innerPid, ct);
+                    await TryDeleteProjectAsync(http, innerPid);
                 }
             }));
 
@@ -230,7 +230,7 @@ public sealed class TestRunnerService(
                 }
                 finally
                 {
-                    await TryDeleteProjectAsync(http, innerPid, ct);
+                    await TryDeleteProjectAsync(http, innerPid);
                 }
             }));
 
@@ -246,7 +246,7 @@ public sealed class TestRunnerService(
                 }
                 finally
                 {
-                    await TryDeleteProjectAsync(http, innerPid, ct);
+                    await TryDeleteProjectAsync(http, innerPid);
                 }
             }));
 
@@ -268,7 +268,7 @@ public sealed class TestRunnerService(
                 }
                 finally
                 {
-                    await TryDeleteProjectAsync(http, innerPid, ct);
+                    await TryDeleteProjectAsync(http, innerPid);
                 }
             }));
 
@@ -322,7 +322,7 @@ public sealed class TestRunnerService(
                 }
                 finally
                 {
-                    await TryDeleteProjectAsync(http, innerPid, ct);
+                    await TryDeleteProjectAsync(http, innerPid);
                 }
             }));
 
@@ -357,7 +357,7 @@ public sealed class TestRunnerService(
                     if (cb.GetString() != "bob")
                         throw new Exception($"Expected claimedBy 'bob' after re-claim, got '{cb.GetString()}'");
                 }
-                finally { await TryDeleteProjectAsync(http, innerPid, ct); }
+                finally { await TryDeleteProjectAsync(http, innerPid); }
             }));
 
             results.Add(await RunTest("Dependency blocks next-tasks until blocker is Done", "API:AI", async () =>
@@ -402,7 +402,7 @@ public sealed class TestRunnerService(
                     if (blockedCtx2.GetProperty("isBlocked").GetBoolean()) throw new Exception("context.isBlocked should be false after blocker Done");
                     if (blockedCtx2.GetProperty("openBlockerCount").GetInt32() != 0) throw new Exception("context.openBlockerCount should be 0 after blocker Done");
                 }
-                finally { await TryDeleteProjectAsync(http, innerPid, ct); }
+                finally { await TryDeleteProjectAsync(http, innerPid); }
             }));
 
             results.Add(await RunTest("Requirement create / assign / delete round-trip", "API:Requirement", async () =>
@@ -436,7 +436,7 @@ public sealed class TestRunnerService(
                     if (list2.EnumerateArray().Any(r => r.GetProperty("id").GetInt32() == reqId))
                         throw new Exception("Deleted requirement still present in GET list");
                 }
-                finally { await TryDeleteProjectAsync(http, innerPid, ct); }
+                finally { await TryDeleteProjectAsync(http, innerPid); }
             }));
 
             // ── Idea CRUD (#180 Phase 2): ideas are not project-scoped, so most tests POST directly ──
@@ -473,7 +473,7 @@ public sealed class TestRunnerService(
                 }
                 finally
                 {
-                    if (ideaId is int iid) await http.DeleteAsync($"/api/ideas/{iid}", ct);
+                    if (ideaId is int iid) await TryDeleteIdeaAsync(http, iid);
                 }
             }));
 
@@ -517,8 +517,8 @@ public sealed class TestRunnerService(
                 }
                 finally
                 {
-                    if (idA is int a) await http.DeleteAsync($"/api/ideas/{a}", ct);
-                    if (idB is int b) await http.DeleteAsync($"/api/ideas/{b}", ct);
+                    if (idA is int a) await TryDeleteIdeaAsync(http, a);
+                    if (idB is int b) await TryDeleteIdeaAsync(http, b);
                 }
             }));
 
@@ -549,7 +549,7 @@ public sealed class TestRunnerService(
                 }
                 finally
                 {
-                    if (ideaId is int iid) await http.DeleteAsync($"/api/ideas/{iid}", ct);
+                    if (ideaId is int iid) await TryDeleteIdeaAsync(http, iid);
                 }
             }));
 
@@ -611,8 +611,8 @@ public sealed class TestRunnerService(
                 }
                 finally
                 {
-                    if (projectId is int proj) await TryDeleteProjectAsync(http, proj, ct);
-                    if (ideaId is int iid) await http.DeleteAsync($"/api/ideas/{iid}", ct);
+                    if (projectId is int proj) await TryDeleteProjectAsync(http, proj);
+                    if (ideaId is int iid) await TryDeleteIdeaAsync(http, iid);
                 }
             }));
 
@@ -651,7 +651,7 @@ public sealed class TestRunnerService(
                 }
                 finally
                 {
-                    if (ideaId is int iid) await http.DeleteAsync($"/api/ideas/{iid}", ct);
+                    if (ideaId is int iid) await TryDeleteIdeaAsync(http, iid);
                 }
             }));
 
@@ -677,7 +677,7 @@ public sealed class TestRunnerService(
                 }
                 finally
                 {
-                    if (ideaId is int iid) await http.DeleteAsync($"/api/ideas/{iid}", ct);
+                    if (ideaId is int iid) await TryDeleteIdeaAsync(http, iid);
                 }
             }));
 
@@ -705,13 +705,13 @@ public sealed class TestRunnerService(
                     if (after.GetArrayLength() == 0)
                         throw new Exception("Retained activity events should still be returned after project deletion");
                 }
-                finally { if (!deleted) await TryDeleteProjectAsync(http, innerPid, ct); }
+                finally { if (!deleted) await TryDeleteProjectAsync(http, innerPid); }
             }));
         }
         finally
         {
             if (scratchProjectId is int pid)
-                await TryDeleteProjectAsync(http, pid, ct);
+                await TryDeleteProjectAsync(http, pid);
         }
 
         return new TestSuiteResult("API", results, sw.Elapsed.TotalMilliseconds);
@@ -745,63 +745,122 @@ public sealed class TestRunnerService(
 
         try
         {
-        results.Add(await RunTest("Home page renders 200 with PageTitle", "UI:Home", async () =>
+        // NOTE (#284): these tests assert the *page's own rendered structure*, never a string the
+        // shared layout emits. The NavMenu renders "KanbanFlow" (brand), "Ideas" and "Settings"
+        // (nav links) on EVERY route, and every page emits a <title>. Asserting any of those
+        // proved only that the layout rendered — the board could paint zero columns and zero
+        // cards and the suite stayed green. Structural, data-backed assertions only.
+
+        results.Add(await RunTest("Home page lists a freshly-created project as a card", "UI:Home", async () =>
         {
-            var resp = await http.GetAsync("/", ct);
-            if (!resp.IsSuccessStatusCode)
-                throw new Exception($"GET / returned {(int)resp.StatusCode}");
-            var html = await resp.Content.ReadAsStringAsync(ct);
-            if (!html.Contains("KanbanFlow", StringComparison.OrdinalIgnoreCase))
-                throw new Exception("Home page HTML missing brand string 'KanbanFlow'");
-            // The home page is rendered via the Blazor SSR pipeline and includes the
-            // <PageTitle> in <head> via @rendermode InteractiveServer.
-            if (!html.Contains("<title", StringComparison.OrdinalIgnoreCase))
-                throw new Exception("Home page HTML missing <title> tag");
+            var name = NewName("UiHome");
+            var create = await http.PostAsJsonAsync("/api/projects", new { name }, Json, ct);
+            if (create.StatusCode != HttpStatusCode.Created)
+                throw new Exception($"POST /api/projects expected 201, got {(int)create.StatusCode}");
+            var pid = (await create.Content.ReadFromJsonAsync<JsonElement>(Json, ct)).GetProperty("id").GetInt32();
+            try
+            {
+                var resp = await http.GetAsync("/", ct);
+                if (!resp.IsSuccessStatusCode)
+                    throw new Exception($"GET / returned {(int)resp.StatusCode}");
+                var html = await resp.Content.ReadAsStringAsync(ct);
+
+                // Home's own <h1> — the layout emits no <h1>, so this proves the page component rendered.
+                if (!html.Contains(">Projects</h1>", StringComparison.Ordinal))
+                    throw new Exception("Home page HTML missing its 'Projects' <h1> heading");
+                // ...and the list actually rendered a card for the project we just created,
+                // rather than the empty state or an empty grid.
+                if (!html.Contains(name, StringComparison.Ordinal))
+                    throw new Exception($"Home page rendered no card for the newly-created project '{name}'");
+            }
+            finally
+            {
+                await TryDeleteProjectAsync(http, pid);
+            }
         }));
 
-        results.Add(await RunTest("Settings page renders 200 with section markers", "UI:Settings", async () =>
+        results.Add(await RunTest("Settings page renders the app-info and test-runner panels", "UI:Settings", async () =>
         {
             var resp = await http.GetAsync("/settings", ct);
             if (!resp.IsSuccessStatusCode)
                 throw new Exception($"GET /settings returned {(int)resp.StatusCode}");
             var html = await resp.Content.ReadAsStringAsync(ct);
-            if (!html.Contains("Settings", StringComparison.OrdinalIgnoreCase))
-                throw new Exception("Settings page HTML missing 'Settings' marker");
-            if (!html.Contains("Run Tests", StringComparison.OrdinalIgnoreCase))
-                throw new Exception("Settings page HTML missing 'Run Tests' marker");
+
+            // "Settings" on its own is a layout tautology (the NavMenu's settings link emits it
+            // on every route). Assert the page's own panels instead.
+            if (!html.Contains(">Settings</h1>", StringComparison.Ordinal))
+                throw new Exception("Settings page HTML missing its 'Settings' <h1> heading");
+            foreach (var testId in new[] { "settings-app-info", "settings-tests", "settings-test-buttons" })
+            {
+                if (!html.Contains($"data-testid=\"{testId}\"", StringComparison.Ordinal))
+                    throw new Exception($"Settings page missing the '{testId}' panel (data-testid=\"{testId}\")");
+            }
+            if (!html.Contains("Run Tests", StringComparison.Ordinal))
+                throw new Exception("Settings page HTML missing the 'Run Tests' panel header");
         }));
 
-        results.Add(await RunTest("Ideas page renders 200 with header marker", "UI:Ideas", async () =>
+        results.Add(await RunTest("Ideas page renders a seeded idea as an idea card", "UI:Ideas", async () =>
         {
-            var resp = await http.GetAsync("/ideas", ct);
-            if (!resp.IsSuccessStatusCode)
-                throw new Exception($"GET /ideas returned {(int)resp.StatusCode}");
-            var html = await resp.Content.ReadAsStringAsync(ct);
-            if (!html.Contains("KanbanFlow", StringComparison.OrdinalIgnoreCase))
-                throw new Exception("Ideas page HTML missing brand marker");
-            // The Ideas inbox SSR-renders its "Ideas" header even before the interactive circuit boots.
-            if (!html.Contains("Ideas", StringComparison.OrdinalIgnoreCase))
-                throw new Exception("Ideas page HTML missing 'Ideas' marker");
+            // IdeaService.ListAsync returns newest-first, so the idea we just created is
+            // always on the first page of results regardless of how many ideas exist.
+            var title = NewName("UiIdea");
+            var create = await http.PostAsJsonAsync("/api/ideas", new { title }, Json, ct);
+            if (create.StatusCode != HttpStatusCode.Created)
+                throw new Exception($"POST /api/ideas expected 201, got {(int)create.StatusCode}");
+            var ideaId = (await create.Content.ReadFromJsonAsync<JsonElement>(Json, ct)).GetProperty("id").GetInt32();
+            try
+            {
+                var resp = await http.GetAsync("/ideas", ct);
+                if (!resp.IsSuccessStatusCode)
+                    throw new Exception($"GET /ideas returned {(int)resp.StatusCode}");
+                var html = await resp.Content.ReadAsStringAsync(ct);
+
+                if (!html.Contains("data-testid=\"ideas-grid\"", StringComparison.Ordinal))
+                    throw new Exception("Ideas page rendered no idea grid (data-testid=\"ideas-grid\" missing — empty state, or the list is broken)");
+
+                var card = $"data-testid=\"idea-card-{ideaId}\"";
+                if (!html.Contains(card, StringComparison.Ordinal))
+                    throw new Exception($"Idea {ideaId} did not render as an idea card ({card} not found in the page HTML)");
+                if (!html.Contains(title, StringComparison.Ordinal))
+                    throw new Exception($"Idea card {ideaId} rendered without its title '{title}'");
+            }
+            finally
+            {
+                await TryDeleteIdeaAsync(http, ideaId);
+            }
         }));
 
-        results.Add(await RunTest("Project view renders 200 for a freshly-created project", "UI:ProjectView", async () =>
+        results.Add(await RunTest("Project view renders all 5 board columns with the seeded task as a card", "UI:ProjectView", async () =>
         {
             // Don't depend on seed project id=1 — it can be deleted by other tests
             // or future migrations. Create a scratch project, hit its route, clean up.
-            var (pid, _, _) = await CreateProjectFeatureTaskAsync(http, ct);
+            // CreateProjectFeatureTaskAsync seeds exactly one task, with status Todo.
+            var (pid, _, taskId) = await CreateProjectFeatureTaskAsync(http, ct);
             try
             {
                 var resp = await http.GetAsync($"/project/{pid}", ct);
                 if (!resp.IsSuccessStatusCode)
                     throw new Exception($"GET /project/{pid} returned {(int)resp.StatusCode}");
                 var html = await resp.Content.ReadAsStringAsync(ct);
-                // The page renders even before the InteractiveServer circuit fully boots.
-                if (!html.Contains("KanbanFlow", StringComparison.OrdinalIgnoreCase))
-                    throw new Exception("Project view HTML missing brand marker");
+
+                // The board is prerendered by the SSR pass (InteractiveServer prerenders by
+                // default), so its full structure is in the initial HTML. Asserting that
+                // structure is what lets this test fail when the board breaks.
+                foreach (var status in Enum.GetValues<WorkStatus>())
+                {
+                    if (!html.Contains($"data-testid=\"board-column-{status}\"", StringComparison.Ordinal))
+                        throw new Exception($"Board is missing the '{status}' column (data-testid=\"board-column-{status}\")");
+                    if (!html.Contains($"data-testid=\"board-column-{status}-cards\"", StringComparison.Ordinal))
+                        throw new Exception($"Board column '{status}' is missing its cards container (data-testid=\"board-column-{status}-cards\")");
+                }
+
+                // ...and the seeded Todo task must render as a card *inside the Todo column*,
+                // not merely somewhere on the page.
+                AssertCardRendersInColumn(html, WorkStatus.Todo, taskId);
             }
             finally
             {
-                await TryDeleteProjectAsync(http, pid, ct);
+                await TryDeleteProjectAsync(http, pid);
             }
         }));
 
@@ -914,7 +973,7 @@ public sealed class TestRunnerService(
             }
             finally
             {
-                await TryDeleteProjectAsync(http, pid, ct);
+                await TryDeleteProjectAsync(http, pid);
             }
         }));
 
@@ -937,7 +996,7 @@ public sealed class TestRunnerService(
             }
             finally
             {
-                await TryDeleteProjectAsync(http, pid, ct);
+                await TryDeleteProjectAsync(http, pid);
             }
         }));
 
@@ -955,7 +1014,7 @@ public sealed class TestRunnerService(
             }
             finally
             {
-                await TryDeleteProjectAsync(http, pid, ct);
+                await TryDeleteProjectAsync(http, pid);
             }
         }));
 
@@ -1039,7 +1098,7 @@ public sealed class TestRunnerService(
             }
             finally
             {
-                await TryDeleteProjectAsync(http, pid, ct);
+                await TryDeleteProjectAsync(http, pid);
             }
         }));
 
@@ -1068,7 +1127,7 @@ public sealed class TestRunnerService(
             }
             finally
             {
-                await TryDeleteProjectAsync(http, pid, ct);
+                await TryDeleteProjectAsync(http, pid);
             }
         }));
 
@@ -1128,7 +1187,7 @@ public sealed class TestRunnerService(
             }
             finally
             {
-                await TryDeleteProjectAsync(http, pid, ct);
+                await TryDeleteProjectAsync(http, pid);
             }
         }));
 
@@ -1181,7 +1240,7 @@ public sealed class TestRunnerService(
             }
             finally
             {
-                await TryDeleteProjectAsync(http, pid, ct);
+                await TryDeleteProjectAsync(http, pid);
             }
         }));
 
@@ -1212,7 +1271,7 @@ public sealed class TestRunnerService(
             }
             finally
             {
-                await TryDeleteProjectAsync(http, pid, ct);
+                await TryDeleteProjectAsync(http, pid);
             }
         }));
 
@@ -1245,7 +1304,7 @@ public sealed class TestRunnerService(
             }
             finally
             {
-                await TryDeleteProjectAsync(http, pid, ct);
+                await TryDeleteProjectAsync(http, pid);
             }
         }));
 
@@ -1273,7 +1332,7 @@ public sealed class TestRunnerService(
             }
             finally
             {
-                await TryDeleteProjectAsync(http, pid, ct);
+                await TryDeleteProjectAsync(http, pid);
             }
         }));
 
@@ -1299,8 +1358,8 @@ public sealed class TestRunnerService(
             }
             finally
             {
-                await TryDeleteProjectAsync(http, pidA, ct);
-                if (pidB.HasValue) await TryDeleteProjectAsync(http, pidB.Value, ct);
+                await TryDeleteProjectAsync(http, pidA);
+                if (pidB.HasValue) await TryDeleteProjectAsync(http, pidB.Value);
             }
         }));
 
@@ -1322,7 +1381,7 @@ public sealed class TestRunnerService(
             }
             finally
             {
-                await TryDeleteProjectAsync(http, pid, ct);
+                await TryDeleteProjectAsync(http, pid);
             }
         }));
 
@@ -1353,7 +1412,7 @@ public sealed class TestRunnerService(
                 var hasEvent = await db.ActivityEvents.AnyAsync(e => e.EntityType == "Task" && e.EntityId == taskId && e.EventType == "TaskStatusChanged", ct);
                 if (!hasEvent) throw new Exception("ToggleDone should write a TaskStatusChanged event");
             }
-            finally { await TryDeleteProjectAsync(http, pid, ct); }
+            finally { await TryDeleteProjectAsync(http, pid); }
         }));
 
         results.Add(await RunTest("ToggleDoneAsync un-completes subtasks when toggled off Done", "Service:Task", async () =>
@@ -1373,7 +1432,7 @@ public sealed class TestRunnerService(
                 var withSubs = await db.Tasks.Include(t => t.Subtasks).AsNoTracking().FirstAsync(t => t.Id == taskId, ct);
                 if (withSubs.Subtasks.Any(x => x.Completed)) throw new Exception("Subtasks should be un-completed after toggling off Done");
             }
-            finally { await TryDeleteProjectAsync(http, pid, ct); }
+            finally { await TryDeleteProjectAsync(http, pid); }
         }));
 
         results.Add(await RunTest("MarkdownRenderer strips javascript: links", "Service:Markdown", () =>
@@ -1470,6 +1529,43 @@ public sealed class TestRunnerService(
 
     private static string NewName(string prefix) => $"{prefix}-{Guid.NewGuid():N}"[..Math.Min(64, prefix.Length + 1 + 8)];
 
+    /// <summary>
+    /// Asserts that a task renders as a board card (<c>data-testid="board-card-{taskId}"</c>) inside the
+    /// given column's card container (<c>data-testid="board-column-{status}-cards"</c>) in the SSR HTML.
+    /// </summary>
+    /// <remarks>
+    /// KanbanBoard renders one KanbanColumn per WorkStatus in enum order, so a column's card region runs
+    /// from its cards container up to the next column's wrapper (or to the end of the document for the
+    /// last column). Every marker embeds its closing quote, so <c>board-column-Todo"</c> cannot match
+    /// <c>board-column-Todo-cards"</c> and <c>board-card-6"</c> cannot match <c>board-card-61"</c>.
+    /// Checking containment — not mere presence — is what makes this catch a card rendered into the
+    /// wrong column (#284).
+    /// </remarks>
+    private static void AssertCardRendersInColumn(string html, WorkStatus status, int taskId)
+    {
+        var card = $"data-testid=\"board-card-{taskId}\"";
+        if (!html.Contains(card, StringComparison.Ordinal))
+            throw new Exception($"Task {taskId} did not render as a board card ({card} not found in the page HTML)");
+
+        var container = $"data-testid=\"board-column-{status}-cards\"";
+        var start = html.IndexOf(container, StringComparison.Ordinal);
+        if (start < 0)
+            throw new Exception($"Board column '{status}' is missing its cards container ({container})");
+
+        // The next column's wrapper bounds this column's card region.
+        var end = html.Length;
+        var statuses = Enum.GetValues<WorkStatus>();
+        var next = Array.IndexOf(statuses, status) + 1;
+        if (next < statuses.Length)
+        {
+            var nextIndex = html.IndexOf($"data-testid=\"board-column-{statuses[next]}\"", start, StringComparison.Ordinal);
+            if (nextIndex >= 0) end = nextIndex;
+        }
+
+        if (!html[start..end].Contains(card, StringComparison.Ordinal))
+            throw new Exception($"Task {taskId} rendered on the page but NOT inside the '{status}' column ({card} not found between {container} and the next column)");
+    }
+
     private static async Task<(int ProjectId, int FeatureId, int TaskId)> CreateProjectFeatureTaskAsync(HttpClient http, CancellationToken ct)
     {
         var p = await http.PostAsJsonAsync("/api/projects", new { name = NewName("Test") }, Json, ct);
@@ -1487,8 +1583,43 @@ public sealed class TestRunnerService(
         return (pid, fid, tid);
     }
 
-    private static async Task TryDeleteProjectAsync(HttpClient http, int projectId, CancellationToken ct)
+    /// <summary>
+    /// Best-effort cleanup DELETE for a scratch row this runner seeded. One helper so the three
+    /// cleanup rules live in exactly one place:
+    /// <list type="number">
+    /// <item><description><b>Never the request's <c>CancellationToken</c>.</b> If the caller cancelled,
+    /// a <c>ct</c>-bound DELETE is never sent — and the seeded row is left behind in the <b>live user
+    /// database</b>. This runner has no test DB: it is driven from <c>/settings</c> and
+    /// <c>POST /api/admin/run-tests</c> against the real one, so a skipped cleanup is junk in real user
+    /// data. Cancellation stops the <em>tests</em>, not the tidying-up.</description></item>
+    /// <item><description><b>Never throws.</b> These calls sit in <c>finally</c> blocks; an exception here
+    /// would replace — and so hide — the test's original exception.</description></item>
+    /// <item><description><b>Never silent.</b> A swallowed failure means invisible junk in real user data,
+    /// so every failure is logged.</description></item>
+    /// </list>
+    /// A 404 counts as success: the row is already gone, which is the entire goal.
+    /// </summary>
+    private async Task TryCleanupAsync(HttpClient http, string route)
     {
-        try { await http.DeleteAsync($"/api/projects/{projectId}", ct); } catch { /* best-effort cleanup */ }
+        try
+        {
+            // CancellationToken.None is deliberate — see rule 1 above.
+            var resp = await http.DeleteAsync(route, CancellationToken.None);
+            if (!resp.IsSuccessStatusCode && resp.StatusCode != HttpStatusCode.NotFound)
+                logger.LogWarning(
+                    "Test cleanup DELETE {Route} returned {StatusCode}; a scratch row may be left behind in the live database.",
+                    route, (int)resp.StatusCode);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex,
+                "Test cleanup DELETE {Route} failed; a scratch row may be left behind in the live database.", route);
+        }
     }
+
+    private Task TryDeleteProjectAsync(HttpClient http, int projectId) =>
+        TryCleanupAsync(http, $"/api/projects/{projectId}");
+
+    private Task TryDeleteIdeaAsync(HttpClient http, int ideaId) =>
+        TryCleanupAsync(http, $"/api/ideas/{ideaId}");
 }

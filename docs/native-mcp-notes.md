@@ -50,6 +50,10 @@ one deployable, and mutations reuse the exact audit-aware code path the UI/REST 
 | `update_idea` | **`IIdeaService.UpdateAsync`** | mutation (audit-aware) |
 | `promote_idea` | **`IIdeaService.PromoteAsync`** | mutation (audit-aware) |
 
+> `update_idea` cannot set `status: Promoted` — that status is **derived**, written only by
+> `promote_idea`/`PromoteAsync`, which alone also creates the linked project. `UpdateAsync` throws
+> `ValidationException` (surfaced as an actionable tool error naming the promote path) if you try (#283).
+
 ### Service-layer extraction (done — closes the task/comment half of #88)
 
 The write tools (`create_task`/`delete_task`/`add_task_comment`/`claim_task`/`release_task`)

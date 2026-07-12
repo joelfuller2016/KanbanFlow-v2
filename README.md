@@ -263,7 +263,7 @@ Requirements are organised by **capability**, not by entity. Every capability mu
 
 | # | Requirement |
 |---|-------------|
-| R-2.1 | Every entity has full REST CRUD: list, get, create, update, delete. *(✅ REST implemented for all entities, 53 endpoints.)* |
+| R-2.1 | Every entity has full REST CRUD: list, get, create, update, delete. *(✅ REST implemented for all entities, 60 endpoints.)* |
 | R-2.2 | Every REST capability has at least one MCP tool. *(❌ MCP currently exposes 11 of ~40 needed tools — see "MCP roadmap" below.)* |
 | R-2.3 | Mutations through the UI go through the **same shared service layer** as REST mutations, so audit events, claim semantics, and validation are produced once and applied everywhere. *(❌ currently broken — UI components write directly to EF, bypassing audit. This is issue #88 and the highest-priority refactor.)* |
 | R-2.4 | All entity mutations produce an `ActivityEvent` row. *(✅ for REST; ❌ for UI — see R-2.3.)* |
@@ -480,7 +480,7 @@ The OpenAPI document (R-5.1) is now the source of truth: GET `/openapi/v1.json` 
 /api/ideas/{id}/activity                    # audit log per idea
 ```
 
-53 endpoints total. Ideas (`/api/ideas`) are the pre-project "inbox" — capture raw ideas, then promote one into a full project (#180). Humans manage them in the browser at the **Ideas inbox** (`/ideas`): search and filter by status or tag, create/edit ideas (markdown body + plan), and promote an idea into a project — all through the same audited `IIdeaService` as REST + MCP (the #88 boundary). Collection/list endpoints will gain consistent pagination once R-1.4 lands; richer response shapes follow with the records refactor (R-5.2).
+60 endpoints total. Ideas (`/api/ideas`) are the pre-project "inbox" — capture raw ideas, then promote one into a full project (#180). `Promoted` is a **derived, terminal** status: only `POST /api/ideas/{id}/promote` (MCP `promote_idea`) sets it, since only that path also creates the linked project. So `PATCH /api/ideas/{id}` and MCP `update_idea` refuse to move an idea *into* `Promoted` (#283) **or back out of it** (#285) — promotion is permanent — and return 422 pointing at the promote endpoint. Every other status transition is free, and a promoted idea's other fields (title, body, plan, tags, priority) stay fully editable. Humans manage them in the browser at the **Ideas inbox** (`/ideas`): search and filter by status or tag, create/edit ideas (markdown body + plan), and promote an idea into a project — all through the same audited `IIdeaService` as REST + MCP (the #88 boundary). Collection/list endpoints will gain consistent pagination once R-1.4 lands; richer response shapes follow with the records refactor (R-5.2).
 
 ---
 
