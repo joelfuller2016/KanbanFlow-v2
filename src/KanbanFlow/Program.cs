@@ -161,7 +161,7 @@ app.MapAdminEndpoints();
 // Native MCP server (Streamable HTTP), prototype — agents connect at POST /mcp.
 // Open access by design: no host/loopback restriction — trust the network (single-user
 // local tool), matching the unrestricted REST API + open CORS. This is SETTLED, not deferred:
-// #169 removed the last RequireHost lock and #84/#161 were closed on the same charter. Do not
+// #169 removed the last RequireHost lock; #84 tracks the rejected hardening proposal (#161 likewise). Do not
 // re-add a loopback/CORS/source-IP restriction here — it has been proposed and rejected.
 app.MapMcp("/mcp");
 
