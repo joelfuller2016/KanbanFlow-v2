@@ -243,14 +243,44 @@ function mapIssueToOpenPr(prs) {
 
 // --- Mapping ----------------------------------------------------------------------------
 
-const PRIORITY_BY_LABEL = { p0: "Critical", p1: "High", p2: "Medium", p3: "Low" };
+// Priority labels are a zoo across repos: bare `P0`; `P0-critical`; `priority:high`;
+// `high-priority`; `priority: medium`; or a plain `critical`. Matching ONLY the bare `p0..p3`
+// form silently mapped every issue in 5 of 6 repos to Medium — the whole 404-task portfolio
+// came out one flat priority, so the /next-tasks direction engine was ranking against a
+// constant. Recognise the real vocabularies, and be strict enough that a topical label which
+// merely CONTAINS a severity word (`critical-path`, `size/medium`, `slow`) is not mistaken
+// for a priority.
+const SEVERITY_WORDS = { critical: "Critical", high: "High", medium: "Medium", low: "Low" };
+const SEVERITY_RANK = { Critical: 0, High: 1, Medium: 2, Low: 3 };
+const PN_LEVELS = ["Critical", "High", "Medium", "Low"]; // P0..P3
+
+function priorityFromLabel(name) {
+  const n = String(name).trim().toLowerCase();
+
+  // "p0", "P0-critical", "p1-high", "p2 medium"
+  const pn = /^p([0-3])\b/.exec(n);
+  if (pn) return PN_LEVELS[Number(pn[1])];
+
+  // "priority:high", "high-priority", "priority: medium", "priority-critical"
+  if (n.includes("priority")) {
+    for (const [word, level] of Object.entries(SEVERITY_WORDS)) {
+      if (n.includes(word)) return level;
+    }
+    return null;
+  }
+
+  // A label that IS a severity word, exactly — not one that merely contains it.
+  return SEVERITY_WORDS[n] ?? null;
+}
 
 function derivePriority(issue) {
+  // Highest severity present wins: an issue tagged both `bug` and `P0-critical` is Critical.
+  let best = null;
   for (const label of issue.labels || []) {
-    const hit = PRIORITY_BY_LABEL[String(label.name).trim().toLowerCase()];
-    if (hit) return hit;
+    const level = priorityFromLabel(label.name);
+    if (level && (best === null || SEVERITY_RANK[level] < SEVERITY_RANK[best])) best = level;
   }
-  return "Medium";
+  return best ?? "Medium";
 }
 
 function deriveStatus(issue, linkedPr) {
