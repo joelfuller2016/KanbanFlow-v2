@@ -195,12 +195,17 @@ else
 @* ── Delete confirmation modal (mirrors Home.razor's delete modal) ── *@
 @if (showDeleteModal && deletingIdea is not null)
 {
-    @* Esc cancels. The dialog is hand-rolled (not a Bootstrap-managed modal), and only IdeaModal
-       wires KanbanFlow.initDialog, so nothing was listening for Escape here at all: the confirm
-       could only be dismissed by mouse. keydown bubbles from the focused .modal-content, so one
-       handler on the backdrop element catches it. *@
-    <div class="modal fade show d-block" tabindex="-1" role="dialog" aria-modal="true" aria-labelledby="delete-idea-modal-title" style="background-color: rgba(0,0,0,0.5);" data-testid="idea-delete-modal"
-         @onkeydown="OnDeleteModalKeyDown">
+    @* An accessible dialog, not just markup that claims to be one. It has said role="dialog" +
+       aria-modal="true" from the start while Tab walked straight out of it and onto the board behind
+       (CodeRabbit, PR #300): the confirm was hand-rolled, and only IdeaModal wired
+       KanbanFlow.initDialog. Now it uses that same helper — autofocus, the Tab cycle, Esc, and focus
+       handed back to whatever opened it — exactly as IdeaModal / AddItemModal / EditItemModal do.
+
+       The `@onkeydown` Escape handler this replaces is GONE on purpose: initDialog already owns
+       Escape (-> CloseFromJs), and two Escape handlers on one dialog is two sources of truth.
+       `@ref` stays on .modal-content because THAT is the trap boundary — it contains every
+       focusable in the dialog, and initDialog listens on the element it is handed. *@
+    <div class="modal fade show d-block" tabindex="-1" role="dialog" aria-modal="true" aria-labelledby="delete-idea-modal-title" style="background-color: rgba(0,0,0,0.5);" data-testid="idea-delete-modal">
         <div class="modal-dialog">
             <div class="modal-content" tabindex="-1" @ref="deleteModalDialog">
                 <div class="modal-header">
@@ -237,11 +242,11 @@ else
    why promotion is a button + this modal and NOT a drag. This is the one confirm that stays. *@
 @if (showPromoteModal && promotingIdea is not null)
 {
-    @* #296 AC4 — Esc cancels, with no side effects. It never did: see the note on the delete modal.
-       A confirm you cannot back out of with the keyboard is pure friction, which is precisely what
-       this issue is about. *@
-    <div class="modal fade show d-block" tabindex="-1" role="dialog" aria-modal="true" aria-labelledby="promote-idea-modal-title" style="background-color: rgba(0,0,0,0.5);" data-testid="idea-promote-modal"
-         @onkeydown="OnPromoteModalKeyDown">
+    @* #296 AC4 — Esc cancels, with no side effects. Same wiring as the delete confirm above, from the
+       same helper: see that note. A confirm you cannot back out of with the keyboard is pure
+       friction, which is precisely what #296 is about — and a confirm you cannot Tab around without
+       falling out of is the same failure one keystroke over. *@
+    <div class="modal fade show d-block" tabindex="-1" role="dialog" aria-modal="true" aria-labelledby="promote-idea-modal-title" style="background-color: rgba(0,0,0,0.5);" data-testid="idea-promote-modal">
         <div class="modal-dialog">
             <div class="modal-content" tabindex="-1" @ref="promoteModalDialog">
                 <div class="modal-header">
@@ -317,7 +322,6 @@ else
     private bool isDeleting;
     private string? deleteError;
     private ElementReference deleteModalDialog;
-    private bool shouldFocusDeleteModal;
 
     // ── Promote modal state ──
     private bool showPromoteModal;
@@ -326,7 +330,6 @@ else
     private string? promoteError;
     private IdeaPromoteResult? promoteSuccess;
     private ElementReference promoteModalDialog;
-    private bool shouldFocusPromoteModal;
 
     // ── Page-level load/filter error. OWNED BY LoadIdeas: it alone sets and clears this field. ──
     private string? loadError;
@@ -425,15 +428,21 @@ else
             catch (InvalidOperationException) { }
         }
 
-        if (shouldFocusDeleteModal && showDeleteModal)
+        // Arm each confirm as a real dialog the moment it opens — the "it just opened" latch, exactly
+        // as IdeaModal does it. initDialog owns the autofocus (so the bare FocusAsync this replaces
+        // is gone), the Tab trap, Esc, and the opener it will hand focus back to on close. There is
+        // deliberately no "it just closed" branch here: see the lifecycle note further down.
+        if (showDeleteModal && !_deleteDialogInited)
         {
-            shouldFocusDeleteModal = false;
-            await deleteModalDialog.FocusAsync(preventScroll: true);
+            _deleteDialogInited = true;   // set before the await so a re-render mid-init can't double-call
+            _selfRef ??= DotNetObjectReference.Create(this);
+            await SafeInitDialogAsync(deleteModalDialog);
         }
-        if (shouldFocusPromoteModal && showPromoteModal)
+        if (showPromoteModal && !_promoteDialogInited)
         {
-            shouldFocusPromoteModal = false;
-            await promoteModalDialog.FocusAsync(preventScroll: true);
+            _promoteDialogInited = true;
+            _selfRef ??= DotNetObjectReference.Create(this);
+            await SafeInitDialogAsync(promoteModalDialog);
         }
     }
 
@@ -687,23 +696,20 @@ else
         deletingIdea = idea;
         deleteError = null;
         showDeleteModal = true;
-        shouldFocusDeleteModal = true;
     }
 
-    private void CloseDeleteModal()
+    // EVERY close funnels through here — Cancel, the ✕, Esc (CloseFromJs) and a completed delete —
+    // because the dialog teardown has to happen while the dialog's node still exists. See the
+    // lifecycle note under CloseFromJs.
+    private async Task CloseDeleteModal()
     {
+        if (_deleteDialogInited)
+        {
+            _deleteDialogInited = false;
+            await SafeDestroyDialogAsync(deleteModalDialog);   // ← this is the focus restore
+        }
         showDeleteModal = false;
         deletingIdea = null;
-    }
-
-    // Esc cancels — never while the confirmed action is already in flight, or the modal would
-    // vanish out from under a write the user can no longer see the result of.
-    private void OnDeleteModalKeyDown(KeyboardEventArgs e)
-    {
-        if (e.Key == "Escape" && !isDeleting)
-        {
-            CloseDeleteModal();
-        }
     }
 
     private async Task ConfirmDelete()
@@ -716,15 +722,13 @@ else
         try
         {
             await IdeaSvc.DeleteAsync(deletingIdea.Id, "User", _cts.Token);
-            showDeleteModal = false;
-            deletingIdea = null;
+            await CloseDeleteModal();
             await LoadIdeas();
         }
         catch (IdeaNotFoundException)
         {
             // Already gone (e.g. deleted in another tab) — treat as success and refresh.
-            showDeleteModal = false;
-            deletingIdea = null;
+            await CloseDeleteModal();
             await LoadIdeas();
         }
         catch (Exception ex)
@@ -745,23 +749,18 @@ else
         promoteError = null;
         promoteSuccess = null;
         showPromoteModal = true;
-        shouldFocusPromoteModal = true;
     }
 
-    private void ClosePromoteModal()
+    // Every close funnels through here, for the same reason as CloseDeleteModal.
+    private async Task ClosePromoteModal()
     {
+        if (_promoteDialogInited)
+        {
+            _promoteDialogInited = false;
+            await SafeDestroyDialogAsync(promoteModalDialog);   // ← this is the focus restore
+        }
         showPromoteModal = false;
         promotingIdea = null;
-    }
-
-    // #296 AC4. Same rule as delete: not while the promote is in flight — that one really is a
-    // one-way door, and dismissing the dialog mid-write would hide its outcome.
-    private void OnPromoteModalKeyDown(KeyboardEventArgs e)
-    {
-        if (e.Key == "Escape" && !isPromoting)
-        {
-            ClosePromoteModal();
-        }
     }
 
     private async Task ConfirmPromote()
@@ -774,8 +773,7 @@ else
         try
         {
             var result = await IdeaSvc.PromoteAsync(promotingIdea.Id, "User", _cts.Token);
-            showPromoteModal = false;
-            promotingIdea = null;
+            await ClosePromoteModal();
             promoteSuccess = result;
             // The promoted card just changed columns, so LoadIdeas re-binds the sortables for us.
             await LoadIdeas();
@@ -799,6 +797,76 @@ else
         }
     }
 
+    // ── Accessible confirm dialogs (#166's helper): focus-trap + Esc + focus restore ──
+    //
+    // Both confirms are hand-rolled, and both advertised role="dialog" + aria-modal="true" while Tab
+    // walked straight out of them onto the board behind — the a11y equivalent of a painted-on door
+    // (CodeRabbit, PR #300). KanbanFlow.initDialog (wwwroot/js/kanbanflow.js:227) is the one dialog
+    // implementation in this app — IdeaModal, AddItemModal and EditItemModal all use it — and it
+    // brings the autofocus, the Tab cycle, Escape, and the focus restore in one call. Wiring it is
+    // strictly better than growing a second, half-built dialog behaviour here.
+    //
+    // ⚠️ WHY THE TEARDOWN LIVES IN THE CLOSE PATH, NOT IN A "just closed" OnAfterRenderAsync LATCH —
+    // the one place this cannot copy IdeaModal verbatim. IdeaModal's markup is ALWAYS rendered and
+    // merely display:none when shut, so its ElementReference resolves whenever it likes. These two
+    // confirms are @if-rendered: the moment `showDeleteModal` goes false the node is GONE, and Blazor
+    // resolves an ElementReference by looking its capture attribute up in the LIVE DOM. destroyDialog
+    // would be handed null, take its `if (!dialog) return`, and the focus restore would silently
+    // never happen — a11y theatre that compiles, and that no unit test can see. So every close tears
+    // the dialog down FIRST, while its node still exists, and only then flips the flag that removes
+    // it. (An `await` inside an event handler renders at the await point, where the modal is still
+    // open, so the JS call always finds the element.) The focus restore is guarded for real:
+    // scripts/ui-e2e.mjs, "the confirm dialogs trap Tab and hand focus back to the opener".
+    private DotNetObjectReference<Ideas>? _selfRef;
+    private bool _deleteDialogInited;
+    private bool _promoteDialogInited;
+
+    private async Task SafeInitDialogAsync(ElementReference dialog)
+    {
+        try { await JS.InvokeVoidAsync("KanbanFlow.initDialog", dialog, _selfRef); }
+        catch (JSDisconnectedException) { }
+        catch (ObjectDisposedException) { }
+        catch (InvalidOperationException) { }
+    }
+
+    private async Task SafeDestroyDialogAsync(ElementReference dialog)
+    {
+        try { await JS.InvokeVoidAsync("KanbanFlow.destroyDialog", dialog); }
+        catch (JSDisconnectedException) { }
+        catch (ObjectDisposedException) { }
+        catch (InvalidOperationException) { }
+    }
+
+    /// <summary>
+    /// Escape, from initDialog's keydown trap — the replacement for the two hand-rolled
+    /// <c>@onkeydown</c> handlers (one Escape owner, not two). ONE method for both confirms because
+    /// initDialog hardcodes the callback name, and only one confirm is ever open at a time: each is
+    /// opened from a card action, and an open confirm covers the board it would have to be opened from.
+    ///
+    /// The in-flight guard is carried over verbatim from those handlers and is not optional — Esc must
+    /// never dismiss a confirm whose action is already running, or the dialog vanishes out from under
+    /// a write whose outcome the user can no longer see.
+    ///
+    /// A [JSInvokable] gets no automatic StateHasChanged (unlike an EventCallback handler), so this
+    /// has to ask for its own render — without it, Esc would run the close and paint nothing.
+    /// </summary>
+    [JSInvokable]
+    public async Task CloseFromJs()
+    {
+        if (showDeleteModal)
+        {
+            if (isDeleting) return;
+            await CloseDeleteModal();
+        }
+        else if (showPromoteModal)
+        {
+            if (isPromoting) return;
+            await ClosePromoteModal();
+        }
+
+        StateHasChanged();
+    }
+
     public async ValueTask DisposeAsync()
     {
         _cts.Cancel();
@@ -817,6 +885,7 @@ else
         catch (InvalidOperationException) { }
 
         dotNetRef?.Dispose();
+        _selfRef?.Dispose();
         debounceCts?.Dispose();
         _cts.Dispose();
     }

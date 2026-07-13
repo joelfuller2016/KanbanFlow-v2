@@ -233,6 +233,62 @@ async function waitForSortableArmed(page, status) {
   }, status, { timeout: 15000 });
 }
 
+// ── Dialog focus-trap harness (#300) ─────────────────────────────────────────────────────────────
+// A modal's aria-modal="true" is a PROMISE that nothing behind it is reachable. The mouse keeps that
+// promise for free (the backdrop swallows the clicks); the keyboard only keeps it if something traps
+// Tab. Nothing in a screenshot, a unit test or the C# compiler can tell the two apart, so read it
+// off the live DOM: where focus is, where the dialog's own focus order puts it, and how many
+// focusables sit OUTSIDE the dialog — i.e. how much of the page a broken trap could leak onto.
+//
+// The selector is KanbanFlow._dialogFocusables' own (kanbanflow.js:222), deliberately: a trap judged
+// against a different definition of "focusable" than the one it implements is judging a different
+// dialog. Same for the visibility filter — getClientRects(), not offsetParent, which is null for the
+// position:fixed .modal and would wrongly report an empty dialog.
+const DIALOG_FOCUSABLE =
+  'a[href]:not([tabindex="-1"]), button:not([disabled]):not([tabindex="-1"]), ' +
+  'input:not([disabled]):not([tabindex="-1"]), select:not([disabled]):not([tabindex="-1"]), ' +
+  'textarea:not([disabled]):not([tabindex="-1"]), [tabindex]:not([tabindex="-1"])';
+
+async function probeDialogFocus(page, modalSelector) {
+  return page.evaluate(({ sel, focusable }) => {
+    const visible = (el) => el.getClientRects().length > 0;
+    const modal = document.querySelector(sel);
+    const active = document.activeElement;
+    // Name whatever holds focus, so a failure says WHICH control the keyboard escaped to.
+    const describe = (el) => {
+      if (!el) return "null (focus is nowhere)";
+      const testid = el.getAttribute?.("data-testid");
+      const label = (el.getAttribute?.("aria-label") || el.textContent || "")
+        .replace(/\s+/g, " ").trim().slice(0, 40);
+      return `<${el.tagName.toLowerCase()}${testid ? ` data-testid="${testid}"` : ""}> ${label}`.trim();
+    };
+    const inDialog = modal ? [...modal.querySelectorAll(focusable)].filter(visible) : [];
+    const outside = [...document.querySelectorAll(focusable)]
+      .filter((el) => visible(el) && !(modal && modal.contains(el)));
+    return {
+      present: !!modal,
+      inside: !!modal && !!active && modal.contains(active),
+      index: inDialog.indexOf(active),   // position in the dialog's focus order; -1 = not one of them
+      count: inDialog.length,
+      escapes: outside.length,           // where a broken trap lands
+      active: describe(active),
+      activeTestid: active?.getAttribute?.("data-testid") ?? null,
+    };
+  }, { sel: modalSelector, focusable: DIALOG_FOCUSABLE });
+}
+
+// Park focus on the dialog's FIRST focusable. The Shift+Tab wrap has to be asked from a known place:
+// pressing it from wherever the previous assertion happened to leave focus tests nothing in
+// particular, and the trap's autofocus target is not what is under test here.
+async function focusFirstInDialog(page, modalSelector) {
+  await page.evaluate(({ sel, focusable }) => {
+    const modal = document.querySelector(sel);
+    const first = [...(modal?.querySelectorAll(focusable) ?? [])]
+      .filter((el) => el.getClientRects().length > 0)[0];
+    first?.focus();
+  }, { sel: modalSelector, focusable: DIALOG_FOCUSABLE });
+}
+
 async function startApp() {
   if (process.env.SKIP_BUILD !== "1") {
     log("Building app (worktree)...");
@@ -1000,6 +1056,133 @@ async function main() {
       } finally {
         if (viewport) await page.setViewportSize(viewport);
       }
+    });
+
+    // ── Regression guard (#300): the confirms are REAL dialogs, not painted-on ones ───────────────
+    // Both hand-rolled confirms have advertised role="dialog" + aria-modal="true" since the day they
+    // were written — a promise that nothing behind them is reachable — while Tab walked straight out
+    // of an open confirm and onto the board underneath, and closing one dropped focus on the floor.
+    // A mouse user could never tell; a keyboard user is driving controls hidden behind a modal.
+    // Nothing else in this suite, in xUnit, or in the compiler can see any of that: the modal LOOKS
+    // right, so the only way to hold the wiring in place is to press the keys.
+    //
+    // Three questions, each of which the unwired code answers wrongly:
+    //   1. does Tab stay inside the dialog, however many times it is pressed;
+    //   2. does Shift+Tab from the FIRST focusable wrap round to the LAST, or reverse out;
+    //   3. once the dialog closes, does focus return to the control that opened it.
+    // (3) is asked of the PROMOTE confirm on purpose. Its opener is a plain visible button on the
+    // card, which is still there afterwards — so "focus came back" is a question with a legible
+    // answer. The delete confirm opens from a ⋮ item that Bootstrap display:none's on click, and
+    // "focus returned to a hidden element" would mean nothing whichever way it came out. Same
+    // destroyDialog code path either way; ask it where the answer can be read.
+    await test("Ideas board: the confirm dialogs trap Tab and hand focus back to the opener", async () => {
+      // Clean slate: one idea, so "the card" is unambiguous.
+      for (const i of await api("GET", "/api/ideas?limit=500")) {
+        await api("DELETE", `/api/ideas/${i.id}`).catch(() => {});
+      }
+      const idea = await api("POST", "/api/ideas", { title: `E2E Trap ${stamp}`, priority: "High" });
+
+      await page.goto(`${baseUrl}/ideas`);
+      await page.locator(`[data-testid="idea-card-${idea.id}"]`).waitFor({ state: "visible" });
+      // This file's settled "the board has finished standing itself up" signal: the circuit is live,
+      // so a click reaches the server and the modal's OnAfterRenderAsync (which arms the trap) runs.
+      await waitForSortableArmed(page, "New");
+
+      // ── 1. The DELETE confirm: Tab cannot leave it ───────────────────────────────────────────
+      const deleteModal = '[data-testid="idea-delete-modal"]';
+      await clickUntil(
+        () => page.locator(`[data-testid="idea-card-menu-${idea.id}"]`).click(),
+        page.locator(`[data-testid="idea-card-delete-${idea.id}"]`),
+      );
+      await page.locator(`[data-testid="idea-card-delete-${idea.id}"]`).click();
+      await page.locator(deleteModal).waitFor({ state: "visible" });
+
+      const opened = await probeDialogFocus(page, deleteModal);
+
+      // ── PRECONDITIONS: what makes a green here MEAN something ────────────────────────────────
+      assert(opened.count >= 3,
+        `the delete confirm exposes ${opened.count} focusable control(s). A cycle needs at least three ` +
+        "(✕, Cancel, Delete) — with fewer, wrapping and not-wrapping look identical and this guard is " +
+        "vacuous.");
+      assert(opened.escapes > 0,
+        "PRECONDITION: nothing OUTSIDE the open confirm is focusable, so Tab has nowhere to escape to " +
+        "and even an untrapped dialog would hold focus by accident. This guard would pass on broken " +
+        "code. (The board, its filter bar and its cards are supposed to be sitting right behind it.)");
+      assert(opened.inside,
+        `the confirm opened without taking focus at all — focus is on ${opened.active}. Nothing below ` +
+        "this line is being tested from inside the dialog.");
+
+      // Press Tab MORE times than the dialog has focusables: a "trap" that merely lets you walk to
+      // the last control and out would survive any shorter walk.
+      const presses = opened.count + 2;
+      for (let i = 1; i <= presses; i++) {
+        await page.keyboard.press("Tab");
+        const p = await probeDialogFocus(page, deleteModal);
+        assert(p.inside,
+          `Tab #${i} of ${presses} walked OUT of the open delete confirm and onto ${p.active}. The ` +
+          'dialog claims aria-modal="true" and its backdrop swallows every click, so a keyboard user ' +
+          "is now operating a control they cannot see, behind a modal they cannot leave. " +
+          "(KanbanFlow.initDialog is the Tab cycle — Ideas.razor must call it.)");
+      }
+
+      // Shift+Tab from the first control must WRAP to the last, not reverse out the front.
+      await focusFirstInDialog(page, deleteModal);
+      const parked = await probeDialogFocus(page, deleteModal);
+      assert(parked.index === 0,
+        `could not park focus on the confirm's first focusable — focus sits at index ${parked.index} ` +
+        `(${parked.active}). The wrap below would be asked from the wrong place.`);
+
+      await page.keyboard.press("Shift+Tab");
+      const wrapped = await probeDialogFocus(page, deleteModal);
+      assert(wrapped.inside,
+        `Shift+Tab from the confirm's FIRST control reversed straight out of the dialog and onto ` +
+        `${wrapped.active}. Backwards is a leak too — a forward-only trap is not a trap.`);
+      assert(wrapped.index === opened.count - 1,
+        `Shift+Tab from the first control must wrap to the LAST (index ${opened.count - 1}); it landed ` +
+        `at index ${wrapped.index} (${wrapped.active}).`);
+
+      // Esc still cancels (#296 AC4) — now via initDialog -> [JSInvokable] CloseFromJs, which REPLACED
+      // the hand-rolled @onkeydown handler. Deleting that handler without wiring its replacement, or
+      // wiring it without the StateHasChanged a [JSInvokable] does not get for free, lands here.
+      await page.keyboard.press("Escape");
+      await page.locator(deleteModal).waitFor({ state: "detached" });
+      const survivor = await api("GET", `/api/ideas/${idea.id}`).catch(() => null);
+      assert(survivor !== null, "Esc on the DELETE confirm must cancel it — the idea was deleted instead");
+
+      // ── 2. The PROMOTE confirm: focus goes back where it came from ───────────────────────────
+      const promoteModal = '[data-testid="idea-promote-modal"]';
+      const openerTestid = `idea-card-promote-btn-${idea.id}`;
+      await clickUntil(
+        () => page.locator(`[data-testid="${openerTestid}"]`).click(),
+        page.locator(promoteModal),
+      );
+
+      const promoteOpen = await probeDialogFocus(page, promoteModal);
+      // Load-bearing precondition. Clicking the opener FOCUSED it, so "focus is on the opener after
+      // close" is also true of a dialog that never took focus in the first place. Focus has to be
+      // shown leaving the opener before its return can mean anything.
+      assert(promoteOpen.inside,
+        `the promote confirm opened without taking focus — it is still on ${promoteOpen.active}, so ` +
+        "the focus-restore assertion below could not tell a working restore from a dialog that never " +
+        "moved focus at all.");
+      assert(promoteOpen.count >= 3,
+        `the promote confirm exposes only ${promoteOpen.count} focusable control(s)`);
+
+      await page.keyboard.press("Escape");
+      await page.locator(promoteModal).waitFor({ state: "detached" });
+
+      const restored = await probeDialogFocus(page, promoteModal);
+      assert(restored.activeTestid === openerTestid,
+        "closing the promote confirm dropped focus on the floor instead of handing it back to the " +
+        `button that opened it — focus is now on ${restored.active}. A keyboard user who cancels a ` +
+        "confirm is dumped at the top of the document and has to walk the entire board again to get " +
+        "back to the card they were on. (KanbanFlow.destroyDialog is the focus restore, and it only " +
+        "runs while the dialog's node still EXISTS — these confirms are @if-rendered, so a teardown " +
+        "deferred to after the close-render is handed a null element and silently does nothing.)");
+
+      const notPromoted = await api("GET", `/api/ideas/${idea.id}`);
+      assert(notPromoted.status === "New",
+        `Esc on the PROMOTE confirm must cancel it — the idea is now ${notPromoted.status}`);
     });
 
     // ── Scenario E: Settings -> Run all shows an all-passed result table ──

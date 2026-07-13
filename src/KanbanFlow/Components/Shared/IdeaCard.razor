@@ -39,9 +39,13 @@
                     {
                         <li><hr class="dropdown-divider" /></li>
                         <li><h6 class="dropdown-header">Move to</h6></li>
+                        @* @key on the ENUM value, which is unique by construction (moveTargets is a
+                           filtered Enum.GetValues), so each item's @onclick closure stays pinned to
+                           the target it was rendered for when the set changes (it does: the idea's
+                           own status is excluded, so moving a card re-shapes this list). *@
                         @foreach (var target in moveTargets)
                         {
-                            <li>
+                            <li @key="target">
                                 <button type="button" class="dropdown-item"
                                         @onclick="() => OnMoveTo.InvokeAsync((Idea, target))"
                                         data-testid="idea-card-move-@(Idea.Id)-@target">@target</button>
@@ -99,6 +103,13 @@
                     </span>
                 }
 
+                @* NO @key here, deliberately — do not "fix" this to match the loop above.
+                   `Tags` is a free-text comma string and IdeaService.Normalize only Trim()s the WHOLE
+                   string (no split, no dedupe), so `bug, bug` reaches this loop as two identical
+                   entries — i.e. two SIBLINGS WITH THE SAME KEY, which Blazor's keyed diff does not
+                   promise to survive. These spans are stateless text: no component identity, no event
+                   handler, no form state, nothing a key could preserve. A key buys nothing here and
+                   stakes a reachable user input on undefined diff behaviour. *@
                 @foreach (var tag in tags)
                 {
                     <span class="badge bg-light text-dark border">#@tag</span>
