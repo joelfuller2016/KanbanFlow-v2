@@ -362,7 +362,7 @@ These aren't oversights — they're deliberate exclusions for v2:
 |----------|--------|
 | Authentication / authorisation | Single-trust-boundary tool. Agent + owner on one machine. |
 | Multi-tenancy | One DB, one user. Per-project ownership scoping is not a v2 goal. |
-| HTTPS, security headers, rate limiting | **Open access by design** — trust the network; no enforced loopback / CORS / source-IP restrictions. Hardening deferred to #84. |
+| HTTPS, security headers, rate limiting | **Open access by design** — trust the network; no enforced loopback / CORS / source-IP restrictions. This is a settled charter decision, not a deferral: KanbanFlow is a single-user local tool with one trust boundary (agent + owner, one machine). #169 removed the last host lock; #84 tracks the rejected hardening proposal; #161 likewise. |
 | Real-time human collaboration (multiple humans on the same board) | Single-user UX; auto-poll or refresh on demand. |
 | Notifications (email, Slack, etc.) | The agent is the integration. |
 | External integrations (GitHub, Jira, Linear) | Could be a later module; not v2. |
