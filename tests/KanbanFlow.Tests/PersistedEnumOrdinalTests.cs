@@ -109,12 +109,10 @@ public class PersistedEnumOrdinalTests
     [MemberData(nameof(PersistedEnums))]
     public void LockedMembers_KeepTheirOrdinals(string enumName, Type enumType, Dictionary<string, int> locked)
     {
-        var present = Enum.GetNames(enumType);
-
         foreach (var (member, expected) in locked)
         {
             Assert.True(
-                present.Contains(member),
+                Enum.IsDefined(enumType, member),
                 $"{enumName}.{member} was REMOVED. It is persisted as the raw int {expected}, and every " +
                 $"member after it shifts down — silently re-typing existing rows on every install that " +
                 $"used them. Restore it. If it is genuinely dead, leave the member in place (or reserve " +
@@ -169,5 +167,18 @@ public class PersistedEnumOrdinalTests
             $"{enumName} has member(s) missing from the lock map: {string.Join(", ", uncovered)}. " +
             $"Every persisted member must be pinned here, or a later reorder of it goes unnoticed. " +
             $"Add them with their exact ordinals.");
+
+        var duplicateOrdinals = locked
+            .GroupBy(kv => kv.Value)
+            .Where(g => g.Count() > 1)
+            .Select(g => $"{g.Key}: [{string.Join(", ", g.Select(kv => kv.Key))}]")
+            .ToArray();
+
+        Assert.True(
+            duplicateOrdinals.Length == 0,
+            $"{enumName} lock map has duplicate ordinals: {string.Join("; ", duplicateOrdinals)}. " +
+            $"C# allows two enum members to share an int value, so a collision slips past " +
+            $"LockedMembers_KeepTheirOrdinals and NewMembers_AreAppendedAboveTheLockedRange. " +
+            $"Each locked ordinal must be unique.");
     }
 }
