@@ -87,14 +87,31 @@ async function test(name, fn) {
 function assert(cond, msg) { if (!cond) throw new Error(msg); }
 
 // Blazor Server renders static HTML first, then connects an interactive circuit a
-// moment later. A click that lands before the circuit is live is a no-op, so for
-// idempotent "open" actions we retry the click until the expected element appears.
+// moment later. A click that lands before the circuit is live is a no-op, so we retry
+// the click until the expected element appears.
+//
+// #312 — CHECK BEFORE YOU CLICK. This used to say "for idempotent open actions", and then
+// SIX of its NINE call sites passed it a Bootstrap dropdown TOGGLE (`idea-card-menu-*`),
+// which is the exact opposite: every click FLIPS it. The retry then fought itself —
+//
+//   attempt 1: click the ⋮   -> the menu opens, but the SignalR round-trip has not rendered
+//   waitFor(2500ms)          -> TIMES OUT (the DOM has not caught up on a starved circuit)
+//   attempt 2: click the ⋮   -> CLOSES the menu it just opened
+//   ...and the caller's next line, a click on an item INSIDE that menu, races the close and
+//      dies on the 15s default: `locator.click: Timeout 15000ms exceeded`.
+//
+// Load does not cause this. Load widens the window. The race is here, in the helper: it
+// re-invokes `opener()` unconditionally, even when the thing it was asked to open is already
+// open. One `isVisible` check makes a toggle safe and leaves the idempotent callers untouched
+// (their target is not visible on entry, so they click exactly as they always did).
 async function clickUntil(opener, expected, attempts = 6) {
   for (let i = 0; i < attempts; i++) {
+    if (await expected.isVisible().catch(() => false)) return;
     try { await opener(); } catch { /* target not ready yet */ }
     try { await expected.waitFor({ state: "visible", timeout: 2500 }); return; }
     catch { await sleep(500); }
   }
+  if (await expected.isVisible().catch(() => false)) return;
   await opener();
   await expected.waitFor({ state: "visible", timeout: 5000 });
 }
@@ -316,15 +333,64 @@ async function startApp() {
     }
   });
 
-  for (let i = 0; i < 40; i++) {
+  // #312 — the health budget is a WALL-CLOCK BET ON A MACHINE WE DO NOT CONTROL, and the old one
+  // (40 x 500ms = 20s) was losing it. Measured on a loaded box: the app came healthy at 20.0s
+  // against a 20.0s budget — a coin flip that reported "App did not become healthy in time" for a
+  // tree that was perfectly fine, with no stderr to explain it (the app had not crashed; it was
+  // merely slow). A cold .NET start has to JIT, open SQLite, and run every Ensure* schema patcher.
+  //
+  // Raising the ceiling hides NOTHING. This is a readiness POLL, not a race: it returns the instant
+  // the app answers, so an idle run is not one millisecond slower. It only stops a busy machine from
+  // failing a green tree — which is the whole point, because a gate that only works when the box is
+  // quiet is a gate nobody can trust. (Contrast the click timeouts, which must NOT be widened: there
+  // the bigger number would hide a real race. See clickUntil above.)
+  const startedAt = Date.now();
+  const healthDeadline = startedAt + 90_000;
+
+  // What the LAST probe actually saw. "Never answered" and "answered, but said it is not ok" are
+  // completely different bugs — a hang or a pinned CPU vs. an app that is up and deliberately
+  // reporting unhealthy — and a message that conflates them sends the next person hunting the wrong
+  // one. So record which it was, and say so. (Copilot, PR #313.)
+  let lastProbe = "never got a response (connection refused, or the probe timed out)";
+
+  while (Date.now() < healthDeadline) {
     if (startupError) throw new Error(startupError);
     try {
-      const r = await fetch(`${baseUrl}/api/admin/health`);
-      if (r.ok && (await r.json()).status === "ok") { started = true; log("App is up."); return; }
-    } catch { /* not ready */ }
-    await sleep(500);
+      // Bound the request, or the deadline above is a lie. Node's fetch (undici) defaults
+      // `headersTimeout` to 300s, so a server that ACCEPTS the connection and then never answers —
+      // a deadlock, a locked DB, a pathological JIT — parks this loop for five minutes: the
+      // deadline is only tested BETWEEN iterations, and `startupError` (set by the process `exit`
+      // handler) never gets read either, so a crashed app is not noticed. (Gemini, PR #313.)
+      //
+      // 5s, not 2s. The abort must sit comfortably ABOVE any plausible healthy-but-slow response,
+      // because aborting a good one and retrying forever is precisely the bug this PR exists to
+      // kill: measured, /api/admin/health took 812ms under a pinned CPU, and the FIRST call also
+      // pays for JIT. Aborting early is otherwise cheap — the next poll is 250ms away.
+      const r = await fetch(`${baseUrl}/api/admin/health`, { signal: AbortSignal.timeout(5000) });
+      const body = await r.text();
+      let status = null;
+      try { status = JSON.parse(body)?.status; } catch { /* not JSON — record it below */ }
+
+      if (r.ok && status === "ok") {
+        started = true;
+        log(`App is up. (${((Date.now() - startedAt) / 1000).toFixed(1)}s)`);
+        return;
+      }
+      lastProbe = `answered HTTP ${r.status}, body: ${body.slice(0, 160)}`;
+    } catch (e) {
+      lastProbe = `never got a response (${e.name}: ${e.message})`;
+    }
+    await sleep(250);
   }
-  throw new Error("App did not become healthy in time" + (stderrTail ? `\n--- stderr ---\n${stderrTail}` : ""));
+
+  throw new Error(
+    `App did not report healthy within 90s (waited ${((Date.now() - startedAt) / 1000).toFixed(1)}s). ` +
+    `It did not crash.\n` +
+    `  Last probe of /api/admin/health: ${lastProbe}\n` +
+    `  If it never answered, the app never came up — on a heavily loaded machine that is the ` +
+    `likeliest cause, so check CPU before suspecting the code.\n` +
+    `  If it answered, the app IS up and is deliberately reporting unhealthy — read the body above.` +
+    (stderrTail ? `\n--- stderr ---\n${stderrTail}` : ""));
 }
 
 function stopApp() {
@@ -348,6 +414,44 @@ async function main() {
 
   try {
     const stamp = Date.now();
+
+    // ── Regression guard (#312): clickUntil must not re-click an opener it has already opened ──
+    // Why this is not a browser scenario. The bug needs `waitFor` to MISS while the click ACTUALLY
+    // WORKED — a starved SignalR circuit, which is exactly the non-determinism the bug is made of.
+    // Staging that in a live browser means racing the same coin flip the bug is, and a guard that
+    // only fails when the machine happens to be busy is not a guard. So the REAL clickUntil is
+    // driven with a doubled locator whose first wait misses on purpose. The function under test is
+    // the real one; only its inputs are doubled. Deterministic, and it fails for the right reason.
+    //
+    // It cost a full false bisect to find: two runs failed on "Deleting an idea removes its card"
+    // while a CONTROL RUN AT THE SAME COMMIT PASSED — which reads exactly like a regression in the
+    // code under test. It was not. It was this.
+    await test("clickUntil does not re-click a toggle it has already opened (#312)", async () => {
+      let isOpen = false;        // the ⋮ menu: every click FLIPS it
+      let clicks = 0;
+      let firstWaitMisses = true;
+
+      const opener = async () => { clicks++; isOpen = !isOpen; };
+      const expected = {
+        isVisible: async () => isOpen,
+        waitFor: async () => {
+          // The render lands, but not before the 2500ms window — the whole bug in one line.
+          if (firstWaitMisses) { firstWaitMisses = false; throw new Error("Timeout 2500ms exceeded"); }
+          if (!isOpen) throw new Error("not visible");
+        },
+      };
+
+      await clickUntil(opener, expected);
+
+      assert(clicks === 1,
+        `clickUntil clicked the toggle ${clicks}x. It must click ONCE: the first waitFor missed ` +
+        `(slow render) even though the click had already worked, so the old code flipped the ⋮ ` +
+        `back SHUT and then open again. In a real browser that is a menu flickering closed under ` +
+        `the caller, whose very next line clicks an item inside it — hence the random ` +
+        `"locator.click: Timeout 15000ms exceeded". Check the expected element BEFORE re-clicking.`);
+      assert(isOpen,
+        "clickUntil returned with the menu CLOSED — the caller is about to click into nothing.");
+    });
 
     // ── Scenario A: create a project through the Home "New Project" modal ──
     const modalProjectName = `E2E Modal ${stamp}`;
