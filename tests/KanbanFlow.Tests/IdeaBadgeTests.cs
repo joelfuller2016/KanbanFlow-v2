@@ -95,6 +95,36 @@ public sealed class IdeaBadgeTests
         Assert.Equal("Sub-scope", IdeaBadge.PlanPreview("# Scope\n## Sub-scope"));
     }
 
+    [Fact]
+    public void PlanPreview_HeadingOnlyPlan_IsCappedLikeEveryOtherPreview()
+    {
+        // THE SEAM (Copilot, PR #300). There was a heading-only test — the one directly above, whose
+        // headings are four words long — and there was a cap test, which only ever runs down the
+        // CONTENT path. Nothing tested the cap ON the heading-only path, and that exit returned the
+        // heading raw. A heading is user text of unbounded length, so `# <200 chars>` rendered a
+        // 200-char tooltip. Two tests, each covering one axis, and the bug lived in their gap.
+        var preview = IdeaBadge.PlanPreview("# " + new string('a', 200));
+
+        Assert.EndsWith("…", preview);
+        Assert.Equal(PlanPreviewCap + 1, preview.Length);
+        Assert.Equal(new string('a', PlanPreviewCap) + "…", preview);
+    }
+
+    [Fact]
+    public void PlanPreview_HeadingOnlyPlan_DoesNotSplitAGraphemeClusterAtTheCap()
+    {
+        // Not redundant with the fix above: this is what proves the heading-only exit shares the ONE
+        // Elide rather than growing a second, weaker copy of the cap. A `heading[..120]` patch would
+        // satisfy the length assertion and still slice 🇺🇸 (two surrogate pairs, one glyph) in half.
+        var plan = "# " + new string('a', 118) + "\U0001F1FA\U0001F1F8" + new string('b', 50);
+
+        var preview = IdeaBadge.PlanPreview(plan);
+
+        Assert.False(HasUnpairedSurrogate(preview), $"unpaired surrogate: {Describe(preview)}");
+        Assert.DoesNotContain("\U0001F1FA", preview); // no half-flag
+        Assert.Equal(new string('a', 118) + "…", preview);
+    }
+
     [Theory]
     [InlineData(null)]
     [InlineData("")]

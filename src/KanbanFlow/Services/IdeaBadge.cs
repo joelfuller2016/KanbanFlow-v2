@@ -92,23 +92,35 @@ public static class IdeaBadge
                 continue;
             }
 
-            var preview = heading is null ? line : $"{heading}: {line}";
-
-            if (preview.Length <= PlanPreviewMaxLength)
-                return preview;
-
-            var cut = GraphemeSafeCut(preview, PlanPreviewMaxLength);
-
-            // A single grapheme longer than the ENTIRE cap (a base char under ~120 stacked combining
-            // marks — "Zalgo" text). There is no honest prefix to show, so say what we always say
-            // when a plan has no readable content: the generic tooltip, never a broken half-glyph.
-            return cut == 0
-                ? PlanFallback
-                : string.Concat(preview.AsSpan(0, cut).TrimEnd(), "…");
+            return Elide(heading is null ? line : $"{heading}: {line}");
         }
 
-        // A plan that is nothing BUT headings still deserves its most specific one as the tooltip.
-        return heading ?? PlanFallback;
+        // A plan that is nothing BUT headings still deserves its most specific one as the tooltip —
+        // and it goes through the SAME cap. A heading is user text of unbounded length, and this exit
+        // used to return it raw, so a lone `# <400 chars>` rendered a 400-char tooltip. There was a
+        // heading-only test and there was a cap test; nothing tested the cap ON the heading-only
+        // path. (Copilot, PR #300.)
+        return heading is null ? PlanFallback : Elide(heading);
+    }
+
+    /// <summary>
+    /// The one place the cap is applied. Every exit from <see cref="PlanPreview"/> that can return
+    /// user text routes through it, so a future third exit cannot quietly ship an unbounded tooltip
+    /// the way the heading-only one did.
+    /// </summary>
+    private static string Elide(string preview)
+    {
+        if (preview.Length <= PlanPreviewMaxLength)
+            return preview;
+
+        var cut = GraphemeSafeCut(preview, PlanPreviewMaxLength);
+
+        // A single grapheme longer than the ENTIRE cap (a base char under ~120 stacked combining
+        // marks — "Zalgo" text). There is no honest prefix to show, so say what we always say
+        // when a plan has no readable content: the generic tooltip, never a broken half-glyph.
+        return cut == 0
+            ? PlanFallback
+            : string.Concat(preview.AsSpan(0, cut).TrimEnd(), "…");
     }
 
     /// <summary>
