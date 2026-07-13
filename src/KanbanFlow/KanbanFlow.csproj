@@ -29,8 +29,8 @@
          That breaks the -warnaserror PR gate (NU1903). 2.7.5 is the first patched 2.x build and
          satisfies the open-ended minimum without NU1608. Flows transitively into
          KanbanFlow.Tests via the ProjectReference. -->
-    <PackageReference Include="Microsoft.OpenApi" Version="2.7.5" />
-    <PackageReference Include="ModelContextProtocol.AspNetCore" Version="1.4.0" />
+    <PackageReference Include="Microsoft.OpenApi" Version="2.10.0" />
+    <PackageReference Include="ModelContextProtocol.AspNetCore" Version="1.4.1" />
     <!-- Security pin (#214): EF Core Sqlite 10.0.9 drags in the native SQLite binary
          SQLitePCLRaw.lib.e_sqlite3 2.1.11, flagged by advisory GHSA-2m69-gcr7-jv3q
          (vulnerable range <= 2.1.11). That breaks the -warnaserror PR gate (NU1903).
@@ -39,7 +39,7 @@
          this upgrade satisfies the graph without NU1608 and keeps the managed layer
          EF Core was built against. Only the native lib is flagged, so only it is
          pinned. This flows transitively into KanbanFlow.Tests via the ProjectReference. -->
-    <PackageReference Include="SQLitePCLRaw.lib.e_sqlite3" Version="3.50.3" />
+    <PackageReference Include="SQLitePCLRaw.lib.e_sqlite3" Version="3.53.3" />
   </ItemGroup>
 
 </Project>
