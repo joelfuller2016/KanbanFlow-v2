@@ -72,7 +72,14 @@ public static class IdeaBadge
 
         string? heading = null;
 
-        foreach (var rawLine in plan.Split('\n'))
+        // StringReader, not Split: this loop RETURNS on the first content line, so a plan of the
+        // usual shape ("## Problem" / "Users can't find X." / "## Approach" / …) reads TWO lines and
+        // leaves. Split would materialise every line of the document first — an eager array behind a
+        // lazy scan — and PlanPreview runs once per card, per render. ReadLine also handles \r\n and
+        // a lone \r, which Split('\n') does not. (Gemini, PR #300.)
+        using var reader = new StringReader(plan);
+
+        while (reader.ReadLine() is { } rawLine)
         {
             var trimmed = rawLine.Trim();
             var isHeading = trimmed.StartsWith('#');

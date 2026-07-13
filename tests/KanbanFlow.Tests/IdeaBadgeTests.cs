@@ -88,6 +88,20 @@ public sealed class IdeaBadgeTests
             IdeaBadge.PlanPreview("# Scope\n\n   \n- The first real line.\nA later line."));
     }
 
+    [Theory]
+    [InlineData("# Scope\nThe content line.")]     // LF
+    [InlineData("# Scope\r\nThe content line.")]   // CRLF — Split('\n') left a trailing \r that Trim() ate
+    [InlineData("# Scope\rThe content line.")]     // lone CR — Split('\n') saw the WHOLE THING as one line
+    public void PlanPreview_HandlesEveryLineEnding(string plan)
+    {
+        // The parser reads by line, so what counts as a line is load-bearing. `Plan` arrives from a
+        // textarea *and* from REST/MCP, so the line ending is whatever the caller sent. The lone-CR
+        // case is the one that was actually wrong: `Split('\n')` yields a single element, the whole
+        // string reads as one `#` heading, and the tooltip came back as "Scope\rThe content line."
+        // — heading and content welded together with a control character in the middle.
+        Assert.Equal("Scope: The content line.", IdeaBadge.PlanPreview(plan));
+    }
+
     [Fact]
     public void PlanPreview_HeadingOnlyPlan_FallsBackToItsMostSpecificHeading()
     {
