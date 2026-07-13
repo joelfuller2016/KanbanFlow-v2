@@ -349,13 +349,23 @@ async function startApp() {
   while (Date.now() < healthDeadline) {
     if (startupError) throw new Error(startupError);
     try {
-      const r = await fetch(`${baseUrl}/api/admin/health`);
+      // Bound the request, or the deadline above is a lie. Node's fetch (undici) defaults
+      // `headersTimeout` to 300s, so a server that ACCEPTS the connection and then never answers —
+      // a deadlock, a locked DB, a pathological JIT — parks this loop for five minutes: the
+      // deadline is only tested BETWEEN iterations, and `startupError` (set by the process `exit`
+      // handler) never gets read either, so a crashed app is not noticed. (Gemini, PR #313.)
+      //
+      // 5s, not 2s. The abort must sit comfortably ABOVE any plausible healthy-but-slow response,
+      // because aborting a good one and retrying forever is precisely the bug this PR exists to
+      // kill: measured, /api/admin/health took 812ms under a pinned CPU, and the FIRST call also
+      // pays for JIT. Aborting early is otherwise cheap — the next poll is 250ms away.
+      const r = await fetch(`${baseUrl}/api/admin/health`, { signal: AbortSignal.timeout(5000) });
       if (r.ok && (await r.json()).status === "ok") {
         started = true;
         log(`App is up. (${((Date.now() - startedAt) / 1000).toFixed(1)}s)`);
         return;
       }
-    } catch { /* not ready */ }
+    } catch { /* not ready, or the probe timed out — poll again */ }
     await sleep(250);
   }
   throw new Error(
