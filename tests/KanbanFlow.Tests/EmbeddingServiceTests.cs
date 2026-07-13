@@ -1,6 +1,7 @@
 using KanbanFlow.Services;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Time.Testing;
 
 namespace KanbanFlow.Tests;
 
@@ -16,13 +17,24 @@ public sealed class EmbeddingServiceTests
 {
     private const string FakeModel = "fake-embed-model";
 
+    // Generous hang-guard for the rendezvous waits below. This is NOT a race budget — the timeout
+    // under test is driven by a FakeTimeProvider, so it fires when the test says so. This only stops
+    // a genuine deadlock from hanging the suite, and it lives in the TEST BODY (not inside the fake)
+    // so a real bug surfaces as "the retry never started" rather than corrupting the asserted string.
+    private static readonly TimeSpan HangGuard = TimeSpan.FromSeconds(30);
+
     private static EmbeddingService NewService(
-        IEmbeddingGenerator<string, Embedding<float>> generator, EmbeddingOptions? config = null, int? capacity = null)
+        IEmbeddingGenerator<string, Embedding<float>> generator,
+        EmbeddingOptions? config = null,
+        int? capacity = null,
+        TimeProvider? timeProvider = null)
     {
         config ??= new EmbeddingOptions { Model = "test-embed-model", TimeoutMs = 5_000 };
-        return capacity is { } c
-            ? new EmbeddingService(generator, config, NullLogger<EmbeddingService>.Instance, c)
-            : new EmbeddingService(generator, config, NullLogger<EmbeddingService>.Instance);
+        // capacity 0 ⇒ the service falls back to its own DefaultCacheCapacity (EmbeddingService.cs:76),
+        // so the default path stays identical without duplicating the constant here.
+        return new EmbeddingService(
+            generator, config, NullLogger<EmbeddingService>.Instance,
+            capacity ?? 0, timeProvider);
     }
 
     // Canned, content-derived 3-dim vector: identical text ⇒ identical vector; different text ⇒
@@ -245,21 +257,42 @@ public sealed class EmbeddingServiceTests
     [Fact]
     public async Task EmbedAsync_Timeout_IsTreatedAsTransient_RetriesThenFailsSoft()
     {
-        // The fake blocks until its (linked) token is cancelled; the tiny per-attempt timeout fires
-        // and surfaces as a cancellation the wrapper classifies as transient — NOT a caller cancel,
-        // since the caller token below is never cancelled.
+        // #262 — this test used to be flaky, and the flake was self-inflicted. The old version raced a
+        // REAL 30ms per-attempt timeout against a 2-second watchdog inside the fake. Under full-suite
+        // parallelism the thread pool starved the 30ms CTS, the watchdog won, and it threw a
+        // TimeoutException — which IsTransient (EmbeddingService.cs:306-313, `_ => false`) classifies
+        // as NON-transient. So the watchdog short-circuited the very retry this test exists to verify,
+        // and the assertion failed on the watchdog's message instead of "timed out".
+        //
+        // Now the per-attempt timeout is driven by a FakeTimeProvider: the test ADVANCES the clock
+        // rather than waiting on it. No race, no watchdog, no wall-clock dependency.
+        var time = new FakeTimeProvider();
+        using var enteredGenerator = new SemaphoreSlim(0);
+
         var fake = new FakeEmbeddingGenerator(async (_, _, token) =>
         {
-            var wait = Task.Delay(Timeout.Infinite, token);
-            var watchdog = Task.Delay(TimeSpan.FromSeconds(2), CancellationToken.None);
-            if (await Task.WhenAny(wait, watchdog) == watchdog)
-                throw new TimeoutException("Test watchdog: EmbeddingService did not cancel the attempt token.");
-            await wait;
+            // We are inside the generator, so the service has already armed its timeout CTS.
+            enteredGenerator.Release();
+            // Block until the SERVICE cancels us — never on a timer of our own.
+            await Task.Delay(Timeout.Infinite, token);
             return new GeneratedEmbeddings<Embedding<float>>(new[] { Canned("x") });
         });
-        var service = NewService(fake, new EmbeddingOptions { Model = "test-embed-model", TimeoutMs = 30 });
+        var service = NewService(
+            fake,
+            new EmbeddingOptions { Model = "test-embed-model", TimeoutMs = 30 },
+            timeProvider: time);
 
-        var result = await service.EmbedAsync("ping", CancellationToken.None);
+        var call = service.EmbedAsync("ping", CancellationToken.None);
+
+        // Attempt 1: wait until the generator is running, then fire its timeout.
+        Assert.True(await enteredGenerator.WaitAsync(HangGuard), "attempt 1 never reached the generator");
+        time.Advance(TimeSpan.FromMilliseconds(31));
+
+        // Attempt 2 (the retry — the actual thing under test): same again.
+        Assert.True(await enteredGenerator.WaitAsync(HangGuard), "the retry never started — timeout was not treated as transient");
+        time.Advance(TimeSpan.FromMilliseconds(31));
+
+        var result = await call;
 
         Assert.False(result.Ok);
         Assert.Contains("timed out", result.Error);

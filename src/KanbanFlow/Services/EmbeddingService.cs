@@ -29,6 +29,9 @@ public sealed class EmbeddingService : IEmbeddingService
     private readonly IEmbeddingGenerator<string, Embedding<float>> _generator;
     private readonly EmbeddingOptions _config;
     private readonly ILogger<EmbeddingService> _logger;
+    // TimeProvider.System in production; a FakeTimeProvider in tests so the per-attempt timeout is
+    // deterministic rather than a wall-clock race the thread pool can lose under load (#262).
+    private readonly TimeProvider _timeProvider;
     private readonly EmbeddingGenerationOptions? _generationOptions;
 
     // Bounded, thread-safe content-hash → (vector + provider-reported model) cache. The dictionary
@@ -58,17 +61,20 @@ public sealed class EmbeddingService : IEmbeddingService
     }
 
     // Test seam (InternalsVisibleTo = KanbanFlow.Tests): lets a test pick a tiny cache capacity to
-    // prove eviction is real without embedding thousands of strings.
+    // prove eviction is real without embedding thousands of strings, and supply a fake TimeProvider
+    // so the per-attempt timeout fires deterministically instead of racing the wall clock (#262).
     internal EmbeddingService(
         IEmbeddingGenerator<string, Embedding<float>> generator,
         EmbeddingOptions config,
         ILogger<EmbeddingService> logger,
-        int cacheCapacity)
+        int cacheCapacity,
+        TimeProvider? timeProvider = null)
     {
         _generator = generator ?? throw new ArgumentNullException(nameof(generator));
         _config = ValidateConfig(config);
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         _capacity = cacheCapacity > 0 ? cacheCapacity : DefaultCacheCapacity;
+        _timeProvider = timeProvider ?? TimeProvider.System;
 
         // Only send generation options when there is something to override. A configured (> 0)
         // dimensionality is requested from the provider; otherwise null ⇒ provider-native size.
@@ -216,7 +222,10 @@ public sealed class EmbeddingService : IEmbeddingService
             ct.ThrowIfCancellationRequested();
 
             // Per-attempt timeout, linked to the caller's token so caller-cancel still wins the race.
-            using var timeoutCts = new CancellationTokenSource(_config.TimeoutMs);
+            // Driven by _timeProvider (TimeProvider.System in production) so a test can advance the
+            // clock and fire this deterministically rather than waiting on a real 30ms that thread-pool
+            // starvation can delay past the test's own patience (#262).
+            using var timeoutCts = new CancellationTokenSource(TimeSpan.FromMilliseconds(_config.TimeoutMs), _timeProvider);
             using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(ct, timeoutCts.Token);
             try
             {
