@@ -344,8 +344,15 @@ async function startApp() {
   // failing a green tree — which is the whole point, because a gate that only works when the box is
   // quiet is a gate nobody can trust. (Contrast the click timeouts, which must NOT be widened: there
   // the bigger number would hide a real race. See clickUntil above.)
-  const healthDeadline = Date.now() + 90_000;
   const startedAt = Date.now();
+  const healthDeadline = startedAt + 90_000;
+
+  // What the LAST probe actually saw. "Never answered" and "answered, but said it is not ok" are
+  // completely different bugs — a hang or a pinned CPU vs. an app that is up and deliberately
+  // reporting unhealthy — and a message that conflates them sends the next person hunting the wrong
+  // one. So record which it was, and say so. (Copilot, PR #313.)
+  let lastProbe = "never got a response (connection refused, or the probe timed out)";
+
   while (Date.now() < healthDeadline) {
     if (startupError) throw new Error(startupError);
     try {
@@ -360,18 +367,29 @@ async function startApp() {
       // kill: measured, /api/admin/health took 812ms under a pinned CPU, and the FIRST call also
       // pays for JIT. Aborting early is otherwise cheap — the next poll is 250ms away.
       const r = await fetch(`${baseUrl}/api/admin/health`, { signal: AbortSignal.timeout(5000) });
-      if (r.ok && (await r.json()).status === "ok") {
+      const body = await r.text();
+      let status = null;
+      try { status = JSON.parse(body)?.status; } catch { /* not JSON — record it below */ }
+
+      if (r.ok && status === "ok") {
         started = true;
         log(`App is up. (${((Date.now() - startedAt) / 1000).toFixed(1)}s)`);
         return;
       }
-    } catch { /* not ready, or the probe timed out — poll again */ }
+      lastProbe = `answered HTTP ${r.status}, body: ${body.slice(0, 160)}`;
+    } catch (e) {
+      lastProbe = `never got a response (${e.name}: ${e.message})`;
+    }
     await sleep(250);
   }
+
   throw new Error(
-    `App did not become healthy within 90s (waited ${((Date.now() - startedAt) / 1000).toFixed(1)}s). ` +
-    `It did not crash — it never answered /api/admin/health. If the machine is under heavy load, ` +
-    `that is the likeliest cause; check CPU before suspecting the code.` +
+    `App did not report healthy within 90s (waited ${((Date.now() - startedAt) / 1000).toFixed(1)}s). ` +
+    `It did not crash.\n` +
+    `  Last probe of /api/admin/health: ${lastProbe}\n` +
+    `  If it never answered, the app never came up — on a heavily loaded machine that is the ` +
+    `likeliest cause, so check CPU before suspecting the code.\n` +
+    `  If it answered, the app IS up and is deliberately reporting unhealthy — read the body above.` +
     (stderrTail ? `\n--- stderr ---\n${stderrTail}` : ""));
 }
 
