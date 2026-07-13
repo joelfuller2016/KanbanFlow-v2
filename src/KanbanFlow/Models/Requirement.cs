@@ -19,5 +19,9 @@ public class Requirement
     public TaskItem? TaskItem { get; set; }
 }
 
-public enum RequirementPriority { P0, P1, P2 }
-public enum RequirementStatus { Open, InProgress, Done }
+// ON-DISK CONTRACT: persisted as a raw ordinal int (no HasConversion). Append only — never
+// change, reorder, or remove a member. Locked by PersistedEnumOrdinalTests. See CommentType.
+public enum RequirementPriority { P0 = 0, P1 = 1, P2 = 2 }
+// ON-DISK CONTRACT: persisted as a raw ordinal int (no HasConversion). Append only — never
+// change, reorder, or remove a member. Locked by PersistedEnumOrdinalTests. See CommentType.
+public enum RequirementStatus { Open = 0, InProgress = 1, Done = 2 }

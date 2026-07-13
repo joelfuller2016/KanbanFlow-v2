@@ -24,19 +24,23 @@ public class TaskItem
     public List<TaskDependency> BlockingDependencies { get; set; } = [];
 }
 
+// ON-DISK CONTRACT: persisted as a raw ordinal int (no HasConversion). Append only — never
+// change, reorder, or remove a member. Locked by PersistedEnumOrdinalTests. See CommentType.
 public enum WorkStatus
 {
-    Backlog,
-    Todo,
-    InProgress,
-    Review,
-    Done
+    Backlog = 0,
+    Todo = 1,
+    InProgress = 2,
+    Review = 3,
+    Done = 4
 }
 
+// ON-DISK CONTRACT: persisted as a raw ordinal int (no HasConversion). Append only — never
+// change, reorder, or remove a member. Locked by PersistedEnumOrdinalTests. See CommentType.
 public enum TaskPriority
 {
-    Low,
-    Medium,
-    High,
-    Critical
+    Low = 0,
+    Medium = 1,
+    High = 2,
+    Critical = 3
 }

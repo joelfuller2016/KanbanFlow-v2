@@ -14,8 +14,11 @@ public class TaskDependency
     public TaskItem DependsOnTaskItem { get; set; } = null!;
 }
 
+// ON-DISK CONTRACT: persisted as a raw ordinal int (no HasConversion). Append only — never
+// change, reorder, or remove a member. Locked by PersistedEnumOrdinalTests. See CommentType.
+// This table is currently EMPTY on dev boxes, so a reorder here is completely invisible locally.
 public enum TaskDependencyType
 {
-    Blocks,
-    DependsOn
+    Blocks = 0,
+    DependsOn = 1
 }
