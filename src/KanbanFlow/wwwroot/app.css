@@ -12,12 +12,34 @@ a, .btn-link {
     border-color: #1861ac;
 }
 
-/* High-priority badge ("badge bg-orange text-white"). Bootstrap has no bg-orange,
-   so without this the High badge rendered transparent (white-on-transparent = invisible).
-   Bootstrap's .badge sets no background, so no !important is needed to win.
-   Deep orange keeps white text above WCAG AA contrast (~6:1). */
+/* ── Priority palette: the ONE semantic colour ramp in the app (design/ui/design-tokens.md §1) ──
+   These exist because the same concept carried two different values. High priority was #fd7e14 as
+   a card left-border (KanbanCard.razor, GetPriorityBorderColor) but #c2410c as a badge (.bg-orange
+   below). They never met, so nobody noticed — until an idea card gained BOTH a priority left-border
+   and a priority badge, which puts the two oranges 8px apart on the same card.
+
+   The token is now the single source of truth. Low/Medium/Critical are pinned to the exact colours
+   the Bootstrap badge utilities already use (.bg-secondary / .bg-warning / .bg-danger), so border
+   and badge agree by construction — without overriding a single Bootstrap utility.
+
+   RESIDUAL (follow-up): KanbanCard.razor still hard-codes #fd7e14 in a C# switch. It is frozen for
+   this PR — the task board's rendered HTML is proven byte-identical and is not worth the risk here.
+   Until it is migrated to --kf-prio-high, High is #fd7e14 on a *task* card's border and #c2410c
+   everywhere else. The two are never adjacent, so this is exactly the status quo, not a new bug. */
+:root {
+    --kf-prio-low: #6c757d;                   /* = Bootstrap $gray-600, matches .bg-secondary */
+    --kf-prio-medium: #ffc107;                /* = Bootstrap $warning,  matches .bg-warning   */
+    --kf-prio-high: #c2410c;                  /* deep orange; white text 5.2:1 — WCAG AA ✅    */
+    --kf-prio-critical: #dc3545;              /* = Bootstrap $danger,   matches .bg-danger    */
+    --kf-prio-none: var(--bs-border-color);   /* no priority set: the slot stays, the meaning goes */
+}
+
+/* High-priority badge ("badge bg-orange text-white"). Bootstrap has no bg-orange, so without this
+   the High badge rendered transparent (white-on-transparent = invisible). Bootstrap's .badge sets
+   no background, so no !important is needed to win. Now routed through the token above, so the
+   badge and an idea card's left border cannot drift apart again. */
 .bg-orange {
-    background-color: #c2410c;
+    background-color: var(--kf-prio-high);
 }
 
 .btn:focus, .btn:active:focus, .btn-link.nav-link:focus, .form-control:focus, .form-check-input:focus {
@@ -97,7 +119,13 @@ h1:focus {
     box-shadow: 0 0.5rem 1rem rgba(0, 0, 0, 0.25) !important;
 }
 
-.board-column-cards {
+/* Both card containers keep a droppable-sized floor. `.board-column-cards-inert` is the SAME
+   container in a column that must not accept drops (KanbanColumn.CardsCssClass): it deliberately
+   does NOT emit `board-column-cards`, because kanbanflow.js:56 binds SortableJS to that class and
+   nothing else — so omitting it is how a column becomes put:false AND pull:false with zero JS
+   changes. It still needs the height, or the Promoted column collapses to nothing. */
+.board-column-cards,
+.board-column-cards-inert {
     min-height: 50px;
 }
 
@@ -282,9 +310,54 @@ h1:focus {
     display: none;
 }
 
-.kanban-board {
+/* The board's horizontal scroll container.
+
+   It has NEVER carried a `.kanban-board` class — KanbanBoard.razor only sets
+   data-testid="kanban-board" (true at HEAD too; Wave 1 left that element untouched). So this rule
+   and its mobile half below have been DEAD since they were written: the mobile board's gap,
+   padding-bottom and scrollbar-gutter have never once applied.
+
+   Retargeted at the attribute the element actually emits. The data-testid is a frozen contract (the
+   e2e suite keys off it, and so does kanbanflow.js:149 — which already hedges these very two
+   selectors), so it is a stable style hook and CSS and JS now agree on what "the board" is. The
+   class is kept in the selector so that adding it later is still a no-op.
+
+   ⚠️ This makes the mobile rule below live for the first time, which CHANGES mobile task-board
+   spacing (gap .5rem → .75rem, plus 1rem of bottom padding). Intentional: that is the fix. */
+.kanban-board,
+[data-testid="kanban-board"] {
     min-width: 0;
     scroll-padding-inline: .5rem;
+}
+
+/* The board's outer shell (KanbanBoard.razor's <section>), and the reason /ideas no longer scrolls
+   the whole PAGE sideways on a phone.
+
+   A kanban board is *supposed* to scroll horizontally — but INSIDE itself. On /ideas the overflow was
+   escaping to the document: at 390px the viewport's scroll area ran to 932px, so the header, the
+   filter bar and every other thing on the page slid too. The board's own `overflow-hidden` looked
+   like it should have stopped that, and body.scrollWidth agreed (a perfectly innocent 390) — only
+   documentElement disagreed. That split is the tell.
+
+   Bootstrap's `.visually-hidden` is `position: absolute !important`, and KanbanColumn puts two in
+   every column heading (" column," and " items" — they are what make the column's accessible name
+   read "Backlog column, 3 items" instead of "Backlog 3"). An absolutely-positioned box is clipped
+   only by ancestors in its CONTAINING-BLOCK chain, and every ancestor here was `position: static` —
+   so those spans resolved against the INITIAL containing block, sailed straight through the section's
+   overflow-hidden, and a span sitting inside a column at x≈900 pulled the viewport's scroll area out
+   with it. `position: relative` makes this section their containing block, so the clip it already had
+   finally applies to them.
+
+   /project/{id} never showed the bug for one accidental reason: `.project-shell` above is
+   `position: relative` and was silently catching them. The board now contains its own overflow on ANY
+   page instead of borrowing a container's.
+
+   Chosen over `overflow`/`contain: paint` on a wrapper precisely BECAUSE it adds no new clipping: the
+   ⋮ dropdown menus are already inside this section's clip chain and are unaffected, whereas a fresh
+   clip would have cut them off. Costs nothing else: no offsets, and `z-index: auto` means no new
+   stacking context. */
+.kanban-board-shell {
+    position: relative;
 }
 
 .kanban-column {
@@ -320,7 +393,10 @@ h1:focus {
         background: rgba(0, 0, 0, .25);
     }
 
-    .kanban-board {
+    /* Live for the first time — see the note on .kanban-board above. The !important is what it was
+       always for: beating the element's own `gap-2` and `p-2` Bootstrap utilities. */
+    .kanban-board,
+    [data-testid="kanban-board"] {
         gap: .75rem !important;
         padding-bottom: 1rem !important;
         scrollbar-gutter: stable;
@@ -377,4 +453,245 @@ h1:focus {
 /* Long bot comments lean on <details> and wide tables — keep both inside the box. */
 .task-comment-body table { display: block; overflow-x: auto; max-width: 100%; }
 .task-comment-body pre { max-width: 100%; }
+
+/* ══════════════════════════════════════════════════════════════════════════════════════════════
+   Kanban columns — terminal rails, inert columns, drag affordance, priority borders, empty states.
+   Emitted by Components/Shared/KanbanColumn.razor; shared by /project/{id} and /ideas.
+
+   ⚠️ SOURCE ORDER IS LOAD-BEARING. `.kanban-column-terminal` and `.kanban-column-collapsed` have
+   the SAME specificity as `.kanban-column` (0,1,0) — including inside the `max-width: 991.98px`
+   block above, because a media query adds no specificity. They win only because they come LATER in
+   this file. Keep this block last, and keep `-collapsed` after `-terminal`.
+
+   Bootstrap 5.3 is the design system: everything below is a delta Bootstrap genuinely lacks, and
+   every colour is a `var(--bs-*)` so dark mode (#39) stays reachable.
+   ══════════════════════════════════════════════════════════════════════════════════════════════ */
+
+/* ── Terminal columns (Archived / Rejected): present, but never an equal peer ─────────────────── */
+.kanban-column-terminal {
+    --kf-col-surface: var(--bs-tertiary-bg);   /* lighter than a working column's --bs-secondary-bg */
+
+    /* !important is required, and this is the ONLY place it is used to beat Bootstrap: the column
+       root carries the `bg-body-secondary` utility, and EVERY Bootstrap utility ships !important.
+       One scoped escape hatch is extending the design system; a parallel one would be forking it. */
+    background-color: var(--kf-col-surface) !important;
+    flex: 0 1 220px;                           /* NOT `flex: 1 1 0` — never an equal-width peer */
+}
+
+/* De-emphasis by colour VALUE, never by transparency. rgba(33,37,41,.75) on #f8f9fa = 6.7:1 — AA ✅
+   The design also called for `opacity: .92` here and `opacity: .85` on the card stack. Both are
+   DELIBERATELY OMITTED: CSS opacity composites the whole subtree, text included, so .92 drops this
+   heading to ~3.9:1 and .85 drops a card's `text-muted` body to ~3.5:1 — both fail WCAG AA. That is
+   precisely the trap accessibility.md §6 warns about. Hierarchy (width, structure, colour, the
+   collapsed rail) already carries the de-emphasis; transparency would only buy a contrast bug. */
+.kanban-column-terminal > .d-flex > h3 {
+    color: var(--bs-secondary-color);
+}
+
+/* ── Collapsed rail (the terminal columns' default). STILL A LIVE DROP TARGET ─────────────────── */
+/* `.board-column-cards` is still rendered — just narrow — so SortableJS still binds it and
+   drag-to-archive keeps working. Must come after `.kanban-column-terminal`: same specificity. */
+.kanban-column-collapsed {
+    flex: 0 0 3rem;
+    min-width: 3rem;   /* beats `.kanban-column`'s 180px, and its min(82vw, 260px) on mobile */
+    max-width: 3rem;
+}
+
+/* The header becomes a vertical stack: toggle on top, then the rotated name + count (wireframes §4).
+   `column-reverse` because the toggle follows the heading in the DOM — and DOM order is what screen
+   readers and Tab use, so the heading stays first where it matters. */
+.kanban-column-collapsed > .d-flex {
+    flex-direction: column-reverse;
+    gap: .25rem;
+}
+
+/* `.ms-auto` on the toggle is `margin-left: auto !important` — meaningless, and off-centre, once
+   the header is a column. */
+.kanban-column-collapsed > .d-flex > .btn {
+    margin-left: 0 !important;
+}
+
+.kanban-column-collapsed > .d-flex > h3 {
+    writing-mode: vertical-rl;
+    text-orientation: mixed;
+    white-space: nowrap;
+}
+
+/* NEVER rotate a number (wireframes.md §4). writing-mode inherits, so the badge opts back out. */
+.kanban-column-collapsed > .d-flex > h3 .badge {
+    writing-mode: horizontal-tb;
+}
+
+/* ── The status-focused board: ONE column, so let it have the room ───────────────────────────── */
+/* Filtering to a single status renders a board with exactly one column, and `.kanban-column`'s
+   `max-width: 260px` left it as a narrow strip stranded in an otherwise empty page — the user asked
+   to focus a status and got a worse view of it than the full board gave them. A lone column takes
+   the width instead.
+
+   `:only-child` does the whole job with no new markup and no C# flag, and it is what makes this
+   PROVABLY inert on the task board: /project/{id} always renders five columns, so the selector can
+   never match there. It cannot collide with the collapsed rail either — a focused column is never
+   terminal (Ideas.IsTerminalColumn is false whenever a status filter is set, so it is never
+   collapsed) — but `:not(.kanban-column-collapsed)` states that rather than relying on it, and keeps
+   this rule from out-specifying the 3rem rail if that ever stops being true.
+
+   Beats the `max-width: 991.98px` block's `.kanban-column` on specificity (0,4,0 vs 0,1,0), not on
+   source order, so the mobile rules above stay safe to edit. */
+[data-testid="kanban-board"] > .kanban-column:only-child:not(.kanban-column-collapsed) {
+    flex: 1 1 auto;
+    max-width: none;
+}
+
+/* ── Inert column (Promoted): a shelf things arrive on, not a slot things go into ─────────────── */
+/* Four pre-attempt cues (wireframes.md §5): the lock icon in the heading and the persistent hint
+   (both KanbanColumn.razor), this surface + green top accent, and `cursor: default` on its cards
+   (below). The user learns the rule by contrast BEFORE committing the gesture — an error afterwards
+   teaches the same rule but charges them a failed action for the lesson. */
+.kanban-column-inert {
+    --kf-col-surface: color-mix(in srgb, var(--bs-success-bg-subtle) 55%, var(--bs-body-bg));
+    background-color: var(--kf-col-surface) !important;   /* see the note on -terminal */
+    border-top: 3px solid var(--bs-success-border-subtle);
+    box-shadow: none;
+}
+
+/* ── The drag affordance: the strongest "can I pick this up?" cue a pointer UI has ────────────── */
+/* NEW TO BOTH BOARDS, and the cheapest line in the design. `.board-card` was `cursor: pointer` —
+   "click me", not "drag me" — on a surface whose entire point is dragging. Nothing signalled
+   draggability at all. Making draggable cards `grab` and inert ones `default` teaches the Promoted
+   column's rule without a word of copy.
+   Visual only: no DOM, no behaviour, no data-testid. The card's own controls keep `cursor: pointer`
+   (Bootstrap's .btn, and the task card's checkbox via its inline style). */
+.board-column-cards > .board-card {
+    cursor: grab;
+}
+
+.board-column-cards > .board-card:active {
+    cursor: grabbing;
+}
+
+.board-column-cards-inert > .board-card {
+    cursor: default;
+}
+
+/* An inert card does not lift. A hover-lift is a "pick me up" promise this column cannot keep. */
+.board-column-cards-inert > .board-card:hover {
+    transform: none;
+    box-shadow: 0 .125rem .25rem rgba(0, 0, 0, .075);   /* stays at .board-card's resting shadow */
+}
+
+/* ── A card with an OPEN ⋮ menu must out-paint the cards below it ─────────────────────────────── */
+/* Without this, "Promote" and "Delete" are UNREACHABLE on any idea card that has another card under
+   it: the menu opens, renders, survives every clipping check — and is then quietly painted over by
+   the next card. (`elementFromPoint` on those two items returns the NEXT CARD's markup. That is the
+   tell, and it is the only reason this was ever noticed.)
+
+   The culprit is the hover-lift a few lines up: `.board-card:hover { transform: translateY(-1px) }`.
+   A `transform` CREATES A STACKING CONTEXT — so the instant the pointer is on the card, which it
+   always is, because you just clicked that card's ⋮, the card becomes a stacking context and traps
+   the dropdown inside it. The menu's `z-index: 1000` is now scoped to the CARD instead of the board,
+   while the card itself sits at `z-index: auto` — so the next card (also auto, but later in DOM
+   order) paints over the whole subtree, menu included. The menu is never clipped; it is buried.
+
+   Keyboard users never hit it: no hover, no transform, no stacking context, menu on top. Which is
+   precisely how it survived — the ⋮ menu is the WCAG 2.2 §2.5.7 no-drag path, so it was exercised
+   by keyboard and looked fine.
+
+   Lifting the card that owns the open menu into the z>0 paint step puts it above every sibling card,
+   and the menu rides along inside it. `:has()` keeps the lift scoped to the one card with a menu
+   actually open, so no card is ever gratuitously stacked above its neighbours.
+
+   Inert on /project/{id}: KanbanCard has no ⋮ menu, so this can never match there. */
+.board-card:has(.dropdown-menu.show) {
+    z-index: 3;
+}
+
+/* ── Priority left-border: the sort key, drawn (design-tokens.md §4) ──────────────────────────── */
+/* An idea column sorts `Priority desc, CreatedAt desc`, so this border IS the reason the cards are
+   in the order they are in. It encodes PRIORITY and nothing else, ever — a decorative rainbow
+   border would spend the same visual channel on noise.
+   The 3px slot is ALWAYS present: an idea with no priority gets the neutral token, so a card never
+   jumps horizontally between "has a priority" and "doesn't".
+   /project/{id} is untouched by this: KanbanCard sets the same border with an inline `style`
+   computed in C#, and an inline style beats a stylesheet. */
+.board-card {
+    border-left: 3px solid var(--kf-prio-none);
+}
+
+.kf-prio-low      { border-left-color: var(--kf-prio-low); }
+.kf-prio-medium   { border-left-color: var(--kf-prio-medium); }
+.kf-prio-high     { border-left-color: var(--kf-prio-high); }
+.kf-prio-critical { border-left-color: var(--kf-prio-critical); }
+
+/* ── Plan chip (#282): OUTLINE, because the filled channel already belongs to priority ────────── */
+/* Exactly one filled badge per card, and it is priority — a second filled badge would turn the meta
+   row into a colour competition. So the chip is distinguished by its icon and shape, not by hue.
+   Text is --bs-body-color and NOT muted: a plan is evidence, the highest-value signal on the card,
+   and muting it would bury the very thing #282 exists to surface. 16:1 on the card — AA ✅ */
+.idea-plan-chip {
+    border: 1px solid var(--bs-border-color);
+    background-color: var(--bs-body-bg);
+    color: var(--bs-body-color);
+    font-weight: 500;
+}
+
+/* ── Empty-column placeholder (#119, #290) ────────────────────────────────────────────────────── */
+/* KanbanColumn renders this as a `position-absolute … pe-none` SIBLING of the SortableJS container,
+   never a child of it. That is what keeps the container free of non-card children (a placeholder
+   inside it has no data-task-id → parseInt(undefined) → NaN → OnCardMoved throws), while `pe-none`
+   lets a drop aimed at the dead centre of an empty column fall through and still land.
+
+   Typography is DELIBERATELY absent here: both boards dress their own placeholder with Bootstrap
+   utilities, and a font-size on this wrapper would re-scale the task board's `.small` text (which
+   is em-relative) and silently shrink it. All this rule adds is the box. */
+.kanban-column-empty {
+    display: flex;
+
+    /* `column`, not `row`: the default `align-items: stretch` keeps the placeholder full-width. A
+       row flex would shrink-wrap it and visibly narrow the task board's existing dashed box. */
+    flex-direction: column;
+}
+
+/* pe-none is what makes the overlay safe; an interactive placeholder opts its own control back in. */
+.kanban-column-empty > .btn,
+.kanban-column-empty-action {
+    pointer-events: auto;
+}
+
+/* #119: when creating an item directly in this column is a REAL operation, the placeholder IS the
+   button. Never a disabled button — a disabled control invites a click it will refuse. */
+.kanban-column-empty-action {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: .25rem;
+    flex: 1 1 auto;
+    width: 100%;
+    border: 1px dashed var(--bs-border-color);
+    border-radius: var(--bs-border-radius);
+    color: var(--bs-secondary-color);
+    text-decoration: none;
+}
+
+.kanban-column-empty-action:hover,
+.kanban-column-empty-action:focus-visible {
+    border-color: var(--bs-primary-border-subtle);
+    background-color: var(--bs-tertiary-bg);
+    color: var(--bs-body-color);
+}
+
+/* ── prefers-reduced-motion (accessibility.md §8) ─────────────────────────────────────────────── */
+/* Neither board honoured this. The hover-lift is a transform and the cards transition on hover.
+   (SortableJS's own `animation: 150` is a JS option in kanbanflow.js, which is frozen for this PR —
+   CSS cannot reach it. Noted as a follow-up.) */
+@media (prefers-reduced-motion: reduce) {
+    .board-card,
+    .mini-card {
+        transition: none;
+    }
+
+    .board-card:hover {
+        transform: none;
+    }
+}
 

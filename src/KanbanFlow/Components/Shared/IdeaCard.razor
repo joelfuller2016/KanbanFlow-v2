@@ -1,12 +1,26 @@
-@* One idea card for the inbox grid (#180 Phase 4). Mirrors Home.razor's project card:
-   a shadow-sm card with a three-dots actions dropdown (Edit · Promote · Delete), a clamped
-   markdown body preview, and a footer row of status / priority badges + a promoted link. *@
-<div class="card h-100 shadow-sm" data-testid="idea-card-@Idea.Id">
+@* One idea card for the ideas status board (#280) with a Plan indicator (#282).
+
+   Shape (wireframes.md §2): [title ⋮] · clamped markdown body · meta row (priority · Plan · tags) ·
+   footer (Promote button, or the Open-project link once promoted).
+
+   NO STATUS BADGE. On a board the *column* is the status, so a status badge is a tautology — and
+   worse, it fought the priority badge for the same palette (a live idea rendered `Archived`
+   bg-secondary next to `Low` bg-secondary: two identical grey pills meaning unrelated things).
+   Status is still legible: it is the column, and a promoted card carries "Open project →".
+   `IdeaBadge.StatusClass()` stays public + unit-tested for non-board consumers.
+
+   ⚠️ `data-task-id` (NOT `data-idea-id`) is LOAD-BEARING. `kanbanflow.js:66` reads
+   `evt.item.dataset.taskId` unconditionally for BOTH boards, and the JS is frozen (locked
+   decision 6). The name is a misnomer on an idea; renaming it silently kills drag-and-drop. *@
+<div class="card mb-2 board-card @PriorityBorderClass"
+     data-testid="idea-card-@Idea.Id"
+     data-task-id="@Idea.Id">
     <div class="card-body d-flex flex-column">
         <div class="d-flex justify-content-between align-items-start mb-2">
             <h5 class="card-title mb-0" data-testid="idea-card-title-@Idea.Id">@Idea.Title</h5>
             <div class="dropdown">
-                <button class="btn btn-sm btn-link text-muted p-0" data-bs-toggle="dropdown" aria-expanded="false"
+                @* p-1 + lh-1 pads the 20px glyph to a >=24x24 target — WCAG 2.2 §2.5.8 (accessibility.md §4). *@
+                <button type="button" class="btn btn-sm btn-link text-muted p-1 lh-1" data-bs-toggle="dropdown" aria-expanded="false"
                         aria-label="Open idea actions for @Idea.Title" data-testid="idea-card-menu-@Idea.Id">
                     <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" fill="currentColor" class="bi bi-three-dots-vertical" viewBox="0 0 16 16" aria-hidden="true">
                         <path d="M9.5 13a1.5 1.5 0 1 1-3 0 1.5 1.5 0 0 1 3 0m0-5a1.5 1.5 0 1 1-3 0 1.5 1.5 0 0 1 3 0m0-5a1.5 1.5 0 1 1-3 0 1.5 1.5 0 0 1 3 0"/>
@@ -14,17 +28,45 @@
                 </button>
                 <ul class="dropdown-menu dropdown-menu-end">
                     <li>
-                        <button class="dropdown-item" @onclick="() => OnEdit.InvokeAsync(Idea)" data-testid="idea-card-edit-@Idea.Id">Edit</button>
+                        <button type="button" class="dropdown-item" @onclick="() => OnEdit.InvokeAsync(Idea)" data-testid="idea-card-edit-@Idea.Id">Edit</button>
                     </li>
-                    @if (Idea.Status != IdeaStatus.Promoted)
+
+                    @* Keyboard/touch alternative to dragging — the conformance mechanism for
+                       WCAG 2.2 §2.5.7 (Dragging Movements). Bootstrap's dropdown already ships
+                       arrow-key nav, Esc-to-close and focus return, so this costs zero a11y JS.
+                       Rendered only when the page wires OnMoveTo. *@
+                    @if (OnMoveTo.HasDelegate && moveTargets.Length > 0)
                     {
+                        <li><hr class="dropdown-divider" /></li>
+                        <li><h6 class="dropdown-header">Move to</h6></li>
+                        @* @key on the ENUM value, which is unique by construction (moveTargets is a
+                           filtered Enum.GetValues), so each item's @onclick closure stays pinned to
+                           the target it was rendered for when the set changes (it does: the idea's
+                           own status is excluded, so moving a card re-shapes this list). *@
+                        @foreach (var target in moveTargets)
+                        {
+                            <li @key="target">
+                                <button type="button" class="dropdown-item"
+                                        @onclick="() => OnMoveTo.InvokeAsync((Idea, target))"
+                                        data-testid="idea-card-move-@(Idea.Id)-@target">@target</button>
+                            </li>
+                        }
+                    }
+
+                    @* Promote stays in the menu as well as on the card: it is the keyboard path,
+                       and scripts/ui-e2e.mjs:386-389 drives this exact testid. The new footer
+                       button is `idea-card-promote-btn-{id}` precisely so this one can keep its name. *@
+                    @if (!IsPromoted)
+                    {
+                        <li><hr class="dropdown-divider" /></li>
                         <li>
-                            <button class="dropdown-item" @onclick="() => OnPromote.InvokeAsync(Idea)" data-testid="idea-card-promote-@Idea.Id">Promote</button>
+                            <button type="button" class="dropdown-item" @onclick="() => OnPromote.InvokeAsync(Idea)" data-testid="idea-card-promote-@Idea.Id">Promote</button>
                         </li>
                     }
+
                     <li><hr class="dropdown-divider" /></li>
                     <li>
-                        <button class="dropdown-item text-danger" @onclick="() => OnDelete.InvokeAsync(Idea)" data-testid="idea-card-delete-@Idea.Id">Delete</button>
+                        <button type="button" class="dropdown-item text-danger" @onclick="() => OnDelete.InvokeAsync(Idea)" data-testid="idea-card-delete-@Idea.Id">Delete</button>
                     </li>
                 </ul>
             </div>
@@ -36,24 +78,74 @@
 
         <div class="mt-auto pt-3">
             <div class="d-flex flex-wrap align-items-center gap-2">
-                <span class="badge @IdeaBadge.StatusClass(Idea.Status)" data-testid="idea-card-status-@Idea.Id">@Idea.Status</span>
+                @* Exactly ONE filled badge per card, and it is priority. Priority is nullable on an
+                   Idea (unlike TaskItem) — no badge when unset; the left border falls back to the
+                   neutral --kf-prio-none so the card never shifts horizontally. *@
                 @if (Idea.Priority is TaskPriority priority)
                 {
                     <span class="badge @IdeaBadge.PriorityClass(priority)" data-testid="idea-card-priority-@Idea.Id">@priority</span>
                 }
+
+                @* #282: the plan is the signal that separates a worked-out idea from a brain-dump.
+                   An indicator, not the content (the card already clamps Body). OUTLINE, not filled —
+                   the filled channel belongs to priority (design-tokens.md §5). Nothing at all when
+                   there is no plan: a greyed "no plan" chip would be noise on the majority case. *@
+                @if (HasPlan)
+                {
+                    <span class="badge idea-plan-chip d-inline-flex align-items-center gap-1"
+                          data-testid="idea-card-plan-@Idea.Id"
+                          title="@planTooltip"
+                          aria-label="Has a plan">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" fill="currentColor" class="bi bi-list-check" viewBox="0 0 16 16" aria-hidden="true">
+                            <path fill-rule="evenodd" d="M5 11.5a.5.5 0 0 1 .5-.5h9a.5.5 0 0 1 0 1h-9a.5.5 0 0 1-.5-.5m0-4a.5.5 0 0 1 .5-.5h9a.5.5 0 0 1 0 1h-9a.5.5 0 0 1-.5-.5m0-4a.5.5 0 0 1 .5-.5h9a.5.5 0 0 1 0 1h-9a.5.5 0 0 1-.5-.5M3.854 2.146a.5.5 0 0 1 0 .708l-1.5 1.5a.5.5 0 0 1-.708 0l-.5-.5a.5.5 0 1 1 .708-.708L2 3.293l1.146-1.147a.5.5 0 0 1 .708 0m0 4a.5.5 0 0 1 0 .708l-1.5 1.5a.5.5 0 0 1-.708 0l-.5-.5a.5.5 0 1 1 .708-.708L2 7.293l1.146-1.147a.5.5 0 0 1 .708 0m0 4a.5.5 0 0 1 0 .708l-1.5 1.5a.5.5 0 0 1-.708 0l-.5-.5a.5.5 0 0 1 .708-.708l.146.147 1.146-1.147a.5.5 0 0 1 .708 0"/>
+                        </svg>
+                        Plan
+                    </span>
+                }
+
+                @* NO @key here, deliberately — do not "fix" this to match the loop above.
+                   `Tags` is a free-text comma string and IdeaService.Normalize only Trim()s the WHOLE
+                   string (no split, no dedupe), so `bug, bug` reaches this loop as two identical
+                   entries — i.e. two SIBLINGS WITH THE SAME KEY, which Blazor's keyed diff does not
+                   promise to survive. These spans are stateless text: no component identity, no event
+                   handler, no form state, nothing a key could preserve. A key buys nothing here and
+                   stakes a reachable user input on undefined diff behaviour. *@
                 @foreach (var tag in tags)
                 {
                     <span class="badge bg-light text-dark border">#@tag</span>
                 }
             </div>
-            @if (Idea.Status == IdeaStatus.Promoted && Idea.PromotedProjectId is int projectId)
+
+            @if (IsPromoted)
             {
-                <a class="d-inline-flex align-items-center mt-2 small" href="@($"/project/{projectId}")" data-testid="idea-card-project-link-@Idea.Id">
-                    Open project
-                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="currentColor" class="bi bi-arrow-right ms-1" viewBox="0 0 16 16" aria-hidden="true">
-                        <path fill-rule="evenodd" d="M1 8a.5.5 0 0 1 .5-.5h11.793l-3.147-3.146a.5.5 0 0 1 .708-.708l4 4a.5.5 0 0 1 0 .708l-4 4a.5.5 0 0 1-.708-.708L13.293 8.5H1.5A.5.5 0 0 1 1 8"/>
-                    </svg>
-                </a>
+                @* The trophy. This link IS the status (#280 AC5) — which is why no status badge is missed. *@
+                @if (Idea.PromotedProjectId is int projectId)
+                {
+                    <a class="d-inline-flex align-items-center mt-2 small" href="@($"/project/{projectId}")" data-testid="idea-card-project-link-@Idea.Id">
+                        Open project
+                        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="currentColor" class="bi bi-arrow-right ms-1" viewBox="0 0 16 16" aria-hidden="true">
+                            <path fill-rule="evenodd" d="M1 8a.5.5 0 0 1 .5-.5h11.793l-3.147-3.146a.5.5 0 0 1 .708-.708l4 4a.5.5 0 0 1 0 .708l-4 4a.5.5 0 0 1-.708-.708L13.293 8.5H1.5A.5.5 0 0 1 1 8"/>
+                        </svg>
+                    </a>
+                }
+            }
+            else
+            {
+                @* The card's reason for existing, no longer buried in the ⋮ menu (#280 AC4).
+                   Green because the column it sends the card to is green: the action is the colour
+                   of its destination. Outline, so it never outshouts the priority badge.
+                   The page owns the confirm modal — promotion is a one-way door. *@
+                <div class="d-flex justify-content-end mt-2">
+                    <button type="button" class="btn btn-sm btn-outline-success d-inline-flex align-items-center gap-1"
+                            @onclick="() => OnPromote.InvokeAsync(Idea)"
+                            aria-label="Promote @Idea.Title to a project"
+                            data-testid="idea-card-promote-btn-@Idea.Id">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" fill="currentColor" class="bi bi-arrow-up-right" viewBox="0 0 16 16" aria-hidden="true">
+                            <path fill-rule="evenodd" d="M14 2.5a.5.5 0 0 0-.5-.5h-6a.5.5 0 0 0 0 1h4.793L2.146 13.146a.5.5 0 0 0 .708.708L13 3.707V8.5a.5.5 0 0 0 1 0z"/>
+                        </svg>
+                        Promote
+                    </button>
+                </div>
             }
         </div>
     </div>
@@ -65,11 +157,53 @@
     [Parameter] public EventCallback<Idea> OnDelete { get; set; }
     [Parameter] public EventCallback<Idea> OnPromote { get; set; }
 
+    /// <summary>
+    /// Raised by the ⋮ → "Move to" items: the non-drag path to a status change (WCAG 2.2 §2.5.7).
+    /// The group is omitted entirely when the host page does not wire this, so it is never a dead control.
+    /// </summary>
+    [Parameter] public EventCallback<(Idea Idea, IdeaStatus Target)> OnMoveTo { get; set; }
+
+    private bool IsPromoted => Idea.Status == IdeaStatus.Promoted;
+
+    private bool HasPlan => !string.IsNullOrWhiteSpace(Idea.Plan);
+
+    /// <summary>
+    /// The 3px left border encodes PRIORITY and nothing else — and priority is the column's sort key,
+    /// so the border is the sort order drawn. Tokens (not literal hex) because border and badge must
+    /// agree: KanbanCard hardcodes #fd7e14 for High while the badge palette uses #c2410c, and on this
+    /// card the two would land 8px apart. `null` priority yields no class → the neutral
+    /// --kf-prio-none default on .board-card. (design-tokens.md §4)
+    /// </summary>
+    private string PriorityBorderClass => Idea.Priority switch
+    {
+        TaskPriority.Low => "kf-prio-low",
+        TaskPriority.Medium => "kf-prio-medium",
+        TaskPriority.High => "kf-prio-high",
+        TaskPriority.Critical => "kf-prio-critical",
+        _ => ""
+    };
+
     // Computed once per parameter change rather than on every render (Idea is a parameter).
     private string[] tags = [];
+    private string planTooltip = "Has a plan";
+    private IdeaStatus[] moveTargets = [];
 
-    protected override void OnParametersSet() =>
+    protected override void OnParametersSet()
+    {
         tags = string.IsNullOrWhiteSpace(Idea.Tags)
             ? []
             : Idea.Tags.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+
+        // Lives in IdeaBadge, not here: a `.razor` @code block is unreachable from a unit test, and
+        // this is a pure string function with real edge cases (stacked headings, elision). Same
+        // reason IdeaBadge exists at all — the repo has no bUnit.
+        planTooltip = IdeaBadge.PlanPreview(Idea.Plan);
+
+        // Promotion is one-way: IdeaService refuses a status change into AND out of Promoted, so a
+        // promoted idea has no legal move targets. Never offer an operation the service will refuse.
+        moveTargets = IsPromoted
+            ? []
+            : [.. Enum.GetValues<IdeaStatus>().Where(s => s != IdeaStatus.Promoted && s != Idea.Status)];
+    }
+
 }

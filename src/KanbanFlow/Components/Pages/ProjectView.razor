@@ -273,10 +273,38 @@ else
                     }
                 </div>
             </section>
-            <KanbanBoard AllTasks="allTasks"
-                         OnAddTask="OpenAddModalForColumn"
-                         OnToggleTaskDone="ToggleTaskDone"
-                         OnOpenTaskDetail="OpenTaskDetail" />
+            @* The board is generic over <TItem, TStatus>. Pass the type arguments EXPLICITLY at
+               every call site: with inferred type arguments Razor closes an EventCallback<T>
+               handler before T is known and it degrades to object (CS1503). What a task *is* now
+               lives entirely in these templates — the board no longer knows. *@
+            <KanbanBoard TItem="TaskItem" TStatus="WorkStatus"
+                         Items="allTasks"
+                         StatusOf="t => t.Status"
+                         IdOf="t => t.Id"
+                         OrderColumnBy="OrderTasksInColumn"
+                         DisplayName="GetStatusDisplayName"
+                         Guidance="Drag cards between columns. Click a card for details.">
+                <CardTemplate Context="task">
+                    <KanbanCard @key="task.Id" Task="task" OnToggleTaskDone="ToggleTaskDone" OnOpenTaskDetail="OpenTaskDetail" />
+                </CardTemplate>
+                <ColumnHeaderActions Context="status">
+                    <button class="btn btn-sm btn-outline-secondary py-0 px-2 ms-auto d-flex align-items-center gap-1" style="line-height: 1;"
+                            @onclick="() => OpenAddModalForColumn(status)"
+                            title="Add task to @(GetStatusDisplayName(status))"
+                            aria-label="Add task to @(GetStatusDisplayName(status))"
+                            data-testid="add-task-@status-button">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="currentColor" viewBox="0 0 16 16" aria-hidden="true">
+                            <path fill-rule="evenodd" d="M8 2a.5.5 0 0 1 .5.5v5h5a.5.5 0 0 1 0 1h-5v5a.5.5 0 0 1-1 0v-5h-5a.5.5 0 0 1 0-1h5v-5A.5.5 0 0 1 8 2"/>
+                        </svg>
+                        <span class="small">Task</span>
+                    </button>
+                </ColumnHeaderActions>
+                <ColumnEmptyTemplate Context="status">
+                    <div class="border rounded bg-white text-muted small text-center p-3" style="border-style: dashed !important;">
+                        No tasks in @(GetStatusDisplayName(status)). Use “Task” to add one here.
+                    </div>
+                </ColumnEmptyTemplate>
+            </KanbanBoard>
         </div>
     </div>
 }
@@ -900,6 +928,15 @@ else
     }
 
     // ── Helpers ──
+
+    // The board's intra-column order. This sort used to live in KanbanColumn.razor and it is the
+    // ONLY thing imposing it: LoadProject builds `allTasks` from an unordered
+    // Features.SelectMany(f => f.Tasks), so nothing downstream re-imposes it. Dropping or
+    // reversing it compiles, passes every unit test, and silently scrambles every board — the
+    // "Todo column renders its cards in SortOrder sequence" E2E guard exists for exactly that.
+    // ThenBy(Id) is the #207 deterministic tiebreak when SortOrder ties.
+    private static IEnumerable<TaskItem> OrderTasksInColumn(IEnumerable<TaskItem> tasks) =>
+        tasks.OrderBy(t => t.SortOrder).ThenBy(t => t.Id);
 
     private static string GetStatusDisplayName(WorkStatus status) => status switch
     {

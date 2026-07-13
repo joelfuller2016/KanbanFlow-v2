@@ -1,51 +1,187 @@
-<div class="kanban-column d-flex flex-column bg-body-secondary rounded p-2" data-testid="board-column-@Status" aria-label="@StatusDisplayName column">
+@* One column of a <see cref="KanbanBoard{TItem, TStatus}" />: heading, count badge, an optional
+   header action, the caller's cards, and an empty-state placeholder.
+
+   #290 — the empty-state placeholder is a SIBLING OVERLAY of .board-column-cards, never a child.
+   SortableJS makes *every* child of its container draggable. The placeholder carries no
+   data-task-id, so dragging it made kanbanflow.js:66 do parseInt(undefined) => NaN, which
+   serialises to null, which cannot bind to OnCardMoved(int taskId, …) — the drag threw. Overlaying
+   it with pointer-events: none (pe-none) means the Sortable container has zero non-card children,
+   the NaN path becomes structurally impossible, and drops still fall through to the container
+   underneath, so an empty column keeps accepting cards. *@
+@typeparam TItem
+@typeparam TStatus where TStatus : struct, Enum
+
+<section class="@ColumnCssClass" data-testid="board-column-@Status" aria-labelledby="@HeadingId">
     <div class="d-flex align-items-center mb-2">
-        <h6 class="fw-semibold mb-0">
-            @StatusDisplayName
-            <span class="badge bg-secondary">@Tasks.Count</span>
-        </h6>
-        <button class="btn btn-sm btn-outline-secondary py-0 px-2 ms-auto d-flex align-items-center gap-1" style="line-height: 1;"
-                @onclick="() => OnAddTask.InvokeAsync(Status)"
-                title="Add task to @StatusDisplayName"
-                aria-label="Add task to @StatusDisplayName"
-                data-testid="add-task-@Status-button">
-            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="currentColor" viewBox="0 0 16 16" aria-hidden="true">
-                <path fill-rule="evenodd" d="M8 2a.5.5 0 0 1 .5.5v5h5a.5.5 0 0 1 0 1h-5v5a.5.5 0 0 1-1 0v-5h-5a.5.5 0 0 1 0-1h5v-5A.5.5 0 0 1 8 2"/>
-            </svg>
-            <span class="small">Task</span>
-        </button>
+        @* The <section> above is named by this heading (aria-labelledby), so the heading's text IS
+           the column's accessible name. Without the two visually-hidden words that name computes to
+           "Backlog 0" — a label and an orphaned number — which is a WORSE name for a screen-reader
+           user than the "Backlog column" that aria-label used to give. The hidden text restores a
+           meaningful one ("Backlog column, 0 items") and costs nothing visually: Bootstrap's
+           .visually-hidden is an out-of-flow, clipped 1px box, so the rendered heading, the count
+           badge and the collapsed rail's rotated label are all pixel-for-pixel unchanged.
+           The count stays INSIDE the heading on purpose — it belongs to the name (accessibility.md
+           §1); it just needs a noun to mean anything.
+
+           The separating space lives INSIDE the C# string literal (" items", not " " + "items"),
+           which is the only place a space is safe. Written as markup whitespace between the badge's
+           `@Items.Count` and the noun that follows it, it sits at a Razor transition boundary, and
+           the accessible name is computed from concatenated text nodes — so anything that drops it
+           yields the single token "3items", which assistive tech reads as a word, not as a count
+           and a noun. A string literal cannot be trimmed by a parser, an editor, or a formatter.
+           (Copilot, PR #300.) *@
+        <h3 id="@HeadingId" class="h6 fw-semibold mb-0">
+            @if (!IsDragEnabled)
+            {
+                <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" fill="currentColor" viewBox="0 0 16 16" class="me-1" aria-hidden="true">
+                    <path d="M8 1a2 2 0 0 1 2 2v4H6V3a2 2 0 0 1 2-2m3 6V3a3 3 0 0 0-6 0v4a2 2 0 0 0-2 2v5a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2"/>
+                </svg>
+            }
+            @DisplayName<span class="visually-hidden"> column,</span>
+            <span class="badge bg-secondary">@Items.Count<span class="visually-hidden">@(Items.Count == 1 ? " item" : " items")</span></span>
+        </h3>
+        @if (IsTerminal)
+        {
+            <button type="button"
+                    class="btn btn-sm btn-link text-reset text-decoration-none ms-auto p-1 lh-1"
+                    style="min-width: 24px; min-height: 24px;"
+                    @onclick="ToggleCollapsedAsync"
+                    aria-expanded="@(Collapsed ? "false" : "true")"
+                    aria-controls="@CardsId"
+                    aria-label="@(Collapsed ? $"Expand {DisplayName} column" : $"Collapse {DisplayName} column")"
+                    data-testid="board-column-@(Status)-collapse-toggle">
+                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="currentColor" viewBox="0 0 16 16" aria-hidden="true">
+                    @if (Collapsed)
+                    {
+                        <path fill-rule="evenodd" d="M7.646 4.646a.5.5 0 0 1 .708 0l6 6a.5.5 0 0 1-.708.708L8 5.707l-5.646 5.647a.5.5 0 0 1-.708-.708z"/>
+                    }
+                    else
+                    {
+                        <path fill-rule="evenodd" d="M1.646 4.646a.5.5 0 0 1 .708 0L8 10.293l5.646-5.647a.5.5 0 0 1 .708.708l-6 6a.5.5 0 0 1-.708 0l-6-6a.5.5 0 0 1 0-.708"/>
+                    }
+                </svg>
+            </button>
+        }
+        @HeaderActions
     </div>
 
-    <div class="flex-grow-1 overflow-auto board-column-cards" data-status="@Status" data-testid="board-column-@Status-cards">
-        @foreach (var task in Tasks.OrderBy(t => t.SortOrder).ThenBy(t => t.Id))
+    @* #295 — directly under the heading, NOT at the column's bottom edge. This is the one cue that
+       explains the inert column ("Promote from a card. One-way."); the other three (lock, tinted
+       shelf, cursor: default) say "you can't", and only this one says "…and here's what to do
+       instead". As the section's last child it was pushed below the flex-grow-1 body — 525px below
+       the fold at 1440x900 with a populated column — so the user who tries the drag anyway, i.e.
+       exactly the user it exists for, never saw it. It reads BEFORE the attempt now, which is the
+       whole point of a pre-attempt cue. Still a sibling of the cards container, never a child of it:
+       SortableJS makes every child of its container draggable (#290). *@
+    @if (!string.IsNullOrWhiteSpace(InertHint))
+    {
+        <p class="small text-body-secondary mb-2" data-testid="board-column-@(Status)-inert-hint">@InertHint</p>
+    }
+
+    <div class="kanban-column-body position-relative d-flex flex-column flex-grow-1">
+        @* ── SortableJS container. ONLY cards may be children of this element (#290). ── *@
+        <div class="@CardsCssClass"
+             id="@(IsTerminal ? CardsId : null)"
+             data-status="@Status"
+             data-testid="@CardsId">
+            @* #294 — CardTemplate's root MUST carry `@key` (on an identity, never the index). This
+               loop compiles to `AddContent(seq, CardTemplate(item))`: one REGION per card, every
+               one of them sharing this single sequence number, so the diff pairs cards POSITIONALLY
+               and hands card N+1's parameters to the component instance that owns card N's DOM
+               node. That is invisible while Blazor owns the DOM — and catastrophic the moment
+               anything else touches it, which SortableJS does on every drag. The key cannot be
+               applied here (`@key` needs an element or component frame, and CardTemplate is an
+               opaque RenderFragment), so it is the CALLER's to set, and both callers do. The other
+               half of the fix is in kanbanflow.js: the drag reverts its own DOM mutation so Blazor
+               is re-rendering a DOM it still owns. Neither half is sufficient alone. *@
+            @if (!Collapsed)
+            {
+                @foreach (var item in Items)
+                {
+                    @CardTemplate(item)
+                }
+            }
+        </div>
+
+        @* ── Empty state: a SIBLING overlay, never a child of the container above (#290). ── *@
+        @if (Items.Count == 0 && !Collapsed)
         {
-            <KanbanCard Task="task" OnToggleTaskDone="OnToggleTaskDone" OnOpenTaskDetail="OnOpenTaskDetail" />
-        }
-        @if (Tasks.Count == 0)
-        {
-            <div class="border rounded bg-white text-muted small text-center p-3" style="border-style: dashed !important;" data-testid="empty-column-@Status">
-                No tasks in @StatusDisplayName. Use “Task” to add one here.
+            <div class="kanban-column-empty position-absolute top-0 start-0 end-0 bottom-0 pe-none"
+                 data-testid="empty-column-@Status">
+                @if (EmptyTemplate is not null)
+                {
+                    @EmptyTemplate
+                }
+                else
+                {
+                    <div class="text-muted small text-center p-3">Nothing in @DisplayName.</div>
+                }
             </div>
         }
     </div>
-</div>
+</section>
 
 @code {
-    [Parameter, EditorRequired] public WorkStatus Status { get; set; }
-    [Parameter, EditorRequired] public IReadOnlyList<TaskItem> Tasks { get; set; } = [];
-    [Parameter] public EventCallback<WorkStatus> OnAddTask { get; set; }
-    [Parameter] public EventCallback<TaskItem> OnToggleTaskDone { get; set; }
-    [Parameter] public EventCallback<TaskItem> OnOpenTaskDetail { get; set; }
+    /// <summary>The column's status. Emitted verbatim as <c>data-status</c> (SortableJS contract 1).</summary>
+    [Parameter, EditorRequired] public TStatus Status { get; set; }
 
-    private string StatusDisplayName => GetStatusDisplayName(Status);
+    /// <summary>The column's items, already filtered and ordered by the board.</summary>
+    [Parameter, EditorRequired] public IReadOnlyList<TItem> Items { get; set; } = [];
 
-    private static string GetStatusDisplayName(WorkStatus status) => status switch
+    /// <summary>Renders one card. Its root element owns <c>data-task-id</c> (SortableJS contract 2).</summary>
+    [Parameter, EditorRequired] public RenderFragment<TItem> CardTemplate { get; set; } = default!;
+
+    /// <summary>The column's heading text, resolved by the board.</summary>
+    [Parameter, EditorRequired] public string DisplayName { get; set; } = string.Empty;
+
+    /// <summary>Whether this column takes part in drag-and-drop. See <see cref="CardsCssClass"/>.</summary>
+    [Parameter] public bool IsDragEnabled { get; set; } = true;
+
+    /// <summary>Whether this column is terminal, and so collapsible.</summary>
+    [Parameter] public bool IsTerminal { get; set; }
+
+    /// <summary>Whether a terminal column is currently collapsed. Owned by the board.</summary>
+    [Parameter] public bool Collapsed { get; set; }
+
+    /// <summary>Raised when the collapse toggle is pressed.</summary>
+    [Parameter] public EventCallback<bool> CollapsedChanged { get; set; }
+
+    /// <summary>One-line hint shown under a column that does not accept drags.</summary>
+    [Parameter] public string? InertHint { get; set; }
+
+    /// <summary>Action rendered beside the heading (e.g. the task board's "+ Task" button).</summary>
+    [Parameter] public RenderFragment? HeaderActions { get; set; }
+
+    /// <summary>
+    /// Placeholder rendered when the column is empty. It sits in a <c>pe-none</c> overlay, so an
+    /// interactive placeholder must re-enable pointer events on its own control (<c>pe-auto</c>).
+    /// </summary>
+    [Parameter] public RenderFragment? EmptyTemplate { get; set; }
+
+    private string HeadingId => $"board-column-{Status}-heading";
+
+    private string CardsId => $"board-column-{Status}-cards";
+
+    // The base classes are the task board's original column classes, unchanged: `.kanban-column`
+    // carries the flex/width rules in app.css, so dropping it would silently collapse the layout.
+    private string ColumnCssClass
     {
-        WorkStatus.Backlog => "Backlog",
-        WorkStatus.Todo => "To Do",
-        WorkStatus.InProgress => "In Progress",
-        WorkStatus.Review => "Review",
-        WorkStatus.Done => "Done",
-        _ => status.ToString()
-    };
+        get
+        {
+            var css = "kanban-column d-flex flex-column bg-body-secondary rounded p-2";
+            if (IsTerminal) css += " kanban-column-terminal";
+            if (Collapsed) css += " kanban-column-collapsed";
+            if (!IsDragEnabled) css += " kanban-column-inert";
+            return css;
+        }
+    }
+
+    // A column that must not accept drops simply does not emit `board-column-cards`. kanbanflow.js
+    // binds SortableJS to that class and nothing else, so the column becomes neither a drop target
+    // nor a drag source — put:false *and* pull:false — with zero JS changes.
+    private string CardsCssClass => IsDragEnabled
+        ? "flex-grow-1 overflow-auto board-column-cards"
+        : "flex-grow-1 overflow-auto board-column-cards-inert";
+
+    private Task ToggleCollapsedAsync() => CollapsedChanged.InvokeAsync(!Collapsed);
 }

@@ -60,6 +60,18 @@ async function waitForApiStatus(taskId, expected, timeoutMs = 6000) {
   throw new Error(`expected status ${expected}, got ${last}`);
 }
 
+// Status persistence after an idea drag, same reasoning as waitForApiStatus above.
+async function waitForIdeaStatus(ideaId, expected, timeoutMs = 8000) {
+  const deadline = Date.now() + timeoutMs;
+  let last;
+  do {
+    last = (await api("GET", `/api/ideas/${ideaId}`)).status;
+    if (last === expected) return;
+    await sleep(200);
+  } while (Date.now() < deadline);
+  throw new Error(`expected idea status ${expected}, got ${last}`);
+}
+
 async function test(name, fn) {
   const started = Date.now();
   try {
@@ -107,6 +119,174 @@ async function dragCardTo(page, cardSelector, targetColumnSelector) {
   await page.mouse.move(tx, ty);
   await page.waitForTimeout(60);
   await page.mouse.up();
+}
+
+// ── Board render-truth harness (#294) ────────────────────────────────────────────────
+// Reads what a board is actually DRAWING: per column, the count badge (which the component
+// computes from the MODEL) and the ids of the card roots rendered beside it (which the Blazor
+// DIFF puts there). Only a card root carries data-task-id, on both boards.
+const IDEA_COLUMNS = ["New", "Triaging", "Promoted", "Archived", "Rejected"];
+const TASK_COLUMNS = ["Backlog", "Todo", "InProgress", "Review", "Done"];
+
+async function readBoardDom(page, statuses) {
+  return page.evaluate((sts) => {
+    const board = {};
+    for (const s of sts) {
+      const col = document.querySelector(`[data-testid="board-column-${s}"]`);
+      if (!col) continue;
+      board[s] = {
+        badge: parseInt(col.querySelector("h3 .badge")?.textContent ?? "", 10),
+        // A collapsed terminal rail renders NO cards by design (KanbanColumn: `@if (!Collapsed)`),
+        // so "badge === cards drawn" is only a claim about an expanded column.
+        collapsed: col.classList.contains("kanban-column-collapsed"),
+        cardIds: Array.from(
+          document.querySelectorAll(`[data-testid="board-column-${s}-cards"] [data-task-id]`),
+          (el) => Number(el.getAttribute("data-task-id")),
+        ),
+      };
+    }
+    return board;
+  }, statuses);
+}
+
+// The two boards' canonical column orders, restated from the source so the DOM is checked
+// against the SERVER's truth and not against itself:
+//   /ideas        Priority desc, CreatedAt desc, Id desc  (Ideas.OrderIdeas — an Idea has no SortOrder)
+//   /project/{id} SortOrder asc, Id asc                   (ProjectView.OrderTasksInColumn)
+// Both end in a UNIQUE key, so both comparisons are TOTAL and this "truth" is a single order rather
+// than a set of acceptable ones. Ideas.OrderIdeas grew its `Id desc` for exactly that reason (#300):
+// CreatedAt defaults to UtcNow, two ideas made in the same tick at the same priority tie on both of
+// the other keys, and a guard that compares the DOM against an ambiguous truth FLAPS instead of
+// failing. Mirror of the C# — change one, change the other.
+const PRIORITY_RANK = { Critical: 3, High: 2, Medium: 1, Low: 0 };
+function groupBy(items, statusOf, compare) {
+  const out = {};
+  for (const item of items) (out[statusOf(item)] ??= []).push(item);
+  for (const key of Object.keys(out)) out[key] = out[key].sort(compare).map((i) => i.id);
+  return out;
+}
+const ideaTruth = (ideas) => groupBy(ideas, (i) => i.status, (a, b) =>
+  (PRIORITY_RANK[b.priority] ?? -1) - (PRIORITY_RANK[a.priority] ?? -1) ||
+  new Date(b.createdAt) - new Date(a.createdAt) ||
+  b.id - a.id);
+const taskTruth = (tasks) => groupBy(tasks, (t) => t.status, (a, b) =>
+  a.sortOrder - b.sortOrder || a.id - b.id);
+
+// The assertion #294 would have failed on. The badge is rendered from the model; the cards are
+// put there by the render diff. A column whose badge contradicts the cards drawn beside it is a
+// board disagreeing with ITSELF on screen — no server call, no error, nothing else can see it.
+function assertBoardTruthful(dom, truth, ctx) {
+  for (const [status, col] of Object.entries(dom)) {
+    const expected = truth[status] ?? [];
+    assert(col.badge === expected.length,
+      `${ctx}: ${status} badge says ${col.badge}, the API holds ${expected.length} [${expected}]`);
+    if (col.collapsed) {
+      assert(col.cardIds.length === 0,
+        `${ctx}: collapsed rail ${status} drew ${col.cardIds.length} card(s) [${col.cardIds}]`);
+      continue;
+    }
+    assert(col.badge === col.cardIds.length,
+      `${ctx}: ${status} counts ${col.badge} but DRAWS ${col.cardIds.length} card(s) [${col.cardIds}] ` +
+      `— the column's own badge contradicts the cards rendered beside it`);
+    assert(col.cardIds.join(",") === expected.join(","),
+      `${ctx}: ${status} draws [${col.cardIds}] but the API holds [${expected}]`);
+  }
+}
+
+// Which cards changed column between two DOM snapshots, as "id: From -> To".
+function domColumnMoves(before, after, statuses) {
+  const moves = [];
+  for (const to of statuses) {
+    for (const id of after[to]?.cardIds ?? []) {
+      const from = statuses.find((s) => before[s]?.cardIds.includes(id));
+      if (from && from !== to) moves.push(`${id}: ${from} -> ${to}`);
+    }
+  }
+  return moves;
+}
+
+// Terminal rails (Archived/Rejected on /ideas) start collapsed and draw no cards, so open them
+// before snapshotting — otherwise "badge === cards drawn" has nothing to say about them. The
+// retry loop doubles as a wait for the interactive circuit: the toggle is an @onclick, so a
+// click that lands on the SSR HTML is a no-op (same handoff clickUntil guards against).
+async function expandColumn(page, status) {
+  const col = page.locator(`[data-testid="board-column-${status}"]`);
+  const isCollapsed = () => col.evaluate((e) => e.classList.contains("kanban-column-collapsed"));
+  for (let i = 0; i < 8; i++) {
+    if (!(await isCollapsed())) return;
+    try { await page.locator(`[data-testid="board-column-${status}-collapse-toggle"]`).click({ timeout: 2000 }); }
+    catch { /* circuit not live yet */ }
+    await sleep(400);
+  }
+  assert(!(await isCollapsed()), `the ${status} rail never expanded`);
+}
+
+// A drag fired before SortableJS is bound is a silent no-op: the card follows the cursor (the
+// browser's own text-drag) and nothing happens. Binding is deferred — OnAfterRenderAsync waits for
+// the interactive circuit, then 100ms, then calls initBoardDragDrop — so a test that navigates and
+// drags immediately is racing it. `Sortable.get(el)` is the framework's own "is this container
+// armed?" question, so ask that rather than sleeping and hoping.
+async function waitForSortableArmed(page, status) {
+  await page.waitForFunction((s) => {
+    const el = document.querySelector(`[data-testid="board-column-${s}-cards"]`);
+    return !!el && !!window.Sortable && window.Sortable.get(el) != null;
+  }, status, { timeout: 15000 });
+}
+
+// ── Dialog focus-trap harness (#300) ─────────────────────────────────────────────────────────────
+// A modal's aria-modal="true" is a PROMISE that nothing behind it is reachable. The mouse keeps that
+// promise for free (the backdrop swallows the clicks); the keyboard only keeps it if something traps
+// Tab. Nothing in a screenshot, a unit test or the C# compiler can tell the two apart, so read it
+// off the live DOM: where focus is, where the dialog's own focus order puts it, and how many
+// focusables sit OUTSIDE the dialog — i.e. how much of the page a broken trap could leak onto.
+//
+// The selector is KanbanFlow._dialogFocusables' own (kanbanflow.js:222), deliberately: a trap judged
+// against a different definition of "focusable" than the one it implements is judging a different
+// dialog. Same for the visibility filter — getClientRects(), not offsetParent, which is null for the
+// position:fixed .modal and would wrongly report an empty dialog.
+const DIALOG_FOCUSABLE =
+  'a[href]:not([tabindex="-1"]), button:not([disabled]):not([tabindex="-1"]), ' +
+  'input:not([disabled]):not([tabindex="-1"]), select:not([disabled]):not([tabindex="-1"]), ' +
+  'textarea:not([disabled]):not([tabindex="-1"]), [tabindex]:not([tabindex="-1"])';
+
+async function probeDialogFocus(page, modalSelector) {
+  return page.evaluate(({ sel, focusable }) => {
+    const visible = (el) => el.getClientRects().length > 0;
+    const modal = document.querySelector(sel);
+    const active = document.activeElement;
+    // Name whatever holds focus, so a failure says WHICH control the keyboard escaped to.
+    const describe = (el) => {
+      if (!el) return "null (focus is nowhere)";
+      const testid = el.getAttribute?.("data-testid");
+      const label = (el.getAttribute?.("aria-label") || el.textContent || "")
+        .replace(/\s+/g, " ").trim().slice(0, 40);
+      return `<${el.tagName.toLowerCase()}${testid ? ` data-testid="${testid}"` : ""}> ${label}`.trim();
+    };
+    const inDialog = modal ? [...modal.querySelectorAll(focusable)].filter(visible) : [];
+    const outside = [...document.querySelectorAll(focusable)]
+      .filter((el) => visible(el) && !(modal && modal.contains(el)));
+    return {
+      present: !!modal,
+      inside: !!modal && !!active && modal.contains(active),
+      index: inDialog.indexOf(active),   // position in the dialog's focus order; -1 = not one of them
+      count: inDialog.length,
+      escapes: outside.length,           // where a broken trap lands
+      active: describe(active),
+      activeTestid: active?.getAttribute?.("data-testid") ?? null,
+    };
+  }, { sel: modalSelector, focusable: DIALOG_FOCUSABLE });
+}
+
+// Park focus on the dialog's FIRST focusable. The Shift+Tab wrap has to be asked from a known place:
+// pressing it from wherever the previous assertion happened to leave focus tests nothing in
+// particular, and the trap's autofocus target is not what is under test here.
+async function focusFirstInDialog(page, modalSelector) {
+  await page.evaluate(({ sel, focusable }) => {
+    const modal = document.querySelector(sel);
+    const first = [...(modal?.querySelectorAll(focusable) ?? [])]
+      .filter((el) => el.getClientRects().length > 0)[0];
+    first?.focus();
+  }, { sel: modalSelector, focusable: DIALOG_FOCUSABLE });
 }
 
 async function startApp() {
@@ -309,6 +489,64 @@ async function main() {
       );
     });
 
+    // ── Regression guard (#294): a drag must not corrupt the RENDER ───────────────────────────
+    // SortableJS physically relocates the dragged card's <div> BEFORE Blazor is told anything.
+    // Blazor's renderer keeps its own logical-children array per `.board-column-cards` container
+    // and never re-reads the DOM, so after a drop its model and the real DOM disagree. Worse,
+    // KanbanColumn draws its cards as `@foreach (var item in Items) { @CardTemplate(item) }`,
+    // which compiles to `AddContent(seq, CardTemplate(item))` — one REGION per card, all sharing
+    // ONE sequence number — so the diff pairs cards POSITIONALLY. It therefore hands card N+1's
+    // parameters to the component instance that owns card N's DOM node… which SortableJS has
+    // already moved into a different column. The board then draws cards in columns they are not
+    // in, while the database is perfectly correct and a refresh heals it — so every server-side
+    // test, and every drag test that only checks "the card I dragged arrived", stays green.
+    //
+    // The seed is what makes this catch it: the dragged card must NOT be the last card in its
+    // column. Dragging the LAST card is self-healing (the diff's trailing removal happens to
+    // delete exactly the node Sortable moved), which is why every drag scenario above — each of
+    // which drags the only card in its column — has never seen this.
+    //
+    // Asserted: (a) exactly one card changes column in the DOM, (b) every column's count badge
+    // equals the number of cards actually drawn beside it, (c) the DOM equals the API.
+    const dragProj = await api("POST", "/api/projects", { name: `E2E Drag ${stamp}` });
+    const dragFeature = await api("POST", `/api/projects/${dragProj.id}/features`, { name: "E2E Drag Feature" });
+    await test("Project board: dragging ONE card moves exactly one card, and every badge matches its cards", async () => {
+      const mkTask = (label, sortOrder, status) => api("POST", `/api/features/${dragFeature.id}/tasks`,
+        { name: `E2E Drag ${label} ${stamp}`, status, sortOrder });
+      const t1 = await mkTask("Todo A", 10, "Todo");
+      const t2 = await mkTask("Todo B", 20, "Todo"); // the one we drag — deliberately NOT last
+      const t3 = await mkTask("Todo C", 30, "Todo");
+      await mkTask("Parked", 10, "InProgress");      // a bystander the drag must not disturb
+
+      await page.goto(`${baseUrl}/project/${dragProj.id}`);
+      for (const t of [t1, t2, t3]) {
+        await page.locator(`[data-testid="board-column-Todo-cards"] [data-testid="board-card-${t.id}"]`)
+          .waitFor({ state: "visible" });
+      }
+
+      await waitForSortableArmed(page, "Todo");
+      await waitForSortableArmed(page, "InProgress");
+
+      const before = await readBoardDom(page, TASK_COLUMNS);
+      assert(before.Todo.cardIds.join(",") === [t1.id, t2.id, t3.id].join(","),
+        `seed: Todo must draw [${[t1.id, t2.id, t3.id]}], got [${before.Todo.cardIds}]`);
+      assert(before.Todo.cardIds.indexOf(t2.id) < before.Todo.cardIds.length - 1,
+        "seed is not discriminating: the dragged card must not be the LAST card in its column");
+
+      await dragCardTo(page, `[data-testid="board-card-${t2.id}"]`,
+        `[data-testid="board-column-InProgress-cards"]`);
+      await waitForApiStatus(t2.id, "InProgress");
+      await page.waitForTimeout(600); // let the re-render land
+
+      const after = await readBoardDom(page, TASK_COLUMNS);
+      const truth = taskTruth(await api("GET", `/api/features/${dragFeature.id}/tasks`));
+      assertBoardTruthful(after, truth, "after dragging one task Todo -> InProgress");
+
+      const moves = domColumnMoves(before, after, TASK_COLUMNS);
+      assert(moves.length === 1 && moves[0] === `${t2.id}: Todo -> InProgress`,
+        `exactly ONE card may change column — the DOM moved [${moves.join("; ") || "nothing"}]`);
+    });
+
     // ── Scenario F: Ideas inbox — create / edit / filter / promote / delete ──
     // The harness boots a fresh scratch DB each run (mkdtempSync), so the ideas table
     // starts empty: assert the empty state first, then drive the full lifecycle through
@@ -389,10 +627,15 @@ async function main() {
       await page.locator(`[data-testid="idea-card-promote-${createdIdea.id}"]`).click();
       await page.locator('[data-testid="idea-promote-confirm"]').waitFor({ state: "visible" });
       await page.locator('[data-testid="idea-promote-confirm"]').click();
-      // success banner with an "Open new project" link appears, and the card now shows Promoted
+      // success banner with an "Open new project" link appears, and the card has MOVED to the
+      // Promoted column. #280 turned /ideas into a status board: the column IS the status, so the
+      // card no longer carries a status badge (two grey pills meaning different things). Asserting
+      // the column instead of a label is strictly stronger — it tests the promote pipeline rather
+      // than a string.
       await page.locator('[data-testid="idea-promote-success-link"]').waitFor({ state: "visible" });
-      await page.locator(`[data-testid="idea-card-status-${createdIdea.id}"]`)
-        .getByText("Promoted", { exact: true }).waitFor({ state: "visible" });
+      await page.locator(
+        `[data-testid="board-column-Promoted-cards"] [data-testid="idea-card-${createdIdea.id}"]`,
+      ).waitFor({ state: "visible" });
     });
 
     // ── Regression guard: an ALREADY-PROMOTED idea must still be editable ──
@@ -470,6 +713,478 @@ async function main() {
       await page.locator(`[data-testid="idea-card-${createdIdea.id}"]`).waitFor({ state: "detached" });
     });
 
+    // ── Regression guard (#294), ideas board ──────────────────────────────────────────────────
+    // The same guard as the project board's above, on the board where the UX review actually saw
+    // it: drag ONE idea into Archived and two cards move. See that comment for the mechanism.
+    // The ideas board is the harder case — a moved idea can land ANYWHERE in the destination's
+    // canonical order (`Priority desc, CreatedAt desc`), not just at the end — so the seed makes
+    // the dragged card sort FIRST in Archived, ahead of the bystander already sitting there.
+    await test("Ideas board: dragging ONE card moves exactly one card, and every badge matches its cards", async () => {
+      // Clean slate: the seed IS the board, so every assertion below is exact.
+      for (const i of await api("GET", "/api/ideas?limit=500")) {
+        await api("DELETE", `/api/ideas/${i.id}`).catch(() => {});
+      }
+      // Distinct priorities all round: OrderIdeas is `Priority desc, CreatedAt desc`, so priority
+      // alone fixes every column's order and the assertions never race the clock.
+      const mkIdea = (label, priority) => api("POST", "/api/ideas", { title: `E2E Drag ${label} ${stamp}`, priority });
+      const top = await mkIdea("Top", "Critical");
+      const mid = await mkIdea("Mid", "High");    // the one we drag — deliberately NOT last
+      const bottom = await mkIdea("Bottom", "Medium");
+      const parked = await mkIdea("Parked", "Low"); // a bystander in the destination column
+      await api("PATCH", `/api/ideas/${parked.id}`, { status: "Archived" });
+
+      await page.goto(`${baseUrl}/ideas`);
+      await page.locator(`[data-testid="idea-card-${top.id}"]`).waitFor({ state: "visible" });
+      // Archived/Rejected are terminal rails and start collapsed, drawing no cards at all. Open
+      // them so "badge === cards drawn" is a claim about EVERY column on the board.
+      await expandColumn(page, "Archived");
+      await expandColumn(page, "Rejected");
+      await waitForSortableArmed(page, "New");
+      await waitForSortableArmed(page, "Archived");
+
+      const before = await readBoardDom(page, IDEA_COLUMNS);
+      assert(before.New.cardIds.join(",") === [top.id, mid.id, bottom.id].join(","),
+        `seed: New must draw [${[top.id, mid.id, bottom.id]}], got [${before.New.cardIds}]`);
+      assert(before.New.cardIds.indexOf(mid.id) < before.New.cardIds.length - 1,
+        "seed is not discriminating: the dragged card must not be the LAST card in its column");
+
+      await dragCardTo(page, `[data-testid="idea-card-${mid.id}"]`,
+        `[data-testid="board-column-Archived-cards"]`);
+      await waitForIdeaStatus(mid.id, "Archived");
+      await page.waitForTimeout(600); // let the re-render land
+
+      const after = await readBoardDom(page, IDEA_COLUMNS);
+      const truth = ideaTruth(await api("GET", "/api/ideas?limit=500"));
+      // The moved idea (High) must sort AHEAD of the bystander (Low) — i.e. NOT at the end.
+      assert(truth.Archived.join(",") === [mid.id, parked.id].join(","),
+        `precondition: Archived's canonical order must be [${[mid.id, parked.id]}], API says [${truth.Archived}]`);
+      assertBoardTruthful(after, truth, "after dragging one idea New -> Archived");
+
+      const moves = domColumnMoves(before, after, IDEA_COLUMNS);
+      assert(moves.length === 1 && moves[0] === `${mid.id}: New -> Archived`,
+        `exactly ONE card may change column — the DOM moved [${moves.join("; ") || "nothing"}]`);
+
+      // ── The same bug, in-column. An Idea has NO SortOrder: a column's order is DERIVED
+      // (`Priority desc, CreatedAt desc`), so dropping a card at a position the server cannot
+      // represent must snap back. Ideas.ApplyStatusAsync says so in as many words — "the reload
+      // snaps the card back to its canonical slot, so the board teaches its own rule instead of
+      // quietly drifting" — and that claim is only TRUE if Blazor still owns the DOM it is
+      // re-rendering. When SortableJS keeps the node it moved, the re-render is a no-op (same
+      // items, same order => zero diff edits) and the drifted order simply STAYS on screen, a
+      // lie the server never agreed to, until something forces a refresh.
+      //
+      // ── Settling this drop has NO NATURAL SIGNAL, which is why it used to be a bare sleep(900).
+      // Two facts conspire. kanbanflow.js reverts the dragged node SYNCHRONOUSLY inside onEnd,
+      // *before* it calls into Blazor, so the DOM is already canonical the instant the mouse comes
+      // up; and on a healthy board LoadIdeas' re-render is then a NO-OP DIFF that changes nothing.
+      // So "poll until the order is canonical" is worse than the sleep, not better: it returns TRUE
+      // immediately, BEFORE the round-trip lands, and would sail straight past a re-render that
+      // corrupts the board — the exact bug this guard exists to catch. The sleep at least waited.
+      //
+      // So MANUFACTURE a signal. This idea is created out-of-band while the board is open, and the
+      // page has no timer, no SignalR push and no polling — LoadIdeas runs ONLY when an interaction
+      // asks it to. The open board therefore CANNOT know about this card until the drop's own reload
+      // fetches it. Its appearance is proof that LoadIdeas ran AND that Blazor applied the resulting
+      // render batch (batches are applied atomically, so New's cards are settled with it).
+      //
+      // It also kills the sleep's blind spot: if the drop never fired at all, OnCardMoved never runs,
+      // LoadIdeas never runs, this card never appears — and the assertions below go RED instead of
+      // passing on a board nobody actually dragged.
+      const barrier = await mkIdea("Barrier", "Low");
+      assert(await page.locator(`[data-testid="idea-card-${barrier.id}"]`).count() === 0,
+        "precondition: the open board must not already know about the out-of-band barrier idea");
+
+      await dragCardTo(page, `[data-testid="idea-card-${bottom.id}"]`,
+        `[data-testid="board-column-New-cards"]`);
+
+      // The reload has landed exactly when the card it fetched is on screen. On a CORRUPT board the
+      // diff can wedge and never draw it — so don't die here with an opaque Playwright timeout; fall
+      // through and let the assertions below say precisely what the board is drawing and why that is
+      // wrong. Generous timeout: this waits on a real signal, so a slow box costs time, never a flake.
+      await page.locator(`[data-testid="idea-card-${barrier.id}"]`)
+        .waitFor({ state: "visible", timeout: 15000 })
+        .catch(() => {});
+
+      const settled = await readBoardDom(page, IDEA_COLUMNS);
+      assertBoardTruthful(settled, ideaTruth(await api("GET", "/api/ideas?limit=500")),
+        "after dropping an idea out of canonical order inside its own column");
+      const canonical = [top.id, bottom.id, barrier.id];
+      assert(settled.New.cardIds.join(",") === canonical.join(","),
+        `an in-column drop must snap back to the canonical order [${canonical}] ` +
+        `(Priority desc) — the board is still drawing [${settled.New.cardIds}]`);
+    });
+
+    // ── Regression guard (#300): a REFUSED move must not fail SILENTLY ────────────────────────
+    // ApplyStatusAsync's error path ends in `await LoadIdeas()` — that reload IS the snap-back —
+    // and LoadIdeas clears `loadError` on every successful load. So the move error it had just set
+    // was wiped by the very reload that returned the card to its real column: the card jumped home
+    // and the board said NOTHING about why. A silent snap-back is precisely the "the UI lies to
+    // you" failure this board was rebuilt to kill, so it gets a test that can see it.
+    //
+    // The refusal is REAL, not injected. IdeaService has exactly ONE status rule — the Promoted
+    // boundary may not be crossed (#283 in, #285 out) — and ApplyStatusAsync's own pre-check reads
+    // the board's IN-MEMORY copy of the idea. Promote out-of-band (a second tab, the MCP server's
+    // promote_idea, an agent on the API) and that copy is stale: the pre-check waves the drag
+    // through, the service loads the idea fresh, and refuses. That is a race this app can genuinely
+    // lose — three writers share one DB — and it is the only way a drag can be refused at all.
+    await test("Ideas board: a move the service refuses says WHY, and does not take effect", async () => {
+      for (const i of await api("GET", "/api/ideas?limit=500")) {
+        await api("DELETE", `/api/ideas/${i.id}`).catch(() => {});
+      }
+      const stale = await api("POST", "/api/ideas", { title: `E2E Refused ${stamp}`, priority: "Critical" });
+
+      await page.goto(`${baseUrl}/ideas`);
+      await page.locator(`[data-testid="idea-card-${stale.id}"]`).waitFor({ state: "visible" });
+      await waitForSortableArmed(page, "New");
+
+      // Out-of-band promote. The open board never hears about it, and keeps drawing the card in New.
+      const promoted = await api("POST", `/api/ideas/${stale.id}/promote`, { actor: "e2e" });
+      assert(promoted.projectId > 0, `promote did not create a project: ${JSON.stringify(promoted)}`);
+
+      // Drag the now-stale card New -> Triaging. The service refuses: it is really Promoted.
+      await dragCardTo(page, `[data-testid="idea-card-${stale.id}"]`,
+        `[data-testid="board-column-Triaging-cards"]`);
+
+      // 1. The user must be TOLD. THIS is the assertion that is RED before the fix, and it is
+      //    deliberately testid-AGNOSTIC: the question is "does the board say ANYTHING at all?",
+      //    and pinning it to one testid would let the answer come back "no, but the right box was
+      //    missing" — a weaker claim than the bug deserves. Pre-fix NO danger alert paints at all:
+      //    ApplyStatusAsync sets `loadError`, then its own snap-back reload nulls it on the way out.
+      const anyError = page.locator('.alert-danger[role="alert"]');
+      try {
+        await anyError.first().waitFor({ state: "visible", timeout: 8000 });
+      } catch {
+        throw new Error("a refused move told the user NOTHING — the card snapped back and no " +
+          "page-level error ever appeared (no visible .alert-danger[role=alert] on /ideas)");
+      }
+      const msg = ((await anyError.first().textContent()) ?? "").replace(/\s+/g, " ").trim();
+
+      // 2. ...and told WHY, in the service's own actionable words — never a bare "move failed".
+      assert(/promot/i.test(msg) && /Triaging/.test(msg),
+        `the refusal must name the reason AND the target it refused — the banner reads "${msg}"`);
+
+      // 3. It must ride the MOVE channel, not the load channel. A move error parked in `loadError`
+      //    IS the bug: LoadIdeas owns that field and clears it (`loadError = null`) on every
+      //    successful load — including the snap-back reload the error path itself awaits.
+      await page.locator('[data-testid="idea-move-error"]').waitFor({ state: "visible", timeout: 3000 });
+
+      // 4. The gesture must not have taken effect. The card belongs in Promoted — where it REALLY
+      //    is — and never in Triaging, where the user dropped it. (This half already passed: the
+      //    reload snaps the card back. It is the EXPLANATION that was missing, which is exactly
+      //    what makes the bug so easy to miss — the board looks right and lies by omission.)
+      await page.locator(`[data-testid="board-column-Promoted-cards"] [data-task-id="${stale.id}"]`)
+        .waitFor({ state: "visible", timeout: 8000 });
+      const settled = await readBoardDom(page, IDEA_COLUMNS);
+      assert(!settled.Triaging.cardIds.includes(stale.id),
+        `the refused card is still sitting in Triaging [${settled.Triaging.cardIds}] — the drop was never undone`);
+      assertBoardTruthful(settled, ideaTruth(await api("GET", "/api/ideas?limit=500")), "after a refused move");
+
+      await api("DELETE", `/api/projects/${promoted.projectId}`).catch(() => {});
+      await api("DELETE", `/api/ideas/${stale.id}`).catch(() => {});
+    });
+
+    // ── Regression guard (#293): an OPEN ⋮ menu must be CLICKABLE, not merely VISIBLE ─────────
+    // app.css:604 — `.board-card:has(.dropdown-menu.show) { z-index: 3 }` — is ONE line, it is
+    // load-bearing, and nothing held it down: revert it and `dotnet build`, `dotnet test` and this
+    // very suite all stay green while Promote and Delete quietly stop working on every idea card
+    // that has another card underneath it.
+    //
+    // The mechanism is stated in full beside the rule. In short: `.board-card:hover` lifts the card
+    // with `transform: translateY(-1px)`, and a transform CREATES A STACKING CONTEXT. The pointer is
+    // on the card — it must be; you just clicked that card's ⋮ — so the card becomes a stacking
+    // context and the menu's `z-index: 1000` is scoped to the CARD instead of the board. The card
+    // itself sits at `z-index: auto`, so the NEXT card (also auto, but later in DOM order) paints
+    // over the whole subtree, menu included. The menu is not hidden and not clipped. It is BURIED.
+    //
+    // TWO things kept this bug alive, and the guard has to beat both:
+    //
+    //  1. VISIBILITY SEES NOTHING. A buried button is painted, has a box, has size, is not
+    //     `display:none` and is not clipped — Playwright's visibility checks, and every assertion in
+    //     this file above this one, call it perfectly fine. Only a HIT TEST (`elementFromPoint`) can
+    //     say that the pixel under the cursor belongs to somebody else. So this asserts what a CLICK
+    //     WOULD REACH, never what is drawn.
+    //
+    //  2. THE BUG EVAPORATES IF YOU LOOK AWAY. No hover => no transform => no stacking context =>
+    //     the menu is on top and everything passes on definitively broken code. Moving the mouse off
+    //     the card — or scrolling, which moves the pointer relative to the page — is enough to erase
+    //     it. A first draft of this guard clicked the ⋮ and then scrolled, and reported GREEN against
+    //     a deliberately sabotaged stylesheet. So: hover the card, open the menu with a click that
+    //     lands INSIDE it, and hit-test from `page.evaluate` — which cannot move the pointer — with
+    //     no scroll and no locator walk in between.
+    //
+    // The preconditions below are this test's "can it still fail?" proof. Each is a real way the
+    // guard could rot into a green that means nothing: the pointer must still be ON the card at the
+    // moment of the hit-test (P1), the hover-lift that creates the stacking context must still exist
+    // (P2), the card must have a sibling BELOW it — that sibling is what does the burying (P3) — and
+    // the menu must actually SPILL past the card's bottom edge, or there is nothing to bury (P4).
+    await test("Ideas board: every item of an open ⋮ menu is hit-testable, not buried under the next card", async () => {
+      const viewport = page.viewportSize();
+      try {
+        // Tall enough that the whole menu opens DOWNWARD and inside the viewport. Popper flips a
+        // dropdown upward when it runs out of room below, which would put it over the cards ABOVE
+        // the target — no sibling underneath it, no burial, vacuous pass. P4 catches a flip, but
+        // it is better not to provoke one. Width is unchanged (>= 992px stays the desktop layout).
+        await page.setViewportSize({ width: viewport?.width ?? 1280, height: 1000 });
+
+        // Clean slate: the seed IS the board, so "first card in New" is exact.
+        for (const i of await api("GET", "/api/ideas?limit=500")) {
+          await api("DELETE", `/api/ideas/${i.id}`).catch(() => {});
+        }
+        // Distinct priorities fix New's order outright (`Priority desc`), so the target is the FIRST
+        // card and the other two sit under it. The target carries NO body and NO tags on purpose: it
+        // must be the SHORT card. A tall target would swallow its own menu, nothing would spill past
+        // its bottom edge, no sibling could bury anything — and P4 would (correctly) call the seed
+        // undiscriminating. The two cards below it are what the menu gets buried under.
+        const mkIdea = (label, priority, body) => api("POST", "/api/ideas",
+          { title: `E2E Menu ${label} ${stamp}`, priority, body });
+        const target = await mkIdea("Target", "Critical", null);
+        await mkIdea("Under", "High", "The card that paints over the open menu.");
+        await mkIdea("Below", "Medium", "And the one under that.");
+
+        await page.goto(`${baseUrl}/ideas`);
+        const card = page.locator(`[data-testid="idea-card-${target.id}"]`);
+        await card.waitFor({ state: "visible" });
+        // Not needed by the dropdown (Bootstrap's own JS runs it), but it is this file's settled
+        // "the board has finished standing itself up" signal: LoadIdeas' re-render, and the deferred
+        // initBoardDragDrop behind it, are done — so nothing replaces the card DOM mid-hit-test.
+        await waitForSortableArmed(page, "New");
+
+        // ⚠️ FROM HERE THE POINTER MUST NOT LEAVE THE CARD. hover() scrolls the card into view and
+        // parks the mouse on it; the ⋮ lives inside the card, so clicking it keeps `:hover` live
+        // (hover matches every ancestor of the hovered node). No scrollIntoView, no boundingBox
+        // walk, no goto, nothing else until the hit-test has run.
+        await card.hover();
+        const menu = page.locator(`[data-testid="idea-card-${target.id}"] .dropdown-menu.show`);
+        await clickUntil(
+          () => page.locator(`[data-testid="idea-card-menu-${target.id}"]`).click(),
+          menu,
+        );
+
+        // ONE evaluate: it cannot move the mouse, so the card is still hovered, still transformed,
+        // still a stacking context — the exact state a real user is in when they reach for Delete.
+        const probe = await page.evaluate((id) => {
+          const cardEl = document.querySelector(`[data-testid="idea-card-${id}"]`);
+          if (!cardEl) return { error: `the card for idea ${id} is not in the DOM` };
+          const menuEl = cardEl.querySelector(".dropdown-menu.show");
+          const cardRect = cardEl.getBoundingClientRect();
+          const style = getComputedStyle(cardEl);
+          // The opening tag of whatever is actually painted at that point — the tell.
+          const tagOf = (el) => {
+            if (!el) return "null (nothing is painted there)";
+            const attrs = [...el.attributes].map((a) => ` ${a.name}="${a.value}"`).join("");
+            return `<${el.tagName.toLowerCase()}${attrs}>`.slice(0, 140);
+          };
+          const siblings = [...document.querySelectorAll('[data-testid="board-column-New-cards"] [data-task-id]')];
+          const idx = siblings.indexOf(cardEl);
+          return {
+            hovered: cardEl.matches(":hover"),
+            transform: style.transform,
+            zIndex: style.zIndex,
+            menuOpen: !!menuEl,
+            cardsBelow: idx < 0 ? -1 : siblings.length - 1 - idx,
+            // `.dropdown-item` is exactly the actionable items — the dividers and the "Move to"
+            // header carry no such class and are not things a user can click.
+            items: [...(menuEl?.querySelectorAll(".dropdown-item") ?? [])].map((el) => {
+              const r = el.getBoundingClientRect();
+              const cx = r.left + r.width / 2;
+              const cy = r.top + r.height / 2;
+              const hit = document.elementFromPoint(cx, cy);
+              return {
+                testid: el.getAttribute("data-testid"),
+                label: (el.textContent ?? "").trim(),
+                // Does this item spill past the card, into the sibling's box? (P4)
+                spillsPastCard: cy > cardRect.bottom,
+                inViewport: cx >= 0 && cx <= window.innerWidth && cy >= 0 && cy <= window.innerHeight,
+                // THE question: would a click here land on this item, or on somebody else's markup?
+                reachable: !!hit && el.contains(hit),
+                hit: tagOf(hit),
+              };
+            }),
+          };
+        }, target.id);
+
+        assert(!probe.error, probe.error ?? "");
+        assert(probe.menuOpen, "the ⋮ menu never opened — there is nothing to hit-test");
+
+        // ── P1-P4: the preconditions that make a green here MEAN something ──────────────────────
+        assert(probe.hovered,
+          "PRECONDITION: the pointer is no longer over the card at the moment of the hit-test. " +
+          "No hover => no transform => no stacking context => the menu is on top and this test " +
+          "passes on BROKEN code. Something above moved the mouse or scrolled the page.");
+        assert(probe.transform !== "none",
+          `PRECONDITION: the hovered card has no transform (computed \`${probe.transform}\`), so it ` +
+          "is not a stacking context and the bug this guard exists for cannot occur. The hover-lift " +
+          "(.board-card:hover { transform: translateY(-1px) }) is what creates it — if that is gone, " +
+          "app.css:604 may be dead code, and this guard must be re-derived rather than left green.");
+        assert(probe.cardsBelow >= 1,
+          `seed is not discriminating: the card under test has ${probe.cardsBelow} card(s) below it in ` +
+          "New. The burying element IS the next card — with none, nothing can paint over the menu.");
+        const spill = probe.items.filter((i) => i.spillsPastCard);
+        assert(spill.length > 0,
+          "seed is not discriminating: no menu item extends past the card's bottom edge, so the menu " +
+          "sits entirely inside its own card and the sibling below has nothing to bury. (Either the " +
+          "target card grew a body/tags and is now too tall, the menu lost items, or Popper flipped " +
+          "the menu upward for want of room below it.)");
+
+        // ── P5: the items whose burial IS the bug must actually be on the menu ──────────────────
+        const rendered = probe.items.map((i) => i.testid);
+        for (const required of [
+          `idea-card-move-${target.id}-Rejected`,
+          `idea-card-promote-${target.id}`,
+          `idea-card-delete-${target.id}`,
+        ]) {
+          assert(rendered.includes(required),
+            `the open menu does not render ${required} — it renders [${rendered}]. These are the ` +
+            "three items the bug buried; a menu without them cannot demonstrate anything.");
+        }
+
+        // ── P6: elementFromPoint is viewport-relative, so an off-screen centre returns null for a ──
+        //    reason that has nothing to do with burial. Say so, rather than blaming the z-index.
+        const offscreen = probe.items.filter((i) => !i.inViewport);
+        assert(offscreen.length === 0,
+          `PRECONDITION: ${offscreen.map((i) => i.label).join(", ")} lie outside the viewport, where ` +
+          "elementFromPoint can see nothing at all. Give the page more height.");
+
+        // ── THE ASSERTION. Not "is it visible" — "would a click get there". ─────────────────────
+        const buried = probe.items.filter((i) => !i.reachable);
+        assert(buried.length === 0,
+          `${buried.length} of ${probe.items.length} items in the open ⋮ menu are BURIED — they are ` +
+          `painted, but a click at their centre lands on somebody else's markup (the card owning the ` +
+          `open menu is painting at z-index: ${probe.zIndex}):\n` +
+          buried.map((i) => `    BURIED  ${i.label.padEnd(10)} [${i.testid}]  elementFromPoint = ${i.hit}`).join("\n") +
+          "\n  This is what app.css:604 (.board-card:has(.dropdown-menu.show) { z-index: 3 }) prevents.");
+      } finally {
+        if (viewport) await page.setViewportSize(viewport);
+      }
+    });
+
+    // ── Regression guard (#300): the confirms are REAL dialogs, not painted-on ones ───────────────
+    // Both hand-rolled confirms have advertised role="dialog" + aria-modal="true" since the day they
+    // were written — a promise that nothing behind them is reachable — while Tab walked straight out
+    // of an open confirm and onto the board underneath, and closing one dropped focus on the floor.
+    // A mouse user could never tell; a keyboard user is driving controls hidden behind a modal.
+    // Nothing else in this suite, in xUnit, or in the compiler can see any of that: the modal LOOKS
+    // right, so the only way to hold the wiring in place is to press the keys.
+    //
+    // Three questions, each of which the unwired code answers wrongly:
+    //   1. does Tab stay inside the dialog, however many times it is pressed;
+    //   2. does Shift+Tab from the FIRST focusable wrap round to the LAST, or reverse out;
+    //   3. once the dialog closes, does focus return to the control that opened it.
+    // (3) is asked of the PROMOTE confirm on purpose. Its opener is a plain visible button on the
+    // card, which is still there afterwards — so "focus came back" is a question with a legible
+    // answer. The delete confirm opens from a ⋮ item that Bootstrap display:none's on click, and
+    // "focus returned to a hidden element" would mean nothing whichever way it came out. Same
+    // destroyDialog code path either way; ask it where the answer can be read.
+    await test("Ideas board: the confirm dialogs trap Tab and hand focus back to the opener", async () => {
+      // Clean slate: one idea, so "the card" is unambiguous.
+      for (const i of await api("GET", "/api/ideas?limit=500")) {
+        await api("DELETE", `/api/ideas/${i.id}`).catch(() => {});
+      }
+      const idea = await api("POST", "/api/ideas", { title: `E2E Trap ${stamp}`, priority: "High" });
+
+      await page.goto(`${baseUrl}/ideas`);
+      await page.locator(`[data-testid="idea-card-${idea.id}"]`).waitFor({ state: "visible" });
+      // This file's settled "the board has finished standing itself up" signal: the circuit is live,
+      // so a click reaches the server and the modal's OnAfterRenderAsync (which arms the trap) runs.
+      await waitForSortableArmed(page, "New");
+
+      // ── 1. The DELETE confirm: Tab cannot leave it ───────────────────────────────────────────
+      const deleteModal = '[data-testid="idea-delete-modal"]';
+      await clickUntil(
+        () => page.locator(`[data-testid="idea-card-menu-${idea.id}"]`).click(),
+        page.locator(`[data-testid="idea-card-delete-${idea.id}"]`),
+      );
+      await page.locator(`[data-testid="idea-card-delete-${idea.id}"]`).click();
+      await page.locator(deleteModal).waitFor({ state: "visible" });
+
+      const opened = await probeDialogFocus(page, deleteModal);
+
+      // ── PRECONDITIONS: what makes a green here MEAN something ────────────────────────────────
+      assert(opened.count >= 3,
+        `the delete confirm exposes ${opened.count} focusable control(s). A cycle needs at least three ` +
+        "(✕, Cancel, Delete) — with fewer, wrapping and not-wrapping look identical and this guard is " +
+        "vacuous.");
+      assert(opened.escapes > 0,
+        "PRECONDITION: nothing OUTSIDE the open confirm is focusable, so Tab has nowhere to escape to " +
+        "and even an untrapped dialog would hold focus by accident. This guard would pass on broken " +
+        "code. (The board, its filter bar and its cards are supposed to be sitting right behind it.)");
+      assert(opened.inside,
+        `the confirm opened without taking focus at all — focus is on ${opened.active}. Nothing below ` +
+        "this line is being tested from inside the dialog.");
+
+      // Press Tab MORE times than the dialog has focusables: a "trap" that merely lets you walk to
+      // the last control and out would survive any shorter walk.
+      const presses = opened.count + 2;
+      for (let i = 1; i <= presses; i++) {
+        await page.keyboard.press("Tab");
+        const p = await probeDialogFocus(page, deleteModal);
+        assert(p.inside,
+          `Tab #${i} of ${presses} walked OUT of the open delete confirm and onto ${p.active}. The ` +
+          'dialog claims aria-modal="true" and its backdrop swallows every click, so a keyboard user ' +
+          "is now operating a control they cannot see, behind a modal they cannot leave. " +
+          "(KanbanFlow.initDialog is the Tab cycle — Ideas.razor must call it.)");
+      }
+
+      // Shift+Tab from the first control must WRAP to the last, not reverse out the front.
+      await focusFirstInDialog(page, deleteModal);
+      const parked = await probeDialogFocus(page, deleteModal);
+      assert(parked.index === 0,
+        `could not park focus on the confirm's first focusable — focus sits at index ${parked.index} ` +
+        `(${parked.active}). The wrap below would be asked from the wrong place.`);
+
+      await page.keyboard.press("Shift+Tab");
+      const wrapped = await probeDialogFocus(page, deleteModal);
+      assert(wrapped.inside,
+        `Shift+Tab from the confirm's FIRST control reversed straight out of the dialog and onto ` +
+        `${wrapped.active}. Backwards is a leak too — a forward-only trap is not a trap.`);
+      assert(wrapped.index === opened.count - 1,
+        `Shift+Tab from the first control must wrap to the LAST (index ${opened.count - 1}); it landed ` +
+        `at index ${wrapped.index} (${wrapped.active}).`);
+
+      // Esc still cancels (#296 AC4) — now via initDialog -> [JSInvokable] CloseFromJs, which REPLACED
+      // the hand-rolled @onkeydown handler. Deleting that handler without wiring its replacement, or
+      // wiring it without the StateHasChanged a [JSInvokable] does not get for free, lands here.
+      await page.keyboard.press("Escape");
+      await page.locator(deleteModal).waitFor({ state: "detached" });
+      const survivor = await api("GET", `/api/ideas/${idea.id}`).catch(() => null);
+      assert(survivor !== null, "Esc on the DELETE confirm must cancel it — the idea was deleted instead");
+
+      // ── 2. The PROMOTE confirm: focus goes back where it came from ───────────────────────────
+      const promoteModal = '[data-testid="idea-promote-modal"]';
+      const openerTestid = `idea-card-promote-btn-${idea.id}`;
+      await clickUntil(
+        () => page.locator(`[data-testid="${openerTestid}"]`).click(),
+        page.locator(promoteModal),
+      );
+
+      const promoteOpen = await probeDialogFocus(page, promoteModal);
+      // Load-bearing precondition. Clicking the opener FOCUSED it, so "focus is on the opener after
+      // close" is also true of a dialog that never took focus in the first place. Focus has to be
+      // shown leaving the opener before its return can mean anything.
+      assert(promoteOpen.inside,
+        `the promote confirm opened without taking focus — it is still on ${promoteOpen.active}, so ` +
+        "the focus-restore assertion below could not tell a working restore from a dialog that never " +
+        "moved focus at all.");
+      assert(promoteOpen.count >= 3,
+        `the promote confirm exposes only ${promoteOpen.count} focusable control(s)`);
+
+      await page.keyboard.press("Escape");
+      await page.locator(promoteModal).waitFor({ state: "detached" });
+
+      const restored = await probeDialogFocus(page, promoteModal);
+      assert(restored.activeTestid === openerTestid,
+        "closing the promote confirm dropped focus on the floor instead of handing it back to the " +
+        `button that opened it — focus is now on ${restored.active}. A keyboard user who cancels a ` +
+        "confirm is dumped at the top of the document and has to walk the entire board again to get " +
+        "back to the card they were on. (KanbanFlow.destroyDialog is the focus restore, and it only " +
+        "runs while the dialog's node still EXISTS — these confirms are @if-rendered, so a teardown " +
+        "deferred to after the close-render is handed a null element and silently does nothing.)");
+
+      const notPromoted = await api("GET", `/api/ideas/${idea.id}`);
+      assert(notPromoted.status === "New",
+        `Esc on the PROMOTE confirm must cancel it — the idea is now ${notPromoted.status}`);
+    });
+
     // ── Scenario E: Settings -> Run all shows an all-passed result table ──
     await test("Settings 'Run all' reports an all-passed result", async () => {
       await page.goto(`${baseUrl}/settings`);
@@ -493,6 +1208,7 @@ async function main() {
     // ── Cleanup of API-created data (best effort) ──
     await api("DELETE", `/api/projects/${proj.id}`).catch(() => {});
     await api("DELETE", `/api/projects/${orderProj.id}`).catch(() => {});
+    await api("DELETE", `/api/projects/${dragProj.id}`).catch(() => {});
     // delete the modal-created project too
     const all = await api("GET", "/api/projects");
     const modalProj = all.find((p) => p.name === modalProjectName);
