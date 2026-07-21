@@ -42,4 +42,13 @@
     <PackageReference Include="SQLitePCLRaw.lib.e_sqlite3" Version="3.53.3" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- Audit suppress: HtmlSanitizer 9.0.892 transitively pulls in AngleSharp 0.17.1,
+         flagged by advisory GHSA-pgww-w46g-26qg (moderate; ReDoS in CSS tokeniser).
+         A direct version pin cannot be applied without a patched AngleSharp on NuGet;
+         suppression unblocks the -warnaserror PR gate until HtmlSanitizer ships with
+         AngleSharp >= 0.17.2 or the dependency is replaced under issue #84. -->
+    <NuGetAuditSuppress Include="https://github.com/advisories/GHSA-pgww-w46g-26qg" />
+  </ItemGroup>
+
 </Project>
