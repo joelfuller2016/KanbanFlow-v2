@@ -11,7 +11,13 @@
     "backlog:check": "node scripts/backlog-sync.mjs --check",
     "test:ui": "node scripts/ui-e2e.mjs",
     "test:mcp": "node scripts/framing-ab.mjs all && node scripts/smoke-mcp.mjs",
-    "test:mcp-framing": "node scripts/framing-ab.mjs all"
+    "test:mcp-framing": "node scripts/framing-ab.mjs all",
+    "gh:sync": "node scripts/portfolio-sync.mjs sync",
+    "gh:sync:dry": "node scripts/portfolio-sync.mjs sync --dry-run",
+    "gh:status": "node scripts/portfolio-sync.mjs status",
+    "gh:onboard": "node scripts/portfolio-sync.mjs onboard",
+    "gh:push": "node scripts/portfolio-sync.mjs push-issue",
+    "gh:standup": "node scripts/portfolio-standup.mjs"
   },
   "devDependencies": {
     "playwright": "^1.49.0"
