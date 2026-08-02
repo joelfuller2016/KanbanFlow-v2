@@ -270,7 +270,7 @@ const tools = [
           description: "Optional initial priority. Defaults to Low."
         },
         assignee: { type: "string", description: "Optional free-text assignee label." },
-        sortOrder: { type: "integer", minimum: 0, description: "Optional sort order within column." }
+        sortOrder: { type: "number", description: "Optional finite task rank within the column; may be fractional." }
       },
       required: ["featureId", "name"]
     }
@@ -295,7 +295,7 @@ const tools = [
           description: "New priority."
         },
         assignee: { type: "string", description: "New assignee label." },
-        sortOrder: { type: "integer", minimum: 0, description: "New sort order within column." }
+        sortOrder: { type: "number", description: "New finite task rank within the column; may be fractional." }
       },
       required: ["taskId", "name"]
     }
@@ -1112,7 +1112,7 @@ async function callTool(toolName, args) {
           status: optionalString(args, "status"),
           priority: optionalString(args, "priority"),
           assignee: optionalString(args, "assignee"),
-          sortOrder: optionalInt(args, "sortOrder", { min: 0 })
+          sortOrder: optionalFiniteNumber(args, "sortOrder")
         }
       });
     case "update_task":
@@ -1128,7 +1128,7 @@ async function callTool(toolName, args) {
           status: optionalString(args, "status"),
           priority: optionalString(args, "priority"),
           assignee: optionalString(args, "assignee"),
-          sortOrder: optionalInt(args, "sortOrder", { min: 0 })
+          sortOrder: optionalFiniteNumber(args, "sortOrder")
         }
       });
     case "delete_task":
@@ -1536,6 +1536,15 @@ function optionalInt(args, name, { min = undefined, max = undefined } = {}) {
   if (args[name] === undefined || args[name] === null) return undefined;
   const value = coerceInt(args[name], name);
   assertIntRange(value, name, min, max);
+  return value;
+}
+
+function optionalFiniteNumber(args, name) {
+  if (args[name] === undefined || args[name] === null) return undefined;
+  const value = args[name];
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    throw new McpError(-32602, `${name} must be a finite number.`);
+  }
   return value;
 }
 

@@ -8,7 +8,9 @@
         IsDragEnabled=false is neither a drop target nor a drag source (put:false + pull:false)
         with zero JS changes.
      2. Each card root emits data-task-id="{id}" — owned by CardTemplate's root, not by the board.
-     3. The hosting page owns [JSInvokable] OnCardMoved(int id, string newStatus, int newIndex).
+     3. The hosting page owns [JSInvokable] OnCardMoved(int id, string newStatus, int beforeItemId).
+        Argument 3 is the next rendered card's stable identity (0 = append), NOT a DOM index.
+        Items may be a filtered/partial subset; the host resolves the anchor against persisted order.
         data-status must be the ENUM NAME ("InProgress"), never the display name ("In Progress"):
         the page's Enum.TryParse silently swallows a failed parse and the drop is lost.
      4. CardTemplate's root carries @key="{the item's identity}" (#294). KanbanColumn's card loop

@@ -11,7 +11,11 @@ public class TaskItem
     public string? Assignee { get; set; }
     public string? ClaimedBy { get; set; }
     public DateTime? ClaimedAt { get; set; }
-    public int SortOrder { get; set; }
+    /// <summary>
+    /// Finite ordering rank. Fractional values let a drag place this task between two
+    /// persisted siblings without rewriting either sibling's rank (#307).
+    /// </summary>
+    public double SortOrder { get; set; }
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
     public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
     public DateTime? CompletedAt { get; set; }

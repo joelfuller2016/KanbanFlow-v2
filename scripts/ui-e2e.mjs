@@ -9,9 +9,9 @@
 //
 // The kanban board uses SortableJS drag-and-drop (initBoardDragDrop in
 // wwwroot/js/kanbanflow.js): dragging a card between the `.board-column-cards`
-// containers fires onEnd -> OnCardMoved(taskId, newStatus), which updates the
-// task's status. These tests drive a real drag (mouse events) AND the done-checkbox
-// path — both re-group the card into the destination column.
+// containers fires onEnd -> OnCardMoved(taskId, newStatus, beforeTaskId), which updates the
+// task's status and identity-anchored order. These tests drive a real drag (mouse events) AND
+// the done-checkbox path — both re-group the card into the destination column.
 
 import { chromium } from "playwright";
 import { spawn, execSync } from "node:child_process";
@@ -138,6 +138,55 @@ async function dragCardTo(page, cardSelector, targetColumnSelector) {
   await page.mouse.up();
 }
 
+// Same real-mouse path as dragCardTo, but release near the top edge of a specific
+// card so SortableJS places the dragged card immediately BEFORE that identity.
+// This is the user gesture whose persisted meaning #307 protects.
+async function dragCardBefore(page, cardSelector, beforeCardSelector) {
+  const card = page.locator(cardSelector);
+  const beforeCard = page.locator(beforeCardSelector);
+  await beforeCard.scrollIntoViewIfNeeded();
+  await card.scrollIntoViewIfNeeded();
+  const cb = await card.boundingBox();
+  const ab = await beforeCard.boundingBox();
+  if (!cb || !ab) throw new Error("card or anchor card not visible for drag");
+  const sx = cb.x + cb.width / 2, sy = cb.y + cb.height / 2;
+  const tx = ab.x + ab.width / 2, ty = ab.y + Math.min(6, ab.height / 5);
+  await page.mouse.move(sx, sy);
+  await page.mouse.down();
+  for (let i = 1; i <= 12; i++) {
+    await page.mouse.move(sx + ((tx - sx) * i) / 12, sy + ((ty - sy) * i) / 12, { steps: 2 });
+    await page.waitForTimeout(25);
+  }
+  await page.mouse.move(tx, ty);
+  await page.waitForTimeout(60);
+  await page.mouse.up();
+}
+
+async function waitForFeatureTaskOrder(featureId, expectedIds, timeoutMs = 6000) {
+  const expected = expectedIds.join(",");
+  const deadline = Date.now() + timeoutMs;
+  let lastTasks = [];
+  do {
+    lastTasks = await api("GET", `/api/features/${featureId}/tasks`);
+    if (lastTasks.map((task) => task.id).join(",") === expected) return lastTasks;
+    await sleep(200);
+  } while (Date.now() < deadline);
+  throw new Error(`expected feature task order [${expected}], got [${lastTasks.map((task) => task.id)}]`);
+}
+
+async function waitForProjectBoardOrder(projectId, status, expectedIds, timeoutMs = 6000) {
+  const expected = expectedIds.join(",");
+  const deadline = Date.now() + timeoutMs;
+  let lastTasks = [];
+  do {
+    const board = await api("GET", `/api/projects/${projectId}/board`);
+    lastTasks = board[status] ?? [];
+    if (lastTasks.map((task) => task.id).join(",") === expected) return lastTasks;
+    await sleep(200);
+  } while (Date.now() < deadline);
+  throw new Error(`expected ${status} board order [${expected}], got [${lastTasks.map((task) => task.id)}]`);
+}
+
 // ── Board render-truth harness (#294) ────────────────────────────────────────────────
 // Reads what a board is actually DRAWING: per column, the count badge (which the component
 // computes from the MODEL) and the ids of the card roots rendered beside it (which the Blazor
@@ -169,7 +218,7 @@ async function readBoardDom(page, statuses) {
 // The two boards' canonical column orders, restated from the source so the DOM is checked
 // against the SERVER's truth and not against itself:
 //   /ideas        Priority desc, CreatedAt desc, Id desc  (Ideas.OrderIdeas — an Idea has no SortOrder)
-//   /project/{id} SortOrder asc, Id asc                   (ProjectView.OrderTasksInColumn)
+//   /project/{id} effective rank, raw rank, Id asc        (ProjectView.OrderTasksInColumn)
 // Both end in a UNIQUE key, so both comparisons are TOTAL and this "truth" is a single order rather
 // than a set of acceptable ones. Ideas.OrderIdeas grew its `Id desc` for exactly that reason (#300):
 // CreatedAt defaults to UtcNow, two ideas made in the same tick at the same priority tie on both of
@@ -186,8 +235,11 @@ const ideaTruth = (ideas) => groupBy(ideas, (i) => i.status, (a, b) =>
   (PRIORITY_RANK[b.priority] ?? -1) - (PRIORITY_RANK[a.priority] ?? -1) ||
   new Date(b.createdAt) - new Date(a.createdAt) ||
   b.id - a.id);
+const effectiveTaskRank = (task) => Number.isInteger(task.sortOrder)
+  ? task.sortOrder + (task.id / 2147483648)
+  : task.sortOrder;
 const taskTruth = (tasks) => groupBy(tasks, (t) => t.status, (a, b) =>
-  a.sortOrder - b.sortOrder || a.id - b.id);
+  effectiveTaskRank(a) - effectiveTaskRank(b) || a.sortOrder - b.sortOrder || a.id - b.id);
 
 // The assertion #294 would have failed on. The badge is rendered from the model; the cards are
 // put there by the render diff. A column whose badge contradicts the cards drawn beside it is a
@@ -521,8 +573,8 @@ async function main() {
     });
 
     // ── Regression guard: cards inside a column render in SortOrder sequence ──
-    // KanbanColumn.razor orders its cards `OrderBy(t => t.SortOrder).ThenBy(t => t.Id)`, and that
-    // sort lives ONLY in the Razor: ProjectView builds `allTasks` from an unordered
+    // ProjectView orders cards through the canonical effective/raw-rank/Id rule, and that sort lives
+    // ONLY in the Razor: ProjectView builds `allTasks` from an unordered
     // `Features.SelectMany(f => f.Tasks)` (no OrderBy on the Include), so nothing downstream
     // re-imposes it. Every other board scenario above puts a single card in a column, where a
     // scrambled sort is invisible. Seed THREE cards whose SortOrder order matches neither their
@@ -569,6 +621,181 @@ async function main() {
         domIds.join(",") === expectedCardIds.join(","),
         `cards must render in SortOrder order — expected [${expectedCardIds}], got [${domIds}]`,
       );
+    });
+
+    // ── Regression guard (#307): rendered indices are not database indices ──────────────
+    // KanbanBoard accepts a caller-supplied subset. #112 will use that for filtering, but
+    // shipping the filter merely to prove this lower-level contract would couple two issues.
+    // Instead, stage the exact DOM shape a filtered board renders: five persisted cards, only
+    // two card nodes present while Sortable computes the drop. The one-shot revert wrapper puts
+    // every node back before Blazor is invoked, preserving the #294 DOM-ownership invariant.
+    const partialProj = await api("POST", "/api/projects", { name: `E2E Partial Drag ${stamp}` });
+    const partialFeatureA = await api("POST", `/api/projects/${partialProj.id}/features`, { name: "E2E Partial Feature A" });
+    const partialFeatureB = await api("POST", `/api/projects/${partialProj.id}/features`, { name: "E2E Partial Feature B" });
+    // Normal CreateAsync ranks are feature-local, so these interleaved tasks persist as
+    // A0/id1, B0/id2, A1/id3, B1/id4, A2/id5. The two duplicate-rank groups are the common
+    // case that the effective legacy positions must separate without rewriting bystanders.
+    const partialTasks = [
+      await api("POST", `/api/features/${partialFeatureA.id}/tasks`, { name: `E2E Partial A0 ${stamp}`, status: "Todo", sortOrder: 0 }),
+      await api("POST", `/api/features/${partialFeatureB.id}/tasks`, { name: `E2E Partial B0 ${stamp}`, status: "Todo", sortOrder: 0 }),
+      await api("POST", `/api/features/${partialFeatureA.id}/tasks`, { name: `E2E Partial A1 ${stamp}`, status: "Todo", sortOrder: 1 }),
+      await api("POST", `/api/features/${partialFeatureB.id}/tasks`, { name: `E2E Partial B1 ${stamp}`, status: "Todo", sortOrder: 1 }),
+      await api("POST", `/api/features/${partialFeatureA.id}/tasks`, { name: `E2E Partial A2 ${stamp}`, status: "Todo", sortOrder: 2 }),
+    ];
+    const [hiddenBefore, visibleAnchor, hiddenMiddle, movedVisible, hiddenAfter] = partialTasks;
+
+    await test("Filtered board drag is persisted relative to the visible task identity", async () => {
+      await page.goto(`${baseUrl}/project/${partialProj.id}`);
+      for (const task of partialTasks) {
+        await page.locator(`[data-testid="board-card-${task.id}"]`).waitFor({ state: "visible" });
+      }
+      await waitForSortableArmed(page, "Todo");
+
+      const beforeTasks = (await api("GET", `/api/projects/${partialProj.id}/board`)).Todo;
+      const beforeIds = beforeTasks.map((task) => task.id);
+      const beforeRanks = new Map(beforeTasks.map((task) => [task.id, task.sortOrder]));
+      assert(beforeIds.join(",") === partialTasks.map((task) => task.id).join(","),
+        `seed: expected dense persisted order [${partialTasks.map((task) => task.id)}], got [${beforeIds}]`);
+
+      await page.evaluate(({ visibleIds }) => {
+        const column = document.querySelector('[data-testid="board-column-Todo-cards"]');
+        if (!column) throw new Error("Todo card container not found");
+        const originalChildren = Array.from(column.children);
+        const originalRevert = window.KanbanFlow._revertDraggedNode;
+
+        // Restore the complete Blazor-owned DOM synchronously after Sortable reports the partial
+        // drop but before invokeMethodAsync starts the server round-trip.
+        const patched = function (evt) {
+          originalRevert.call(window.KanbanFlow, evt);
+          for (const child of originalChildren) column.appendChild(child);
+          window.KanbanFlow._revertDraggedNode = originalRevert;
+          delete window.KanbanFlow._e2eRevertPatch;
+          delete window.KanbanFlow._e2eOriginalRevert;
+        };
+
+        // Publish both halves so the teardown below can undo the patch even when `onEnd` — and
+        // therefore the self-restore above — never fires. Without this the helper stays patched
+        // for the rest of the run and the closure pins every removed node in memory.
+        window.KanbanFlow._e2eRevertPatch = patched;
+        window.KanbanFlow._e2eOriginalRevert = originalRevert;
+        window.KanbanFlow._revertDraggedNode = patched;
+
+        for (const child of originalChildren) {
+          const id = Number(child.getAttribute("data-task-id"));
+          if (!visibleIds.includes(id)) child.remove();
+        }
+      }, { visibleIds: [visibleAnchor.id, movedVisible.id] });
+
+      const renderedIds = await page.$$eval(
+        '[data-testid="board-column-Todo-cards"] [data-task-id]',
+        (els) => els.map((el) => Number(el.getAttribute("data-task-id"))),
+      );
+      assert(renderedIds.join(",") === [visibleAnchor.id, movedVisible.id].join(","),
+        `staged board must render only the two visible cards, got [${renderedIds}]`);
+
+      await dragCardBefore(page,
+        `[data-testid="board-card-${movedVisible.id}"]`,
+        `[data-testid="board-card-${visibleAnchor.id}"]`);
+
+      // Finally-style teardown: undo the patch if the drop never fired. Restore ONLY while our own
+      // patch is still the installed helper — if `onEnd` already restored it, or anything else
+      // replaced it since, overwriting here would reinstate a stale function.
+      await page.evaluate(() => {
+        const kf = window.KanbanFlow;
+        if (kf._e2eRevertPatch && kf._revertDraggedNode === kf._e2eRevertPatch) {
+          kf._revertDraggedNode = kf._e2eOriginalRevert;
+        }
+        delete kf._e2eRevertPatch;
+        delete kf._e2eOriginalRevert;
+      });
+
+      const expectedIds = [hiddenBefore.id, movedVisible.id, visibleAnchor.id, hiddenMiddle.id, hiddenAfter.id];
+      const afterTasks = await waitForProjectBoardOrder(partialProj.id, "Todo", expectedIds);
+      const beforeBystanders = beforeIds.filter((id) => id !== movedVisible.id);
+      const afterBystanders = afterTasks.map((task) => task.id).filter((id) => id !== movedVisible.id);
+      assert(afterBystanders.join(",") === beforeBystanders.join(","),
+        `non-dragged tasks changed relative order: before [${beforeBystanders}], after [${afterBystanders}]`);
+
+      for (const task of afterTasks.filter((task) => task.id !== movedVisible.id)) {
+        assert(task.sortOrder === beforeRanks.get(task.id),
+          `hidden/bystander task ${task.id} SortOrder changed from ${beforeRanks.get(task.id)} to ${task.sortOrder}`);
+      }
+      const movedAfter = afterTasks.find((task) => task.id === movedVisible.id);
+      assert(movedAfter?.sortOrder > 0 && movedAfter?.sortOrder < 1,
+        `moved task should receive a fractional rank inside the legacy rank-0 interval, got ${movedAfter?.sortOrder}`);
+
+      // A task response containing a fractional rank must be accepted by the public PUT surface;
+      // otherwise GET -> PUT round trips would break after the first identity-anchored drag.
+      const roundTripped = await api("PUT", `/api/tasks/${movedVisible.id}`, {
+        name: movedAfter.name,
+        description: movedAfter.description,
+        status: movedAfter.status,
+        priority: movedAfter.priority,
+        assignee: movedAfter.assignee,
+        sortOrder: movedAfter.sortOrder,
+        actor: "ui-e2e",
+      });
+      assert(roundTripped.sortOrder === movedAfter.sortOrder,
+        `fractional SortOrder did not survive GET -> PUT: ${roundTripped.sortOrder}`);
+    });
+
+    // The outline already has a live partial-DOM seam: expanded subtask cards are direct siblings
+    // of task cards inside `.feature-tasks`, so evt.newIndex counts nodes the database task list
+    // does not contain. Identity anchoring must scan past those non-task siblings.
+    const outlineProj = await api("POST", "/api/projects", { name: `E2E Outline Anchor ${stamp}` });
+    const outlineFeature = await api("POST", `/api/projects/${outlineProj.id}/features`, { name: "E2E Outline Feature" });
+    const outlineA = await api("POST", `/api/features/${outlineFeature.id}/tasks`, { name: `Outline A ${stamp}`, status: "Todo", sortOrder: 0 });
+    const outlineB = await api("POST", `/api/features/${outlineFeature.id}/tasks`, { name: `Outline B ${stamp}`, status: "Review", sortOrder: 1 });
+    const outlineC = await api("POST", `/api/features/${outlineFeature.id}/tasks`, { name: `Outline C ${stamp}`, status: "Backlog", sortOrder: 2 });
+    const outlineSubtask = await api("POST", `/api/tasks/${outlineA.id}/subtasks`, {
+      text: `Expanded child ${stamp}`, completed: false, sortOrder: 0, parentSubtaskId: null,
+    });
+
+    await test("Outline drag ignores expanded subtask siblings and anchors to the next task", async () => {
+      await page.goto(`${baseUrl}/project/${outlineProj.id}`);
+      for (const task of [outlineA, outlineB, outlineC]) {
+        await page.locator(`[data-testid="outline-task-${task.id}"]`).waitFor({ state: "visible" });
+      }
+      await page.locator(`[data-testid="outline-subtask-${outlineSubtask.id}"]`).waitFor({ state: "visible" });
+      await page.waitForFunction((featureId) => {
+        const container = document.querySelector(`[data-testid="outline-feature-${featureId}-tasks"]`);
+        return container && window.Sortable && window.Sortable.get(container);
+      }, outlineFeature.id);
+
+      const directChildren = await page.$$eval(
+        `[data-testid="outline-feature-${outlineFeature.id}-tasks"] > [data-testid]`,
+        (els) => els.map((el) => el.getAttribute("data-testid")),
+      );
+      assert(directChildren.join(",") === [
+        `outline-task-${outlineA.id}`,
+        `outline-subtask-${outlineSubtask.id}`,
+        `outline-task-${outlineB.id}`,
+        `outline-task-${outlineC.id}`,
+      ].join(","), `seed: expanded outline child sequence was [${directChildren}]`);
+
+      const ranksBefore = new Map(
+        (await api("GET", `/api/features/${outlineFeature.id}/tasks`))
+          .map((task) => [task.id, task.sortOrder]),
+      );
+
+      await dragCardBefore(page,
+        `[data-testid="outline-task-${outlineC.id}"]`,
+        `[data-testid="outline-task-${outlineB.id}"]`);
+
+      const beforeIds = [outlineA.id, outlineB.id, outlineC.id];
+      const expectedIds = [outlineA.id, outlineC.id, outlineB.id];
+      const afterTasks = await waitForFeatureTaskOrder(outlineFeature.id, expectedIds);
+      const beforeBystanders = beforeIds.filter((id) => id !== outlineC.id);
+      const afterBystanders = afterTasks.map((task) => task.id).filter((id) => id !== outlineC.id);
+      assert(afterBystanders.join(",") === beforeBystanders.join(","),
+        `outline bystanders changed relative order: before [${beforeBystanders}], after [${afterBystanders}]`);
+      for (const task of afterTasks.filter((task) => task.id !== outlineC.id)) {
+        assert(task.sortOrder === ranksBefore.get(task.id),
+          `outline bystander ${task.id} SortOrder changed from ${ranksBefore.get(task.id)} to ${task.sortOrder}`);
+      }
+      const movedAfter = afterTasks.find((task) => task.id === outlineC.id);
+      assert(movedAfter?.sortOrder === 0.5,
+        `outline moved task should receive midpoint rank 0.5, got ${movedAfter?.sortOrder}`);
     });
 
     // ── Regression guard: columns render left-to-right in WorkStatus order ──
@@ -1313,6 +1540,8 @@ async function main() {
     await api("DELETE", `/api/projects/${proj.id}`).catch(() => {});
     await api("DELETE", `/api/projects/${orderProj.id}`).catch(() => {});
     await api("DELETE", `/api/projects/${dragProj.id}`).catch(() => {});
+    await api("DELETE", `/api/projects/${partialProj.id}`).catch(() => {});
+    await api("DELETE", `/api/projects/${outlineProj.id}`).catch(() => {});
     // delete the modal-created project too
     const all = await api("GET", "/api/projects");
     const modalProj = all.find((p) => p.name === modalProjectName);
