@@ -8,18 +8,28 @@ const restTimeoutMs = Number.isFinite(parsedRestTimeoutMs) && parsedRestTimeoutM
   ? parsedRestTimeoutMs
   : defaultRestTimeoutMs;
 // Two independent protocol hops, deliberately versioned separately (PR #259 review):
-// - protocolVersion is what THIS stdio wrapper speaks to its client (the widely-supported
-//   2024-11-05 revision the wrapper's handlers implement).
+// - SUPPORTED_PROTOCOL_VERSIONS is what THIS stdio wrapper speaks to its client. `initialize`
+//   echoes the client's requested revision when it is in this list, else the newest we support
+//   (SUPPORTED_PROTOCOL_VERSIONS[0]) — rather than unconditionally asserting one revision.
+//   2024-11-05 remains supported; it is simply no longer asserted unilaterally.
 // - nativeProtocolVersion is the header sent on the HTTP hop to the app's native /mcp server
-//   (the revision the ModelContextProtocol.AspNetCore 1.4 SDK negotiates).
-// Newest first. `initialize` echoes the client's requested version when we support it,
-// otherwise the newest we do — instead of unconditionally asserting one revision.
+//   (the revision the ModelContextProtocol.AspNetCore 1.4 SDK negotiates). Unrelated to the
+//   stdio hop above and deliberately pinned.
+// Newest first — SUPPORTED_PROTOCOL_VERSIONS[0] is the fallback.
 const SUPPORTED_PROTOCOL_VERSIONS = ["2025-06-18", "2025-03-26", "2024-11-05"];
 const protocolVersion = SUPPORTED_PROTOCOL_VERSIONS[0];
 const nativeProtocolVersion = "2025-06-18";
 
+// Upper bound on a single NDJSON line. Guards against a peer that streams bytes but never
+// sends a "\n" — without it, inputBuffer would grow until the process exhausts memory.
+const MAX_STDIO_MESSAGE_BYTES = 8 * 1024 * 1024;
+
 function negotiateProtocolVersion(requested) {
-  return SUPPORTED_PROTOCOL_VERSIONS.includes(requested) ? requested : protocolVersion;
+  // Only echo a string we actually support; anything else (absent, number, null, array,
+  // unknown revision) falls back to the newest supported version.
+  return typeof requested === "string" && SUPPORTED_PROTOCOL_VERSIONS.includes(requested)
+    ? requested
+    : protocolVersion;
 }
 let inputBuffer = Buffer.alloc(0);
 
@@ -840,7 +850,22 @@ function readMessages() {
   // so anything after the last newline is retained in inputBuffer until it completes.
   while (inputBuffer.length > 0) {
     const newlineIndex = inputBuffer.indexOf("\n");
-    if (newlineIndex === -1) return; // partial message; wait for more input
+    if (newlineIndex === -1) {
+      // Bound the retained partial: a peer that never sends "\n" would otherwise grow
+      // inputBuffer without limit until the process runs out of memory.
+      if (inputBuffer.length > MAX_STDIO_MESSAGE_BYTES) {
+        inputBuffer = Buffer.alloc(0); // drop the oversized partial; do not try to parse it
+        writeMessage({
+          jsonrpc: "2.0",
+          id: null,
+          error: {
+            code: -32700,
+            message: `Parse error: message exceeded ${MAX_STDIO_MESSAGE_BYTES} bytes without a newline delimiter`,
+          },
+        });
+      }
+      return; // partial message; wait for more input
+    }
 
     // Slice the line off first so a throw inside handleRawMessage cannot re-process it.
     const line = inputBuffer.subarray(0, newlineIndex).toString("utf8");
