@@ -15,7 +15,12 @@ namespace KanbanFlow.Tests;
 /// </summary>
 public sealed class MarkdownRendererTests
 {
-    private static string Render(string? markdown) => new MarkdownRenderer().RenderToSafeHtml(markdown);
+    // One shared instance, matching how Program.cs registers MarkdownRenderer (singleton).
+    // It is immutable after construction, so rebuilding the Markdig pipeline and the
+    // sanitizer allow-list for every theory case would only cost time.
+    private static readonly MarkdownRenderer Renderer = new();
+
+    private static string Render(string? markdown) => Renderer.RenderToSafeHtml(markdown);
 
     // ── Script injection ────────────────────────────────────────────────────────────────────────
 
@@ -73,14 +78,26 @@ public sealed class MarkdownRendererTests
     /// The advisory this bump closes: AngleSharp &lt; 1.5.0 never flagged
     /// <c>MathAnnotationXmlElement</c> as an HTML integration point, so tokens routed through
     /// <c>Foreign()</c> instead of <c>Home()</c>, and <c>HtmlMarkupFormatter.WriteAttributeValue()</c>
-    /// did not escape &lt;/&gt; in attribute values. Net effect: a sanitizer walking the DOM sees
-    /// nothing dangerous while the SERIALISED output re-parses in a browser as a live element.
+    /// did not escape the &lt; and &gt; characters in attribute values. Net effect: a sanitizer
+    /// walking the DOM sees nothing dangerous while the SERIALISED output re-parses in a
+    /// browser as a live element.
     ///
-    /// Note on scope, so this test is not over-read: measured against the pre-bump build, this app's
-    /// own allow-list already reduced every payload below to an empty paragraph, because
-    /// <c>AllowedTags</c> is cleared and neither <c>math</c> nor <c>annotation-xml</c> is re-added.
-    /// That is a lucky side effect of the configuration, not a designed mitigation - it evaporates
-    /// the moment somebody widens the allow-list. This is therefore a REGRESSION guard: it pins the
+    /// Note on scope, so this test is not over-read. A 17-vector differential sweep was run through
+    /// this exact sanitizer configuration on BOTH HtmlSanitizer 9.0.967 / AngleSharp 0.17.1 and
+    /// 9.1.974 / AngleSharp 1.6.0 - covering the annotation-xml PoC shapes (text/html,
+    /// application/xhtml+xml, no encoding, uppercase, self-closing, nested in p/table/pre),
+    /// mtext+mglyph, svg foreignObject and svg desc. Re-parsing each sanitized output gave
+    /// ZERO event-handler attributes and ZERO script elements on BOTH versions; the only deltas
+    /// were trailing newlines.
+    ///
+    /// So no payload was found that is exploitable here on the vulnerable version: because
+    /// <c>AllowedTags</c> is cleared and neither <c>math</c>, <c>annotation-xml</c>, <c>svg</c> nor
+    /// <c>style</c> is re-added, HtmlSanitizer drops those elements WITH their whole subtree
+    /// (KeepChildNodes is false by default), so the payload is destroyed before serialisation - and
+    /// serialisation is where the CVE bites. That is a side effect of the allow-list, not a designed
+    /// mitigation, and it evaporates the moment somebody widens the list.
+    ///
+    /// These cases are therefore a REGRESSION guard, not an exploit reproduction: they pin the
     /// neutralised behaviour so a future allow-list change or sanitizer bypass turns the gate red.
     /// </summary>
     [Theory]
