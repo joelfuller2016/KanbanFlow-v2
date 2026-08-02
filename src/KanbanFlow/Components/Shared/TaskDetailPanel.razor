@@ -269,13 +269,27 @@
                 </div>
             </div>
 
-            @* Comments / activity notes *@
+            @* ── History: the task's COMPLETE trail (#328) ────────────────────────────────────
+               This section rendered `comments` ONLY. Every field-level change — status, priority,
+               assignment, rename, feature move, claim/release — was written to ActivityEvent by
+               TaskService and then never shown to the human. ActivityTimeline merges both records
+               into one rail and de-duplicates the comment/event PAIRS the service writes for a
+               single action (see ActivityTimelineBuilder's remarks).
+
+               It is the SAME component EditItemModal uses. Do not fork it — two copies is exactly
+               how this panel ended up rendering two different clocks (#306).
+
+               The Latest Handoff banner stays: it is a "read this first" callout, not a duplicate
+               history, and it is the one entry that must not be behind a filter chip or a fold. *@
             <section class="mb-4 pt-3 border-top" data-testid="task-comments-section" aria-labelledby="task-comments-heading">
                 <div class="d-flex align-items-center mb-2">
-                    <h6 id="task-comments-heading" class="form-label small text-muted mb-0">Comments</h6>
+                    <h6 id="task-comments-heading" class="form-label small text-muted mb-0">History</h6>
                     @if (!commentsLoading)
                     {
-                        <span class="ms-2 badge bg-secondary small" data-testid="task-comments-count">@comments.Count</span>
+                        @* Counts COMMENTS, not history entries — the timeline's own chips carry the
+                           per-category totals. Labelled so "12" next to "History" cannot be misread. *@
+                        <span class="ms-2 badge bg-secondary small" data-testid="task-comments-count"
+                              title="Comments" aria-label="@($"{comments.Count} comments")">@comments.Count</span>
                     }
                 </div>
 
@@ -286,18 +300,21 @@
                         Loading comments...
                     </div>
                 }
-                else if (commentsError is not null)
-                {
-                    <div class="alert alert-danger py-2 small" data-testid="task-comments-error">We couldn't load comments right now. Please try reopening the task.</div>
-                }
-                else if (comments.Count == 0)
-                {
-                    <div class="text-muted small border rounded p-2 mb-2" data-testid="task-comments-empty-state">
-                        No comments yet. Add a note for the next human or AI agent.
-                    </div>
-                }
                 else
                 {
+                    @* A failed COMMENT load no longer hides the audit trail: the timeline still
+                       renders the events, and the alert says which half is missing. *@
+                    @if (commentsError is not null)
+                    {
+                        <div class="alert alert-danger py-2 small" data-testid="task-comments-error">We couldn't load comments right now. Please try reopening the task.</div>
+                    }
+                    else if (comments.Count == 0)
+                    {
+                        <div class="text-muted small border rounded p-2 mb-2" data-testid="task-comments-empty-state">
+                            No comments yet. Add a note for the next human or AI agent.
+                        </div>
+                    }
+
                     var latestHandoff = GetLatestHandoffComment();
                     @if (latestHandoff is not null)
                     {
@@ -315,20 +332,11 @@
                         </div>
                     }
 
-                    <div class="task-comments-list d-flex flex-column gap-2 mb-2" data-testid="task-comments-list">
-                        @foreach (var comment in comments)
-                        {
-                            <article class="task-comment border rounded p-2 @GetCommentBorderClass(comment.Type) @(comment.Id == latestHandoff?.Id ? "task-comment-latest-handoff" : null)" data-testid="@($"task-comment-row-{comment.Id}")">
-                                <div class="d-flex flex-wrap align-items-center gap-2 mb-1">
-                                    <span class="@GetCommentTypeBadgeClass(comment.Type)" data-testid="@($"task-comment-type-{comment.Id}")">@GetCommentTypeDisplayName(comment.Type)</span>
-                                    <span class="small fw-semibold">@(!string.IsNullOrWhiteSpace(comment.Author) ? comment.Author : "Anonymous")</span>
-                                    <span class="small text-muted ms-auto" title="@($"UTC: {comment.CreatedAt:O}")">@comment.CreatedAt.ToLocalTime().ToString("MMM d, yyyy h:mm tt")</span>
-                                </div>
-                                <MarkdownContent Markdown="@comment.Text"
-                                                 CssClass="small text-break"
-                                                 EmptyText="" />
-                            </article>
-                        }
+                    <div class="mb-2">
+                        <ActivityTimeline TaskId="Task.Id"
+                                          Comments="comments"
+                                          RefreshToken="activityRefreshToken"
+                                          CollapseAfter="10" />
                     </div>
                 }
 
@@ -355,13 +363,17 @@
                 </div>
             </section>
 
-            @* Timestamps *@
+            @* Timestamps — LOCAL on the face, absolute UTC in the tooltip (#306).
+               These three lines used to render raw UTC with no `.ToLocalTime()` and no tooltip,
+               while the comment rows ~35 lines above rendered local: two clocks, one panel, four
+               to five hours apart in US Eastern. The new timeline is uniformly local, so leaving
+               these would have made it three. One convention, applied to every timestamp here. *@
             <div class="mb-4 pt-2 border-top">
-                <small class="text-muted d-block">Created: @Task.CreatedAt.ToString("MMM d, yyyy h:mm tt")</small>
-                <small class="text-muted d-block">Updated: @Task.UpdatedAt.ToString("MMM d, yyyy h:mm tt")</small>
+                <small class="text-muted d-block" title="@($"UTC: {Task.CreatedAt:O}")">Created: @Task.CreatedAt.ToLocalTime().ToString("MMM d, yyyy h:mm tt")</small>
+                <small class="text-muted d-block" title="@($"UTC: {Task.UpdatedAt:O}")">Updated: @Task.UpdatedAt.ToLocalTime().ToString("MMM d, yyyy h:mm tt")</small>
                 @if (Task.CompletedAt.HasValue)
                 {
-                    <small class="text-muted d-block">Completed: @Task.CompletedAt.Value.ToString("MMM d, yyyy h:mm tt")</small>
+                    <small class="text-muted d-block" title="@($"UTC: {Task.CompletedAt.Value:O}")">Completed: @Task.CompletedAt.Value.ToLocalTime().ToString("MMM d, yyyy h:mm tt")</small>
                 }
             </div>
 
@@ -443,6 +455,11 @@
     private string? newCommentText;
     private CommentType newCommentType = CommentType.Note;
 
+    // Audit trail (#328). ActivityTimeline only re-queries ActivityEvents when TaskId or this
+    // token changes, so mutations must announce themselves.
+    private int activityRefreshToken;
+    private DateTime? lastSeenTaskUpdatedAt;
+
     protected override async Task OnParametersSetAsync()
     {
         if (IsOpen && !wasOpen)
@@ -462,6 +479,18 @@
         newChildSubtaskText = null;
 
         var taskId = IsOpen ? Task?.Id : null;
+
+        // Every panel mutation ends in OnTaskUpdated, and ProjectView re-fetches the task — so a
+        // changed Task.UpdatedAt is the one cheap signal that new ActivityEvents exist, without
+        // threading a bump through all ~25 mutation call sites. (A comment add does NOT touch
+        // UpdatedAt; AddCommentAsync bumps the token itself.) Computed BEFORE the block below,
+        // which overwrites loadedCommentsTaskId.
+        if (taskId != loadedCommentsTaskId || Task?.UpdatedAt != lastSeenTaskUpdatedAt)
+        {
+            lastSeenTaskUpdatedAt = Task?.UpdatedAt;
+            activityRefreshToken++;
+        }
+
         if (taskId != loadedCommentsTaskId)
         {
             loadedCommentsTaskId = taskId;
@@ -1036,6 +1065,10 @@
                 comments = comments.OrderBy(c => c.CreatedAt).ThenBy(c => c.Id).ToList();
                 newCommentText = null;
                 newCommentType = CommentType.Note;
+                // AddCommentAsync writes a paired TaskCommentAdded event but does NOT touch
+                // Task.UpdatedAt, so OnParametersSetAsync's signal never fires here. Without this
+                // the timeline would show the comment now and its shadow event on the next open.
+                activityRefreshToken++;
             }
 
             await OnTaskUpdated.InvokeAsync();
@@ -1157,29 +1190,11 @@
         CommentType.Verification
     ];
 
-    private static string GetCommentTypeBadgeClass(CommentType type) => type switch
-    {
-        CommentType.Comment => "badge text-bg-primary",
-        CommentType.Note => "badge text-bg-primary",
-        CommentType.Decision => "badge text-bg-info",
-        CommentType.Question => "badge text-bg-light border text-dark",
-        CommentType.Blocked => "badge text-bg-danger",
-        CommentType.Handoff => "badge text-bg-warning",
-        CommentType.Verification => "badge text-bg-success",
-        CommentType.Created => "badge text-bg-success",
-        _ => "badge text-bg-secondary"
-    };
-
-    private static string GetCommentBorderClass(CommentType type) => type switch
-    {
-        CommentType.Comment or CommentType.Note => "task-comment-note",
-        CommentType.Decision => "border-info",
-        CommentType.Question => "border-dark-subtle",
-        CommentType.Blocked => "border-danger",
-        CommentType.Handoff => "border-warning bg-warning-subtle",
-        CommentType.Verification => "border-success",
-        _ => "task-comment-system"
-    };
+    // GetCommentTypeBadgeClass / GetCommentBorderClass lived here and coloured each comment row's
+    // badge and left border. The rail replaced the row markup, so they became dead — but the
+    // INFORMATION they carried did not. It moved to ActivityTimelineBuilder.CommentTone, which
+    // maps the same CommentTypes onto the .kf-tl-* dot accents (Blocked → danger, Handoff →
+    // warning, Verification → success, …). Deleted here rather than left orphaned.
 
     private TaskComment? GetLatestHandoffComment() => comments
         .Where(comment => comment.Type == CommentType.Handoff)
