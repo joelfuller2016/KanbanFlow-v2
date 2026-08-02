@@ -30,6 +30,27 @@ public interface ITaskService
     Task<TaskItem> ChangeStatusAsync(int taskId, WorkStatus newStatus, string? actor, CancellationToken ct = default);
 
     /// <summary>
+    /// Atomically move a task on the project board and place it immediately before a stable
+    /// task identity in the destination status column. <paramref name="beforeTaskId"/> is
+    /// <c>0</c> to append. The destination order is resolved from the complete persisted
+    /// project/status scope, never from a rendered DOM index, so filtered boards are safe.
+    /// A status change emits the same comment and activity event as
+    /// <see cref="ChangeStatusAsync"/>; a same-status reorder remains non-audited.
+    /// </summary>
+    /// <exception cref="TaskNotFoundException">The task does not exist.</exception>
+    /// <exception cref="ValidationException">
+    /// The status is undefined, the task is outside the project, or the anchor is invalid for
+    /// the destination project/status scope.
+    /// </exception>
+    Task<TaskItem> MoveOnBoardAsync(
+        int taskId,
+        WorkStatus newStatus,
+        int projectId,
+        int beforeTaskId,
+        string? actor,
+        CancellationToken ct = default);
+
+    /// <summary>
     /// Toggle a task between Done and Todo. When transitioning to Done,
     /// cascade-marks all subtasks completed; when transitioning away from Done,
     /// cascade-unmarks them. Writes a status-change comment and activity event
@@ -67,6 +88,24 @@ public interface ITaskService
     /// <exception cref="FeatureNotFoundException">The target feature does not exist.</exception>
     /// <exception cref="CrossProjectReassignmentException">The target feature belongs to a different project.</exception>
     Task<TaskItem> ReassignToFeatureAsync(int taskId, int newFeatureId, string? actor, CancellationToken ct = default);
+
+    /// <summary>
+    /// Atomically move a task in the project outline and place it immediately before a stable
+    /// task identity in the destination feature. <paramref name="beforeTaskId"/> is <c>0</c>
+    /// to append. The anchor is resolved across every task in the feature regardless of status,
+    /// matching the outline's persisted ordering scope. Cross-feature moves retain the validation,
+    /// comment, and activity-event behavior of <see cref="ReassignToFeatureAsync"/>.
+    /// </summary>
+    /// <exception cref="TaskNotFoundException">The task does not exist.</exception>
+    /// <exception cref="FeatureNotFoundException">The destination feature does not exist.</exception>
+    /// <exception cref="CrossProjectReassignmentException">The destination feature belongs to another project.</exception>
+    /// <exception cref="ValidationException">The anchor is invalid for the destination feature.</exception>
+    Task<TaskItem> MoveInOutlineAsync(
+        int taskId,
+        int newFeatureId,
+        int beforeTaskId,
+        string? actor,
+        CancellationToken ct = default);
 
     /// <summary>
     /// Full task update with field-by-field audit diff. Idempotent when no field
@@ -174,7 +213,7 @@ public sealed record TaskCreate(
     WorkStatus? Status = null,
     TaskPriority? Priority = null,
     string? Assignee = null,
-    int? SortOrder = null);
+    double? SortOrder = null);
 
 /// <summary>
 /// Update payload for <see cref="ITaskService.UpdateAsync"/>. Optional fields are
@@ -188,4 +227,4 @@ public sealed record TaskUpdate(
     WorkStatus? Status = null,
     TaskPriority? Priority = null,
     string? Assignee = null,
-    int? SortOrder = null);
+    double? SortOrder = null);

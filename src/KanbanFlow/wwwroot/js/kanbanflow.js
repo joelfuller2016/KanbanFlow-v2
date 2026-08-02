@@ -5,6 +5,26 @@ window.KanbanFlow = {
     _outlineMediaQueryHandler: null,
     _outlineObserver: null,
 
+    // ── SortableJS ↔ Blazor identity contract (#307) ──
+    // Board containers are `.board-column-cards[data-status]`; outline containers are
+    // `.feature-tasks[data-feature-id]`; every draggable root owns a positive `data-task-id`.
+    // Both .NET callbacks keep their three-argument shapes, but argument 3 is the id of the next
+    // TASK after the drop (`0` = append), never Sortable's rendered-child index. A container may
+    // render a filtered subset, and the outline also renders non-task subtask siblings, so a DOM
+    // position can never be treated as a database position.
+
+    _nextTaskId: function (item) {
+        var sibling = item.nextElementSibling;
+        while (sibling) {
+            var candidate = Number(sibling.dataset && sibling.dataset.taskId);
+            if (Number.isInteger(candidate) && candidate > 0) {
+                return candidate;
+            }
+            sibling = sibling.nextElementSibling;
+        }
+        return 0;
+    },
+
     updateProjectOutlineAccessibility: function () {
         var shell = document.querySelector('.project-shell');
         var outline = document.getElementById('project-outline');
@@ -98,11 +118,14 @@ window.KanbanFlow = {
                 onEnd: function (evt) {
                     // Read the drop BEFORE undoing it — the revert moves the node, so `evt.to` is
                     // the only record of where the user actually dropped it.
-                    var taskId = parseInt(evt.item.dataset.taskId);
+                    var taskId = Number(evt.item.dataset.taskId);
                     var newStatus = evt.to.dataset.status;
-                    var newIndex = evt.newIndex;
+                    var beforeTaskId = window.KanbanFlow._nextTaskId(evt.item);
                     window.KanbanFlow._revertDraggedNode(evt);
-                    dotNetRef.invokeMethodAsync('OnCardMoved', taskId, newStatus, newIndex);
+                    if (!Number.isInteger(taskId) || taskId <= 0 || !newStatus) {
+                        return;
+                    }
+                    dotNetRef.invokeMethodAsync('OnCardMoved', taskId, newStatus, beforeTaskId);
                 }
             });
             this._boardSortables.push(sortable);
@@ -121,15 +144,22 @@ window.KanbanFlow = {
                 ghostClass: 'kanban-ghost',
                 chosenClass: 'kanban-chosen',
                 fallbackOnBody: true,
+                // `.feature-tasks` also contains expanded subtask siblings. Only task roots
+                // participate in this Sortable; _nextTaskId likewise skips non-task siblings.
+                draggable: '[data-task-id]',
                 onEnd: function (evt) {
                     // Same contract as the board (#294): the outline's task lists are Blazor's DOM
                     // too, and OnTaskReordered re-renders them from the server. Hand the node back
                     // before invoking .NET.
-                    var taskId = parseInt(evt.item.dataset.taskId);
-                    var newFeatureId = parseInt(evt.to.dataset.featureId);
-                    var newIndex = evt.newIndex;
+                    var taskId = Number(evt.item.dataset.taskId);
+                    var newFeatureId = Number(evt.to.dataset.featureId);
+                    var beforeTaskId = window.KanbanFlow._nextTaskId(evt.item);
                     window.KanbanFlow._revertDraggedNode(evt);
-                    dotNetRef.invokeMethodAsync('OnTaskReordered', taskId, newFeatureId, newIndex);
+                    if (!Number.isInteger(taskId) || taskId <= 0
+                        || !Number.isInteger(newFeatureId) || newFeatureId <= 0) {
+                        return;
+                    }
+                    dotNetRef.invokeMethodAsync('OnTaskReordered', taskId, newFeatureId, beforeTaskId);
                 }
             });
             this._navSortables.push(sortable);

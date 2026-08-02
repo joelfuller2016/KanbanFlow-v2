@@ -801,7 +801,7 @@ else
     // ── Drag-and-Drop Handlers ──
 
     [JSInvokable]
-    public async Task OnCardMoved(int taskId, string newStatus, int newIndex)
+    public async Task OnCardMoved(int taskId, string newStatus, int beforeTaskId)
     {
         // Reject undefined enum values up-front (closes part of #89 for the UI).
         if (!Enum.TryParse<WorkStatus>(newStatus, out var status)
@@ -812,33 +812,9 @@ else
 
         try
         {
-            // Status change goes through ITaskService — produces the StatusChange comment
-            // and TaskStatusChanged activity event (closes UI half of #88 for status moves).
-            await TaskSvc.ChangeStatusAsync(taskId, status, actor: "User", _cts.Token);
-
-            // Reorder is still inline; service extraction for reorder is deferred to a
-            // follow-up PR (TODO: ITaskService.ReorderAsync).
-            using var db = await DbFactory.CreateDbContextAsync(_cts.Token);
-            var task = await db.Tasks.FindAsync(new object[] { taskId }, _cts.Token);
-            if (task is null) return;
-
-            var columnTasks = await db.Tasks
-                .Include(t => t.Feature)
-                .Where(t => t.Status == status && t.Feature.ProjectId == Id)
-                .OrderBy(t => t.SortOrder)
-                .ThenBy(t => t.Id) // #207: deterministic pre-reindex read when SortOrder ties
-                .ToListAsync(_cts.Token);
-
-            columnTasks.Remove(task);
-            var insertIndex = Math.Min(newIndex, columnTasks.Count);
-            columnTasks.Insert(insertIndex, task);
-
-            for (int i = 0; i < columnTasks.Count; i++)
-            {
-                columnTasks[i].SortOrder = i;
-            }
-
-            await db.SaveChangesAsync(_cts.Token);
+            // One service call atomically applies status + identity-anchored ordering. The third
+            // JS argument is a task id (0 = append), never an index into the rendered subset.
+            await TaskSvc.MoveOnBoardAsync(taskId, status, Id, beforeTaskId, actor: "User", _cts.Token);
             await LoadProject();
             await ReinitializeSortables();
         }
@@ -851,39 +827,17 @@ else
     }
 
     [JSInvokable]
-    public async Task OnTaskReordered(int taskId, int newFeatureId, int newIndex)
+    public async Task OnTaskReordered(int taskId, int newFeatureId, int beforeTaskId)
     {
         try
         {
-            using var db = await DbFactory.CreateDbContextAsync(_cts.Token);
-            var task = await db.Tasks.FindAsync(new object[] { taskId }, _cts.Token);
-            if (task is null) return;
-
-            task.FeatureId = newFeatureId;
-            task.UpdatedAt = DateTime.UtcNow;
-            await db.SaveChangesAsync(_cts.Token);
-
-            // Reindex all tasks in the target feature
-            var featureTasks = await db.Tasks
-                .Where(t => t.FeatureId == newFeatureId)
-                .OrderBy(t => t.SortOrder)
-                .ThenBy(t => t.Id) // #207: deterministic pre-reindex read when SortOrder ties
-                .ToListAsync(_cts.Token);
-
-            featureTasks.Remove(task);
-            var insertIndex = Math.Min(newIndex, featureTasks.Count);
-            featureTasks.Insert(insertIndex, task);
-
-            for (int i = 0; i < featureTasks.Count; i++)
-            {
-                featureTasks[i].SortOrder = i;
-            }
-
-            await db.SaveChangesAsync(_cts.Token);
+            await TaskSvc.MoveInOutlineAsync(
+                taskId, newFeatureId, beforeTaskId, actor: "User", _cts.Token);
             await LoadProject();
             await ReinitializeSortables();
         }
         catch (OperationCanceledException) { }
+        catch (TaskNotFoundException) { /* task vanished mid-drag — drop silently */ }
         catch (Exception ex)
         {
             loadError = ex.Message;
@@ -934,9 +888,10 @@ else
     // Features.SelectMany(f => f.Tasks), so nothing downstream re-imposes it. Dropping or
     // reversing it compiles, passes every unit test, and silently scrambles every board — the
     // "Todo column renders its cards in SortOrder sequence" E2E guard exists for exactly that.
-    // ThenBy(Id) is the #207 deterministic tiebreak when SortOrder ties.
+    // TaskOrdering expands normal cross-feature integral ties by Id while preserving the former
+    // SortOrder/Id order, then fractional drag ranks can sit between those stable identities (#307).
     private static IEnumerable<TaskItem> OrderTasksInColumn(IEnumerable<TaskItem> tasks) =>
-        tasks.OrderBy(t => t.SortOrder).ThenBy(t => t.Id);
+        TaskOrdering.Order(tasks);
 
     private static string GetStatusDisplayName(WorkStatus status) => status switch
     {

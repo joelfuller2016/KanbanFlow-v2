@@ -116,7 +116,10 @@ public static class ApiEndpoints
             var allTasks = project.Features
                 .SelectMany(f => f.Tasks.Select(t => new { Task = t, Feature = f }))
                 .OrderBy(x => x.Feature.SortOrder)
+                    .ThenBy(x => x.Feature.Id)
+                    .ThenBy(x => TaskOrdering.EffectiveRank(x.Task))
                     .ThenBy(x => x.Task.SortOrder)
+                    .ThenBy(x => x.Task.Id)
                 .ToList();
 
             object MapSubtaskContext(Subtask subtask, IReadOnlyCollection<Subtask> allSubtasks) => new
@@ -238,8 +241,9 @@ public static class ApiEndpoints
                 TaskCount = feature.Tasks.Count,
                 DoneCount = feature.Tasks.Count(t => t.Status == WorkStatus.Done),
                 Tasks = feature.Tasks
-                    .OrderBy(t => t.SortOrder)
-                    .ThenBy(t => t.Id) // #207: deterministic tie-break when SortOrder ties (legacy/concurrent dupes)
+                    .OrderBy(TaskOrdering.EffectiveRank)
+                    .ThenBy(t => t.SortOrder)
+                    .ThenBy(t => t.Id)
                     .Select(task => MapTaskContext(task, feature)),
                 Children = project.Features
                     .Where(f => f.ParentFeatureId == feature.Id)
@@ -331,7 +335,9 @@ public static class ApiEndpoints
                     UnfinishedBlockers = dependenciesByBlockedTask[task.Id]
                         .Where(d => tasksById.TryGetValue(d.DependsOnTaskItemId, out var blocker) && blocker.Status != WorkStatus.Done)
                         .Select(d => tasksById[d.DependsOnTaskItemId])
-                        .OrderBy(t => t.SortOrder)
+                        .OrderBy(TaskOrdering.EffectiveRank)
+                        .ThenBy(t => t.SortOrder)
+                        .ThenBy(t => t.Id)
                         .ToList()
                 })
                 .Where(x => x.UnfinishedBlockers.Count > 0)
@@ -877,18 +883,22 @@ public static class ApiEndpoints
                 feature.UpdatedAt,
                 TaskCount = feature.Tasks.Count,
                 DoneCount = feature.Tasks.Count(t => t.Status == WorkStatus.Done),
-                Tasks = feature.Tasks.OrderBy(t => t.SortOrder).ThenBy(t => t.Id).Select(t => new
-                {
-                    t.Id,
-                    t.Name,
-                    Status = t.Status.ToString(),
-                    Priority = t.Priority.ToString(),
-                    t.Assignee,
-                    t.SortOrder,
-                    t.CreatedAt,
-                    t.UpdatedAt,
-                    t.CompletedAt
-                }),
+                Tasks = feature.Tasks
+                    .OrderBy(TaskOrdering.EffectiveRank)
+                    .ThenBy(t => t.SortOrder)
+                    .ThenBy(t => t.Id)
+                    .Select(t => new
+                    {
+                        t.Id,
+                        t.Name,
+                        Status = t.Status.ToString(),
+                        Priority = t.Priority.ToString(),
+                        t.Assignee,
+                        t.SortOrder,
+                        t.CreatedAt,
+                        t.UpdatedAt,
+                        t.CompletedAt
+                    }),
                 ChildFeatures = feature.ChildFeatures.OrderBy(c => c.SortOrder).Select(c => new
                 {
                     c.Id,
@@ -1038,9 +1048,8 @@ public static class ApiEndpoints
                 .Include(t => t.AcceptanceCriteria)
                 .AsSplitQuery() // #157: avoid the tasks x subtasks x criteria cartesian blow-up
                 .AsNoTracking()
-                .OrderBy(t => t.SortOrder)
-                .ThenBy(t => t.Id) // #207: deterministic tie-break when SortOrder ties
                 .ToListAsync();
+            tasks = TaskOrdering.Order(tasks).ToList();
 
             return Results.Ok(tasks.Select(MapTaskSummary));
         });
@@ -1059,9 +1068,14 @@ public static class ApiEndpoints
                 .Include(t => t.AcceptanceCriteria)
                 .AsSplitQuery() // #157: avoid the tasks x subtasks x criteria cartesian blow-up
                 .AsNoTracking()
-                .OrderBy(t => t.Feature.SortOrder)
-                    .ThenBy(t => t.SortOrder)
                 .ToListAsync();
+            tasks = tasks
+                .OrderBy(t => t.Feature.SortOrder)
+                .ThenBy(t => t.Feature.Id)
+                .ThenBy(TaskOrdering.EffectiveRank)
+                .ThenBy(t => t.SortOrder)
+                .ThenBy(t => t.Id)
+                .ToList();
 
             return Results.Ok(tasks.Select(t => new
             {
@@ -1100,9 +1114,8 @@ public static class ApiEndpoints
                 .Include(t => t.AcceptanceCriteria)
                 .AsSplitQuery() // #157: avoid the tasks x subtasks x criteria cartesian blow-up
                 .AsNoTracking()
-                .OrderBy(t => t.SortOrder)
-                .ThenBy(t => t.Id) // #207: deterministic tie-break when SortOrder ties
                 .ToListAsync();
+            tasks = TaskOrdering.Order(tasks).ToList();
 
             var board = Enum.GetValues<WorkStatus>()
                 .ToDictionary(
@@ -2699,7 +2712,9 @@ public static class ApiEndpoints
     private static string BuildBlockedTaskReason(TaskItem task, IReadOnlyCollection<TaskItem> unfinishedBlockers)
     {
         var blockerNames = unfinishedBlockers
-            .OrderBy(t => t.SortOrder)
+            .OrderBy(TaskOrdering.EffectiveRank)
+            .ThenBy(t => t.SortOrder)
+            .ThenBy(t => t.Id)
             .Select(t => $"{t.Name} ({t.Status})");
 
         return $"{task.Priority} priority task is blocked until {string.Join(", ", blockerNames)} is Done.";
@@ -2718,7 +2733,7 @@ public record TaskDto(
     string? Status,
     string? Priority,
     string? Assignee,
-    int? SortOrder,
+    double? SortOrder,
     string? Actor = null);
 
 public record StatusDto(string? Status, string? Actor = null);

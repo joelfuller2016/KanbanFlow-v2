@@ -1,3 +1,6 @@
+@* SortableJS contract (#307): `.feature-tasks[data-feature-id]` may contain expanded subtask
+   siblings, but only roots with `data-task-id` are draggable. The client sends the next TASK id
+   (0 = append), so non-task DOM children can never become database indices. *@
 <div id="project-outline" class="project-outline border-end bg-light p-3" data-testid="project-outline">
     <div class="project-outline-header">
         <div class="outline-title-row">
@@ -165,7 +168,7 @@
         @if (isExpanded)
         {
             <div class="feature-tasks" data-testid="outline-feature-@feature.Id-tasks" data-feature-id="@feature.Id">
-            @foreach (var task in feature.Tasks.OrderBy(t => t.SortOrder).ThenBy(t => t.Id))
+            @foreach (var task in TaskOrdering.Order(feature.Tasks))
             {
                 var taskHasSubtasks = task.Subtasks.Count > 0;
                 var taskIsExpanded = ExpandedTasks.Contains(task.Id);

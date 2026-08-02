@@ -96,9 +96,18 @@ Every text field on every entity is documentation that agents can retrieve, summ
 | Assignee | string? | no | free-text label |
 | ClaimedBy | string? | no | claim system actor; case-insensitive comparison |
 | ClaimedAt | DateTime? | no | set on successful claim |
-| SortOrder | int | yes | within feature + status column |
+| SortOrder | finite number | yes | fractional task rank; within feature + status column |
 | CreatedAt, UpdatedAt | DateTime | yes | |
 | CompletedAt | DateTime? | no | set when Status → Done; cleared otherwise |
+
+Task ordering is identity-anchored: a move assigns only the dragged task a finite rank between
+its persisted neighbors. Historical integral ranks are ordered as virtual positions within their
+unit interval using `Id`; this exactly preserves the former `SortOrder, Id` order while separating
+normal cross-feature duplicates so a moved row can receive a fractional rank between them.
+Existing SQLite databases may still declare `Tasks.SortOrder` as
+`INTEGER`; SQLite numeric affinity stores fractional ranks as `REAL` values in that column.
+Fresh databases declare it as `REAL`. The declarations can be normalized when schema migrations
+are introduced by #86; both forms have the same runtime ordering semantics.
 
 ### 3.4 Subtask
 

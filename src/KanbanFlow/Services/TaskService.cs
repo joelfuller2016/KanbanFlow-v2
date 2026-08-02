@@ -91,6 +91,94 @@ public sealed class TaskService(IDbContextFactory<AppDbContext> dbFactory) : ITa
         return task;
     }
 
+    public async Task<TaskItem> MoveOnBoardAsync(
+        int taskId,
+        WorkStatus newStatus,
+        int projectId,
+        int beforeTaskId,
+        string? actor,
+        CancellationToken ct = default)
+    {
+        if (!Enum.IsDefined(newStatus))
+            throw new ValidationException($"Invalid status '{newStatus}'.");
+        if (beforeTaskId < 0)
+            throw new ValidationException("The before-task id must be zero or a positive task id.");
+        if (beforeTaskId == taskId)
+            throw new ValidationException("A task cannot be positioned before itself.");
+
+        await using var db = await dbFactory.CreateDbContextAsync(ct);
+        var task = await db.Tasks
+            .Include(t => t.Feature)
+            .FirstOrDefaultAsync(t => t.Id == taskId, ct);
+        if (task is null)
+            throw new TaskNotFoundException(taskId);
+        if (task.Feature is null)
+            throw new InvalidOperationException($"Task {taskId} has no feature; cannot resolve project for audit.");
+        if (task.Feature.ProjectId != projectId)
+            throw new ValidationException($"Task {taskId} does not belong to project {projectId}.");
+
+        // This is the complete persisted destination scope. The browser may have rendered any
+        // subset of it; beforeTaskId is the only ordering fact received from the DOM (#307).
+        var destinationTasks = await db.Tasks
+            .Where(t => t.Feature.ProjectId == projectId && t.Status == newStatus)
+            .ToListAsync(ct);
+        destinationTasks = TaskOrdering.Order(destinationTasks).ToList();
+        var originalOrder = destinationTasks.Select(t => t.Id).ToArray();
+
+        destinationTasks.RemoveAll(t => t.Id == taskId);
+        var insertIndex = ResolveAnchorIndex(destinationTasks, beforeTaskId, "project/status column");
+        var desiredOrder = destinationTasks.Select(t => t.Id).ToList();
+        desiredOrder.Insert(insertIndex, taskId);
+
+        var oldStatus = task.Status;
+        var statusChanged = oldStatus != newStatus;
+        var orderChanged = !originalOrder.SequenceEqual(desiredOrder);
+        if (!statusChanged && !orderChanged)
+            return task;
+
+        // Allocate before mutating status so an invalid/exhausted rank cannot leave the tracked
+        // entity partially changed. Only the dragged row receives a new rank; every sibling keeps
+        // its exact persisted value, including siblings omitted from the rendered board (#307).
+        var newSortOrder = orderChanged
+            ? AllocateSortOrder(destinationTasks, insertIndex, taskId)
+            : task.SortOrder;
+
+        var before = TaskActivitySnapshot(task);
+        var now = DateTime.UtcNow;
+
+        if (statusChanged)
+        {
+            task.Status = newStatus;
+            task.CompletedAt = newStatus == WorkStatus.Done ? now : null;
+        }
+
+        if (orderChanged)
+        {
+            task.SortOrder = newSortOrder;
+        }
+
+        task.UpdatedAt = now;
+
+        if (statusChanged)
+        {
+            db.TaskComments.Add(new TaskComment
+            {
+                TaskItemId = task.Id,
+                Text = $"Status changed from {oldStatus} to {newStatus}",
+                Author = string.IsNullOrWhiteSpace(actor) ? "System" : actor!.Trim(),
+                Type = CommentType.StatusChange,
+                CreatedAt = now
+            });
+            AddActivityEvent(
+                db, projectId, "Task", task.Id, actor,
+                "TaskStatusChanged", before, TaskActivitySnapshot(task),
+                $"Task '{task.Name}' status changed from {oldStatus} to {newStatus}");
+        }
+
+        await db.SaveChangesAsync(ct);
+        return task;
+    }
+
     public async Task<TaskItem> ToggleDoneAsync(int taskId, string? actor, CancellationToken ct = default)
     {
         await using var db = await dbFactory.CreateDbContextAsync(ct);
@@ -174,9 +262,9 @@ public sealed class TaskService(IDbContextFactory<AppDbContext> dbFactory) : ITa
         // correctly excludes the moved task and yields a clean, collision-free append.
         var maxSort = await db.Tasks
             .Where(t => t.FeatureId == newFeatureId)
-            .MaxAsync(t => (int?)t.SortOrder, ct) ?? -1;
+            .MaxAsync(t => (double?)t.SortOrder, ct);
         task.FeatureId = newFeatureId;
-        task.SortOrder = maxSort + 1;
+        task.SortOrder = AllocateAppendSortOrder(maxSort);
         task.UpdatedAt = DateTime.UtcNow;
 
         db.TaskComments.Add(new TaskComment
@@ -196,6 +284,247 @@ public sealed class TaskService(IDbContextFactory<AppDbContext> dbFactory) : ITa
         await db.SaveChangesAsync(ct);
         return task;
     }
+
+    public async Task<TaskItem> MoveInOutlineAsync(
+        int taskId,
+        int newFeatureId,
+        int beforeTaskId,
+        string? actor,
+        CancellationToken ct = default)
+    {
+        if (beforeTaskId < 0)
+            throw new ValidationException("The before-task id must be zero or a positive task id.");
+        if (beforeTaskId == taskId)
+            throw new ValidationException("A task cannot be positioned before itself.");
+
+        await using var db = await dbFactory.CreateDbContextAsync(ct);
+        var task = await db.Tasks
+            .Include(t => t.Feature)
+            .FirstOrDefaultAsync(t => t.Id == taskId, ct);
+        if (task is null)
+            throw new TaskNotFoundException(taskId);
+        if (task.Feature is null)
+            throw new InvalidOperationException($"Task {taskId} has no feature; cannot resolve project for audit.");
+
+        var destinationFeature = await db.Features.FirstOrDefaultAsync(f => f.Id == newFeatureId, ct);
+        if (destinationFeature is null)
+            throw new FeatureNotFoundException(newFeatureId);
+
+        var oldFeatureId = task.FeatureId;
+        var projectId = task.Feature.ProjectId;
+        if (destinationFeature.ProjectId != projectId)
+            throw new CrossProjectReassignmentException(taskId, projectId, destinationFeature.ProjectId);
+
+        // Unlike the board, outline order is feature-scoped across every status. Expanded
+        // subtask DOM siblings are deliberately absent from this persisted candidate list.
+        var destinationTasks = await db.Tasks
+            .Where(t => t.FeatureId == newFeatureId)
+            .ToListAsync(ct);
+        destinationTasks = TaskOrdering.Order(destinationTasks).ToList();
+        var originalOrder = destinationTasks.Select(t => t.Id).ToArray();
+
+        destinationTasks.RemoveAll(t => t.Id == taskId);
+        var insertIndex = ResolveAnchorIndex(destinationTasks, beforeTaskId, "feature");
+        var desiredOrder = destinationTasks.Select(t => t.Id).ToList();
+        desiredOrder.Insert(insertIndex, taskId);
+
+        var featureChanged = oldFeatureId != newFeatureId;
+        var orderChanged = !originalOrder.SequenceEqual(desiredOrder);
+        if (!featureChanged && !orderChanged)
+            return task;
+
+        var newSortOrder = orderChanged
+            ? AllocateSortOrder(destinationTasks, insertIndex, taskId)
+            : task.SortOrder;
+
+        var before = TaskActivitySnapshot(task);
+        var now = DateTime.UtcNow;
+
+        if (featureChanged)
+        {
+            task.FeatureId = newFeatureId;
+            task.Feature = destinationFeature;
+        }
+
+        if (orderChanged)
+        {
+            task.SortOrder = newSortOrder;
+        }
+
+        task.UpdatedAt = now;
+
+        if (featureChanged)
+        {
+            db.TaskComments.Add(new TaskComment
+            {
+                TaskItemId = task.Id,
+                Text = $"Feature changed: was feature {oldFeatureId}, now feature {newFeatureId}",
+                Author = string.IsNullOrWhiteSpace(actor) ? "System" : actor!.Trim(),
+                Type = CommentType.FeatureChange,
+                CreatedAt = now
+            });
+            AddActivityEvent(
+                db, projectId, "Task", task.Id, actor,
+                "TaskFeatureChanged", before, TaskActivitySnapshot(task),
+                $"Task '{task.Name}' reassigned from feature {oldFeatureId} to feature {newFeatureId}");
+        }
+
+        await db.SaveChangesAsync(ct);
+        return task;
+    }
+
+    private static int ResolveAnchorIndex(List<TaskItem> destinationTasks, int beforeTaskId, string scopeName)
+    {
+        if (beforeTaskId == 0)
+            return destinationTasks.Count;
+
+        var anchorIndex = destinationTasks.FindIndex(t => t.Id == beforeTaskId);
+        if (anchorIndex < 0)
+        {
+            throw new ValidationException(
+                $"Anchor task {beforeTaskId} is not in the destination {scopeName}.");
+        }
+
+        return anchorIndex;
+    }
+
+    /// <summary>
+    /// Return a rank that places one task at <paramref name="insertIndex"/> without changing
+    /// any existing rank. The Id tie-break is used only when no distinct IEEE-754 value exists.
+    /// If neither a value nor a safe tie can represent the requested identity order, fail visibly
+    /// instead of silently renumbering siblings.
+    /// </summary>
+    private static double AllocateSortOrder(
+        IReadOnlyList<TaskItem> orderedWithoutMoved,
+        int insertIndex,
+        int movingTaskId)
+    {
+        if (insertIndex < 0 || insertIndex > orderedWithoutMoved.Count)
+            throw new ArgumentOutOfRangeException(nameof(insertIndex));
+
+        if (orderedWithoutMoved.Count == 0)
+            return 0d;
+
+        var lower = insertIndex > 0 ? orderedWithoutMoved[insertIndex - 1] : null;
+        var upper = insertIndex < orderedWithoutMoved.Count ? orderedWithoutMoved[insertIndex] : null;
+        if (lower is not null) EnsureFiniteSortOrder(lower);
+        if (upper is not null) EnsureFiniteSortOrder(upper);
+
+        if (lower is null)
+        {
+            var upperRank = TaskOrdering.EffectiveRank(upper!);
+            if (TryCandidate(upper!.SortOrder - 1d, movingTaskId, null, upper, out var beforeFirst)
+                || TryCandidate(upperRank - 1d, movingTaskId, null, upper, out beforeFirst)
+                || TryCandidate(Math.BitDecrement(upperRank), movingTaskId, null, upper, out beforeFirst)
+                || TryCandidate(upper!.SortOrder, movingTaskId, null, upper, out beforeFirst))
+            {
+                return beforeFirst;
+            }
+
+            throw OrderingSpaceExhausted();
+        }
+
+        if (upper is null)
+        {
+            var lowerRank = TaskOrdering.EffectiveRank(lower);
+            if (TryCandidate(lower.SortOrder + 1d, movingTaskId, lower, null, out var afterLast)
+                || TryCandidate(lowerRank + 1d, movingTaskId, lower, null, out afterLast)
+                || TryCandidate(Math.BitIncrement(lowerRank), movingTaskId, lower, null, out afterLast)
+                || TryCandidate(lower.SortOrder, movingTaskId, lower, null, out afterLast))
+            {
+                return afterLast;
+            }
+
+            throw OrderingSpaceExhausted();
+        }
+
+        if (TaskOrdering.Compare(lower.SortOrder, lower.Id, upper) >= 0)
+            throw new ValidationException("Persisted task ordering is invalid.");
+
+        // Prefer the intuitive raw midpoint when the persisted values differ (for example,
+        // 0 and 1 -> 0.5). Validation uses effective ordering, so legacy integral expansion
+        // cannot accidentally put the candidate on the wrong side of either identity.
+        if (lower.SortOrder < upper.SortOrder)
+        {
+            var rawMidpoint = Midpoint(lower.SortOrder, upper.SortOrder);
+            if (TryCandidate(rawMidpoint, movingTaskId, lower, upper, out var betweenRawRanks))
+                return betweenRawRanks;
+        }
+
+        // Equal integral ranks are normal across features. Their effective ranks are distinct
+        // legacy positions derived from Id, so persist a fractional midpoint between them.
+        var effectiveMidpoint = Midpoint(
+            TaskOrdering.EffectiveRank(lower),
+            TaskOrdering.EffectiveRank(upper));
+        if (TryCandidate(effectiveMidpoint, movingTaskId, lower, upper, out var betweenEffectiveRanks)
+            || TryCandidate(lower.SortOrder, movingTaskId, lower, upper, out betweenEffectiveRanks)
+            || TryCandidate(upper.SortOrder, movingTaskId, lower, upper, out betweenEffectiveRanks))
+        {
+            return betweenEffectiveRanks;
+        }
+
+        throw OrderingSpaceExhausted();
+    }
+
+    private static double Midpoint(double lower, double upper)
+        => (lower / 2d) + (upper / 2d);
+
+    private static bool TryCandidate(
+        double candidate,
+        int movingTaskId,
+        TaskItem? lower,
+        TaskItem? upper,
+        out double persistedSortOrder)
+    {
+        // An integral candidate is virtually expanded by Id. Its adjacent representable values
+        // are fractional and therefore encode the candidate literally, so try both as fallbacks.
+        var candidates = new[] { candidate, Math.BitIncrement(candidate), Math.BitDecrement(candidate) };
+        foreach (var rawSortOrder in candidates)
+        {
+            if (!double.IsFinite(rawSortOrder))
+                continue;
+            if (lower is not null && TaskOrdering.Compare(rawSortOrder, movingTaskId, lower) <= 0)
+                continue;
+            if (upper is not null && TaskOrdering.Compare(rawSortOrder, movingTaskId, upper) >= 0)
+                continue;
+
+            persistedSortOrder = rawSortOrder;
+            return true;
+        }
+
+        persistedSortOrder = default;
+        return false;
+    }
+
+    private static double AllocateAppendSortOrder(double? maxSortOrder)
+    {
+        if (maxSortOrder is null)
+            return 0d;
+        if (!double.IsFinite(maxSortOrder.Value))
+            throw new ValidationException("Persisted task ordering contains a non-finite rank.");
+
+        var candidate = maxSortOrder.Value + 1d;
+        if (double.IsFinite(candidate) && candidate > maxSortOrder.Value)
+            return candidate;
+
+        candidate = Math.BitIncrement(maxSortOrder.Value);
+        if (double.IsFinite(candidate) && candidate > maxSortOrder.Value)
+            return candidate;
+
+        throw OrderingSpaceExhausted();
+    }
+
+    private static void EnsureFiniteSortOrder(TaskItem task)
+    {
+        if (!double.IsFinite(task.SortOrder))
+        {
+            throw new ValidationException(
+                $"Task {task.Id} has a non-finite ordering rank.");
+        }
+    }
+
+    private static ValidationException OrderingSpaceExhausted()
+        => new("No ordering space remains between the selected tasks.");
 
     public async Task<TaskItem> UpdateAsync(int taskId, TaskUpdate dto, string? actor, CancellationToken ct = default)
     {
@@ -225,6 +554,8 @@ public sealed class TaskService(IDbContextFactory<AppDbContext> dbFactory) : ITa
             throw new ValidationException($"Invalid status '{dto.Status.Value}'.");
         if (dto.Priority is not null && !Enum.IsDefined(dto.Priority.Value))
             throw new ValidationException($"Invalid priority '{dto.Priority.Value}'.");
+        if (dto.SortOrder is not null && !double.IsFinite(dto.SortOrder.Value))
+            throw new ValidationException("SortOrder must be a finite number.");
 
         var before = TaskActivitySnapshot(task);
         var oldStatus = task.Status;
@@ -357,6 +688,8 @@ public sealed class TaskService(IDbContextFactory<AppDbContext> dbFactory) : ITa
             throw new ValidationException($"Invalid status '{dto.Status.Value}'.");
         if (dto.Priority is not null && !Enum.IsDefined(dto.Priority.Value))
             throw new ValidationException($"Invalid priority '{dto.Priority.Value}'.");
+        if (dto.SortOrder is not null && !double.IsFinite(dto.SortOrder.Value))
+            throw new ValidationException("SortOrder must be a finite number.");
 
         // Resolve the project for audit attribution; a missing feature is a distinct,
         // actionable error (the task itself does not exist yet).
@@ -372,7 +705,7 @@ public sealed class TaskService(IDbContextFactory<AppDbContext> dbFactory) : ITa
 
         var maxSort = await db.Tasks
             .Where(t => t.FeatureId == dto.FeatureId)
-            .MaxAsync(t => (int?)t.SortOrder, ct) ?? -1;
+            .MaxAsync(t => (double?)t.SortOrder, ct);
 
         var task = new TaskItem
         {
@@ -382,7 +715,7 @@ public sealed class TaskService(IDbContextFactory<AppDbContext> dbFactory) : ITa
             Status = status,
             Priority = priority,
             Assignee = string.IsNullOrWhiteSpace(dto.Assignee) ? null : dto.Assignee.Trim(),
-            SortOrder = dto.SortOrder ?? maxSort + 1,
+            SortOrder = dto.SortOrder ?? AllocateAppendSortOrder(maxSort),
             CompletedAt = status == WorkStatus.Done ? DateTime.UtcNow : null
         };
 
