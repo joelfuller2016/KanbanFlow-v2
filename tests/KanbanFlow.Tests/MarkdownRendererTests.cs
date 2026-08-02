@@ -204,21 +204,30 @@ public sealed class MarkdownRendererTests
 
         var html = sanitizer.Sanitize(payload);
 
-        // The load-bearing assertion: on AngleSharp < 1.5.0 the <img> escapes <style> and appears
-        // here. On >= 1.5.0 it never materialises as an element at all.
-        Assert.DoesNotContain("<img", html, StringComparison.OrdinalIgnoreCase);
-        // And the advisory's actual impact must not appear under any parse.
-        Assert.DoesNotContain("onerror", html, StringComparison.OrdinalIgnoreCase);
-        Assert.DoesNotContain("<script", html, StringComparison.OrdinalIgnoreCase);
-
-        // The advisory is a serialise -> RE-PARSE mismatch, so assert on the DOM a browser would
-        // actually build from this output, not only on the string we happened to serialise.
+        // RE-PARSE FIRST, deliberately. The advisory is a serialise -> re-parse mismatch, so the
+        // DOM is the property under test and these must be the assertions that fire. Ordered after
+        // the string checks they were SHADOWED: xUnit stops at the first failure, so on a
+        // downgraded AngleSharp the substring assertion below failed and this block never ran -
+        // it could not have failed, which makes it decoration rather than a guard.
+        // Measured on 9.0.967/0.17.1: img=1 here, so this block genuinely fails on its own.
+        //
+        // Honest limit: this re-parses with AngleSharp, i.e. the component under test. A browser is
+        // the real reference implementation and AngleSharp is the thing that deviates, so treat
+        // this as corroboration of the DOM shape, not as a browser-equivalent oracle. It happens to
+        // surface the leak on 0.17.1 (measured), but a bug AngleSharp cannot see when parsing is
+        // also a bug it cannot see when re-parsing.
         var reparsed = new HtmlParser().ParseDocument("<!doctype html><body>" + html);
         Assert.Empty(reparsed.QuerySelectorAll("img"));
         Assert.Empty(reparsed.QuerySelectorAll("script"));
         Assert.DoesNotContain(
             reparsed.All.SelectMany(e => e.Attributes),
             a => a.Name.StartsWith("on", StringComparison.OrdinalIgnoreCase));
+
+        // Then the serialised string, as defence-in-depth: on AngleSharp < 1.5.0 the <img> escapes
+        // <style> and appears here verbatim. On >= 1.5.0 it never materialises at all.
+        Assert.DoesNotContain("<img", html, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("onerror", html, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("<script", html, StringComparison.OrdinalIgnoreCase);
     }
     // ── Empty input contract ────────────────────────────────────────────────────────────────────
 
