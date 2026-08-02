@@ -163,7 +163,28 @@ h1:focus {
    the capped column regardless. The cards container needs no equivalent -- its `min-height` is now
    the explicit drop floor (96px), not `auto`, so it is already free to shrink to it. */
 .kanban-column-body {
+    /* Single-cell grid: `.board-column-cards` and `.kanban-column-empty` are stacked in the SAME
+       cell by the rule below, so the row sizes to whichever is taller. That is what stops the
+       empty-state placeholder painting outside its column -- as an `inset: 0` absolutely-positioned
+       overlay it could never push the column taller, only spill, and its height is width-dependent
+       (76px at a 214px column, 118px at the 180px `min-width` floor). A fixed floor cannot cover
+       that, because the number is a function of the column width and the status name; the grid
+       removes the failure mode instead of re-tuning a constant that was already wrong once.
+
+       `minmax(0, auto)` on the row, and `min-height: 0` here, are what keep the CAPPED case working:
+       a column with more cards than fit is bounded by `.kanban-column`'s `max-height: 100%`, and
+       both must be able to shrink below content for `.board-column-cards`'s `overflow-auto` to
+       engage. See the note there. */
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(0, auto);
     min-height: 0;
+}
+
+/* Stack every child of the body in one cell, which is the whole point of the grid above. */
+.kanban-column-body > * {
+    grid-area: 1 / 1;
+    min-width: 0;
 }
 
 .feature-tasks {

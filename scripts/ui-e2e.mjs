@@ -619,6 +619,13 @@ async function main() {
         { name: "Short label card", status: "Todo", priority: "Medium" });
       await api("POST", `/api/features/${visLongFeature.id}/tasks`,
         { name: "Long label card", status: "Todo", priority: "Critical" });
+      // AC4 names TWO viewports (1440x900 and 390x844) and the suite's default is 1280x720, so a
+      // single-viewport run silently drops half the criterion — and the halves genuinely differ:
+      // at the 180px column floor "Dashboard" DOES overflow and renders "Dashbo…", so the
+      // "renders the whole word" claim is width-dependent and has to be checked where it is made.
+      const restoreVis = page.viewportSize();
+      for (const [vw, vh] of [[1440, 900], [390, 844]]) {
+      await page.setViewportSize({ width: vw, height: vh });
       await page.goto(`${baseUrl}/project/${visProj.id}`);
       await page.locator('[data-testid="board-column-Todo-cards"] .board-card-meta-label').first()
         .waitFor({ state: "visible" });
@@ -651,6 +658,11 @@ async function main() {
           headroom: clipRight - last.getBoundingClientRect().right,
           overflows: el.scrollWidth > el.clientWidth,
           gutterToBadge: r.left - badge.right,
+          // Resolve the DECLARED side bearing and the root size, so the assertions below can be
+          // stated against what the stylesheet says rather than against a copied-out constant.
+          bearingPx: parseFloat(cs.paddingInlineEnd),
+          fontSizePx: parseFloat(cs.fontSize),
+          rootPx: parseFloat(getComputedStyle(document.documentElement).fontSize),
         };
       }));
       assert(labels.length >= 2, `expected both seeded cards to render a feature label, saw ${labels.length}`);
@@ -663,23 +675,40 @@ async function main() {
       assert(short, `short-label card not rendered; saw ${JSON.stringify(labels.map((l) => l.text))}`);
       assert(long, `long-label card not rendered; saw ${JSON.stringify(labels.map((l) => l.text))}`);
 
-      // (a) A label that FITS must clear the clip edge — this is the "Dashboarc" guard.
-      assert(short.headroom > 0,
-        `feature label "${short.text}" ends flush against its clip edge (headroom ${short.headroom.toFixed(3)}px) — ` +
-        `its final glyph will be shaved`);
+      // (a) A label that FITS must clear the clip edge by the DECLARED italic side bearing.
+      //
+      // `headroom > 0` looked like this guard but was not: for a non-overlapping right-aligned
+      // label, `clipRight - lastGlyph.right` is arithmetically EQUAL to `padding-right`, so the
+      // assertion reduced to "the padding is non-zero". Weakening the bearing to .02em yields
+      // ~0.22px — still > 0, still green, and the glyph is shaved again with no ellipsis to
+      // rescue it, because a fitting label does not overflow. Stated against the declared .15em
+      // instead, which is the value the fix actually depends on.
+      const expectedBearing = 0.15 * short.fontSizePx;
+      assert(short.headroom >= expectedBearing - 0.05,
+        `feature label "${short.text}" clears its clip edge by only ${short.headroom.toFixed(3)}px at ${vw}x${vh}; ` +
+        `the declared .15em italic side bearing at ${short.fontSizePx}px type is ${expectedBearing.toFixed(3)}px — ` +
+        `the final glyph's ink will be shaved`);
       // (b) A label that does NOT fit must genuinely overflow, so the ellipsis renders.
       assert(long.overflows,
-        `long feature label "${long.text}" does not overflow its box, so text-overflow:ellipsis cannot fire`);
+        `long feature label "${long.text}" does not overflow its box at ${vw}x${vh}, so text-overflow:ellipsis cannot fire`);
       // (c) Neither may collide with the priority badge (the badge is flex-shrink-0 for this).
-      // The gutter is Bootstrap's `ms-1` (0.25rem = 4px) and it is a MARGIN, so it is not
-      // negotiable at any viewport — measured 4.00px at both 1440x900 and 390x844. Asserting
-      // merely `> 0` would accept a 1px sliver and still call itself an overlap guard, so it is
-      // pinned to the real value with only a subpixel tolerance. (CodeRabbit, PR #335.)
+      // The gutter is Bootstrap's `ms-1` = 0.25rem. It is a MARGIN, so it is fixed against
+      // viewport — but it is REM, so it is not fixed against the root font size: a 12px root
+      // ("Small" in Chrome) makes it 3.00px and a hard-coded `>= 3.5` would false-RED on a user
+      // setting rather than on a regression. Derived from the measured root instead.
+      //
+      // Scope note, so this is not miscounted among the load-bearing guards: two in-flow flex
+      // siblings in DOM order cannot overlap, and this measures 4px on master, 4px with the fix,
+      // and 4-5px with the label rules reverted. It only catches `ms-1` being deleted from the
+      // markup. Kept for that, claimed as no more than that.
       for (const l of labels) {
-        assert(l.gutterToBadge >= 3.5,
-          `feature label "${l.text}" leaves only ${l.gutterToBadge.toFixed(2)}px before its priority badge ` +
-          `(require the 4px ms-1 gutter)`);
+        const expectedGutter = 0.25 * l.rootPx;
+        assert(l.gutterToBadge >= expectedGutter - 0.5,
+          `feature label "${l.text}" leaves ${l.gutterToBadge.toFixed(2)}px before its priority badge ` +
+          `at ${vw}x${vh}; the ms-1 gutter at a ${l.rootPx}px root should be ${expectedGutter.toFixed(2)}px`);
       }
+      }
+      if (restoreVis) await page.setViewportSize(restoreVis);
     });
 
     await test("Board column: a 1-card column does not paint a dead region below its card (#322)", async () => {
@@ -712,6 +741,9 @@ async function main() {
           emptyColumnH: empty.getBoundingClientRect().height,
           emptyDropTargetH: emptyCards.getBoundingClientRect().height,
           declaredFloorPx: declared.endsWith("rem") ? parseFloat(declared) * rootPx : parseFloat(declared),
+          unusedBoardHeightBelowColumn:
+            document.querySelector('[data-testid="kanban-board"]').getBoundingClientRect().bottom
+            - col.getBoundingClientRect().bottom,
           cardStridePx: (() => {
             const c = cards[0];
             return c.getBoundingClientRect().height + parseFloat(getComputedStyle(c).marginBottom);
@@ -722,8 +754,15 @@ async function main() {
       assert(geom.deadBelowLastCard < 200,
         `a 1-card column paints ${geom.deadBelowLastCard.toFixed(0)}px of dead space below its last card (limit 200px)`);
       // The column must genuinely be shorter than the board, not merely under the threshold.
-      assert(geom.columnH < geom.boardH,
-        `a 1-card column is ${geom.columnH.toFixed(0)}px tall against a ${geom.boardH.toFixed(0)}px board — it is still stretching`);
+      //
+      // `columnH < boardH` was a TAUTOLOGY as seeded: under `align-self: stretch` a 1-card column
+      // measures 470.6 against a 486.6 board, and the 16px difference is just the board's own
+      // `p-2`, so it could not fail in any configuration. Stated instead as the property the fix
+      // actually creates — a 1-card column leaves most of the board's height UNUSED — which is
+      // ~8px (the padding) under stretch and hundreds of px with the fix.
+      assert(geom.unusedBoardHeightBelowColumn > 100,
+        `a 1-card column leaves only ${geom.unusedBoardHeightBelowColumn.toFixed(0)}px of board height ` +
+        `unused below it (column ${geom.columnH.toFixed(0)}px / board ${geom.boardH.toFixed(0)}px) — it is still stretching`);
       // …and the cure must not be worse: an EMPTY column has to stay a real drop target (#290).
       // Two separate holes, because a single fixed threshold closes neither. (CodeRabbit, PR #335.)
       //   (a) the RENDERED floor must match the DECLARED token — catches CSS breaking the floor;
@@ -736,6 +775,122 @@ async function main() {
       assert(geom.declaredFloorPx >= geom.cardStridePx,
         `--kf-board-drop-floor is ${geom.declaredFloorPx.toFixed(0)}px, below one card's stride of ` +
         `${geom.cardStridePx.toFixed(0)}px — an empty column no longer offers room for the card it asks for`);
+    });
+
+    await test("Board column: the empty-state placeholder never paints outside its column (#322)", async () => {
+      // The half of the dead-space fix that had NO coverage, and which shipped a real defect.
+      //
+      // The placeholder's natural height is a function of COLUMN WIDTH x status-name length: 76px
+      // at a 214px column, 97px at 182px, and 118px at the 180px `min-width` floor, where both the
+      // "In Progress" heading and the placeholder text wrap hardest. While every column stretched
+      // to ~470px that variation was invisible. Content-height columns exposed it: at 1024x768 the
+      // white dashed box hung 14px BELOW the grey column background (column bottom 401.75,
+      // placeholder bottom 415.75), because the placeholder was an `inset: 0` absolutely-positioned
+      // overlay and so could never push the column taller, only spill out of it.
+      //
+      // This runs at 1024x768 ON PURPOSE. It is GREEN at 1280x720 and 1440x900 — the default
+      // viewport the other guards use — so a fixed-viewport suite cannot see it at all.
+      //
+      // Paired with a dead-space assertion at the SAME viewport, because containment is trivially
+      // satisfiable by making every column taller again — which would trade this defect for the
+      // one the whole PR exists to remove.
+      const phProj = await api("POST", "/api/projects", { name: `E2E Placeholder ${stamp}` });
+      const phFeature = await api("POST", `/api/projects/${phProj.id}/features`, { name: "Placeholder Feature" });
+      await api("POST", `/api/features/${phFeature.id}/tasks`, { name: "Only card", status: "Todo" });
+
+      const restore = page.viewportSize();
+      await page.setViewportSize({ width: 1024, height: 768 });
+      try {
+        await page.goto(`${baseUrl}/project/${phProj.id}`);
+        await page.locator('[data-testid="board-column-Todo-cards"] .board-card').waitFor({ state: "visible" });
+
+        const g = await page.evaluate(() => {
+          const rows = [];
+          for (const col of document.querySelectorAll(".kanban-column")) {
+            const ph = col.querySelector(".kanban-column-empty");
+            if (!ph || !ph.firstElementChild) continue;
+            const cr = col.getBoundingClientRect();
+            rows.push({
+              status: col.getAttribute("data-testid").replace("board-column-", ""),
+              columnWidth: cr.width,
+              columnBottom: cr.bottom,
+              // the PAINTED box, not the inset:0 wrapper — the wrapper can never report a spill
+              placeholderBottom: ph.firstElementChild.getBoundingClientRect().bottom,
+            });
+          }
+          const todo = document.querySelector('[data-testid="board-column-Todo"]');
+          const cards = [...todo.querySelectorAll(".board-card")];
+          return {
+            rows,
+            deadBelowLastCard: todo.getBoundingClientRect().bottom - cards[cards.length - 1].getBoundingClientRect().bottom,
+          };
+        });
+
+        assert(g.rows.length > 0, "no empty column rendered a placeholder — the guard has nothing to measure");
+        for (const r of g.rows) {
+          assert(r.placeholderBottom <= r.columnBottom + 0.5,
+            `the "${r.status}" empty-state placeholder paints ` +
+            `${(r.placeholderBottom - r.columnBottom).toFixed(2)}px below its column at a ` +
+            `${r.columnWidth.toFixed(0)}px column width (1024x768)`);
+        }
+        // …and containment must not have been bought by re-growing the columns.
+        assert(g.deadBelowLastCard < 200,
+          `containment came at the cost of ${g.deadBelowLastCard.toFixed(0)}px of dead space below a ` +
+          `1-card column at 1024x768 — the defect this PR removes has been traded, not fixed`);
+      } finally {
+        if (restore) await page.setViewportSize(restore);
+      }
+    });
+
+    await test("Board column: a column taller than the board scrolls itself, not the board (#322)", async () => {
+      // The other unguarded half. `.kanban-column { max-height: 100% }` caps a long column and
+      // `.kanban-column-body { min-height: 0 }` is the release valve that lets
+      // `.board-column-cards`'s `overflow-auto` actually engage. Every other guard seeds <= 2 cards,
+      // so NEITHER was exercised: reverting `max-height` (column grows to 1038px) or the
+      // `min-height` (cards box 993px inside a 651px column) brings back the board's second
+      // vertical scrollbar with every other assertion still green.
+      const tallProj = await api("POST", "/api/projects", { name: `E2E Tall ${stamp}` });
+      const tallFeature = await api("POST", `/api/projects/${tallProj.id}/features`, { name: "Tall Feature" });
+      for (let i = 0; i < 14; i++) {
+        await api("POST", `/api/features/${tallFeature.id}/tasks`,
+          { name: `Tall probe ${i} with a deliberately long wrapping title`, status: "Todo", sortOrder: i * 10 });
+      }
+      await page.goto(`${baseUrl}/project/${tallProj.id}`);
+      await page.locator('[data-testid="board-column-Todo-cards"] .board-card').first().waitFor({ state: "visible" });
+
+      const g = await page.evaluate(() => {
+        const board = document.querySelector('[data-testid="kanban-board"]');
+        const col = document.querySelector('[data-testid="board-column-Todo"]');
+        const cards = document.querySelector('[data-testid="board-column-Todo-cards"]');
+        const before = cards.scrollTop;
+        cards.scrollTop = 99999;
+        const maxScroll = cards.scrollTop;
+        cards.scrollTop = before;
+        return {
+          cardCount: col.querySelectorAll(".board-card").length,
+          columnBottom: col.getBoundingClientRect().bottom,
+          boardBottom: board.getBoundingClientRect().bottom,
+          cardsClientH: cards.clientHeight,
+          cardsScrollH: cards.scrollHeight,
+          maxInternalScroll: maxScroll,
+          boardScrollH: board.scrollHeight,
+          boardClientH: board.clientHeight,
+        };
+      });
+
+      assert(g.cardCount >= 10, `guard needs a genuinely tall column, saw ${g.cardCount} cards`);
+      // the cap: the column may not grow past the board
+      assert(g.columnBottom <= g.boardBottom + 1,
+        `a ${g.cardCount}-card column overflows the board by ${(g.columnBottom - g.boardBottom).toFixed(0)}px — ` +
+        `max-height is not capping it`);
+      // the release valve: the cards box must actually be scrollable, not merely overflowing
+      assert(g.cardsScrollH > g.cardsClientH,
+        `the cards container is ${g.cardsClientH}px for ${g.cardsScrollH}px of cards — it is not bounded, so it cannot scroll`);
+      assert(g.maxInternalScroll > 0,
+        `the cards container reports ${g.maxInternalScroll}px of scroll range — overflow-auto never engaged`);
+      // and the whole point: the board itself must NOT gain a second vertical scrollbar
+      assert(g.boardScrollH <= g.boardClientH + 1,
+        `the board scrolls vertically (${g.boardScrollH}px in ${g.boardClientH}px) — the column overflow escaped to it`);
     });
 
     // ── Regression guard (#294): a drag must not corrupt the RENDER ───────────────────────────
@@ -968,6 +1123,60 @@ async function main() {
     // The ideas board is the harder case — a moved idea can land ANYWHERE in the destination's
     // canonical order (`Priority desc, CreatedAt desc`), not just at the end — so the seed makes
     // the dragged card sort FIRST in Archived, ahead of the bystander already sitting there.
+    // The empty-state placeholder had ZERO coverage before #322 phase 3 — `kanban-column-empty`,
+    // `empty-column-*` and `add-idea-New-button` appeared nowhere in this suite — which is exactly
+    // why both #290's overlay contract and the placeholder's own geometry could break silently.
+    await test("Ideas board: an empty column's add affordance is contained, hit-testable, and opens the modal (#322/#290)", async () => {
+      const parked = await api("POST", "/api/ideas", { title: `E2E Empty ${stamp}` });
+      await api("PATCH", `/api/ideas/${parked.id}`, { status: "Triaging" });   // vacate New
+      await page.goto(`${baseUrl}/ideas`);
+      await page.locator('[data-testid="add-idea-New-button"]').waitFor({ state: "visible" });
+
+      const g = await page.evaluate(() => {
+        const col = document.querySelector('[data-testid="board-column-New"]');
+        const ph = col.querySelector(".kanban-column-empty");
+        const btn = document.querySelector('[data-testid="add-idea-New-button"]');
+        const cr = col.getBoundingClientRect(), br = btn.getBoundingClientRect();
+        return {
+          // #290: the placeholder must be a SIBLING of the sortable container, never a DOM child —
+          // a child with no data-task-id makes kanbanflow.js parseInt(undefined) => NaN on drag.
+          placeholderIsChildOfSortable: !!ph.closest(".board-column-cards"),
+          sortableNonCardChildren: [...col.querySelector(".board-column-cards").children]
+            .filter((n) => !n.classList.contains("board-card")).length,
+          placeholderPointerEvents: getComputedStyle(ph).pointerEvents,
+          buttonPointerEvents: getComputedStyle(btn).pointerEvents,
+          // the placeholder must not spill its column (the #322 phase 3 blocker)
+          overhang: ph.firstElementChild.getBoundingClientRect().bottom - cr.bottom,
+          btnH: br.height, btnW: br.width,
+          // is the button the topmost thing at its own centre? (paint order / click swallowing)
+          topmostAtCentre: (() => {
+            const el = document.elementFromPoint(br.left + br.width / 2, br.top + br.height / 2);
+            return el === btn || btn.contains(el);
+          })(),
+        };
+      });
+
+      assert(!g.placeholderIsChildOfSortable, "#290 broken: the placeholder is now a DOM child of .board-column-cards");
+      assert(g.sortableNonCardChildren === 0,
+        `#290 broken: the SortableJS container has ${g.sortableNonCardChildren} non-card child element(s)`);
+      assert(g.placeholderPointerEvents === "none",
+        `#290 broken: the placeholder is ${g.placeholderPointerEvents}, so a drop aimed at an empty column cannot fall through`);
+      assert(g.buttonPointerEvents === "auto",
+        `the add-idea button re-enables pointer events (pe-auto); it reports ${g.buttonPointerEvents}`);
+      assert(g.overhang <= 0.5,
+        `the /ideas empty placeholder paints ${g.overhang.toFixed(2)}px below its column`);
+      assert(g.btnH >= 24 && g.btnW >= 24,
+        `the add-idea target is ${g.btnW.toFixed(0)}x${g.btnH.toFixed(0)}px, under WCAG 2.5.8's 24x24`);
+      assert(g.topmostAtCentre,
+        "something paints above the add-idea button at its own centre — the click would be swallowed");
+
+      // …and it must actually WORK, not merely be positioned correctly.
+      await page.locator('[data-testid="add-idea-New-button"]').click();
+      await page.locator('[data-testid="idea-modal"]').waitFor({ state: "visible" });
+      await page.locator('[data-testid="idea-cancel-button"]').click();
+      await page.locator('[data-testid="idea-modal"]').waitFor({ state: "hidden" });
+    });
+
     await test("Ideas board: dragging ONE card moves exactly one card, and every badge matches its cards", async () => {
       // Clean slate: the seed IS the board, so every assertion below is exact.
       for (const i of await api("GET", "/api/ideas?limit=500")) {
