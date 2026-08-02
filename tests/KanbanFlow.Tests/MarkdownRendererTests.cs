@@ -248,6 +248,13 @@ public sealed class MarkdownRendererTests
     /// dead), and the task-list fixture loses its CSS hooks. All pre-date #320. If a later change
     /// correctly allow-lists those attributes these three fixtures SHOULD fail - update them, do
     /// not read the failure as a regression.
+    ///
+    /// AND ONE THING DELIBERATELY KEPT, for symmetry: the two style fixtures pin <c>style</c> as an
+    /// ALLOWED attribute on user-supplied markdown. That is HtmlSanitizer's default and pre-dates
+    /// #320; it is recorded here so nobody reads the class/id note above and assumes every
+    /// attribute is stripped. It is not free-form - HtmlSanitizer runs the CSS through
+    /// AllowedCssProperties (239 entries), which is why the two hostile CSS cases in
+    /// DangerousUrlSchemes_AreDropped (expression(...) and url(javascript:...)) are neutralised.
     /// </summary>
     [Theory]
     [InlineData("This is **bold** text.", "<p>This is <strong>bold</strong> text.</p>\n")]
