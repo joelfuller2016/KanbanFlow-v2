@@ -7,6 +7,10 @@ individually-green PRs can break `master` once merged (exactly what happened wit
 the #142 NU1605 downgrade). These scripts close that gap by letting an **external
 scheduler** run the same gate the bots can't. See issue #147.
 
+That gate also runs the **NuGet audit**: `-warnaserror` turns an NU1903 advisory hit into a
+build failure. Close those by **bumping the dependency**, never by adding an audit suppression —
+see [reviews/2026-08-02-anglesharp-cve-suppression-removal.md](reviews/2026-08-02-anglesharp-cve-suppression-removal.md) (#320).
+
 ## Scripts
 
 | Script | Purpose |
