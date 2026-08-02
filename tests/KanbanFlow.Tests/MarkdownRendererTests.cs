@@ -1,3 +1,4 @@
+using AngleSharp.Html.Parser;
 using Ganss.Xss;
 using KanbanFlow.Services;
 
@@ -191,9 +192,15 @@ public sealed class MarkdownRendererTests
     public void AnnotationXmlIntegrationPoint_DoesNotLeakMarkupOutOfStyle_Cve202654570(string payload)
     {
         var sanitizer = new HtmlSanitizer();
-        foreach (var tag in new[] { "math", "semantics", "annotation-xml", "style" })
+        foreach (var tag in new[] { "math", "semantics", "annotation-xml", "style", "img" })
             sanitizer.AllowedTags.Add(tag);
         sanitizer.AllowedAttributes.Add("encoding");
+        sanitizer.AllowedAttributes.Add("src");
+        // img/src ARE in HtmlSanitizer's default allow-list today, but they are pinned explicitly
+        // because the detection depends on them: if a future HtmlSanitizer minor dropped either
+        // default, the <img> would be stripped for the WRONG reason and this guard would go green
+        // against a downgraded AngleSharp - a guard that silently stops being able to fail, which
+        // is the exact failure mode #320 exists to remove.
 
         var html = sanitizer.Sanitize(payload);
 
@@ -203,6 +210,15 @@ public sealed class MarkdownRendererTests
         // And the advisory's actual impact must not appear under any parse.
         Assert.DoesNotContain("onerror", html, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("<script", html, StringComparison.OrdinalIgnoreCase);
+
+        // The advisory is a serialise -> RE-PARSE mismatch, so assert on the DOM a browser would
+        // actually build from this output, not only on the string we happened to serialise.
+        var reparsed = new HtmlParser().ParseDocument("<!doctype html><body>" + html);
+        Assert.Empty(reparsed.QuerySelectorAll("img"));
+        Assert.Empty(reparsed.QuerySelectorAll("script"));
+        Assert.DoesNotContain(
+            reparsed.All.SelectMany(e => e.Attributes),
+            a => a.Name.StartsWith("on", StringComparison.OrdinalIgnoreCase));
     }
     // ── Empty input contract ────────────────────────────────────────────────────────────────────
 
