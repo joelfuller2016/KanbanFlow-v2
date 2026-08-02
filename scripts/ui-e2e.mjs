@@ -86,6 +86,11 @@ async function test(name, fn) {
 
 function assert(cond, msg) { if (!cond) throw new Error(msg); }
 
+// Playwright rejections that mean "the thing a teardown would clean up no longer exists", so the
+// teardown is moot and must not mask the failure that triggered it. Deliberately narrow: any other
+// rejection from a teardown is a real bug and is rethrown.
+const IS_CONTEXT_GONE = /execution context was destroyed|target (page|closed)|target page, context or browser has been closed|cannot find context with specified id|frame was detached|browser has been closed|has been closed/i;
+
 // Blazor Server renders static HTML first, then connects an interactive circuit a
 // moment later. A click that lands before the circuit is live is a no-op, so we retry
 // the click until the expected element appears.
@@ -706,14 +711,25 @@ async function main() {
         // patch installed. Restore ONLY while our own patch is still the installed helper: if
         // `onEnd` already restored it, or anything else replaced it since, overwriting here would
         // reinstate a stale function. `?? {}` keeps this a no-op if the JS context is already gone.
-        await page.evaluate(() => {
-          const kf = window.KanbanFlow ?? {};
-          if (kf._e2eRevertPatch && kf._revertDraggedNode === kf._e2eRevertPatch) {
-            kf._revertDraggedNode = kf._e2eOriginalRevert;
-          }
-          delete kf._e2eRevertPatch;
-          delete kf._e2eOriginalRevert;
-        });
+        //
+        // Best-effort by construction: `page.evaluate` REJECTS when the execution context is
+        // destroyed by a navigation, or when the page/context/browser has been closed. A throwing
+        // `finally` REPLACES the exception that put us here — so an unguarded teardown would mask
+        // the very staged-board assertion or drag failure it exists to survive. That is the same
+        // defect one layer up from the one this block fixes. Swallow ONLY the teardown-is-moot
+        // shapes; anything else is a real bug and must still surface.
+        try {
+          await page.evaluate(() => {
+            const kf = window.KanbanFlow ?? {};
+            if (kf._e2eRevertPatch && kf._revertDraggedNode === kf._e2eRevertPatch) {
+              kf._revertDraggedNode = kf._e2eOriginalRevert;
+            }
+            delete kf._e2eRevertPatch;
+            delete kf._e2eOriginalRevert;
+          });
+        } catch (teardownErr) {
+          if (!IS_CONTEXT_GONE.test(teardownErr?.message ?? "")) throw teardownErr;
+        }
       }
 
       const expectedIds = [hiddenBefore.id, movedVisible.id, visibleAnchor.id, hiddenMiddle.id, hiddenAfter.id];
