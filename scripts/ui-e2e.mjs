@@ -624,8 +624,19 @@ async function main() {
         .waitFor({ state: "visible" });
 
       const labels = await page.$$eval(".board-card-meta-label", (els) => els.map((el) => {
-        const node = el.firstChild;
-        const text = el.textContent;
+        // Locate the text node EXPLICITLY rather than assuming `firstChild` is one. If the label's
+        // markup ever gains a wrapper (e.g. the text moves inside a <span> when CardMeta is
+        // extracted in a later phase), `firstChild` becomes an Element and `Range#setStart` throws
+        // IndexSizeError — the suite would then die with an opaque DOM exception instead of saying
+        // what actually broke. Offsets are taken from the TEXT NODE's own length, not
+        // `el.textContent.length`, which counts every descendant and would overrun a partial node.
+        // (Copilot, PR #335.)
+        const node = [...el.childNodes].find((n) => n.nodeType === Node.TEXT_NODE && n.nodeValue.trim() !== "");
+        if (!node) {
+          return { structureError: `no direct text node under .board-card-meta-label (found: ` +
+            `${[...el.childNodes].map((n) => n.nodeName).join(",") || "nothing"}) — the guard needs updating` };
+        }
+        const text = node.nodeValue;
         // The FINAL glyph's own box, versus the box that clips it.
         const last = document.createRange();
         last.setStart(node, text.length - 1);
@@ -643,6 +654,9 @@ async function main() {
         };
       }));
       assert(labels.length >= 2, `expected both seeded cards to render a feature label, saw ${labels.length}`);
+      // Surface a markup-shape change as a readable failure, not an IndexSizeError. (Copilot.)
+      const broken = labels.filter((l) => l.structureError);
+      assert(broken.length === 0, `label geometry could not be measured: ${broken[0]?.structureError}`);
 
       const short = labels.find((l) => l.text === "Dashboard");
       const long = labels.find((l) => l.text.startsWith("Authentication & Session"));
