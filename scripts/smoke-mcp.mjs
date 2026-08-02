@@ -680,11 +680,20 @@ function writeMessage(message, options = {}) {
 }
 
 function writeRawFrame(body, options = {}) {
-  const framed = `Content-Length: ${Buffer.byteLength(body, "utf8")}\r\n\r\n${body}`;
+  // Newline-delimited JSON, per the MCP stdio spec (2025-06-18, Transports/stdio).
+  // NOTE: this mirrors the server's framing, so it can NOT by itself prove conformance —
+  // a matching pair of wrong implementations is exactly how the old Content-Length framing
+  // survived. `scripts/framing-ab.mjs` is the INDEPENDENT wire-format gate; this suite
+  // tests behaviour on top of a working transport.
+  const framed = `${body}\n`;
   if (options.chunked) {
-    const splitAt = Math.max(1, Math.floor(framed.length / 2));
-    server.stdin.write(framed.slice(0, splitAt));
-    setTimeout(() => server.stdin.write(framed.slice(splitAt)), 10);
+    // Convert to a Buffer first so splitAt is a byte index, not a character index.
+    // Splitting a JS string between surrogate pairs corrupts the UTF-8 bytes written
+    // by the two separate stdin.write() calls.
+    const buf = Buffer.from(framed, "utf8");
+    const splitAt = Math.max(1, Math.floor(buf.length / 2));
+    server.stdin.write(buf.subarray(0, splitAt));
+    setTimeout(() => server.stdin.write(buf.subarray(splitAt)), 10);
     return;
   }
 
@@ -693,24 +702,32 @@ function writeRawFrame(body, options = {}) {
 
 function readMessages() {
   while (buffer.length > 0) {
-    const headerEnd = buffer.indexOf("\r\n\r\n");
-    if (headerEnd === -1) return;
+    const newlineIndex = buffer.indexOf("\n");
+    if (newlineIndex === -1) return; // partial message; wait for more input
 
-    const header = buffer.subarray(0, headerEnd).toString("utf8");
-    const contentLengthMatch = /Content-Length:\s*(\d+)/i.exec(header);
-    if (!contentLengthMatch) {
-      buffer = buffer.subarray(headerEnd + 4);
+    const line = buffer.subarray(0, newlineIndex).toString("utf8");
+    buffer = buffer.subarray(newlineIndex + 1);
+
+    const rawMessage = line.replace(/\r$/, "").trim();
+    if (rawMessage.length === 0) continue;
+
+    // The old Content-Length reader SKIPPED anything that was not a frame. Per-line dispatch
+    // has no such filter, so a single stray non-JSON line on the server's stdout would throw
+    // out of this stdout handler as an unhandled exception, killing the run with a stack trace
+    // instead of a readable assertion failure. Surface it through the same path the server-exit
+    // handler uses (reject everything pending) so the suite fails cleanly and says why.
+    let message;
+    try {
+      message = JSON.parse(rawMessage);
+    } catch {
+      const err = new Error(
+        `Non-JSON line on MCP server stdout (violates the stdio contract): ${rawMessage.slice(0, 200)}`
+      );
+      process.exitCode = 1;
+      for (const { reject } of pending.values()) reject(err);
+      pending.clear();
       continue;
     }
-
-    const contentLength = Number.parseInt(contentLengthMatch[1], 10);
-    const messageStart = headerEnd + 4;
-    const messageEnd = messageStart + contentLength;
-    if (buffer.length < messageEnd) return;
-
-    const rawMessage = buffer.subarray(messageStart, messageEnd).toString("utf8");
-    buffer = buffer.subarray(messageEnd);
-    const message = JSON.parse(rawMessage);
     const deferred = pending.get(message.id);
     if (!deferred) {
       unexpectedMessages.push(message);
