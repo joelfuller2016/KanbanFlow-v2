@@ -1,3 +1,4 @@
+using Ganss.Xss;
 using KanbanFlow.Services;
 
 namespace KanbanFlow.Tests;
@@ -114,6 +115,38 @@ public sealed class MarkdownRendererTests
         Assert.DoesNotContain("<img", html, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("alert(1)", html, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("annotation-xml", html, StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// Exercises the CVE path with a MathML-permissive sanitizer configuration.
+    /// <c>MarkdownRenderer</c> excludes <c>math</c> and <c>annotation-xml</c> from its allow-list,
+    /// so the existing <see cref="AnnotationXmlMxssVector_IsNeutralised"/> cases only prove that
+    /// allow-list stripping works. This test widens the allow-list to include those containers,
+    /// which is the configuration that would be vulnerable on AngleSharp &lt; 1.5.0, and asserts that
+    /// the fixed AngleSharp 1.6.0 correctly surfaces the injected <c>onerror</c> attribute so
+    /// HtmlSanitizer can strip it. If someone downgrades to a vulnerable AngleSharp, this test fails.
+    /// </summary>
+    [Theory]
+    [InlineData("<math><annotation-xml encoding=\"text/html\"><title><a encoding=\"</title><img src=x onerror=alert()>\"></annotation-xml></math>")]
+    [InlineData("<math><annotation-xml encoding=\"text/html\"><style><img src=x onerror=alert(1)></style></annotation-xml></math>")]
+    [InlineData("<math><annotation-xml encoding=\"application/xhtml+xml\"><script>alert(1)</script></annotation-xml></math>")]
+    public void AnnotationXmlMxssVector_IsNeutralisedWithMathmlAllowList(string payload)
+    {
+        // Build a sanitizer that keeps math + annotation-xml so the allow-list does not destroy
+        // the payload before the parser has a chance to route it. On AngleSharp < 1.5.0 the
+        // parser misroutes annotation-xml tokens, the sanitizer never sees the injected element,
+        // and the serialized output still contains the active attribute. On the fixed 1.6.0 the
+        // element is correctly placed in the DOM and HtmlSanitizer strips the dangerous attribute.
+        var sanitizer = new HtmlSanitizer();
+        sanitizer.AllowedTags.Add("math");
+        sanitizer.AllowedTags.Add("annotation-xml");
+        sanitizer.AllowedAttributes.Add("encoding");
+
+        var sanitized = sanitizer.Sanitize(payload);
+
+        Assert.DoesNotContain("onerror", sanitized, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("alert(", sanitized, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("<script", sanitized, StringComparison.OrdinalIgnoreCase);
     }
 
     // ── Empty input contract ────────────────────────────────────────────────────────────────────
