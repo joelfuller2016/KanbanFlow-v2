@@ -149,6 +149,44 @@ public sealed class MarkdownRendererTests
         Assert.DoesNotContain("<script", sanitized, StringComparison.OrdinalIgnoreCase);
     }
 
+    // ── CVE path itself: proves the PATCHED parser is present, not just the allow-list ──────────
+
+    /// <summary>
+    /// The test above is neutralised by the allow-list on BOTH the vulnerable and the patched
+    /// AngleSharp, so on its own it cannot prove the CVE is closed. This one can: it deliberately
+    /// ALLOWS the MathML containers the advisory needs, so the annotation-xml integration-point bug
+    /// actually executes instead of being short-circuited.
+    ///
+    /// On AngleSharp 0.17.1, <c>annotation-xml</c> is not treated as an HTML integration point, so
+    /// the &lt;style&gt; content is parsed as markup rather than raw text and the &lt;img&gt; is
+    /// HOISTED OUT of &lt;style&gt;, surviving as a sibling:
+    ///   <c>&lt;annotation-xml ...&gt;&lt;style&gt;&lt;/style&gt;&lt;img src="x"&gt;&lt;/annotation-xml&gt;</c>
+    /// On AngleSharp 1.6.0 the element stays inside &lt;style&gt; as text and is dropped entirely:
+    ///   <c>&lt;annotation-xml ...&gt;&lt;style&gt;&lt;/style&gt;&lt;/annotation-xml&gt;</c>
+    ///
+    /// Both measured directly against 9.0.967/0.17.1 and 9.1.974/1.6.0. So this test is RED on the
+    /// vulnerable dependency and GREEN on the patched one - it is the regression guard that fails if
+    /// AngleSharp is ever downgraded back below 1.5.0.
+    /// </summary>
+    [Theory]
+    [InlineData("<math><annotation-xml encoding=\"text/html\"><style><img src=x onerror=alert(1)></style></annotation-xml></math>")]
+    [InlineData("<math><semantics><annotation-xml encoding=\"text/html\"><style><img src=x onerror=alert(1)></style></annotation-xml></semantics></math>")]
+    public void AnnotationXmlIntegrationPoint_DoesNotLeakMarkupOutOfStyle_Cve202654570(string payload)
+    {
+        var sanitizer = new Ganss.Xss.HtmlSanitizer();
+        foreach (var tag in new[] { "math", "semantics", "annotation-xml", "style" })
+            sanitizer.AllowedTags.Add(tag);
+        sanitizer.AllowedAttributes.Add("encoding");
+
+        var html = sanitizer.Sanitize(payload);
+
+        // The load-bearing assertion: on AngleSharp < 1.5.0 the <img> escapes <style> and appears
+        // here. On >= 1.5.0 it never materialises as an element at all.
+        Assert.DoesNotContain("<img", html, StringComparison.OrdinalIgnoreCase);
+        // And the advisory's actual impact must not appear under any parse.
+        Assert.DoesNotContain("onerror", html, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("<script", html, StringComparison.OrdinalIgnoreCase);
+    }
     // ── Empty input contract ────────────────────────────────────────────────────────────────────
 
     [Fact]
