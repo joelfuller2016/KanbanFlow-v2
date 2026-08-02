@@ -16,7 +16,11 @@ const restTimeoutMs = Number.isFinite(parsedRestTimeoutMs) && parsedRestTimeoutM
 //   (the revision the ModelContextProtocol.AspNetCore 1.4 SDK negotiates). Unrelated to the
 //   stdio hop above and deliberately pinned.
 // Newest first — SUPPORTED_PROTOCOL_VERSIONS[0] is the fallback.
-const SUPPORTED_PROTOCOL_VERSIONS = ["2025-06-18", "2025-03-26", "2024-11-05"];
+// 2025-03-26 is deliberately EXCLUDED: it requires servers to accept JSON-RPC batches
+// (batching was only removed in 2025-06-18 — see that revision's changelog, "Remove support
+// for JSON-RPC batching"). validateRequest() rejects arrays with -32600, so advertising
+// 2025-03-26 would claim conformance we do not have. Only advertise what the handlers implement.
+const SUPPORTED_PROTOCOL_VERSIONS = ["2025-06-18", "2024-11-05"];
 const protocolVersion = SUPPORTED_PROTOCOL_VERSIONS[0];
 const nativeProtocolVersion = "2025-06-18";
 
@@ -1594,7 +1598,9 @@ function claimResponse(id) {
 function writeMessage(message) {
   // MCP stdio framing is newline-delimited JSON (spec 2025-06-18, Transports/stdio:
   // "Messages are delimited by newlines, and MUST NOT contain embedded newlines").
-  // JSON.stringify escapes any newline inside a string value, so the payload is
-  // always single-line and the delimiter is unambiguous.
+  // JSON.stringify escapes U+000A and U+000D inside string values, so no raw 0x0A/0x0D
+  // byte is ever emitted and the delimiter is unambiguous for any "\n"-splitting reader.
+  // (U+2028/U+2029/U+0085 ARE emitted raw, but none of them is 0x0A — they only matter to
+  // a reader that splits on Unicode line boundaries, e.g. Python's str.splitlines().)
   process.stdout.write(JSON.stringify(message) + "\n");
 }

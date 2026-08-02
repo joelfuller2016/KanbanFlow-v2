@@ -22,6 +22,7 @@
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
+import { readFileSync } from "node:fs";
 
 const MODES = ["spec", "lsp", "negotiate", "all"];
 const mode = process.argv[2];
@@ -42,7 +43,19 @@ if (rawWait !== undefined && WAIT_MS !== Number(rawWait)) {
   console.error(`warn: ignoring invalid FRAMING_AB_WAIT_MS=${JSON.stringify(rawWait)}; using ${WAIT_MS}ms`);
 }
 
-const SUPPORTED = ["2025-06-18", "2025-03-26", "2024-11-05"];
+// Derived from the server's source rather than duplicated: a hardcoded copy here would
+// silently stop testing anything the moment SUPPORTED_PROTOCOL_VERSIONS is reordered or
+// extended. If the declaration cannot be found, fail loudly instead of guessing.
+function readServerSupportedVersions() {
+  const src = readFileSync(WRAPPER, "utf8");
+  const m = /const SUPPORTED_PROTOCOL_VERSIONS\s*=\s*\[([^\]]*)\]/.exec(src);
+  if (!m) throw new Error("could not locate SUPPORTED_PROTOCOL_VERSIONS in mcp-server.mjs");
+  const versions = [...m[1].matchAll(/"([^"]+)"/g)].map((x) => x[1]);
+  if (versions.length === 0) throw new Error("SUPPORTED_PROTOCOL_VERSIONS parsed as empty");
+  return versions;
+}
+
+const SUPPORTED = readServerSupportedVersions();
 const NEWEST = SUPPORTED[0];
 
 function initRequest(id, protocolVersion) {
@@ -88,12 +101,28 @@ async function runSpec() {
   const { out, bytes } = await probe(initRequest(1, NEWEST) + "\n");
   console.log(`[spec] BYTES_RECEIVED=${bytes}`);
   if (bytes === 0) { console.log("[spec] FAIL: no response to a spec-compliant client."); return false; }
-  if (/^Content-Length:/i.test(out.trim())) {
-    console.log("[spec] FAIL: the RESPONSE is LSP-framed — a compliant client cannot parse it."); return false;
+
+  // EVERY non-empty line must be a valid JSON message. Checking only line 1 (and anchoring the
+  // Content-Length regex to the whole output) let a "writer emits BOTH framings" regression pass
+  // — the stray frame lived on a later line and was never inspected. The stdio contract is
+  // absolute: "The server MUST NOT write anything to its stdout that is not a valid MCP message",
+  // so a debug console.log is a conformance failure too, not just cosmetic noise.
+  const lines = out.split("\n").filter((l) => l.trim().length > 0);
+  for (const [i, line] of lines.entries()) {
+    if (/^\s*Content-Length:/i.test(line)) {
+      console.log(`[spec] FAIL: line ${i + 1} is an LSP frame header — a compliant client cannot parse it.`);
+      return false;
+    }
+    try { JSON.parse(line); }
+    catch {
+      console.log(`[spec] FAIL: line ${i + 1} on stdout is not valid JSON: ${line.slice(0, 120)}`);
+      return false;
+    }
   }
+
   const v = results(out)[0]?.result?.protocolVersion;
   if (v !== NEWEST) { console.log(`[spec] FAIL: expected protocolVersion ${NEWEST}, got ${v}`); return false; }
-  console.log(`[spec] PASS: NDJSON response, protocolVersion=${v}`);
+  console.log(`[spec] PASS: ${lines.length} line(s), all valid JSON, protocolVersion=${v}`);
   return true;
 }
 

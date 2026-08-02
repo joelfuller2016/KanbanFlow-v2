@@ -706,7 +706,24 @@ function readMessages() {
 
     const rawMessage = line.replace(/\r$/, "").trim();
     if (rawMessage.length === 0) continue;
-    const message = JSON.parse(rawMessage);
+
+    // The old Content-Length reader SKIPPED anything that was not a frame. Per-line dispatch
+    // has no such filter, so a single stray non-JSON line on the server's stdout would throw
+    // out of this stdout handler as an unhandled exception, killing the run with a stack trace
+    // instead of a readable assertion failure. Surface it through the same path the server-exit
+    // handler uses (reject everything pending) so the suite fails cleanly and says why.
+    let message;
+    try {
+      message = JSON.parse(rawMessage);
+    } catch {
+      const err = new Error(
+        `Non-JSON line on MCP server stdout (violates the stdio contract): ${rawMessage.slice(0, 200)}`
+      );
+      process.exitCode = 1;
+      for (const { reject } of pending.values()) reject(err);
+      pending.clear();
+      continue;
+    }
     const deferred = pending.get(message.id);
     if (!deferred) {
       unexpectedMessages.push(message);
