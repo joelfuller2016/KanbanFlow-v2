@@ -236,20 +236,22 @@ try {
     name: `MCP authored task ${runMarker}`,
     description: "Created via the new create_task MCP tool.",
     status: "Backlog",
-    priority: "Medium"
+    priority: "Medium",
+    sortOrder: 0.25
   });
-  if (typeof authoredTask?.id !== "number") {
-    throw new Error(`create_task did not return an id: ${JSON.stringify(authoredTask)}`);
+  if (typeof authoredTask?.id !== "number" || authoredTask?.sortOrder !== 0.25) {
+    throw new Error(`create_task did not preserve a fractional rank: ${JSON.stringify(authoredTask)}`);
   }
   const updatedTask = await callTool("update_task", {
     taskId: authoredTask.id,
     name: `MCP authored task ${runMarker} (updated)`,
     description: "Updated via update_task.",
     status: "Todo",
-    priority: "High"
+    priority: "High",
+    sortOrder: 0.5
   });
-  if (updatedTask?.priority !== "High") {
-    throw new Error(`update_task did not return updated priority: ${JSON.stringify(updatedTask)}`);
+  if (updatedTask?.priority !== "High" || updatedTask?.sortOrder !== 0.5) {
+    throw new Error(`update_task did not preserve a fractional rank: ${JSON.stringify(updatedTask)}`);
   }
   await callTool("delete_task", { taskId: authoredTask.id });
 
