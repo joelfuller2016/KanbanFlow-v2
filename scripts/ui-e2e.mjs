@@ -657,9 +657,14 @@ async function main() {
       assert(long.overflows,
         `long feature label "${long.text}" does not overflow its box, so text-overflow:ellipsis cannot fire`);
       // (c) Neither may collide with the priority badge (the badge is flex-shrink-0 for this).
+      // The gutter is Bootstrap's `ms-1` (0.25rem = 4px) and it is a MARGIN, so it is not
+      // negotiable at any viewport — measured 4.00px at both 1440x900 and 390x844. Asserting
+      // merely `> 0` would accept a 1px sliver and still call itself an overlap guard, so it is
+      // pinned to the real value with only a subpixel tolerance. (CodeRabbit, PR #335.)
       for (const l of labels) {
         assert(l.gutterToBadge >= 3.5,
-          `feature label "${l.text}" has only ${l.gutterToBadge.toFixed(2)}px before its priority badge; require a 4px gutter`);
+          `feature label "${l.text}" leaves only ${l.gutterToBadge.toFixed(2)}px before its priority badge ` +
+          `(require the 4px ms-1 gutter)`);
       }
     });
 
@@ -680,14 +685,23 @@ async function main() {
         const last = cards[cards.length - 1].getBoundingClientRect();
         const empty = document.querySelector('[data-testid="board-column-Review"]');
         const emptyCards = document.querySelector('[data-testid="board-column-Review-cards"]');
+        // Resolve the DECLARED floor so the assertion below compares the rendered box against the
+        // token, instead of against a number copied out of it that can silently drift.
+        const rootPx = parseFloat(getComputedStyle(document.documentElement).fontSize);
+        const declared = getComputedStyle(document.documentElement)
+          .getPropertyValue("--kf-board-drop-floor").trim();
         return {
           cardCount: cards.length,
-          rootFontSize: parseFloat(getComputedStyle(document.documentElement).fontSize),
           deadBelowLastCard: col.getBoundingClientRect().bottom - last.bottom,
           columnH: col.getBoundingClientRect().height,
           boardH: document.querySelector('[data-testid="kanban-board"]').getBoundingClientRect().height,
           emptyColumnH: empty.getBoundingClientRect().height,
           emptyDropTargetH: emptyCards.getBoundingClientRect().height,
+          declaredFloorPx: declared.endsWith("rem") ? parseFloat(declared) * rootPx : parseFloat(declared),
+          cardStridePx: (() => {
+            const c = cards[0];
+            return c.getBoundingClientRect().height + parseFloat(getComputedStyle(c).marginBottom);
+          })(),
         };
       });
       assert(geom.cardCount === 1, `guard needs exactly one card to be meaningful, saw ${geom.cardCount}`);
@@ -697,10 +711,17 @@ async function main() {
       assert(geom.columnH < geom.boardH,
         `a 1-card column is ${geom.columnH.toFixed(0)}px tall against a ${geom.boardH.toFixed(0)}px board — it is still stretching`);
       // …and the cure must not be worse: an EMPTY column has to stay a real drop target (#290).
-      // The floor is --kf-board-drop-floor: 6rem; derive the expected pixel value from the root font
-      // size so the assertion tracks the token rather than a fixed pixel threshold.
-      assert(geom.emptyDropTargetH >= (geom.rootFontSize * 6) - 0.5,
-        `an empty column's drop target is ${geom.emptyDropTargetH.toFixed(1)}px; require the 6rem floor`);
+      // Two separate holes, because a single fixed threshold closes neither. (CodeRabbit, PR #335.)
+      //   (a) the RENDERED floor must match the DECLARED token — catches CSS breaking the floor;
+      assert(Math.abs(geom.emptyDropTargetH - geom.declaredFloorPx) <= 1,
+        `an empty column's drop target renders ${geom.emptyDropTargetH.toFixed(0)}px but ` +
+        `--kf-board-drop-floor declares ${geom.declaredFloorPx.toFixed(0)}px`);
+      //   (b) the DECLARED token must still clear one card's stride — catches the token itself being
+      //       quietly shrunk below the constraint it was derived from, which (a) alone would let
+      //       through with both numbers agreeing on a uselessly small target.
+      assert(geom.declaredFloorPx >= geom.cardStridePx,
+        `--kf-board-drop-floor is ${geom.declaredFloorPx.toFixed(0)}px, below one card's stride of ` +
+        `${geom.cardStridePx.toFixed(0)}px — an empty column no longer offers room for the card it asks for`);
     });
 
     // ── Regression guard (#294): a drag must not corrupt the RENDER ───────────────────────────
