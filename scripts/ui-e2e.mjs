@@ -624,6 +624,7 @@ async function main() {
       // at the 180px column floor "Dashboard" DOES overflow and renders "Dashbo…", so the
       // "renders the whole word" claim is width-dependent and has to be checked where it is made.
       const restoreVis = page.viewportSize();
+      try {
       for (const [vw, vh] of [[1440, 900], [390, 844]]) {
       await page.setViewportSize({ width: vw, height: vh });
       await page.goto(`${baseUrl}/project/${visProj.id}`);
@@ -708,7 +709,12 @@ async function main() {
           `at ${vw}x${vh}; the ms-1 gutter at a ${l.rootPx}px root should be ${expectedGutter.toFixed(2)}px`);
       }
       }
-      if (restoreVis) await page.setViewportSize(restoreVis);
+      } finally {
+        // try/finally, not a bare restore: an assertion thrown mid-loop would otherwise leave the
+        // viewport at 390x844 for the ~17 tests that follow, turning one real failure into a
+        // screenful of spurious ones that bury it.
+        if (restoreVis) await page.setViewportSize(restoreVis);
+      }
     });
 
     await test("Board column: a 1-card column does not paint a dead region below its card (#322)", async () => {

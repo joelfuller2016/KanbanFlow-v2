@@ -171,10 +171,25 @@ h1:focus {
        that, because the number is a function of the column width and the status name; the grid
        removes the failure mode instead of re-tuning a constant that was already wrong once.
 
-       `minmax(0, auto)` on the row, and `min-height: 0` here, are what keep the CAPPED case working:
-       a column with more cards than fit is bounded by `.kanban-column`'s `max-height: 100%`, and
-       both must be able to shrink below content for `.board-column-cards`'s `overflow-auto` to
-       engage. See the note there. */
+       ⚠️ These two declarations are NOT equally important, and the failure modes are asymmetric.
+
+       `min-height: 0` is LOAD-BEARING. It is the release valve that lets this box shrink below its
+       content when `.kanban-column`'s `max-height: 100%` caps a long column, which is the only
+       reason `.board-column-cards`'s `overflow-auto` ever engages. Delete it and a 14-card column
+       gives a 1069px cards box inside a capped column with the scroll DEAD, and the board grows the
+       second vertical scrollbar this PR exists to prevent (scrollHeight 1114 vs clientHeight 535).
+       Guarded: "a column taller than the board scrolls itself, not the board".
+
+       `grid-template-rows: minmax(0, auto)` is belt-and-braces, and was kept only after being
+       measured. The intuition that a bare `auto` track would size to the taller child's max-content
+       and blow past the cap is WRONG here, and both the author and an independent reviewer measured
+       it separately: `auto` is byte-identical to `minmax(0, auto)` (body 473.4px, internal scroll
+       live, no board scrollbar, suite 27/27). `.board-column-cards` already carries `overflow-auto`,
+       so it is a scroll container whose automatic minimum size is 0, and the track's growth limit is
+       capped by available free space during track maximisation regardless.
+
+       So: simplifying `minmax(0, auto)` → `auto` breaks nothing. Removing `min-height: 0` because
+       "the grid handles it" breaks everything. Do not confuse the two. */
     display: grid;
     grid-template-columns: minmax(0, 1fr);
     grid-template-rows: minmax(0, auto);
