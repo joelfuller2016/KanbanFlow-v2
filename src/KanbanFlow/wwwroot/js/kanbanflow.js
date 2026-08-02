@@ -121,11 +121,15 @@ window.KanbanFlow = {
                     var taskId = Number(evt.item.dataset.taskId);
                     var newStatus = evt.to.dataset.status;
                     var beforeTaskId = window.KanbanFlow._nextTaskId(evt.item);
+                    // A no-op drop must not spend rank precision; each move halves the interval
+                    // between neighbours and the space is finite ("No ordering space remains").
+                    var unmoved = evt.to === evt.from && evt.newIndex === evt.oldIndex;
                     window.KanbanFlow._revertDraggedNode(evt);
-                    if (!Number.isInteger(taskId) || taskId <= 0 || !newStatus) {
+                    if (unmoved || !Number.isInteger(taskId) || taskId <= 0 || !newStatus) {
                         return;
                     }
-                    dotNetRef.invokeMethodAsync('OnCardMoved', taskId, newStatus, beforeTaskId);
+                    dotNetRef.invokeMethodAsync('OnCardMoved', taskId, newStatus, beforeTaskId)
+                        .catch(function () { /* circuit disconnected — DOM already canonical */ });
                 }
             });
             this._boardSortables.push(sortable);
@@ -154,12 +158,14 @@ window.KanbanFlow = {
                     var taskId = Number(evt.item.dataset.taskId);
                     var newFeatureId = Number(evt.to.dataset.featureId);
                     var beforeTaskId = window.KanbanFlow._nextTaskId(evt.item);
+                    var unmoved = evt.to === evt.from && evt.newIndex === evt.oldIndex;
                     window.KanbanFlow._revertDraggedNode(evt);
-                    if (!Number.isInteger(taskId) || taskId <= 0
+                    if (unmoved || !Number.isInteger(taskId) || taskId <= 0
                         || !Number.isInteger(newFeatureId) || newFeatureId <= 0) {
                         return;
                     }
-                    dotNetRef.invokeMethodAsync('OnTaskReordered', taskId, newFeatureId, beforeTaskId);
+                    dotNetRef.invokeMethodAsync('OnTaskReordered', taskId, newFeatureId, beforeTaskId)
+                        .catch(function () { /* circuit disconnected — DOM already canonical */ });
                 }
             });
             this._navSortables.push(sortable);

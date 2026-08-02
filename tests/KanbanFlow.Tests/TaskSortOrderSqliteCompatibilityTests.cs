@@ -100,6 +100,11 @@ public sealed class TaskSortOrderSqliteCompatibilityTests
         return Assert.IsType<string>(await command.ExecuteScalarAsync());
     }
 
+    // ⚠️ FROZEN SNAPSHOT of the pre-#307 schema — not a copy of the current EF model.
+    // `SortOrder INTEGER` is the declaration under test and must never change here.
+    // Every OTHER column must stay in sync with TaskItem/Feature/Project, because EF
+    // reads these tables through the CURRENT model: add a property to any entity and
+    // this test fails with a bare SQLite "no such column". Add the column here too.
     private const string LegacySchemaAndRows = """
         CREATE TABLE Projects (
             Id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,

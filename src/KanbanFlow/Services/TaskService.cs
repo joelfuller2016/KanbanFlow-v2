@@ -455,6 +455,11 @@ public sealed class TaskService(IDbContextFactory<AppDbContext> dbFactory) : ITa
 
         // Equal integral ranks are normal across features. Their effective ranks are distinct
         // legacy positions derived from Id, so persist a fractional midpoint between them.
+        // The two raw-value fallbacks below reuse a neighbour's exact rank and rely on the Id
+        // tie-break in TaskOrdering.Compare. That only represents the requested order when
+        // movingTaskId itself sorts between lower.Id and upper.Id — the same drag succeeds or
+        // fails depending on the creation order of unrelated rows. Failing is deliberate: the
+        // alternative is renumbering siblings the caller never saw (#307).
         var effectiveMidpoint = Midpoint(
             TaskOrdering.EffectiveRank(lower),
             TaskOrdering.EffectiveRank(upper));

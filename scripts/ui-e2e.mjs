@@ -1519,6 +1519,8 @@ async function main() {
     await api("DELETE", `/api/projects/${proj.id}`).catch(() => {});
     await api("DELETE", `/api/projects/${orderProj.id}`).catch(() => {});
     await api("DELETE", `/api/projects/${dragProj.id}`).catch(() => {});
+    await api("DELETE", `/api/projects/${partialProj.id}`).catch(() => {});
+    await api("DELETE", `/api/projects/${outlineProj.id}`).catch(() => {});
     // delete the modal-created project too
     const all = await api("GET", "/api/projects");
     const modalProj = all.find((p) => p.name === modalProjectName);

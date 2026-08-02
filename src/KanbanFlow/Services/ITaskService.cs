@@ -94,7 +94,9 @@ public interface ITaskService
     /// task identity in the destination feature. <paramref name="beforeTaskId"/> is <c>0</c>
     /// to append. The anchor is resolved across every task in the feature regardless of status,
     /// matching the outline's persisted ordering scope. Cross-feature moves retain the validation,
-    /// comment, and activity-event behavior of <see cref="ReassignToFeatureAsync"/>.
+    /// comment, and activity-event behavior of <see cref="ReassignToFeatureAsync"/>. A
+    /// same-feature reorder remains non-audited, matching <see cref="MoveOnBoardAsync"/>'s
+    /// behaviour for same-status reorders (see R-2.4 in docs/requirements.md).
     /// </summary>
     /// <exception cref="TaskNotFoundException">The task does not exist.</exception>
     /// <exception cref="FeatureNotFoundException">The destination feature does not exist.</exception>

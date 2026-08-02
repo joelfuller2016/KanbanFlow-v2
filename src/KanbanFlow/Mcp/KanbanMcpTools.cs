@@ -91,8 +91,10 @@ public static class KanbanMcpTools
 
         var tasks = (await db.Tasks.AsNoTracking()
                 .Where(t => t.Feature.ProjectId == projectId)
+                .Include(t => t.Feature)
                 .ToListAsync(cancellationToken))
-            .OrderBy(t => t.FeatureId)
+            .OrderBy(t => t.Feature.SortOrder)
+            .ThenBy(t => t.FeatureId)
             .ThenBy(TaskOrdering.EffectiveRank)
             .ThenBy(t => t.SortOrder)
             .ThenBy(t => t.Id)

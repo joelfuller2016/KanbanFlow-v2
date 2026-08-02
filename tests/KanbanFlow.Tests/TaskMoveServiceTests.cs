@@ -54,6 +54,7 @@ public sealed class TaskMoveServiceTests
     {
         await using var db = factory.CreateDbContext();
         var tasks = await db.Tasks
+            .AsNoTracking()
             .Where(t => t.Feature.ProjectId == projectId && t.Status == status)
             .ToArrayAsync();
         return TaskOrdering.Order(tasks).Select(t => t.Id).ToArray();
@@ -65,6 +66,7 @@ public sealed class TaskMoveServiceTests
     {
         await using var db = factory.CreateDbContext();
         return await db.Tasks
+            .AsNoTracking()
             .Where(t => taskIds.Contains(t.Id))
             .ToDictionaryAsync(t => t.Id, t => t.SortOrder);
     }
@@ -326,6 +328,7 @@ public sealed class TaskMoveServiceTests
     {
         await using var db = factory.CreateDbContext();
         var tasks = await db.Tasks
+            .AsNoTracking()
             .Where(t => t.FeatureId == featureId)
             .ToArrayAsync();
         return TaskOrdering.Order(tasks).Select(t => t.Id).ToArray();
@@ -581,12 +584,26 @@ public sealed class TaskMoveServiceTests
     {
         using var factory = new SqliteTestFactory();
         var seed = SeedDenseBoard(factory);
+        var outline = SeedDenseOutline(factory);
         var service = new TaskService(factory);
+        var boardBefore = await BoardOrder(factory, seed.ProjectId, WorkStatus.Todo);
 
         await Assert.ThrowsAsync<ValidationException>(() => service.MoveOnBoardAsync(
             seed.MovedId, WorkStatus.Todo, seed.ProjectId, seed.MovedId, "board-user"));
         await Assert.ThrowsAsync<TaskNotFoundException>(() => service.MoveOnBoardAsync(
             999_999, WorkStatus.Todo, seed.ProjectId, beforeTaskId: 0, actor: "board-user"));
+        await Assert.ThrowsAsync<ValidationException>(() => service.MoveInOutlineAsync(
+            outline.MovedId, outline.SourceFeatureId, outline.MovedId, "outline-user"));
+        await Assert.ThrowsAsync<TaskNotFoundException>(() => service.MoveInOutlineAsync(
+            999_999, outline.DestinationFeatureId, beforeTaskId: 0, actor: "outline-user"));
+
+        Assert.Equal(boardBefore, await BoardOrder(factory, seed.ProjectId, WorkStatus.Todo));
+        Assert.Equal(
+            new[] { outline.SourceBystanderId, outline.MovedId },
+            await FeatureOrder(factory, outline.SourceFeatureId));
+        await using var db = factory.CreateDbContext();
+        Assert.Equal(0, await db.ActivityEvents.CountAsync());
+        Assert.Equal(0, await db.TaskComments.CountAsync());
     }
 
     private sealed class ThrowOnSaveFactory(SqliteTestFactory inner) : IDbContextFactory<AppDbContext>
