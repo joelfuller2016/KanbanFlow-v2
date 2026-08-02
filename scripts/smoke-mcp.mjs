@@ -687,9 +687,13 @@ function writeRawFrame(body, options = {}) {
   // tests behaviour on top of a working transport.
   const framed = `${body}\n`;
   if (options.chunked) {
-    const splitAt = Math.max(1, Math.floor(framed.length / 2));
-    server.stdin.write(framed.slice(0, splitAt));
-    setTimeout(() => server.stdin.write(framed.slice(splitAt)), 10);
+    // Convert to a Buffer first so splitAt is a byte index, not a character index.
+    // Splitting a JS string between surrogate pairs corrupts the UTF-8 bytes written
+    // by the two separate stdin.write() calls.
+    const buf = Buffer.from(framed, "utf8");
+    const splitAt = Math.max(1, Math.floor(buf.length / 2));
+    server.stdin.write(buf.subarray(0, splitAt));
+    setTimeout(() => server.stdin.write(buf.subarray(splitAt)), 10);
     return;
   }
 
