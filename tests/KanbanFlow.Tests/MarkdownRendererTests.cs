@@ -13,7 +13,7 @@ namespace KanbanFlow.Tests;
 ///
 /// Most of them exercise the REAL renderer (real Markdig pipeline + real Ganss.Xss.HtmlSanitizer)
 /// against real hostile markup - no stubs, no fakes, no mocks. Every renderer-path security
-/// assertion is written so that removing the <c>Sanitize</c> call makes it FAIL (measured: 23 red).
+/// assertion is written so that removing the <c>Sanitize</c> call makes it FAIL (measured: 27 red, all in this class).
 ///
 /// The two dependency guards at the end are the exception: they build their OWN HtmlSanitizer with a
 /// widened allow-list and never call <c>RenderToSafeHtml</c>, because the renderer's own allow-list
