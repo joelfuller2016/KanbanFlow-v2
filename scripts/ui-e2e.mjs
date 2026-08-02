@@ -625,90 +625,113 @@ async function main() {
       // "renders the whole word" claim is width-dependent and has to be checked where it is made.
       const restoreVis = page.viewportSize();
       try {
-      for (const [vw, vh] of [[1440, 900], [390, 844]]) {
-      await page.setViewportSize({ width: vw, height: vh });
-      await page.goto(`${baseUrl}/project/${visProj.id}`);
-      await page.locator('[data-testid="board-column-Todo-cards"] .board-card-meta-label').first()
-        .waitFor({ state: "visible" });
+        for (const [vw, vh] of [[1440, 900], [390, 844]]) {
+          await page.setViewportSize({ width: vw, height: vh });
+          await page.goto(`${baseUrl}/project/${visProj.id}`);
+          await page.locator('[data-testid="board-column-Todo-cards"] .board-card-meta-label').first()
+            .waitFor({ state: "visible" });
 
-      const labels = await page.$$eval(".board-card-meta-label", (els) => els.map((el) => {
-        // Locate the text node EXPLICITLY rather than assuming `firstChild` is one. If the label's
-        // markup ever gains a wrapper (e.g. the text moves inside a <span> when CardMeta is
-        // extracted in a later phase), `firstChild` becomes an Element and `Range#setStart` throws
-        // IndexSizeError — the suite would then die with an opaque DOM exception instead of saying
-        // what actually broke. Offsets are taken from the TEXT NODE's own length, not
-        // `el.textContent.length`, which counts every descendant and would overrun a partial node.
-        // (Copilot, PR #335.)
-        const node = [...el.childNodes].find((n) => n.nodeType === Node.TEXT_NODE && n.nodeValue.trim() !== "");
-        if (!node) {
-          return { structureError: `no direct text node under .board-card-meta-label (found: ` +
-            `${[...el.childNodes].map((n) => n.nodeName).join(",") || "nothing"}) — the guard needs updating` };
+          const labels = await page.$$eval(".board-card-meta-label", (els) => els.map((el) => {
+            // Locate the text node EXPLICITLY rather than assuming `firstChild` is one. If the label's
+            // markup ever gains a wrapper (e.g. the text moves inside a <span> when CardMeta is
+            // extracted in a later phase), `firstChild` becomes an Element and `Range#setStart` throws
+            // IndexSizeError — the suite would then die with an opaque DOM exception instead of saying
+            // what actually broke. Offsets are taken from the TEXT NODE's own length, not
+            // `el.textContent.length`, which counts every descendant and would overrun a partial node.
+            // (Copilot, PR #335.)
+            const node = [...el.childNodes].find((n) => n.nodeType === Node.TEXT_NODE && n.nodeValue.trim() !== "");
+            if (!node) {
+              return { structureError: `no direct text node under .board-card-meta-label (found: ` +
+                `${[...el.childNodes].map((n) => n.nodeName).join(",") || "nothing"}) — the guard needs updating` };
+            }
+            const text = node.nodeValue;
+            // The FINAL glyph's own box, versus the box that clips it.
+            const last = document.createRange();
+            last.setStart(node, text.length - 1);
+            last.setEnd(node, text.length);
+            const cs = getComputedStyle(el);
+            const r = el.getBoundingClientRect();
+            // overflow:hidden clips at the PADDING box, so the trailing padding is real headroom.
+            const clipRight = r.right - parseFloat(cs.borderRightWidth);
+            const badge = el.parentElement.querySelector(".badge").getBoundingClientRect();
+            return {
+              text: text.trim(),
+              headroom: clipRight - last.getBoundingClientRect().right,
+              overflows: el.scrollWidth > el.clientWidth,
+              gutterToBadge: r.left - badge.right,
+              // Resolve the DECLARED side bearing and the root size, so the assertions below can be
+              // stated against what the stylesheet says rather than against a copied-out constant.
+              bearingPx: parseFloat(cs.paddingInlineEnd),
+              fontSizePx: parseFloat(cs.fontSize),
+              rootPx: parseFloat(getComputedStyle(document.documentElement).fontSize),
+              // The independently MEASURED constraint the bearing exists to clear: how far this
+              // italic font's final glyph paints PAST its own advance width. Canvas reports both
+              // (`actualBoundingBoxRight` is ink, `width` is advance), so the floor is derived from
+              // the font actually rendering on screen rather than copied from the design spec.
+              // Measured here: 0.771px for "Dashboard" at italic 11.2px Helvetica Neue, 1.400px for
+              // a "Wy" ending. This is exactly the quantity `Range`/`scrollWidth` cannot see, which
+              // is why the original bug reported "nothing is overflowing" while shaving a glyph.
+              inkOverhangPx: (() => {
+                const probe = document.createElement("canvas").getContext("2d");
+                probe.font = `${cs.fontStyle} ${cs.fontWeight} ${cs.fontSize} ${cs.fontFamily}`;
+                const m = probe.measureText(text);
+                return Math.max(0, m.actualBoundingBoxRight - m.width);
+              })(),
+            };
+          }));
+          assert(labels.length >= 2, `expected both seeded cards to render a feature label, saw ${labels.length}`);
+          // Surface a markup-shape change as a readable failure, not an IndexSizeError. (Copilot.)
+          const broken = labels.filter((l) => l.structureError);
+          assert(broken.length === 0, `label geometry could not be measured: ${broken[0]?.structureError}`);
+
+          const short = labels.find((l) => l.text === "Dashboard");
+          const long = labels.find((l) => l.text.startsWith("Authentication & Session"));
+          assert(short, `short-label card not rendered; saw ${JSON.stringify(labels.map((l) => l.text))}`);
+          assert(long, `long-label card not rendered; saw ${JSON.stringify(labels.map((l) => l.text))}`);
+
+          // (a) A label that FITS must clear its clip edge by the bearing the stylesheet DECLARES,
+          //     and (b) that declared bearing must clear the ink overhang actually MEASURED for this
+          //     font. Two assertions, because either one alone is worthless here:
+          //
+          //   * (a) alone is a TAUTOLOGY. For a non-overlapping right-aligned label,
+          //     `clipRight - lastGlyph.right` is arithmetically EQUAL to `padding-inline-end` — so
+          //     comparing headroom against `bearingPx` compares the padding with itself. Verified,
+          //     not assumed: written that way, weakening the token to `.02em` leaves the suite 27/27
+          //     GREEN with the glyph shaved again. (CodeRabbit proposed exactly this; it removes the
+          //     literal and the guard's power together.)
+          //   * (b) alone would not notice CSS failing to apply the padding at all.
+          //
+          // Neither hard-codes `0.15`. The old form did, which is the same guard-the-exemplar bug
+          // this file fixes twice elsewhere (`0.25 * rootPx` for the gutter, `--kf-board-drop-floor`
+          // read at runtime for the floor) — CodeRabbit was right that the literal had to go; it is
+          // the REPLACEMENT that has to be an independently measured quantity, not the declaration.
+          assert(short.headroom >= short.bearingPx - 0.05,
+            `feature label "${short.text}" clears its clip edge by ${short.headroom.toFixed(3)}px at ${vw}x${vh}, ` +
+            `but the stylesheet declares a ${short.bearingPx.toFixed(3)}px side bearing — the padding is not being applied`);
+          assert(short.bearingPx >= short.inkOverhangPx,
+            `the declared italic side bearing is ${short.bearingPx.toFixed(3)}px at ${vw}x${vh}, below the ` +
+            `${short.inkOverhangPx.toFixed(3)}px of ink this font paints past its advance width for ` +
+            `"${short.text}" — the final glyph will be shaved`);
+          // (b) A label that does NOT fit must genuinely overflow, so the ellipsis renders.
+          assert(long.overflows,
+            `long feature label "${long.text}" does not overflow its box at ${vw}x${vh}, so text-overflow:ellipsis cannot fire`);
+          // (c) Neither may collide with the priority badge (the badge is flex-shrink-0 for this).
+          // The gutter is Bootstrap's `ms-1` = 0.25rem. It is a MARGIN, so it is fixed against
+          // viewport — but it is REM, so it is not fixed against the root font size: a 12px root
+          // ("Small" in Chrome) makes it 3.00px and a hard-coded `>= 3.5` would false-RED on a user
+          // setting rather than on a regression. Derived from the measured root instead.
+          //
+          // Scope note, so this is not miscounted among the load-bearing guards: two in-flow flex
+          // siblings in DOM order cannot overlap, and this measures 4px on master, 4px with the fix,
+          // and 4-5px with the label rules reverted. It only catches `ms-1` being deleted from the
+          // markup. Kept for that, claimed as no more than that.
+          for (const l of labels) {
+            const expectedGutter = 0.25 * l.rootPx;
+            assert(l.gutterToBadge >= expectedGutter - 0.5,
+              `feature label "${l.text}" leaves ${l.gutterToBadge.toFixed(2)}px before its priority badge ` +
+              `at ${vw}x${vh}; the ms-1 gutter at a ${l.rootPx}px root should be ${expectedGutter.toFixed(2)}px`);
+          }
         }
-        const text = node.nodeValue;
-        // The FINAL glyph's own box, versus the box that clips it.
-        const last = document.createRange();
-        last.setStart(node, text.length - 1);
-        last.setEnd(node, text.length);
-        const cs = getComputedStyle(el);
-        const r = el.getBoundingClientRect();
-        // overflow:hidden clips at the PADDING box, so the trailing padding is real headroom.
-        const clipRight = r.right - parseFloat(cs.borderRightWidth);
-        const badge = el.parentElement.querySelector(".badge").getBoundingClientRect();
-        return {
-          text: text.trim(),
-          headroom: clipRight - last.getBoundingClientRect().right,
-          overflows: el.scrollWidth > el.clientWidth,
-          gutterToBadge: r.left - badge.right,
-          // Resolve the DECLARED side bearing and the root size, so the assertions below can be
-          // stated against what the stylesheet says rather than against a copied-out constant.
-          bearingPx: parseFloat(cs.paddingInlineEnd),
-          fontSizePx: parseFloat(cs.fontSize),
-          rootPx: parseFloat(getComputedStyle(document.documentElement).fontSize),
-        };
-      }));
-      assert(labels.length >= 2, `expected both seeded cards to render a feature label, saw ${labels.length}`);
-      // Surface a markup-shape change as a readable failure, not an IndexSizeError. (Copilot.)
-      const broken = labels.filter((l) => l.structureError);
-      assert(broken.length === 0, `label geometry could not be measured: ${broken[0]?.structureError}`);
-
-      const short = labels.find((l) => l.text === "Dashboard");
-      const long = labels.find((l) => l.text.startsWith("Authentication & Session"));
-      assert(short, `short-label card not rendered; saw ${JSON.stringify(labels.map((l) => l.text))}`);
-      assert(long, `long-label card not rendered; saw ${JSON.stringify(labels.map((l) => l.text))}`);
-
-      // (a) A label that FITS must clear the clip edge by the DECLARED italic side bearing.
-      //
-      // `headroom > 0` looked like this guard but was not: for a non-overlapping right-aligned
-      // label, `clipRight - lastGlyph.right` is arithmetically EQUAL to `padding-right`, so the
-      // assertion reduced to "the padding is non-zero". Weakening the bearing to .02em yields
-      // ~0.22px — still > 0, still green, and the glyph is shaved again with no ellipsis to
-      // rescue it, because a fitting label does not overflow. Stated against the declared .15em
-      // instead, which is the value the fix actually depends on.
-      const expectedBearing = 0.15 * short.fontSizePx;
-      assert(short.headroom >= expectedBearing - 0.05,
-        `feature label "${short.text}" clears its clip edge by only ${short.headroom.toFixed(3)}px at ${vw}x${vh}; ` +
-        `the declared .15em italic side bearing at ${short.fontSizePx}px type is ${expectedBearing.toFixed(3)}px — ` +
-        `the final glyph's ink will be shaved`);
-      // (b) A label that does NOT fit must genuinely overflow, so the ellipsis renders.
-      assert(long.overflows,
-        `long feature label "${long.text}" does not overflow its box at ${vw}x${vh}, so text-overflow:ellipsis cannot fire`);
-      // (c) Neither may collide with the priority badge (the badge is flex-shrink-0 for this).
-      // The gutter is Bootstrap's `ms-1` = 0.25rem. It is a MARGIN, so it is fixed against
-      // viewport — but it is REM, so it is not fixed against the root font size: a 12px root
-      // ("Small" in Chrome) makes it 3.00px and a hard-coded `>= 3.5` would false-RED on a user
-      // setting rather than on a regression. Derived from the measured root instead.
-      //
-      // Scope note, so this is not miscounted among the load-bearing guards: two in-flow flex
-      // siblings in DOM order cannot overlap, and this measures 4px on master, 4px with the fix,
-      // and 4-5px with the label rules reverted. It only catches `ms-1` being deleted from the
-      // markup. Kept for that, claimed as no more than that.
-      for (const l of labels) {
-        const expectedGutter = 0.25 * l.rootPx;
-        assert(l.gutterToBadge >= expectedGutter - 0.5,
-          `feature label "${l.text}" leaves ${l.gutterToBadge.toFixed(2)}px before its priority badge ` +
-          `at ${vw}x${vh}; the ms-1 gutter at a ${l.rootPx}px root should be ${expectedGutter.toFixed(2)}px`);
-      }
-      }
       } finally {
         // try/finally, not a bare restore: an assertion thrown mid-loop would otherwise leave the
         // viewport at 390x844 for the ~17 tests that follow, turning one real failure into a
