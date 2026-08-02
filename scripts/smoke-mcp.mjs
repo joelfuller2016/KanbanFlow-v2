@@ -680,7 +680,12 @@ function writeMessage(message, options = {}) {
 }
 
 function writeRawFrame(body, options = {}) {
-  const framed = `Content-Length: ${Buffer.byteLength(body, "utf8")}\r\n\r\n${body}`;
+  // Newline-delimited JSON, per the MCP stdio spec (2025-06-18, Transports/stdio).
+  // NOTE: this mirrors the server's framing, so it can NOT by itself prove conformance —
+  // a matching pair of wrong implementations is exactly how the old Content-Length framing
+  // survived. `scripts/framing-ab.mjs` is the INDEPENDENT wire-format gate; this suite
+  // tests behaviour on top of a working transport.
+  const framed = `${body}\n`;
   if (options.chunked) {
     const splitAt = Math.max(1, Math.floor(framed.length / 2));
     server.stdin.write(framed.slice(0, splitAt));
@@ -693,23 +698,14 @@ function writeRawFrame(body, options = {}) {
 
 function readMessages() {
   while (buffer.length > 0) {
-    const headerEnd = buffer.indexOf("\r\n\r\n");
-    if (headerEnd === -1) return;
+    const newlineIndex = buffer.indexOf("\n");
+    if (newlineIndex === -1) return; // partial message; wait for more input
 
-    const header = buffer.subarray(0, headerEnd).toString("utf8");
-    const contentLengthMatch = /Content-Length:\s*(\d+)/i.exec(header);
-    if (!contentLengthMatch) {
-      buffer = buffer.subarray(headerEnd + 4);
-      continue;
-    }
+    const line = buffer.subarray(0, newlineIndex).toString("utf8");
+    buffer = buffer.subarray(newlineIndex + 1);
 
-    const contentLength = Number.parseInt(contentLengthMatch[1], 10);
-    const messageStart = headerEnd + 4;
-    const messageEnd = messageStart + contentLength;
-    if (buffer.length < messageEnd) return;
-
-    const rawMessage = buffer.subarray(messageStart, messageEnd).toString("utf8");
-    buffer = buffer.subarray(messageEnd);
+    const rawMessage = line.replace(/\r$/, "").trim();
+    if (rawMessage.length === 0) continue;
     const message = JSON.parse(rawMessage);
     const deferred = pending.get(message.id);
     if (!deferred) {
