@@ -658,8 +658,8 @@ async function main() {
         `long feature label "${long.text}" does not overflow its box, so text-overflow:ellipsis cannot fire`);
       // (c) Neither may collide with the priority badge (the badge is flex-shrink-0 for this).
       for (const l of labels) {
-        assert(l.gutterToBadge > 0,
-          `feature label "${l.text}" overlaps its priority badge by ${(-l.gutterToBadge).toFixed(2)}px`);
+        assert(l.gutterToBadge >= 3.5,
+          `feature label "${l.text}" has only ${l.gutterToBadge.toFixed(2)}px before its priority badge; require a 4px gutter`);
       }
     });
 
@@ -682,6 +682,7 @@ async function main() {
         const emptyCards = document.querySelector('[data-testid="board-column-Review-cards"]');
         return {
           cardCount: cards.length,
+          rootFontSize: parseFloat(getComputedStyle(document.documentElement).fontSize),
           deadBelowLastCard: col.getBoundingClientRect().bottom - last.bottom,
           columnH: col.getBoundingClientRect().height,
           boardH: document.querySelector('[data-testid="kanban-board"]').getBoundingClientRect().height,
@@ -696,8 +697,10 @@ async function main() {
       assert(geom.columnH < geom.boardH,
         `a 1-card column is ${geom.columnH.toFixed(0)}px tall against a ${geom.boardH.toFixed(0)}px board — it is still stretching`);
       // …and the cure must not be worse: an EMPTY column has to stay a real drop target (#290).
-      assert(geom.emptyDropTargetH >= 90,
-        `an empty column's drop target collapsed to ${geom.emptyDropTargetH.toFixed(0)}px — a card can no longer be aimed at it`);
+      // The floor is --kf-board-drop-floor: 6rem; derive the expected pixel value from the root font
+      // size so the assertion tracks the token rather than a fixed pixel threshold.
+      assert(geom.emptyDropTargetH >= (geom.rootFontSize * 6) - 0.5,
+        `an empty column's drop target is ${geom.emptyDropTargetH.toFixed(1)}px; require the 6rem floor`);
     });
 
     // ── Regression guard (#294): a drag must not corrupt the RENDER ───────────────────────────
