@@ -10,9 +10,14 @@ namespace KanbanFlow.Tests;
 /// Before #320 nothing in the gated suite referenced this type at all, so bypassing the sanitizer
 /// outright still left the merge gate at 449/449 green (measured). These tests close that hole.
 ///
-/// They exercise the REAL renderer (real Markdig pipeline + real Ganss.Xss.HtmlSanitizer) against
-/// real hostile markup - no stubs, no fakes, no mocks. Every security assertion is written so that
-/// removing the <c>Sanitize</c> call makes it FAIL.
+/// Most of them exercise the REAL renderer (real Markdig pipeline + real Ganss.Xss.HtmlSanitizer)
+/// against real hostile markup - no stubs, no fakes, no mocks. Every renderer-path security
+/// assertion is written so that removing the <c>Sanitize</c> call makes it FAIL (measured: 23 red).
+///
+/// The two dependency guards at the end are the exception: they build their OWN HtmlSanitizer with a
+/// widened allow-list and never call <c>RenderToSafeHtml</c>, because the renderer's own allow-list
+/// destroys the CVE payload before the parser bug can surface. They stay green under a
+/// sanitizer-bypass mutation by design - what they detect is an AngleSharp DOWNGRADE.
 /// </summary>
 public sealed class MarkdownRendererTests
 {
@@ -68,6 +73,8 @@ public sealed class MarkdownRendererTests
     [InlineData("<a href=\"javascript:alert(1)\">click me</a>", "javascript:")]
     [InlineData("<a href=\"vbscript:msgbox(1)\">click me</a>", "vbscript:")]
     [InlineData("<img src=\"data:text/html;base64,PHNjcmlwdD5hbGVydCgxKTwvc2NyaXB0Pg==\">", "data:text/html")]
+    [InlineData("<p style=\"width:expression(alert(1))\">x</p>", "expression(")]
+    [InlineData("<p style=\"background:url(javascript:alert(1))\">x</p>", "javascript:")]
     public void DangerousUrlSchemes_AreDropped(string markdown, string forbidden)
     {
         Assert.DoesNotContain(forbidden, Render(markdown), StringComparison.OrdinalIgnoreCase);
@@ -183,7 +190,7 @@ public sealed class MarkdownRendererTests
     [InlineData("<math><semantics><annotation-xml encoding=\"text/html\"><style><img src=x onerror=alert(1)></style></annotation-xml></semantics></math>")]
     public void AnnotationXmlIntegrationPoint_DoesNotLeakMarkupOutOfStyle_Cve202654570(string payload)
     {
-        var sanitizer = new Ganss.Xss.HtmlSanitizer();
+        var sanitizer = new HtmlSanitizer();
         foreach (var tag in new[] { "math", "semantics", "annotation-xml", "style" })
             sanitizer.AllowedTags.Add(tag);
         sanitizer.AllowedAttributes.Add("encoding");
@@ -210,9 +217,21 @@ public sealed class MarkdownRendererTests
     /// <summary>
     /// Exact-output fixtures. These were captured from the PRE-bump build (HtmlSanitizer 9.0.967 /
     /// AngleSharp 0.17.1) and re-verified byte-for-byte against the POST-bump build
-    /// (9.1.974 / AngleSharp 1.6.0): 11/11 identical, so the AngleSharp 0.17 -> 1.6 major jump
-    /// changed nothing about how benign markdown serialises. Pinning them here means a future
-    /// dependency bump that DOES alter rendering fails the gate instead of silently shipping.
+    /// (9.1.974 / AngleSharp 1.6.0): 13/13 identical, so neither the AngleSharp 0.17 -> 1.6 jump nor
+    /// the AngleSharp.Css 0.17 -> 1.0 jump changed how benign markdown serialises. Pinning them here
+    /// means a future dependency bump that DOES alter rendering fails the gate instead of silently
+    /// shipping. The last two cover the <c>style</c> attribute specifically, because AngleSharp.Css
+    /// went up a full major and owns CSS sanitisation - the riskiest untested half of this bump.
+    /// (The CSS serialiser normalises: <c>color:red</c> comes back as <c>rgba(255, 0, 0, 1)</c>.
+    /// Identical on both versions, so it is pinned, not a regression.)
+    ///
+    /// KNOWN, DELIBERATELY PINNED LOSSES - these fixtures record what the allow-list already strips
+    /// today; they are NOT an endorsement of it. <c>AllowedAttributes</c> contains neither
+    /// <c>class</c> nor <c>id</c>, so the fenced-code fixture loses the language class (no
+    /// client-side syntax highlighting), the heading fixture loses its id (in-page anchors are
+    /// dead), and the task-list fixture loses its CSS hooks. All pre-date #320. If a later change
+    /// correctly allow-lists those attributes these three fixtures SHOULD fail - update them, do
+    /// not read the failure as a regression.
     /// </summary>
     [Theory]
     [InlineData("This is **bold** text.", "<p>This is <strong>bold</strong> text.</p>\n")]
@@ -226,6 +245,8 @@ public sealed class MarkdownRendererTests
     [InlineData("~~gone~~ stays", "<p><del>gone</del> stays</p>\n")]
     [InlineData("- [x] done\n- [ ] todo", "<ul>\n<li><input disabled=\"disabled\" type=\"checkbox\" checked=\"checked\"> done</li>\n<li><input disabled=\"disabled\" type=\"checkbox\"> todo</li>\n</ul>\n")]
     [InlineData("> quoted text", "<blockquote>\n<p>quoted text</p>\n</blockquote>\n")]
+    [InlineData("<p style=\"color:red\">x</p>", "<p style=\"color: rgba(255, 0, 0, 1)\">x</p>\n")]
+    [InlineData("<p style=\"color:red;font-weight:bold\">x</p>", "<p style=\"color: rgba(255, 0, 0, 1); font-weight: bold\">x</p>\n")]
     public void BenignMarkdown_RendersExactly(string markdown, string expected)
     {
         Assert.Equal(expected, Render(markdown));

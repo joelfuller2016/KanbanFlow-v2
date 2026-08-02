@@ -15,10 +15,10 @@
   <ItemGroup>
     <!-- Security bump (#320): HtmlSanitizer 9.0.967 pinned AngleSharp to exactly [0.17.1],
          which is vulnerable to GHSA-pgww-w46g-26qg / CVE-2026-54570 - an mXSS SANITIZER
-         BYPASS via the annotation-xml HTML integration point (affects &lt; 1.5.0, patched
+         BYPASS via the annotation-xml HTML integration point (affects < 1.5.0, patched
          in 1.5.0). Because 9.0.967 pinned AngleSharp exactly, a direct pin here would
-         raise NU1608; 9.1.974 depends on AngleSharp &gt;= 1.6.0 instead (and moves
-         AngleSharp.Css 0.17.0 -&gt; 1.0.0 with it), so the
+         raise NU1608; 9.1.974 depends on AngleSharp >= 1.6.0 instead (and moves
+         AngleSharp.Css 0.17.0 -> 1.0.0 with it), so the
          -warnaserror audit gate passes on merit, with no audit suppression at all.
          MarkdownRendererTests guards the sanitizer this package backs - do not
          re-suppress this advisory. -->
