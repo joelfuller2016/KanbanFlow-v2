@@ -123,8 +123,15 @@ public sealed class MarkdownRendererTests
     /// so the existing <see cref="AnnotationXmlMxssVector_IsNeutralised"/> cases only prove that
     /// allow-list stripping works. This test widens the allow-list to include those containers,
     /// which is the configuration that would be vulnerable on AngleSharp &lt; 1.5.0, and asserts that
-    /// the fixed AngleSharp 1.6.0 correctly surfaces the injected <c>onerror</c> attribute so
-    /// HtmlSanitizer can strip it. If someone downgrades to a vulnerable AngleSharp, this test fails.
+    /// no active <c>onerror</c>, <c>alert(</c> or <c>&lt;script&gt;</c> survives sanitisation.
+    ///
+    /// IMPORTANT - measured correction: this test does NOT distinguish the vulnerable dependency
+    /// from the patched one. Run against HtmlSanitizer 9.0.967 / AngleSharp 0.17.1 it PASSES 3/3,
+    /// because HtmlSanitizer still strips the <c>onerror</c> attribute on the mis-parsed DOM; what
+    /// the old parser actually leaks is the ELEMENT, not the handler. So this is a useful
+    /// belt-and-braces assertion, but it is not the downgrade guard - do not read it as one.
+    /// <see cref="AnnotationXmlIntegrationPoint_DoesNotLeakMarkupOutOfStyle_Cve202654570"/> is the
+    /// test that actually goes RED on 0.17.1 (measured: Failed 2, Passed 0).
     /// </summary>
     [Theory]
     [InlineData("<math><annotation-xml encoding=\"text/html\"><title><a encoding=\"</title><img src=x onerror=alert()>\"></annotation-xml></math>")]
