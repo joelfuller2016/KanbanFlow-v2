@@ -663,6 +663,7 @@ async function main() {
               // stated against what the stylesheet says rather than against a copied-out constant.
               bearingPx: parseFloat(cs.paddingInlineEnd),
               fontSizePx: parseFloat(cs.fontSize),
+              fontStyle: cs.fontStyle,
               rootPx: parseFloat(getComputedStyle(document.documentElement).fontSize),
               // The independently MEASURED constraint the bearing exists to clear: how far this
               // italic font's final glyph paints PAST its own advance width. Canvas reports both
@@ -675,7 +676,10 @@ async function main() {
                 const probe = document.createElement("canvas").getContext("2d");
                 probe.font = `${cs.fontStyle} ${cs.fontWeight} ${cs.fontSize} ${cs.fontFamily}`;
                 const m = probe.measureText(text);
-                return Math.max(0, m.actualBoundingBoxRight - m.width);
+                // NOT clamped to >= 0. The SAME string upright measures -0.2289px, and that
+                // negative value is the only tell that the page is not in the state this guard
+                // thinks it is; clamping would erase it. The precondition below rejects it.
+                return m.actualBoundingBoxRight - m.width;
               })(),
             };
           }));
@@ -705,6 +709,23 @@ async function main() {
           // this file fixes twice elsewhere (`0.25 * rootPx` for the gutter, `--kf-board-drop-floor`
           // read at runtime for the floor) — CodeRabbit was right that the literal had to go; it is
           // the REPLACEMENT that has to be an independently measured quantity, not the declaration.
+          // PRECONDITION for (b): the label must actually be rendering ITALIC. Measured, this
+          // font overhangs +0.7711px italic but -0.2289px UPRIGHT for the same string -- so if the
+          // page loses `fst-italic` (Bootstrap's, not ours), the overhang goes negative and (b)
+          // degrades to `0 >= -0.2289` => true, passing on a completely unstyled page.
+          //
+          // Not hypothetical: it is the shape of the .NET 10 MapStaticAssets trap, where a
+          // stylesheet can return 200 with a body that parses to zero rules. Lose app.css ALONE
+          // and Bootstrap still supplies `fst-italic`, so the overhang stays +0.7711 and (b) bites
+          // correctly (`0 >= 0.7711` is false). Lose EVERY stylesheet and it does not. The suite
+          // still goes red either way -- `--kf-board-drop-floor` is then unresolved and the
+          // drop-floor guard's `Math.abs(NaN - x) <= 1` fails unconditionally -- but it would go
+          // red for the wrong reason while this assertion sat blind. (Reviewer, PR #335.)
+          assert(short.inkOverhangPx > 0,
+            `the feature label measures ${short.inkOverhangPx.toFixed(4)}px of ink past its advance ` +
+            `width at ${vw}x${vh} — non-positive means it is not rendering italic (computed ` +
+            `font-style: ${short.fontStyle}), so the page is not in the state this guard measures. ` +
+            `Suspect a stylesheet that loaded but parsed to zero rules; rebuild --no-incremental.`);
           assert(short.headroom >= short.bearingPx - 0.05,
             `feature label "${short.text}" clears its clip edge by ${short.headroom.toFixed(3)}px at ${vw}x${vh}, ` +
             `but the stylesheet declares a ${short.bearingPx.toFixed(3)}px side bearing — the padding is not being applied`);
