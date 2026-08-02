@@ -21,12 +21,12 @@
 
 | | |
 | :--- | :--- |
-| **Generated** | `2026-08-02T22:13:12.555Z` |
+| **Generated** | `2026-08-02T22:51:48.193Z` |
 | **Against** | `origin/master` @ [`1e2d0e82`](https://github.com/joelfuller2016/KanbanFlow-v2/commit/1e2d0e82ea3c4c70831aff0c172b5ba6989f98d8) |
-| **Open issues** | **98** |
+| **Open issues** | **103** |
 | **Closed issues** | **100** — 99 completed, 1 not planned |
 | **Regenerate** | `npm run backlog` &nbsp;·&nbsp; verify with `npm run backlog:check` |
-| **Content digest** | `sha256:74fe944e28034ff510a569040b513c5b9016a98ccaa73612ebefab12845d6314` |
+| **Content digest** | `sha256:b7347fcf6a9a0189ec3c1dd9551e1d9bb7e0590456831da298c37fc7e4a59183` |
 
 <!-- backlog-sync:body -->
 ## 📊 At a glance
@@ -34,10 +34,10 @@
 | Tier | Meaning | Open | What it covers |
 | :--- | :--- | ---: | :--- |
 | 🔴 **P0 · Critical** | `P0` | 4 | Correctness, data integrity, and the audit trail. Fix before anything else. |
-| 🟠 **P1 · High** | `P1` | 21 | Foundation and agent-facing surface. The work that unblocks the rest. |
-| 🟡 **P2 · Medium** | `P2` | 63 | Feature build-out, UI/UX polish, docs. Real work, not urgent. |
+| 🟠 **P1 · High** | `P1` | 25 | Foundation and agent-facing surface. The work that unblocks the rest. |
+| 🟡 **P2 · Medium** | `P2` | 64 | Feature build-out, UI/UX polish, docs. Real work, not urgent. |
 | 🟢 **P3 · Low** | `P3` | 10 | Speculative, nice-to-have, or explicitly deferred. |
-| | **Total open** | **98** | |
+| | **Total open** | **103** | |
 
 ### Open issues per milestone
 
@@ -51,7 +51,7 @@ pie showData
     "M5: Docs & Process" : 2
     "M6: AI Memory & Ops Hub" : 19
     "M7: Self-Improving" : 7
-    "No milestone" : 34
+    "No milestone" : 39
 ```
 
 ### 🧩 Open epics (14)
@@ -79,7 +79,7 @@ Epics are containers — their children are the ordinary issues listed in the ti
 
 ## 📋 Open backlog — highest to lowest priority
 
-All **98** open issues, each appearing exactly once. `Rank` is the global work order.
+All **103** open issues, each appearing exactly once. `Rank` is the global work order.
 
 ### 🔴 P0 · Critical — 4 open
 
@@ -92,7 +92,7 @@ _Correctness, data integrity, and the audit trail. Fix before anything else._
 | 3 | [#302](https://github.com/joelfuller2016/KanbanFlow-v2/issues/302) | 🧩 Epic: the REST edge layer re-declares what the service layer owns — three verified divergences (comment-type policy, dead isBlocked fields, actor/author collapse) | M1 | `ai-agent` `api` `epic` `tech-debt` | 20d |
 | 4 | [#305](https://github.com/joelfuller2016/KanbanFlow-v2/issues/305) | ProjectView.ParsePriority is the last unguarded enum parse in src/ — "99" yields (TaskPriority)99 instead of the Low fallback (closes the #89 → #205 arc) | M2 | `bug` `tech-debt` `ui` | 20d |
 
-### 🟠 P1 · High — 21 open
+### 🟠 P1 · High — 25 open
 
 _Foundation and agent-facing surface. The work that unblocks the rest._
 
@@ -119,76 +119,81 @@ _Foundation and agent-facing surface. The work that unblocks the rest._
 | 23 | [#311](https://github.com/joelfuller2016/KanbanFlow-v2/issues/311) | MCP wrapper never sends 'actor' to /next-tasks — so an agent that claims a task then asks what's next watches its own task sink | — | `ai-agent` `api` `bug` | 20d |
 | 24 | [#320](https://github.com/joelfuller2016/KanbanFlow-v2/issues/320) | Sanitizer-bypass CVE under the app's only XSS defence — suppression comment is wrong on all 3 claims, and the gated suite can't catch a bypass | — | `bug` `dependencies` `tech-debt` `testing` | 0d |
 | 25 | [#330](https://github.com/joelfuller2016/KanbanFlow-v2/issues/330) | Missing .gitattributes + core.autocrlf=true: a fresh clone hands back CRLF, so any byte-comparing guard is red on arrival | — | `bug` `tech-debt` | 0d |
+| 26 | [#332](https://github.com/joelfuller2016/KanbanFlow-v2/issues/332) | GET /api/{entity}/{id}/activity: a 500-event lifetime cap with no cursor, and an unstable sort — history past 500 is unreachable and the order can change between renders | — | `ai-agent` `api` `bug` `tech-debt` | 0d |
+| 27 | [#333](https://github.com/joelfuller2016/KanbanFlow-v2/issues/333) | portfolio-sync forces status to Done over a hand-set value — the 'never overrides a hand-set status' invariant holds in only one direction | — | `api` `bug` `tech-debt` | 0d |
+| 28 | [#337](https://github.com/joelfuller2016/KanbanFlow-v2/issues/337) | API serializes DateTime with Kind=Unspecified — every timestamp goes out without a 'Z' and every consumer silently mis-zones it | — | `ai-agent` `api` `bug` `tech-debt` | 0d |
+| 29 | [#338](https://github.com/joelfuller2016/KanbanFlow-v2/issues/338) | smoke-api.ps1 is RED on master: /api/memory/search clamps k&lt;=0 to 1 and returns 200, but the smoke gate asserts 422 — and the catch block for it is unreachable | — | `ai-agent` `api` `bug` `testing` | 0d |
 
-### 🟡 P2 · Medium — 63 open
+### 🟡 P2 · Medium — 64 open
 
 _Feature build-out, UI/UX polish, docs. Real work, not urgent._
 
 | Rank | Issue | Title | Milestone | Labels | Age |
 | ---: | :--- | :--- | :--- | :--- | ---: |
-| 26 | [#86](https://github.com/joelfuller2016/KanbanFlow-v2/issues/86) | P2: Replace manual schema patching with EF migrations | M2 | `enhancement` | 91d |
-| 27 | [#152](https://github.com/joelfuller2016/KanbanFlow-v2/issues/152) | P2: Split ApiEndpoints.cs (2,482 lines) + replace anonymous response shapes with records (R-5.2) | M2 | `api` `tech-debt` | 70d |
-| 28 | [#154](https://github.com/joelfuller2016/KanbanFlow-v2/issues/154) | P2: List endpoints lack ?limit/?offset paging except /activity (R-1.4) | M2 | `ai-agent` `api` `enhancement` | 70d |
-| 29 | [#126](https://github.com/joelfuller2016/KanbanFlow-v2/issues/126) | P2: GET /api/agents/{name}/work — see all tasks claimed/assigned to an actor | M3 | `ai-agent` `api` `enhancement` | 84d |
-| 30 | [#127](https://github.com/joelfuller2016/KanbanFlow-v2/issues/127) | P2: Add task.staleness signal (e.g., "3d_unchanged") to context responses | M3 | `ai-agent` `api` `enhancement` | 84d |
-| 31 | [#128](https://github.com/joelfuller2016/KanbanFlow-v2/issues/128) | P2: Add task.next_action server-generated hint | M3 | `ai-agent` `api` `enhancement` | 84d |
-| 32 | [#129](https://github.com/joelfuller2016/KanbanFlow-v2/issues/129) | P2: Return both raw and rendered markdown for project goals + readme | M3 | `ai-agent` `api` `enhancement` | 84d |
-| 33 | [#130](https://github.com/joelfuller2016/KanbanFlow-v2/issues/130) | P2: Optional requirementId link on AcceptanceCriterion | M3 | `api` `enhancement` | 84d |
-| 34 | [#131](https://github.com/joelfuller2016/KanbanFlow-v2/issues/131) | P2: Expose MCP resources alongside tools (e.g., kanbanflow://project/1/context) | M3 | `ai-agent` `api` `enhancement` | 84d |
-| 35 | [#183](https://github.com/joelfuller2016/KanbanFlow-v2/issues/183) | P2: AI-tools panel race — rapid clicks can show mismatched title/data (ProjectView) | M4 | `ai-agent` `bug` `ui` | 70d |
-| 36 | [#279](https://github.com/joelfuller2016/KanbanFlow-v2/issues/279) | 🧩 Epic: Make the agent dimension visible — the UI renders none of what the backend records | M4 | `ai-agent` `epic` `ui` | 21d |
-| 37 | [#115](https://github.com/joelfuller2016/KanbanFlow-v2/issues/115) | P2: Add a global Cmd-K command palette | M4 | `enhancement` `ui` | 84d |
-| 38 | [#116](https://github.com/joelfuller2016/KanbanFlow-v2/issues/116) | P2: Use relative timestamps with absolute on hover | M4 | `enhancement` `ui` | 84d |
-| 39 | [#117](https://github.com/joelfuller2016/KanbanFlow-v2/issues/117) | P2: Add hover tooltips for truncated task and feature names | M4 | `enhancement` `ui` | 84d |
-| 40 | [#119](https://github.com/joelfuller2016/KanbanFlow-v2/issues/119) | P2: Improve empty kanban column UX with inline + button | M4 | `enhancement` `ui` | 84d |
-| 41 | [#281](https://github.com/joelfuller2016/KanbanFlow-v2/issues/281) | Home project card doesn't earn its space — no progress, no next-task, no recency, no agent state | M4 | `ai-agent` `enhancement` `ui` | 21d |
-| 42 | [#147](https://github.com/joelfuller2016/KanbanFlow-v2/issues/147) | Harden the PR-review workflow: execution gate (CI without GitHub Actions), merge gating, honest thread resolution | M5 | `ai-agent` `enhancement` `tech-debt` `testing` | 70d |
-| 43 | [#216](https://github.com/joelfuller2016/KanbanFlow-v2/issues/216) | 🧩 Epic: AI Memory & Ops Hub — KanbanFlow as memory + PM + knowledge store for AI | M6 | `ai-agent` `enhancement` `epic` | 35d |
-| 44 | [#225](https://github.com/joelfuller2016/KanbanFlow-v2/issues/225) | 🧩 Epic: Cross-project knowledge storage — queryable KB over the board | M6 | `ai-agent` `enhancement` `epic` | 35d |
-| 45 | [#226](https://github.com/joelfuller2016/KanbanFlow-v2/issues/226) | 🧩 Epic: AI project-management brain — plan, estimate, sequence | M6 | `ai-agent` `epic` | 35d |
-| 46 | [#229](https://github.com/joelfuller2016/KanbanFlow-v2/issues/229) | 🧩 Epic: MCP surface hardening — toolsets, parity, resources | M6 | `ai-agent` `api` `epic` | 35d |
-| 47 | [#232](https://github.com/joelfuller2016/KanbanFlow-v2/issues/232) | 🧩 Epic: Claude Code integration — hooks, slash commands, plugin | M6 | `ai-agent` `epic` | 35d |
-| 48 | [#236](https://github.com/joelfuller2016/KanbanFlow-v2/issues/236) | 🧩 Epic: PR & git management — link tasks to branches/PRs, surface review status | M6 | `api` `epic` | 35d |
-| 49 | [#238](https://github.com/joelfuller2016/KanbanFlow-v2/issues/238) | 🧩 Epic: Deployment orchestration hub — track & trigger deploys for managed projects (Azure) | M6 | `deploy` `epic` | 35d |
-| 50 | [#227](https://github.com/joelfuller2016/KanbanFlow-v2/issues/227) | Add spec-&gt;plan-&gt;tasks decomposition (REST + MCP tool) | M6 | `ai-agent` `api` | 35d |
-| 51 | [#228](https://github.com/joelfuller2016/KanbanFlow-v2/issues/228) | Add LLM-aware next_task: complexity scoring + auto-prioritization | M6 | `ai-agent` `api` | 35d |
-| 52 | [#230](https://github.com/joelfuller2016/KanbanFlow-v2/issues/230) | Add MCP toolset grouping + read-only mode to /mcp | M6 | `ai-agent` `api` | 35d |
-| 53 | [#231](https://github.com/joelfuller2016/KanbanFlow-v2/issues/231) | Finish native C# MCP parity (15-&gt;~30 tools); retire Node-wrapper drift | M6 | `ai-agent` `api` | 35d |
-| 54 | [#233](https://github.com/joelfuller2016/KanbanFlow-v2/issues/233) | Add event-sync hooks (SessionStart/PostToolUse/Stop -&gt; /api/activity + memory) | M6 | `ai-agent` | 35d |
-| 55 | [#234](https://github.com/joelfuller2016/KanbanFlow-v2/issues/234) | Ship /kanban slash-command suite (next/plan/start/update/ship/status) | M6 | `ai-agent` | 35d |
-| 56 | [#235](https://github.com/joelfuller2016/KanbanFlow-v2/issues/235) | Package KanbanFlow as an installable Claude Code plugin (commands + hooks + MCP config) | M6 | `ai-agent` | 35d |
-| 57 | [#237](https://github.com/joelfuller2016/KanbanFlow-v2/issues/237) | Add GitLink model + auto branch+PR from a task (Octokit + LibGit2Sharp) | M6 | `ai-agent` `api` | 35d |
-| 58 | [#239](https://github.com/joelfuller2016/KanbanFlow-v2/issues/239) | Add DeploymentTarget model + per-project deploy status board (read-only first) | M6 | `api` `deploy` | 35d |
-| 59 | [#276](https://github.com/joelfuller2016/KanbanFlow-v2/issues/276) | Add TaskAttempt / AgentSession / AttemptCommit model — record agent work attempts + a commit ledger with rewind | M6 | `ai-agent` `api` `enhancement` | 21d |
-| 60 | [#278](https://github.com/joelfuller2016/KanbanFlow-v2/issues/278) | Generate the MCP server 'instructions' string from the actually-registered tools (kill tool-list prose drift) | M6 | `ai-agent` `api` `tech-debt` | 21d |
-| 61 | [#289](https://github.com/joelfuller2016/KanbanFlow-v2/issues/289) | portfolio-sync: 78% of the board lands in a flat 'Unsorted' bucket — add a label-based grouping fallback | M6 | `ai-agent` `enhancement` | 21d |
-| 62 | [#189](https://github.com/joelfuller2016/KanbanFlow-v2/issues/189) | P2: EnsureActivityEventTable rebuild can drop column drift / orphan the table (data-loss path) | — | `bug` `tech-debt` | 70d |
-| 63 | [#308](https://github.com/joelfuller2016/KanbanFlow-v2/issues/308) | 🧩 📊 Backlog blocker map: the critical path, the parallel set, and what's actually dead | — | `epic` | 20d |
-| 64 | [#322](https://github.com/joelfuller2016/KanbanFlow-v2/issues/322) | 🧩 EPIC: Give KanbanFlow a visual language — make the knowledge graph visible, not just queryable | — | `enhancement` `epic` `ui` | 0d |
-| 65 | [#323](https://github.com/joelfuller2016/KanbanFlow-v2/issues/323) | 🧩 EPIC: The human must see the AI working — live board, agent presence, readable audit, one tool contract per transport | — | `ai-agent` `api` `epic` `ui` | 0d |
-| 66 | [#326](https://github.com/joelfuller2016/KanbanFlow-v2/issues/326) | 🧩 EPIC: KanbanFlow is GitHub, visualized — authoritative log book, complete item history, full sync lifecycle | — | `ai-agent` `api` `documentation` `enhancement` `epic` | 0d |
-| 67 | [#164](https://github.com/joelfuller2016/KanbanFlow-v2/issues/164) | Epic: competitive feature-gap analysis — features from similar tools to adopt | — | `ai-agent` `api` `enhancement` | 70d |
-| 68 | [#167](https://github.com/joelfuller2016/KanbanFlow-v2/issues/167) | Blazor correctness & UX hardening (eval, @key, [Parameter] mutation, full-page error takeover, HttpClient) | — | `tech-debt` `ui` | 70d |
-| 69 | [#173](https://github.com/joelfuller2016/KanbanFlow-v2/issues/173) | Task organization: milestone sequencing layer + AI orientation briefing (make the whole process AI-legible) | — | `ai-agent` `api` `enhancement` `ui` | 70d |
-| 70 | [#191](https://github.com/joelfuller2016/KanbanFlow-v2/issues/191) | Minor correctness cleanup: run-tests concurrency, dead CommentType, master-health title match, leaf-first depth cache, CreateAsync SortOrder | — | `tech-debt` | 70d |
-| 71 | [#200](https://github.com/joelfuller2016/KanbanFlow-v2/issues/200) | a11y: confirm-action modals (delete/promote) lack Esc dismissal + focus-trap | — | `enhancement` | 70d |
-| 72 | [#202](https://github.com/joelfuller2016/KanbanFlow-v2/issues/202) | test: add WebApplicationFactory HTTP-level endpoint tests (suite is DbContext-only) | — | `tech-debt` | 70d |
-| 73 | [#208](https://github.com/joelfuller2016/KanbanFlow-v2/issues/208) | test: assert next-tasks ranking order + cycle-guard correctness + enum-rejection negatives | — | `testing` | 56d |
-| 74 | [#209](https://github.com/joelfuller2016/KanbanFlow-v2/issues/209) | Minor correctness cleanup (round 2): no-op assign audit, SQLite WAL/busy_timeout, full-table feature-delete scan, mojibake separator | — | `tech-debt` | 56d |
-| 75 | [#253](https://github.com/joelfuller2016/KanbanFlow-v2/issues/253) | fix(verify.ps1): advisory format step leaks its exit code → gate reports failure despite green build+test | — | `tech-debt` `testing` | 34d |
-| 76 | [#254](https://github.com/joelfuller2016/KanbanFlow-v2/issues/254) | MemoryService.GetNodeAsync — make AccessCount increment atomic (multi-reader safety) | — | `memory` `tech-debt` | 34d |
-| 77 | [#255](https://github.com/joelfuller2016/KanbanFlow-v2/issues/255) | Add host-level startup smoke test (WebApplicationFactory) for memory schema + DI wiring | — | `memory` `tech-debt` | 34d |
-| 78 | [#258](https://github.com/joelfuller2016/KanbanFlow-v2/issues/258) | MemorySearch: extend the vector signal to rank superseded versions when IncludeSuperseded=true | — | `enhancement` `memory` | 34d |
-| 79 | [#263](https://github.com/joelfuller2016/KanbanFlow-v2/issues/263) | Bi-temporal MemoryRelation edges: conflict-driven soft-invalidation + point-in-time (asOf) graph reads | — | `ai-agent` `api` `memory` | 30d |
-| 80 | [#264](https://github.com/joelfuller2016/KanbanFlow-v2/issues/264) | Parallel work-batch endpoint: return K conflict-minimal tasks for N concurrent agents | — | `ai-agent` `api` `enhancement` | 30d |
-| 81 | [#265](https://github.com/joelfuller2016/KanbanFlow-v2/issues/265) | Critical-path & slack signal over the dependency DAG (CPM forward/backward pass) | — | `ai-agent` `api` `enhancement` | 30d |
-| 82 | [#266](https://github.com/joelfuller2016/KanbanFlow-v2/issues/266) | Enable structured MCP tool output (UseStructuredContent + outputSchema) + behavioral annotations | — | `ai-agent` `api` | 30d |
-| 83 | [#267](https://github.com/joelfuller2016/KanbanFlow-v2/issues/267) | Graph-expansion retrieval: bounded neighborhood hops over the RRF seed set | — | `ai-agent` `api` `memory` | 30d |
-| 84 | [#314](https://github.com/joelfuller2016/KanbanFlow-v2/issues/314) | ui-e2e prints no summary line when the harness itself dies — a run that never happened greps identical to a clean one | — | `testing` | 20d |
-| 85 | [#327](https://github.com/joelfuller2016/KanbanFlow-v2/issues/327) | docs/BACKLOG.md: an authoritative, generated log book — every issue ranked, every completion logged | — | `ai-agent` `documentation` `enhancement` | 0d |
-| 86 | [#328](https://github.com/joelfuller2016/KanbanFlow-v2/issues/328) | The task modal shows comments but not the ActivityEvent trail — a task's real history is recorded, queryable, and invisible | — | `ai-agent` `enhancement` `ui` | 0d |
-| 87 | [#329](https://github.com/joelfuller2016/KanbanFlow-v2/issues/329) | The sync has one verb: mirror. Add onboard / push-issue / status so the board is a real view over GitHub | — | `ai-agent` `api` `documentation` `enhancement` | 0d |
-| 88 | [#331](https://github.com/joelfuller2016/KanbanFlow-v2/issues/331) | 32 of 96 open issues have no milestone — which is why 62 of them default into one undifferentiated P2 tier | — | `documentation` `tech-debt` | 0d |
+| 30 | [#86](https://github.com/joelfuller2016/KanbanFlow-v2/issues/86) | P2: Replace manual schema patching with EF migrations | M2 | `enhancement` | 91d |
+| 31 | [#152](https://github.com/joelfuller2016/KanbanFlow-v2/issues/152) | P2: Split ApiEndpoints.cs (2,482 lines) + replace anonymous response shapes with records (R-5.2) | M2 | `api` `tech-debt` | 70d |
+| 32 | [#154](https://github.com/joelfuller2016/KanbanFlow-v2/issues/154) | P2: List endpoints lack ?limit/?offset paging except /activity (R-1.4) | M2 | `ai-agent` `api` `enhancement` | 70d |
+| 33 | [#126](https://github.com/joelfuller2016/KanbanFlow-v2/issues/126) | P2: GET /api/agents/{name}/work — see all tasks claimed/assigned to an actor | M3 | `ai-agent` `api` `enhancement` | 84d |
+| 34 | [#127](https://github.com/joelfuller2016/KanbanFlow-v2/issues/127) | P2: Add task.staleness signal (e.g., "3d_unchanged") to context responses | M3 | `ai-agent` `api` `enhancement` | 84d |
+| 35 | [#128](https://github.com/joelfuller2016/KanbanFlow-v2/issues/128) | P2: Add task.next_action server-generated hint | M3 | `ai-agent` `api` `enhancement` | 84d |
+| 36 | [#129](https://github.com/joelfuller2016/KanbanFlow-v2/issues/129) | P2: Return both raw and rendered markdown for project goals + readme | M3 | `ai-agent` `api` `enhancement` | 84d |
+| 37 | [#130](https://github.com/joelfuller2016/KanbanFlow-v2/issues/130) | P2: Optional requirementId link on AcceptanceCriterion | M3 | `api` `enhancement` | 84d |
+| 38 | [#131](https://github.com/joelfuller2016/KanbanFlow-v2/issues/131) | P2: Expose MCP resources alongside tools (e.g., kanbanflow://project/1/context) | M3 | `ai-agent` `api` `enhancement` | 84d |
+| 39 | [#183](https://github.com/joelfuller2016/KanbanFlow-v2/issues/183) | P2: AI-tools panel race — rapid clicks can show mismatched title/data (ProjectView) | M4 | `ai-agent` `bug` `ui` | 70d |
+| 40 | [#279](https://github.com/joelfuller2016/KanbanFlow-v2/issues/279) | 🧩 Epic: Make the agent dimension visible — the UI renders none of what the backend records | M4 | `ai-agent` `epic` `ui` | 21d |
+| 41 | [#115](https://github.com/joelfuller2016/KanbanFlow-v2/issues/115) | P2: Add a global Cmd-K command palette | M4 | `enhancement` `ui` | 84d |
+| 42 | [#116](https://github.com/joelfuller2016/KanbanFlow-v2/issues/116) | P2: Use relative timestamps with absolute on hover | M4 | `enhancement` `ui` | 84d |
+| 43 | [#117](https://github.com/joelfuller2016/KanbanFlow-v2/issues/117) | P2: Add hover tooltips for truncated task and feature names | M4 | `enhancement` `ui` | 84d |
+| 44 | [#119](https://github.com/joelfuller2016/KanbanFlow-v2/issues/119) | P2: Improve empty kanban column UX with inline + button | M4 | `enhancement` `ui` | 84d |
+| 45 | [#281](https://github.com/joelfuller2016/KanbanFlow-v2/issues/281) | Home project card doesn't earn its space — no progress, no next-task, no recency, no agent state | M4 | `ai-agent` `enhancement` `ui` | 21d |
+| 46 | [#147](https://github.com/joelfuller2016/KanbanFlow-v2/issues/147) | Harden the PR-review workflow: execution gate (CI without GitHub Actions), merge gating, honest thread resolution | M5 | `ai-agent` `enhancement` `tech-debt` `testing` | 70d |
+| 47 | [#216](https://github.com/joelfuller2016/KanbanFlow-v2/issues/216) | 🧩 Epic: AI Memory & Ops Hub — KanbanFlow as memory + PM + knowledge store for AI | M6 | `ai-agent` `enhancement` `epic` | 35d |
+| 48 | [#225](https://github.com/joelfuller2016/KanbanFlow-v2/issues/225) | 🧩 Epic: Cross-project knowledge storage — queryable KB over the board | M6 | `ai-agent` `enhancement` `epic` | 35d |
+| 49 | [#226](https://github.com/joelfuller2016/KanbanFlow-v2/issues/226) | 🧩 Epic: AI project-management brain — plan, estimate, sequence | M6 | `ai-agent` `epic` | 35d |
+| 50 | [#229](https://github.com/joelfuller2016/KanbanFlow-v2/issues/229) | 🧩 Epic: MCP surface hardening — toolsets, parity, resources | M6 | `ai-agent` `api` `epic` | 35d |
+| 51 | [#232](https://github.com/joelfuller2016/KanbanFlow-v2/issues/232) | 🧩 Epic: Claude Code integration — hooks, slash commands, plugin | M6 | `ai-agent` `epic` | 35d |
+| 52 | [#236](https://github.com/joelfuller2016/KanbanFlow-v2/issues/236) | 🧩 Epic: PR & git management — link tasks to branches/PRs, surface review status | M6 | `api` `epic` | 35d |
+| 53 | [#238](https://github.com/joelfuller2016/KanbanFlow-v2/issues/238) | 🧩 Epic: Deployment orchestration hub — track & trigger deploys for managed projects (Azure) | M6 | `deploy` `epic` | 35d |
+| 54 | [#227](https://github.com/joelfuller2016/KanbanFlow-v2/issues/227) | Add spec-&gt;plan-&gt;tasks decomposition (REST + MCP tool) | M6 | `ai-agent` `api` | 35d |
+| 55 | [#228](https://github.com/joelfuller2016/KanbanFlow-v2/issues/228) | Add LLM-aware next_task: complexity scoring + auto-prioritization | M6 | `ai-agent` `api` | 35d |
+| 56 | [#230](https://github.com/joelfuller2016/KanbanFlow-v2/issues/230) | Add MCP toolset grouping + read-only mode to /mcp | M6 | `ai-agent` `api` | 35d |
+| 57 | [#231](https://github.com/joelfuller2016/KanbanFlow-v2/issues/231) | Finish native C# MCP parity (15-&gt;~30 tools); retire Node-wrapper drift | M6 | `ai-agent` `api` | 35d |
+| 58 | [#233](https://github.com/joelfuller2016/KanbanFlow-v2/issues/233) | Add event-sync hooks (SessionStart/PostToolUse/Stop -&gt; /api/activity + memory) | M6 | `ai-agent` | 35d |
+| 59 | [#234](https://github.com/joelfuller2016/KanbanFlow-v2/issues/234) | Ship /kanban slash-command suite (next/plan/start/update/ship/status) | M6 | `ai-agent` | 35d |
+| 60 | [#235](https://github.com/joelfuller2016/KanbanFlow-v2/issues/235) | Package KanbanFlow as an installable Claude Code plugin (commands + hooks + MCP config) | M6 | `ai-agent` | 35d |
+| 61 | [#237](https://github.com/joelfuller2016/KanbanFlow-v2/issues/237) | Add GitLink model + auto branch+PR from a task (Octokit + LibGit2Sharp) | M6 | `ai-agent` `api` | 35d |
+| 62 | [#239](https://github.com/joelfuller2016/KanbanFlow-v2/issues/239) | Add DeploymentTarget model + per-project deploy status board (read-only first) | M6 | `api` `deploy` | 35d |
+| 63 | [#276](https://github.com/joelfuller2016/KanbanFlow-v2/issues/276) | Add TaskAttempt / AgentSession / AttemptCommit model — record agent work attempts + a commit ledger with rewind | M6 | `ai-agent` `api` `enhancement` | 21d |
+| 64 | [#278](https://github.com/joelfuller2016/KanbanFlow-v2/issues/278) | Generate the MCP server 'instructions' string from the actually-registered tools (kill tool-list prose drift) | M6 | `ai-agent` `api` `tech-debt` | 21d |
+| 65 | [#289](https://github.com/joelfuller2016/KanbanFlow-v2/issues/289) | portfolio-sync: 78% of the board lands in a flat 'Unsorted' bucket — add a label-based grouping fallback | M6 | `ai-agent` `enhancement` | 21d |
+| 66 | [#189](https://github.com/joelfuller2016/KanbanFlow-v2/issues/189) | P2: EnsureActivityEventTable rebuild can drop column drift / orphan the table (data-loss path) | — | `bug` `tech-debt` | 70d |
+| 67 | [#308](https://github.com/joelfuller2016/KanbanFlow-v2/issues/308) | 🧩 📊 Backlog blocker map: the critical path, the parallel set, and what's actually dead | — | `epic` | 20d |
+| 68 | [#322](https://github.com/joelfuller2016/KanbanFlow-v2/issues/322) | 🧩 EPIC: Give KanbanFlow a visual language — make the knowledge graph visible, not just queryable | — | `enhancement` `epic` `ui` | 0d |
+| 69 | [#323](https://github.com/joelfuller2016/KanbanFlow-v2/issues/323) | 🧩 EPIC: The human must see the AI working — live board, agent presence, readable audit, one tool contract per transport | — | `ai-agent` `api` `epic` `ui` | 0d |
+| 70 | [#326](https://github.com/joelfuller2016/KanbanFlow-v2/issues/326) | 🧩 EPIC: KanbanFlow is GitHub, visualized — authoritative log book, complete item history, full sync lifecycle | — | `ai-agent` `api` `documentation` `enhancement` `epic` | 0d |
+| 71 | [#164](https://github.com/joelfuller2016/KanbanFlow-v2/issues/164) | Epic: competitive feature-gap analysis — features from similar tools to adopt | — | `ai-agent` `api` `enhancement` | 70d |
+| 72 | [#167](https://github.com/joelfuller2016/KanbanFlow-v2/issues/167) | Blazor correctness & UX hardening (eval, @key, [Parameter] mutation, full-page error takeover, HttpClient) | — | `tech-debt` `ui` | 70d |
+| 73 | [#173](https://github.com/joelfuller2016/KanbanFlow-v2/issues/173) | Task organization: milestone sequencing layer + AI orientation briefing (make the whole process AI-legible) | — | `ai-agent` `api` `enhancement` `ui` | 70d |
+| 74 | [#191](https://github.com/joelfuller2016/KanbanFlow-v2/issues/191) | Minor correctness cleanup: run-tests concurrency, dead CommentType, master-health title match, leaf-first depth cache, CreateAsync SortOrder | — | `tech-debt` | 70d |
+| 75 | [#200](https://github.com/joelfuller2016/KanbanFlow-v2/issues/200) | a11y: confirm-action modals (delete/promote) lack Esc dismissal + focus-trap | — | `enhancement` | 70d |
+| 76 | [#202](https://github.com/joelfuller2016/KanbanFlow-v2/issues/202) | test: add WebApplicationFactory HTTP-level endpoint tests (suite is DbContext-only) | — | `tech-debt` | 70d |
+| 77 | [#208](https://github.com/joelfuller2016/KanbanFlow-v2/issues/208) | test: assert next-tasks ranking order + cycle-guard correctness + enum-rejection negatives | — | `testing` | 56d |
+| 78 | [#209](https://github.com/joelfuller2016/KanbanFlow-v2/issues/209) | Minor correctness cleanup (round 2): no-op assign audit, SQLite WAL/busy_timeout, full-table feature-delete scan, mojibake separator | — | `tech-debt` | 56d |
+| 79 | [#253](https://github.com/joelfuller2016/KanbanFlow-v2/issues/253) | fix(verify.ps1): advisory format step leaks its exit code → gate reports failure despite green build+test | — | `tech-debt` `testing` | 34d |
+| 80 | [#254](https://github.com/joelfuller2016/KanbanFlow-v2/issues/254) | MemoryService.GetNodeAsync — make AccessCount increment atomic (multi-reader safety) | — | `memory` `tech-debt` | 34d |
+| 81 | [#255](https://github.com/joelfuller2016/KanbanFlow-v2/issues/255) | Add host-level startup smoke test (WebApplicationFactory) for memory schema + DI wiring | — | `memory` `tech-debt` | 34d |
+| 82 | [#258](https://github.com/joelfuller2016/KanbanFlow-v2/issues/258) | MemorySearch: extend the vector signal to rank superseded versions when IncludeSuperseded=true | — | `enhancement` `memory` | 34d |
+| 83 | [#263](https://github.com/joelfuller2016/KanbanFlow-v2/issues/263) | Bi-temporal MemoryRelation edges: conflict-driven soft-invalidation + point-in-time (asOf) graph reads | — | `ai-agent` `api` `memory` | 30d |
+| 84 | [#264](https://github.com/joelfuller2016/KanbanFlow-v2/issues/264) | Parallel work-batch endpoint: return K conflict-minimal tasks for N concurrent agents | — | `ai-agent` `api` `enhancement` | 30d |
+| 85 | [#265](https://github.com/joelfuller2016/KanbanFlow-v2/issues/265) | Critical-path & slack signal over the dependency DAG (CPM forward/backward pass) | — | `ai-agent` `api` `enhancement` | 30d |
+| 86 | [#266](https://github.com/joelfuller2016/KanbanFlow-v2/issues/266) | Enable structured MCP tool output (UseStructuredContent + outputSchema) + behavioral annotations | — | `ai-agent` `api` | 30d |
+| 87 | [#267](https://github.com/joelfuller2016/KanbanFlow-v2/issues/267) | Graph-expansion retrieval: bounded neighborhood hops over the RRF seed set | — | `ai-agent` `api` `memory` | 30d |
+| 88 | [#314](https://github.com/joelfuller2016/KanbanFlow-v2/issues/314) | ui-e2e prints no summary line when the harness itself dies — a run that never happened greps identical to a clean one | — | `testing` | 20d |
+| 89 | [#327](https://github.com/joelfuller2016/KanbanFlow-v2/issues/327) | docs/BACKLOG.md: an authoritative, generated log book — every issue ranked, every completion logged | — | `ai-agent` `documentation` `enhancement` | 0d |
+| 90 | [#328](https://github.com/joelfuller2016/KanbanFlow-v2/issues/328) | The task modal shows comments but not the ActivityEvent trail — a task's real history is recorded, queryable, and invisible | — | `ai-agent` `enhancement` `ui` | 0d |
+| 91 | [#329](https://github.com/joelfuller2016/KanbanFlow-v2/issues/329) | The sync has one verb: mirror. Add onboard / push-issue / status so the board is a real view over GitHub | — | `ai-agent` `api` `documentation` `enhancement` | 0d |
+| 92 | [#331](https://github.com/joelfuller2016/KanbanFlow-v2/issues/331) | 32 of 96 open issues have no milestone — which is why 62 of them default into one undifferentiated P2 tier | — | `documentation` `tech-debt` | 0d |
+| 93 | [#336](https://github.com/joelfuller2016/KanbanFlow-v2/issues/336) | Durable issue link + resumable create — the title prefix cannot safely key an issue the board originates | — | `ai-agent` `api` `enhancement` `tech-debt` | 0d |
 
 ### 🟢 P3 · Low — 10 open
 
@@ -196,16 +201,16 @@ _Speculative, nice-to-have, or explicitly deferred._
 
 | Rank | Issue | Title | Milestone | Labels | Age |
 | ---: | :--- | :--- | :--- | :--- | ---: |
-| 89 | [#159](https://github.com/joelfuller2016/KanbanFlow-v2/issues/159) | P3: Remove dead code + de-duplicate leaf-first subtask deletion | M2 | `tech-debt` | 70d |
-| 90 | [#277](https://github.com/joelfuller2016/KanbanFlow-v2/issues/277) | docs: README under-reports the surface — 53→60 endpoints, memory endpoints missing from the API table, 41→50 wrapper tools | M5 | `documentation` | 21d |
-| 91 | [#242](https://github.com/joelfuller2016/KanbanFlow-v2/issues/242) | 🧩 Epic: Self-improving KanbanFlow — a learning loop over the board's own outcomes | M7 | `ai-agent` `epic` `self-improving` | 34d |
-| 92 | [#243](https://github.com/joelfuller2016/KanbanFlow-v2/issues/243) | Build a trajectory + outcome labeler over ActivityEvent + comments | M7 | `ai-agent` `self-improving` | 34d |
-| 93 | [#244](https://github.com/joelfuller2016/KanbanFlow-v2/issues/244) | Add a ReasoningBank strategy distiller (ILlmClient → memory store) | M7 | `ai-agent` `memory` `self-improving` | 34d |
-| 94 | [#245](https://github.com/joelfuller2016/KanbanFlow-v2/issues/245) | Recall + inject learned strategies into get_next_tasks/get_task (the "Coach") | M7 | `ai-agent` `api` `self-improving` | 34d |
-| 95 | [#246](https://github.com/joelfuller2016/KanbanFlow-v2/issues/246) | Self-tuning recommender + offline backtest harness (A/B + rollback) | M7 | `ai-agent` `api` `self-improving` | 34d |
-| 96 | [#247](https://github.com/joelfuller2016/KanbanFlow-v2/issues/247) | Failure-reflection loop — CommentType.Reflection on reopen/Blocked/failed-Verification | M7 | `ai-agent` `self-improving` | 34d |
-| 97 | [#248](https://github.com/joelfuller2016/KanbanFlow-v2/issues/248) | Growing playbook library from recurring success patterns (Voyager-style) | M7 | `ai-agent` `self-improving` | 34d |
-| 98 | [#163](https://github.com/joelfuller2016/KanbanFlow-v2/issues/163) | 🗺️ Roadmap & execution plan (M1–M5) — the KanbanFlow-v2 backlog | — | `documentation` | 70d |
+| 94 | [#159](https://github.com/joelfuller2016/KanbanFlow-v2/issues/159) | P3: Remove dead code + de-duplicate leaf-first subtask deletion | M2 | `tech-debt` | 70d |
+| 95 | [#277](https://github.com/joelfuller2016/KanbanFlow-v2/issues/277) | docs: README under-reports the surface — 53→60 endpoints, memory endpoints missing from the API table, 41→50 wrapper tools | M5 | `documentation` | 21d |
+| 96 | [#242](https://github.com/joelfuller2016/KanbanFlow-v2/issues/242) | 🧩 Epic: Self-improving KanbanFlow — a learning loop over the board's own outcomes | M7 | `ai-agent` `epic` `self-improving` | 34d |
+| 97 | [#243](https://github.com/joelfuller2016/KanbanFlow-v2/issues/243) | Build a trajectory + outcome labeler over ActivityEvent + comments | M7 | `ai-agent` `self-improving` | 34d |
+| 98 | [#244](https://github.com/joelfuller2016/KanbanFlow-v2/issues/244) | Add a ReasoningBank strategy distiller (ILlmClient → memory store) | M7 | `ai-agent` `memory` `self-improving` | 34d |
+| 99 | [#245](https://github.com/joelfuller2016/KanbanFlow-v2/issues/245) | Recall + inject learned strategies into get_next_tasks/get_task (the "Coach") | M7 | `ai-agent` `api` `self-improving` | 34d |
+| 100 | [#246](https://github.com/joelfuller2016/KanbanFlow-v2/issues/246) | Self-tuning recommender + offline backtest harness (A/B + rollback) | M7 | `ai-agent` `api` `self-improving` | 34d |
+| 101 | [#247](https://github.com/joelfuller2016/KanbanFlow-v2/issues/247) | Failure-reflection loop — CommentType.Reflection on reopen/Blocked/failed-Verification | M7 | `ai-agent` `self-improving` | 34d |
+| 102 | [#248](https://github.com/joelfuller2016/KanbanFlow-v2/issues/248) | Growing playbook library from recurring success patterns (Voyager-style) | M7 | `ai-agent` `self-improving` | 34d |
+| 103 | [#163](https://github.com/joelfuller2016/KanbanFlow-v2/issues/163) | 🗺️ Roadmap & execution plan (M1–M5) — the KanbanFlow-v2 backlog | — | `documentation` | 70d |
 
 ---
 
