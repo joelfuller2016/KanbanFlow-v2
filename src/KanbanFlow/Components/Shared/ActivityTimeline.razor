@@ -1,0 +1,336 @@
+@using Microsoft.EntityFrameworkCore
+@inject IDbContextFactory<AppDbContext> DbFactory
+
+@* ══════════════════════════════════════════════════════════════════════════════════════════
+   A task's COMPLETE history, as one chronological rail (#328).
+
+   Two records exist per task and only one of them was ever rendered: TaskComment (discussion)
+   was shown, ActivityEvent (the durable audit trail, with Before/AfterJson) was not — so every
+   field-level change was recorded server-side and invisible to the human. This component merges
+   both. The merge is NOT a concatenation: TaskService writes a comment AND an event for the same
+   action, so ActivityTimelineBuilder de-duplicates them. See its class remarks for the contract.
+
+   ONE COMPONENT, USED TWICE — TaskDetailPanel (the card-click surface) and EditItemModal (the
+   outline's Edit Task). Do not fork it: a second copy is how this codebase ended up with two
+   different clocks in the first place (#306).
+
+   TIMEZONE (#306): every timestamp here renders in LOCAL time with the absolute UTC value in a
+   `title` tooltip — the convention #306 names as the target. Relative labels ("3d ago") are
+   computed UTC-to-UTC so they can never disagree with the local absolute beside them.
+   ══════════════════════════════════════════════════════════════════════════════════════════ *@
+
+<div class="kf-timeline-wrap" data-testid="activity-timeline">
+
+    @* ── Filter chips. Counts come from the pre-resolved list, never recomputed in the markup. ── *@
+    <div class="kf-timeline-filters" role="group" aria-label="Filter activity by type">
+        @foreach (var chip in chips)
+        {
+            <button type="button"
+                    class="kf-chip @(activeFilter == chip.Filter ? "kf-chip-active" : null)"
+                    data-testid="@($"activity-filter-{chip.Key}")"
+                    aria-pressed="@(activeFilter == chip.Filter ? "true" : "false")"
+                    @onclick="() => SetFilter(chip.Filter)">
+                @chip.Label
+                <span class="kf-chip-count">@chip.Count</span>
+            </button>
+        }
+    </div>
+
+    @if (loadFailed)
+    {
+        @* The comments half still renders — say what is missing rather than pretending the
+           history is complete. *@
+        <div class="alert alert-warning py-1 px-2 small mb-2" role="alert" data-testid="activity-timeline-degraded">
+            Audit trail unavailable — showing comments only.
+        </div>
+    }
+
+    @if (visibleEntries.Count == 0)
+    {
+        <div class="text-muted small fst-italic py-2" data-testid="activity-timeline-empty">
+            @(allEntries.Count == 0 ? "No activity yet." : "No activity of this type.")
+        </div>
+    }
+    else
+    {
+        <ol class="kf-timeline" data-testid="activity-timeline-list">
+            @foreach (var entry in visibleEntries)
+            {
+                <li class="kf-timeline-item kf-tl-@entry.Tone"
+                    data-testid="activity-timeline-entry"
+                    data-kind="@entry.Kind"
+                    data-tone="@entry.Tone">
+
+                    <span class="kf-timeline-dot" aria-hidden="true">
+                        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" width="10" height="10" fill="currentColor">
+                            <path d="@IconPath(entry.Tone)" />
+                        </svg>
+                    </span>
+
+                    <div class="kf-timeline-body">
+                        <div class="kf-timeline-head">
+                            <span class="kf-timeline-badge">@entry.Badge</span>
+                            <span class="kf-timeline-actor">@(entry.Actor ?? "System")</span>
+                            @* Local time on the face, absolute UTC on hover — one clock, #306.
+                               Formatting is delegated to the pure model so the zone handling is
+                               unit-testable and identical on both surfaces; a `.ToLocalTime()`
+                               written inline here would be a second, untested clock. *@
+                            <time class="kf-timeline-when"
+                                  datetime="@ActivityTimelineBuilder.FormatMachine(entry.CreatedAtUtc)"
+                                  title="@ActivityTimelineBuilder.FormatTooltip(entry.CreatedAtUtc)">
+                                @ActivityTimelineBuilder.Relative(entry.CreatedAtUtc, nowUtc)
+                            </time>
+                        </div>
+
+                        @if (entry.Changes.Count > 0)
+                        {
+                            <ul class="kf-timeline-changes" data-testid="activity-timeline-changes">
+                                @foreach (var change in entry.Changes)
+                                {
+                                    <li data-testid="activity-timeline-change">
+                                        <span class="kf-change-label">@change.Label</span>
+                                        <span class="kf-change-before">@change.Before</span>
+                                        <span class="kf-change-arrow" aria-hidden="true">→</span>
+                                        <span class="visually-hidden">changed to</span>
+                                        <span class="kf-change-after">@change.After</span>
+                                    </li>
+                                }
+                            </ul>
+                        }
+                        else if (entry.Markdown is not null)
+                        {
+                            @* Comment bodies are markdown; MarkdownContent renders + sanitises. *@
+                            <div class="task-comment-body small">
+                                <MarkdownContent Markdown="@entry.Markdown" />
+                            </div>
+                        }
+                        else if (!string.IsNullOrWhiteSpace(entry.Headline))
+                        {
+                            @* No derivable diff (create/delete carry only one side) — the audit
+                               message is the fallback, exactly as recorded. *@
+                            <div class="kf-timeline-headline">@entry.Headline</div>
+                        }
+                    </div>
+                </li>
+            }
+        </ol>
+
+        @if (allFiltered > visibleEntries.Count || expanded)
+        {
+            <button type="button" class="btn btn-link btn-sm p-0 kf-timeline-more"
+                    data-testid="activity-timeline-toggle"
+                    @onclick="ToggleExpanded">
+                @(expanded ? "Show fewer" : $"Show all {allFiltered}")
+            </button>
+        }
+    }
+
+    @* ── Truncation boundary ────────────────────────────────────────────────────────────────
+       The heading says "History". If the audit window does not reach the beginning, SAY SO —
+       a silently capped list that presents itself as complete is the dishonest option. *@
+    @if (totalEvents > events.Count)
+    {
+        <div class="kf-timeline-boundary" data-testid="activity-timeline-boundary">
+            <span>Showing the most recent @events.Count of @totalEvents recorded events.</span>
+            <button type="button" class="btn btn-link btn-sm p-0"
+                    data-testid="activity-timeline-load-older"
+                    @onclick="LoadOlderAsync">
+                Load older
+            </button>
+        </div>
+    }
+</div>
+
+@code {
+    /// <summary>Task whose audit events to load. 0 / null means "nothing to show".</summary>
+    [Parameter] public int? TaskId { get; set; }
+
+    /// <summary>
+    /// Comments, owned by the parent (both parents already load and mutate them — e.g. an
+    /// optimistic append after "Send"). Passed in rather than re-queried so the timeline never
+    /// disagrees with the list the parent just updated.
+    /// </summary>
+    [Parameter] public IReadOnlyList<TaskComment>? Comments { get; set; }
+
+    /// <summary>
+    /// Bump to force a re-read of the audit events (after a save that emitted new ones). The
+    /// events are a DB round-trip, so they are NOT re-read on every parameter set.
+    /// </summary>
+    [Parameter] public int RefreshToken { get; set; }
+
+    /// <summary>How many entries render before the "Show all" fold.</summary>
+    [Parameter] public int CollapseAfter { get; set; } = 8;
+
+    /// <summary>How many more audit events each "Load older" press pulls in.</summary>
+    private const int EventPageSize = 200;
+
+    private List<ActivityEvent> events = [];
+    private List<TimelineEntry> allEntries = [];
+    private List<TimelineEntry> visibleEntries = [];
+    private int allFiltered;
+    private bool expanded;
+    private bool loadFailed;
+
+    // Audit-event window. `eventLimit` is what we asked for, `totalEvents` what exists — the two
+    // together are what let the UI state the truncation boundary instead of hiding it.
+    private int eventLimit = EventPageSize;
+    private int totalEvents;
+
+    private TimelineCategory? activeFilter;
+    private (string Key, string Label, TimelineCategory? Filter, int Count)[] chips = [];
+
+    // Resolved ONCE per rebuild. A `DateTime.UtcNow` read from the markup would re-evaluate on
+    // every render and make two entries in the same list disagree about what "now" is.
+    private DateTime nowUtc = DateTime.UtcNow;
+
+    // Guards against a stale in-flight load overwriting a newer one when the user opens task A
+    // then immediately task B.
+    private int loadVersion;
+    private int? loadedTaskId;
+
+    protected override void OnParametersSet()
+    {
+        var taskId = TaskId is > 0 ? TaskId : null;
+
+        if (taskId != loadedTaskId || RefreshToken != loadedRefreshToken)
+        {
+            // Only a genuinely different task resets the paging window — a refresh-token bump
+            // (a save on the SAME task) must not silently re-truncate a history the user just
+            // expanded.
+            if (taskId != loadedTaskId)
+                eventLimit = EventPageSize;
+
+            loadedTaskId = taskId;
+            loadedRefreshToken = RefreshToken;
+            events = [];
+            totalEvents = 0;
+            loadFailed = false;
+            expanded = false;
+            if (taskId is int id)
+                _ = LoadEventsAsync(id, ++loadVersion);
+            else
+                loadVersion++;
+        }
+
+        // The merge itself is pure and cheap — rebuild every parameter set so an optimistically
+        // appended comment shows up immediately, without the parent needing a refresh token.
+        Rebuild();
+    }
+
+    private int loadedRefreshToken = -1;
+
+    private async Task LoadEventsAsync(int taskId, int version)
+    {
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+            var query = db.ActivityEvents
+                .Where(e => e.EntityType == "Task" && e.EntityId == taskId);
+
+            // The total is what makes the "showing N of M" boundary honest — without it the panel
+            // cannot tell a complete history from a truncated one, and would claim completeness
+            // it does not have.
+            var total = await query.CountAsync();
+
+            // Same predicate the REST surface serves at GET /api/tasks/{id}/activity
+            // (ApiEndpoints.cs:522-540), with an Id tiebreak: ordering by CreatedAt ALONE is
+            // non-deterministic for rows written in the same tick — and TaskService writes
+            // several per SaveChanges — so the rail could reshuffle between renders.
+            var loaded = await query
+                .AsNoTracking()
+                .OrderByDescending(e => e.CreatedAt)
+                .ThenByDescending(e => e.Id)
+                .Take(eventLimit)
+                .ToListAsync();
+
+            if (version != loadVersion) return;   // superseded by a newer open
+            events = loaded;
+            totalEvents = total;
+        }
+        catch (Exception)
+        {
+            if (version != loadVersion) return;
+            // A broken audit read must not take the panel down — degrade to comments-only and
+            // SAY so, rather than silently presenting a partial history as complete.
+            events = [];
+            totalEvents = 0;
+            loadFailed = true;
+        }
+
+        Rebuild();
+        StateHasChanged();
+    }
+
+    /// <summary>
+    /// Raises the audit-event window and re-reads. Offset-style paging by a growing take: this
+    /// panel is a single task's trail (tens of rows in practice, not millions), so a cursor buys
+    /// nothing a bigger window does not — but the LIFETIME cap has to go, because "complete
+    /// history" that silently stops at row 500 is a false claim.
+    /// </summary>
+    private async Task LoadOlderAsync()
+    {
+        if (loadedTaskId is not int id) return;
+        eventLimit += EventPageSize;
+        await LoadEventsAsync(id, ++loadVersion);
+    }
+
+    /// <summary>
+    /// Resolves the merged list, the chip counts and the visible slice. Called from
+    /// OnParametersSet, the async load and every interaction — never from the render path.
+    /// </summary>
+    private void Rebuild()
+    {
+        nowUtc = DateTime.UtcNow;
+        allEntries = ActivityTimelineBuilder.Build(Comments, events);
+
+        chips =
+        [
+            ("all", "All", null, allEntries.Count),
+            ("comments", "Comments", TimelineCategory.Comment, allEntries.Count(e => e.Category == TimelineCategory.Comment)),
+            ("status", "Status", TimelineCategory.Status, allEntries.Count(e => e.Category == TimelineCategory.Status)),
+            ("changes", "Changes", TimelineCategory.Change, allEntries.Count(e => e.Category == TimelineCategory.Change)),
+        ];
+
+        var filtered = activeFilter is null
+            ? allEntries
+            : allEntries.Where(e => e.Category == activeFilter).ToList();
+
+        allFiltered = filtered.Count;
+        visibleEntries = expanded || filtered.Count <= CollapseAfter
+            ? filtered
+            : filtered.Take(CollapseAfter).ToList();
+    }
+
+    private void SetFilter(TimelineCategory? filter)
+    {
+        activeFilter = filter;
+        expanded = false;
+        Rebuild();
+    }
+
+    private void ToggleExpanded()
+    {
+        expanded = !expanded;
+        Rebuild();
+    }
+
+    // Inline SVG (16×16) — no icon font is loaded, and these must survive offline.
+    private const string IconComment = "M2.5 2h11A1.5 1.5 0 0 1 15 3.5v7a1.5 1.5 0 0 1-1.5 1.5H6.7l-3 2.7a.5.5 0 0 1-.7-.4V12h-.5A1.5 1.5 0 0 1 1 10.5v-7A1.5 1.5 0 0 1 2.5 2";
+    private const string IconStatus = "M1 8a.5.5 0 0 1 .5-.5h10.8L9.6 4.9a.5.5 0 0 1 .7-.7l4 4a.5.5 0 0 1 0 .7l-4 4a.5.5 0 0 1-.7-.7l2.7-2.8H1.5A.5.5 0 0 1 1 8";
+    private const string IconCreated = "M7.5 1.5a.5.5 0 0 1 1 0v6h6a.5.5 0 0 1 0 1h-6v6a.5.5 0 0 1-1 0v-6h-6a.5.5 0 0 1 0-1h6z";
+    private const string IconDeleted = "M3.6 3.6a.5.5 0 0 1 .7 0L8 7.3l3.7-3.7a.5.5 0 1 1 .7.7L8.7 8l3.7 3.6a.5.5 0 0 1-.7.8L8 8.7l-3.7 3.7a.5.5 0 0 1-.7-.8L7.3 8 3.6 4.3a.5.5 0 0 1 0-.7";
+    private const string IconClaim = "M8 8a3 3 0 1 0 0-6 3 3 0 0 0 0 6m0 1c-3.1 0-6 1.6-6 3.6V15h12v-2.4C14 10.6 11.1 9 8 9";
+    private const string IconChange = "M12.1 1.6a1.6 1.6 0 0 1 2.3 2.3L6.6 11.7l-3.4 1.1 1.1-3.4z";
+
+    private static string IconPath(string tone) => tone switch
+    {
+        "created" => IconCreated,
+        "deleted" => IconDeleted,
+        "claim" => IconClaim,
+        "status" => IconStatus,
+        "change" => IconChange,
+        // Every remaining tone is a comment flavour (comment/decision/question/blocked/handoff/
+        // verification) — they differ by colour, not by glyph.
+        _ => IconComment
+    };
+}
