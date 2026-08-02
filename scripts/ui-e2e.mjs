@@ -593,6 +593,113 @@ async function main() {
       );
     });
 
+    // ── Regression guards (#322 phase 3): the two visible board defects ───────────────────────
+    // Both are LAYOUT bugs, so both are asserted on measured geometry in a real browser. Neither
+    // can be caught server-side, and neither shows up in a DOM/text assertion: the markup was
+    // always correct, it was the boxes that were wrong.
+    const visProj = await api("POST", "/api/projects", { name: `E2E Visual ${stamp}` });
+    // A deliberately long feature name: the ONLY input that exercises the ellipsis branch.
+    const visLongFeature = await api("POST", `/api/projects/${visProj.id}/features`,
+      { name: "Authentication & Session Lifecycle Management" });
+    const visShortFeature = await api("POST", `/api/projects/${visProj.id}/features`,
+      { name: "Dashboard" });
+
+    await test("Board card: a feature label is never shaved mid-glyph, and a long one really ellipsises (#322)", async () => {
+      // The defect this guards is SILENT. `.board-card-meta-label` used to be sized to exactly its
+      // own text (measured: box 54.797px === text 54.797px), so:
+      //   * the italic final glyph's INK leaned past the clip edge and was shaved — "Dashboard"
+      //     rendered as "Dashboarc", which reads as a different WORD, not as a truncation; and
+      //   * `text-overflow: ellipsis` could never fire, because nothing overflowed (scrollWidth
+      //     === clientWidth), so there was no "…" to signal the loss.
+      // Note what is NOT asserted: `scrollWidth > clientWidth` on a SHORT label. That is the
+      // condition the old markup already satisfied only for long names, and asserting it for short
+      // ones would demand the bug. The load-bearing measurement is the final glyph's HEADROOM
+      // against the clip edge, which is the thing the rasteriser actually consumes.
+      await api("POST", `/api/features/${visShortFeature.id}/tasks`,
+        { name: "Short label card", status: "Todo", priority: "Medium" });
+      await api("POST", `/api/features/${visLongFeature.id}/tasks`,
+        { name: "Long label card", status: "Todo", priority: "Critical" });
+      await page.goto(`${baseUrl}/project/${visProj.id}`);
+      await page.locator('[data-testid="board-column-Todo-cards"] .board-card-meta-label').first()
+        .waitFor({ state: "visible" });
+
+      const labels = await page.$$eval(".board-card-meta-label", (els) => els.map((el) => {
+        const node = el.firstChild;
+        const text = el.textContent;
+        // The FINAL glyph's own box, versus the box that clips it.
+        const last = document.createRange();
+        last.setStart(node, text.length - 1);
+        last.setEnd(node, text.length);
+        const cs = getComputedStyle(el);
+        const r = el.getBoundingClientRect();
+        // overflow:hidden clips at the PADDING box, so the trailing padding is real headroom.
+        const clipRight = r.right - parseFloat(cs.borderRightWidth);
+        const badge = el.parentElement.querySelector(".badge").getBoundingClientRect();
+        return {
+          text: text.trim(),
+          headroom: clipRight - last.getBoundingClientRect().right,
+          overflows: el.scrollWidth > el.clientWidth,
+          gutterToBadge: r.left - badge.right,
+        };
+      }));
+      assert(labels.length >= 2, `expected both seeded cards to render a feature label, saw ${labels.length}`);
+
+      const short = labels.find((l) => l.text === "Dashboard");
+      const long = labels.find((l) => l.text.startsWith("Authentication & Session"));
+      assert(short, `short-label card not rendered; saw ${JSON.stringify(labels.map((l) => l.text))}`);
+      assert(long, `long-label card not rendered; saw ${JSON.stringify(labels.map((l) => l.text))}`);
+
+      // (a) A label that FITS must clear the clip edge — this is the "Dashboarc" guard.
+      assert(short.headroom > 0,
+        `feature label "${short.text}" ends flush against its clip edge (headroom ${short.headroom.toFixed(3)}px) — ` +
+        `its final glyph will be shaved`);
+      // (b) A label that does NOT fit must genuinely overflow, so the ellipsis renders.
+      assert(long.overflows,
+        `long feature label "${long.text}" does not overflow its box, so text-overflow:ellipsis cannot fire`);
+      // (c) Neither may collide with the priority badge (the badge is flex-shrink-0 for this).
+      for (const l of labels) {
+        assert(l.gutterToBadge > 0,
+          `feature label "${l.text}" overlaps its priority badge by ${(-l.gutterToBadge).toFixed(2)}px`);
+      }
+    });
+
+    await test("Board column: a 1-card column does not paint a dead region below its card (#322)", async () => {
+      // Every column used to stretch to the board's full height, so a column holding one 68px card
+      // painted ~545px of empty `bg-body-secondary` under it and the board read as EMPTY while work
+      // existed in it. Asserted against the epic's own AC5 threshold (200px), with a wide margin:
+      // the fix lands at ~36px, which is the drop floor doing its job, not residual dead space.
+      const deadProj = await api("POST", "/api/projects", { name: `E2E Dead ${stamp}` });
+      const deadFeature = await api("POST", `/api/projects/${deadProj.id}/features`, { name: "Dead Space Feature" });
+      await api("POST", `/api/features/${deadFeature.id}/tasks`, { name: "Only card", status: "Todo" });
+      await page.goto(`${baseUrl}/project/${deadProj.id}`);
+      await page.locator('[data-testid="board-column-Todo-cards"] .board-card').waitFor({ state: "visible" });
+
+      const geom = await page.evaluate(() => {
+        const col = document.querySelector('[data-testid="board-column-Todo"]');
+        const cards = [...col.querySelectorAll(".board-card")];
+        const last = cards[cards.length - 1].getBoundingClientRect();
+        const empty = document.querySelector('[data-testid="board-column-Review"]');
+        const emptyCards = document.querySelector('[data-testid="board-column-Review-cards"]');
+        return {
+          cardCount: cards.length,
+          deadBelowLastCard: col.getBoundingClientRect().bottom - last.bottom,
+          columnH: col.getBoundingClientRect().height,
+          boardH: document.querySelector('[data-testid="kanban-board"]').getBoundingClientRect().height,
+          emptyColumnH: empty.getBoundingClientRect().height,
+          emptyDropTargetH: emptyCards.getBoundingClientRect().height,
+        };
+      });
+      assert(geom.cardCount === 1, `guard needs exactly one card to be meaningful, saw ${geom.cardCount}`);
+      assert(geom.deadBelowLastCard < 200,
+        `a 1-card column paints ${geom.deadBelowLastCard.toFixed(0)}px of dead space below its last card (limit 200px)`);
+      // The column must genuinely be shorter than the board, not merely under the threshold.
+      assert(geom.columnH < geom.boardH,
+        `a 1-card column is ${geom.columnH.toFixed(0)}px tall against a ${geom.boardH.toFixed(0)}px board — it is still stretching`);
+      // …and the cure must not be worse: an EMPTY column has to stay a real drop target (#290).
+      assert(geom.emptyDropTargetH >= 90,
+        `an empty column's drop target collapsed to ${geom.emptyDropTargetH.toFixed(0)}px — a card can no longer be aimed at it`);
+    });
+
     // ── Regression guard (#294): a drag must not corrupt the RENDER ───────────────────────────
     // SortableJS physically relocates the dragged card's <div> BEFORE Blazor is told anything.
     // Blazor's renderer keeps its own logical-children array per `.board-column-cards` container
