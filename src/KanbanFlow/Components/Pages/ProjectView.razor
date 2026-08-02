@@ -273,6 +273,15 @@ else
                     }
                 </div>
             </section>
+            @if (moveError is not null)
+            {
+                <div class="alert alert-danger alert-dismissible fade show m-2" role="alert"
+                     aria-live="assertive" aria-atomic="true" data-testid="task-move-error">
+                    @moveError
+                    <button type="button" class="btn-close" @onclick="() => moveError = null"
+                            aria-label="Dismiss error"></button>
+                </div>
+            }
             @* The board is generic over <TItem, TStatus>. Pass the type arguments EXPLICITLY at
                every call site: with inferred type arguments Razor closes an EventCallback<T>
                handler before T is known and it degrades to object (CS1503). What a task *is* now
@@ -355,6 +364,9 @@ else
     private List<TaskItem> allTasks = [];
     private bool notFound;
     private string? loadError;
+    // A refused or failed MOVE (board drag or outline drag). Separate from loadError, which
+    // replaces the whole page — see Ideas.razor for the same split and why it is load-bearing.
+    private string? moveError;
     private DotNetObjectReference<ProjectView>? dotNetRef;
     private bool sortablesInitialized;
     private bool hasRenderedInteractively;
@@ -810,6 +822,7 @@ else
             return;
         }
 
+        moveError = null;
         try
         {
             // One service call atomically applies status + identity-anchored ordering. The third
@@ -822,13 +835,18 @@ else
         catch (TaskNotFoundException) { /* task vanished mid-drag — drop silently */ }
         catch (Exception ex)
         {
-            loadError = ex.Message;
+            // A refused move must NOT take the load channel: loadError replaces the entire page.
+            // Reload so the card snaps back to its persisted position.
+            moveError = ex.Message;
+            await LoadProject();
+            await ReinitializeSortables();
         }
     }
 
     [JSInvokable]
     public async Task OnTaskReordered(int taskId, int newFeatureId, int beforeTaskId)
     {
+        moveError = null;
         try
         {
             await TaskSvc.MoveInOutlineAsync(
@@ -840,7 +858,9 @@ else
         catch (TaskNotFoundException) { /* task vanished mid-drag — drop silently */ }
         catch (Exception ex)
         {
-            loadError = ex.Message;
+            moveError = ex.Message;
+            await LoadProject();
+            await ReinitializeSortables();
         }
     }
 
