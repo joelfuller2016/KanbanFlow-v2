@@ -96,7 +96,7 @@ Every text field on every entity is documentation that agents can retrieve, summ
 | Assignee | string? | no | free-text label |
 | ClaimedBy | string? | no | claim system actor; case-insensitive comparison |
 | ClaimedAt | DateTime? | no | set on successful claim |
-| SortOrder | finite number | yes | fractional task rank; within feature + status column |
+| SortOrder | finite number | yes | canonical task rank; board scope is project + status, outline scope is feature-wide |
 | CreatedAt, UpdatedAt | DateTime | yes | |
 | CompletedAt | DateTime? | no | set when Status → Done; cleared otherwise |
 

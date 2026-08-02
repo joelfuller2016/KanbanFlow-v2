@@ -120,6 +120,7 @@ public sealed class TaskService(IDbContextFactory<AppDbContext> dbFactory) : ITa
         // This is the complete persisted destination scope. The browser may have rendered any
         // subset of it; beforeTaskId is the only ordering fact received from the DOM (#307).
         var destinationTasks = await db.Tasks
+            .AsNoTracking()
             .Where(t => t.Feature.ProjectId == projectId && t.Status == newStatus)
             .ToListAsync(ct);
         destinationTasks = TaskOrdering.Order(destinationTasks).ToList();
@@ -318,6 +319,7 @@ public sealed class TaskService(IDbContextFactory<AppDbContext> dbFactory) : ITa
         // Unlike the board, outline order is feature-scoped across every status. Expanded
         // subtask DOM siblings are deliberately absent from this persisted candidate list.
         var destinationTasks = await db.Tasks
+            .AsNoTracking()
             .Where(t => t.FeatureId == newFeatureId)
             .ToListAsync(ct);
         destinationTasks = TaskOrdering.Order(destinationTasks).ToList();
