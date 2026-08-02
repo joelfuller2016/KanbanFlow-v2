@@ -107,6 +107,18 @@ public sealed class TaskService(IDbContextFactory<AppDbContext> dbFactory) : ITa
             throw new ValidationException("A task cannot be positioned before itself.");
 
         await using var db = await dbFactory.CreateDbContextAsync(ct);
+
+        // Serialize the whole read-modify-write. The destination read below and the rank write at
+        // the end are one logical operation: without a lock spanning them, two concurrent moves
+        // into the same gap both read the same neighbours, both compute the same midpoint, and
+        // both persist it — leaving duplicate ranks that TaskOrdering can only break by Id, so one
+        // user's drop silently lands in the wrong place. A concurrent move could also retire the
+        // anchor between the read and the write, persisting a position that was never validated.
+        // Microsoft.Data.Sqlite issues BEGIN IMMEDIATE for this overload (it only defers when the
+        // caller passes deferred: true), so the write lock is taken HERE, before the neighbour
+        // read — the same pattern CreateAsync/ClaimAsync/ReleaseAsync already use in this file.
+        await using var tx = await db.Database.BeginTransactionAsync(ct);
+
         var task = await db.Tasks
             .Include(t => t.Feature)
             .FirstOrDefaultAsync(t => t.Id == taskId, ct);
@@ -177,6 +189,7 @@ public sealed class TaskService(IDbContextFactory<AppDbContext> dbFactory) : ITa
         }
 
         await db.SaveChangesAsync(ct);
+        await tx.CommitAsync(ct);
         return task;
     }
 
@@ -299,6 +312,12 @@ public sealed class TaskService(IDbContextFactory<AppDbContext> dbFactory) : ITa
             throw new ValidationException("A task cannot be positioned before itself.");
 
         await using var db = await dbFactory.CreateDbContextAsync(ct);
+
+        // Same read-modify-write serialization as MoveOnBoardAsync — see the note there. The
+        // outline scope is feature-scoped rather than project/status-scoped, but the race and the
+        // BEGIN IMMEDIATE guarantee are identical.
+        await using var tx = await db.Database.BeginTransactionAsync(ct);
+
         var task = await db.Tasks
             .Include(t => t.Feature)
             .FirstOrDefaultAsync(t => t.Id == taskId, ct);
@@ -372,6 +391,7 @@ public sealed class TaskService(IDbContextFactory<AppDbContext> dbFactory) : ITa
         }
 
         await db.SaveChangesAsync(ct);
+        await tx.CommitAsync(ct);
         return task;
     }
 

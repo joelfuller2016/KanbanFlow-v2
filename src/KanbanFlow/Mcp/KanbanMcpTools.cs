@@ -216,6 +216,7 @@ public static class KanbanMcpTools
         [Description("Optional initial status: Backlog | Todo | InProgress | Review | Done (case-insensitive). Defaults to Backlog.")] string? status = null,
         [Description("Optional initial priority: Low | Medium | High | Critical (case-insensitive). Defaults to Low.")] string? priority = null,
         [Description("Optional free-text assignee label.")] string? assignee = null,
+        [Description("Optional finite task rank within the column; may be fractional. Defaults to appending after the feature's last task.")] double? sortOrder = null,
         [Description("Optional actor label recorded in the audit trail (default 'mcp-agent').")] string? actor = null,
         CancellationToken cancellationToken = default)
     {
@@ -240,12 +241,13 @@ public static class KanbanMcpTools
         try
         {
             var created = await taskService.CreateAsync(
-                new TaskCreate(featureId, name, description, parsedStatus, parsedPriority, assignee),
+                new TaskCreate(featureId, name, description, parsedStatus, parsedPriority, assignee, sortOrder),
                 string.IsNullOrWhiteSpace(actor) ? DefaultActor : actor.Trim(),
                 cancellationToken);
             return new TaskDetailResult(
                 created.Id, created.FeatureId, created.Name, created.Description,
                 created.Status.ToString(), created.Priority.ToString(), created.Assignee,
+                created.SortOrder,
                 "Task created; audit event recorded.");
         }
         catch (FeatureNotFoundException)
@@ -1050,7 +1052,7 @@ public sealed record ChecklistItem(int Id, string Text, bool Completed);
 public sealed record TaskDetail(int Id, int FeatureId, string Name, string? Description, string Status, string Priority, string? Assignee, string? ClaimedBy, IReadOnlyList<ChecklistItem> AcceptanceCriteria, IReadOnlyList<ChecklistItem> Subtasks, IReadOnlyList<int> DependsOnTaskIds);
 public sealed record NextTask(int Id, string Name, string Status, string Priority, string? ClaimedBy, string Reason);
 public sealed record TaskStatusResult(int Id, string Name, string Status, string Message);
-public sealed record TaskDetailResult(int Id, int FeatureId, string Name, string? Description, string Status, string Priority, string? Assignee, string Message);
+public sealed record TaskDetailResult(int Id, int FeatureId, string Name, string? Description, string Status, string Priority, string? Assignee, double SortOrder, string Message);
 public sealed record TaskDeleteResult(int Id, bool Deleted, string Message);
 public sealed record TaskCommentResult(int Id, int TaskItemId, string Text, string? Author, string Type, DateTime CreatedAt);
 public sealed record TaskClaimResult(int Id, string Name, string? ClaimedBy, DateTime? ClaimedAt, string Message);

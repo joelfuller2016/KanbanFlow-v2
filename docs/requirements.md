@@ -109,6 +109,14 @@ Existing SQLite databases may still declare `Tasks.SortOrder` as
 Fresh databases declare it as `REAL`. The declarations can be normalized when schema migrations
 are introduced by #86; both forms have the same runtime ordering semantics.
 
+A move is a read-modify-write over the destination scope, so `MoveOnBoardAsync` and
+`MoveInOutlineAsync` open a transaction **before** reading the neighbor ranks and commit only after
+persisting the new rank. Microsoft.Data.Sqlite issues `BEGIN IMMEDIATE` for that overload — it
+defers only when the caller passes `deferred: true` — so the write lock is held across the whole
+operation. Without it, two concurrent moves into the same gap read the same neighbors, compute the
+same midpoint, and both persist it, leaving duplicate ranks that ordering can separate only by `Id`;
+a concurrent move could also retire the anchor between the read and the write.
+
 ### 3.4 Subtask
 
 | Field | Type | Required | Notes |

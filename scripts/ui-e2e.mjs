@@ -665,11 +665,20 @@ async function main() {
 
         // Restore the complete Blazor-owned DOM synchronously after Sortable reports the partial
         // drop but before invokeMethodAsync starts the server round-trip.
-        window.KanbanFlow._revertDraggedNode = function (evt) {
+        const patched = function (evt) {
           originalRevert.call(window.KanbanFlow, evt);
           for (const child of originalChildren) column.appendChild(child);
           window.KanbanFlow._revertDraggedNode = originalRevert;
+          delete window.KanbanFlow._e2eRevertPatch;
+          delete window.KanbanFlow._e2eOriginalRevert;
         };
+
+        // Publish both halves so the teardown below can undo the patch even when `onEnd` — and
+        // therefore the self-restore above — never fires. Without this the helper stays patched
+        // for the rest of the run and the closure pins every removed node in memory.
+        window.KanbanFlow._e2eRevertPatch = patched;
+        window.KanbanFlow._e2eOriginalRevert = originalRevert;
+        window.KanbanFlow._revertDraggedNode = patched;
 
         for (const child of originalChildren) {
           const id = Number(child.getAttribute("data-task-id"));
@@ -687,6 +696,18 @@ async function main() {
       await dragCardBefore(page,
         `[data-testid="board-card-${movedVisible.id}"]`,
         `[data-testid="board-card-${visibleAnchor.id}"]`);
+
+      // Finally-style teardown: undo the patch if the drop never fired. Restore ONLY while our own
+      // patch is still the installed helper — if `onEnd` already restored it, or anything else
+      // replaced it since, overwriting here would reinstate a stale function.
+      await page.evaluate(() => {
+        const kf = window.KanbanFlow;
+        if (kf._e2eRevertPatch && kf._revertDraggedNode === kf._e2eRevertPatch) {
+          kf._revertDraggedNode = kf._e2eOriginalRevert;
+        }
+        delete kf._e2eRevertPatch;
+        delete kf._e2eOriginalRevert;
+      });
 
       const expectedIds = [hiddenBefore.id, movedVisible.id, visibleAnchor.id, hiddenMiddle.id, hiddenAfter.id];
       const afterTasks = await waitForProjectBoardOrder(partialProj.id, "Todo", expectedIds);
