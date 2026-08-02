@@ -12,8 +12,15 @@ const restTimeoutMs = Number.isFinite(parsedRestTimeoutMs) && parsedRestTimeoutM
 //   2024-11-05 revision the wrapper's handlers implement).
 // - nativeProtocolVersion is the header sent on the HTTP hop to the app's native /mcp server
 //   (the revision the ModelContextProtocol.AspNetCore 1.4 SDK negotiates).
-const protocolVersion = "2024-11-05";
+// Newest first. `initialize` echoes the client's requested version when we support it,
+// otherwise the newest we do — instead of unconditionally asserting one revision.
+const SUPPORTED_PROTOCOL_VERSIONS = ["2025-06-18", "2025-03-26", "2024-11-05"];
+const protocolVersion = SUPPORTED_PROTOCOL_VERSIONS[0];
 const nativeProtocolVersion = "2025-06-18";
+
+function negotiateProtocolVersion(requested) {
+  return SUPPORTED_PROTOCOL_VERSIONS.includes(requested) ? requested : protocolVersion;
+}
 let inputBuffer = Buffer.alloc(0);
 
 // Requests we've received an id for but not yet answered (crash-safety, #168). A fatal
@@ -829,26 +836,20 @@ class McpError extends Error {
 }
 
 function readMessages() {
+  // Newline-delimited JSON per the MCP stdio spec. A chunk may split mid-message,
+  // so anything after the last newline is retained in inputBuffer until it completes.
   while (inputBuffer.length > 0) {
-    const headerEnd = inputBuffer.indexOf("\r\n\r\n");
-    if (headerEnd === -1) {
-      return;
-    }
+    const newlineIndex = inputBuffer.indexOf("\n");
+    if (newlineIndex === -1) return; // partial message; wait for more input
 
-    const header = inputBuffer.subarray(0, headerEnd).toString("utf8");
-    const contentLengthMatch = /Content-Length:\s*(\d+)/i.exec(header);
-    if (!contentLengthMatch) {
-      inputBuffer = inputBuffer.subarray(headerEnd + 4);
-      continue;
-    }
+    // Slice the line off first so a throw inside handleRawMessage cannot re-process it.
+    const line = inputBuffer.subarray(0, newlineIndex).toString("utf8");
+    inputBuffer = inputBuffer.subarray(newlineIndex + 1);
 
-    const contentLength = Number.parseInt(contentLengthMatch[1], 10);
-    const messageStart = headerEnd + 4;
-    const messageEnd = messageStart + contentLength;
-    if (inputBuffer.length < messageEnd) return;
+    // Tolerate CRLF senders and blank keep-alive lines.
+    const rawMessage = line.replace(/\r$/, "").trim();
+    if (rawMessage.length === 0) continue;
 
-    const rawMessage = inputBuffer.subarray(messageStart, messageEnd).toString("utf8");
-    inputBuffer = inputBuffer.subarray(messageEnd);
     handleRawMessage(rawMessage);
   }
 }
@@ -895,7 +896,7 @@ async function handleMessage(message) {
   if (method === "initialize") {
     if (!shouldRespond) return;
     writeResult(id, {
-      protocolVersion,
+      protocolVersion: negotiateProtocolVersion(message?.params?.protocolVersion),
       capabilities: { tools: {} },
       serverInfo: { name: "kanbanflow-mcp", version: "0.1.0" }
     });
@@ -1566,6 +1567,9 @@ function claimResponse(id) {
 }
 
 function writeMessage(message) {
-  const body = JSON.stringify(message);
-  process.stdout.write(`Content-Length: ${Buffer.byteLength(body, "utf8")}\r\n\r\n${body}`);
+  // MCP stdio framing is newline-delimited JSON (spec 2025-06-18, Transports/stdio:
+  // "Messages are delimited by newlines, and MUST NOT contain embedded newlines").
+  // JSON.stringify escapes any newline inside a string value, so the payload is
+  // always single-line and the delimiter is unambiguous.
+  process.stdout.write(JSON.stringify(message) + "\n");
 }
