@@ -14,8 +14,15 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+import { readFile } from "node:fs/promises";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { tierOfIssue, milestoneOf, signalRank, tierIdForMilestone, MILESTONES } from "./backlog-sync.mjs";
 import { derivePriority, PN_LEVELS, priorityFromMilestone } from "./priority-model.mjs";
+
+const execFileAsync = promisify(execFile);
 
 const issue = ({ number = 1, title = "untitled", labels = [], milestone = null } = {}) => ({
   number,
@@ -155,4 +162,150 @@ test("a milestone with no band fails with a message naming both files, not a Typ
       return true;
     },
   );
+});
+
+// ── AC2, closed over the input SPACE rather than a sample ─────────────────────────────────
+//
+// The CASES table above is nine real shapes taken from the backlog as it stood when #364 was
+// measured. That proves the two consumers agree on the issues that existed that day; it proves
+// nothing about the ones filed tomorrow. #364's AC2 asks for agreement over the whole backlog,
+// so close the gap from both ends: sweep the cross product of every signal that can reach either
+// consumer, and then check the live backlog itself.
+
+const TITLE_CASES = [
+  "no prefix at all",
+  "P0: explicit critical",
+  "P1: explicit high",
+  "P2: explicit medium",
+  "P3: explicit low",
+  "p1 — lowercase with an em dash",
+  "P2P sync rewrite",          // decoy: contains the token, is not a prefix
+  "HTTP3: chunked transfer",   // decoy: not at the start
+];
+
+const LABEL_CASES = [
+  [],
+  ["bug"],                          // promoted the tier before #364
+  ["dependencies"],                 // promoted the tier before #364
+  ["security"],                     // promoted the tier before #364
+  ["documentation"],                // demoted the tier before #364 (docs-only)
+  ["documentation", "bug"],         // not docs-only; promoted before #364
+  ["epic"],
+  ["tech-debt", "ui"],
+  ["bug", "tech-debt"],             // #340 / #341 wear exactly this
+  ["priority:high"],                // a real priority label (the other portfolio repos)
+  ["P0-critical"],
+  ["low-priority", "bug"],          // priority label + topical label
+  ["critical-path", "size/medium"], // severity WORDS that are not priorities
+];
+
+const MILESTONE_CASES = [null, ...MILESTONES.map((m) => m.title)];
+
+test("AC2 (space): the log book and the board agree on every combination of signals", () => {
+  const disagreements = [];
+  let compared = 0;
+  let n = 0;
+  for (const title of TITLE_CASES) {
+    for (const labels of LABEL_CASES) {
+      for (const milestone of MILESTONE_CASES) {
+        const i = issue({ number: ++n, title, labels, milestone });
+        compared++;
+        if (tierOfIssue(i) !== boardTier(i)) {
+          disagreements.push(
+            `title=${JSON.stringify(title)} labels=[${labels.join(",")}] ` +
+            `milestone=${milestone ?? "none"} -> book=${tierOfIssue(i)} board=${boardTier(i)}`,
+          );
+        }
+      }
+    }
+  }
+  assert.equal(
+    disagreements.length, 0,
+    `${disagreements.length}/${compared} combinations disagree:\n  ` + disagreements.join("\n  "),
+  );
+  // A sweep that quietly stopped sweeping is the failure this number exists to catch.
+  assert.equal(compared, TITLE_CASES.length * LABEL_CASES.length * MILESTONE_CASES.length);
+  assert.ok(compared >= 800, `expected a real sweep, compared only ${compared}`);
+});
+
+// ── AC1 structurally: no second copy of the rule, even one that AGREES today ───────────────
+//
+// The sweeps above catch a private rule that DISAGREES. They cannot catch one that agrees today
+// and drifts next month — which is exactly how #364 was born: #360 transcribed #339's band table
+// and all seven rows were identical, right up until they were not. So assert the structural
+// property too.
+
+const GENERATOR_SRC = await readFile(
+  join(dirname(fileURLToPath(import.meta.url)), "backlog-sync.mjs"), "utf8",
+);
+
+test("AC1: the generator declares no private title-prefix regex and no tier-adjusting label set", () => {
+  assert.ok(
+    !/\/\^[^\n/]*P\[0-3\]/.test(GENERATOR_SRC),
+    "backlog-sync.mjs declares its own P0-P3 title-prefix regex. priorityFromTitle() in " +
+    "scripts/priority-model.mjs is the only one that may exist (#364 AC1).",
+  );
+  for (const gone of ["PROMOTING_LABELS", "DEMOTING_LABELS", "clampTier"]) {
+    assert.ok(
+      !GENERATOR_SRC.includes(gone),
+      `backlog-sync.mjs still references ${gone} — the promote/demote step #364 removed.`,
+    );
+  }
+});
+
+test("AC1: the generator pairs no milestone title with a priority band of its own", () => {
+  // MILESTONES legitimately keeps the titles — `milestoneOf` refuses an unmapped milestone with
+  // them. What it must never regrow is a title -> Critical/High/Medium/Low column beside them.
+  const bandLike = new RegExp(
+    `"M[1-7]:[^"]*"\\s*(?::|,|=>|\\]\\s*,?\\s*)\\s*["'\`](?:${PN_LEVELS.join("|")}|P[0-3])`,
+    "i",
+  );
+  assert.ok(
+    !bandLike.test(GENERATOR_SRC),
+    "backlog-sync.mjs appears to pair a milestone title with a priority band again. That table " +
+    "belongs to MILESTONE_BANDS in scripts/priority-model.mjs and must be read through " +
+    "derivePriority (#364 AC1).",
+  );
+  // Prove the detector can actually fire, so a silently-broken regex cannot pass forever.
+  assert.ok(
+    bandLike.test('const X = [["M4: UI / UX Polish", "Medium"]];'),
+    "the band-table detector matched nothing at all — it cannot be trusted to catch a real one",
+  );
+});
+
+// ── AC2 over the LIVE backlog ─────────────────────────────────────────────────────────────
+
+test("AC2 (live): the log book and the board agree on every OPEN issue", async (t) => {
+  let issues;
+  try {
+    const { stdout } = await execFileAsync("gh", [
+      "issue", "list", "-R", process.env.KANBANFLOW_BACKLOG_REPO || "joelfuller2016/KanbanFlow-v2",
+      "--state", "open", "--limit", "1000", "--json", "number,title,labels,milestone",
+    ], { maxBuffer: 64 * 1024 * 1024, timeout: 120_000 });
+    issues = JSON.parse(stdout);
+  } catch (err) {
+    // `gh` missing or unauthenticated is not a divergence. Skip LOUDLY — a silent pass here would
+    // be the same lie the log book itself refuses to tell. This cannot mask a real disagreement:
+    // the assertion below runs unconditionally once the fetch succeeds.
+    t.skip(`gh unavailable, live half not run: ${err.message}`);
+    return;
+  }
+
+  assert.ok(issues.length > 0, "gh returned no open issues — refusing to pass on an empty set");
+
+  const disagreements = [];
+  for (const i of issues) {
+    if (tierOfIssue(i) !== boardTier(i)) {
+      disagreements.push(
+        `#${i.number} book=${tierOfIssue(i)} board=${boardTier(i)} ` +
+        `labels=[${(i.labels || []).map((l) => l.name).join(",")}] ` +
+        `milestone=${i.milestone?.title ?? "none"}`,
+      );
+    }
+  }
+  assert.equal(
+    disagreements.length, 0,
+    `${disagreements.length} of ${issues.length} open issues disagree:\n  ` + disagreements.join("\n  "),
+  );
+  console.error(`  agreement: ${issues.length}/${issues.length} open issues`);
 });
