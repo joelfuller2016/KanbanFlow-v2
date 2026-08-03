@@ -52,7 +52,7 @@ public static class ApiEndpoints
         });
 
         // GET /api/projects/{id} — get one with features + task counts
-        app.MapGet("/api/projects/{id:int}", async (int id, AppDbContext db) =>
+        app.MapGet("/api/projects/{id:int}", async (int id, AppDbContext db, CancellationToken ct) =>
         {
             // #157: project features + per-feature counts in SQL instead of loading every task.
             var project = await db.Projects
@@ -80,7 +80,7 @@ public static class ApiEndpoints
                         DoneCount = f.Tasks.Count(t => t.Status == WorkStatus.Done)
                     })
                 })
-                .FirstOrDefaultAsync();
+                .FirstOrDefaultAsync(ct);
 
             if (project is null)
                 return Results.NotFound(new { message = $"Project {id} not found." });
@@ -93,7 +93,7 @@ public static class ApiEndpoints
                 .Where(t => t.Feature.ProjectId == id)
                 .AsNoTracking()
                 .Select(t => new { t.Id, t.FeatureId, t.Status })
-                .ToListAsync();
+                .ToListAsync(ct);
 
             // A task is blocked when it depends on a task that is not yet Done — the same rule
             // /context applies per task, expressed here as one indexed query.
@@ -102,7 +102,7 @@ public static class ApiEndpoints
                 .AsNoTracking()
                 .Select(d => d.TaskItemId)
                 .Distinct()
-                .ToListAsync();
+                .ToListAsync(ct);
 
             var progress = Services.ProjectProgressCalculator.Calculate(
                 project.Features.Select(f => new Services.ProgressFeature(f.Id, f.ParentFeatureId)),
@@ -187,13 +187,17 @@ public static class ApiEndpoints
             var dependenciesByBlockedTask = project.TaskDependencies.ToLookup(d => d.TaskItemId);
             var dependenciesByBlockingTask = project.TaskDependencies.ToLookup(d => d.DependsOnTaskItemId);
 
-            // Single source for "which of this task's dependencies are still open?" — the per-task
-            // IsBlocked flag and the #125 progress.blocked counter both read it, so the two halves
-            // of the same payload can never disagree.
-            List<TaskDependency> OpenBlockersOf(int taskId) => dependenciesByBlockedTask[taskId]
-                .Where(d => tasksById.TryGetValue(d.DependsOnTaskItemId, out var blocker) && blocker.Task.Status != WorkStatus.Done)
-                .OrderBy(d => d.CreatedAt)
-                .ToList();
+            // Single source for "is this dependency still open?" — the per-task IsBlocked flag and
+            // the #125 progress.blocked counter both read THIS predicate, so the two halves of the
+            // same payload can never disagree. Deliberately a predicate rather than a
+            // list-returning helper: the two callers need different shapes, and only one of them
+            // needs the list.
+            bool IsOpenBlocker(TaskDependency dependency) =>
+                tasksById.TryGetValue(dependency.DependsOnTaskItemId, out var blocker) && blocker.Task.Status != WorkStatus.Done;
+
+            // Existence only — no sort, no list allocation, for the progress pass that discards
+            // everything except the boolean.
+            bool HasOpenBlocker(int taskId) => dependenciesByBlockedTask[taskId].Any(IsOpenBlocker);
 
             object MapDependencyContext(TaskDependency dependency)
             {
@@ -231,7 +235,9 @@ public static class ApiEndpoints
                 var blocking = dependenciesByBlockingTask[task.Id]
                     .OrderBy(d => d.CreatedAt)
                     .ToList();
-                var unfinishedBlockers = OpenBlockersOf(task.Id);
+                // Filters the list built two lines up — already sourced from the same lookup and
+                // already ordered by CreatedAt, so this neither re-queries nor re-sorts.
+                var unfinishedBlockers = dependencies.Where(IsOpenBlocker).ToList();
 
                 return new
                 {
@@ -287,7 +293,7 @@ public static class ApiEndpoints
             var progress = Services.ProjectProgressCalculator.Calculate(
                 project.Features.Select(f => new Services.ProgressFeature(f.Id, f.ParentFeatureId)),
                 allTasks.Select(x => new Services.ProgressTask(x.Task.Id, x.Task.FeatureId, x.Task.Status)),
-                allTasks.Where(x => OpenBlockersOf(x.Task.Id).Count > 0).Select(x => x.Task.Id));
+                allTasks.Where(x => HasOpenBlocker(x.Task.Id)).Select(x => x.Task.Id));
 
             object MapFeatureContext(Feature feature) => new
             {

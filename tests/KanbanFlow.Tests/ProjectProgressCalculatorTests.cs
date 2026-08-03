@@ -6,8 +6,8 @@ namespace KanbanFlow.Tests;
 /// <summary>
 /// Tests for <see cref="ProjectProgressCalculator"/> — the single shared "how much of this is
 /// done?" calculator behind <c>GET /api/projects/{id}</c> and <c>GET /api/projects/{id}/context</c>
-/// (#125), so Home, <c>/project/{id}</c> and MCP can never report different numbers for the same
-/// project.
+/// (#125), so those two endpoints can never report different numbers for the same project. Home,
+/// <c>/project/{id}</c> and MCP still recompute their own counts and move onto it under #281/#111.
 ///
 /// The calculator is pure (no EF, no Blazor), so every case below exercises the REAL production
 /// code over in-memory inputs — no database, no browser, no fakes.
@@ -87,6 +87,35 @@ public sealed class ProjectProgressCalculatorTests
             NoBlockers);
 
         Assert.Equal(33.3, report.Project.PercentComplete);
+    }
+
+    [Fact]
+    public void ExactMidpointPercentage_RoundsToEven()
+    {
+        // 100 * 1/16 = 6.25 — an EXACT midpoint (6.25 is exactly representable in binary, so this
+        // is deterministic, not a floating-point coin flip). The mode must be a decision, not a
+        // default: Math.Round(x, 1) is MidpointRounding.ToEven, so 6.25 -> 6.2, never 6.3. Pinned
+        // because #281/#111 will compare this number against client-side arithmetic, and an agent
+        // parses it. A silent switch to AwayFromZero would otherwise ship unnoticed.
+        //
+        // 1 Done + 1 InProgress (not 1 Done + 15 Todo) so the mutation "count InProgress as Done"
+        // leaves this test green — its subject is the rounding mode, not the Done predicate.
+        var tasks = new ProgressTask[16];
+        for (var i = 0; i < tasks.Length; i++)
+        {
+            var status = i switch
+            {
+                0 => WorkStatus.Done,
+                1 => WorkStatus.InProgress,
+                _ => WorkStatus.Todo
+            };
+            tasks[i] = Task(i + 1, 1, status);
+        }
+
+        var report = ProjectProgressCalculator.Calculate([Feat(1)], tasks, NoBlockers);
+
+        Assert.Equal(16, report.Project.Total);
+        Assert.Equal(6.2, report.Project.PercentComplete);
     }
 
     // ── status buckets ─────────────────────────────────────────────────────────────

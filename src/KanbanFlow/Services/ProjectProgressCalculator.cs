@@ -13,6 +13,8 @@ namespace KanbanFlow.Services;
 /// <param name="PercentComplete">
 /// <c>Completed / Total</c> as a percentage rounded to one decimal — a NUMBER, never a formatted
 /// string, because agents parse it. Exactly <c>0.0</c> (never <c>NaN</c>) when <paramref name="Total"/> is 0.
+/// An exact midpoint rounds to even (1 of 16 → <c>6.2</c>, not <c>6.3</c>) — a deliberate choice,
+/// pinned by a test, because clients will compare this number against their own arithmetic.
 /// </param>
 public sealed record ProjectProgress(
     int Completed, int InProgress, int Blocked, int Total, double PercentComplete)
@@ -26,7 +28,7 @@ public sealed record ProjectProgress(
     /// </summary>
     public static ProjectProgress From(int completed, int inProgress, int blocked, int total) =>
         new(completed, inProgress, blocked, total,
-            total > 0 ? Math.Round(100.0 * completed / total, 1) : 0.0);
+            total > 0 ? Math.Round(100.0 * completed / total, 1, MidpointRounding.ToEven) : 0.0);
 }
 
 /// <summary>
@@ -61,11 +63,13 @@ public sealed record ProjectProgressReport(
 }
 
 /// <summary>
-/// The single, shared "how much of this is done?" calculator (#125). Every surface — the Home
-/// list, <c>/project/{id}</c>, <c>GET /api/projects/{id}</c>, <c>GET /api/projects/{id}/context</c>
-/// and MCP — reads its numbers from here, so they can never report different values for the same
-/// project. Pure and DB-free: the caller loads the rows, this counts them, which keeps it
-/// unit-testable without a database or a browser.
+/// The single, shared "how much of this is done?" calculator (#125). Today exactly two surfaces
+/// read their numbers from here: <c>GET /api/projects/{id}</c> and
+/// <c>GET /api/projects/{id}/context</c> — so those two can never disagree. The Home list
+/// (<c>Components/Pages/Home.razor</c>), the <c>/project/{id}</c> header
+/// (<c>Components/Shared/ProjectOutline.razor</c>) and MCP still compute their own counts; moving
+/// them onto this calculator is what #281 and #111 do. Pure and DB-free: the caller loads the
+/// rows, this counts them, which keeps it unit-testable without a database or a browser.
 /// </summary>
 /// <remarks>
 /// The feature rollup is recursive (a feature's progress includes all descendant features'
