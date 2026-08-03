@@ -175,20 +175,13 @@ h1:focus {
     border-color: rgba(0, 0, 0, .08) !important;
 }
 
-/* ── Task detail comments ── */
-.task-comments-list {
-    max-height: 16rem;
-    overflow-y: auto;
-}
-
-.task-comment-note {
-    border-left: 0.25rem solid #0d6efd !important;
-}
-
-.task-comment-system {
-    border-left: 0.25rem solid #6c757d !important;
-    background: rgba(108, 117, 125, .06);
-}
+/* ── Task detail comments ──
+   `.task-comments-list` (a 16rem scroll cap) and the `.task-comment-note` /
+   `.task-comment-system` left-border swatches died with the bespoke comment list that
+   TaskDetailPanel used to render inline. Their replacements live with the shared component:
+   `.activity-timeline-scroll` caps the rows, and the coloured rail dots + badges carry the
+   type. Left behind, they would be three rules matching nothing, in a file whose ordering is
+   load-bearing — dead weight that reads like it still does something. */
 
 .task-blocker-incomplete {
     border-left: 0.25rem solid #dc3545 !important;
@@ -436,14 +429,22 @@ h1:focus {
    content) while the radial "shadow" gradients are `scroll` (fixed to the box). When the
    content is flush against an edge, its cover sits over the shadow and hides it — so a
    shadow is only ever visible on an edge that actually has more content past it, and a
-   short comment shows none. Cover colour must track the activity panel's #f8f9fa. */
+   short comment shows none. Cover colour must track whatever surface the body sits on — hence
+   the --kf-comment-cover variable rather than the literal #f8f9fa this used to hardcode. That
+   hex was invisible while this box lived only inside EditItemModal's grey panel; the moment the
+   shared ActivityTimeline put a comment body on the task detail panel too, a forced
+   data-bs-theme="dark" render came back with near-white bands lying across dark text. A cover
+   colour is by definition the surface behind it, so it cannot be a constant. */
 .task-comment-body {
+    /* Default surface: the page/panel body. Overridden per-surface below. */
+    --kf-comment-cover: var(--bs-body-bg);
+
     max-height: 14rem;
     overflow-y: auto;
     overscroll-behavior: contain;
     background:
-        linear-gradient(#f8f9fa 30%, rgba(248, 249, 250, 0)) center top,
-        linear-gradient(rgba(248, 249, 250, 0), #f8f9fa 70%) center bottom,
+        linear-gradient(var(--kf-comment-cover) 30%, transparent) center top,
+        linear-gradient(transparent, var(--kf-comment-cover) 70%) center bottom,
         radial-gradient(farthest-side at 50% 0, rgba(0, 0, 0, 0.14), rgba(0, 0, 0, 0)) center top,
         radial-gradient(farthest-side at 50% 100%, rgba(0, 0, 0, 0.14), rgba(0, 0, 0, 0)) center bottom;
     background-repeat: no-repeat;
@@ -453,6 +454,128 @@ h1:focus {
 /* Long bot comments lean on <details> and wide tables — keep both inside the box. */
 .task-comment-body table { display: block; overflow-x: auto; max-width: 100%; }
 .task-comment-body pre { max-width: 100%; }
+
+/* ── Activity timeline (#328) — Components/Shared/ActivityTimeline.razor ──────────────────────
+   ONE component, mounted by BOTH task surfaces (TaskDetailPanel = card click, EditItemModal =
+   outline edit), so this is the only place the timeline is styled. Colours are `var(--bs-*)`
+   only, so `data-bs-theme="dark"` recolours the rail, the dots and the diff chips for free —
+   a hardcoded hex here would be a light-mode-only feature. */
+.activity-timeline {
+    position: relative;
+    margin: 0;
+    padding-left: 1.15rem;
+}
+
+/* The rail. Inset so it runs THROUGH the dots, and stopped short at both ends so it does not
+   dangle past the first and last event. */
+.activity-timeline::before {
+    content: "";
+    position: absolute;
+    left: 0.3rem;
+    top: 0.55rem;
+    bottom: 0.55rem;
+    width: 1px;
+    background-color: var(--bs-border-color);
+}
+
+.activity-timeline-item {
+    position: relative;
+    padding: 0 0 0.75rem 0.65rem;
+}
+
+.activity-timeline-item:last-child {
+    padding-bottom: 0;
+}
+
+.activity-timeline-dot {
+    position: absolute;
+    left: -1.0rem;
+    top: 0.4rem;
+    width: 0.55rem;
+    height: 0.55rem;
+    border-radius: 50%;
+    background-color: var(--bs-secondary-bg);
+    /* The ring is the page background, so the dot punches a clean hole in the rail behind it. */
+    box-shadow: 0 0 0 2px var(--bs-body-bg);
+    border: 1px solid var(--bs-secondary-color);
+}
+
+/* Event type is carried by colour AND by the badge text next to it — never by colour alone
+   (accessibility.md §6): a user who cannot separate the hues still reads "Status" / "Comment". */
+.activity-timeline-item-comment > .activity-timeline-dot {
+    background-color: var(--bs-primary);
+    border-color: var(--bs-primary);
+}
+
+.activity-timeline-item-status > .activity-timeline-dot {
+    background-color: var(--bs-warning);
+    border-color: var(--bs-warning);
+}
+
+.activity-timeline-item-field > .activity-timeline-dot {
+    background-color: var(--bs-secondary-color);
+    border-color: var(--bs-secondary-color);
+}
+
+.activity-timeline-changes {
+    display: flex;
+    flex-direction: column;
+    gap: 0.15rem;
+}
+
+/* Wraps rather than overflows: the panel is 480px wide and drops to 100vw on a phone. */
+.activity-timeline-change {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 0.3rem;
+    min-width: 0;
+}
+
+.activity-timeline-field {
+    font-weight: 600;
+    color: var(--bs-secondary-color);
+}
+
+.activity-timeline-value {
+    max-width: 100%;
+    padding: 0 0.3rem;
+    border-radius: var(--bs-border-radius-sm);
+    background-color: var(--bs-tertiary-bg);
+    font-family: var(--bs-font-monospace);
+    font-size: 0.78rem;
+    overflow-wrap: anywhere;
+}
+
+.activity-timeline-value-after {
+    color: var(--bs-emphasis-color);
+    font-weight: 600;
+}
+
+.activity-timeline-arrow {
+    color: var(--bs-secondary-color);
+}
+
+/* Only the ROWS scroll. The old EditItemModal box scrolled the whole activity block, which was
+   fine when it held nothing but a comment list — now the filter chips live above it and must
+   stay put. Both surfaces get the same cap, because both mount the same component. */
+.activity-timeline-scroll {
+    max-height: 20rem;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+}
+
+/* The activity surface inside the outline sidebar's edit modal. `--bs-tertiary-bg` resolves to
+   #f8f9fa in light mode — byte-identical to the inline style this replaced — and to a dark grey
+   under data-bs-theme="dark", which the literal hex could not do. The nested comment bodies are
+   told which surface they sit on so their scroll-shadow cover keeps matching it. */
+.edit-item-activity-surface {
+    background: var(--bs-tertiary-bg);
+}
+
+.edit-item-activity-surface .task-comment-body {
+    --kf-comment-cover: var(--bs-tertiary-bg);
+}
 
 /* ══════════════════════════════════════════════════════════════════════════════════════════════
    Kanban columns — terminal rails, inert columns, drag affordance, priority borders, empty states.

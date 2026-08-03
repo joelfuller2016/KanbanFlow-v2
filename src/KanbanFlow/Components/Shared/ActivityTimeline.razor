@@ -1,0 +1,323 @@
+@inject IDbContextFactory<AppDbContext> DbFactory
+
+@*
+    ONE history component, used by BOTH task surfaces (#328):
+
+      • TaskDetailPanel.razor — the CARD-CLICK surface (KanbanCard -> OnOpenTaskDetail -> ProjectView)
+      • EditItemModal.razor    — the outline sidebar's edit action
+
+    It is used twice; it is never COPIED. A second copy is exactly how this codebase ended up
+    rendering the same instant on two different clocks (#306), and how the ActivityEvent trail
+    stayed invisible on both surfaces while /api/tasks/{id}/activity served it perfectly.
+
+    Contract with the callers:
+      • The caller owns the COMMENTS (it already loads them for its own count badge / add form)
+        and hands them in. This component owns the ACTIVITY EVENTS and loads them itself, so
+        there is exactly one query for the trail no matter how many surfaces mount it.
+      • The merge runs in OnParametersSet — NOT in a render-path computed property, which would
+        re-parse every BeforeJson/AfterJson on every keystroke in the panel's bound inputs.
+      • Pass `Watermark` (e.g. the task's UpdatedAt) to force an event reload after a mutation.
+*@
+
+<section class="activity-timeline-section" data-testid="@($"{TestIdPrefix}")" aria-label="Task history">
+
+    <div class="d-flex flex-wrap align-items-center gap-2 mb-2">
+        <div class="btn-group btn-group-sm" role="group" aria-label="Filter task history">
+            @foreach (var (filter, label) in Chips)
+            {
+                var active = filter == activeFilter;
+                <button type="button"
+                        class="btn @(active ? "btn-primary" : "btn-outline-secondary")"
+                        aria-pressed="@(active ? "true" : "false")"
+                        data-testid="@($"{TestIdPrefix}-filter-{filter}")"
+                        @onclick="() => SetFilter(filter)">
+                    @label
+                    <span class="badge rounded-pill text-bg-light border ms-1"
+                          data-testid="@($"{TestIdPrefix}-filter-{filter}-count")">@CountFor(filter)</span>
+                </button>
+            }
+        </div>
+    </div>
+
+    @if (loading)
+    {
+        <div class="d-flex align-items-center small text-muted" data-testid="@($"{TestIdPrefix}-loading")">
+            <div class="spinner-border spinner-border-sm me-2" role="status" aria-hidden="true"></div>
+            Loading history...
+        </div>
+    }
+    else if (loadFailed)
+    {
+        <div class="alert alert-danger py-2 small mb-0" role="alert" data-testid="@($"{TestIdPrefix}-error")">
+            We couldn't load this task's history right now. Please try reopening the task.
+        </div>
+    }
+    else if (visible.Count == 0)
+    {
+        <div class="text-muted small border rounded p-2" data-testid="@($"{TestIdPrefix}-empty-state")">
+            @(entries.Count == 0
+                ? "No history yet. Comments and recorded changes will appear here."
+                : "Nothing matches this filter.")
+        </div>
+    }
+    else
+    {
+        @* Only the ROWS scroll — the filter chips above must stay reachable while you scroll. *@
+        <div class="activity-timeline-scroll">
+        <ol class="activity-timeline list-unstyled mb-0" data-testid="@($"{TestIdPrefix}-list")">
+            @foreach (var entry in visible)
+            {
+                <li class="activity-timeline-item @KindClass(entry.Kind)"
+                    @key="entry.Key"
+                    data-testid="@($"{TestIdPrefix}-entry-{entry.Key}")"
+                    data-timeline-kind="@entry.Kind"
+                    data-timeline-source="@(entry.IsActivityEvent ? "activity" : "comment")">
+
+                    <span class="activity-timeline-dot" aria-hidden="true"></span>
+
+                    <div class="activity-timeline-body">
+                        <div class="d-flex flex-wrap align-items-center gap-2 mb-1">
+                            <span class="badge @BadgeClass(entry)">@entry.Label</span>
+                            <span class="small fw-semibold text-break">@entry.Actor</span>
+                            @* ONE CLOCK (#306/#328): relative on the face, absolute LOCAL + the
+                               round-trip UTC instant in the tooltip. Every timestamp on both task
+                               surfaces goes through ActivityTimelineModel — there is no second
+                               formatting call site left to drift. *@
+                            <time class="small text-muted ms-auto"
+                                  datetime="@entry.CreatedAtUtc.ToString("O")"
+                                  title="@ActivityTimelineModel.Tooltip(entry.CreatedAtUtc)">
+                                @ActivityTimelineModel.Relative(entry.CreatedAtUtc, nowUtc)
+                            </time>
+                        </div>
+
+                        @if (entry.Changes.Count > 0)
+                        {
+                            @* Derived from BeforeJson/AfterJson by the pure differ. The differ only
+                               ever emits whitelisted field labels and scalar display values, so raw
+                               JSON cannot reach this markup. *@
+                            <div class="activity-timeline-changes small"
+                                 data-testid="@($"{TestIdPrefix}-changes-{entry.Key}")">
+                                @foreach (var change in entry.Changes)
+                                {
+                                    <div class="activity-timeline-change">
+                                        <span class="activity-timeline-field">@change.Field:</span>
+                                        <span class="activity-timeline-value activity-timeline-value-before">@change.Before</span>
+                                        <span class="activity-timeline-arrow" aria-hidden="true">→</span>
+                                        <span class="visually-hidden">changed to</span>
+                                        <span class="activity-timeline-value activity-timeline-value-after">@change.After</span>
+                                    </div>
+                                }
+                            </div>
+                        }
+                        else if (entry.Summary is not null)
+                        {
+                            <div class="small text-body-secondary text-break"
+                                 data-testid="@($"{TestIdPrefix}-summary-{entry.Key}")">@entry.Summary</div>
+                        }
+
+                        @if (entry.Body is not null)
+                        {
+                            @* .task-comment-body caps a very long body (a mirrored PR-bot review
+                               runs to thousands of words) into its own scroll box instead of
+                               pushing the rest of the timeline off-screen. EditItemModal already
+                               did this; the card-click panel did not. One component, one answer. *@
+                            <MarkdownContent Markdown="@entry.Body" CssClass="task-comment-body small text-break" EmptyText="" />
+                        }
+                    </div>
+                </li>
+            }
+        </ol>
+        </div>
+    }
+</section>
+
+@code {
+    /// <summary>The task whose history to show. Null closes/clears the timeline.</summary>
+    [Parameter] public int? TaskId { get; set; }
+
+    /// <summary>
+    /// Comments, supplied by the caller (which already loads them). Reassign the list — do not
+    /// mutate it in place — or the reference check below will not see the change.
+    /// </summary>
+    [Parameter] public IReadOnlyList<TaskComment>? Comments { get; set; }
+
+    /// <summary>
+    /// Any value that changes when the task mutates (the task's <c>UpdatedAt</c> is ideal).
+    /// A change forces a reload of the activity trail so a status/priority edit shows up at once.
+    /// </summary>
+    [Parameter] public DateTime? Watermark { get; set; }
+
+    /// <summary>
+    /// Prefix for this instance's data-testid attributes. BOTH surfaces are present in
+    /// ProjectView's markup at the same time, so a shared literal would make every
+    /// timeline selector ambiguous.
+    /// </summary>
+    [Parameter] public string TestIdPrefix { get; set; } = "activity-timeline";
+
+    private static readonly (TimelineFilter Filter, string Label)[] Chips =
+    [
+        (TimelineFilter.All, "All"),
+        (TimelineFilter.Comments, "Comments"),
+        (TimelineFilter.Status, "Status"),
+        (TimelineFilter.FieldChanges, "Field changes")
+    ];
+
+    private int? loadedTaskId;
+    private DateTime? loadedWatermark;
+    private IReadOnlyList<TaskComment>? mergedComments;
+    private long loadVersion;
+
+    private List<ActivityEvent> events = [];
+    private IReadOnlyList<TimelineEntry> entries = [];
+    private IReadOnlyList<TimelineEntry> visible = [];
+    private TimelineCounts counts = new(0, 0, 0, 0);
+    private TimelineFilter activeFilter = TimelineFilter.All;
+    private bool loading;
+    private bool loadFailed;
+    private DateTime nowUtc = DateTime.UtcNow;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        var taskChanged = TaskId != loadedTaskId;
+        var watermarkChanged = Watermark != loadedWatermark;
+        var commentsChanged = !ReferenceEquals(Comments, mergedComments);
+
+        if (taskChanged)
+        {
+            loadedTaskId = TaskId;
+            activeFilter = TimelineFilter.All;
+            loadFailed = false;
+            events = [];
+            entries = [];
+            visible = [];
+            counts = new TimelineCounts(0, 0, 0, 0);
+        }
+
+        if (taskChanged || watermarkChanged)
+        {
+            loadedWatermark = Watermark;
+
+            if (TaskId is int id)
+            {
+                await LoadEventsAsync(id);
+            }
+            else
+            {
+                loading = false;
+            }
+
+            Merge();
+        }
+        else if (commentsChanged)
+        {
+            // Comment-only change (the caller just posted one) — re-merge without re-querying.
+            // The TaskCommentAdded event that accompanies it is suppressed as a duplicate of the
+            // comment row anyway, so nothing is missing from the trail.
+            Merge();
+        }
+    }
+
+    /// <summary>Force a reload of the activity trail. For callers with no natural watermark.</summary>
+    public async Task RefreshAsync()
+    {
+        if (loadedTaskId is int id)
+        {
+            await LoadEventsAsync(id);
+            Merge();
+            StateHasChanged();
+        }
+    }
+
+    private async Task LoadEventsAsync(int taskId)
+    {
+        var version = ++loadVersion;
+        loading = true;
+        loadFailed = false;
+
+        try
+        {
+            // Same predicate as GET /api/tasks/{id}/activity (ApiEndpoints.cs) — one shape of
+            // truth for "this task's trail", read straight from the DbContext because this is
+            // Blazor Server and an HTTP hop to our own process would buy nothing.
+            using var db = await DbFactory.CreateDbContextAsync();
+            var loaded = await db.ActivityEvents
+                .Where(e => e.EntityType == "Task" && e.EntityId == taskId)
+                .AsNoTracking()
+                .OrderByDescending(e => e.CreatedAt)
+                .ThenByDescending(e => e.Id)
+                .Take(ActivityTimelineModel.MaxEntries)
+                .ToListAsync();
+
+            if (IsCurrentLoad(taskId, version))
+                events = loaded;
+        }
+        catch
+        {
+            if (IsCurrentLoad(taskId, version))
+            {
+                events = [];
+                loadFailed = true;
+            }
+        }
+        finally
+        {
+            if (IsCurrentLoad(taskId, version))
+                loading = false;
+        }
+    }
+
+    private bool IsCurrentLoad(int taskId, long version) =>
+        loadedTaskId == taskId && loadVersion == version;
+
+    private void Merge()
+    {
+        mergedComments = Comments;
+        nowUtc = DateTime.UtcNow;
+        entries = ActivityTimelineModel.Build(Comments, events);
+        counts = ActivityTimelineModel.Count(entries);
+        visible = ActivityTimelineModel.Filter(entries, activeFilter);
+    }
+
+    private void SetFilter(TimelineFilter filter)
+    {
+        activeFilter = filter;
+        visible = ActivityTimelineModel.Filter(entries, activeFilter);
+    }
+
+    private int CountFor(TimelineFilter filter) => filter switch
+    {
+        TimelineFilter.Comments => counts.Comments,
+        TimelineFilter.Status => counts.Status,
+        TimelineFilter.FieldChanges => counts.FieldChanges,
+        _ => counts.All
+    };
+
+    private static string KindClass(TimelineEntryKind kind) => kind switch
+    {
+        TimelineEntryKind.Comment => "activity-timeline-item-comment",
+        TimelineEntryKind.StatusChange => "activity-timeline-item-status",
+        _ => "activity-timeline-item-field"
+    };
+
+    private static string BadgeClass(TimelineEntry entry)
+    {
+        if (entry.IsActivityEvent)
+        {
+            return entry.Kind == TimelineEntryKind.StatusChange
+                ? "text-bg-warning"
+                : "text-bg-secondary";
+        }
+
+        return entry.CommentType switch
+        {
+            CommentType.Comment or CommentType.Note => "text-bg-primary",
+            CommentType.Decision => "text-bg-info",
+            CommentType.Question => "text-bg-light border text-dark",
+            CommentType.Blocked => "text-bg-danger",
+            CommentType.Handoff => "text-bg-warning",
+            CommentType.Verification => "text-bg-success",
+            CommentType.Created => "text-bg-success",
+            _ => "text-bg-secondary"
+        };
+    }
+}

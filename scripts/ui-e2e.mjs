@@ -86,6 +86,14 @@ async function test(name, fn) {
 
 function assert(cond, msg) { if (!cond) throw new Error(msg); }
 
+// The API serialises stored-UTC DateTimes with Kind=Unspecified, i.e. no trailing "Z" — and
+// `new Date("2026-07-12T17:19:00")` reads a zoneless string as LOCAL time. Pin the zone, or a
+// clock assertion silently compares local-against-local and can never fail.
+function utcIso(value) {
+  const s = String(value);
+  return /(Z|[+-]\d{2}:?\d{2})$/.test(s) ? s : `${s}Z`;
+}
+
 // Blazor Server renders static HTML first, then connects an interactive circuit a
 // moment later. A click that lands before the circuit is live is a no-op, so we retry
 // the click until the expected element appears.
@@ -1514,6 +1522,201 @@ async function main() {
       const notPromoted = await api("GET", `/api/ideas/${idea.id}`);
       assert(notPromoted.status === "New",
         `Esc on the PROMOTE confirm must cancel it — the idea is now ${notPromoted.status}`);
+    });
+
+    // ── Scenario D2: the task history timeline, on BOTH task surfaces (#328) ─────────────────
+    // The premise this guards: ActivityEvents were recorded from day one, served by
+    // GET /api/tasks/{id}/activity, and rendered by NEITHER task surface — the endpoint had zero
+    // UI call sites. So a browser assertion is the only kind that can fail for the right reason:
+    // the unit tests prove the MERGE, and this proves the merge reaches a screen.
+    //
+    // Both surfaces are checked because both were broken, and they are deliberately checked with
+    // different data-testid prefixes off the SAME component — if someone ever "fixes" one by
+    // copying it, this test still passes, but the clock test below (which reads both) will not.
+    await test("Task history timeline renders the ActivityEvent trail on both task surfaces (#328)", async () => {
+      const historyTask = await api("POST", `/api/features/${feature.id}/tasks`, {
+        name: `E2E History ${stamp}`, status: "Todo", sortOrder: 90,
+      });
+      // Real recorded history — three different event types plus a user comment.
+      await api("PATCH", `/api/tasks/${historyTask.id}/status`, { status: "InProgress", actor: "e2e-bot" });
+      await api("PUT", `/api/tasks/${historyTask.id}`, {
+        name: `E2E History ${stamp}`, priority: "High", actor: "e2e-bot",
+      });
+      await api("POST", `/api/tasks/${historyTask.id}/comments`, {
+        text: "Timeline smoke note", author: "e2e-human", type: "Note",
+      });
+
+      // Precondition: the trail genuinely exists server-side. Without this, a timeline that
+      // renders nothing but comments would still "pass" every assertion below by vacuum.
+      const trail = await api("GET", `/api/tasks/${historyTask.id}/activity`);
+      assert(trail.length >= 3,
+        `expected at least 3 recorded ActivityEvents for the seeded task, got ${trail.length}. ` +
+        "Nothing below can prove the UI shows the trail if the trail is not there.");
+
+      const consoleErrors = [];
+      const onConsole = (m) => { if (m.type() === "error") consoleErrors.push(m.text()); };
+      page.on("console", onConsole);
+
+      try {
+        await page.goto(`${baseUrl}/project/${proj.id}`);
+        await page.waitForLoadState("networkidle").catch(() => {});
+
+        // ── Surface 1: the CARD CLICK -> TaskDetailPanel (primary) ──
+        const panelTimeline = page.locator('[data-testid="task-detail-activity"]');
+        await clickUntil(
+          () => page.locator(`[data-testid="board-card-${historyTask.id}"]`).click(),
+          panelTimeline,
+        );
+
+        const activityRows = panelTimeline.locator('[data-timeline-source="activity"]');
+        const activityCount = await activityRows.count();
+        assert(activityCount >= 3,
+          `the card-click panel rendered ${activityCount} ActivityEvent row(s) for a task with ` +
+          `${trail.length} recorded events. This is the #328 bug itself: the audit trail exists, ` +
+          "is queryable, and is invisible.");
+
+        const commentCount = await panelTimeline.locator('[data-timeline-source="comment"]').count();
+        assert(commentCount >= 1,
+          `the timeline dropped the comments while adding the trail (${commentCount} comment rows) ` +
+          "— it must MERGE the two, not replace one with the other.");
+
+        // AC2: a readable change line, not raw JSON.
+        const timelineText = await panelTimeline.innerText();
+        assert(/Status[\s\S]{0,40}Todo[\s\S]{0,40}InProgress/.test(timelineText),
+          `no "Status: Todo → InProgress" line in the panel timeline. Rendered:\n${timelineText.slice(0, 800)}`);
+        assert(/Priority[\s\S]{0,40}Low[\s\S]{0,40}High/.test(timelineText),
+          `no "Priority: Low → High" line in the panel timeline. Rendered:\n${timelineText.slice(0, 800)}`);
+        assert(!/"(status|priority|featureId|claimedBy)"\s*:/.test(timelineText),
+          `RAW JSON reached the user in the panel timeline:\n${timelineText.slice(0, 800)}`);
+        assert(timelineText.includes("e2e-bot"),
+          "the actor is missing from the timeline — the Actor column is how a human sees an agent work.");
+
+        // AC4: the filter chips actually filter. A chip click is a SignalR round-trip, so read
+        // the row counts through waitForFunction — a bare count() after the click races the
+        // re-render and would pass against the PRE-click DOM.
+        const rowsUnderFilter = () => page.evaluate(() => {
+          const root = document.querySelector('[data-testid="task-detail-activity"]');
+          const n = (sel) => (root ? root.querySelectorAll(sel).length : -1);
+          return {
+            activity: n('[data-timeline-source="activity"]'),
+            comment: n('[data-timeline-source="comment"]'),
+            status: n('[data-timeline-kind="StatusChange"]'),
+            other: n('[data-timeline-kind="Comment"], [data-timeline-kind="FieldChange"]'),
+          };
+        });
+        const waitForRows = async (fn, label) => {
+          try {
+            await page.waitForFunction(fn, null, { timeout: 10000 });
+          } catch {
+            throw new Error(`${label} (rows: ${JSON.stringify(await rowsUnderFilter())})`);
+          }
+        };
+
+        await panelTimeline.locator('[data-testid="task-detail-activity-filter-Comments"]').click();
+        await waitForRows(() => {
+          const root = document.querySelector('[data-testid="task-detail-activity"]');
+          return root
+            && root.querySelectorAll('[data-timeline-source="activity"]').length === 0
+            && root.querySelectorAll('[data-timeline-source="comment"]').length > 0;
+        }, 'the "Comments" chip left activity rows on screen — the chip does not filter');
+
+        await panelTimeline.locator('[data-testid="task-detail-activity-filter-Status"]').click();
+        await waitForRows(() => {
+          const root = document.querySelector('[data-testid="task-detail-activity"]');
+          return root
+            && root.querySelectorAll('[data-timeline-kind="StatusChange"]').length > 0
+            && root.querySelectorAll('[data-timeline-kind="Comment"], [data-timeline-kind="FieldChange"]').length === 0;
+        }, 'the "Status" chip did not narrow the timeline to status rows');
+
+        await panelTimeline.locator('[data-testid="task-detail-activity-filter-All"]').click();
+        await waitForRows(() => {
+          const root = document.querySelector('[data-testid="task-detail-activity"]');
+          return root
+            && root.querySelectorAll('[data-timeline-source="activity"]').length >= 3
+            && root.querySelectorAll('[data-timeline-source="comment"]').length > 0;
+        }, 'the "All" chip did not restore the merged timeline');
+
+        // ── #306: ONE CLOCK. Created/Updated used to render raw UTC, ~35 lines below comment
+        // rows that rendered local time — a 4-5h split on the same screen. Compare the panel's
+        // footer against the value the server would print in LOCAL time for the same instant.
+        const apiTask = await api("GET", `/api/tasks/${historyTask.id}`);
+        const clock = await page.evaluate(({ createdAtIso, updatedAtIso }) => {
+          const read = (testid) => {
+            const el = document.querySelector(`[data-testid="${testid}"]`);
+            return el ? { text: el.textContent.trim(), title: el.getAttribute("title") } : null;
+          };
+          // The browser and the Blazor Server host are the same machine here, so the browser's
+          // own local rendering is the right oracle for "did the server print local time".
+          const local = (iso) => {
+            const d = new Date(iso);
+            const hh = d.getHours() % 12 === 0 ? 12 : d.getHours() % 12;
+            const mm = String(d.getMinutes()).padStart(2, "0");
+            return { hour12: `${hh}:${mm}`, ampm: d.getHours() < 12 ? "AM" : "PM" };
+          };
+          return {
+            created: read("task-detail-created-at"),
+            updated: read("task-detail-updated-at"),
+            expectedCreated: local(createdAtIso),
+            expectedUpdated: local(updatedAtIso),
+            offsetMinutes: new Date().getTimezoneOffset(),
+          };
+        }, {
+          // The API serialises these DateTimes as Kind=Unspecified (no trailing Z) but stores
+          // UTC, so pin the zone explicitly rather than letting Date() read them as local.
+          createdAtIso: utcIso(apiTask.createdAt),
+          updatedAtIso: utcIso(apiTask.updatedAt),
+        });
+
+        assert(clock.created && clock.updated, "the panel's Created/Updated timestamps are missing");
+        assert(clock.created.title?.includes("UTC:") && clock.updated.title?.includes("UTC:"),
+          `Created/Updated must expose the absolute UTC instant on hover (#306). ` +
+          `Got created title=${JSON.stringify(clock.created.title)}, updated=${JSON.stringify(clock.updated.title)}.`);
+
+        // On a UTC box local == UTC and this proves nothing, so only assert where there IS a split.
+        if (clock.offsetMinutes !== 0) {
+          for (const [label, rendered, expected] of [
+            ["Created", clock.created, clock.expectedCreated],
+            ["Updated", clock.updated, clock.expectedUpdated],
+          ]) {
+            assert(rendered.text.includes(expected.hour12) && rendered.text.includes(expected.ampm),
+              `${label} still renders a clock other than local time (#306): the panel shows ` +
+              `"${rendered.text}" but this machine's local time for that instant is ` +
+              `${expected.hour12} ${expected.ampm}. That is the bug — a comment posted at 3:00 PM ` +
+              `sat above an "Updated:" line reading 7:00 PM.`);
+          }
+        }
+
+        await page.locator('[data-testid="task-detail-close-button"]').click();
+        await panelTimeline.waitFor({ state: "hidden" });
+
+        // ── Surface 2: the OUTLINE SIDEBAR's edit action -> EditItemModal (secondary) ──
+        // Same component, different mount. Before #328 this block was labelled "Activity" and
+        // showed comments only, with a THIRD clock of its own (raw UTC, no tooltip).
+        const modalTimeline = page.locator('[data-testid="edit-item-activity"]');
+        await clickUntil(
+          () => page.locator(`[data-testid="outline-task-${historyTask.id}"]`).click(),
+          modalTimeline,
+        );
+
+        const modalActivityCount = await modalTimeline.locator('[data-timeline-source="activity"]').count();
+        assert(modalActivityCount >= 3,
+          `the outline-sidebar edit modal rendered ${modalActivityCount} ActivityEvent row(s). ` +
+          "Both task surfaces must show the same history — one component, mounted twice.");
+
+        const modalText = await modalTimeline.innerText();
+        assert(/Status[\s\S]{0,40}Todo[\s\S]{0,40}InProgress/.test(modalText),
+          `no "Status: Todo → InProgress" line in the edit modal timeline. Rendered:\n${modalText.slice(0, 800)}`);
+        assert(!/"(status|priority|featureId|claimedBy)"\s*:/.test(modalText),
+          `RAW JSON reached the user in the edit modal timeline:\n${modalText.slice(0, 800)}`);
+
+        await page.locator('[data-testid="edit-item-cancel-button"]').click();
+
+        assert(consoleErrors.length === 0,
+          `the timeline logged ${consoleErrors.length} console error(s): ${consoleErrors.slice(0, 3).join(" | ")}`);
+      } finally {
+        page.off("console", onConsole);
+        await api("DELETE", `/api/tasks/${historyTask.id}`).catch(() => {});
+      }
     });
 
     // ── Scenario E: Settings -> Run all shows an all-passed result table ──

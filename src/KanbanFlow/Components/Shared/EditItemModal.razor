@@ -177,47 +177,19 @@
                         </div>
                     }
 
-                    @* Activity Timeline *@
+                    @* Activity Timeline — the SAME <ActivityTimeline> the card-click surface
+                       (TaskDetailPanel) mounts, not a copy. This block previously iterated
+                       taskComments and nothing else, under a heading that said "Activity": the
+                       ActivityEvent trail was never requested here either. It also carried this
+                       codebase's THIRD clock — `@comment.CreatedAt.ToString("MMM d, h:mm tt")`,
+                       raw UTC, no .ToLocalTime(), no tooltip — which #306's evidence does not
+                       cover. Routing both surfaces through one component is what retires it. *@
                     <div class="mb-3">
                         <div id="edit-item-activity-label" class="form-label small text-muted mb-1">Activity</div>
-                        <div class="border rounded p-2" style="max-height: 250px; overflow-y: auto; background: #f8f9fa;">
-                            @if (taskComments.Count == 0)
-                            {
-                                <small class="text-muted">No activity yet.</small>
-                            }
-                            @foreach (var comment in taskComments.OrderByDescending(c => c.CreatedAt))
-                            {
-                                <div class="mb-2 pb-2 @(comment != taskComments.OrderByDescending(c => c.CreatedAt).Last() ? "border-bottom" : "")">
-                                    <div class="d-flex align-items-center mb-1">
-                                        @if (comment.Type == CommentType.Comment)
-                                        {
-                                            <span class="badge bg-primary me-2" style="font-size: 0.6rem;">Comment</span>
-                                        }
-                                        else if (comment.Type == CommentType.StatusChange)
-                                        {
-                                            <span class="badge bg-warning text-dark me-2" style="font-size: 0.6rem;">Status</span>
-                                        }
-                                        else if (comment.Type == CommentType.Created)
-                                        {
-                                            <span class="badge bg-success me-2" style="font-size: 0.6rem;">Created</span>
-                                        }
-                                        else
-                                        {
-                                            <span class="badge bg-secondary me-2" style="font-size: 0.6rem;">@comment.Type</span>
-                                        }
-                                        <small class="text-muted fw-medium">@(comment.Author ?? "System")</small>
-                                        <small class="text-muted ms-auto" style="font-size: 0.65rem;">@comment.CreatedAt.ToString("MMM d, h:mm tt")</small>
-                                    </div>
-                                    @* Comment bodies are markdown — a plain `@comment.Text` HTML-encodes them, so a
-                                       mirrored GitHub comment renders as raw `**bold**` and its links are dead text.
-                                       MarkdownContent (already used by TaskDetailPanel/Home/ProjectView) renders +
-                                       sanitises. Bot reviews can be very long, so each body is capped to a scrollable
-                                       box rather than pushing the rest of the timeline off-screen. *@
-                                    <div class="task-comment-body small">
-                                        <MarkdownContent Markdown="@comment.Text" />
-                                    </div>
-                                </div>
-                            }
+                        <div class="border rounded p-2 edit-item-activity-surface">
+                            <ActivityTimeline TestIdPrefix="edit-item-activity"
+                                              TaskId="@EditTaskId"
+                                              Comments="taskComments" />
                         </div>
 
                         @* Add comment *@
@@ -443,7 +415,9 @@
         // audit event identical to the REST/MCP surfaces (#88).
         var comment = await TaskService.AddCommentAsync(
             EditTaskId.Value, newCommentText, author: "User", type: CommentType.Comment, actor: "User");
-        taskComments.Add(comment);
+        // Reassign rather than Add in place: <ActivityTimeline> re-merges on a reference change,
+        // so mutating this list would post the comment and leave the timeline showing the old set.
+        taskComments = [.. taskComments, comment];
         newCommentText = null;
         StateHasChanged();
     }

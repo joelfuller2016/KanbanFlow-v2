@@ -269,14 +269,18 @@
                 </div>
             </div>
 
-            @* Comments / activity notes *@
-            <section class="mb-4 pt-3 border-top" data-testid="task-comments-section" aria-labelledby="task-comments-heading">
+            @* History — comments AND the ActivityEvent trail, in one timeline (#328).
+               The trail was recorded and served by GET /api/tasks/{id}/activity from the start,
+               and never rendered on either task surface. ActivityTimeline is that one renderer;
+               EditItemModal mounts the SAME component, not a copy. *@
+            <section class="mb-4 pt-3 border-top" data-testid="task-history-section" aria-labelledby="task-comments-heading">
+                @* No count badge here on purpose. It used to show comments.Count, which is now a
+                   DIFFERENT number from the timeline below it (the merge adds activity events and
+                   folds away the system comments they supersede) — a header saying 6 above a list
+                   saying 7 is worse than no header count. The "All" chip carries it instead, and
+                   it is computed from the very list it labels. *@
                 <div class="d-flex align-items-center mb-2">
-                    <h6 id="task-comments-heading" class="form-label small text-muted mb-0">Comments</h6>
-                    @if (!commentsLoading)
-                    {
-                        <span class="ms-2 badge bg-secondary small" data-testid="task-comments-count">@comments.Count</span>
-                    }
+                    <h6 id="task-comments-heading" class="form-label small text-muted mb-0">History</h6>
                 </div>
 
                 @if (commentsLoading)
@@ -286,26 +290,21 @@
                         Loading comments...
                     </div>
                 }
-                else if (commentsError is not null)
-                {
-                    <div class="alert alert-danger py-2 small" data-testid="task-comments-error">We couldn't load comments right now. Please try reopening the task.</div>
-                }
-                else if (comments.Count == 0)
-                {
-                    <div class="text-muted small border rounded p-2 mb-2" data-testid="task-comments-empty-state">
-                        No comments yet. Add a note for the next human or AI agent.
-                    </div>
-                }
                 else
                 {
+                    @if (commentsError is not null)
+                    {
+                        <div class="alert alert-danger py-2 small" data-testid="task-comments-error">We couldn't load comments right now. Please try reopening the task.</div>
+                    }
+
                     var latestHandoff = GetLatestHandoffComment();
                     @if (latestHandoff is not null)
                     {
                         <div class="alert alert-warning py-2 mb-2" data-testid="latest-handoff-comment">
                             <div class="d-flex flex-wrap align-items-center gap-2 mb-1">
                                 <span class="badge text-bg-warning" data-testid="latest-handoff-comment-badge">Latest Handoff</span>
-                                <span class="small fw-semibold">@(!string.IsNullOrWhiteSpace(latestHandoff.Author) ? latestHandoff.Author : "Anonymous")</span>
-                                <span class="small text-muted ms-auto" title="@($"UTC: {latestHandoff.CreatedAt:O}")">@latestHandoff.CreatedAt.ToLocalTime().ToString("MMM d, yyyy h:mm tt")</span>
+                                <span class="small fw-semibold">@ActorOf(latestHandoff.Author)</span>
+                                <span class="small text-muted ms-auto" title="@ActivityTimelineModel.Tooltip(latestHandoff.CreatedAt)">@ActivityTimelineModel.Absolute(latestHandoff.CreatedAt)</span>
                             </div>
                             <div data-testid="latest-handoff-comment-text">
                                 <MarkdownContent Markdown="@latestHandoff.Text"
@@ -315,20 +314,13 @@
                         </div>
                     }
 
-                    <div class="task-comments-list d-flex flex-column gap-2 mb-2" data-testid="task-comments-list">
-                        @foreach (var comment in comments)
-                        {
-                            <article class="task-comment border rounded p-2 @GetCommentBorderClass(comment.Type) @(comment.Id == latestHandoff?.Id ? "task-comment-latest-handoff" : null)" data-testid="@($"task-comment-row-{comment.Id}")">
-                                <div class="d-flex flex-wrap align-items-center gap-2 mb-1">
-                                    <span class="@GetCommentTypeBadgeClass(comment.Type)" data-testid="@($"task-comment-type-{comment.Id}")">@GetCommentTypeDisplayName(comment.Type)</span>
-                                    <span class="small fw-semibold">@(!string.IsNullOrWhiteSpace(comment.Author) ? comment.Author : "Anonymous")</span>
-                                    <span class="small text-muted ms-auto" title="@($"UTC: {comment.CreatedAt:O}")">@comment.CreatedAt.ToLocalTime().ToString("MMM d, yyyy h:mm tt")</span>
-                                </div>
-                                <MarkdownContent Markdown="@comment.Text"
-                                                 CssClass="small text-break"
-                                                 EmptyText="" />
-                            </article>
-                        }
+                    @* The scroll cap now lives inside ActivityTimeline (.activity-timeline-scroll),
+                       so the filter chips stay put while the rows scroll. *@
+                    <div class="mb-2">
+                        <ActivityTimeline TestIdPrefix="task-detail-activity"
+                                          TaskId="@Task.Id"
+                                          Comments="comments"
+                                          Watermark="@Task.UpdatedAt" />
                     </div>
                 }
 
@@ -355,13 +347,16 @@
                 </div>
             </section>
 
-            @* Timestamps *@
+            @* Timestamps — #306. These three rendered RAW UTC with no tooltip, ~35 lines below
+               comment rows that rendered LOCAL time: same panel, same screen, two clocks, 4-5h
+               apart. Every timestamp on this panel now goes through ActivityTimelineModel, which
+               is the only formatter left, so there is nothing to drift against. *@
             <div class="mb-4 pt-2 border-top">
-                <small class="text-muted d-block">Created: @Task.CreatedAt.ToString("MMM d, yyyy h:mm tt")</small>
-                <small class="text-muted d-block">Updated: @Task.UpdatedAt.ToString("MMM d, yyyy h:mm tt")</small>
+                <small class="text-muted d-block" data-testid="task-detail-created-at" title="@ActivityTimelineModel.Tooltip(Task.CreatedAt)">Created: @ActivityTimelineModel.Absolute(Task.CreatedAt)</small>
+                <small class="text-muted d-block" data-testid="task-detail-updated-at" title="@ActivityTimelineModel.Tooltip(Task.UpdatedAt)">Updated: @ActivityTimelineModel.Absolute(Task.UpdatedAt)</small>
                 @if (Task.CompletedAt.HasValue)
                 {
-                    <small class="text-muted d-block">Completed: @Task.CompletedAt.Value.ToString("MMM d, yyyy h:mm tt")</small>
+                    <small class="text-muted d-block" data-testid="task-detail-completed-at" title="@ActivityTimelineModel.Tooltip(Task.CompletedAt.Value)">Completed: @ActivityTimelineModel.Absolute(Task.CompletedAt.Value)</small>
                 }
             </div>
 
@@ -1157,29 +1152,10 @@
         CommentType.Verification
     ];
 
-    private static string GetCommentTypeBadgeClass(CommentType type) => type switch
-    {
-        CommentType.Comment => "badge text-bg-primary",
-        CommentType.Note => "badge text-bg-primary",
-        CommentType.Decision => "badge text-bg-info",
-        CommentType.Question => "badge text-bg-light border text-dark",
-        CommentType.Blocked => "badge text-bg-danger",
-        CommentType.Handoff => "badge text-bg-warning",
-        CommentType.Verification => "badge text-bg-success",
-        CommentType.Created => "badge text-bg-success",
-        _ => "badge text-bg-secondary"
-    };
-
-    private static string GetCommentBorderClass(CommentType type) => type switch
-    {
-        CommentType.Comment or CommentType.Note => "task-comment-note",
-        CommentType.Decision => "border-info",
-        CommentType.Question => "border-dark-subtle",
-        CommentType.Blocked => "border-danger",
-        CommentType.Handoff => "border-warning bg-warning-subtle",
-        CommentType.Verification => "border-success",
-        _ => "task-comment-system"
-    };
+    // One actor convention across both task surfaces: a blank author is "System", which is
+    // literally what every writer in TaskService stores when no actor is supplied. (The panel
+    // used to say "Anonymous" here and EditItemModal said "System" for the same rows.)
+    private static string ActorOf(string? author) => ActivityTimelineModel.ActorOf(author);
 
     private TaskComment? GetLatestHandoffComment() => comments
         .Where(comment => comment.Type == CommentType.Handoff)

@@ -30,8 +30,12 @@
                     <dt class="col-5 text-muted">DB path</dt>
                     <dd class="col-7 text-truncate font-monospace" title="@DbPath">@DbPath</dd>
 
+                    @* Already local time — the #306 sweep's only other hit, and it was already
+                       right. It gains the UTC tooltip so every timestamp in the app now exposes
+                       its absolute instant on hover. The sortable-log format stays; this is a
+                       server-uptime readout, not a task timestamp. *@
                     <dt class="col-5 text-muted">Started</dt>
-                    <dd class="col-7">@Startup.StartedAtUtc.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss")</dd>
+                    <dd class="col-7" title="@KanbanFlow.Services.ActivityTimelineModel.Tooltip(Startup.StartedAtUtc)">@Startup.StartedAtUtc.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss")</dd>
                 </dl>
             </div>
         </div>
