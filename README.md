@@ -1,534 +1,770 @@
-# KanbanFlow v2
+# KanbanFlow
 
-> **An AI-first project knowledge graph that's equally a human kanban board and an agent API.**
-> .NET 10 · Blazor Server · SQLite · REST + MCP · local-first · no auth · no Docker
+> ## KanbanFlow is GitHub, visualized.
+>
+> **GitHub issues are the substrate for the work the world can see** — the items, their state,
+> and their conversation. KanbanFlow **projects** them into a richer graph and adds what an
+> issue tracker has no place for: dependencies, acceptance criteria, subtasks, agent claims,
+> and memory.
+>
+> It is a **projection, not a mirror.** GitHub owns some fields; the board owns others; a few
+> are derived. Which is which is spelled out in
+> [Who owns what](#who-owns-what) — read that table before you trust either side.
 
-**Designed for AI agents to read, write, and navigate structured project knowledge — and to be told *what to work on next, with the context they need to do it*.** Humans use the kanban UI; agents use the REST API and MCP server. It's not a kanban app with an API bolted on — the board is one view of a project knowledge graph that is equally exposed as REST + MCP.
+| | |
+|---|---|
+| **Stack** | .NET 10 · Blazor Server · SQLite (EF Core 10) · Minimal APIs · Node 18+ for the MCP wrapper |
+| **Surfaces** | 5 UI routes · 60 REST endpoints · 24 native MCP tools · 50 Node-wrapper MCP tools |
+| **Sync** | **One-way**, GitHub → board. It **never writes to GitHub**. GitHub owns title, priority, milestone; the board owns dependencies, criteria, subtasks, claims, ordering, memory — see [Who owns what](#who-owns-what) |
+| **Tests** | 524 xUnit · 56 in-app integration · 25 Playwright e2e · 2 smoke suites — [all local, no CI](#deliberate-non-features) |
+| **Runs at** | `http://127.0.0.1:5123` — localhost only, no auth, no Docker, no cloud |
+| **Log book** | [`docs/BACKLOG.md`](docs/BACKLOG.md) — the authoritative record of what happened |
+| **Deep detail** | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) |
 
-## In one minute
-
-- **What:** a single-file (.NET 10 + SQLite) app where a project — its features, tasks, subtasks, requirements, acceptance criteria, decisions, and dependencies — is structured data.
-- **For humans:** a drag-and-drop kanban board, project outline, and an **Ideas board** (`/ideas`) for capturing, triaging, and promoting ideas into projects.
-- **For agents:** the *same* data over a REST API and an MCP server, plus a `next-tasks` engine that answers "what should I work on next?" with reasoning.
-- **Guarantee:** every **task** mutation (human *or* agent) writes an immutable `ActivityEvent` — full-entity audit coverage is landing via the service-layer work (#88) — so agents inherit the causal history.
-- **Scope:** local-first, single-user, single-trust-boundary (agent + owner on one machine). No auth, no multi-tenancy, no cloud.
-
----
-
-## The problem it solves
-
-AI coding agents are good at *executing* a well-scoped task but bad at knowing **what to do next, and why**. The state that answers those questions — goals, decisions, what's blocked, what changed and when — is scattered across chat logs, code comments, and a human's head. None of it is queryable by an agent, so:
-
-- Agents **re-derive context** from scratch every session, expensively and unreliably.
-- The **causal history of decisions is lost** — a new agent can't see *why* a previous one did something.
-- Humans and agents **drift**: there's no shared, authoritative picture of project state.
-- Traditional PM tools (Jira, Linear, Trello) are built for **humans clicking buttons** — their APIs are afterthoughts, and none of them can hand an agent "the exact context needed to act on this task."
-
-**KanbanFlow v2 makes project state a first-class, agent-native knowledge graph.** Every entity is structured documentation reachable over REST + MCP; a direction engine ranks the next tasks with human-readable reasoning and bundles everything needed to execute; and an append-only audit trail records every mutation so agents and humans share one source of truth. The kanban board is just the human's view of that graph.
-
----
-
-## Vision
-
-KanbanFlow v2 does three things:
-
-1. **Documents.** Every project, feature, task, subtask, criterion, requirement, comment, and activity event is structured documentation. The repo *is* the documentation.
-2. **Directs.** Given a project, the API answers "what should I work on next?" with reasoning, dependencies expanded, and full context bundled in one call.
-3. **Records.** Every change — by human or agent — produces an immutable activity event. Future agents have the full causal history.
-
-A kanban board is a side effect of the data model, not the point.
-
-## What it is, what it isn't
-
-✅ A documentation-rich project structure that AI agents can read, write, and navigate
-✅ A workflow engine that answers "what's next?" with reasoning + the context needed to execute
-✅ A local, single-trust-boundary tool — designed for agent + owner on one machine
-✅ A complete audit trail of every project change
-
-❌ Not multi-tenant, not authenticated, not production-deployable beyond `localhost`
-❌ Not a replacement for code repos, design tools, or chat — it complements them
-❌ Not a real-time collaboration tool (no SignalR-driven multi-user editing)
-
-If you need any of the things in the right column, this isn't the tool.
+Every count above was re-derived from the code for this revision. The commands that produced
+them are in [Surfaces, verified](#surfaces-verified) — run them yourself; do not trust the
+table alone.
 
 ---
 
-## Quick Start
+## Contents
 
-```powershell
-# Start the app (recommended — fixed URL agents can rely on)
-$env:ASPNETCORE_ENVIRONMENT = "Development"
-dotnet run --project src/KanbanFlow/KanbanFlow.csproj --urls http://127.0.0.1:5123
-# Open http://127.0.0.1:5123
+- [The thesis](#the-thesis)
+- [How the sync works](#how-the-sync-works)
+- [GitHub → KanbanFlow: the mapping](#github--kanbanflow-the-mapping)
+- [Who owns what](#who-owns-what)
+- [Known omissions](#known-omissions)
+- [The task lifecycle](#the-task-lifecycle)
+- [Runbook](#runbook) — [start](#0-start-the-app) · [onboard a repo](#1-onboard-a-new-repo) · [create an issue](#2-create-a-new-issue) · [sync](#3-run-a-sync) · [status & drift](#4-check-status-and-drift) · [log book](#5-read-the-log-book)
+- [Surfaces, verified](#surfaces-verified)
+- [What is audited — and what is not](#what-is-audited--and-what-is-not)
+- [Deliberate non-features](#deliberate-non-features)
+- [Install & run](#install--run)
+- [Tests](#tests)
+- [Docs](#docs)
+
+---
+
+## The thesis
+
+GitHub already holds the work: the issues, the milestones, the review conversations, the
+closes. What it does not hold is a **picture**. `gh issue list` across six repos is 400 lines
+of text with no shape — you cannot see what is in flight, what is blocked, or what to do next.
+GitHub Projects gets closer, but it is a board *for humans clicking buttons*; an agent cannot
+ask it "what should I work on, and why".
+
+KanbanFlow does not ask you to move your work. It **projects** GitHub into a project knowledge
+graph and gives that graph three surfaces:
+
+1. **A board** — drag-and-drop kanban, project outline, and an ideas inbox. For you.
+2. **A REST API** — 60 endpoints over the same graph. For scripts.
+3. **An MCP server** — the same capabilities as first-class agent tools, plus a direction
+   engine that answers *"what next, and why"* with a human-readable reason. For agents.
+
+The projection is deliberately **lossy in one direction and additive in the other**. GitHub
+supplies the work items and their conversation; the board supplies the structure an issue
+tracker cannot express — a cycle-guarded dependency DAG, acceptance-criteria checklists,
+recursive subtasks, agent claims (`ClaimedBy` / `ClaimedAt`), ordering (`SortOrder`),
+requirements, and a memory knowledge graph. **None of that has a GitHub representation.**
+Editing an issue will never change a dependency edge or tick an acceptance criterion.
+
+Three properties make it safe to point at a real portfolio:
+
+- **GitHub is upstream.** The sync reads GitHub and writes the board. **It never writes to
+  GitHub** — not a label, not a comment, not a status. Today the board→GitHub direction does
+  not exist at all.
+- **It advances your board, and overrides it in exactly one case.** Drag a task to
+  `InProgress` and the sync leaves it there — *unless the issue is closed*, in which case the
+  task is forced to `Done` regardless of where you put it
+  (`syncTasks()` in `portfolio-sync.mjs`). The opposite disagreement — board `Done`, issue still
+  open — is reported as **drift** and never touched (`driftDoneButOpen`). That asymmetry is the whole rule; the
+  older "never overrides your status" phrasing was half true and has been corrected here.
+- **It is idempotent.** Re-running converges instead of duplicating, with **no schema change** —
+  the identity of every projected row is encoded in data GitHub already gave it.
+
+---
+
+## How the sync works
+
+```mermaid
+flowchart LR
+    subgraph GH["GitHub — upstream"]
+        direction TB
+        REPO["repo"]
+        MS["milestone"]
+        ISS["issue"]
+        IC["issue comment"]
+        PR["open PR + reviews<br/>+ inline file:line comments"]
+    end
+
+    subgraph ENGINE["sync engine — scripts/portfolio-sync.mjs"]
+        direction TB
+        READ["gh CLI, read-only<br/>issues · PRs · comments"]
+        MATCH["match by idempotency key<br/>name · #n prefix · gh node id"]
+        PLAN["plan writes<br/>--dry-run prints, mutates nothing"]
+        READ --> MATCH --> PLAN
+    end
+
+    subgraph KF["KanbanFlow graph — projected from GitHub"]
+        direction TB
+        PRJ["Project"]
+        FEAT["Feature"]
+        TASK["TaskItem"]
+        TC["TaskComment"]
+        AE[["ActivityEvent<br/>append-only"]]
+    end
+
+    subgraph OWN["board-owned — NO GitHub source, never round-trips"]
+        direction TB
+        DEP["TaskDependency<br/>cycle-guarded DAG"]
+        AC["AcceptanceCriterion"]
+        SUB["Subtask (recursive)"]
+        REQ["Requirement"]
+        CLAIM["ClaimedBy · ClaimedAt · SortOrder"]
+        MEM["Memory knowledge graph"]
+    end
+
+    subgraph OUT["surfaces over the same graph"]
+        direction TB
+        UI["Blazor board<br/>/ · /project/{id} · /ideas"]
+        REST["REST · 60 endpoints"]
+        MCP["MCP · 24 native / 50 wrapper"]
+    end
+
+    REPO --> READ
+    MS --> READ
+    ISS --> READ
+    IC --> READ
+    PR --> READ
+
+    PLAN -->|"POST /api/projects"| PRJ
+    PLAN -->|"POST /api/projects/{id}/features"| FEAT
+    PLAN -->|"POST /api/features/{id}/tasks<br/>PUT name+priority · PATCH status · PATCH feature"| TASK
+    PLAN -->|"POST /api/tasks/{id}/comments"| TC
+    TASK -.->|"task writes only"| AE
+
+    TASK --- OWN
+    PRJ --> UI
+    TASK --> UI
+    TC --> UI
+    AE --> UI
+    OWN --> UI
+
+    DRIFT["drift report<br/>disagreements the sync refuses to resolve"]
+    PLAN --> DRIFT
+    XBACK["board to GitHub:<br/>no write path exists"]
+    KF -.-x XBACK
 ```
 
-The app uses SQLite. The database file is created on first run with seed data — no setup, no Docker, no accounts.
+Every sync write goes over **REST**, never straight to SQLite — so the mutations the service
+layer owns land in the audit trail like any other. (What that does and does not cover is
+[spelled out below](#what-is-audited--and-what-is-not).)
 
-To use a custom database location:
+The right-hand box is the part that makes this a projection rather than a mirror: those
+entities are created by you and by agents doing real work, live only on the board, and are
+invisible to GitHub.
+
+The sync also **cannot** run over the native MCP server: the 24 native tools include
+`list_projects` and `get_project_context` but **no `create_project`**, so an agent on `/mcp`
+cannot onboard a repo. That parity gap is [#231](https://github.com/joelfuller2016/KanbanFlow-v2/issues/231).
+
+---
+
+## GitHub → KanbanFlow: the mapping
+
+| GitHub concept | KanbanFlow entity | Idempotency key | Direction |
+|---|---|---|---|
+| Repo | `Project` | `<!-- github: owner/repo -->` marker in `Project.Description`; falls back to `Project.Name` == repo short name (case-insensitive) | GitHub → board |
+| Milestone | `Feature` | `Feature.Name` == milestone title, within the project; issues with no milestone go to a feature literally named `Unsorted` | GitHub → board |
+| Issue | `TaskItem` | the **`#<n>` title prefix followed by one space** — the space is part of the key (`/^#(\d+)\s/`) | GitHub → board |
+| Issue labels (`P0`…`P3`, `priority:high`, `critical`, …) | `TaskItem.Priority` | — reconciled every run | GitHub → board (GitHub always wins) |
+| Issue state + linked open PR | `TaskItem.Status` | — | GitHub → board, **advance-only** (see below) |
+| Issue body | `TaskItem.Description` | `<!-- kanbanflow-sync -->` block + first 1500 chars | GitHub → board |
+| Issue comment | `TaskComment` (`Comment`) | GitHub node id stamped as `<!-- gh:ID -->` | GitHub → board |
+| PR conversation comment | `TaskComment` (`Comment`) | same `<!-- gh:ID -->` marker | GitHub → board |
+| PR review, `APPROVED` | `TaskComment` (**`Verification`**) | same `<!-- gh:ID -->` marker | GitHub → board |
+| PR review, `CHANGES_REQUESTED` | `TaskComment` (**`Blocked`**) | same `<!-- gh:ID -->` marker | GitHub → board |
+| PR inline `file:line` review comment | `TaskComment` (`Comment`) | same `<!-- gh:ID -->` marker | GitHub → board |
+| *(every task mutation the sync makes)* | `ActivityEvent` | — append-only | board-internal |
+| *(nothing)* | — | — | **board → GitHub: never** |
+
+**Status is deliberately asymmetric — and one row does override you.** On create it is derived
+from GitHub (`closed` → `Done`; open + linked open PR → `Review`; open + assignee →
+`InProgress`; else `Backlog`). On update:
+
+| Condition | Action | Overrides a hand-set status? |
+|---|---|---|
+| issue closed, task ≠ `Done` | → `Done` | **Yes.** Whatever column you put it in, a closed issue forces `Done` (`syncTasks()` in `portfolio-sync.mjs`) |
+| issue open, linked open PR, task ∈ {`Backlog`, `Todo`, `InProgress`} | → `Review` | Partly — it advances those three, and will not touch `Review` or `Done` |
+| issue open, task = `Done` | **drift** — reported, not touched | No |
+| task's issue is in neither the open nor the closed set | **drift** — deleted or transferred; never auto-deleted | No |
+| anything else | leave the board alone | No |
+
+> The frequently-repeated line *"the sync advances status but never overrides yours"* is **half
+> true**. Row 1 is a genuine override. If you deliberately park a task in `Todo` while its issue
+> is closed, the next sync will move it to `Done` and keep doing so.
+
+**The two fragile keys.** Both are data, not decoration:
+
+- Strip or edit the `#<n>` prefix (the number, then one space) on a task title and the task is orphaned — the next sync
+  creates a duplicate. Rename the *issue*, not the task.
+- Edit a mirrored comment's text and you strip its `<!-- gh:ID -->` marker — the next sync
+  re-adds it as a duplicate. The marker is hidden where the body renders as Markdown
+  (`MarkdownRenderer` sanitises HTML comments away) but **plainly visible in raw reads**:
+  `GET /api/tasks/{id}/comments`, a `curl`, and any agent pulling the comment over MCP all
+  see it.
+
+A durable `Project.RepoUrl` and `TaskItem.IssueNumber` would replace both keys with real
+columns — [#237](https://github.com/joelfuller2016/KanbanFlow-v2/issues/237).
+
+Full semantics, including truncation warnings, comment sizing, and every drift case:
+[`docs/GITHUB-SYNC.md`](docs/GITHUB-SYNC.md) and
+[`.claude/skills/kanban-portfolio/reference/mapping.md`](.claude/skills/kanban-portfolio/reference/mapping.md).
+
+---
+
+## Who owns what
+
+The single most useful table here. Before you edit a field, know which side wins.
+
+| Field | Owner | What that means in practice |
+|---|---|---|
+| Task **title** | **GitHub** | Reconciled every run (`syncTasks()`). Rename the issue; renaming the task is undone — and stripping the `#<n>` prefix, the number followed by one space, orphans it |
+| Task **priority** | **GitHub** | Reconciled every run (`syncTasks()`) from `P0`…`P3` / `priority:high` / bare severity labels. Setting it on the board is undone on the next sync |
+| Task **status** | **Shared, GitHub-dominant** | You may move it freely, **except** that a closed issue forces `Done` (`syncTasks()`). Board `Done` + open issue is reported as drift, not corrected |
+| Task **feature** (milestone) | **GitHub** | An issue's milestone change moves the task via `PATCH /api/tasks/{id}/feature` (`syncTasks()`) |
+| Task **description** | **GitHub, once** | Written from the issue body **only at creation**, truncated to 1,500 chars. It is **never refreshed** — the update patch carries only name, priority, status |
+| **Comments** | **GitHub, append-only** | Issue comments, PR conversation, PR reviews, and inline `file:line` comments are appended, deduped by node id. Board-authored comments are never pushed |
+| **`ActivityEvent`** | **Derived** | Written by the service layer as a side effect of task writes. Never read from or sent to GitHub |
+| `TaskDependency` (DAG) | **Board** | No GitHub representation. Authored by you and by agents |
+| `AcceptanceCriterion` | **Board** | No GitHub representation |
+| `Subtask` (recursive) | **Board** | No GitHub representation |
+| `Requirement` | **Board** | No GitHub representation |
+| `ClaimedBy` / `ClaimedAt` | **Board** | Agent coordination primitive. GitHub assignees do **not** populate it |
+| `SortOrder` | **Board** | Your manual ordering within a column. Survives sync |
+| Memory graph (`MemoryNode` / relations / observations) | **Board** | Entirely local |
+| `Idea` inbox | **Board** | Pre-project capture; promotion creates a Project, never a repo |
+
+**Derived, not owned by either side:** task status *on create* (computed from issue state +
+linked PR + assignee presence), the `Feature` named `Unsorted` (synthesised for issues with no
+milestone), the `<!-- kanbanflow-sync -->` description block, and `isBlocked` /
+`openBlockerCount` (computed from the board-owned dependency DAG at read time).
+
+---
+
+## Known omissions
+
+What the sync **does not** do. Each of these is verified behaviour, not speculation — an agent
+that assumes otherwise will be wrong.
+
+| Omission | Detail |
+|---|---|
+| **Issue body is never refreshed** | Written once at task creation, truncated at `BODY_EXCERPT_LIMIT = 1500` (`portfolio-sync.mjs`). Edit an issue body and the board keeps the original excerpt forever |
+| **Closed issues are fetched as numbers only** | Without `--include-closed` the sync pulls only issue *numbers* for closed issues (`fetchClosedIssues(repo, full)`), enough to converge a task to `Done` — their bodies and comments are not mirrored |
+| **Assignees are not synchronised** | GitHub assignees are read once, only to infer `InProgress` on create (`deriveStatus()`). `TaskItem.Assignee` is never populated from GitHub |
+| **Labels collapse to one priority** | The first matching severity label becomes `TaskItem.Priority`. Every other label survives only as text inside the description block — there is no label entity, and no filtering by label on the board |
+| **Comment edits, deletions, and reactions are never reconciled** | Dedupe is by GitHub node id; an id already seen is skipped forever. An edited GitHub comment keeps its original mirrored text, and a deleted one stays on the board |
+| **PR comments on a PR that closes no issue are dropped** | With no `Closes #n` there is no task to attach them to. They are counted and reported, never silently discarded |
+| **Inline review comments cost one API call per PR** | Fetched via `gh api repos/{repo}/pulls/{n}/comments`. A failure is reported and sets a non-zero exit code — the board is explicitly flagged incomplete rather than looking whole |
+| **Fetches are capped per list** | `GH_PAGE_LIMIT` defaults to `2000` (`KANBANFLOW_GH_PAGE_LIMIT` overrides it). Hitting the cap is a hard failure, not a warning — a count derived from a partial read is worse than no count |
+| **No board → GitHub write path exists** | The sync creates nothing on GitHub — not an issue, not a comment, not a label. A task created on the board has no issue and will be reported as drift |
+| **Board-owned structure never round-trips** | Dependencies, acceptance criteria, subtasks, requirements, claims, ordering, and memory have no GitHub equivalent. See [Who owns what](#who-owns-what) |
+| **Milestones are flattened** | Features are created flat; GitHub milestones are not hierarchical, so the recursive-feature capability is unused by the sync |
+| **Project ↔ repo link has no dedicated column** | There is still no `RepoUrl` column ([#237](https://github.com/joelfuller2016/KanbanFlow-v2/issues/237)), but the link is durable anyway: a `<!-- github: owner/repo -->` marker in `Project.Description` is the primary key, so a **marker-linked project survives a rename**. Short-name matching remains as a legacy fallback, and a hand-made project matching a repo short name is still adopted (and then stamped with a marker) on the next `onboard` |
+
+---
+
+## The task lifecycle
+
+A card's column *is* its status. Five things can change it — dragging, the done checkbox, REST,
+MCP, and the next sync after the issue closes. The first four are yours; the fifth can
+overrule them, in the one case noted below.
+
+```mermaid
+stateDiagram-v2
+    direction LR
+
+    [*] --> Backlog : issue opened / synced
+    Backlog --> Todo : you triage it
+    Todo --> InProgress : claim_task / assignee on GitHub
+    InProgress --> Review : PR opened with "Closes #n"
+    Review --> Done : issue closed on GitHub
+    InProgress --> Done : you tick it off
+
+    Review --> InProgress : changes requested
+    Done --> Todo : reopened
+
+    note left of Backlog
+        Sync creates it here unless GitHub
+        already says otherwise.
+    end note
+
+    note right of Review
+        The sync ADVANCES Backlog/Todo/InProgress
+        to Review when a PR says "Closes #n",
+        and FORCES Done when the issue closes -
+        overriding whatever column you chose.
+        It never drags a task backwards.
+    end note
+
+    note right of Done
+        Board says Done but the issue is
+        still open? That is DRIFT: reported,
+        never silently corrected.
+    end note
+```
+
+A task with an unfinished dependency is **blocked**: excluded from `next-tasks`
+recommendations and flagged `isBlocked` / `openBlockerCount` in step context. Those
+dependencies are **board-owned** — GitHub has no equivalent, so blocking is something the
+board knows and the issue tracker cannot. The direction engine ranks what is left by priority,
+then status, then oldest-updated, and hands back a human-readable `reason` per pick.
+
+---
+
+## Runbook
+
+Everything below was executed as written on Windows 11 / PowerShell 7 with Git Bash available.
+Commands are portable except where noted; `smoke-api.ps1` and `verify.ps1` are PowerShell.
+
+### 0. Start the app
+
+```powershell
+dotnet run --project src/KanbanFlow/KanbanFlow.csproj --urls http://127.0.0.1:5123
+```
+
+SQLite creates itself on first run with seed data. No setup, no Docker, no accounts.
+
+> **Use `--urls http://127.0.0.1:5123`.** The launch profile defaults to `:5148`, but the MCP
+> wrapper, `smoke-mcp.mjs`, `portfolio-sync.mjs`, and `portfolio-standup.mjs` all default to
+> `:5123`. Standardising the profile on `:5123` is on the roadmap; until then pass the flag or
+> set `KANBANFLOW_API_URL` to match.
+
+Confirm it is up:
+
+```bash
+curl -s http://127.0.0.1:5123/api/admin/health
+# {"status":"ok","app":"KanbanFlow","startedAtUtc":"2026-08-02T22:26:22.1897449Z",
+#  "checkedAtUtc":"2026-08-02T22:26:30.7731684Z","runtime":".NET 10.0.10",
+#  "openApiUrl":"/openapi.json"}
+```
+
+Custom database location:
 
 ```powershell
 $env:KANBANFLOW_DB_PATH = "C:\path\to\my-projects.db"
 dotnet run --project src/KanbanFlow/KanbanFlow.csproj --urls http://127.0.0.1:5123
 ```
 
-> **Note on URL.** The launch profile defaults to `http://localhost:5148`, but the MCP wrapper and smoke tests assume `http://127.0.0.1:5123`. Use the `--urls` flag above (or set `KANBANFLOW_API_URL` to match) to keep everything aligned. Standardising on `:5123` is on the roadmap.
+### 1. Onboard a new repo
 
-### LLM connection (optional — #218)
+Onboarding *is* the first sync. There is no separate "create project" step — point the sync at
+a repo and it creates the `Project`, the milestone `Feature`s, and every issue as a `TaskItem`.
 
-KanbanFlow can talk to an OpenAI-compatible LLM endpoint (default: a local ZeroRouter at `http://localhost:5256/v1`) through the `ILlmClient` service — the foundation for upcoming AI features (memory #220, AI-PM #226). It is **fail-soft**: when the endpoint is unreachable nothing crashes and no request 500s; calls return a typed error result. All settings are optional environment variables:
+Requires an authenticated [`gh` CLI](https://cli.github.com/) (`gh auth status` to check).
 
-| Variable | Default | Purpose |
-|----------|---------|---------|
-| `ZEROROUTER_URL` (or `KANBANFLOW_LLM_URL`) | `http://localhost:5256/v1` | OpenAI-compatible base URL — must include the `/v1` suffix |
-| `KANBANFLOW_LLM_MODEL` | `gpt-4o-mini` | Model id (the router maps it to a provider) |
-| `ZEROROUTER_API_KEY` (or `KANBANFLOW_LLM_KEY`) | `zerorouter` | Credential — ZeroRouter is open, so the placeholder is fine (never masked) |
-| `KANBANFLOW_LLM_TIMEOUT_MS` | `30000` | Per-attempt request timeout |
+```bash
+# 1. See exactly what would be written. Mutates nothing.
+node scripts/portfolio-sync.mjs --dry-run --repos joelfuller2016/KanbanFlow-v2
 
-Check connectivity with the self-test endpoint — it returns `{ ok, model, url, latencyMs, reply?, error? }`, reporting `ok: false` with a clean error (HTTP 200, never a 500) when the endpoint is down:
-
-```powershell
-curl http://127.0.0.1:5123/api/admin/llm-ping
+# 2. Happy with the plan? Run it for real.
+node scripts/portfolio-sync.mjs --repos joelfuller2016/KanbanFlow-v2
 ```
 
-### Embeddings (optional — #219)
+**`onboard` is the explicit version of step 2's first half.** It resolves (or creates) the
+`Project` for a repo and stamps the durable `<!-- github: owner/repo -->` marker into
+`Project.Description` — including onto a legacy project that was previously linked by name
+alone. It is safe to re-run:
 
-KanbanFlow can also generate **text embeddings** through the same ZeroRouter endpoint, via the `IEmbeddingService` — the retrieval foundation for semantic recall (memory store #220, duplicate/similar detection). Identical text is embedded once (content-hash cache), batches are deduped and chunked, and it is **fail-soft** like the chat client: when the endpoint is down nothing crashes and no request 500s. It reuses the URL / key / timeout settings above and adds:
-
-| Variable | Default | Purpose |
-|----------|---------|---------|
-| `KANBANFLOW_EMBED_MODEL` | `text-embedding-3-small` | Embedding model id (the router maps it to a provider) |
-| `KANBANFLOW_EMBED_DIMENSIONS` | *(provider-native)* | Optional requested output dimensionality (e.g. `768`, `1536`); only sent when set |
-| `KANBANFLOW_EMBED_BATCH_SIZE` | `256` | Max texts per provider call — larger batches are split into chunks |
-
-Check connectivity with the self-test endpoint — it returns `{ ok, model, url, dimensions, latencyMs, error? }`, reporting `ok: false` with a clean error (HTTP 200, never a 500) when the endpoint is down, and the live vector length in `dimensions` when it is up:
-
-```powershell
-curl http://127.0.0.1:5123/api/admin/embed-ping
+```bash
+node scripts/portfolio-sync.mjs onboard joelfuller2016/KanbanFlow-v2
 ```
 
-### Tests (all local — no CI)
+To onboard several at once, or to make a repo set the default for every later run:
 
-```powershell
-# In-app integration suite (40 tests) — click "Run all" at /settings, or hit the running app
-# (match the port you launched with — the launch profile defaults to :5148, Quick Start uses :5123):
-curl -X POST "http://127.0.0.1:5123/api/admin/run-tests?suite=all"   # suite=api|ui|service|all
-
-./scripts/smoke-api.ps1                 # ~50 HTTP calls against an ephemeral DB
-node ./scripts/smoke-mcp.mjs 1          # exercises the MCP tool surface (needs the app running)
-npm run test:ui                         # Playwright browser e2e: New Project + add-task modals,
-                                        # board render, status auto-placement, Settings "Run all"
+```bash
+node scripts/portfolio-sync.mjs --repos owner/alpha,owner/beta,owner/gamma
 ```
 
-The in-app suite runs real integration tests from inside the live app (API hits the REST
-surface, UI renders Razor routes via SSR, Service exercises `ITaskService` + the audit-log
-contract). `npm run test:ui` builds, boots an isolated instance (scratch port + throwaway DB),
-drives chromium, and tears down. First run needs `npm install` + `npx playwright install chromium`.
-
-### Before you push
-
 ```powershell
-./scripts/verify.ps1                    # restore + build (warnings=errors) + test  (+ format, advisory)
+$env:KANBANFLOW_PORTFOLIO_REPOS = "owner/alpha,owner/beta"
+node scripts/portfolio-sync.mjs
 ```
 
-**There is no CI** (single-trust-boundary, local-first by design), so `verify.ps1` is the quality gate — run it before every push. Build + tests are hard gates; the **format check is advisory** (it reports drift but doesn't fail the run), pending a one-time `dotnet format` cleanup of the existing tree.
+> **Run `--dry-run` first on a board that already has hand-made projects.** A project whose
+> name happens to equal a repo's short name **will be adopted** by the sync — short-name
+> matching is the fallback the durable marker does not replace, because a project that predates
+> the marker has nothing else to match on. Once adopted (or onboarded) it carries a marker and
+> the name stops mattering: rename it freely. [#237](https://github.com/joelfuller2016/KanbanFlow-v2/issues/237)
+> would replace the marker with a real column, but the link is no longer waiting on it.
 
-Client-side libraries (Bootstrap, SortableJS) are vendored under `wwwroot/lib` and pinned in `libman.json`. To restore or update them:
+### 2. Create a new issue
+
+Create it **on GitHub** — that is the substrate. The board is downstream.
+
+```bash
+gh issue create --repo joelfuller2016/KanbanFlow-v2 \
+  --title "Board should show the linked PR on a task card" \
+  --body  "Objective / Requirements / Goals (AC) / Plan — see docs/issue-quality-checklist.md" \
+  --label "P2,enhancement" \
+  --milestone "M5: Docs & Process"
+```
+
+Then bring it onto the board:
+
+```bash
+node scripts/portfolio-sync.mjs --repos joelfuller2016/KanbanFlow-v2
+```
+
+The new issue arrives as a `TaskItem` titled `#<n> <issue title>`, filed under the milestone's
+`Feature` (or `Unsorted`), with priority from the `P2` label and status `Backlog`.
+
+Repo issue templates live in [`.github/ISSUE_TEMPLATE/`](.github/ISSUE_TEMPLATE); what a
+well-formed issue contains is in [`docs/issue-quality-checklist.md`](docs/issue-quality-checklist.md).
+
+> **Tasks created *on the board* stay on the board.** The sync is one-way, so a board-only task
+> has no issue and will be reported as drift on the next run. Use the board for triage and
+> annotation; use GitHub to create work.
+
+### 3. Run a sync
+
+```bash
+# Default repo set (or $KANBANFLOW_PORTFOLIO_REPOS), full comment mirroring.
+node scripts/portfolio-sync.mjs
+
+# Also mirror closed issues as Done tasks.
+node scripts/portfolio-sync.mjs --include-closed
+
+# Skip comment mirroring — much faster on repos with heavy bot review threads.
+node scripts/portfolio-sync.mjs --no-comments
+
+# Cap each mirrored comment (a single CodeRabbit review has measured 110,574 chars).
+node scripts/portfolio-sync.mjs --max-comment-chars 4000
+
+# Label the audit trail so you can tell this run apart later.
+node scripts/portfolio-sync.mjs --actor nightly-sync
+
+node scripts/portfolio-sync.mjs --help
+```
+
+The run prints a plan line per write, then a summary. Onboarding this repo from an empty
+board produced:
+
+```text
+── summary ──
+projects created: 1
+features created: 8
+tasks created:    100
+tasks updated:    0
+tasks moved:      0
+tasks unchanged:  0
+comments mirrored: 404
+comments existing:   0
+
+  ! biggest comment: 110,574 chars from coderabbitai on #149.
+    Mirrored whole. Use --max-comment-chars N to cap it (agents reading this task over MCP pay for it).
+```
+
+**A second consecutive run creates nothing** — that is the idempotency contract. Immediately
+re-running the same command gave:
+
+```text
+── summary ──
+projects created: 0
+features created: 0
+tasks created:    0
+tasks updated:    0
+tasks moved:      0
+tasks unchanged:  100
+comments mirrored:   0
+comments existing: 404
+```
+
+If a re-run keeps creating tasks, a `#<n> ` title prefix has been edited off.
+
+### 4. Check status and drift
+
+Three questions, three commands.
+
+**"Is it safe to act on this board right now?"** — `status`. This is the dedicated health check:
+read-only, and it answers with an **exit code** so a script or an agent can gate on it rather
+than parsing prose.
+
+```bash
+node scripts/portfolio-sync.mjs status && echo "safe to act"
+node scripts/portfolio-sync.mjs status --repos joelfuller2016/KanbanFlow-v2
+```
+
+| Exit | Meaning |
+|---|---|
+| `0` | Clean **and complete** — everything was read, and nothing disagrees |
+| `1` | Confirmed drift. With `--strict`, also pending work, unsynced tasks, or a non-durable link |
+| `2` | **Incomplete or error** — a repo could not be read, or a fetch hit its item bound |
+
+Exit `2` dominates `1`: "I could not see everything" is a different answer from "I looked and it
+is clean", and a drift count computed over a partial read is worse than no count at all. See
+[`docs/GITHUB-SYNC.md`](docs/GITHUB-SYNC.md) for the full contract — including the fact that
+`status --actor <name>` reports "last sync" only for syncs run under that **same** `--actor`.
+
+**"Is the board still in agreement with GitHub?"** — the drift block at the end of any sync,
+including a dry run:
+
+```bash
+node scripts/portfolio-sync.mjs --dry-run
+```
+
+```text
+── drift (2) — board and GitHub disagree ──
+  ! owner/repo#144: board says Done, issue is still open — https://github.com/owner/repo/issues/144
+  ! owner/repo: task "#98 Old thing" has no matching issue #98 on GitHub (deleted or transferred?)
+```
+
+Drift is never auto-resolved. Close the issue, or move the card — the sync will not choose for
+you, and it never deletes a task (the audit trail is sacred).
+
+**"What is actually going on across everything?"** — the standup. Read-only; writes nothing,
+anywhere. It rolls each project to one row, asks the direction engine what matters, and
+overlays live GitHub state (open PRs, PRs stale without review >3 days, tasks parked
+`InProgress` >14 days):
+
+```bash
+node scripts/portfolio-standup.mjs
+node scripts/portfolio-standup.mjs --repos joelfuller2016/ZeroRouter
+node scripts/portfolio-standup.mjs --help
+```
+
+Or ask an agent, over MCP, per project:
+
+```text
+get_next_tasks(projectId: 1, limit: 5)   → ranked picks, each with a reason
+get_step_context(taskId: 42)             → everything needed to act on one task
+```
+
+### 5. Read the log book
+
+**[`docs/BACKLOG.md`](docs/BACKLOG.md) is the authoritative log book** — the durable, ordered
+record of what was decided and what happened. Read it before starting work; it answers "why is
+this the way it is" faster than any query.
+
+The live equivalents, when you need the current state rather than the history:
+
+```bash
+# Every recorded mutation on a project, newest first (limit clamped to 500).
+curl -s "http://127.0.0.1:5123/api/projects/1/activity?limit=50"
+
+# One task's history.
+curl -s "http://127.0.0.1:5123/api/tasks/42/activity"
+
+# One task's full context: description, criteria, subtasks, dependencies,
+# comments (including every mirrored GitHub comment), and recent activity.
+curl -s "http://127.0.0.1:5123/api/tasks/42/context"
+```
+
+In the browser, open a project at `/project/{id}` and click any card — the detail panel carries
+the same comment stream and history.
+
+---
+
+## Surfaces, verified
+
+[Issue #277](https://github.com/joelfuller2016/KanbanFlow-v2/issues/277) exists because this
+README under-reported its own surface. Each number below was re-derived for this revision by
+the command beside it — not copied from the previous README, and not copied from the issue.
+
+| Surface | Count | Command that produced it |
+|---|---:|---|
+| REST endpoints (app) | 55 | `grep -cE '\.Map(Get\|Post\|Put\|Patch\|Delete)\(' src/KanbanFlow/ApiEndpoints.cs` |
+| REST endpoints (admin) | 5 | `grep -cE '\.Map(Get\|Post\|Put\|Patch\|Delete)\(' src/KanbanFlow/AdminEndpoints.cs` |
+| **REST endpoints total** | **60** | *sum of the two above* |
+| Native MCP tools (`POST /mcp`) | 24 | `grep -c '\[McpServerTool(' src/KanbanFlow/Mcp/KanbanMcpTools.cs` |
+| Node-wrapper MCP tools | 50 | `tools/list` over stdio against `scripts/mcp-server.mjs` — [exact invocation](docs/ARCHITECTURE.md#mcp-surface-24-native--50-wrapper) |
+| Blazor routes | 5 | `grep -rn '@page' src/KanbanFlow/Components/ \| sort -u` → `/`, `/Error`, `/ideas`, `/project/{Id:int}`, `/settings` |
+| Razor components | 22 | `find src/KanbanFlow/Components -name '*.razor' \| wc -l` |
+| xUnit tests | 524 | `dotnet test tests/KanbanFlow.Tests` |
+| In-app integration tests | 56 | `grep -c 'results.Add(await RunTest' src/KanbanFlow/Services/TestRunnerService.cs` (28 API + 22 service + 6 UI) |
+| Playwright e2e scenarios | 25 | `npm run test:ui` |
+
+Corrections this revision made to the previous README: **53 → 60** endpoints (both memory
+endpoints and `GET /api/tasks/{id}/context` were missing from the route list entirely);
+**41 → 50** wrapper tools; native tool count stated for the first time (**24**); in-app suite
+**40 → 56**; and `GET /api/subtasks/{id}`, `GET /api/acceptance-criteria/{id}`,
+`GET /api/requirements/{id}` were listed as existing — **they do not exist**. The route map in
+[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md#rest-surface-60-endpoints) now marks them.
+
+Also corrected: `#82`, `#83`, `#85`, `#88`, and `#89` were all cited as open/broken. All five
+are **closed**, and the code enforces what they asked for.
+
+---
+
+## What is audited — and what is not
+
+Every mutation *should* write an immutable `ActivityEvent`. **It does not yet.** The previous
+README called this "non-negotiable ✅ for REST"; that was not true, and an agent that trusts a
+partial history draws wrong conclusions. Here is the real coverage:
+
+| Entity | Create | Update | Delete | Writes `ActivityEvent`? |
+|---|:--:|:--:|:--:|---|
+| `TaskItem` (incl. status, claim, release, reassign) | ✅ | ✅ | ✅ | **Yes** — via `ITaskService`, in one `SaveChanges` |
+| `TaskComment` (add) | ✅ | — | ❌ | **Yes** on add via `ITaskService`; **no** on `DELETE /api/comments/{id}` |
+| `Idea` (incl. promote) | ✅ | ✅ | ✅ | **Yes** — via `IIdeaService` |
+| `Project` | ✅ | ✅ | ✅ | **Delete only.** Create and update write raw EF |
+| `Requirement` | ✅ | ✅ | ✅ | **Assign only** (`PATCH /assign`). Create, update, delete write raw EF |
+| `Feature` | ✅ | ✅ | ✅ | **No** |
+| `Subtask` | ✅ | ✅ | ✅ | **No** |
+| `AcceptanceCriterion` | ✅ | ✅ | ✅ | **No** |
+| `TaskDependency` | ✅ | — | ✅ | **No** |
+
+The mechanical evidence — the entire REST layer has exactly one inline audit call site:
+
+```bash
+grep -n 'AddActivityEvent(' src/KanbanFlow/ApiEndpoints.cs
+# 2247:  AddActivityEvent(..., "RequirementAssigned", ...)   <- the only call
+# 2364:  private static void AddActivityEvent(...)           <- the helper itself
+```
+
+Closing this is [#149](https://github.com/joelfuller2016/KanbanFlow-v2/issues/149) (extend
+`ActivityEvent` to all entities). Two related issues are **already closed** and should not be
+cited as gaps: [#88](https://github.com/joelfuller2016/KanbanFlow-v2/issues/88) routed UI
+mutations through the shared service layer, and
+[#85](https://github.com/joelfuller2016/KanbanFlow-v2/issues/85) made the audit log survive
+entity deletion. [#302](https://github.com/joelfuller2016/KanbanFlow-v2/issues/302) tracks the
+REST edge layer re-declaring policy the service layer already owns.
+
+**What you can rely on today:** task and idea history is complete and identical across UI,
+REST, and MCP, and it survives deletion. **What you cannot:** the shape of the graph around a
+task — its features, subtasks, criteria, and dependencies — has no history at all.
+
+---
+
+## Deliberate non-features
+
+These are settled charter decisions, not backlog items. Proposals to add them have been
+filed and rejected; please read the linked issue before filing another.
+
+| Not here | Why |
+|---|---|
+| **No CI / no GitHub Actions** | Single-trust-boundary, local-first tool. The gate is [`scripts/verify.ps1`](scripts/verify.ps1), run before every push, plus externally-scheduled [`scripts/pr-ci.ps1`](scripts/pr-ci.ps1) and [`scripts/master-health.ps1`](scripts/master-health.ps1) — same build + tests, no workflow file. See [`docs/ci-without-actions.md`](docs/ci-without-actions.md). |
+| **No authentication or authorisation** | One machine, one owner, one agent. There is no second principal to authorise against. |
+| **No Docker** | One SQLite file and `dotnet run`. A container adds a layer and removes nothing. |
+| **No HTTPS, CORS lock, loopback pin, or rate limiting** | **Open access by design** — trust the network. [#169](https://github.com/joelfuller2016/KanbanFlow-v2/issues/169) removed the last host lock; [#84](https://github.com/joelfuller2016/KanbanFlow-v2/issues/84) and [#161](https://github.com/joelfuller2016/KanbanFlow-v2/issues/161) are the rejected hardening proposals. |
+| **No multi-tenancy** | One database, one user. Per-project ownership scoping is not a goal. |
+| **No real-time multi-human collaboration** | Single-user UX. Refresh on demand. |
+| **No notifications** | The agent is the integration. |
+| **No board → GitHub writes** | The whole safety argument rests on this. A sync that can write to GitHub is a sync that can corrupt the source of truth. |
+| **No mobile-first UI** | Desktop primary; existing responsive work is a courtesy, not a target. |
+
+If you need something in the right-hand column, this is not the tool.
+
+---
+
+## Install & run
+
+```powershell
+git clone https://github.com/joelfuller2016/KanbanFlow-v2.git
+cd KanbanFlow-v2
+dotnet run --project src/KanbanFlow/KanbanFlow.csproj --urls http://127.0.0.1:5123
+# open http://127.0.0.1:5123
+```
+
+Prerequisites: **.NET 10 SDK**. For the sync and MCP wrapper: **Node 18+** and an authenticated
+**`gh` CLI**. For the browser e2e suite: `npm install` then `npx playwright install chromium`.
+
+Client-side libraries (Bootstrap, SortableJS) are vendored under `wwwroot/lib` and pinned in
+`libman.json`:
 
 ```powershell
 dotnet tool install -g Microsoft.Web.LibraryManager.Cli   # once
 libman restore                                            # fetch the pinned versions
-libman update bootstrap                                    # bump a library
+libman update bootstrap                                   # bump one
 ```
 
----
+Optional: KanbanFlow can talk to an OpenAI-compatible LLM endpoint and an embedding endpoint
+(both **fail-soft** — unreachable means a typed error result, never a 500). Configuration and
+self-test endpoints: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md#optional-llm--embedding-configuration).
 
-## Architecture
+### Claude Code skills
 
-```mermaid
-flowchart TD
-    H["👤 Human"] -->|"kanban board · outline"| UI["Blazor Server UI<br/>Components/*"]
-    A["🤖 AI agent"] -->|"JSON-RPC (stdio)"| NODE["Node MCP wrapper<br/>scripts/mcp-server.mjs"]
-    A -->|"JSON-RPC over HTTP"| NATIVE["Native in-process MCP<br/>/mcp · Mcp/*"]
-    A -->|"HTTP / JSON"| REST["REST · Minimal API<br/>ApiEndpoints.cs"]
-    NODE -->|"HTTP"| REST
-
-    UI --> SVC
-    REST --> SVC
-    NATIVE --> SVC["ITaskService<br/><i>audit-aware service layer</i>"]
-
-    SVC -->|"mutation + ActivityEvent<br/>in one transaction"| DB["AppDbContext · EF Core 10"]
-    DB --> SQLITE[("SQLite — single file")]
-    SVC -. "every write" .-> AUDIT[["ActivityEvent<br/>append-only audit log"]]
-    AUDIT --> DB
-```
-
-**Single project, single assembly, single SQLite file.** The simplicity is the feature. The **service layer (`ITaskService`) is the one audit boundary** — UI, REST, and the native MCP all route mutations through it so an `ActivityEvent` is produced once and applied everywhere (this is the #88 guarantee; the Node MCP wrapper reaches it via REST).
-
-### Entities
-
-```mermaid
-flowchart TD
-    P["Project<br/><small>name · description · goals · readme (markdown)</small>"]
-    P --> R["Requirement<br/><small>P0 / P1 / P2 · links a Feature or Task</small>"]
-    P --> F["Feature"]
-    F -->|"recursive: sub-features"| F
-    F --> T["TaskItem<br/><small>status · priority · markdown description</small>"]
-    T --> AC["AcceptanceCriterion<br/><small>checklist item</small>"]
-    T --> S["Subtask"]
-    S -->|"recursive: sub-subtasks"| S
-    T --> C["TaskComment<br/><small>user: Note/Decision/Question/Blocked/Handoff/Verification · + system types</small>"]
-    T --> D["TaskDependency<br/><small>DAG · cycle-protected</small>"]
-    P -. "every change" .-> AE[["ActivityEvent<br/><small>append-only · survives entity deletion</small>"]]
-```
-
-Every text field on every entity is documentation that agents can retrieve, summarise, or update. Feature trees, subtask trees, and the dependency graph are all cycle-protected.
-
----
-
-## Workflows
-
-### 1. "What should I work on next?" — the direction engine
-
-The whole point of the system: an agent asks for direction and gets a ranked, dependency-aware list with reasoning, then pulls one task's full context and acts — leaving an audit trail the *next* agent inherits.
-
-```mermaid
-flowchart LR
-    A["🤖 agent"] --> N["GET /api/projects/{id}/next-tasks?limit="]
-    N --> CHK{"task has an<br/>open blocker?"}
-    CHK -- yes --> BLK["→ blockedTasks<br/>(excluded from picks)"]
-    CHK -- no --> RANK["rank by:<br/>priority → status → oldest updated"]
-    RANK --> REC["recommendations[]<br/>each with a human-readable <b>reason</b>"]
-    REC --> SC["GET /api/tasks/{id}/context<br/>criteria + subtasks + deps + comments + activity"]
-    SC --> ACT["agent executes →<br/>status change · comment · claim"]
-    ACT --> AUD[["ActivityEvent recorded"]]
-    AUD -. "next session inherits the history" .-> A
-```
-
-### 2. Every change is audited — the #88 guarantee
-
-There is one write path by design. Whether a mutation originates in the Blazor UI, a REST call, or an MCP tool, it flows through `ITaskService`, which validates, applies the change, and records an `ActivityEvent` (+ a typed comment) **in a single transaction** — so every surface produces identical audit history. (The UI reroute lands with the service-layer extraction, #88.)
-
-```mermaid
-flowchart TD
-    UI["Blazor UI"] --> SVC
-    RST["REST endpoint"] --> SVC
-    MCP["MCP tool"] --> SVC["ITaskService.&lt;Mutate&gt;Async(actor)"]
-    SVC --> V{"validate<br/>enums · project boundary · claim owner"}
-    V -- invalid --> E["422 / 409 / 404<br/>{ message } (+ context on some)"]
-    V -- ok --> M["apply mutation"]
-    M --> EV["ActivityEvent<br/>before/after snapshot + message"]
-    M --> CM["typed TaskComment<br/>StatusChange · Created · …"]
-    EV --> SAVE[("SaveChanges — one transaction")]
-    CM --> SAVE
-```
-
-### 3. Task lifecycle & dependency blocking
-
-Cards are placed on the board by their status; changing status (drag-drop, the done checkbox, or an API/MCP call) re-groups the card. A task with an unfinished dependency is **blocked** and held out of `next-tasks` until its blocker is `Done`.
-
-```mermaid
-stateDiagram-v2
-    [*] --> Backlog
-    Backlog --> Todo
-    Todo --> InProgress
-    InProgress --> Review
-    Review --> Done
-    InProgress --> Todo : reopen
-    Review --> InProgress : changes requested
-    Done --> Todo : reopened
-    note right of Todo
-      A task with an unfinished dependency is "blocked":
-      excluded from next-tasks recommendations and
-      flagged isBlocked / openBlockerCount in step-context.
-    end note
-```
-
----
-
-## Skills (Claude Code)
-
-Two skills ship in `.claude/skills/`. They answer questions at different altitudes — pick by scope, not by preference.
+Two skills ship in `.claude/skills/`. Pick by scope.
 
 | Skill | Answers | Use when |
-|-------|---------|----------|
+|---|---|---|
 | [`kanban-project-ops`](.claude/skills/kanban-project-ops/SKILL.md) | *"What do I do next **in this project**, and how do I record it?"* | Working a task: `get_next_tasks` → `get_step_context` → `claim_task` → do it → `add_task_comment` → `update_task_status`. |
-| [`kanban-portfolio`](.claude/skills/kanban-portfolio/SKILL.md) | *"What am I working on **across everything**, and where does it stand?"* | Status, standups, "what's in flight", "what am I forgetting" — across more than one repo. Or when the board looks empty. |
-
-### The portfolio loop
-
-KanbanFlow is a knowledge graph, but it is **not self-populating** — the work actually lives in GitHub issues and PRs. `kanban-portfolio` closes that gap: it reconciles GitHub into the board, then reports over it.
-
-```bash
-node scripts/portfolio-sync.mjs --dry-run   # see the write plan, change nothing
-node scripts/portfolio-sync.mjs             # reconcile GitHub → board (idempotent)
-node scripts/portfolio-standup.mjs          # the short report over a big board
-```
-
-`sync` maps repo → **Project**, milestone → **Feature**, issue → **TaskItem** (`P0..P3` labels → priority; a linked open PR → `Review`; a closed issue → `Done`). It needs **no schema change**: the `#<n> ` prefix on a task title is the idempotency key, so a re-sync converges instead of duplicating.
-
-Two invariants make it safe to run on a real board:
-
-- **GitHub is the source of truth; the sync is one-way and never writes to GitHub.**
-- **It advances status but never overrides yours.** Drag a task to `InProgress` and the sync leaves it there. A genuine disagreement (board says `Done`, issue still open) is reported as **drift** — never silently "corrected." A sync that fights its owner gets turned off.
-
-`standup` keeps a several-hundred-task board readable by rolling each project to one row and letting the direction engine (`/next-tasks`) pick what matters, then overlaying live GitHub state — open PRs, PRs stale without review >3d, tasks parked `InProgress` >14d.
-
-Config: `KANBANFLOW_API_URL` (default `http://127.0.0.1:5123`) · `KANBANFLOW_PORTFOLIO_REPOS` (comma-separated `owner/repo`). Requires an authenticated `gh` CLI. Full mapping and drift semantics: [`reference/mapping.md`](.claude/skills/kanban-portfolio/reference/mapping.md).
+| [`kanban-portfolio`](.claude/skills/kanban-portfolio/SKILL.md) | *"What am I working on **across everything**?"* | Status, standups, "what's in flight", "what am I forgetting" — across more than one repo. Or when the board looks empty. |
 
 ---
 
-## Requirements
+## Tests
 
-Requirements are organised by **capability**, not by entity. Every capability must be reachable from both REST and MCP.
-
-### C-1. Read everything
-
-| # | Requirement |
-|---|-------------|
-| R-1.1 | Agents can list and get every entity: project, feature, task, subtask, acceptance criterion, requirement, dependency, comment, activity event. |
-| R-1.2 | `GET /api/projects/{id}/context` returns the entire project graph in one denormalised payload optimised for AI consumption — features, tasks, subtasks, criteria, comments, requirements, dependencies, recent activity. *(✅ implemented; needs paging caps for large projects.)* |
-| R-1.3 | Activity is queryable per project and per task, time-ordered, with structured `before`/`after` snapshots. *(✅ implemented; surfaces only API-driven mutations — see issue #88.)* |
-| R-1.4 | List endpoints support `?limit=&offset=` paging. *(❌ only the activity endpoint clamps `limit` to 500; everything else is unbounded — gap for large projects.)* |
-| R-1.5 | A search endpoint returns matches across project descriptions, task descriptions, comments, and requirements: `GET /api/projects/{id}/search?q=...`. *(❌ not implemented.)* |
-| R-1.7 | Completion is computed **once, server-side** and served as a `progress` object at project and feature level, so no surface recomputes it: `{ completed, inProgress, blocked, total, percentComplete }` on `GET /api/projects/{id}` and `GET /api/projects/{id}/context`. Feature progress is recursive (own tasks + all descendant features'); `blocked` counts unfinished tasks with an open blocker (matching `next-tasks.blockedTaskCount`) and is a cross-cut, not a sixth status; `percentComplete` is a number rounded to one decimal, and `0.0` — never `NaN` — when `total` is 0. *(⚠️ partial — the shared `Services/ProjectProgressCalculator` serves both REST endpoints (#125); the Home card (#281), the `ProjectOutline` header (#111) and MCP `get_project_context` still recompute or omit it.)* |
-
-### C-2. Write everything
-
-| # | Requirement |
-|---|-------------|
-| R-2.1 | Every entity has full REST CRUD: list, get, create, update, delete. *(✅ REST implemented for all entities, 60 endpoints.)* |
-| R-2.2 | Every REST capability has at least one MCP tool. *(❌ MCP currently exposes 11 of ~40 needed tools — see "MCP roadmap" below.)* |
-| R-2.3 | Mutations through the UI go through the **same shared service layer** as REST mutations, so audit events, claim semantics, and validation are produced once and applied everywhere. *(❌ currently broken — UI components write directly to EF, bypassing audit. This is issue #88 and the highest-priority refactor.)* |
-| R-2.4 | All entity mutations produce an `ActivityEvent` row. *(✅ for REST; ❌ for UI — see R-2.3.)* |
-| R-2.5 | Project boundary integrity: a feature cannot have a parent feature in another project; a task cannot be reassigned across projects; a requirement cannot link to a feature/task in another project. *(❌ broken — issues #82, #83.)* |
-| R-2.6 | Cycle protection on feature trees, subtask trees, and dependency graphs. *(✅ implemented and correct.)* |
-| R-2.7 | Enum validation rejects undefined values: `Status: "99"` returns 422; UI int-to-enum casts also validate. *(❌ broken — issue #89, plus 14 API call sites and 3 UI sites.)* |
-
-### C-3. Direct agents to the next step, with full context
-
-| # | Requirement |
-|---|-------------|
-| R-3.1 | `GET /api/projects/{id}/next-tasks?actor={name}&limit={n}` returns priority-sorted, dependency-aware next tasks. *(✅ implemented.)* |
-| R-3.2 | Each recommendation includes a human-readable `reason` (e.g. "Top because: Critical priority, already in progress, no open blockers."). *(✅ implemented by the shared `TaskRanking.RankNextTasks`, used by both the REST endpoint and MCP `get_next_tasks`.)* |
-| R-3.3 | Tasks blocked by incomplete dependencies are excluded from `next-tasks` results. *(✅ implemented.)* |
-| R-3.4 | A "step context" endpoint returns everything an agent needs to act on a single task without re-querying the graph: full description, all acceptance criteria, all subtasks recursively, all dependencies (resolved to task names + status), recent comments (latest first), related requirements, recent activity events touching this task. *(⚠️ partial — `GET /api/tasks/{id}` returns subtasks + criteria; comments and dependencies require separate calls. Consolidate into a `GET /api/tasks/{id}/context` for AI consumption.)* |
-| R-3.5 | `next-tasks` accepts an optional `actor` parameter and de-prioritises tasks already claimed by other actors. *(✅ implemented.)* |
-| R-3.6 | The recommendation logic is documented in `docs/` so agents (and humans) can predict why a task ranked where it did. *(❌ not documented; the algorithm only lives in `BuildNextTaskReason` source.)* |
-
-### C-4. Add and update documentation
-
-| # | Requirement |
-|---|-------------|
-| R-4.1 | Project documentation fields are first-class: `name`, `description`, `goals`, `readme`. The `readme` field is a markdown body, intended to be the project's living documentation. *(✅ schema; ⚠️ no MCP tool to update README/goals yet.)* |
-| R-4.2 | Markdown is rendered server-side via Markdig with HTML sanitisation. Renderable on any text field tagged `markdown`. *(❌ Markdig is referenced but never imported. README/description currently render as plaintext.)* |
-| R-4.3 | Comments support typed authoring: `Note`, `Decision`, `Handoff`, `Verification` (user-creatable), and system types (`Created`, `StatusChange`, etc.). Agents pick the right type based on intent. *(✅ implemented; `AllowedUserCommentTypes` enforces the user/system split.)* |
-| R-4.4 | Acceptance criteria are first-class checklist items, not embedded in description. *(✅ implemented.)* |
-| R-4.5 | Activity log records both a structured `BeforeJson`/`AfterJson` snapshot and a human-readable `Message`. Both are exposed for AI summarisation. *(✅ implemented.)* |
-| R-4.6 | Adding a `Decision` or `Handoff` comment is a single MCP tool call. *(✅ `add_task_comment` exists; agents pick `type`.)* |
-
-### C-5. Be self-describing
-
-| # | Requirement |
-|---|-------------|
-| R-5.1 | The API publishes an OpenAPI document (`/openapi.json`) covering every endpoint, request body, and response shape. *(✅ implemented — `Microsoft.AspNetCore.OpenApi` serves `/openapi/v1.json`; `/openapi.json` 302s to it. Response shapes still loosen pending the records refactor, R-5.2.)* |
-| R-5.2 | Response types are strongly typed (records), not anonymous. *(❌ ~25 distinct anonymous shapes are constructed inline in `ApiEndpoints.cs`.)* |
-| R-5.3 | Each MCP tool has a rich description that explains its purpose, parameters, and the kind of follow-up the agent typically does after calling it. *(⚠️ tool descriptions exist but are terse; could be expanded.)* |
-| R-5.4 | `docs/requirements.md` lists every endpoint, kept in sync with the code; to be regenerated from OpenAPI once R-5.1 lands. |
-| R-5.5 | Errors use a uniform shape: `{ "message": string, "errors"?: Record<string, string[]>, "details"?: Record<string, unknown> }`. *(⚠️ partially consistent — some endpoints add bonus fields ad-hoc.)* |
-
-### C-6. Be operationally simple
-
-| # | Requirement |
-|---|-------------|
-| R-6.1 | Zero setup: `dotnet run` produces a working app with seed data on .NET 10. *(✅.)* |
-| R-6.2 | Single SQLite file; portable; no Docker, no migrations service. *(✅; but see R-6.4 — schema lifecycle needs work.)* |
-| R-6.3 | A working smoke suite runs in under 60 seconds. *(✅ — `smoke-api.ps1` ~40s, asserts ~50 HTTP calls including negative paths.)* |
-| R-6.4 | Schema evolves via EF Core migrations, not hand-rolled `ALTER TABLE` patchers. *(❌ currently `EnsureCreated()` + four `Ensure*` patchers in `Program.cs`, including a transactional FK-rebuild dance — see #86.)* |
-| R-6.5 | A second smoke script (cross-platform, Node-based) lets non-Windows contributors verify the API. *(❌ only PowerShell smoke today.)* |
-| R-6.6 | CI runs build + smoke on every PR. *(❌ no `.github/workflows/` exists.)* |
-
-### C-7. Be honest about the audit trail (non-negotiable for AI accuracy)
-
-| # | Requirement |
-|---|-------------|
-| R-7.1 | The audit log is the single source of truth for "what changed when." No mutation path is allowed to skip it. |
-| R-7.2 | UI mutations and API mutations produce identical activity events. *(❌ broken — UI bypasses; see #88.)* |
-| R-7.3 | The audit log survives entity deletion. *(✅ — `ActivityEvent` deliberately ignores the project FK; lookup endpoint must allow reading after delete — see #85.)* |
-
-### Explicitly out of scope
-
-These aren't oversights — they're deliberate exclusions for v2:
-
-| Excluded | Reason |
-|----------|--------|
-| Authentication / authorisation | Single-trust-boundary tool. Agent + owner on one machine. |
-| Multi-tenancy | One DB, one user. Per-project ownership scoping is not a v2 goal. |
-| HTTPS, security headers, rate limiting | **Open access by design** — trust the network; no enforced loopback / CORS / source-IP restrictions. This is a settled charter decision, not a deferral: KanbanFlow is a single-user local tool with one trust boundary (agent + owner, one machine). #169 removed the last host lock; #84 tracks the rejected hardening proposal; #161 likewise. |
-| Real-time human collaboration (multiple humans on the same board) | Single-user UX; auto-poll or refresh on demand. |
-| Notifications (email, Slack, etc.) | The agent is the integration. |
-| External integrations (GitHub, Jira, Linear) | Could be a later module; not v2. |
-| Mobile-first UI | Desktop primary; the existing responsive work is a courtesy, not a target. |
-
----
-
-## Current state vs target state
-
-This repo is in the **prototype-complete** stage. The data model, REST API, kanban UI, and 11-tool MCP server all work end-to-end. The gap to "AI-first documentation system" is concentrated in five places:
-
-| Gap | Closes which capabilities | Effort |
-|-----|---------------------------|--------|
-| **Extract a service layer** (so REST + UI share validation, audit, project-boundary checks). Closes #82, #83, #88, half of #89. | R-2.3, R-2.4, R-2.5, R-7.2 | 2-3 days |
-| **Expand MCP tool surface** from 11 to ~40 (see roadmap below). Until this lands, agents can read but not author. | R-2.2 | 2-4 days |
-| **Add OpenAPI generation + replace anonymous response types with records.** | R-5.1, R-5.2 | 1-2 days |
-| **Wire up Markdig** for rendering descriptions, goals, README, and comments. | R-4.2 | 0.5-1 day |
-| **Adopt EF Core migrations.** | R-6.4 | 0.5 day |
-
-Plus a small set of integrity bugs that directly hurt AI accuracy:
-
-- Project-boundary leak (#82, #83) — agents see cross-project context contamination
-- Enum coercion (#89) — `Status: "99"` produces ghost tasks invisible to board responses
-- Mojibake at `ProjectView.razor:240` — agents parsing rendered output get `?` garbage
-- Untested PUT/Update endpoints — every documentation-update path agents will use is unverified
-
----
-
-## MCP roadmap
-
-The MCP server (`scripts/mcp-server.mjs`) is the agent's primary entry point. **It exposes 41 tools** as of the latest integrated batch (PRs #100, #101, plus the Ideas tools in #180). Every tool forwards to the REST API — single source of truth, no duplicated logic.
-
-### Implemented (41)
-
-Grouped by capability area:
-
-**Projects (5)** — C-1, C-2, C-4
-- `list_projects`, `get_project`, `get_project_context` (read)
-- `create_project`, `update_project` (the documentation backbone — name + description + goals + readme)
-
-**Features (4)** — C-2
-- `create_feature`, `update_feature`, `delete_feature` (sub-feature support via `parentFeatureId`)
-
-**Tasks (8)** — C-1, C-2, C-3
-- `list_project_tasks`, `get_task`, `get_step_context` (one-call AI bundle: task + criteria + subtasks + deps + comments + activity), `get_project_board`, `get_next_tasks` (direction)
-- `create_task`, `update_task`, `delete_task`, `update_task_status`, `reassign_task`, `claim_task`, `release_task`
-
-**Subtasks (5)** — C-2
-- `list_subtasks`, `create_subtask`, `update_subtask`, `mark_subtask_done`, `delete_subtask` (sub-subtask support via `parentSubtaskId`)
-
-**Acceptance criteria (5)** — C-2
-- `list_acceptance_criteria`, `create_acceptance_criterion`, `update_acceptance_criterion`, `mark_acceptance_criterion_done`, `delete_acceptance_criterion`
-
-**Dependencies (3)** — C-2
-- `list_dependencies`, `create_dependency`, `delete_dependency` (cycle-protected DAG)
-
-**Comments (1)** — C-4
-- `add_task_comment` (typed: Note / Decision / Question / Blocked / Handoff / Verification)
-
-**Activity (2)** — C-1
-- `list_project_activity`, `list_task_activity`
-
-**Ideas (5)** — C-2
-- `list_ideas`, `get_idea` (read)
-- `create_idea`, `update_idea`, `promote_idea` (idea inbox → triage → promote to project)
-
-The full machine-readable list is at `tools/list` (JSON-RPC) when the server is running. The OpenAPI document at `/openapi/v1.json` describes the underlying REST surface.
-
-### To add (remaining roadmap)
-
-| Tool | Capability | Notes |
-|------|------------|-------|
-| `list_requirements` / `get_requirement` / `create_requirement` / `update_requirement` / `assign_requirement` / `delete_requirement` (6) | C-2 | P0/P1/P2 with feature/task links — last entity without MCP CRUD |
-| `search_project` | C-1 | Once the search endpoint lands (R-1.5) |
-
-### Wiring into Claude Code
-
-```jsonc
-// ~/.claude/.mcp.json (or your client's MCP config)
-{
-  "mcpServers": {
-    "kanbanflow": {
-      "command": "node",
-      "args": ["C:/path/to/KanbanFlow-v2/scripts/mcp-server.mjs"],
-      "env": {
-        "KANBANFLOW_API_URL": "http://127.0.0.1:5123",
-        "KANBANFLOW_MCP_TIMEOUT_MS": "10000"
-      }
-    }
-  }
-}
-```
-
-Start the web app on the matching URL **before** the agent connects:
+All local. There is no CI — [on purpose](#deliberate-non-features).
 
 ```powershell
-dotnet run --project src/KanbanFlow/KanbanFlow.csproj --urls http://127.0.0.1:5123
+./scripts/verify.ps1                    # the gate: restore + build (warnings=errors) + test + format
 ```
 
----
-
-## Surfaces at a glance
-
-- **Kanban UI** — a **Project Outline** (left panel: Project → Features → Tasks as draggable mini-cards) and a **Kanban Board** (main area: cards auto-placed by status; drag-and-drop or the done-checkbox to change it). Click a card for full detail; modals create/edit items.
-- **REST API** — full CRUD for every entity, so agents read and write project data over plain HTTP/JSON.
-- **MCP server** — the same capabilities as first-class agent tools (native in-process `/mcp` plus a Node stdio wrapper).
-- **OpenAPI spec** — machine-readable API description at `/openapi.json` (302 → `/openapi/v1.json`) so agents discover the surface without reading source.
-- **Zero setup** — SQLite single file, seeded on first run; no Docker, no accounts, no login.
-
----
-
-## API reference
-
-The OpenAPI document (R-5.1) is now the source of truth: GET `/openapi/v1.json` (or `/openapi.json` for the README-friendly path; it 302s to the canonical URL). The endpoint shape is:
-
-```
-/api/projects                               # list/create
-/api/projects/{id}                          # get/update/delete (+ progress, project + per feature)
-/api/projects/{id}/context                  # full graph for AI (+ progress, project + per feature)
-/api/projects/{id}/board                    # tasks grouped by status
-/api/projects/{id}/next-tasks               # direction
-/api/projects/{id}/activity                 # audit log
-/api/projects/{id}/features                 # list/create
-/api/projects/{id}/tasks                    # list (flat)
-/api/projects/{id}/requirements             # list/create
-/api/features/{id}                          # get/update/delete
-/api/features/{id}/tasks                    # list/create
-/api/tasks/{id}                             # get/update/delete
-/api/tasks/{id}/status                      # PATCH status only
-/api/tasks/{id}/feature                     # PATCH reassign
-/api/tasks/{id}/claim                       # POST claim
-/api/tasks/{id}/release                     # POST release
-/api/tasks/{id}/activity                    # audit log per task
-/api/tasks/{id}/subtasks                    # list/create
-/api/tasks/{id}/acceptance-criteria         # list/create
-/api/tasks/{id}/comments                    # list/create
-/api/tasks/{id}/dependencies                # list/create
-/api/subtasks/{id}                          # get/update/delete
-/api/acceptance-criteria/{id}               # get/update/delete
-/api/comments/{id}                          # delete
-/api/task-dependencies/{id}                 # get/delete
-/api/requirements/{id}                      # get/update/delete
-/api/requirements/{id}/assign               # PATCH assign feature/task
-/api/ideas                                  # list (?status= ?tag= ?q= ?limit= ?offset=)/create
-/api/ideas/{id}                             # get/update/delete
-/api/ideas/{id}/promote                     # POST promote idea to a project
-/api/ideas/{id}/activity                    # audit log per idea
+```bash
+dotnet test tests/KanbanFlow.Tests      # 524 xUnit tests
 ```
 
-60 endpoints total. Ideas (`/api/ideas`) are the pre-project "inbox" — capture raw ideas, then promote one into a full project (#180). `Promoted` is a **derived, terminal** status: only `POST /api/ideas/{id}/promote` (MCP `promote_idea`) sets it, since only that path also creates the linked project. So `PATCH /api/ideas/{id}` and MCP `update_idea` refuse to move an idea *into* `Promoted` (#283) **or back out of it** (#285) — promotion is permanent — and return 422 pointing at the promote endpoint. Every other status transition is free, and a promoted idea's other fields (title, body, plan, tags, priority) stay fully editable. Humans manage them in the browser at the **Ideas board** (`/ideas`) — a status board whose columns *are* the `IdeaStatus` pipeline: drag a card to re-triage it, promote from the card itself, and tell at a glance which ideas already carry a plan. `Promoted` is **inert** — you can neither drag into it nor out of it, matching the service rule above — so promotion always goes through the confirm. Search and status/tag filters still apply, now to the board. Every mutation lands through the same audited `IIdeaService` as REST + MCP (the #88 boundary). Collection/list endpoints will gain consistent pagination once R-1.4 lands; richer response shapes follow with the records refactor (R-5.2).
+```powershell
+./scripts/smoke-api.ps1                 # boots its own app on a free loopback port,
+                                        # ~75 HTTP calls including negative paths
+```
+
+```bash
+node ./scripts/smoke-mcp.mjs 1          # MCP tool surface — needs the app running on :5123
+npm run test:mcp                        # stdio framing A/B + the MCP smoke suite
+npm run test:scripts                    # node:test units for scripts/*.mjs — the shared
+                                        # priority model behind portfolio-sync and the
+                                        # log book (#360). No app, no network, no DB.
+npm run test:ui                         # Playwright e2e — builds, boots an isolated instance
+                                        # (scratch port + throwaway DB), drives chromium, tears down
+```
+
+```bash
+# The in-app integration suite, from inside the live app.
+# Also available as "Run all" at /settings.
+curl -X POST "http://127.0.0.1:5123/api/admin/run-tests?suite=all"   # suite=api|ui|service|all
+```
+
+Build and tests are the hard gates in `verify.ps1`. The **format check is advisory** — it
+prints a warning and lets the run continue, pending a one-time `dotnet format` cleanup of the
+existing tree.
+
+> **Read `verify.ps1`'s last printed line, not its exit code.** On a clean build + test run
+> with only formatting drift it prints `Build + tests passed. Safe to push.` and still exits
+> **2** — the script has no explicit success `exit`, so the advisory `dotnet format` result
+> becomes the process exit code (`scripts/verify.ps1:44-51`). Anything gating on `$LASTEXITCODE`
+> will read a green run as a failure.
 
 ---
-
-## Stack
-
-.NET 10 · Blazor Server (Interactive Server render mode) · C# · SQLite via EF Core 10 · Bootstrap 5.3 · Minimal APIs · Markdig (referenced; not yet wired) · SortableJS (drag-and-drop) · Node 18+ for the MCP wrapper.
 
 ## Docs
 
-- `docs/requirements.md` — detailed v1 requirements (some sections now superseded by this README; will be regenerated from OpenAPI once R-5.1 lands).
-- `docs/reviews/` — historical review notes.
-- `scripts/smoke-api.ps1`, `scripts/smoke-mcp.mjs` — runnable contract tests for the API and MCP wrapper.
+| Doc | What it holds |
+|---|---|
+| [`docs/BACKLOG.md`](docs/BACKLOG.md) | **The log book.** Authoritative record of what happened and why. Start here. |
+| [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | Entity model, write path, full REST route map, MCP inventory, capability matrix, known gaps |
+| [`docs/GITHUB-SYNC.md`](docs/GITHUB-SYNC.md) | Full sync semantics, drift cases, comment mirroring |
+
+> `docs/BACKLOG.md` and `docs/GITHUB-SYNC.md` are authored on sibling branches and land with
+> them; on a branch that has only this README the two links will 404 until those merge.
+| [`.claude/skills/kanban-portfolio/reference/mapping.md`](.claude/skills/kanban-portfolio/reference/mapping.md) | GitHub → board mapping in full, with the reasoning |
+| [`docs/ci-without-actions.md`](docs/ci-without-actions.md) | How the quality gate runs with no workflow file |
+| [`docs/issue-quality-checklist.md`](docs/issue-quality-checklist.md) | What a well-formed issue contains |
+| [`docs/native-mcp-notes.md`](docs/native-mcp-notes.md) | Native in-process MCP implementation notes |
+| [`docs/ai-briefing-schema.md`](docs/ai-briefing-schema.md) | The agent briefing payload shape |
+| [`docs/requirements.md`](docs/requirements.md) | Original v1 requirements — partly superseded by `ARCHITECTURE.md` |
+| [`docs/reviews/`](docs/reviews) | Historical review notes |
+
+---
 
 ## License & contributing
 
 Licensed under the [MIT License](LICENSE).
 
-Single-developer project. No CONTRIBUTING.md yet, but: issues use the templates under `.github/ISSUE_TEMPLATE/`, PRs follow `.github/PULL_REQUEST_TEMPLATE.md`, and `./scripts/verify.ps1` must pass before pushing. If you fork it, the data model is small enough to skim in an afternoon — start with `Models/`, then `Data/AppDbContext.cs`, then `ApiEndpoints.cs`.
+Single-developer project. Issues use the templates under
+[`.github/ISSUE_TEMPLATE/`](.github/ISSUE_TEMPLATE), PRs follow
+[`.github/PULL_REQUEST_TEMPLATE.md`](.github/PULL_REQUEST_TEMPLATE.md), and
+`./scripts/verify.ps1` must pass before pushing. If you fork it, the data model is small enough
+to skim in an afternoon — start with `src/KanbanFlow/Models/`, then `Data/AppDbContext.cs`,
+then `ApiEndpoints.cs`.

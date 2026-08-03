@@ -175,20 +175,9 @@ h1:focus {
     border-color: rgba(0, 0, 0, .08) !important;
 }
 
-/* ── Task detail comments ── */
-.task-comments-list {
-    max-height: 16rem;
-    overflow-y: auto;
-}
-
-.task-comment-note {
-    border-left: 0.25rem solid #0d6efd !important;
-}
-
-.task-comment-system {
-    border-left: 0.25rem solid #6c757d !important;
-    background: rgba(108, 117, 125, .06);
-}
+/* `.task-comments-list`, `.task-comment-note` and `.task-comment-system` were removed with the
+   flat comment list they styled (#328 folded it into `.kf-timeline` further down). Their
+   per-comment-type colouring lives on as the `.kf-tl-*` dot accents. */
 
 .task-blocker-incomplete {
     border-left: 0.25rem solid #dc3545 !important;
@@ -436,23 +425,289 @@ h1:focus {
    content) while the radial "shadow" gradients are `scroll` (fixed to the box). When the
    content is flush against an edge, its cover sits over the shadow and hides it — so a
    shadow is only ever visible on an edge that actually has more content past it, and a
-   short comment shows none. Cover colour must track the activity panel's #f8f9fa. */
+   short comment shows none. Cover colour must track the activity panel's surface — that is
+   `var(--bs-tertiary-bg)`, which IS #f8f9fa in light mode (so this is a no-op there) and flips
+   with `data-bs-theme="dark"`. It used to be the literal #f8f9fa, which painted two light bands
+   across a dark panel. The transparent stops stay literal rgba: `transparent` is rgba(0,0,0,0)
+   in most engines and would fade through BLACK rather than through the surface colour. */
 .task-comment-body {
+    --kf-comment-surface: var(--bs-tertiary-bg);
+    --kf-comment-surface-fade: rgba(248, 249, 250, 0);
+
     max-height: 14rem;
     overflow-y: auto;
     overscroll-behavior: contain;
     background:
-        linear-gradient(#f8f9fa 30%, rgba(248, 249, 250, 0)) center top,
-        linear-gradient(rgba(248, 249, 250, 0), #f8f9fa 70%) center bottom,
+        linear-gradient(var(--kf-comment-surface) 30%, var(--kf-comment-surface-fade)) center top,
+        linear-gradient(var(--kf-comment-surface-fade), var(--kf-comment-surface) 70%) center bottom,
         radial-gradient(farthest-side at 50% 0, rgba(0, 0, 0, 0.14), rgba(0, 0, 0, 0)) center top,
         radial-gradient(farthest-side at 50% 100%, rgba(0, 0, 0, 0.14), rgba(0, 0, 0, 0)) center bottom;
     background-repeat: no-repeat;
     background-size: 100% 2rem, 100% 2rem, 100% 0.5rem, 100% 0.5rem;
     background-attachment: local, local, scroll, scroll;
 }
+/* Dark mode: the fade stop must match the dark surface too, or the band fades through a light
+   haze. --bs-tertiary-bg is #2b3035 under data-bs-theme="dark". */
+[data-bs-theme="dark"] .task-comment-body {
+    --kf-comment-surface-fade: rgba(43, 48, 53, 0);
+}
+
 /* Long bot comments lean on <details> and wide tables — keep both inside the box. */
 .task-comment-body table { display: block; overflow-x: auto; max-width: 100%; }
 .task-comment-body pre { max-width: 100%; }
+
+/* ══════════════════════════════════════════════════════════════════════════════════════════════
+   Activity timeline — a task's COMPLETE history as one rail (#328).
+   Emitted by Components/Shared/ActivityTimeline.razor; shared by TaskDetailPanel (card click)
+   and EditItemModal (outline → Edit Task). ONE component, ONE stylesheet block — do not fork.
+
+   Bootstrap 5.3 is the design system: everything below is a delta Bootstrap genuinely lacks, and
+   every colour is a `var(--bs-*)` token so `data-bs-theme="dark"` resolves correctly with no
+   parallel dark ruleset (#39). No `opacity` is used for de-emphasis anywhere — it composites the
+   whole subtree and drops muted text below WCAG AA (see the kanban-column note further down);
+   de-emphasis here is by colour VALUE (`--bs-secondary-color`) only.
+   ══════════════════════════════════════════════════════════════════════════════════════════════ */
+
+/* `--kf-tl-surface` is the colour the dots are punched out of. It is DELIBERATELY not declared
+   on `.kf-timeline-wrap`: the wrap is a DESCENDANT of `.kf-timeline-panel`, and a child's own
+   declaration always beats an inherited one — so declaring a default here would silently override
+   the tinted panel and leave a white halo round every dot on the tinted surface. The default
+   lives as the fallback argument at the single point of use (`.kf-timeline-dot`) instead. */
+
+/* Scrollable tinted panel used by both hosts. Replaces a hardcoded `background: #f8f9fa`
+   inline style, which was pure white-mode and had no dark counterpart. */
+.kf-timeline-panel {
+    --kf-tl-surface: var(--bs-tertiary-bg);
+
+    background: var(--bs-tertiary-bg);
+    max-height: 18rem;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+}
+
+/* ── Filter chips ─────────────────────────────────────────────────────────────────────────── */
+.kf-timeline-filters {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.25rem;
+    margin-bottom: 0.5rem;
+}
+
+.kf-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.3rem;
+    padding: 0.1rem 0.55rem;
+    font-size: 0.75rem;
+    line-height: 1.6;
+    border: 1px solid var(--bs-border-color);
+    border-radius: 999px;
+    background: var(--bs-body-bg);
+    color: var(--bs-body-color);
+}
+
+.kf-chip:hover { border-color: var(--bs-primary); }
+
+/* `.kf-chip` is a bare <button>, not a `.btn`, so Bootstrap's `.btn:focus-visible` ring never
+   applies to it. Without this the only focus indicator is the UA default outline, which sits
+   badly on a `border-radius: 999px` pill and disappears entirely in some engines. */
+.kf-chip:focus-visible {
+    outline: 2px solid var(--bs-primary);
+    outline-offset: 2px;
+}
+
+/* Selected state is carried by colour AND the `aria-pressed` attribute the component sets, so it
+   is never colour-only. */
+.kf-chip-active {
+    background: var(--bs-primary);
+    border-color: var(--bs-primary);
+    color: #fff;
+}
+
+.kf-chip-count {
+    font-variant-numeric: tabular-nums;
+    font-size: 0.65rem;
+    padding: 0 0.3rem;
+    border-radius: 999px;
+    background: var(--bs-secondary-bg);
+    color: var(--bs-secondary-color);
+}
+
+/* DARKEN, do not lighten. This was `rgba(255, 255, 255, 0.28)`, i.e. a translucent WHITE veil
+   over the chip's `var(--bs-primary)` fill — which lifts the effective background to ≈#5197fe and
+   leaves the white count text at ≈2.9:1. The text is 0.65rem (~10px), so it is normal text and
+   WCAG AA wants 4.5:1. Inverting to a solid white badge with primary-coloured text does not fix
+   it either: #0d6efd on #fff is ≈4.24:1, still short.
+   A translucent BLACK veil composites to ≈#094db1 and puts the white text at ≈7.8:1. It also
+   stays correct if the chip fill is ever re-themed, because it darkens whatever is underneath
+   rather than assuming a particular hue. (--bs-primary is Bootstrap stock #0d6efd here and does
+   not change under data-bs-theme="dark".) */
+.kf-chip-active .kf-chip-count {
+    background: rgba(0, 0, 0, 0.3);
+    color: #fff;
+}
+
+/* ── The rail ─────────────────────────────────────────────────────────────────────────────── */
+.kf-timeline {
+    position: relative;
+    list-style: none;
+    margin: 0;
+    padding: 0 0 0 1.5rem;
+}
+
+/* One continuous vertical line behind the dots. Inset top/bottom so it starts and ends AT the
+   first and last dot rather than floating past them. */
+.kf-timeline::before {
+    content: "";
+    position: absolute;
+    left: 0.4375rem;
+    top: 0.6rem;
+    bottom: 0.6rem;
+    width: 2px;
+    border-radius: 1px;
+    background: var(--bs-border-color);
+}
+
+.kf-timeline-item {
+    position: relative;
+    padding-bottom: 0.7rem;
+}
+
+.kf-timeline-item:last-child { padding-bottom: 0.15rem; }
+
+.kf-timeline-dot {
+    position: absolute;
+    left: -1.5rem;
+    top: 0.1rem;
+    width: 1rem;
+    height: 1rem;
+    border-radius: 50%;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--kf-tl-ink, #fff);
+    background: var(--kf-tl-accent, var(--bs-secondary));
+    /* Punches the dot out of the rail without needing to break the line into segments. The
+       fallback is the default surface; `.kf-timeline-panel` overrides it by inheritance. */
+    box-shadow: 0 0 0 2px var(--kf-tl-surface, var(--bs-body-bg));
+}
+
+/* Per-event-type accents. --bs-warning / --bs-info are light fills, so their glyph flips to ink
+   rather than white: white-on-warning is ~1.6:1 and unreadable. */
+.kf-tl-comment { --kf-tl-accent: var(--bs-primary); }
+.kf-tl-status  { --kf-tl-accent: var(--bs-warning); --kf-tl-ink: #000; }
+.kf-tl-change  { --kf-tl-accent: var(--bs-secondary); }
+.kf-tl-created { --kf-tl-accent: var(--bs-success); }
+.kf-tl-deleted { --kf-tl-accent: var(--bs-danger); }
+.kf-tl-claim   { --kf-tl-accent: var(--bs-info); --kf-tl-ink: #000; }
+
+/* Comment-type accents, carried over from TaskDetailPanel's per-comment left border + badge
+   colour so folding its list into the rail loses no information: a Blocked note stays red.
+   One rule per ActivityTimelineBuilder.CommentTone value — keep the two in step. */
+.kf-tl-decision     { --kf-tl-accent: var(--bs-info); --kf-tl-ink: #000; }
+.kf-tl-question     { --kf-tl-accent: var(--bs-secondary); }
+.kf-tl-blocked      { --kf-tl-accent: var(--bs-danger); }
+.kf-tl-handoff      { --kf-tl-accent: var(--bs-warning); --kf-tl-ink: #000; }
+.kf-tl-verification { --kf-tl-accent: var(--bs-success); }
+
+/* ── Entry body ───────────────────────────────────────────────────────────────────────────── */
+.kf-timeline-head {
+    display: flex;
+    align-items: baseline;
+    flex-wrap: wrap;
+    gap: 0.35rem;
+    font-size: 0.72rem;
+    line-height: 1.5;
+}
+
+.kf-timeline-badge {
+    font-weight: 600;
+    letter-spacing: 0.01em;
+    color: var(--kf-tl-accent, var(--bs-secondary));
+}
+
+.kf-timeline-actor { color: var(--bs-body-color); }
+
+.kf-timeline-when {
+    margin-left: auto;
+    color: var(--bs-secondary-color);
+    white-space: nowrap;
+    cursor: help;   /* there IS a tooltip: the absolute local + UTC instant */
+}
+
+.kf-timeline-headline {
+    font-size: 0.8rem;
+    color: var(--bs-body-color);
+}
+
+/* ── Field-level diff lines: "Status  Todo → InProgress" ──────────────────────────────────── */
+.kf-timeline-changes {
+    list-style: none;
+    margin: 0.1rem 0 0;
+    padding: 0;
+    font-size: 0.78rem;
+}
+
+.kf-timeline-changes li {
+    display: flex;
+    align-items: baseline;
+    flex-wrap: wrap;
+    gap: 0.35rem;
+    padding: 0.05rem 0;
+}
+
+.kf-change-label {
+    min-width: 5.5rem;
+    font-weight: 600;
+    color: var(--bs-secondary-color);
+}
+
+/* The old value is de-emphasised by COLOUR, not opacity, and is not struck through — a strike
+   reads as "deleted" and a rename is not a deletion. */
+/* `overflow-wrap: anywhere`, not the deprecated `word-break: break-word` (dropped in CSS Text
+   Level 3). Both values hold arbitrary snapshot text — a task name mirrored from a GitHub issue
+   title, a description, a bare URL — so breaking inside an otherwise unbreakable run is exactly
+   the wanted behaviour. */
+.kf-change-before {
+    color: var(--bs-secondary-color);
+    overflow-wrap: anywhere;
+}
+
+.kf-change-arrow { color: var(--bs-secondary-color); }
+
+.kf-change-after {
+    font-weight: 600;
+    color: var(--bs-body-color);
+    overflow-wrap: anywhere;
+}
+
+.kf-timeline-more {
+    margin-top: 0.2rem;
+    font-size: 0.75rem;
+}
+
+/* The "showing N of M" boundary. Deliberately plain text, not an alert: it is a fact about the
+   window, not a problem — but it must be READABLE, so it uses body colour, not a muted grey. */
+.kf-timeline-boundary {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 0.4rem;
+    margin-top: 0.4rem;
+    padding-top: 0.35rem;
+    border-top: 1px dashed var(--bs-border-color);
+    font-size: 0.72rem;
+    color: var(--bs-body-color);
+}
+
+.kf-timeline-boundary .btn-link { font-size: 0.72rem; }
+
+/* Narrow viewports: the label column and the auto-margin timestamp both fight for width, so drop
+   the fixed label column and let the timestamp wrap under the actor instead of squeezing it. */
+@media (max-width: 575.98px) {
+    .kf-change-label { min-width: 0; }
+    .kf-timeline-when { margin-left: 0; }
+}
 
 /* ══════════════════════════════════════════════════════════════════════════════════════════════
    Kanban columns — terminal rails, inert columns, drag affordance, priority borders, empty states.
