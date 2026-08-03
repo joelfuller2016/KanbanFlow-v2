@@ -742,19 +742,31 @@ async function main() {
     // ── #112: the board filter bar ───────────────────────────────────────────────────────────
     // The scenario above STAGED a partial board by deleting DOM nodes. This one is the real thing:
     // ProjectView narrows its own list and hands the board a genuine subset, so these scenarios are
-    // what fail if `Items="allTasks"` is ever restored at the call site. Five Todo cards in one
-    // feature, four of which share a token the fifth does not — the odd one out sits in the MIDDLE
-    // of the persisted order, which is the only seed shape that can catch a drag anchoring against
-    // a rendered index instead of a persisted identity.
+    // what fail if `Items="allTasks"` is ever restored at the call site.
+    //
+    // THE SEED SHAPE IS THE TEST. Two hidden cards, and their POSITIONS are what give the drag
+    // scenario below its discriminating power (see the long note there). One hidden card in the
+    // middle is NOT enough: with persisted A,B,C*,D,E and rendered A,B,D,E, dragging E before B
+    // lands A,E,B,C,D under an identity anchor AND under a rendered-index anchor — the two readings
+    // agree whenever every hidden card sits AFTER the insertion point, so such a seed passes either
+    // way and proves nothing. Adding X* early is what pulls them apart. (Reviewer, PR #362.)
+    //
+    //   persisted:  A(0)  X*(1)  B(2)  C*(3)  D(4)  E(5)      * = hidden by `q=Keep`
+    //   rendered:   A     B      D     E
+    //
+    // Assignees and the claim are load-bearing too, not decoration: they are what lets the wiring
+    // scenario prove the assignee box writes `assignee=` and the claimed-by box writes `claimedBy=`.
     const filterProj = await api("POST", "/api/projects", { name: `E2E Filter ${stamp}` });
     const filterFeature = await api("POST", `/api/projects/${filterProj.id}/features`, { name: "E2E Filter Feature" });
+    const filterClaimant = `e2e-agent-${stamp}`;
     const filterTasks = [];
     for (const [label, priority, status, assignee] of [
       ["Keep A", "High", "Todo", "alice"],
+      ["Skip X", "Low", "Todo", "alice"],
       ["Keep B", "Low", "Todo", "bob"],
       ["Skip C", "High", "Todo", "alice"],
       ["Keep D", "Low", "Todo", "bob"],
-      ["Keep E", "High", "Todo", "alice"],
+      ["Keep E", "High", "Todo", "carol"],
     ]) {
       filterTasks.push(await api("POST", `/api/features/${filterFeature.id}/tasks`, {
         name: `E2E Filter ${label} ${stamp}`,
@@ -765,13 +777,19 @@ async function main() {
         sortOrder: filterTasks.length,
       }));
     }
-    const [keepA, keepB, skipC, keepD, keepE] = filterTasks;
+    const [keepA, skipX, keepB, skipC, keepD, keepE] = filterTasks;
     // A second status, so "≥2 statuses" is real and the Done/hide-done clause has something to bite.
     const filterDone = await api("POST", `/api/features/${filterFeature.id}/tasks`, {
       name: `E2E Filter Keep F ${stamp}`, description: "matching description",
-      priority: "High", status: "Done", sortOrder: 10, assignee: "alice",
+      priority: "High", status: "Done", sortOrder: 10, assignee: "carol",
     });
-    await api("POST", `/api/tasks/${keepA.id}/claim`, { actor: `e2e-agent-${stamp}` });
+    // Exactly ONE claimed task, so `claimedBy` discriminates down to a single card.
+    await api("POST", `/api/tasks/${keepA.id}/claim`, { actor: filterClaimant });
+
+    const filterAllIds = [...filterTasks, filterDone].map((task) => task.id);
+    const filterKeepIds = [keepA.id, keepB.id, keepD.id, keepE.id, filterDone.id];
+    const filterAssigneeAliceIds = [keepA.id, skipX.id, skipC.id];
+    const sortedIds = (ids) => ids.slice().sort((a, b) => a - b).join(",");
 
     const filterUrl = (query = "") => `${baseUrl}/project/${filterProj.id}${query}`;
     const renderedBoardIds = (page) => page.$$eval(
@@ -801,14 +819,25 @@ async function main() {
       }
 
       const shown = await renderedBoardIds(page);
-      const expected = [keepA.id, keepB.id, keepD.id, keepE.id, filterDone.id].sort((a, b) => a - b);
-      assert(shown.slice().sort((a, b) => a - b).join(",") === expected.join(","),
-        `filtered board must render only matching cards — expected [${expected}], got [${shown}]`);
-      assert(!shown.includes(skipC.id), `the non-matching card ${skipC.id} is still rendered`);
+      assert(sortedIds(shown) === sortedIds(filterKeepIds),
+        `filtered board must render only matching cards — expected [${filterKeepIds}], got [${shown}]`);
+      for (const hidden of [skipX, skipC]) {
+        assert(!shown.includes(hidden.id), `the non-matching card ${hidden.id} is still rendered`);
+      }
 
       const badges = await readBadges(page);
       assert(badges.every((row) => row.badge === row.cards),
         `each column's count badge must equal its rendered card count: ${JSON.stringify(badges)}`);
+      // …and the badges must sum to the FILTERED total, not the project total. Without this the
+      // per-column equality above also holds for a board that rendered nothing at all.
+      const badgeTotal = badges.reduce((sum, row) => sum + row.badge, 0);
+      assert(badgeTotal === filterKeepIds.length,
+        `count badges sum to ${badgeTotal}, expected ${filterKeepIds.length} (of ${filterAllIds.length} total)`);
+
+      // The summary line is the only place the user is told how much they are NOT seeing.
+      const summary = (await page.locator('[data-testid="board-filter-summary"]').textContent()).trim();
+      assert(summary === `Showing ${filterKeepIds.length} of ${filterAllIds.length} tasks`,
+        `filter summary reads "${summary}", expected "Showing ${filterKeepIds.length} of ${filterAllIds.length} tasks"`);
 
       // The search box itself must be repopulated too — a board that is filtered while the control
       // reads empty tells the user their view is unfiltered, which is worse than not filtering.
@@ -819,8 +848,8 @@ async function main() {
       await page.locator('[data-testid="board-filter-bar"]').waitFor({ state: "visible" });
       await page.locator(`[data-testid="board-card-${keepA.id}"]`).waitFor({ state: "visible" });
       const afterReload = await renderedBoardIds(page);
-      assert(afterReload.slice().sort((a, b) => a - b).join(",") === expected.join(","),
-        `the filter did not survive a reload — expected [${expected}], got [${afterReload}]`);
+      assert(sortedIds(afterReload) === sortedIds(filterKeepIds),
+        `the filter did not survive a reload — expected [${filterKeepIds}], got [${afterReload}]`);
     });
 
     await test("Board filter clauses combine, and Clear resets both the board and the URL", async () => {
@@ -848,6 +877,22 @@ async function main() {
         }
       };
 
+      const waitForRendered = async (expectedIds, what) => {
+        try {
+          await page.waitForFunction(
+            (ids) => {
+              const rendered = [...document.querySelectorAll('[data-testid="kanban-board"] [data-task-id]')]
+                .map((el) => Number(el.getAttribute("data-task-id"))).sort((a, b) => a - b);
+              return rendered.join(",") === ids.join(",");
+            },
+            expectedIds.slice().sort((a, b) => a - b),
+            { timeout: 10000 },
+          );
+        } catch {
+          assert(false, `${what} — expected [${expectedIds}], got [${await renderedBoardIds(page)}]`);
+        }
+      };
+
       await page.locator('[data-testid="board-filter-search"]').fill("Keep");
       await waitForQuery("q", "Keep");
       // Priority chips are btn-check inputs; the LABEL is the hit target, as it is for a user.
@@ -856,20 +901,17 @@ async function main() {
       await page.locator('[data-testid="board-filter-hide-done"]').check();
       await waitForQuery("hideDone", "true");
       // Keep A and Keep E are the only High + non-Done + "Keep" tasks.
-      const expectedCombined = [keepA.id, keepE.id].sort((a, b) => a - b);
-      try {
-        await page.waitForFunction(
-          (ids) => {
-            const rendered = [...document.querySelectorAll('[data-testid="kanban-board"] [data-task-id]')]
-              .map((el) => Number(el.getAttribute("data-task-id"))).sort((a, b) => a - b);
-            return rendered.join(",") === ids.join(",");
-          },
-          expectedCombined,
-          { timeout: 10000 },
-        );
-      } catch {
-        assert(false, `search + priority + hide-done must AND together — expected [${expectedCombined}], got [${await renderedBoardIds(page)}]`);
-      }
+      await waitForRendered([keepA.id, keepE.id], "search + priority + hide-done must AND together");
+
+      // Fourth clause, and the one that proves the ASSIGNEE box is wired to the assignee field:
+      // alice narrows {A, E} to {A} (E is carol's). Swapping this handler for the claimed-by one in
+      // ProjectView compiles and passes every other assertion in this file — the URL check below is
+      // what refuses it, because a miswired box writes its neighbour's query key.
+      await page.locator('[data-testid="board-filter-assignee"]').fill("alice");
+      await waitForQuery("assignee", "alice");
+      await waitForRendered([keepA.id], "adding assignee=alice must narrow the AND further");
+      assert(!page.url().includes("claimedBy="),
+        `the assignee box wrote the claimed-by query key: ${page.url()}`);
 
       const url = new URL(page.url());
       assert(url.searchParams.get("q") === "Keep", `URL lost the search term: ${page.url()}`);
@@ -877,29 +919,86 @@ async function main() {
       assert(url.searchParams.get("hideDone") === "true", `URL lost hide-done: ${page.url()}`);
 
       // Every column is empty except Backlog/Todo — those must say "no tasks MATCH", never the
-      // "no tasks in Review yet, add one" placeholder, which under a filter is a lie.
+      // "no tasks in Review yet, add one" placeholder, which under a filter is a lie. Asserted
+      // through the dedicated testid, so the filtered placeholder is identified structurally rather
+      // than by matching prose that a copy edit would silently break.
+      const noMatchTestids = await page.evaluate(() =>
+        [...document.querySelectorAll('[data-testid$="-no-match"]')].map((el) => el.getAttribute("data-testid")));
       const emptyStates = await page.evaluate(() =>
         [...document.querySelectorAll(".kanban-column-empty")].map((el) => el.textContent.trim()));
       assert(emptyStates.length > 0, "expected at least one empty column while filtered");
+      assert(noMatchTestids.length === emptyStates.length,
+        `every empty column must use the filtered placeholder — ${noMatchTestids.length} of ${emptyStates.length} did: ${JSON.stringify(emptyStates)}`);
       assert(emptyStates.every((text) => text.includes("No tasks match these filters")),
         `a filtered-out column showed the wrong empty state: ${JSON.stringify(emptyStates)}`);
 
       await page.locator('[data-testid="board-filter-clear"]').click();
       await page.locator(`[data-testid="board-card-${skipC.id}"]`).waitFor({ state: "visible" });
       const cleared = await renderedBoardIds(page);
-      assert(cleared.length === 6, `Clear must restore every card — expected 6, got ${cleared.length}`);
-      assert(!page.url().includes("?"), `Clear must empty the query string too, got ${page.url()}`);
-      assert(await page.locator('[data-testid="board-filter-search"]').inputValue() === "",
-        "Clear left the search box populated");
+      assert(cleared.length === filterAllIds.length,
+        `Clear must restore every card — expected ${filterAllIds.length}, got ${cleared.length}`);
+      // The URL write is debounced (ProjectView.UrlSyncDebounce), so poll rather than read once.
+      await page.waitForFunction(() => !window.location.href.includes("?"), null, { timeout: 10000 })
+        .catch(() => assert(false, `Clear must empty the query string too, got ${page.url()}`));
+      for (const box of ["search", "assignee", "claimed-by"]) {
+        assert(await page.locator(`[data-testid="board-filter-${box}"]`).inputValue() === "",
+          `Clear left the ${box} box populated`);
+      }
+    });
+
+    // S2 (reviewer, PR #362): assignee and claimed-by are two near-identical string clauses over two
+    // different columns, and the predicate-level guard for confusing them
+    // (TaskFilterTests.ClaimedByFilter_DoesNotReadTheAssigneeField) says nothing about the WIRING.
+    // `OnClaimedByChanged="OnAssigneeChanged"` in ProjectView compiles. This is the test that refuses it.
+    await test("The claimed-by box filters by claim, not by assignee", async () => {
+      await page.goto(filterUrl());
+      await page.locator('[data-testid="board-filter-bar"]').waitFor({ state: "visible" });
+      await waitForSortableArmed(page, "Todo");
+
+      await page.locator('[data-testid="board-filter-claimed-by"]').fill(filterClaimant);
+      await page.waitForFunction(
+        (v) => new URL(window.location.href).searchParams.get("claimedBy") === v,
+        filterClaimant, { timeout: 10000 })
+        .catch(() => assert(false, `the claimed-by box never wrote claimedBy= to the URL: ${page.url()}`));
+      assert(!page.url().includes("assignee="),
+        `the claimed-by box wrote the assignee query key: ${page.url()}`);
+
+      // Only Keep A is claimed, and it is assigned to alice — who also owns Skip X and Skip C. So a
+      // claimed-by clause reading the ASSIGNEE column would render three cards here, not one.
+      await page.waitForFunction((id) => {
+        const rendered = [...document.querySelectorAll('[data-testid="kanban-board"] [data-task-id]')]
+          .map((el) => Number(el.getAttribute("data-task-id")));
+        return rendered.length === 1 && rendered[0] === id;
+      }, keepA.id, { timeout: 10000 })
+        .catch(async () => assert(false,
+          `claimedBy=${filterClaimant} must render only the claimed card ${keepA.id} — got [${await renderedBoardIds(page)}] ` +
+          `(alice's three cards are [${filterAssigneeAliceIds}], which is what an assignee-reading clause would show)`));
+
+      // And the same state as a shared link.
+      await page.goto(filterUrl(`?claimedBy=${encodeURIComponent(filterClaimant)}`));
+      await page.locator(`[data-testid="board-card-${keepA.id}"]`).waitFor({ state: "visible" });
+      const viaLink = await renderedBoardIds(page);
+      assert(viaLink.join(",") === String(keepA.id),
+        `?claimedBy= deep link must render only [${keepA.id}], got [${viaLink}]`);
     });
 
     // AC 5, and the only place filtering can CORRUPT data rather than merely mis-display it.
-    // Persisted Todo order is A, B, C, D, E with C hidden by the filter. Dragging E onto B's top
-    // edge means "put E before B"; the third OnCardMoved argument is B's IDENTITY, so the server
-    // resolves it against the full persisted column and lands E at index 1 — A, E, B, C, D, with the
-    // hidden C still between B and D and every bystander's rank untouched. A rendered-INDEX
-    // implementation would instead read "index 1 of the four visible cards" and be right here by
-    // accident, so the assertion below checks the whole persisted sequence AND the bystander ranks.
+    //
+    //   persisted:  A(0)  X*(1)  B(2)  C*(3)  D(4)  E(5)     * hidden by `q=Keep`
+    //   rendered:   A     B      D     E
+    //
+    // Drag E onto B's top edge: "put E before B". The third OnCardMoved argument is the next
+    // RENDERED card's identity — B — and MoveOnBoardAsync resolves it against the complete persisted
+    // column, so E lands immediately before B, i.e. AFTER the hidden X:
+    //
+    //   identity anchor  ->  A,  X,  E,  B,  C,  D     <- the correct answer, asserted below
+    //   rendered index   ->  A,  E,  X,  B,  C,  D     <- what "insert at visible index 1" produces
+    //
+    // Those two orders DIFFER, which is the entire point of the seed, and the test asserts the first
+    // and explicitly refuses the second. The naive seed — one hidden card, in the middle — cannot do
+    // this: with A,B,C*,D,E both readings yield A,E,B,C,D, because they only diverge when a hidden
+    // card sits BEFORE the insertion point. A guard that passes under the bug it names is worse than
+    // no guard, so X exists purely to move one hidden card in front of the anchor. (Reviewer, PR #362.)
     await test("Dragging under an active filter persists the correct position across a hidden card", async () => {
       await page.goto(filterUrl("?q=Keep"));
       await page.locator('[data-testid="board-filter-bar"]').waitFor({ state: "visible" });
@@ -908,32 +1007,47 @@ async function main() {
       }
       await waitForSortableArmed(page, "Todo");
 
+      const seedOrder = [keepA.id, skipX.id, keepB.id, skipC.id, keepD.id, keepE.id];
       const beforeTasks = (await api("GET", `/api/projects/${filterProj.id}/board`)).Todo;
       const beforeIds = beforeTasks.map((task) => task.id);
       const beforeRanks = new Map(beforeTasks.map((task) => [task.id, task.sortOrder]));
-      assert(beforeIds.join(",") === [keepA.id, keepB.id, skipC.id, keepD.id, keepE.id].join(","),
-        `seed: expected persisted Todo order [${[keepA.id, keepB.id, skipC.id, keepD.id, keepE.id]}], got [${beforeIds}]`);
+      assert(beforeIds.join(",") === seedOrder.join(","),
+        `seed: expected persisted Todo order [${seedOrder}], got [${beforeIds}]`);
 
-      // Load-bearing precondition: the hidden card must actually be absent from the DOM, or the
+      // Load-bearing precondition: both hidden cards must actually be absent from the DOM, or the
       // drag below is an ordinary unfiltered drag and proves nothing about filtering.
       const renderedInColumn = await page.$$eval(
         '[data-testid="board-column-Todo-cards"] [data-task-id]',
         (els) => els.map((el) => Number(el.getAttribute("data-task-id"))),
       );
-      assert(renderedInColumn.join(",") === [keepA.id, keepB.id, keepD.id, keepE.id].join(","),
-        `the filtered Todo column must render exactly [A,B,D,E], got [${renderedInColumn}]`);
+      const expectedRendered = [keepA.id, keepB.id, keepD.id, keepE.id];
+      assert(renderedInColumn.join(",") === expectedRendered.join(","),
+        `the filtered Todo column must render exactly [A,B,D,E] = [${expectedRendered}], got [${renderedInColumn}]`);
 
       await dragCardBefore(page,
         `[data-testid="board-card-${keepE.id}"]`,
         `[data-testid="board-card-${keepB.id}"]`);
 
-      const expectedOrder = [keepA.id, keepE.id, keepB.id, skipC.id, keepD.id];
+      const expectedOrder = [keepA.id, skipX.id, keepE.id, keepB.id, skipC.id, keepD.id];
+      const renderedIndexOrder = [keepA.id, keepE.id, skipX.id, keepB.id, skipC.id, keepD.id];
       const afterTasks = await waitForProjectBoardOrder(filterProj.id, "Todo", expectedOrder);
+      const afterIds = afterTasks.map((task) => task.id);
+      // Say the wrong answer out loud. waitForProjectBoardOrder already failed if the order is not
+      // `expectedOrder`, but naming the rendered-index order here is what stops a future edit from
+      // quietly weakening the seed back into the shape where the two coincide.
+      assert(afterIds.join(",") !== renderedIndexOrder.join(","),
+        `the drag anchored on the RENDERED INDEX, not the persisted identity: got [${afterIds}]`);
 
       for (const task of afterTasks.filter((task) => task.id !== keepE.id)) {
         assert(task.sortOrder === beforeRanks.get(task.id),
           `bystander ${task.id} SortOrder changed from ${beforeRanks.get(task.id)} to ${task.sortOrder}`);
       }
+      // The moved card must take a rank strictly between the HIDDEN X and B — proof the server
+      // placed it against persisted neighbours, one of which the browser never rendered.
+      const movedAfter = afterTasks.find((task) => task.id === keepE.id);
+      assert(movedAfter.sortOrder > beforeRanks.get(skipX.id) && movedAfter.sortOrder < beforeRanks.get(keepB.id),
+        `moved card should rank between hidden X (${beforeRanks.get(skipX.id)}) and B ` +
+        `(${beforeRanks.get(keepB.id)}), got ${movedAfter.sortOrder}`);
 
       // And the human's own confirmation: clear the filter and read the order off the board.
       await page.locator('[data-testid="board-filter-clear"]').click();

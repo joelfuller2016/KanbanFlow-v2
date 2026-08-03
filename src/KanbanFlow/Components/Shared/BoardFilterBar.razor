@@ -112,8 +112,12 @@
             }
         </span>
 
-        @* Always rendered, never conditionally: `disabled` keeps the control's identity stable so a
-           keyboard user's focus is not thrown away the moment their last filter clears. *@
+        @* Always rendered, never `@if`-ed: an `@if` would make the bar's second row change height
+           the moment the first filter is applied, shoving the whole board down under the user's
+           cursor. Disabled rather than hidden, and the disabling IS a focus change — a disabled
+           element is dropped from the tab order and a focused one blurs to <body> — but that only
+           happens on Clear, where focus leaving a button that now does nothing is the correct
+           outcome. (Copilot, PR #362.) *@
         <button type="button"
                 class="btn btn-sm btn-outline-secondary ms-auto"
                 data-testid="board-filter-clear"

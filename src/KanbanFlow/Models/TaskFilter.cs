@@ -12,8 +12,11 @@ namespace KanbanFlow.Models;
 ///
 /// It also owns its own query-string encoding, because the URL is the ONLY persistence this filter
 /// has (a reload must restore the exact view) and a round-trip that splits its two halves across two
-/// files drifts the first time a field is added. <see cref="ToQuery"/> and <see cref="FromQuery"/>
-/// are inverses over every field; <c>TaskFilterTests</c> asserts that.
+/// files drifts the first time a field is added. <see cref="FromQuery"/> restores every field of a
+/// state that <see cref="ToQuery"/> wrote, and <c>TaskFilterTests</c> asserts that — in that
+/// direction only. The reverse is deliberately NOT an identity: <c>FromQuery</c> is lenient (it
+/// accepts <c>?priority=high</c>, repeated keys, unknown keys and untrimmed values) precisely so a
+/// hand-edited link still works, and <c>ToQuery</c> re-emits the one canonical spelling.
 /// </remarks>
 public sealed record TaskFilterState
 {
