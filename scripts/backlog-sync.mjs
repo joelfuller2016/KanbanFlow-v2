@@ -20,7 +20,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { createHash } from "node:crypto";
 import { readFile, writeFile, mkdir } from "node:fs/promises";
-import { existsSync } from "node:fs";
+import { existsSync, realpathSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 // The single definition of "what priority is this issue?", shared with the board's sync.
@@ -854,8 +854,24 @@ async function main() {
 // (Node resolves process.argv[1] before handing it over), so a URL comparison also works — but it
 // is fragile on Windows, where drive-letter casing and percent-encoding of spaces or non-ASCII
 // characters in the checkout path can make two spellings of the same file compare unequal.
-const invokedDirectly = process.argv[1]
-  && resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+//
+// The comparison must accept the symlink-RESOLVED form too. Node's ESM loader resolves
+// `import.meta.url` THROUGH a symlink to the real file, while `process.argv[1]` keeps the
+// symlink's own path, so a raw-only comparison silently fails when the CLI is reached through
+// one: `main()` never runs, nothing is written, and the process exits 0 with no output at all —
+// the quietest possible failure in a file whose every other guard refuses loudly. Reproduced on
+// Node 24.0.1/Windows: `node <symlink-to-backlog-sync.mjs> --help` printed nothing and exited 0.
+// (`--preserve-symlinks` inverts which side is resolved, so accept either match.)
+function resolvedEntry(p) {
+  try {
+    return realpathSync(resolve(p));
+  } catch {
+    return resolve(p); // argv[1] need not exist on disk; fall back to the raw resolution.
+  }
+}
+const selfPath = fileURLToPath(import.meta.url);
+const invokedDirectly = Boolean(process.argv[1])
+  && (resolve(process.argv[1]) === selfPath || resolvedEntry(process.argv[1]) === selfPath);
 
 if (invokedDirectly) {
   main().catch((err) => {

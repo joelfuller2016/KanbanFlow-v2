@@ -50,9 +50,15 @@
 
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-// `priorityFromLabel` is imported but unused HERE on purpose: PR #339's `labelForPriority()`
-// calls it, and that PR does not touch this import line, so dropping it would merge cleanly
-// and then throw ReferenceError at runtime. Remove only once nothing in this file calls it.
+// BOTH imports are used. `derivePriority` sets TaskItem.Priority in `syncTasks()` and backs the
+// priority-drift check in `statusRepo()`; `priorityFromLabel` is called by `labelForPriority()`
+// below, which picks the label a pushed issue should carry so the priority survives the round trip.
+//
+// This line used to carry a comment calling `priorityFromLabel` "imported but unused HERE on
+// purpose" — true only while its caller was still on the unmerged #339 branch. #339 has landed
+// and the caller is in this file. The stale claim was itself the hazard: it invited exactly the
+// "clean up the unused import" edit that throws ReferenceError the first time `push-issue` runs.
+// Search for call sites before removing either name.
 import { derivePriority, priorityFromLabel } from "./priority-model.mjs";
 
 const execFileAsync = promisify(execFile);
