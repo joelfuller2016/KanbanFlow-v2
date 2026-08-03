@@ -306,8 +306,20 @@ calls return a typed error result, and the ping endpoints answer HTTP 200 with `
 |---|---|---|
 | `ZEROROUTER_URL` (or `KANBANFLOW_LLM_URL`) | `http://localhost:5256/v1` | OpenAI-compatible base URL — must include `/v1` |
 | `KANBANFLOW_LLM_MODEL` | `gpt-4o-mini` | Model id |
-| `ZEROROUTER_API_KEY` (or `KANBANFLOW_LLM_KEY`) | `zerorouter` | Credential — never masked |
+| `ZEROROUTER_API_KEY` (or `KANBANFLOW_LLM_KEY`) | `zerorouter` | Placeholder credential for local ZeroRouter — deliberately never masked (see note) |
 | `KANBANFLOW_LLM_TIMEOUT_MS` | `30000` | Per-attempt timeout |
+
+> **On `ZEROROUTER_API_KEY` and masking.** The default is a **placeholder**, not a secret:
+> ZeroRouter runs open on the local network and the OpenAI client merely requires a non-empty
+> credential. Per the open-access charter this value is never masked in any UI, log, or response,
+> and no auth or rate limiting is added — that is a deliberate product decision for a
+> localhost-only tool, not an oversight ([`LlmOptions.cs`](../src/KanbanFlow/Services/LlmOptions.cs)).
+>
+> **That policy is scoped to the placeholder.** If you repoint `ZEROROUTER_URL` at a hosted
+> provider and set a real API key, you inherit a no-masking policy that was chosen for a value
+> with nothing to protect. KanbanFlow will not redact it for you. Either keep the local-ZeroRouter
+> topology this project assumes, or treat that deployment as out of scope for the open-access
+> charter and handle the credential accordingly.
 
 ```bash
 curl http://127.0.0.1:5123/api/admin/llm-ping
