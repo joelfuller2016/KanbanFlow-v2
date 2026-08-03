@@ -462,6 +462,25 @@ h1:focus {
     position: relative;
 }
 
+/* ── #112 board filter bar ──────────────────────────────────────────────────────────────────────
+   `flex-shrink: 0` is the load-bearing line. The bar is a child of `.project-main`, a flex COLUMN
+   whose height is pinned by `.project-shell` (100dvh - 56px) — so a flex item that is allowed to
+   shrink gets squeezed the moment the board below it is tall, and at 390px (where every control has
+   already wrapped onto its own row) that squeeze clips the priority chips and the Clear button
+   right off the bar. The board keeps its own `flex-grow-1 overflow-auto`, so nothing else changes:
+   the bar takes exactly its content height and the board takes the rest. */
+.board-filter-bar {
+    flex-shrink: 0;
+}
+
+/* The chips wrap onto a second line on a phone. Without a floor they wrap into four different
+   widths (Low/High are ~2x narrower than Critical) and read as a ransom note rather than a control;
+   with one they form an even grid. `min-width`, not `width` — "Critical" must still be able to grow
+   past it rather than truncate. */
+.board-filter-priorities > .btn {
+    min-width: 4.25rem;
+}
+
 /* #322 phase 3 -- columns fit their content instead of stretching to the board's full height.
    The void was never a width bug: `.project-shell` (above) gives the shell a DEFINITE height, the
    board row inherits it through two `flex-grow-1` links, and the row's default `align-items:

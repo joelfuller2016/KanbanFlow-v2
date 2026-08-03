@@ -16,7 +16,7 @@
 | **Stack** | .NET 10 · Blazor Server · SQLite (EF Core 10) · Minimal APIs · Node 18+ for the MCP wrapper |
 | **Surfaces** | 5 UI routes · 60 REST endpoints · 24 native MCP tools · 50 Node-wrapper MCP tools |
 | **Sync** | **One-way**, GitHub → board. It **never writes to GitHub**. GitHub owns title, priority, milestone; the board owns dependencies, criteria, subtasks, claims, ordering, memory — see [Who owns what](#who-owns-what) |
-| **Tests** | 583 xUnit · 56 in-app integration · 30 Playwright e2e · 19 script unit · 2 smoke suites — [all local, no CI](#deliberate-non-features) |
+| **Tests** | 624 xUnit · 56 in-app integration · 35 Playwright e2e · 19 script unit · 2 smoke suites — [all local, no CI](#deliberate-non-features) |
 | **Runs at** | `http://127.0.0.1:5123` — localhost only, no auth, no Docker, no cloud |
 | **Log book** | [`docs/BACKLOG.md`](docs/BACKLOG.md) — the authoritative record of what happened |
 | **Deep detail** | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) |
@@ -56,7 +56,13 @@ ask it "what should I work on, and why".
 KanbanFlow does not ask you to move your work. It **projects** GitHub into a project knowledge
 graph and gives that graph three surfaces:
 
-1. **A board** — drag-and-drop kanban, project outline, and an ideas inbox. For you.
+1. **A board** — drag-and-drop kanban, project outline, and an ideas inbox. A filter bar over
+   the board narrows it as you type — free-text over name and description, plus priority,
+   assignee, claimed-by and hide-done, AND-combined and carried in the query string
+   (`?q=&priority=&assignee=&claimedBy=&hideDone=`), so a filtered view survives a reload and
+   pastes into chat as a link. Filtering never reorders anything: a drag under an active filter
+   anchors on the next *visible* card's identity and the server resolves that against the full
+   persisted column. For you.
 2. **A REST API** — 60 endpoints over the same graph. For scripts.
 3. **An MCP server** — the same capabilities as first-class agent tools, plus a direction
    engine that answers *"what next, and why"* with a human-readable reason. For agents.
@@ -579,10 +585,10 @@ the command beside it — not copied from the previous README, and not copied fr
 | Native MCP tools (`POST /mcp`) | 24 | `grep -c '\[McpServerTool(' src/KanbanFlow/Mcp/KanbanMcpTools.cs` |
 | Node-wrapper MCP tools | 50 | `tools/list` over stdio against `scripts/mcp-server.mjs` — [exact invocation](docs/ARCHITECTURE.md#mcp-surface-24-native--50-wrapper) |
 | Blazor routes | 5 | `grep -rn '@page' src/KanbanFlow/Components/ \| sort -u` → `/`, `/Error`, `/ideas`, `/project/{Id:int}`, `/settings` |
-| Razor components | 22 | `find src/KanbanFlow/Components -name '*.razor' \| wc -l` |
-| xUnit tests | 583 | `dotnet test tests/KanbanFlow.Tests` |
+| Razor components | 24 | `find src/KanbanFlow/Components -name '*.razor' \| wc -l` |
+| xUnit tests | 624 | `dotnet test tests/KanbanFlow.Tests` |
 | In-app integration tests | 56 | `grep -c 'results.Add(await RunTest' src/KanbanFlow/Services/TestRunnerService.cs` (28 API + 22 service + 6 UI) |
-| Playwright e2e scenarios | 30 | `npm run test:ui` |
+| Playwright e2e scenarios | 35 | `npm run test:ui` |
 | Script unit tests (`scripts/*.mjs`) | 19 | `npm run test:scripts` |
 
 Corrections this revision made to the previous README: **53 → 60** endpoints (both memory
@@ -703,7 +709,7 @@ All local. There is no CI — [on purpose](#deliberate-non-features).
 ```
 
 ```bash
-dotnet test tests/KanbanFlow.Tests      # 583 xUnit tests
+dotnet test tests/KanbanFlow.Tests      # 624 xUnit tests
 ```
 
 ```powershell
