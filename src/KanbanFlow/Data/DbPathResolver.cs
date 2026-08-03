@@ -105,6 +105,11 @@ public static class DbPathResolver
         //    once its own file exists; (d) nothing is destroyed or migrated, and the adoption is
         //    stated out loud at boot and on the Settings page rather than inferred. KANBANFLOW_DB_PATH
         //    remains the explicit way to pin one. Revisit if this actually surprises anyone.
+        // On case-sensitive filesystems (Linux), two paths that differ only by case are genuinely
+        // distinct files — OrdinalIgnoreCase would collapse them and hide a shadowed database.
+        var pathComparer = Path.DirectorySeparatorChar == '/'
+            ? StringComparer.Ordinal
+            : StringComparer.OrdinalIgnoreCase;
         var candidates = new List<string>();
         foreach (var directory in new[] { currentDirectory, contentRootPath, appDirectory })
         {
@@ -112,7 +117,7 @@ public static class DbPathResolver
                 continue;
 
             var candidate = Path.GetFullPath(Path.Combine(directory, FileName));
-            if (!candidates.Contains(candidate, StringComparer.OrdinalIgnoreCase))
+            if (!candidates.Contains(candidate, pathComparer))
                 candidates.Add(candidate);
         }
 

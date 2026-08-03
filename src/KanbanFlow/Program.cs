@@ -18,7 +18,7 @@ var builder = WebApplication.CreateBuilder(args);
 // object rather than re-deriving the rule — the UI and the boot log below cannot disagree.
 //
 // DbPathResolverTests asserts this file names neither the working-directory API nor the env var,
-// so the rule cannot quietly grow a second copy again. Keep both out of the prose here too.
+// so the rule cannot quietly grow a second copy again. Keep resolution logic inside DbPathResolver.
 var dbResolution = DbPathResolver.Resolve(builder.Environment.ContentRootPath);
 builder.Services.AddSingleton(dbResolution);
 
