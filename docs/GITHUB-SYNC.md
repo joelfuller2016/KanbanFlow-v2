@@ -138,6 +138,25 @@ truncated read of a 43-issue repo reports *38 phantom orphans*, which is why sat
 bound is a hard failure and not a warning. Raise `KANBANFLOW_GH_PAGE_LIMIT` (default 2000) if a
 repo ever legitimately exceeds it.
 
+> ### ⚠️ "last sync" is scoped to `--actor`, and the default is `portfolio-sync`
+>
+> `status` reports the last sync by finding the most recent activity event whose `actor` equals
+> the `--actor` it was given. That means **`status --actor X` only sees syncs that ran under
+> `--actor X`.**
+>
+> This bites when a scheduled sync is labelled for the audit trail. Run the nightly job as
+> `sync --actor nightly-sync`, then check it with a bare `status`, and the answer is
+> *"never — no activity by this actor"* even though a sync finished minutes ago. Nothing is
+> wrong with the board; the two commands are simply looking at different labels.
+>
+> ```bash
+> node scripts/portfolio-sync.mjs sync   --actor nightly-sync
+> node scripts/portfolio-sync.mjs status --actor nightly-sync   # must match, or "last sync" reads never
+> ```
+>
+> The drift and count fields are **not** actor-scoped — only the "last sync" field is. An exit
+> code of `0` is still trustworthy under a mismatched actor; it is the recency that goes blank.
+
 ---
 
 ## Write surface
@@ -268,7 +287,7 @@ npm run gh:sync        # mirror the whole rotation
 npm run gh:sync:dry    # …preview it
 npm run gh:status      # health check (exit 0/1/2)
 npm run gh:onboard -- joelfuller2016/new-repo
-npm run gh:push -- joelfuller2016/new-repo --all     # preview only
+npm run gh:push:preview -- joelfuller2016/new-repo --all   # preview only — never writes to GitHub
 ```
 
 ---

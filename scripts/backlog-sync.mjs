@@ -72,18 +72,45 @@ const MILESTONES = [
 const MILESTONE_BY_TITLE = new Map(MILESTONES.map((m, i) => [m.title, { ...m, rank: i }]));
 const NO_MILESTONE = { title: null, short: "—", tier: "P2", rank: MILESTONES.length };
 
+// A milestone that exists on GitHub but is absent from MILESTONES has no defined tier and no
+// defined rank. Falling back to NO_MILESTONE would render it with a `—` milestone cell, drop it
+// into P2 and sort it last — a state GitHub does not have, reported with no warning. That is the
+// same failure this file already refuses elsewhere (a truncated fetch and an accounting mismatch
+// both throw), so refuse here too rather than quietly misreporting.
+function milestoneOf(issue) {
+  const title = issue.milestone?.title;
+  if (!title) return NO_MILESTONE;
+  const known = MILESTONE_BY_TITLE.get(title);
+  if (!known) {
+    throw new Error(
+      `Issue #${issue.number} carries the milestone "${title}", which is not in MILESTONES. ` +
+      `Its tier and rank are undefined, so it cannot be placed. Add it to MILESTONES in ` +
+      `scripts/backlog-sync.mjs (with its tier) and re-run. Refusing to render it as "no milestone".`,
+    );
+  }
+  return known;
+}
+
 // Labels that promote / demote a *derived* tier by one step. An explicit title prefix is
 // never adjusted — it is a human's stated decision and outranks every inferred signal.
 const PROMOTING_LABELS = new Set(["bug", "dependencies", "security"]);
 const DEMOTING_LABELS = new Set(["documentation"]);
 
+// The single definition of "this issue carries a promoting label". `classify` uses it to move the
+// derived tier a step, `signalRank` to order within a band — two call sites that must never
+// disagree, so they read the same predicate rather than each spreading PROMOTING_LABELS inline.
+function hasPromotingLabel(labelSet) {
+  for (const l of PROMOTING_LABELS) if (labelSet.has(l)) return true;
+  return false;
+}
+
 // Rank *within* a tier+milestone band. Defects first (something is broken), then the epic
-// that groups the band's children, then ordinary build-out, then docs.
-function signalRank(labels) {
-  const set = new Set(labels);
-  if ([...PROMOTING_LABELS].some((l) => set.has(l))) return 0;
-  if (set.has("epic")) return 1;
-  if (isDocsOnly(set)) return 3;
+// that groups the band's children, then ordinary build-out, then docs. Computed ONCE in
+// `classify` and stored, because `compare` runs it O(n log n) times during the sort.
+function signalRank(labelSet) {
+  if (hasPromotingLabel(labelSet)) return 0;
+  if (labelSet.has("epic")) return 1;
+  if (isDocsOnly(labelSet)) return 3;
   return 2;
 }
 
@@ -101,7 +128,8 @@ function clampTier(index) {
 
 function classify(issue) {
   const labels = (issue.labels || []).map((l) => l.name).sort();
-  const milestone = MILESTONE_BY_TITLE.get(issue.milestone?.title ?? "") ?? NO_MILESTONE;
+  const labelSet = new Set(labels);
+  const milestone = milestoneOf(issue);
 
   const explicit = TITLE_PRIORITY.exec(issue.title || "");
   let tier;
@@ -111,14 +139,14 @@ function classify(issue) {
     tierSource = "title";
   } else {
     let idx = TIER_INDEX.get(milestone.tier);
-    const set = new Set(labels);
-    if ([...PROMOTING_LABELS].some((l) => set.has(l))) idx -= 1;
-    else if (isDocsOnly(set)) idx += 1;
+    if (hasPromotingLabel(labelSet)) idx -= 1;
+    else if (isDocsOnly(labelSet)) idx += 1;
     tier = clampTier(idx);
     tierSource = milestone.title ? "milestone+labels" : "labels";
   }
 
   return {
+    signal: signalRank(labelSet),
     number: issue.number,
     title: String(issue.title || "").replace(/\s+/g, " ").trim(),
     url: issue.url,
@@ -144,7 +172,7 @@ function compare(a, b) {
   return (
     TIER_INDEX.get(a.tier) - TIER_INDEX.get(b.tier) ||
     a.milestone.rank - b.milestone.rank ||
-    signalRank(a.labels) - signalRank(b.labels) ||
+    a.signal - b.signal ||
     Date.parse(a.createdAt) - Date.parse(b.createdAt) ||
     a.number - b.number
   );
@@ -152,9 +180,33 @@ function compare(a, b) {
 
 // --- GitHub (read-only) -----------------------------------------------------------------
 
+// `gh` can block indefinitely — an expired token that wants to prompt, a stalled network read.
+// With no timeout the script simply never returns, and an agent running `npm run backlog:check`
+// hangs with no output and nothing to act on. Bound it, and turn the two failures that actually
+// happen into messages that name the fix.
+const GH_TIMEOUT_MS = 120_000;
+
 async function gh(args) {
-  const { stdout } = await execFileAsync("gh", args, { maxBuffer: 64 * 1024 * 1024 });
-  return JSON.parse(stdout || "[]");
+  let stdout;
+  try {
+    ({ stdout } = await execFileAsync("gh", args, {
+      maxBuffer: 64 * 1024 * 1024,
+      timeout: GH_TIMEOUT_MS,
+    }));
+  } catch (err) {
+    if (err.code === "ENOENT") throw new Error("`gh` is not installed or not on PATH.");
+    if (err.killed) {
+      throw new Error(
+        `\`gh ${args.join(" ")}\` timed out after ${GH_TIMEOUT_MS / 1000}s. Check \`gh auth status\`.`,
+      );
+    }
+    throw err;
+  }
+  try {
+    return JSON.parse(stdout || "[]");
+  } catch {
+    throw new Error(`\`gh ${args.join(" ")}\` did not return JSON.`);
+  }
 }
 
 const ISSUE_FIELDS = [
@@ -507,14 +559,32 @@ function buildModel(rawIssues, now, repo) {
   return { all, open, completed, notPlanned, now, repo };
 }
 
+// Resolve a section by its two bounding headings, and FAIL if either is missing.
+//
+// A bare `indexOf` fails OPEN, which is the worst possible behaviour for the one assertion that
+// reads the rendered output. `body.slice(-1, end)` (start not found) silently yields a wrong,
+// usually empty region; `body.slice(start, -1)` (end not found) swallows the entire rest of the
+// file. Either way the row counts stop measuring what they claim to. These heading strings are
+// one character from a mismatch — `## 🚫 Closed — not planned` carries an em dash — so a
+// renderer edit that drifts one of them must be loud, not silently self-approving.
+function sectionBounds(body, startHeading, endHeading) {
+  const start = body.indexOf(startHeading);
+  const end = body.indexOf(endHeading);
+  if (start === -1 || end === -1 || end < start) {
+    throw new Error(
+      `Rendered body is missing the expected headings "${startHeading}" / "${endHeading}" ` +
+      `(start=${start}, end=${end}). assertRendered cannot verify the output, so it refuses to ` +
+      `pass it. If a heading was renamed in renderBody, rename it here too.`,
+    );
+  }
+  return body.slice(start, end);
+}
+
 function assertRendered(body, model) {
   // Count the rows actually rendered into the open section and compare against what `gh`
   // returned. This is a check on the OUTPUT TEXT, not on the in-memory arrays — it is the
   // only assertion that can catch a rendering bug that drops a row.
-  const openSection = body.slice(
-    body.indexOf("## 📋 Open backlog"),
-    body.indexOf("## ✅ Completed"),
-  );
+  const openSection = sectionBounds(body, "## 📋 Open backlog", "## ✅ Completed");
   const rows = openSection.match(/^\| \d+ \| \[#\d+\]\(/gm) || [];
   if (rows.length !== model.open.length) {
     throw new Error(
@@ -522,12 +592,48 @@ function assertRendered(body, model) {
       `Refusing to write an incomplete log book.`,
     );
   }
-  const ledger = body.slice(body.indexOf("## ✅ Completed"), body.indexOf("## 🚫 Closed — not planned"));
+  const ledger = sectionBounds(body, "## ✅ Completed", "## 🚫 Closed — not planned");
   const ledgerRows = ledger.match(/^\| \[#\d+\]\(/gm) || [];
   if (ledgerRows.length !== model.completed.length) {
     throw new Error(`Rendered ${ledgerRows.length} completed rows but ${model.completed.length} issues are closed-as-completed.`);
   }
   return rows.length;
+}
+
+// The headline counts live in the HEADER, and until this existed nothing checked them: `digestOf`
+// hashes the body only, and `--check` compares body against body. Edit `| **Open issues** | **103**`
+// to `**203**` by hand and every guard stayed green — the file asserted a number GitHub does not
+// support, which is the single failure mode the log book claims to prevent.
+function headerCounts(header) {
+  const open = /\|\s*\*\*Open issues\*\*\s*\|\s*\*\*(\d+)\*\*\s*\|/.exec(header);
+  const closed = /\|\s*\*\*Closed issues\*\*\s*\|\s*\*\*(\d+)\*\*\s*—\s*(\d+) completed, (\d+) not planned\s*\|/.exec(header);
+  return {
+    open: open ? Number(open[1]) : null,
+    closed: closed ? Number(closed[1]) : null,
+    completed: closed ? Number(closed[2]) : null,
+    notPlanned: closed ? Number(closed[3]) : null,
+  };
+}
+
+// Returns a list of human-readable problems; empty means the header agrees with GitHub. A count
+// the regex could not find at all (null) is itself a problem — a header that lost its counts must
+// not pass by default.
+function headerCountProblems(header, model) {
+  const found = headerCounts(header);
+  const expected = {
+    open: model.open.length,
+    closed: model.completed.length + model.notPlanned.length,
+    completed: model.completed.length,
+    notPlanned: model.notPlanned.length,
+  };
+  const problems = [];
+  for (const key of ["open", "closed", "completed", "notPlanned"]) {
+    if (found[key] === null) problems.push(`header has no readable "${key}" count`);
+    else if (found[key] !== expected[key]) {
+      problems.push(`header says ${key}=${found[key]}, GitHub says ${expected[key]}`);
+    }
+  }
+  return problems;
 }
 
 // --- CLI ------------------------------------------------------------------------------------
@@ -592,15 +698,34 @@ async function main() {
     const claimed = headerDigest(prior.header);
     const actualDigest = digestOf(prior.body);
     if (claimed && claimed !== actualDigest) {
+      // EXIT HERE. This used to print and fall through to the drift comparison, which then
+      // reported "STALE: does not match what GitHub says" — blaming GitHub for a local hand edit.
+      // Worse, when the edit only touched the Age column, `maskVolatile` made the two sides equal
+      // and `diffLines` found nothing, so the output was the word STALE followed by no diff at
+      // all. The exit code was right and the diagnosis was wrong; a guard that misnames the fault
+      // sends the reader to the wrong file.
       console.error(`\nTAMPERED: docs/BACKLOG.md has been hand-edited.`);
       console.error(`  header claims  sha256:${claimed}`);
       console.error(`  body hashes to sha256:${actualDigest}`);
+      console.error(`\n  Fix: revert the edit, or change the issue on GitHub and run \`npm run backlog\`.`);
+      process.exit(1);
     }
 
     // 2. Content drift against GitHub.
     const expected = args.strict ? body : maskVolatile(body);
     const found = args.strict ? prior.body : maskVolatile(prior.body);
-    if (expected === found && (!claimed || claimed === actualDigest)) {
+    if (expected === found) {
+      // The BODY agrees. The header still might not: the digest above covers the body only, and
+      // the comparison just made was body against body, so a hand-edited headline count has
+      // passed through both untouched. This is the last place it can be caught.
+      const problems = headerCountProblems(prior.header, model);
+      if (problems.length) {
+        console.error(`\nTAMPERED: docs/BACKLOG.md's header counts disagree with GitHub.`);
+        for (const p of problems) console.error(`  - ${p}`);
+        console.error(`\n  The body is intact, so this is a hand edit to the header alone.`);
+        console.error(`  Fix: \`npm run backlog\` to regenerate the header from GitHub.`);
+        process.exit(1);
+      }
       if (!args.strict && prior.body !== body) {
         console.error(`\nOK (content matches). Only the Age column has moved with the clock — refresh with \`npm run backlog\` when convenient.`);
       } else {

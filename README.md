@@ -16,7 +16,7 @@
 | **Stack** | .NET 10 · Blazor Server · SQLite (EF Core 10) · Minimal APIs · Node 18+ for the MCP wrapper |
 | **Surfaces** | 5 UI routes · 60 REST endpoints · 24 native MCP tools · 50 Node-wrapper MCP tools |
 | **Sync** | **One-way**, GitHub → board. It **never writes to GitHub**. GitHub owns title, priority, milestone; the board owns dependencies, criteria, subtasks, claims, ordering, memory — see [Who owns what](#who-owns-what) |
-| **Tests** | 449 xUnit · 56 in-app integration · 22 Playwright e2e · 2 smoke suites — [all local, no CI](#deliberate-non-features) |
+| **Tests** | 498 xUnit · 56 in-app integration · 23 Playwright e2e · 2 smoke suites — [all local, no CI](#deliberate-non-features) |
 | **Runs at** | `http://127.0.0.1:5123` — localhost only, no auth, no Docker, no cloud |
 | **Log book** | [`docs/BACKLOG.md`](docs/BACKLOG.md) — the authoritative record of what happened |
 | **Deep detail** | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) |
@@ -76,8 +76,8 @@ Three properties make it safe to point at a real portfolio:
 - **It advances your board, and overrides it in exactly one case.** Drag a task to
   `InProgress` and the sync leaves it there — *unless the issue is closed*, in which case the
   task is forced to `Done` regardless of where you put it
-  (`portfolio-sync.mjs:484-486`). The opposite disagreement — board `Done`, issue still open —
-  is reported as **drift** and never touched (`:490`). That asymmetry is the whole rule; the
+  (`syncTasks()` in `portfolio-sync.mjs`). The opposite disagreement — board `Done`, issue still
+  open — is reported as **drift** and never touched (`driftDoneButOpen`). That asymmetry is the whole rule; the
   older "never overrides your status" phrasing was half true and has been corrected here.
 - **It is idempotent.** Re-running converges instead of duplicating, with **no schema change** —
   the identity of every projected row is encoded in data GitHub already gave it.
@@ -174,7 +174,7 @@ cannot onboard a repo. That parity gap is [#231](https://github.com/joelfuller20
 
 | GitHub concept | KanbanFlow entity | Idempotency key | Direction |
 |---|---|---|---|
-| Repo | `Project` | `Project.Name` == repo short name (case-insensitive) | GitHub → board |
+| Repo | `Project` | `<!-- github: owner/repo -->` marker in `Project.Description`; falls back to `Project.Name` == repo short name (case-insensitive) | GitHub → board |
 | Milestone | `Feature` | `Feature.Name` == milestone title, within the project; issues with no milestone go to a feature literally named `Unsorted` | GitHub → board |
 | Issue | `TaskItem` | the **`#<n> ` title prefix** — trailing space included (`/^#(\d+)\s/`) | GitHub → board |
 | Issue labels (`P0`…`P3`, `priority:high`, `critical`, …) | `TaskItem.Priority` | — reconciled every run | GitHub → board (GitHub always wins) |
@@ -194,7 +194,7 @@ from GitHub (`closed` → `Done`; open + linked open PR → `Review`; open + ass
 
 | Condition | Action | Overrides a hand-set status? |
 |---|---|---|
-| issue closed, task ≠ `Done` | → `Done` | **Yes.** Whatever column you put it in, a closed issue forces `Done` (`portfolio-sync.mjs:484-486`) |
+| issue closed, task ≠ `Done` | → `Done` | **Yes.** Whatever column you put it in, a closed issue forces `Done` (`syncTasks()` in `portfolio-sync.mjs`) |
 | issue open, linked open PR, task ∈ {`Backlog`, `Todo`, `InProgress`} | → `Review` | Partly — it advances those three, and will not touch `Review` or `Done` |
 | issue open, task = `Done` | **drift** — reported, not touched | No |
 | task's issue is in neither the open nor the closed set | **drift** — deleted or transferred; never auto-deleted | No |
@@ -229,10 +229,10 @@ The single most useful table here. Before you edit a field, know which side wins
 
 | Field | Owner | What that means in practice |
 |---|---|---|
-| Task **title** | **GitHub** | Reconciled every run (`portfolio-sync.mjs:479`). Rename the issue; renaming the task is undone — and stripping the `#<n> ` prefix orphans it |
-| Task **priority** | **GitHub** | Reconciled every run (`:480`) from `P0`…`P3` / `priority:high` / bare severity labels. Setting it on the board is undone on the next sync |
-| Task **status** | **Shared, GitHub-dominant** | You may move it freely, **except** that a closed issue forces `Done` (`:484-486`). Board `Done` + open issue is reported as drift, not corrected |
-| Task **feature** (milestone) | **GitHub** | An issue's milestone change moves the task via `PATCH /api/tasks/{id}/feature` (`:472`) |
+| Task **title** | **GitHub** | Reconciled every run (`syncTasks()`). Rename the issue; renaming the task is undone — and stripping the `#<n> ` prefix orphans it |
+| Task **priority** | **GitHub** | Reconciled every run (`syncTasks()`) from `P0`…`P3` / `priority:high` / bare severity labels. Setting it on the board is undone on the next sync |
+| Task **status** | **Shared, GitHub-dominant** | You may move it freely, **except** that a closed issue forces `Done` (`syncTasks()`). Board `Done` + open issue is reported as drift, not corrected |
+| Task **feature** (milestone) | **GitHub** | An issue's milestone change moves the task via `PATCH /api/tasks/{id}/feature` (`syncTasks()`) |
 | Task **description** | **GitHub, once** | Written from the issue body **only at creation**, truncated to 1,500 chars. It is **never refreshed** — the update patch carries only name, priority, status |
 | **Comments** | **GitHub, append-only** | Issue comments, PR conversation, PR reviews, and inline `file:line` comments are appended, deduped by node id. Board-authored comments are never pushed |
 | **`ActivityEvent`** | **Derived** | Written by the service layer as a side effect of task writes. Never read from or sent to GitHub |
@@ -259,18 +259,18 @@ that assumes otherwise will be wrong.
 
 | Omission | Detail |
 |---|---|
-| **Issue body is never refreshed** | Written once at task creation, truncated at `BODY_EXCERPT_LIMIT = 1500` (`portfolio-sync.mjs:34`). Edit an issue body and the board keeps the original excerpt forever |
+| **Issue body is never refreshed** | Written once at task creation, truncated at `BODY_EXCERPT_LIMIT = 1500` (`portfolio-sync.mjs`). Edit an issue body and the board keeps the original excerpt forever |
 | **Closed issues are fetched as numbers only** | Without `--include-closed` the sync pulls only issue *numbers* for closed issues (`fetchClosedIssues(repo, full)`), enough to converge a task to `Done` — their bodies and comments are not mirrored |
-| **Assignees are not synchronised** | GitHub assignees are read once, only to infer `InProgress` on create (`deriveStatus`, `:288`). `TaskItem.Assignee` is never populated from GitHub |
+| **Assignees are not synchronised** | GitHub assignees are read once, only to infer `InProgress` on create (`deriveStatus()`). `TaskItem.Assignee` is never populated from GitHub |
 | **Labels collapse to one priority** | The first matching severity label becomes `TaskItem.Priority`. Every other label survives only as text inside the description block — there is no label entity, and no filtering by label on the board |
 | **Comment edits, deletions, and reactions are never reconciled** | Dedupe is by GitHub node id; an id already seen is skipped forever. An edited GitHub comment keeps its original mirrored text, and a deleted one stays on the board |
 | **PR comments on a PR that closes no issue are dropped** | With no `Closes #n` there is no task to attach them to. They are counted and reported, never silently discarded |
 | **Inline review comments cost one API call per PR** | Fetched via `gh api repos/{repo}/pulls/{n}/comments`. A failure is reported and sets a non-zero exit code — the board is explicitly flagged incomplete rather than looking whole |
-| **Fetches are capped at 500 per list** | `GH_PAGE_LIMIT = 500`. Hitting the cap prints a loud truncation warning; it never silently drops issues |
+| **Fetches are capped per list** | `GH_PAGE_LIMIT` defaults to `2000` (`KANBANFLOW_GH_PAGE_LIMIT` overrides it). Hitting the cap is a hard failure, not a warning — a count derived from a partial read is worse than no count |
 | **No board → GitHub write path exists** | The sync creates nothing on GitHub — not an issue, not a comment, not a label. A task created on the board has no issue and will be reported as drift |
 | **Board-owned structure never round-trips** | Dependencies, acceptance criteria, subtasks, requirements, claims, ordering, and memory have no GitHub equivalent. See [Who owns what](#who-owns-what) |
 | **Milestones are flattened** | Features are created flat; GitHub milestones are not hierarchical, so the recursive-feature capability is unused by the sync |
-| **Project ↔ repo link is by name** | There is no `RepoUrl` column ([#237](https://github.com/joelfuller2016/KanbanFlow-v2/issues/237)). Rename a project and it detaches; a hand-made project matching a repo short name is silently adopted |
+| **Project ↔ repo link has no dedicated column** | There is still no `RepoUrl` column ([#237](https://github.com/joelfuller2016/KanbanFlow-v2/issues/237)), but the link is durable anyway: a `<!-- github: owner/repo -->` marker in `Project.Description` is the primary key, so a **marker-linked project survives a rename**. Short-name matching remains as a legacy fallback, and a hand-made project matching a repo short name is still adopted (and then stamped with a marker) on the next `onboard` |
 
 ---
 
@@ -371,6 +371,15 @@ node scripts/portfolio-sync.mjs --dry-run --repos joelfuller2016/KanbanFlow-v2
 node scripts/portfolio-sync.mjs --repos joelfuller2016/KanbanFlow-v2
 ```
 
+**`onboard` is the explicit version of step 2's first half.** It resolves (or creates) the
+`Project` for a repo and stamps the durable `<!-- github: owner/repo -->` marker into
+`Project.Description` — including onto a legacy project that was previously linked by name
+alone. It is safe to re-run:
+
+```bash
+node scripts/portfolio-sync.mjs onboard joelfuller2016/KanbanFlow-v2
+```
+
 To onboard several at once, or to make a repo set the default for every later run:
 
 ```bash
@@ -383,9 +392,11 @@ node scripts/portfolio-sync.mjs
 ```
 
 > **Run `--dry-run` first on a board that already has hand-made projects.** A project whose
-> name happens to equal a repo's short name **will be adopted** by the sync — name-matching
-> *is* the repo link until [#237](https://github.com/joelfuller2016/KanbanFlow-v2/issues/237)
-> adds a real column.
+> name happens to equal a repo's short name **will be adopted** by the sync — short-name
+> matching is the fallback the durable marker does not replace, because a project that predates
+> the marker has nothing else to match on. Once adopted (or onboarded) it carries a marker and
+> the name stops mattering: rename it freely. [#237](https://github.com/joelfuller2016/KanbanFlow-v2/issues/237)
+> would replace the marker with a real column, but the link is no longer waiting on it.
 
 ### 2. Create a new issue
 
@@ -473,7 +484,27 @@ If a re-run keeps creating tasks, a `#<n> ` title prefix has been edited off.
 
 ### 4. Check status and drift
 
-Two questions, two commands.
+Three questions, three commands.
+
+**"Is it safe to act on this board right now?"** — `status`. This is the dedicated health check:
+read-only, and it answers with an **exit code** so a script or an agent can gate on it rather
+than parsing prose.
+
+```bash
+node scripts/portfolio-sync.mjs status && echo "safe to act"
+node scripts/portfolio-sync.mjs status --repos joelfuller2016/KanbanFlow-v2
+```
+
+| Exit | Meaning |
+|---|---|
+| `0` | Clean **and complete** — everything was read, and nothing disagrees |
+| `1` | Confirmed drift. With `--strict`, also pending work, unsynced tasks, or a non-durable link |
+| `2` | **Incomplete or error** — a repo could not be read, or a fetch hit its item bound |
+
+Exit `2` dominates `1`: "I could not see everything" is a different answer from "I looked and it
+is clean", and a drift count computed over a partial read is worse than no count at all. See
+[`docs/GITHUB-SYNC.md`](docs/GITHUB-SYNC.md) for the full contract — including the fact that
+`status --actor <name>` reports "last sync" only for syncs run under that **same** `--actor`.
 
 **"Is the board still in agreement with GitHub?"** — the drift block at the end of any sync,
 including a dry run:
@@ -549,9 +580,9 @@ the command beside it — not copied from the previous README, and not copied fr
 | Node-wrapper MCP tools | 50 | `tools/list` over stdio against `scripts/mcp-server.mjs` — [exact invocation](docs/ARCHITECTURE.md#mcp-surface-24-native--50-wrapper) |
 | Blazor routes | 5 | `grep -rn '@page' src/KanbanFlow/Components/ \| sort -u` → `/`, `/Error`, `/ideas`, `/project/{Id:int}`, `/settings` |
 | Razor components | 22 | `find src/KanbanFlow/Components -name '*.razor' \| wc -l` |
-| xUnit tests | 449 | `dotnet test tests/KanbanFlow.Tests` |
+| xUnit tests | 498 | `dotnet test tests/KanbanFlow.Tests` |
 | In-app integration tests | 56 | `grep -c 'results.Add(await RunTest' src/KanbanFlow/Services/TestRunnerService.cs` (28 API + 22 service + 6 UI) |
-| Playwright e2e scenarios | 22 | `npm run test:ui` |
+| Playwright e2e scenarios | 23 | `npm run test:ui` |
 
 Corrections this revision made to the previous README: **53 → 60** endpoints (both memory
 endpoints and `GET /api/tasks/{id}/context` were missing from the route list entirely);
@@ -671,7 +702,7 @@ All local. There is no CI — [on purpose](#deliberate-non-features).
 ```
 
 ```bash
-dotnet test tests/KanbanFlow.Tests      # 449 xUnit tests
+dotnet test tests/KanbanFlow.Tests      # 498 xUnit tests
 ```
 
 ```powershell

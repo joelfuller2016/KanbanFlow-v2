@@ -179,33 +179,43 @@ public static class ActivityTimelineBuilder
 
         var suppressedComment = new bool[commentList.Count];
         var suppressedEvent = new bool[eventList.Count];
-        var eventUsed = new bool[eventList.Count];
-        var commentUsed = new bool[commentList.Count];
 
         // Pass 1 — a system comment is dropped in favour of ITS event (the event carries the diff).
         foreach (var (ci, ei) in MatchBestFirst(
                      commentList.Count, eventList.Count,
                      (ci, ei) => SupersedingEventTypeFor(commentList[ci]) is { } type
                                  && eventList[ei].EventType == type,
-                     (ci, ei) => Delta(commentList[ci].CreatedAt, eventList[ei].CreatedAt),
-                     commentUsedByPass1: null, eventUsed))
+                     (ci, ei) => Delta(commentList[ci].CreatedAt, eventList[ei].CreatedAt)))
         {
-            eventUsed[ei] = true;
             suppressedComment[ci] = true;
         }
 
+        // The event side of pass 2's predicate, resolved ONCE PER EVENT rather than once per
+        // (comment, event) pair. The predicate is evaluated O(n·m) times and JsonDocument.Parse
+        // was inside it, so a task with a few hundred comments re-parsed tens of thousands of
+        // documents — on the synchronous render path, since Rebuild() runs on every
+        // OnParametersSet. Null for every non-comment event; those never reach the text test.
+        var eventCommentText = new string?[eventList.Count];
+        for (var i = 0; i < eventList.Count; i++)
+            if (eventList[i].EventType == "TaskCommentAdded")
+                eventCommentText[i] = ReadStringProperty(eventList[i].AfterJson, "text")?.Trim();
+
         // Pass 2 — a TaskCommentAdded event is dropped in favour of ITS comment (which has the
-        // markdown body). Disjoint from pass 1: TaskCommentAdded is never a superseding type, and
-        // a comment suppressed in pass 1 is a system comment, never a user one.
+        // markdown body).
+        //
+        // DISJOINTNESS FROM PASS 1 rests on exactly two facts, both load-bearing:
+        //   1. `!suppressedComment[ci]` — a comment pass 1 already spent cannot be spent again.
+        //   2. "TaskCommentAdded" is never a VALUE in SupersedingEventByCommentType, so the two
+        //      passes draw from disjoint sets of events and cannot both claim one.
+        // Map a comment type to "TaskCommentAdded" and fact 2 dies, turning one action into a
+        // double suppression. `Build_TheTwoPassesClaimDisjointEvents_*` pins both.
         foreach (var (ci, ei) in MatchBestFirst(
                      commentList.Count, eventList.Count,
                      (ci, ei) => eventList[ei].EventType == "TaskCommentAdded"
                                  && !suppressedComment[ci]
-                                 && TextMatches(eventList[ei], commentList[ci]),
-                     (ci, ei) => Delta(commentList[ci].CreatedAt, eventList[ei].CreatedAt),
-                     commentUsedByPass1: commentUsed, eventUsedFlags: null))
+                                 && TextMatches(eventCommentText[ei], commentList[ci]),
+                     (ci, ei) => Delta(commentList[ci].CreatedAt, eventList[ei].CreatedAt)))
         {
-            commentUsed[ci] = true;
             suppressedEvent[ei] = true;
         }
 
@@ -251,11 +261,12 @@ public static class ActivityTimelineBuilder
     /// text stops an unrelated comment posted in the same second from absorbing the event. A row
     /// with no parsable text (legacy/hand-written) falls back to time alone.
     /// </summary>
-    private static bool TextMatches(ActivityEvent ev, TaskComment comment)
-    {
-        var text = ReadStringProperty(ev.AfterJson, "text")?.Trim();
-        return text is null || string.Equals(text, comment.Text.Trim(), StringComparison.Ordinal);
-    }
+    /// <param name="eventText">
+    /// The event's already-extracted, already-trimmed comment text, or null when the row carries
+    /// none. Passed in rather than parsed here because the caller evaluates this O(n·m) times.
+    /// </param>
+    private static bool TextMatches(string? eventText, TaskComment comment)
+        => eventText is null || string.Equals(eventText, comment.Text.Trim(), StringComparison.Ordinal);
 
     private static long Delta(DateTime a, DateTime b) => Math.Abs((AsUtc(a) - AsUtc(b)).Ticks);
 
@@ -282,26 +293,33 @@ public static class ActivityTimelineBuilder
     /// Greedy minimum-cost one-to-one matching between comment and event indices.
     /// <paramref name="eligible"/> gates which pairs may match at all; <paramref name="cost"/> is
     /// the tick distance. Pairs outside <see cref="PairingWindow"/> are never considered.
-    /// The `used` arrays let a later pass respect an earlier pass's claims.
+    ///
+    /// ONE-TO-ONE IS ENFORCED HERE, by <c>takenComments</c>/<c>takenEvents</c> below — nowhere
+    /// else. The result is fully materialised before it is returned, so a caller cannot influence
+    /// this matching from inside its own foreach body; anything a later pass must respect has to
+    /// be visible to <paramref name="eligible"/> at call time. (This method used to take two
+    /// `used` arrays for that purpose, documented as letting a later pass respect an earlier
+    /// pass's claims. They could never work: both callers filled them only AFTER the call had
+    /// returned, so every element was false at every point this method read them. They are gone —
+    /// see <see cref="Build"/> for the two facts that actually make the passes disjoint.)
     /// </summary>
     private static List<(int CommentIndex, int EventIndex)> MatchBestFirst(
         int commentCount, int eventCount,
         Func<int, int, bool> eligible,
-        Func<int, int, long> cost,
-        bool[]? commentUsedByPass1,
-        bool[]? eventUsedFlags)
+        Func<int, int, long> cost)
     {
         var candidates = new List<(long Cost, int Ci, int Ei)>();
         for (var ci = 0; ci < commentCount; ci++)
         {
-            if (commentUsedByPass1 is not null && commentUsedByPass1[ci]) continue;
             for (var ei = 0; ei < eventCount; ei++)
             {
-                if (eventUsedFlags is not null && eventUsedFlags[ei]) continue;
-                if (!eligible(ci, ei)) continue;
-
+                // Window FIRST. Both filters are pure and ANDed, so the candidate set is identical
+                // either way — but `eligible` is the expensive half (pass 2's used to parse JSON)
+                // and the window rejects almost every pair, so ordering is a pure win.
                 var d = cost(ci, ei);
                 if (d > PairingWindow.Ticks) continue;
+                if (!eligible(ci, ei)) continue;
+
                 candidates.Add((d, ci, ei));
             }
         }

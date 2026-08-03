@@ -295,6 +295,127 @@ public class ActivityTimelineTests
     }
 
     // ══════════════════════════════════════════════════════════════════════════════════════════
+    //  1b. THE TWO PASSES MUST STAY DISJOINT
+    //
+    //  MatchBestFirst enforces one-to-one WITHIN a call. Nothing enforces it ACROSS the two
+    //  passes except the two facts below — and the code used to claim otherwise: it threaded two
+    //  `used` arrays through MatchBestFirst, documented as "letting a later pass respect an
+    //  earlier pass's claims". They were dead. MatchBestFirst returns a fully materialised list,
+    //  so both callers filled their array only AFTER the call returned; every element was false
+    //  at every point it was read. Deleting them changed no behaviour, which is precisely why the
+    //  real guarantees need tests: they were the only thing holding, and nothing said so.
+    // ══════════════════════════════════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// FACT 1 — a comment spent by pass 1 cannot be spent again by pass 2.
+    ///
+    /// One status change (comment + its TaskStatusChanged event) with an unrelated
+    /// TaskCommentAdded event landing in the same instant, carrying the SAME text. Pass 1 spends
+    /// the comment on the status event. If `!suppressedComment[ci]` were dropped from pass 2's
+    /// predicate, that already-spent comment would absorb the TaskCommentAdded event as well —
+    /// one comment silently deleting TWO events. The event must survive as its own row.
+    /// </summary>
+    [Fact]
+    public void Build_TheTwoPassesClaimDisjointComments_APass1CommentCannotAbsorbASecondEvent()
+    {
+        const string text = "Status changed from Todo to InProgress";
+        var comments = new[] { Comment(1, text, CommentType.StatusChange, T0) };
+        var events = new[]
+        {
+            Event(10, "TaskStatusChanged", T0.AddMilliseconds(3),
+                before: Snapshot(new { Status = "Todo" }), after: Snapshot(new { Status = "InProgress" }),
+                message: "status"),
+            Event(11, "TaskCommentAdded", T0.AddMilliseconds(1), after: Snapshot(new { Text = text, Author = "System" })),
+        };
+
+        var timeline = ActivityTimelineBuilder.Build(comments, events);
+
+        // The comment is gone (pass 1). BOTH events remain: two records, two rows.
+        Assert.Equal(2, timeline.Count);
+        Assert.All(timeline, e => Assert.False(e.FromComment));
+        Assert.Equal(new[] { "TaskStatusChanged", "TaskCommentAdded" }, timeline.Select(e => e.Kind).ToArray());
+    }
+
+    /// <summary>
+    /// FACT 2 — the two passes draw from disjoint sets of EVENTS, because no comment type is
+    /// superseded by "TaskCommentAdded" (pass 2's exclusive event type).
+    ///
+    /// This is the fact that decays silently. Nothing in the compiler stops someone adding
+    /// <c>[CommentType.X] = "TaskCommentAdded"</c> to the supersession map; the suite would stay
+    /// green while pass 1 and pass 2 both claimed the same event and one action rendered as none.
+    ///
+    /// Asserted over the WHOLE function, not the dictionary alone: SupersedingEventTypeFor has a
+    /// second branch (the service's "Updated: …" Note prefix), and every CommentType goes through
+    /// both. Enumerating the enum means a new member cannot be added outside this guard.
+    /// </summary>
+    [Fact]
+    public void Build_TheTwoPassesClaimDisjointEvents_NoCommentTypeIsSupersededByTaskCommentAdded()
+    {
+        var resolve = typeof(ActivityTimelineBuilder).GetMethod(
+            "SupersedingEventTypeFor",
+            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
+        Assert.NotNull(resolve);   // renamed away ⇒ this guard is not watching anything
+
+        foreach (var type in Enum.GetValues<CommentType>())
+        {
+            // Both branches: an ordinary body, and the service's "Updated: …" shadow-note prefix.
+            foreach (var text in new[] { "some text", "Updated: Name, Priority" })
+            {
+                var supersededBy = (string?)resolve!.Invoke(null, [Comment(1, text, type, T0)]);
+                Assert.False(
+                    supersededBy == "TaskCommentAdded",
+                    $"CommentType.{type} (text: \"{text}\") is superseded by \"TaskCommentAdded\", which is " +
+                    "pass 2's exclusive event type. Pass 1 and pass 2 can now claim the same event, " +
+                    "so one action is suppressed twice and vanishes from the history.");
+            }
+        }
+    }
+
+    /// <summary>
+    /// A TaskCommentAdded event whose text matches NO loaded comment is unique history — the
+    /// comment row may have been deleted, or fallen outside the loaded page. Suppressing it on
+    /// time proximity alone would silently drop it.
+    ///
+    /// The positive case (<c>Build_TwoCommentsInTheSameSecond…</c>) cannot prove this: best-first
+    /// cost ordering alone produces the same answer there, so it passes with TextMatches removed.
+    /// </summary>
+    [Fact]
+    public void Build_CommentAddedEvent_WithNonMatchingText_IsNotSuppressed()
+    {
+        var comments = new[] { Comment(1, "mine", CommentType.Note, T0, "User") };
+        var events = new[]
+        {
+            Event(10, "TaskCommentAdded", T0.AddMilliseconds(2),
+                after: Snapshot(new { Text = "someone else's deleted comment", Author = "bob" })),
+        };
+
+        var timeline = ActivityTimelineBuilder.Build(comments, events);
+
+        Assert.Equal(2, timeline.Count);
+        Assert.Contains(timeline, e => e.FromComment && e.Markdown == "mine");
+        Assert.Contains(timeline, e => !e.FromComment && e.Kind == "TaskCommentAdded");
+    }
+
+    /// <summary>
+    /// The documented legacy fallback: a row whose AfterJson carries no parsable text pairs on
+    /// time alone. Rows written before the snapshot shape existed must still de-duplicate.
+    /// </summary>
+    [Theory]
+    [InlineData(null)]
+    [InlineData("not json")]
+    [InlineData("{}")]
+    [InlineData("[1,2,3]")]
+    public void Build_CommentAddedEvent_WithNoParsableText_FallsBackToTimeAlone(string? afterJson)
+    {
+        var comments = new[] { Comment(1, "mine", CommentType.Note, T0, "User") };
+        var events = new[] { Event(10, "TaskCommentAdded", T0.AddMilliseconds(2), after: afterJson) };
+
+        var entry = Assert.Single(ActivityTimelineBuilder.Build(comments, events));
+        Assert.True(entry.FromComment);
+        Assert.Equal("mine", entry.Markdown);
+    }
+
+    // ══════════════════════════════════════════════════════════════════════════════════════════
     //  2. ORDERING
     // ══════════════════════════════════════════════════════════════════════════════════════════
 

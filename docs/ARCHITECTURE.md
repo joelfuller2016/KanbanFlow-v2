@@ -341,7 +341,7 @@ reachable from both REST and MCP.
 
 | # | Requirement | Status |
 |---|---|---|
-| R-1.1 | List and get every entity: project, feature, task, subtask, acceptance criterion, requirement, dependency, comment, activity event. | ✅ (via parent collections for the three leaf entities with no `GET` by id) |
+| R-1.1 | List and get every entity: project, feature, task, subtask, acceptance criterion, requirement, dependency, comment, activity event. | ⚠️ **REST:** yes, but the three leaf entities have no `GET` by id and are reachable only through their parent collection. **MCP:** neither server exposes requirements at all (#231) |
 | R-1.2 | `GET /api/projects/{id}/context` returns the whole graph in one denormalised AI payload. | ✅ needs paging caps for large projects |
 | R-1.3 | Activity queryable per project and per task, time-ordered, with `before`/`after` snapshots. | ✅ for tasks + ideas; ❌ other entities emit nothing (#149) |
 | R-1.4 | List endpoints support `?limit=&offset=`. | ❌ only activity clamps `limit` (500); ideas take both; the rest are unbounded |
@@ -351,7 +351,7 @@ reachable from both REST and MCP.
 
 | # | Requirement | Status |
 |---|---|---|
-| R-2.1 | Full REST CRUD for every entity. | ✅ 60 endpoints |
+| R-2.1 | Full REST CRUD for every entity. | ⚠️ 60 endpoints, but not *full* CRUD everywhere: `TaskComment` has create/list/delete and **no update route**, and `ActivityEvent` is read-only by design (append-only, R-7.3) |
 | R-2.2 | Every REST capability has at least one MCP tool. | ❌ native 24, wrapper 50 — neither covers requirements (#231) |
 | R-2.3 | UI mutations go through the same service layer as REST. | ✅ #88 closed; components call `ITaskService`/`IIdeaService` |
 | R-2.4 | All entity mutations produce an `ActivityEvent`. | ❌ tasks + ideas only (#149) |
@@ -421,7 +421,7 @@ Ranked by how much they hurt an agent consuming this system.
 | Audit covers only tasks + ideas | [#149](https://github.com/joelfuller2016/KanbanFlow-v2/issues/149) | A feature rename or a deleted acceptance criterion leaves no trace; agents reading history see a partial past |
 | Native/wrapper MCP divergence | [#231](https://github.com/joelfuller2016/KanbanFlow-v2/issues/231) | The same agent gets a different tool set depending on transport; `/mcp` cannot create a project |
 | REST edge re-declares service-layer policy | [#302](https://github.com/joelfuller2016/KanbanFlow-v2/issues/302) | Comment-type policy, dead `isBlocked` fields, and actor/author collapse differ between surfaces |
-| No repo link column on `Project` | [#237](https://github.com/joelfuller2016/KanbanFlow-v2/issues/237) | The GitHub sync matches by name; rename a project and it detaches from its repo |
+| No repo link *column* on `Project` | [#237](https://github.com/joelfuller2016/KanbanFlow-v2/issues/237) | Largely mitigated: the sync's primary identity key is a `<!-- github: owner/repo -->` marker in `Project.Description`, so a marker-linked project **survives a rename**. Case-insensitive short-name matching remains only as a legacy fallback, and a name-only link *does* still detach on rename until `onboard` stamps it (safe to re-run). A real column would remove the marker parsing, not restore a lost capability |
 | Unbounded list endpoints | R-1.4 | A several-hundred-task board returns everything, every time |
 | No search endpoint | R-1.5 | Agents must pull whole-project context to find anything |
 | Anonymous response shapes | R-5.2 | The OpenAPI document under-describes responses |

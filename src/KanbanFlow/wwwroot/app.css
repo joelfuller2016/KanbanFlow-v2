@@ -433,6 +433,7 @@ h1:focus {
 .task-comment-body {
     --kf-comment-surface: var(--bs-tertiary-bg);
     --kf-comment-surface-fade: rgba(248, 249, 250, 0);
+
     max-height: 14rem;
     overflow-y: auto;
     overscroll-behavior: contain;
@@ -477,6 +478,7 @@ h1:focus {
    inline style, which was pure white-mode and had no dark counterpart. */
 .kf-timeline-panel {
     --kf-tl-surface: var(--bs-tertiary-bg);
+
     background: var(--bs-tertiary-bg);
     max-height: 18rem;
     overflow-y: auto;
@@ -506,6 +508,14 @@ h1:focus {
 
 .kf-chip:hover { border-color: var(--bs-primary); }
 
+/* `.kf-chip` is a bare <button>, not a `.btn`, so Bootstrap's `.btn:focus-visible` ring never
+   applies to it. Without this the only focus indicator is the UA default outline, which sits
+   badly on a `border-radius: 999px` pill and disappears entirely in some engines. */
+.kf-chip:focus-visible {
+    outline: 2px solid var(--bs-primary);
+    outline-offset: 2px;
+}
+
 /* Selected state is carried by colour AND the `aria-pressed` attribute the component sets, so it
    is never colour-only. */
 .kf-chip-active {
@@ -523,8 +533,17 @@ h1:focus {
     color: var(--bs-secondary-color);
 }
 
+/* DARKEN, do not lighten. This was `rgba(255, 255, 255, 0.28)`, i.e. a translucent WHITE veil
+   over the chip's `var(--bs-primary)` fill — which lifts the effective background to ≈#5197fe and
+   leaves the white count text at ≈2.9:1. The text is 0.65rem (~10px), so it is normal text and
+   WCAG AA wants 4.5:1. Inverting to a solid white badge with primary-coloured text does not fix
+   it either: #0d6efd on #fff is ≈4.24:1, still short.
+   A translucent BLACK veil composites to ≈#094db1 and puts the white text at ≈7.8:1. It also
+   stays correct if the chip fill is ever re-themed, because it darkens whatever is underneath
+   rather than assuming a particular hue. (--bs-primary is Bootstrap stock #0d6efd here and does
+   not change under data-bs-theme="dark".) */
 .kf-chip-active .kf-chip-count {
-    background: rgba(255, 255, 255, 0.28);
+    background: rgba(0, 0, 0, 0.3);
     color: #fff;
 }
 
@@ -645,9 +664,13 @@ h1:focus {
 
 /* The old value is de-emphasised by COLOUR, not opacity, and is not struck through — a strike
    reads as "deleted" and a rename is not a deletion. */
+/* `overflow-wrap: anywhere`, not the deprecated `word-break: break-word` (dropped in CSS Text
+   Level 3). Both values hold arbitrary snapshot text — a task name mirrored from a GitHub issue
+   title, a description, a bare URL — so breaking inside an otherwise unbreakable run is exactly
+   the wanted behaviour. */
 .kf-change-before {
     color: var(--bs-secondary-color);
-    word-break: break-word;
+    overflow-wrap: anywhere;
 }
 
 .kf-change-arrow { color: var(--bs-secondary-color); }
@@ -655,7 +678,7 @@ h1:focus {
 .kf-change-after {
     font-weight: 600;
     color: var(--bs-body-color);
-    word-break: break-word;
+    overflow-wrap: anywhere;
 }
 
 .kf-timeline-more {

@@ -192,7 +192,14 @@
                        the absolute UTC on hover, uniformly. *@
                     <div class="mb-3">
                         <div id="edit-item-activity-label" class="form-label small text-muted mb-1">Activity</div>
-                        <div class="border rounded p-2 kf-timeline-panel">
+                        @* This id labelled the comment list that the timeline replaced, and for a
+                           while it labelled nothing at all — leaving a screen reader with an
+                           unnamed scroll container holding the task's whole history. `tabindex="0"`
+                           is deliberate, not a stray: `.kf-timeline-panel` sets `overflow-y: auto`,
+                           and a scrollable region a keyboard cannot reach is a keyboard trap in
+                           reverse — the content simply cannot be scrolled to. *@
+                        <div class="border rounded p-2 kf-timeline-panel"
+                             role="region" aria-labelledby="edit-item-activity-label" tabindex="0">
                             <ActivityTimeline TaskId="EditTaskId"
                                               Comments="taskComments"
                                               RefreshToken="activityRefreshToken" />
@@ -329,7 +336,16 @@
 
     protected override void OnParametersSet()
     {
-        if (IsOpen)
+        // A FRESH OPEN, or a switch to a different task — not merely "the parent re-rendered".
+        //
+        // Everything below discards state and re-reads from the server, so running it on every
+        // parent render was wrong twice over: it threw away whatever the user had typed into the
+        // form, and it emptied `taskComments` mid-session. That second one became visible when the
+        // timeline started merging events: with an empty Comments list there is nothing for a
+        // `TaskCommentAdded` event to pair with, so the history rendered every comment TWICE until
+        // the async reload landed. The refresh-token bump below was already correctly guarded on
+        // this condition — the state reset simply was not.
+        if (IsOpen && (!wasOpen || EditTaskId != lastOpenedTaskId))
         {
             editName = InitialName;
             editDescription = InitialDescription;
@@ -346,12 +362,9 @@
             taskComments = [];
             RefreshGitHubLinks();
 
-            // A fresh OPEN must re-read the audit trail — ActivityTimeline only re-queries on a
-            // TaskId change, and closing then reopening the SAME task does not change it.
-            // Deliberately NOT unconditional: OnParametersSet runs on every parent render, and a
-            // bump there would fire a DB query per keystroke elsewhere on the page.
-            if (!wasOpen || EditTaskId != lastOpenedTaskId)
-                activityRefreshToken++;
+            // ActivityTimeline only re-queries on a TaskId change, and closing then reopening the
+            // SAME task does not change it — so a reopen has to say so explicitly.
+            activityRefreshToken++;
             lastOpenedTaskId = EditTaskId;
 
             if (EditMode == EditItemType.Task && EditTaskId.HasValue)

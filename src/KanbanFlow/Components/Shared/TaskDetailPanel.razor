@@ -322,7 +322,7 @@
                             <div class="d-flex flex-wrap align-items-center gap-2 mb-1">
                                 <span class="badge text-bg-warning" data-testid="latest-handoff-comment-badge">Latest Handoff</span>
                                 <span class="small fw-semibold">@(!string.IsNullOrWhiteSpace(latestHandoff.Author) ? latestHandoff.Author : "Anonymous")</span>
-                                <span class="small text-muted ms-auto" title="@($"UTC: {latestHandoff.CreatedAt:O}")">@latestHandoff.CreatedAt.ToLocalTime().ToString("MMM d, yyyy h:mm tt")</span>
+                                <span class="small text-muted ms-auto" title="@ActivityTimelineBuilder.FormatTooltip(latestHandoff.CreatedAt)">@ActivityTimelineBuilder.FormatLocal(latestHandoff.CreatedAt)</span>
                             </div>
                             <div data-testid="latest-handoff-comment-text">
                                 <MarkdownContent Markdown="@latestHandoff.Text"
@@ -367,13 +367,19 @@
                These three lines used to render raw UTC with no `.ToLocalTime()` and no tooltip,
                while the comment rows ~35 lines above rendered local: two clocks, one panel, four
                to five hours apart in US Eastern. The new timeline is uniformly local, so leaving
-               these would have made it three. One convention, applied to every timestamp here. *@
+               these would have made it three. One convention, applied to every timestamp here.
+
+               Formatting goes through the SAME tested helpers the timeline uses, not a hand-rolled
+               `:O` + `.ToLocalTime()`. EF hands these back as Kind=Unspecified (SQLite has no zone
+               type), and `"O"` on Unspecified emits NO trailing `Z` — so a tooltip labelled "UTC:"
+               was showing an instant not actually marked as UTC. That is the #306 ambiguity one
+               layer down, and it is exactly what ActivityTimelineBuilder.AsUtc normalises. *@
             <div class="mb-4 pt-2 border-top">
-                <small class="text-muted d-block" title="@($"UTC: {Task.CreatedAt:O}")">Created: @Task.CreatedAt.ToLocalTime().ToString("MMM d, yyyy h:mm tt")</small>
-                <small class="text-muted d-block" title="@($"UTC: {Task.UpdatedAt:O}")">Updated: @Task.UpdatedAt.ToLocalTime().ToString("MMM d, yyyy h:mm tt")</small>
+                <small class="text-muted d-block" title="@ActivityTimelineBuilder.FormatTooltip(Task.CreatedAt)">Created: @ActivityTimelineBuilder.FormatLocal(Task.CreatedAt)</small>
+                <small class="text-muted d-block" title="@ActivityTimelineBuilder.FormatTooltip(Task.UpdatedAt)">Updated: @ActivityTimelineBuilder.FormatLocal(Task.UpdatedAt)</small>
                 @if (Task.CompletedAt.HasValue)
                 {
-                    <small class="text-muted d-block" title="@($"UTC: {Task.CompletedAt.Value:O}")">Completed: @Task.CompletedAt.Value.ToLocalTime().ToString("MMM d, yyyy h:mm tt")</small>
+                    <small class="text-muted d-block" title="@ActivityTimelineBuilder.FormatTooltip(Task.CompletedAt.Value)">Completed: @ActivityTimelineBuilder.FormatLocal(Task.CompletedAt.Value)</small>
                 }
             </div>
 
