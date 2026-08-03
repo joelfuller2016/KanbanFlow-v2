@@ -9,6 +9,7 @@
   "scripts": {
     "backlog": "node scripts/backlog-sync.mjs",
     "backlog:check": "node scripts/backlog-sync.mjs --check",
+    "test:scripts": "node --test \"scripts/*.test.mjs\"",
     "test:ui": "node scripts/ui-e2e.mjs",
     "test:mcp": "node scripts/framing-ab.mjs all && node scripts/smoke-mcp.mjs",
     "test:mcp-framing": "node scripts/framing-ab.mjs all",
