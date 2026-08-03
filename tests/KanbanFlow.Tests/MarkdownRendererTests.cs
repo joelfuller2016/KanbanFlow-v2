@@ -244,6 +244,12 @@ public sealed class MarkdownRendererTests
     /// element. The bare <c>&lt;input&gt;</c> and <c>&lt;input value=...&gt;</c> cases matter
     /// independently: an input with no <c>type</c> defaults to a text box in every browser, so
     /// stripping <c>type</c> alone would NOT have closed this.
+    ///
+    /// The last three rows carry <c>disabled</c> ON PURPOSE and are what make this theory guard
+    /// BOTH halves of <c>IsTaskListCheckbox</c>. Without them every row was killed by the
+    /// <c>disabled</c> half alone, so the <c>type == "checkbox"</c> half was reachable by no test:
+    /// gutting it to <c>true</c> left the whole 646-test suite GREEN (measured). Under that same
+    /// mutation these three render as live form fields, so they are the rows that fail.
     /// </summary>
     [Theory]
     [InlineData("<input type=\"text\" value=\"Enter password\" onfocus=alert(1) autofocus>")]
@@ -253,6 +259,9 @@ public sealed class MarkdownRendererTests
     [InlineData("<input type=\"submit\" value=\"Delete project\">")]
     [InlineData("<input type=\"checkbox\">")]
     [InlineData("<input type=\"image\" src=\"https://evil.example/x.png\">")]
+    [InlineData("<input type=\"text\" disabled value=\"Enter password\">")]
+    [InlineData("<input type=\"submit\" disabled value=\"Delete project\">")]
+    [InlineData("<input disabled value=\"Enter password\">")]
     public void InjectedInput_DoesNotRenderAsLiveFormField(string markdown)
     {
         var html = Render(markdown);
@@ -265,15 +274,17 @@ public sealed class MarkdownRendererTests
     }
 
     /// <summary>
-    /// AC2. The cross-tag leakage the old global <c>AllowedAttributes.Add("type")</c> caused. These
-    /// are the exact two cases measured in #340 against the real configuration - both previously
-    /// survived verbatim. The surrounding text is asserted too, so the fix cannot be faked by
-    /// dropping the element wholesale.
+    /// AC2. The cross-tag leakage the old global <c>AllowedAttributes.Add("type")</c> caused. Of
+    /// the five cases below, the first two (<c>p</c>/<c>type</c> and <c>a</c>/<c>checked</c>) are
+    /// the ones measured in #340 against the real configuration and quoted in the issue; the other
+    /// three were added here for coverage. All five survived verbatim before this fix. The
+    /// surrounding text is asserted too, so the fix cannot be faked by dropping the element
+    /// wholesale.
     ///
     /// The <c>td</c> case is wrapped in a real <c>&lt;table&gt;</c> deliberately. A bare
     /// <c>&lt;td type="submit"&gt;x&lt;/td&gt;</c> was tried first and is a NON-guard: a stray
     /// <c>td</c> outside table context is dropped by the parser anyway, so it stayed GREEN against
-    /// the sabotaged renderer (measured: 3 of 4 cases red, that one green). All four cases here
+    /// the sabotaged renderer (measured: 3 of 4 cases red, that one green). All five cases here
     /// were re-measured red.
     /// </summary>
     [Theory]

@@ -59,10 +59,18 @@ public sealed class MarkdownRenderer : IMarkdownRenderer
         _sanitizer.AllowedAttributes.Remove("disabled");
         _sanitizer.AllowedAttributes.Remove("checked");
         //
-        // RemovingAttribute fires only for an attribute that is ALREADY slated for removal and its
-        // Cancel merely KEEPS it, so it can loosen but never tighten. That is exactly the direction
-        // needed here: leave the three attributes globally disallowed, and cancel their removal on
-        // <input> alone.
+        // RemovingAttribute fires only for an attribute that is ALREADY slated for removal, and its
+        // Cancel merely KEEPS it - so it can loosen but never tighten. That is exactly the
+        // direction needed here: leave the three attributes globally disallowed, and cancel their
+        // removal on <input> alone.
+        //
+        // "Loosen" is not the same as "harmless". RemoveReason has 8 values, and cancelling a
+        // NotAllowedUrlValue resurrects a value the URL sanitiser had already rejected - a
+        // cancel-everything handler yields <a href="javascript:alert(1)">. This handler is safe
+        // ONLY because none of type/disabled/checked is in UriAttributes (action, background,
+        // dynsrc, formaction, href, lowsrc, src), so it can never fire for a URL value.
+        // DO NOT add a URI attribute to TaskListCheckboxAttributes: that set feeds both this
+        // cancel and the PostProcessDom whitelist below, so one edit would widen both.
         _sanitizer.RemovingAttribute += (_, e) =>
         {
             if (e.Tag.LocalName.Equals("input", StringComparison.OrdinalIgnoreCase)
@@ -79,6 +87,17 @@ public sealed class MarkdownRenderer : IMarkdownRenderer
         // renders as a text box. Denying known-bad attributes would be an open-ended list, so this
         // inverts it: an <input> survives only when it IS the disabled checkbox, and then keeps
         // only the three attributes that make it one. Everything else about an input is dropped.
+        //
+        // The whitelist is scoped by attribute NAME, not by value: <input type="checkbox" disabled
+        // checked="anything"> keeps that arbitrary value. Harmless - checked is boolean, the value
+        // is ignored by the browser, and AngleSharp escapes it on serialisation - but it means this
+        // is not a value-level guard. `type` IS value-checked, in IsTaskListCheckbox below.
+        //
+        // Residual surface, in spec and deliberate: an attacker-authored
+        // `<input type="checkbox" disabled>` still renders, because it is indistinguishable from
+        // Markdig's own. So `[<input type=checkbox disabled> Approve](https://evil.example)` paints
+        // a fake checkbox-and-label inside an arbitrary link. AC1 asks only that no LIVE form field
+        // survive; a disabled checkbox is inert, so this is accepted rather than fixed.
         //
         // PostProcessDom is the tightening hook - it runs inside Sanitize() after the allow-list
         // pass and before serialisation, so there is no re-parse/re-serialise round trip.
