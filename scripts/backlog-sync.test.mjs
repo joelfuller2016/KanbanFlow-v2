@@ -14,8 +14,8 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { tierOfIssue, milestoneOf, signalRank } from "./backlog-sync.mjs";
-import { derivePriority, PN_LEVELS } from "./priority-model.mjs";
+import { tierOfIssue, milestoneOf, signalRank, tierIdForMilestone, MILESTONES } from "./backlog-sync.mjs";
+import { derivePriority, PN_LEVELS, priorityFromMilestone } from "./priority-model.mjs";
 
 const issue = ({ number = 1, title = "untitled", labels = [], milestone = null } = {}) => ({
   number,
@@ -123,4 +123,36 @@ test("an unmapped milestone is refused, not silently rendered as 'no milestone'"
 
 test("no milestone is a legitimate state, not an error", () => {
   assert.equal(milestoneOf(issue({ milestone: null })).short, "—");
+});
+
+// ── The two milestone lists must not drift ────────────────────────────────────────────────
+//
+// Removing the duplicated `tier` column left a smaller coupling: this file lists the milestones
+// it knows, `priority-model.mjs` owns their bands, and a milestone present in one but not the
+// other is a silent inconsistency. This is the eager check — it fails on `node --test` rather
+// than at render time, and long before anyone reads a wrong number in the log book.
+
+test("every milestone this generator lists has a band in priority-model", () => {
+  for (const m of MILESTONES) {
+    assert.notEqual(
+      priorityFromMilestone(m.title), null,
+      `"${m.title}" is in MILESTONES (backlog-sync.mjs) but has no band in MILESTONE_BANDS ` +
+      `(priority-model.mjs). The board and the log book would disagree about every issue in it.`,
+    );
+    assert.match(tierIdForMilestone(m.title), /^P[0-3]$/);
+  }
+});
+
+test("a milestone with no band fails with a message naming both files, not a TypeError", () => {
+  // The pre-fix behaviour was `TIERS[PN_LEVELS.indexOf(null)].id` -> TypeError on undefined,
+  // raised from deep inside renderBody with nothing pointing at the real cause.
+  assert.throws(
+    () => tierIdForMilestone("M9: Invented For This Test"),
+    (err) => {
+      assert.ok(!(err instanceof TypeError), "should not be a bare TypeError");
+      assert.match(err.message, /backlog-sync\.mjs/);
+      assert.match(err.message, /priority-model\.mjs/);
+      return true;
+    },
+  );
 });

@@ -22,7 +22,7 @@ import { createHash } from "node:crypto";
 import { readFile, writeFile, mkdir } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 // The single definition of "what priority is this issue?", shared with the board's sync.
 // Imported, never transcribed — a copy is how the two drifted onto different answers for 13 of
 // 119 open issues (#364).
@@ -157,6 +157,25 @@ function isDocsOnly(labelSet) {
 // scales cannot drift apart either.
 function tierOfIssue(issue) {
   return `P${PN_LEVELS.indexOf(derivePriority(issue))}`;
+}
+
+// The tier a milestone maps to, for the rendered explainer.
+//
+// This file lists the milestones it knows; `priority-model.mjs` owns their P0-P3 bands. Dropping
+// the duplicated tier column removed one drift risk and created a smaller one: a milestone added
+// HERE but not THERE. `priorityFromMilestone` returns null for it, `PN_LEVELS.indexOf(null)` is
+// -1, and `TIERS[-1].id` is a bare TypeError from deep inside renderBody — a confusing way to
+// learn that two lists disagree. Name both files and the fix instead.
+function tierIdForMilestone(title) {
+  const level = priorityFromMilestone(title);
+  if (level === null) {
+    throw new Error(
+      `Milestone "${title}" is listed in MILESTONES (scripts/backlog-sync.mjs) but has no band in ` +
+      `MILESTONE_BANDS (scripts/priority-model.mjs). Add it there, or remove it here — the two must ` +
+      `agree, or the board and this log book will disagree about every issue carrying it.`,
+    );
+  }
+  return TIERS[PN_LEVELS.indexOf(level)].id;
 }
 
 // Which signal `derivePriority` actually used — reported, never used for ordering. Recomputed
@@ -450,7 +469,7 @@ function renderBody(model) {
   p("1. **Explicit title prefix** — a `P0:`/`P1:`/`P2:`/`P3:` prefix in the issue title wins outright. It is a human's stated decision.");
   p("2. **Priority label** — the cross-repo vocabulary (`P0`, `priority:high`, a bare `critical`, …). This repo carries none, so it rarely fires here.");
   p("3. **Milestone band** — the execution phase as a proxy: " +
-    MILESTONES.map((m) => `\`${m.short}\`→${TIERS[PN_LEVELS.indexOf(priorityFromMilestone(m.title))].id}`).join(", ") + ", no milestone→P2.");
+    MILESTONES.map((m) => `\`${m.short}\`→${tierIdForMilestone(m.title)}`).join(", ") + ", no milestone→P2.");
   p("4. **`Medium` (P2)** — no signal at all.");
   p();
   p("**Topical labels do not affect priority.** `bug` / `security` / `tech-debt` are a *kind*, not an");
@@ -831,8 +850,12 @@ async function main() {
 // Run only when invoked as the script, not when imported. Without this guard, importing anything
 // from this file to TEST it would fire a live `gh` fetch and write docs/BACKLOG.md as a side
 // effect of `node --test`. `npm run backlog` still runs main() exactly as before.
+// Compared as resolved FILESYSTEM PATHS, not as URL strings. Both sides are absolute already
+// (Node resolves process.argv[1] before handing it over), so a URL comparison also works — but it
+// is fragile on Windows, where drive-letter casing and percent-encoding of spaces or non-ASCII
+// characters in the checkout path can make two spellings of the same file compare unequal.
 const invokedDirectly = process.argv[1]
-  && import.meta.url === pathToFileURL(process.argv[1]).href;
+  && resolve(process.argv[1]) === fileURLToPath(import.meta.url);
 
 if (invokedDirectly) {
   main().catch((err) => {
@@ -843,4 +866,4 @@ if (invokedDirectly) {
 
 // Exported for `backlog-sync.test.mjs`, which pins this file's tier to the shared priority model
 // so the two can never silently diverge again (#364).
-export { tierOfIssue, milestoneOf, signalRank };
+export { tierOfIssue, milestoneOf, signalRank, tierIdForMilestone, MILESTONES };
