@@ -713,9 +713,16 @@ dotnet test tests/KanbanFlow.Tests      # 524 xUnit tests
 ```bash
 node ./scripts/smoke-mcp.mjs 1          # MCP tool surface — needs the app running on :5123
 npm run test:mcp                        # stdio framing A/B + the MCP smoke suite
+npm run test:scripts                    # node:test unit tests for scripts/*.mjs (the priority
+                                        # model behind portfolio-sync) — no app, no network, no DB
 npm run test:ui                         # Playwright e2e — builds, boots an isolated instance
                                         # (scratch port + throwaway DB), drives chromium, tears down
 ```
+
+> **`test:ui` binds a fixed port (`5198`).** Two concurrent runs — two agents, or you and an
+> agent — share that port but get *separate* throwaway databases, so one run's API calls land on
+> the other's app and fail as `Feature <n> not found` rather than as a port clash. Override with
+> `UI_E2E_PORT=<free port> npm run test:ui` when anything else might be running the suite.
 
 ```bash
 # The in-app integration suite, from inside the live app.
