@@ -7,8 +7,13 @@ namespace KanbanFlow.Services;
 /// </summary>
 /// <param name="Completed">Tasks whose status is <see cref="WorkStatus.Done"/>.</param>
 /// <param name="InProgress">Tasks whose status is <see cref="WorkStatus.InProgress"/>.</param>
-/// <param name="Blocked">Tasks with at least one open blocker in the supplied lookup. Independent
-/// of status: a blocked task is ALSO counted in its status bucket.</param>
+/// <param name="Blocked">
+/// UNFINISHED tasks with at least one open blocker in the supplied lookup. A Done task is never
+/// blocked — nothing is left for its blocker to hold up — which is also how
+/// <c>GET /api/projects/{id}/next-tasks</c> counts <c>blockedTaskCount</c>, so the two surfaces
+/// agree. Otherwise independent of status: a blocked task is ALSO counted in its status bucket,
+/// so this is a cross-cut and never a sixth status.
+/// </param>
 /// <param name="Total">Every task in scope, at any status.</param>
 /// <param name="PercentComplete">
 /// <c>Completed / Total</c> as a percentage rounded to one decimal — a NUMBER, never a formatted
@@ -23,8 +28,14 @@ public sealed record ProjectProgress(
     public static readonly ProjectProgress Empty = new(0, 0, 0, 0, 0.0);
 
     /// <summary>
-    /// Build a progress record, deriving <see cref="PercentComplete"/> from the counters so no
-    /// caller can construct a record whose percentage disagrees with its counts.
+    /// The only sanctioned way to build a progress record: it derives
+    /// <see cref="PercentComplete"/> from the counters, so a value produced here can never
+    /// disagree with its own counts. (The positional constructor stays public because
+    /// System.Text.Json needs it to round-trip the record; prefer this factory in app code.)
+    /// Rounding passes <see cref="MidpointRounding.ToEven"/> explicitly — it is also the default,
+    /// but stating it makes the mode a decision rather than an inherited accident, so an exact
+    /// midpoint such as 1-of-16 (6.25) surfaces as 6.2, not 6.3. Pinned by
+    /// <c>ExactMidpointPercentage_RoundsToEven</c>.
     /// </summary>
     public static ProjectProgress From(int completed, int inProgress, int blocked, int total) =>
         new(completed, inProgress, blocked, total,
@@ -98,6 +109,8 @@ public static class ProjectProgressCalculator
     /// <param name="blockedTaskIds">
     /// Ids of the tasks that have at least one open (not-yet-Done) blocker. Supplied by the caller
     /// so the blocked count reuses the lookup the caller already built, rather than re-querying.
+    /// The caller need not filter out finished tasks — <see cref="ProjectProgress.Blocked"/> owns
+    /// the "a Done task is not blocked" rule so it is applied identically for every caller.
     /// </param>
     public static ProjectProgressReport Calculate(
         IEnumerable<ProgressFeature> features,
@@ -112,6 +125,8 @@ public static class ProjectProgressCalculator
         var featureList = features as IReadOnlyList<ProgressFeature> ?? features.ToList();
 
         // ── one pass over the tasks: project totals + each feature's OWN counters ──
+        // `tasks` is enumerated exactly ONCE, on purpose — callers pass a lazy LINQ projection.
+        // Do not add a second pass over it.
         var ownCounters = new Dictionary<int, Counters>(featureList.Count);
         var projectCounters = default(Counters);
         foreach (var task in tasks)
@@ -125,8 +140,13 @@ public static class ProjectProgressCalculator
 
         // ── the adjacency map, built ONCE (never rescan the feature set per node) ──
         var childrenByParent = new Dictionary<int, List<int>>();
+        var seenFeatureIds = new HashSet<int>(featureList.Count);
         foreach (var feature in featureList)
         {
+            // Distinct-by-Id is the documented contract, but a repeated id would put the same
+            // child in a parent's list twice and inflate the parent's rollup. Same reasoning as
+            // the cycle guard below: never trust a caller-side guarantee to keep this total.
+            if (!seenFeatureIds.Add(feature.Id)) continue;
             if (feature.ParentFeatureId is not int parentId) continue;
             if (!childrenByParent.TryGetValue(parentId, out var siblings))
                 childrenByParent[parentId] = siblings = [];
@@ -201,10 +221,12 @@ public static class ProjectProgressCalculator
     /// <summary>Additive counters — the summable form of <see cref="ProjectProgress"/>.</summary>
     private readonly record struct Counters(int Completed, int InProgress, int Blocked, int Total)
     {
-        public static Counters For(WorkStatus status, bool isBlocked) => new(
+        public static Counters For(WorkStatus status, bool hasOpenBlocker) => new(
             Completed: status == WorkStatus.Done ? 1 : 0,
             InProgress: status == WorkStatus.InProgress ? 1 : 0,
-            Blocked: isBlocked ? 1 : 0,
+            // A finished task is not blocked, however stale its dependency rows are. Matching
+            // next-tasks' blockedTaskCount here is what stops two surfaces reporting two numbers.
+            Blocked: hasOpenBlocker && status != WorkStatus.Done ? 1 : 0,
             Total: 1);
 
         public static Counters operator +(Counters left, Counters right) => new(

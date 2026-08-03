@@ -87,8 +87,9 @@ public static class ApiEndpoints
 
             // #125: derived progress comes from the single shared calculator, so this endpoint,
             // /context and every other surface report the SAME number for the same project.
-            // Two narrow projections (three columns each) keep the #157 promise of not loading
-            // the whole Feature→Task graph just to count it.
+            // Two narrow projections — three scalar columns per task, one per blocked task — so
+            // the #157 fix still holds in spirit (no Feature→Task graph load, no tracked entities),
+            // though this endpoint now reads O(tasks) rows rather than O(features) COUNT results.
             var progressTasks = await db.Tasks
                 .Where(t => t.Feature.ProjectId == id)
                 .AsNoTracking()
@@ -128,6 +129,9 @@ public static class ApiEndpoints
                     f.SortOrder,
                     f.CreatedAt,
                     f.UpdatedAt,
+                    // taskCount/doneCount are this feature's OWN tasks; progress is the whole
+                    // subtree (own + all descendant features'). They differ on a nested feature
+                    // by design — consumers wanting the rollup must read progress.
                     f.TaskCount,
                     f.DoneCount,
                     Progress = progress.ForFeature(f.Id)
