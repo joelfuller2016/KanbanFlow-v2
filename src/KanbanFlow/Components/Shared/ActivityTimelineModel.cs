@@ -136,8 +136,16 @@ public static class ActivityTimelineBuilder
     /// whitelist over <c>TaskService.TaskActivitySnapshot</c> (TaskService.cs:18-31): a field
     /// added there without a label here is simply not rendered rather than leaking a raw JSON key.
     /// "id" and "featureId" are deliberately handled — id is never interesting, featureId is.
+    ///
+    /// INTERNAL (tests reach it via InternalsVisibleTo) so the tests can parameterise over the
+    /// WHOLE set rather than a hand-picked exemplar. The X → X collision (#359) was reported
+    /// against <c>description</c>, but the truncation that causes it lives in <see cref="Format"/>
+    /// and applies to every entry here — <c>name</c> is already 60+ characters on 268 of the
+    /// 409 live tasks. A guard written for one field would be correct for the case someone measured
+    /// and silently wrong for the rest, so the guard enumerates THIS list; a field added below is
+    /// covered the moment it is added.
     /// </summary>
-    private static readonly (string Json, string Label)[] DisplayFields =
+    internal static IReadOnlyList<(string Json, string Label)> DisplayFields { get; } =
     [
         ("status", "Status"),
         ("priority", "Priority"),
@@ -499,7 +507,11 @@ public static class ActivityTimelineBuilder
                     if (string.Equals(b.Text, a.Text, StringComparison.Ordinal))
                         continue;
 
-                    changes.Add(new TimelineFieldChange(label, Format(json, b.Text), Format(json, a.Text)));
+                    // The two sides are formatted AS A PAIR, never independently. Formatting them
+                    // one at a time is what let a real change render as "X → X" (#359) — see
+                    // FormatChange.
+                    var (beforeText, afterText) = FormatChange(json, b.Text, a.Text);
+                    changes.Add(new TimelineFieldChange(label, beforeText, afterText));
                 }
                 return changes;
             }
@@ -545,28 +557,194 @@ public static class ActivityTimelineBuilder
 
     private const int MaxValueLength = 60;
 
+    /// <summary>Elision marker. One character, so it never dominates the window it trims.</summary>
+    private const string Ellipsis = "…";
+
+    /// <summary>
+    /// How much of the IDENTICAL run is kept ahead of the first difference when a pair collides.
+    /// Enough to anchor the eye ("…/issues/351 **State:** OPEN"), small enough that the change
+    /// itself is what the row leads with. Must stay well under <see cref="MaxValueLength"/> — the
+    /// difference guarantee in <see cref="FormatChange"/> depends on the divergence point landing
+    /// inside the window, and this is the slack that puts it there.
+    /// </summary>
+    private const int DiffContextLength = 12;
+
     private static string Format(string jsonName, string? raw)
     {
         if (string.IsNullOrWhiteSpace(raw))
             return EmptyValue;
 
-        // Timestamps inside the snapshot blob are serialized from the same Kind=Unspecified
-        // DateTimes, so they too arrive with NO zone designator ("2026-08-02T22:21:48.82"). They
-        // ARE UTC — AssumeUniversal says so explicitly instead of letting the parser default to
-        // local, which would shift them by one offset. Rendered on the same clock as every other
-        // timestamp here (local, per #306) rather than as a raw ISO string.
-        if (jsonName is "completedAt" or "claimedAt" &&
-            DateTime.TryParse(raw, CultureInfo.InvariantCulture,
-                DateTimeStyles.AdjustToUniversal | DateTimeStyles.AssumeUniversal, out var ts))
-        {
-            return FormatLocal(ts);
-        }
+        if (FormatTimestamp(jsonName, raw) is { } stamped)
+            return stamped;
 
-        var text = raw.ReplaceLineEndings(" ").Trim();
+        var text = Collapse(raw);
         if (text.Length == 0)
             return EmptyValue;
-        return text.Length <= MaxValueLength ? text : text[..MaxValueLength] + "…";
+        if (text.Length <= MaxValueLength)
+            return text;
+
+        var end = MaxValueLength;
+        // Never cut between the halves of a surrogate pair — mirrors Window()'s end-trim.
+        if (char.IsLowSurrogate(text[end]))
+            end--;
+        return text[..end] + Ellipsis;
     }
+
+    /// <summary>
+    /// The timestamp branch of <see cref="Format"/>, split out because
+    /// <see cref="FormatChange"/> has to ASK whether a value took it.
+    ///
+    /// Timestamps inside the snapshot blob are serialized from the same Kind=Unspecified
+    /// DateTimes, so they too arrive with NO zone designator ("2026-08-02T22:21:48.82"). They
+    /// ARE UTC — AssumeUniversal says so explicitly instead of letting the parser default to
+    /// local, which would shift them by one offset. Rendered on the same clock as every other
+    /// timestamp here (local, per #306) rather than as a raw ISO string.
+    ///
+    /// Returns null when this is not a timestamp field, or when the value does not parse — an
+    /// unparseable value falls through to the ordinary text path rather than being dropped.
+    /// </summary>
+    private static string? FormatTimestamp(string jsonName, string? raw)
+    {
+        if (jsonName is not ("completedAt" or "claimedAt") || string.IsNullOrWhiteSpace(raw))
+            return null;
+
+        return DateTime.TryParse(raw, CultureInfo.InvariantCulture,
+            DateTimeStyles.AdjustToUniversal | DateTimeStyles.AssumeUniversal, out var ts)
+            ? FormatLocal(ts)
+            : null;
+    }
+
+    /// <summary>One line, no surrounding space — the shape every length decision below is made on.</summary>
+    private static string Collapse(string? raw)
+        => string.IsNullOrWhiteSpace(raw) ? string.Empty : raw.ReplaceLineEndings(" ").Trim();
+
+    // ══════════════════════════════════════════════════════════════════════════════════════════
+    //  WHY THE TWO SIDES ARE FORMATTED TOGETHER — #359
+    //
+    //  Format() is a pure function of ONE value, so it cannot know that the value it just cut at
+    //  60 characters is about to be shown next to another value that cuts to the same 60. That is
+    //  the whole defect: every task mirrored from GitHub opens with an identical ~70-character
+    //  generated block —
+    //
+    //      <!-- kanbanflow-sync -->
+    //      **Issue:** https://github.com/<owner>/<repo>/issues/<n>
+    //
+    //  — so the cut lands 10 characters INSIDE the constant prefix and both operands collapse to
+    //  the same string. The row then says "Description changed" and shows X → X. Measured against
+    //  the live corpus (409 tasks, 404 with a description, 404 distinct values): ALL 404 render as
+    //  the single string "<!-- kanbanflow-sync --> **Issue:** https://github.com/joelf…".
+    //
+    //  RAISING THE CAP IS NOT THE FIX. A 1,800-character before/after on a timeline row is
+    //  unreadable, and the next generated prefix that happens to be longer reintroduces the bug.
+    //  The cap is CORRECT for the short enum-shaped fields (status maxes out at "InProgress",
+    //  priority at "Critical"), so it stays.
+    //
+    //  THE DEFECT IS NOT DESCRIPTION-ONLY. Format() caps all ten DisplayFields. Of those, four are
+    //  unbounded strings and can therefore exceed the cap — description, name, assignee, claimedBy
+    //  (TaskItem.cs:7-20) — and `name` is already over it on 268 of 409 live tasks, so a rename
+    //  editing the TAIL of a synced "#<n> <github issue title>" collides exactly the same way. The
+    //  remaining six cannot reach 60 characters: status/priority are enum ToString()s, featureId
+    //  is an int, sortOrder a double, and completedAt/claimedAt render through FormatTimestamp.
+    //
+    //  So the routing rule is NOT a list of field names — a list would have to be maintained, and
+    //  the two fields with no live data today (assignee, claimedBy) are exactly the ones such a
+    //  list would omit. The rule is the COLLISION ITSELF: re-window only when two values that
+    //  genuinely differ have rendered identically. Every field is routed; none is excluded; and
+    //  for every pair that already renders distinctly the output is byte-identical to before.
+    // ══════════════════════════════════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// Formats the two sides of one field change so that a REAL change can never render as
+    /// "X → X".
+    ///
+    /// GUARANTEE: if <paramref name="beforeRaw"/> and <paramref name="afterRaw"/> collapse to
+    /// different one-line texts, the returned pair differs. The window both sides share starts at
+    /// the same offset and is <see cref="MaxValueLength"/> wide, while the first difference sits
+    /// at most <see cref="DiffContextLength"/> characters past that start — so the differing
+    /// character is inside both windows, or one side ends before it and the two windows differ in
+    /// length. <c>DiffFields_ValuesDivergingAnywhere_NeverRenderAsTwoIdenticalStrings</c> pins it over every
+    /// entry in <see cref="DisplayFields"/>.
+    ///
+    /// Two collisions are deliberately NOT repaired here, because truncation is not their cause
+    /// and a wider window cannot cure them:
+    ///   • Both sides render through <see cref="FormatTimestamp"/> and land in the same MINUTE.
+    ///     The displayed text is DERIVED from the value, not a prefix of it, so windowing the raw
+    ///     ISO text would put an unconverted UTC fragment where a local time belongs — a second
+    ///     clock, which is precisely what #306 removed from this file.
+    ///   • The two values are equal once collapsed (they differ only in line endings or in
+    ///     surrounding whitespace). There is no visible delta to window to.
+    /// Both are tracked separately; see the tests that pin the current behaviour.
+    /// </summary>
+    private static (string Before, string After) FormatChange(string jsonName, string? beforeRaw, string? afterRaw)
+    {
+        var before = Format(jsonName, beforeRaw);
+        var after = Format(jsonName, afterRaw);
+
+        // Not a collision: today's rendering already tells the two apart. This is the overwhelming
+        // majority of rows (a status flip, a priority bump) and they must come out UNCHANGED.
+        if (!string.Equals(before, after, StringComparison.Ordinal))
+            return (before, after);
+
+        // Derived rendering — see the remarks. Asking FormatTimestamp rather than testing the
+        // field name keeps this a question about the MECHANISM that produced the string.
+        if (FormatTimestamp(jsonName, beforeRaw) is not null || FormatTimestamp(jsonName, afterRaw) is not null)
+            return (before, after);
+
+        var b = Collapse(beforeRaw);
+        var a = Collapse(afterRaw);
+        if (b.Length == 0 || a.Length == 0 || string.Equals(b, a, StringComparison.Ordinal))
+            return (before, after);
+
+        var start = WindowStart(b, a);
+        return (Window(b, start), Window(a, start));
+    }
+
+    /// <summary>
+    /// Where the shared window opens: <see cref="DiffContextLength"/> characters before the first
+    /// difference. Both sides get this ONE offset — that is what makes the two windows comparable
+    /// and the difference guarantee hold.
+    /// </summary>
+    private static int WindowStart(string a, string b)
+    {
+        var limit = Math.Min(a.Length, b.Length);
+        var i = 0;
+        while (i < limit && a[i] == b[i]) i++;
+
+        // `start` never exceeds the common prefix, so the two strings agree at that index and it
+        // does not matter which one the rune snap is measured against.
+        return SnapToRuneStart(a, Math.Max(0, i - DiffContextLength));
+    }
+
+    /// <summary>
+    /// A slice of <paramref name="text"/> anchored at <paramref name="start"/>, marked with an
+    /// ellipsis on whichever end elides text, and guaranteed to fit within
+    /// <see cref="MaxValueLength"/> characters even when both ends elide. Plain text throughout:
+    /// no markup is produced here, so the caller's <c>@change.Before</c> stays Razor-encoded
+    /// (#340/#341).
+    /// </summary>
+    private static string Window(string text, int start)
+    {
+        // Reserve one slot for the leading ellipsis (if any); another will be reserved below
+        // when truncation is needed on the trailing end, so the combined output never exceeds
+        // MaxValueLength even when both ellipses fire.
+        var budget = MaxValueLength - (start > 0 ? 1 : 0);
+        var end = Math.Min(text.Length, start + budget);
+        if (end < text.Length)
+        {
+            // Reserve one char for the trailing ellipsis so total stays within MaxValueLength.
+            end--;
+            // Never cut between the halves of a surrogate pair — a lone surrogate is not text.
+            if (end > start && char.IsLowSurrogate(text[end])) end--;
+        }
+
+        return (start > 0 ? Ellipsis : string.Empty)
+             + text[start..end]
+             + (end < text.Length ? Ellipsis : string.Empty);
+    }
+
+    /// <summary>Moves an index back off the low half of a surrogate pair.</summary>
+    private static int SnapToRuneStart(string text, int index)
+        => index > 0 && index < text.Length && char.IsLowSurrogate(text[index]) ? index - 1 : index;
 
     // ══════════════════════════════════════════════════════════════════════════════════════════
     //  TIMEZONE — one convention, applied once, here.

@@ -813,6 +813,383 @@ public class ActivityTimelineTests
     }
 
     // ══════════════════════════════════════════════════════════════════════════════════════════
+    //  7. THE X → X COLLISION (#359)
+    //
+    //  A real change rendered as two IDENTICAL strings, because both sides were cut at 60
+    //  characters and every synced description opens with the same ~70-character generated block.
+    //  Measured against the live corpus: of 409 tasks, 404 carry a description, all 404 distinct —
+    //  and all 404 rendered as the single string
+    //  "<!-- kanbanflow-sync --> **Issue:** https://github.com/joelf…".
+    //
+    //  These tests are written over the WHOLE DisplayFields set, not over `description`. The cut
+    //  is in Format(), which every field goes through; `name` is already past 60 characters on 268
+    //  of those 409 tasks, and `assignee`/`claimedBy` are unbounded strings with no live data —
+    //  exactly the members a guard written for the reported exemplar would have missed.
+    // ══════════════════════════════════════════════════════════════════════════════════════════
+
+    /// <summary>Length of the synthetic values the divergence sweep is built from.</summary>
+    private const int SweepLength = 400;
+
+    /// <summary>
+    /// A deterministic long value whose ONLY distinguishing character is <paramref name="marker"/>
+    /// at <paramref name="at"/>. Two of these with different markers share a prefix of exactly
+    /// <paramref name="at"/> characters, which is what lets one test sweep the divergence point.
+    /// The filler is lowercase and the markers are uppercase, so no filler character can
+    /// accidentally equal a marker.
+    /// </summary>
+    private static string LongValueDivergingAt(int at, char marker)
+    {
+        var chars = new char[SweepLength];
+        for (var i = 0; i < SweepLength; i++) chars[i] = (char)('a' + i % 26);
+        chars[at] = marker;
+        return new string(chars);
+    }
+
+    /// <summary>Overwrites two code units with U+1F600 GRINNING FACE — one astral character.</summary>
+    private static string WithSurrogatePairAt(string text, int at)
+    {
+        var chars = text.ToCharArray();
+        chars[at] = '\uD83D';
+        chars[at + 1] = '\uDE00';
+        return new string(chars);
+    }
+
+    private static bool HasLoneSurrogate(string s)
+    {
+        for (var i = 0; i < s.Length; i++)
+        {
+            if (char.IsHighSurrogate(s[i]))
+            {
+                if (i + 1 >= s.Length || !char.IsLowSurrogate(s[i + 1])) return true;
+                i++;
+            }
+            else if (char.IsLowSurrogate(s[i]))
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /// <summary>
+    /// The rendering rule that shipped BEFORE #359, reproduced verbatim so a fixture can PROVE it
+    /// is a genuine collider. Without it a "renders distinctly" assertion could pass against a
+    /// pair that never collided in the first place — a green test proving nothing.
+    /// </summary>
+    private static string SixtyCharRule(string raw)
+    {
+        var text = raw.ReplaceLineEndings(" ").Trim();
+        return text.Length <= 60 ? text : text[..60] + "…";
+    }
+
+    /// <summary>
+    /// A snapshot blob carrying ONE field under an arbitrary JSON name. The anonymous-object
+    /// helper cannot do that, and the sweep has to address each <c>DisplayFields</c> entry by
+    /// name. Dictionary KEYS are written verbatim — <c>JsonSerializerDefaults.Web</c> sets a
+    /// property naming policy, not a dictionary key policy — which is what keeps them the exact
+    /// camelCase names the differ looks up.
+    /// </summary>
+    private static string FieldSnapshot(string jsonName, string? value)
+        => JsonSerializer.Serialize(
+            new Dictionary<string, string?> { [jsonName] = value },
+            new JsonSerializerOptions(JsonSerializerDefaults.Web));
+
+    /// <summary>Exactly what <c>portfolio-sync.mjs:456-473</c> stamps onto every mirrored task.</summary>
+    private const string SyncBlock =
+        "<!-- kanbanflow-sync -->\n" +
+        "**Issue:** https://github.com/joelfuller2016/KanbanFlow-v2/issues/359\n" +
+        "**State:** OPEN · **Milestone:** M4: UI / UX Polish · **Labels:** bug, ui\n" +
+        "**Open PR:** none\n" +
+        "**Synced:** 2026-08-02T21:14:07.482Z\n" +
+        "<!-- /kanbanflow-sync -->\n\n";
+
+    public static TheoryData<string, string, int> EveryDisplayFieldAndDivergencePoint()
+    {
+        var data = new TheoryData<string, string, int>();
+        foreach (var (json, label) in ActivityTimelineBuilder.DisplayFields)
+        {
+            // 0/30/59 fall INSIDE the old 60-character cut and rendered correctly before #359 —
+            // they are here so the guard cannot pass by asserting something trivially true of
+            // every pair. 59/60/61 straddle the cut. 70/71 are the reported case: the earliest
+            // byte at which two different synced descriptions can diverge is 71. 200 and the final
+            // character are deep past it.
+            foreach (var at in new[] { 0, 30, 59, 60, 61, 70, 71, 200, SweepLength - 1 })
+                data.Add(json, label, at);
+        }
+        return data;
+    }
+
+    /// <summary>
+    /// THE LOAD-BEARING ASSERTION. For every field the timeline renders, and for a divergence at
+    /// any position — before the cut, on it, and far past it — the two sides must render
+    /// DIFFERENTLY, and each must actually SHOW its own changed character rather than merely
+    /// differing somewhere. Fails on every position ≥ 60 against the code this replaces.
+    /// </summary>
+    [Theory]
+    [MemberData(nameof(EveryDisplayFieldAndDivergencePoint))]
+    public void DiffFields_ValuesDivergingAnywhere_NeverRenderAsTwoIdenticalStrings(
+        string json, string label, int at)
+    {
+        var before = LongValueDivergingAt(at, 'X');
+        var after = LongValueDivergingAt(at, 'Y');
+
+        var change = Assert.Single(ActivityTimelineBuilder.DiffFields(
+            FieldSnapshot(json, before), FieldSnapshot(json, after)));
+
+        Assert.Equal(label, change.Label);
+        Assert.NotEqual(change.Before, change.After);
+        Assert.Contains("X", change.Before, StringComparison.Ordinal);
+        Assert.Contains("Y", change.After, StringComparison.Ordinal);
+        // Format() returns up to MaxValueLength content + 1 ellipsis = 61 chars for the
+        // non-collision path. The collision path (Window) must stay within 60 chars total.
+        // The bound here catches Window's old over-budget of 62 (60 content + 2 ellipses)
+        // while permitting Format's expected 61-char non-collision output.
+        Assert.True(change.Before.Length <= 61, $"Before rendered length {change.Before.Length} > 61: '{change.Before}'");
+        Assert.True(change.After.Length <= 61, $"After rendered length {change.After.Length} > 61: '{change.After}'");
+    }
+
+    /// <summary>
+    /// The sweep above is parameterised over <c>DisplayFields</c>, so an emptied or shortened list
+    /// would make it pass VACUOUSLY. The set is pinned here: adding a field is a deliberate act
+    /// that updates both, and the sweep then covers the new field automatically.
+    /// </summary>
+    [Fact]
+    public void DisplayFields_IsTheClosedSetTheCollisionSweepEnumerates()
+    {
+        Assert.Equal(
+            new[]
+            {
+                "status", "priority", "assignee", "claimedBy", "name",
+                "featureId", "description", "sortOrder", "completedAt", "claimedAt"
+            },
+            ActivityTimelineBuilder.DisplayFields.Select(f => f.Json).ToArray());
+    }
+
+    /// <summary>The reported case, against the real producer's output shape.</summary>
+    [Fact]
+    public void DiffFields_SyncedDescriptionBodyRewritten_ShowsTheBodyNotTheSyncBlock()
+    {
+        var before = SyncBlock + "Original body text.";
+        var after = SyncBlock + "COMPLETELY REWRITTEN body with new repro steps and acceptance criteria.";
+
+        // NON-VACUITY: under the rule that shipped, these two ARE the same string.
+        Assert.Equal(SixtyCharRule(before), SixtyCharRule(after));
+
+        var change = Assert.Single(ActivityTimelineBuilder.DiffFields(
+            FieldSnapshot("description", before), FieldSnapshot("description", after)));
+
+        Assert.Equal("Description", change.Label);
+        Assert.NotEqual(change.Before, change.After);
+        Assert.Contains("Original body text.", change.Before, StringComparison.Ordinal);
+        Assert.Contains("COMPLETELY REWRITTEN", change.After, StringComparison.Ordinal);
+
+        // The row leads with the change, not with the boilerplate every synced task shares.
+        Assert.StartsWith("…", change.Before, StringComparison.Ordinal);
+        Assert.DoesNotContain("**Issue:**", change.Before, StringComparison.Ordinal);
+        Assert.DoesNotContain("**Issue:**", change.After, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A change CONFINED TO THE SYNC BLOCK — the guaranteed trigger, since every sync that sees an
+    /// issue close rewrites `**State:**`, which sits past character 60.
+    /// </summary>
+    [Fact]
+    public void DiffFields_SyncedDescriptionStateFlipped_ShowsBothStates()
+    {
+        var before = SyncBlock + "Body.";
+        var after = SyncBlock.Replace("**State:** OPEN", "**State:** CLOSED", StringComparison.Ordinal) + "Body.";
+
+        Assert.Equal(SixtyCharRule(before), SixtyCharRule(after));
+
+        var change = Assert.Single(ActivityTimelineBuilder.DiffFields(
+            FieldSnapshot("description", before), FieldSnapshot("description", after)));
+
+        Assert.NotEqual(change.Before, change.After);
+        Assert.Contains("**State:** OPEN", change.Before, StringComparison.Ordinal);
+        Assert.Contains("**State:** CLOSED", change.After, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The SECOND collider, and the reason this fix is not description-only: synced task names are
+    /// "#&lt;n&gt; " plus a GitHub issue title, and 268 of the 409 live tasks carry one longer than
+    /// the cut. A rename editing the tail collides exactly the same way.
+    /// </summary>
+    [Fact]
+    public void DiffFields_SyncedNameEditedPastTheCap_ShowsTheEditedTail()
+    {
+        const string before = "#149 P1: Audit trail only covers Task entities — extend ActivityEvent to all mutations (UI + REST)";
+        const string after = "#149 P1: Audit trail only covers Task entities — extend ActivityEvent to all mutations (UI + REST + MCP)";
+
+        Assert.Equal(SixtyCharRule(before), SixtyCharRule(after));
+
+        var change = Assert.Single(ActivityTimelineBuilder.DiffFields(
+            FieldSnapshot("name", before), FieldSnapshot("name", after)));
+
+        Assert.Equal("Name", change.Label);
+        Assert.Contains("(UI + REST)", change.Before, StringComparison.Ordinal);
+        Assert.Contains("(UI + REST + MCP)", change.After, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// GOAL 5 — a short-field change renders byte-identically to what shipped: the raw value,
+    /// verbatim, with no window and no ellipsis. The 60-character cap is CORRECT for these.
+    /// </summary>
+    [Theory]
+    [InlineData("status", "Status", "Todo", "Done")]
+    [InlineData("priority", "Priority", "Low", "Critical")]
+    [InlineData("assignee", "Assigned", "alice", "bob")]
+    [InlineData("claimedBy", "Claimed by", "alice", "bob")]
+    [InlineData("name", "Name", "short name", "other name")]
+    [InlineData("featureId", "Feature", "12", "13")]
+    [InlineData("sortOrder", "Order", "1", "2")]
+    public void DiffFields_ValuesUnderTheCap_RenderVerbatim(
+        string json, string label, string before, string after)
+    {
+        var change = Assert.Single(ActivityTimelineBuilder.DiffFields(
+            FieldSnapshot(json, before), FieldSnapshot(json, after)));
+
+        Assert.Equal(label, change.Label);
+        Assert.Equal(before, change.Before);
+        Assert.Equal(after, change.After);
+        Assert.DoesNotContain("…", change.Before, StringComparison.Ordinal);
+        Assert.DoesNotContain("…", change.After, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// GOAL 5 for the LONG case: a pair that already rendered distinctly is left exactly as it
+    /// was — the cap still applies, the window does not fire. Only a COLLISION routes a value
+    /// through the new path.
+    /// </summary>
+    [Fact]
+    public void DiffFields_LongValuesThatAlreadyDiffer_KeepTheSixtyCharacterCap()
+    {
+        var before = LongValueDivergingAt(10, 'X');
+        var after = LongValueDivergingAt(10, 'Y');
+
+        var change = Assert.Single(ActivityTimelineBuilder.DiffFields(
+            FieldSnapshot("description", before), FieldSnapshot("description", after)));
+
+        Assert.Equal(SixtyCharRule(before), change.Before);
+        Assert.Equal(SixtyCharRule(after), change.After);
+    }
+
+    /// <summary>
+    /// Format() truncates long non-colliding values with a plain <c>text[..MaxValueLength]</c>
+    /// slice. If the high half of a surrogate pair sits at index 59, that slice emits the orphaned
+    /// high surrogate — mojibake that reaches the DOM. The fix mirrors the boundary check already
+    /// present in Window(). Divergence at 10 ensures Format() never sees a collision, so the
+    /// values go through the ordinary (non-windowed) truncation path.
+    /// </summary>
+    [Fact]
+    public void DiffFields_SurrogatePairAtFormatTruncationBoundary_IsNeverSplit()
+    {
+        // High surrogate at 59, low at 60 — straddles text[..60].
+        var before = WithSurrogatePairAt(LongValueDivergingAt(10, 'X'), 59);
+        var after  = WithSurrogatePairAt(LongValueDivergingAt(10, 'Y'), 59);
+
+        Assert.NotEqual(SixtyCharRule(before), SixtyCharRule(after));  // confirm non-colliding
+
+        var change = Assert.Single(ActivityTimelineBuilder.DiffFields(
+            FieldSnapshot("description", before), FieldSnapshot("description", after)));
+
+        Assert.False(HasLoneSurrogate(change.Before), $"Before carries a lone surrogate: {change.Before}");
+        Assert.False(HasLoneSurrogate(change.After),  $"After carries a lone surrogate: {change.After}");
+    }
+
+    /// <summary>
+    /// GOAL 6 — a GitHub issue title is mirrored verbatim into these rows, so a payload past the
+    /// cut must survive the window as INERT TEXT: unescaped, unmodified, still a plain string.
+    /// Encoding is the renderer's job (<c>@change.After</c>); pre-escaping here would
+    /// double-encode, and marking it as HTML would be stored XSS.
+    /// </summary>
+    [Fact]
+    public void DiffFields_MarkupPastTheCapInACollidingPair_IsStillInertText()
+    {
+        const string payload = "<img src=x onerror=alert(1)>";
+        var prefix = new string('p', 80);
+        var before = prefix + "safe";
+        var after = prefix + payload;
+
+        Assert.Equal(SixtyCharRule(before), SixtyCharRule(after));
+
+        var change = Assert.Single(ActivityTimelineBuilder.DiffFields(
+            FieldSnapshot("description", before), FieldSnapshot("description", after)));
+
+        Assert.Contains(payload, change.After, StringComparison.Ordinal);
+        Assert.DoesNotContain("&lt;", change.After, StringComparison.Ordinal);
+        Assert.IsType<string>(change.After);
+    }
+
+    /// <summary>
+    /// The window slices by UTF-16 code unit, so both of its edges can land between the halves of
+    /// an astral character. A lone surrogate is not text — it is mojibake that survives all the
+    /// way to the DOM. Divergence at 100 puts the shared window at [88, 148); the parameter walks
+    /// one emoji across both edges.
+    /// </summary>
+    [Theory]
+    [InlineData(86)]
+    [InlineData(87)]
+    [InlineData(88)]
+    [InlineData(89)]
+    [InlineData(146)]
+    [InlineData(147)]
+    [InlineData(148)]
+    [InlineData(149)]
+    public void DiffFields_SurrogatePairStraddlingAWindowEdge_IsNeverSplit(int pairAt)
+    {
+        var before = WithSurrogatePairAt(LongValueDivergingAt(100, 'X'), pairAt);
+        var after = WithSurrogatePairAt(LongValueDivergingAt(100, 'Y'), pairAt);
+
+        var change = Assert.Single(ActivityTimelineBuilder.DiffFields(
+            FieldSnapshot("description", before), FieldSnapshot("description", after)));
+
+        Assert.NotEqual(change.Before, change.After);
+        Assert.False(HasLoneSurrogate(change.Before), $"Before carries a lone surrogate: {change.Before}");
+        Assert.False(HasLoneSurrogate(change.After), $"After carries a lone surrogate: {change.After}");
+    }
+
+    /// <summary>
+    /// A DELIBERATE non-repair, pinned so it stays a decision rather than an accident. Two
+    /// instants in the same minute still render alike — but that collision is not truncation: the
+    /// displayed text is DERIVED from the value, not a prefix of it, so windowing the raw ISO
+    /// string would put an unconverted UTC fragment where a local time belongs. That is a second
+    /// clock, which is exactly what #306 removed from this file. What this pins is that the
+    /// one-clock convention survives the collision handling.
+    /// </summary>
+    [Fact]
+    public void DiffFields_TimestampsInTheSameMinute_StayOnTheOneClock()
+    {
+        var change = Assert.Single(ActivityTimelineBuilder.DiffFields(
+            "{\"claimedAt\":\"2026-08-02T22:21:48.8201407\"}",
+            "{\"claimedAt\":\"2026-08-02T22:21:58.9901407\"}"));
+
+        var expected = TimeZoneInfo
+            .ConvertTimeFromUtc(new DateTime(2026, 8, 2, 22, 21, 0, DateTimeKind.Utc), TimeZoneInfo.Local)
+            .ToString("MMM d, yyyy h:mm tt", CultureInfo.CurrentCulture);
+
+        Assert.Equal(expected, change.Before);
+        Assert.Equal(expected, change.After);
+        Assert.DoesNotContain("2026-08-02T", change.Before, StringComparison.Ordinal);
+        Assert.DoesNotContain("…", change.After, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The other deliberate non-repair: values that are equal ONCE COLLAPSED differ only in line
+    /// endings or surrounding whitespace. Collapsing is what removed the delta, so no window can
+    /// show it — and neither side may gain a spurious ellipsis pretending otherwise.
+    /// </summary>
+    [Fact]
+    public void DiffFields_DifferenceOnlyInLineEndings_IsNotWindowed()
+    {
+        var change = Assert.Single(ActivityTimelineBuilder.DiffFields(
+            FieldSnapshot("description", "alpha\nbeta"),
+            FieldSnapshot("description", "alpha beta")));
+
+        Assert.Equal("alpha beta", change.Before);
+        Assert.Equal("alpha beta", change.After);
+    }
+
+    // ══════════════════════════════════════════════════════════════════════════════════════════
     //  Adversarial payload shapes (#374 AC6)
     //
     //  DiffFields is documented to "yield empty rather than throwing: a corrupt audit row must
