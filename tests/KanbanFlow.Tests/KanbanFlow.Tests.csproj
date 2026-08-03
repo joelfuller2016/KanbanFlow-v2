@@ -27,10 +27,4 @@
     <ProjectReference Include="..\..\src\KanbanFlow\KanbanFlow.csproj" />
   </ItemGroup>
 
-  <ItemGroup>
-    <!-- Mirror the suppress from the main project: AngleSharp 0.17.1 flows in
-         transitively via the ProjectReference → HtmlSanitizer. See main csproj. -->
-    <NuGetAuditSuppress Include="https://github.com/advisories/GHSA-pgww-w46g-26qg" />
-  </ItemGroup>
-
 </Project>
