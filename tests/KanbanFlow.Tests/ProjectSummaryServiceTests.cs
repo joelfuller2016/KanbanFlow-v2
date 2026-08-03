@@ -72,10 +72,15 @@ public sealed class ProjectSummaryServiceTests
         return task;
     }
 
-    private static async Task<ProjectListSummary> LoadOneAsync(SqliteTestFactory factory, int projectId)
+    /// <param name="actor">
+    /// Passed straight to <see cref="ProjectSummaryService.LoadAsync"/>. Defaulted to null so every
+    /// existing call reads as "the parameterless call" — the shape both production callers use.
+    /// </param>
+    private static async Task<ProjectListSummary> LoadOneAsync(
+        SqliteTestFactory factory, int projectId, string? actor = null)
     {
         await using var db = await factory.CreateDbContextAsync();
-        var summaries = await ProjectSummaryService.LoadAsync(db);
+        var summaries = await ProjectSummaryService.LoadAsync(db, actor);
         return Assert.Single(summaries, s => s.Id == projectId);
     }
 
@@ -286,6 +291,61 @@ public sealed class ProjectSummaryServiceTests
         Assert.Equal(top.Priority, summary.NextTask.Priority);
         Assert.Equal(top.ClaimedBy, summary.NextTask.ClaimedBy);
         Assert.Equal(top.Reason, summary.NextTask.Reason);
+    }
+
+    /// <summary>
+    /// <c>LoadAsync</c>'s <c>actor</c> parameter, which until now NOTHING exercised: every other
+    /// test here — and both production callers — pass null, so deleting the argument at the
+    /// <see cref="TaskRanking.RankNextTasks"/> call site would have left the whole suite green
+    /// while quietly breaking the one surface that will eventually pass an actor.
+    ///
+    /// The seed is chosen so the parameter is the ONLY thing that can move the answer. A Critical
+    /// task claimed by "me" and an unclaimed High task rank in opposite orders depending on it:
+    /// with no actor every claim counts as someone else's and the Critical one sinks below the
+    /// High; with actor "me" the claim is the caller's own, so nothing sinks and Critical wins on
+    /// priority. A task claimed by "other-agent" would NOT work here — it is de-prioritised under
+    /// both calls, so both would return the same task and the assertion would prove nothing.
+    ///
+    /// Case and whitespace are folded in too ("  ME  "), because <c>RankNextTasks</c> normalises
+    /// the actor exactly as <c>ClaimedBy</c> is normalised on write, and an actor that has to be
+    /// spelled byte-identically is not usable by an agent that stores its own name.
+    /// </summary>
+    [Fact]
+    public async Task NextTask_HonoursTheActor_SoAnAgentsOwnClaimDoesNotSink()
+    {
+        using var factory = new SqliteTestFactory();
+        Project project;
+        int mineId, unclaimedId;
+        await using (var db = await factory.CreateDbContextAsync())
+        {
+            project = SeedProject(db, "Actor");
+            var feature = SeedFeature(db, project);
+            mineId = SeedTask(db, feature, "critical, claimed by me",
+                WorkStatus.Todo, TaskPriority.Critical, claimedBy: "me").Id;
+            unclaimedId = SeedTask(db, feature, "high, unclaimed",
+                WorkStatus.Todo, TaskPriority.High).Id;
+        }
+
+        // No actor: every claimed task is someone else's, so the unclaimed High outranks the
+        // Critical one despite being lower priority.
+        var anonymous = await LoadOneAsync(factory, project.Id);
+        Assert.NotNull(anonymous.NextTask);
+        Assert.Equal(unclaimedId, anonymous.NextTask!.Id);
+
+        // Same data, same project, one argument different — and the answer must change.
+        var mine = await LoadOneAsync(factory, project.Id, actor: "me");
+        Assert.NotNull(mine.NextTask);
+        Assert.Equal(mineId, mine.NextTask!.Id);
+        Assert.Equal("Critical", mine.NextTask.Priority);
+        // The reason is the ranker's verbatim, and for one's OWN claim it must not say
+        // "deprioritised" — that string is what an agent reads to understand the pick.
+        Assert.DoesNotContain("deprioritised", mine.NextTask.Reason, StringComparison.OrdinalIgnoreCase);
+
+        // Trimmed and case-folded, per RankNextTasks' documented normalisation.
+        Assert.Equal(mineId, (await LoadOneAsync(factory, project.Id, actor: "  ME  ")).NextTask!.Id);
+
+        // Blank is not an actor: it must behave exactly like null, not like an actor named "".
+        Assert.Equal(unclaimedId, (await LoadOneAsync(factory, project.Id, actor: "   ")).NextTask!.Id);
     }
 
     /// <summary>

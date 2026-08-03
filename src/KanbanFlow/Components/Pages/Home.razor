@@ -1,5 +1,6 @@
 @page "/"
 @rendermode InteractiveServer
+@implements IDisposable
 @using System.Globalization
 @inject IDbContextFactory<AppDbContext> DbFactory
 @inject NavigationManager Nav
@@ -125,10 +126,19 @@ else
                             <div class="kf-card-meta">
                                 @if (p.ActivityRelative is not null)
                                 {
+                                    @* The dotted underline + `cursor: help` advertise "there is more here", so the
+                                       more has to be reachable by more than a mouse. `title` fires on hover only,
+                                       and `datetime` is machine-readable but unannounced, so the absolute instant
+                                       is ALSO carried as visually-hidden text: screen readers read it in document
+                                       order with no dependence on how `<time>` maps to an ARIA role (it maps to
+                                       `generic`, where `aria-label` is not guaranteed to be exposed at all).
+                                       `tabindex="0"` puts the same information in the keyboard's reach, and
+                                       `.kf-card-when:focus-visible` in app.css makes that stop visible. *@
                                     <time class="kf-card-when"
                                           data-testid="project-last-activity"
                                           datetime="@p.ActivityMachine"
-                                          title="@p.ActivityTooltip">@p.ActivityRelative</time>
+                                          tabindex="0"
+                                          title="@p.ActivityTooltip">@p.ActivityRelative<span class="visually-hidden"> — @p.ActivityTooltip</span></time>
                                 }
                                 @foreach (var claim in p.VisibleClaims)
                                 {
@@ -245,6 +255,15 @@ else
     // ── Project list data ──
     private List<HomeProjectCard>? projects;
 
+    /// <summary>
+    /// Bounds every read this page starts to the page's own lifetime. <c>LoadProjects</c> runs on
+    /// init and again after every save and delete, and the summary it awaits reads every task and
+    /// every open task in the instance — so without this a navigation away leaves those queries
+    /// running to completion and their continuation resuming against a disposed component. Same
+    /// field, same disposal shape as <c>ProjectView.razor</c>.
+    /// </summary>
+    private readonly CancellationTokenSource cts = new();
+
     // ── Edit modal state ──
     private bool showEditModal;
     private ProjectFormModel editingProject = new();
@@ -298,20 +317,37 @@ else
     /// </summary>
     private async Task LoadProjects()
     {
-        using var db = await DbFactory.CreateDbContextAsync();
-        var summaries = await ProjectSummaryService.LoadAsync(db);
+        // OperationCanceledException is swallowed HERE rather than at the call sites: SaveProject
+        // and ConfirmDelete both end in `await LoadProjects()` inside a `catch (Exception)` that
+        // renders the message to the user, so letting a cancelled navigation escape would paint
+        // "Failed to save" over a save that actually succeeded.
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync(cts.Token);
+            var summaries = await ProjectSummaryService.LoadAsync(db, actor: null, cts.Token);
 
-        // One "now" for the whole page: read per card, two cards rendered in the same pass could
-        // disagree about what "2m ago" means.
-        var nowUtc = DateTime.UtcNow;
+            // One "now" for the whole page: read per card, two cards rendered in the same pass could
+            // disagree about what "2m ago" means.
+            var nowUtc = DateTime.UtcNow;
 
-        projects = summaries
-            // Ordering is presentation and stays here — most-recently-touched first, exactly as
-            // this page has always shown it. ProjectSummaryService deliberately does not order, so
-            // that GET /api/projects keeps the order its consumers already see.
-            .OrderByDescending(s => s.UpdatedAt)
-            .Select(s => ToCard(s, nowUtc))
-            .ToList();
+            projects = summaries
+                // Ordering is presentation and stays here — most-recently-touched first, exactly as
+                // this page has always shown it. ProjectSummaryService deliberately does not order, so
+                // that GET /api/projects keeps the order its consumers already see.
+                .OrderByDescending(s => s.UpdatedAt)
+                .Select(s => ToCard(s, nowUtc))
+                .ToList();
+        }
+        catch (OperationCanceledException)
+        {
+            // Component disposed during load — expected, and the list is left exactly as it was.
+        }
+    }
+
+    public void Dispose()
+    {
+        cts.Cancel();
+        cts.Dispose();
     }
 
     /// <summary>How many claim chips fit on a card before the rest collapse into "+N more".</summary>
@@ -386,23 +422,37 @@ else
         _ = LoadProjectForEdit(p.Id);
     }
 
+    /// <summary>
+    /// Started fire-and-forget from <see cref="OpenEditModal"/>, so it outlives its caller and is
+    /// the read MOST able to resume against a disposed component — hence the same token and the
+    /// same swallow as <see cref="LoadProjects"/>. Without them the <c>StateHasChanged</c> below
+    /// throws into a task nobody observes.
+    /// </summary>
     private async Task LoadProjectForEdit(int id)
     {
-        using var db = await DbFactory.CreateDbContextAsync();
-        var project = await db.Projects.AsNoTracking().FirstOrDefaultAsync(p => p.Id == id);
-        if (project is not null)
+        try
         {
-            editingProject = new ProjectFormModel
+            await using var db = await DbFactory.CreateDbContextAsync(cts.Token);
+            var project = await db.Projects.AsNoTracking()
+                .FirstOrDefaultAsync(p => p.Id == id, cts.Token);
+            if (project is not null)
             {
-                Id = project.Id,
-                Name = project.Name,
-                Description = project.Description,
-                Goals = project.Goals
-            };
-            saveError = null;
-            showEditModal = true;
-            shouldFocusProjectModal = true;
-            StateHasChanged();
+                editingProject = new ProjectFormModel
+                {
+                    Id = project.Id,
+                    Name = project.Name,
+                    Description = project.Description,
+                    Goals = project.Goals
+                };
+                saveError = null;
+                showEditModal = true;
+                shouldFocusProjectModal = true;
+                StateHasChanged();
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // Component disposed while the edit form was loading — nothing to show it in.
         }
     }
 

@@ -97,11 +97,16 @@ public sealed record ProjectListSummary
 /// ───────────────────────────────────────────────────────────────────────────────────────────
 /// </summary>
 /// <remarks>
-/// Cost is a FIXED five queries regardless of how many projects exist — never one per project.
+/// Cost is a FIXED six queries regardless of how many projects exist — never one per project:
+/// projects, features, the task projection, open tasks, dependencies, and the activity aggregate.
 /// Two of them are narrow projections (three scalar columns per task; three per dependency) in the
 /// spirit of #157; only the open tasks are materialised as entities, and only because
 /// <see cref="TaskRanking.RankNextTasks"/> ranks entities. Done tasks — the bulk of a mature
 /// project — are never loaded as entities at all.
+///
+/// The count is load-bearing: it is the budget a future edit is measured against, so it is stated
+/// per query above rather than as a bare number a reader has to re-derive. Each numbered comment
+/// in <see cref="LoadAsync"/> owns exactly one of the six.
 /// </remarks>
 public static class ProjectSummaryService
 {
@@ -169,6 +174,15 @@ public static class ProjectSummaryService
         // ── 4. open tasks as ENTITIES — the only rows loaded in full, because TaskRanking ranks
         //       entities. Done tasks are excluded exactly as both existing next-task surfaces
         //       exclude them, so this loads strictly less than they do. ──
+        //
+        // DELIBERATELY NOT a column projection, though the ranker reads only six members today
+        // (Id, FeatureId, Name, Status, Priority, ClaimedBy). Handing TaskRanking a partially
+        // populated TaskItem would make THIS call site's input silently different from the REST
+        // and MCP ones, so the day the ranker starts reading a seventh member the three surfaces
+        // disagree again — the exact #151/#188 divergence this service exists to prevent, and a
+        // far worse failure than reading seven extra scalar columns off the open half of the
+        // table. Narrowing safely means giving RankNextTasks a narrow input type used by ALL
+        // THREE callers; tracked separately rather than smuggled in here.
         var openTasks = await db.Tasks
             .AsNoTracking()
             .Where(t => t.Status != WorkStatus.Done)

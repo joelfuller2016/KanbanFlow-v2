@@ -975,15 +975,29 @@ else
 
         try
         {
-            // The whole query string is REPLACED, not merged: this filter owns every parameter
-            // /project/{id} accepts, and rebuilding from `filter` is what makes Clear able to leave
-            // a genuinely empty query. Add a merge here if this route ever grows an unrelated param.
+            // The query string is rebuilt from `filter`, not edited in place — that is what makes
+            // Clear able to leave a genuinely empty query — and then the ONE parameter this route
+            // owns outside the filter is merged back on.
+            //
+            // That merge is not optional. `?task=` arrived with #281 (the Home card's "Next" chip
+            // deep-links straight at a task), which is precisely the "if this route ever grows an
+            // unrelated param" case the previous version of this comment reserved. Without it the
+            // first keystroke in the filter box silently strips `task=` out of the address bar, so
+            // reloading or sharing the link no longer opens the task it named — and because
+            // DeepLinkTaskId is [SupplyParameterFromQuery], the value is gone from the component
+            // too and cannot be put back. `taskId` is an int, so no escaping is required.
             //
             // replace: true so typing five characters leaves ONE history entry, not five — otherwise
             // Back walks the user backwards through their own keystrokes instead of off the page.
             // forceLoad: false keeps the SignalR circuit alive; a forced load would tear the page
             // down and rebuild it, losing the board's collapse state and re-running the whole load.
-            Nav.NavigateTo($"/project/{Id}{filter.ToQuery()}", forceLoad: false, replace: true);
+            var query = filter.ToQuery();
+            if (DeepLinkTaskId is int taskId)
+            {
+                query = query.Length == 0 ? $"?task={taskId}" : $"{query}&task={taskId}";
+            }
+
+            Nav.NavigateTo($"/project/{Id}{query}", forceLoad: false, replace: true);
         }
         catch (ObjectDisposedException) { /* circuit torn down while the sync was pending */ }
         catch (InvalidOperationException) { /* ditto — renderer already disposed */ }
