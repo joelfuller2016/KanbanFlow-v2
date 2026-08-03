@@ -4,7 +4,7 @@ namespace KanbanFlow.Services;
 
 /// <summary>
 /// Connection settings for <see cref="ILlmClient"/> (#218), read from the environment the
-/// same way <c>KANBANFLOW_DB_PATH</c> is in <c>Program.cs</c>.
+/// same way <c>KANBANFLOW_DB_PATH</c> is in <c>KanbanFlow.Data.DbPathResolver</c>.
 ///
 /// <para><b>Open access.</b> ZeroRouter is open on the local network, so <see cref="ApiKey"/>
 /// is a non-secret placeholder by default — the OpenAI client merely requires a non-empty
