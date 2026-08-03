@@ -662,6 +662,7 @@ async function main() {
       assert(beforeIds.join(",") === partialTasks.map((task) => task.id).join(","),
         `seed: expected dense persisted order [${partialTasks.map((task) => task.id)}], got [${beforeIds}]`);
 
+      let bodyErr, unexpectedTeardownErr;
       try {
         await page.evaluate(({ visibleIds }) => {
           const column = document.querySelector('[data-testid="board-column-Todo-cards"]');
@@ -704,6 +705,8 @@ async function main() {
         await dragCardBefore(page,
           `[data-testid="board-card-${movedVisible.id}"]`,
           `[data-testid="board-card-${visibleAnchor.id}"]`);
+      } catch (err) {
+        bodyErr = err;
       } finally {
         // Must be a real finally: the staged-board assert above and dragCardBefore both throw, and
         // the surrounding test() helper catches and continues to the next test — so a teardown
@@ -713,11 +716,11 @@ async function main() {
         // reinstate a stale function. `?? {}` keeps this a no-op if the JS context is already gone.
         //
         // Best-effort by construction: `page.evaluate` REJECTS when the execution context is
-        // destroyed by a navigation, or when the page/context/browser has been closed. A throwing
-        // `finally` REPLACES the exception that put us here — so an unguarded teardown would mask
-        // the very staged-board assertion or drag failure it exists to survive. That is the same
-        // defect one layer up from the one this block fixes. Swallow ONLY the teardown-is-moot
-        // shapes; anything else is a real bug and must still surface.
+        // destroyed by a navigation, or when the page/context/browser has been closed. A throw
+        // inside a `finally` REPLACES the exception that put us here — so we store any unexpected
+        // teardown error in `unexpectedTeardownErr` and surface it AFTER the finally block, where
+        // it cannot mask the primary body failure. Context-gone errors are swallowed (teardown is
+        // moot once the page is gone); everything else is a real bug and surfaces below.
         try {
           await page.evaluate(() => {
             const kf = window.KanbanFlow ?? {};
@@ -727,10 +730,18 @@ async function main() {
             delete kf._e2eRevertPatch;
             delete kf._e2eOriginalRevert;
           });
-        } catch (teardownErr) {
-          if (!IS_CONTEXT_GONE.test(teardownErr?.message ?? "")) throw teardownErr;
+        } catch (err) {
+          if (!IS_CONTEXT_GONE.test(err?.message ?? "")) unexpectedTeardownErr = err;
         }
       }
+      // Surface errors outside the finally so neither masks the other.
+      if (bodyErr) {
+        if (unexpectedTeardownErr) {
+          console.error(`[e2e teardown] additional error after body failure: ${unexpectedTeardownErr.message}`);
+        }
+        throw bodyErr;
+      }
+      if (unexpectedTeardownErr) throw unexpectedTeardownErr;
 
       const expectedIds = [hiddenBefore.id, movedVisible.id, visibleAnchor.id, hiddenMiddle.id, hiddenAfter.id];
       const afterTasks = await waitForProjectBoardOrder(partialProj.id, "Todo", expectedIds);
