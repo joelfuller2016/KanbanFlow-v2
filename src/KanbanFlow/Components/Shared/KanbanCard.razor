@@ -29,8 +29,14 @@
             </div>
         </div>
         <div class="d-flex justify-content-between align-items-center mt-1 ps-4">
-            <span class="@GetPriorityBadgeClass(Task.Priority)">@Task.Priority</span>
-            <small class="text-muted fst-italic text-truncate ms-1" style="font-size: 0.7rem;" title="@Task.Feature.Name">@Task.Feature.Name</small>
+            @* #322 phase 3 -- `flex-shrink-0` so a long feature name can never squash the priority
+               word, and `board-card-meta-label` so the label takes the REMAINING track instead of
+               hugging its own text. Hugging it made the box exactly as wide as the text, which shaved
+               the terminal glyph ("Dashboard" -> "Dashboarc") and made `text-truncate`s ellipsis
+               impossible to trigger. `ms-1` is now a guaranteed gutter rather than one a long label
+               could eat, which is what keeps the label off the badge. Full rationale in app.css. *@
+            <span class="@GetPriorityBadgeClass(Task.Priority) flex-shrink-0">@Task.Priority</span>
+            <small class="text-muted fst-italic text-truncate ms-1 board-card-meta-label" style="font-size: 0.7rem;" title="@Task.Feature.Name">@Task.Feature.Name</small>
         </div>
     </div>
 </div>
