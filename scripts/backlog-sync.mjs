@@ -23,6 +23,12 @@ import { readFile, writeFile, mkdir } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+// The single definition of "what priority is this issue?", shared with the board's sync.
+// Imported, never transcribed — a copy is how the two drifted onto different answers for 13 of
+// 119 open issues (#364).
+import {
+  derivePriority, priorityFromTitle, priorityFromLabel, priorityFromMilestone, PN_LEVELS,
+} from "./priority-model.mjs";
 
 const execFileAsync = promisify(execFile);
 
@@ -40,11 +46,22 @@ const MS_PER_DAY = 86_400_000;
 
 // --- Priority model ---------------------------------------------------------------------
 //
-// Signals, in the precedence order the backlog was actually authored with:
-//   1. an explicit `P0:`/`P1:`/`P2:`/`P3:` prefix in the issue TITLE — always wins outright
-//   2. milestone (M1 is the correctness/audit work, M7 the speculative end)
-//   3. labels — defects and dependency/security work ride high; docs-only rides low
-//   4. age (older first), then issue number, as the deterministic tiebreak
+// PRIORITY IS NOT DECIDED HERE. It comes from `./priority-model.mjs`, which is the single
+// definition for the whole repo — the same function `portfolio-sync.mjs` uses to set
+// TaskItem.Priority on the board. Its order is: title prefix → priority label → milestone
+// band → Medium.
+//
+// This file used to derive its own tier and then adjust it by TOPICAL label: `bug` /
+// `dependencies` / `security` promoted a step, a docs-only issue demoted a step. That made the
+// log book a SECOND source of priority truth, and the two disagreed on **13 of 119 open issues
+// (10.9%)** — measured, not predicted (#364). #355 forbids the adjustment outright: a topical
+// label is a KIND, not an urgency. #189 is labelled `bug` and self-declares `P2:`; #340 and #341
+// are both `bug,tech-debt` but are a stored-markdown injection and some dead CSS hooks. Promoting
+// on `bug` fabricates a signal the repo never authored.
+//
+// What survives here is ORDERING WITHIN a band (`signalRank`), which is presentation: it decides
+// which of two equal-priority rows prints first and can never move an issue between tiers. That
+// distinction is the whole point — see the comment on `signalRank`.
 //
 // Everything below is a pure function of the fetched JSON. Nothing consults the clock
 // except `ageDays`, which is reported but never used for ordering.
@@ -57,58 +74,73 @@ const TIERS = [
 ];
 const TIER_INDEX = new Map(TIERS.map((t, i) => [t.id, i]));
 
-// Milestone -> rank (lower = higher priority) and the tier an issue lands in when its title
-// carries no explicit prefix. Unmilestoned work sorts last within its tier: it has not been
-// triaged into the roadmap yet, so it has not earned a place ahead of work that has.
+// Milestone -> display short name and sort rank. **No `tier` column**: the milestone→priority
+// band lives once, in `priority-model.mjs`'s MILESTONE_BANDS, and is read through
+// `derivePriority`. This list carries only what that module does not: the abbreviation shown in
+// the table, and the roadmap order used as a sort key. Unmilestoned work sorts last within its
+// tier — it has not been triaged into the roadmap, so it has not earned a place ahead of work
+// that has.
+//
+// Keeping the titles here is still load-bearing: `milestoneOf` uses them to REFUSE an unmapped
+// milestone (see below), which is the loud half of the contract `priority-model.mjs` describes —
+// "the log book raises it loudly; the sync must keep running, so it degrades quietly."
 const MILESTONES = [
-  { title: "M1: Correctness & Audit Trail", short: "M1", tier: "P0" },
-  { title: "M2: Tech-debt & Foundation", short: "M2", tier: "P1" },
-  { title: "M3: Agent API Surface", short: "M3", tier: "P1" },
-  { title: "M4: UI / UX Polish", short: "M4", tier: "P2" },
-  { title: "M5: Docs & Process", short: "M5", tier: "P2" },
-  { title: "M6: AI Memory & Ops Hub", short: "M6", tier: "P2" },
-  { title: "M7: Self-Improving", short: "M7", tier: "P3" },
+  { title: "M1: Correctness & Audit Trail", short: "M1" },
+  { title: "M2: Tech-debt & Foundation", short: "M2" },
+  { title: "M3: Agent API Surface", short: "M3" },
+  { title: "M4: UI / UX Polish", short: "M4" },
+  { title: "M5: Docs & Process", short: "M5" },
+  { title: "M6: AI Memory & Ops Hub", short: "M6" },
+  { title: "M7: Self-Improving", short: "M7" },
 ];
 const MILESTONE_BY_TITLE = new Map(MILESTONES.map((m, i) => [m.title, { ...m, rank: i }]));
-const NO_MILESTONE = { title: null, short: "—", tier: "P2", rank: MILESTONES.length };
+const NO_MILESTONE = { title: null, short: "—", rank: MILESTONES.length };
 
-// A milestone that exists on GitHub but is absent from MILESTONES has no defined tier and no
-// defined rank. Falling back to NO_MILESTONE would render it with a `—` milestone cell, drop it
-// into P2 and sort it last — a state GitHub does not have, reported with no warning. That is the
-// same failure this file already refuses elsewhere (a truncated fetch and an accounting mismatch
-// both throw), so refuse here too rather than quietly misreporting.
+// A milestone that exists on GitHub but is absent from MILESTONES has no display name and no
+// sort rank, and `priorityFromMilestone` will not have a band for it either — so it would silently
+// land in P2 and render with a `—` milestone cell, a state GitHub does not have, reported with no
+// warning. That is the same failure this file already refuses elsewhere (a truncated fetch and an
+// accounting mismatch both throw), so refuse here too rather than quietly misreporting.
+//
+// This is the LOUD half of the contract `priority-model.mjs` describes: the sync must keep running
+// so it degrades to "Medium" quietly; the log book exists to be trusted, so it stops.
 function milestoneOf(issue) {
   const title = issue.milestone?.title;
   if (!title) return NO_MILESTONE;
   const known = MILESTONE_BY_TITLE.get(title);
   if (!known) {
     throw new Error(
-      `Issue #${issue.number} carries the milestone "${title}", which is not in MILESTONES. ` +
-      `Its tier and rank are undefined, so it cannot be placed. Add it to MILESTONES in ` +
-      `scripts/backlog-sync.mjs (with its tier) and re-run. Refusing to render it as "no milestone".`,
+      `Issue #${issue.number} carries the milestone "${title}", which this generator does not know. ` +
+      `Add it to MILESTONES in scripts/backlog-sync.mjs (name + order) AND to MILESTONE_BANDS in ` +
+      `scripts/priority-model.mjs (its P0–P3 band) — both, or the board and this file will disagree ` +
+      `about it. Refusing to render it as "no milestone".`,
     );
   }
   return known;
 }
 
-// Labels that promote / demote a *derived* tier by one step. An explicit title prefix is
-// never adjusted — it is a human's stated decision and outranks every inferred signal.
-const PROMOTING_LABELS = new Set(["bug", "dependencies", "security"]);
-const DEMOTING_LABELS = new Set(["documentation"]);
+// Topical labels used for READING ORDER ONLY. These once adjusted the tier itself; they no
+// longer touch priority at all (#364/#355).
+const DEFECT_LABELS = new Set(["bug", "dependencies", "security"]);
+const DOCS_LABELS = new Set(["documentation"]);
 
-// The single definition of "this issue carries a promoting label". `classify` uses it to move the
-// derived tier a step, `signalRank` to order within a band — two call sites that must never
-// disagree, so they read the same predicate rather than each spreading PROMOTING_LABELS inline.
-function hasPromotingLabel(labelSet) {
-  for (const l of PROMOTING_LABELS) if (labelSet.has(l)) return true;
+function hasDefectLabel(labelSet) {
+  for (const l of DEFECT_LABELS) if (labelSet.has(l)) return true;
   return false;
 }
 
-// Rank *within* a tier+milestone band. Defects first (something is broken), then the epic
-// that groups the band's children, then ordinary build-out, then docs. Computed ONCE in
-// `classify` and stored, because `compare` runs it O(n log n) times during the sort.
+// Rank *within* one tier band. Defects first (something is broken), then the epic that groups
+// the band's children, then ordinary build-out, then docs.
+//
+// WHY THIS IS NOT A SECOND PRIORITY RULE, and the line not to cross: `signal` is a sort key
+// applied AFTER `tier` and `milestone.rank` in `compare`, so it can only reorder rows that are
+// already in the same band. It cannot move an issue between tiers, and it cannot change what any
+// consumer reads as the issue's priority. The moment something here feeds back into `tier`, this
+// file is a second source of truth again — which is exactly the defect #364 was filed for.
+//
+// Computed ONCE in `classify` and stored, because `compare` runs it O(n log n) times.
 function signalRank(labelSet) {
-  if (hasPromotingLabel(labelSet)) return 0;
+  if (hasDefectLabel(labelSet)) return 0;
   if (labelSet.has("epic")) return 1;
   if (isDocsOnly(labelSet)) return 3;
   return 2;
@@ -116,34 +148,51 @@ function signalRank(labelSet) {
 
 function isDocsOnly(labelSet) {
   if (labelSet.size === 0) return false;
-  for (const l of labelSet) if (!DEMOTING_LABELS.has(l)) return false;
+  for (const l of labelSet) if (!DOCS_LABELS.has(l)) return false;
   return true;
 }
 
-const TITLE_PRIORITY = /^\s*(P[0-3])\s*[:\-–—]/i;
+// `derivePriority` answers in the board's vocabulary (Critical/High/Medium/Low); the log book
+// prints tiers (P0–P3). PN_LEVELS is that mapping, exported from the same module, so the two
+// scales cannot drift apart either.
+function tierOfIssue(issue) {
+  return `P${PN_LEVELS.indexOf(derivePriority(issue))}`;
+}
 
-function clampTier(index) {
-  return TIERS[Math.max(0, Math.min(TIERS.length - 1, index))].id;
+// The tier a milestone maps to, for the rendered explainer.
+//
+// This file lists the milestones it knows; `priority-model.mjs` owns their P0-P3 bands. Dropping
+// the duplicated tier column removed one drift risk and created a smaller one: a milestone added
+// HERE but not THERE. `priorityFromMilestone` returns null for it, `PN_LEVELS.indexOf(null)` is
+// -1, and `TIERS[-1].id` is a bare TypeError from deep inside renderBody — a confusing way to
+// learn that two lists disagree. Name both files and the fix instead.
+function tierIdForMilestone(title) {
+  const level = priorityFromMilestone(title);
+  if (level === null) {
+    throw new Error(
+      `Milestone "${title}" is listed in MILESTONES (scripts/backlog-sync.mjs) but has no band in ` +
+      `MILESTONE_BANDS (scripts/priority-model.mjs). Add it there, or remove it here — the two must ` +
+      `agree, or the board and this log book will disagree about every issue carrying it.`,
+    );
+  }
+  return TIERS[PN_LEVELS.indexOf(level)].id;
+}
+
+// Which signal `derivePriority` actually used — reported, never used for ordering. Recomputed
+// from the same inputs rather than returned by the model, so this stays a pure description of a
+// decision made elsewhere and can never become the decision itself.
+function tierSourceOf(issue) {
+  if (priorityFromTitle(issue.title)) return "title";
+  for (const label of issue.labels || []) if (priorityFromLabel(label.name)) return "label";
+  return priorityFromMilestone(issue.milestone) ? "milestone" : "default";
 }
 
 function classify(issue) {
   const labels = (issue.labels || []).map((l) => l.name).sort();
   const labelSet = new Set(labels);
   const milestone = milestoneOf(issue);
-
-  const explicit = TITLE_PRIORITY.exec(issue.title || "");
-  let tier;
-  let tierSource;
-  if (explicit) {
-    tier = explicit[1].toUpperCase();
-    tierSource = "title";
-  } else {
-    let idx = TIER_INDEX.get(milestone.tier);
-    if (hasPromotingLabel(labelSet)) idx -= 1;
-    else if (isDocsOnly(labelSet)) idx += 1;
-    tier = clampTier(idx);
-    tierSource = milestone.title ? "milestone+labels" : "labels";
-  }
+  const tier = tierOfIssue(issue);
+  const tierSource = tierSourceOf(issue);
 
   return {
     signal: signalRank(labelSet),
@@ -413,11 +462,21 @@ function renderBody(model) {
   p("Ordering is a pure function of the issue payload — no hand-placed rows, no engine order.");
   p("Signals are applied in this precedence:");
   p();
-  p("1. **Explicit title prefix** — a `P0:`/`P1:`/`P2:`/`P3:` prefix in the issue title wins outright and is never adjusted. It is a human's stated decision.");
-  p("2. **Milestone** — otherwise the tier is inherited from the milestone: " +
-    MILESTONES.map((m) => `\`${m.short}\`→${m.tier}`).join(", ") + ", no milestone→P2.");
-  p("3. **Labels** — a derived tier is promoted one step by `bug` / `dependencies` / `security`, and demoted one step when the issue is `documentation`-only. Within a band: defects → epics → build-out → docs.");
-  p("4. **Age, then issue number** — older first; the issue number is the final tiebreak. Because numbers are unique the order is *total*, so re-running the generator over unchanged input reproduces this file byte for byte.");
+  p("**Priority is not decided here.** It comes from `scripts/priority-model.mjs`, the single definition");
+  p("shared with the board's GitHub sync — so a card and its row in this file can never disagree (#364).");
+  p("That module resolves, first non-null winning:");
+  p();
+  p("1. **Explicit title prefix** — a `P0:`/`P1:`/`P2:`/`P3:` prefix in the issue title wins outright. It is a human's stated decision.");
+  p("2. **Priority label** — the cross-repo vocabulary (`P0`, `priority:high`, a bare `critical`, …). This repo carries none, so it rarely fires here.");
+  p("3. **Milestone band** — the execution phase as a proxy: " +
+    MILESTONES.map((m) => `\`${m.short}\`→${tierIdForMilestone(m.title)}`).join(", ") + ", no milestone→P2.");
+  p("4. **`Medium` (P2)** — no signal at all.");
+  p();
+  p("**Topical labels do not affect priority.** `bug` / `security` / `tech-debt` are a *kind*, not an");
+  p("urgency (#355): #189 is labelled `bug` and self-declares `P2:`. They order rows *within* an");
+  p("already-decided tier — defects → epics → build-out → docs — and can never move one between tiers.");
+  p();
+  p("Then, as the deterministic tiebreak: **age (older first), then issue number**. Because numbers are unique the order is *total*, so re-running the generator over unchanged input reproduces this file byte for byte.");
   p();
   p(`Source of truth: <https://github.com/${repo}/issues>. This file is its ordered projection.`);
   p();
@@ -788,7 +847,23 @@ async function main() {
   );
 }
 
-main().catch((err) => {
-  console.error(`backlog-sync: ${err.message}`);
-  process.exit(1);
-});
+// Run only when invoked as the script, not when imported. Without this guard, importing anything
+// from this file to TEST it would fire a live `gh` fetch and write docs/BACKLOG.md as a side
+// effect of `node --test`. `npm run backlog` still runs main() exactly as before.
+// Compared as resolved FILESYSTEM PATHS, not as URL strings. Both sides are absolute already
+// (Node resolves process.argv[1] before handing it over), so a URL comparison also works — but it
+// is fragile on Windows, where drive-letter casing and percent-encoding of spaces or non-ASCII
+// characters in the checkout path can make two spellings of the same file compare unequal.
+const invokedDirectly = process.argv[1]
+  && resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+
+if (invokedDirectly) {
+  main().catch((err) => {
+    console.error(`backlog-sync: ${err.message}`);
+    process.exit(1);
+  });
+}
+
+// Exported for `backlog-sync.test.mjs`, which pins this file's tier to the shared priority model
+// so the two can never silently diverge again (#364).
+export { tierOfIssue, milestoneOf, signalRank, tierIdForMilestone, MILESTONES };
