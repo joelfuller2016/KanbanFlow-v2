@@ -902,18 +902,21 @@ else
     /// <remarks>
     /// The split is deliberate, and in this order.
     ///
-    /// The BOARD updates synchronously, so <c>filter</c> is never behind what the user has typed.
-    /// That is what makes the controlled <c>value="@Filter.Search"</c> in BoardFilterBar safe: the
-    /// re-rendered value always equals the DOM's current value, so the diff writes nothing back and
-    /// the caret cannot be dragged to the end mid-word. Debouncing the STATE instead would reintroduce
-    /// exactly that bug — a render landing during the quiet period would push a stale value into a
-    /// box the user is still typing in.
+    /// The BOARD updates synchronously, so <c>filter</c> is never behind what the user has typed and
+    /// the cards narrow as they type (AC 2). Debouncing the STATE instead would leave <c>filter</c>
+    /// lagging the DOM for the length of the quiet period, which is the divergence that lets a render
+    /// land carrying text the user has already moved past.
+    ///
+    /// This is NOT what keeps the text boxes safe, though — that is BoardFilterBar's job, and it does
+    /// it by rendering them from LOCAL fields that typing never touches (see the warning at the top
+    /// of that file: a re-rendered <c>value</c> attribute eats keystrokes on a Server circuit no
+    /// matter which directive writes it).
     ///
     /// The URL write is debounced because it is the expensive half: NavigateTo notifies the Router,
     /// which re-renders the whole matched route — this page, the outline and every rendered card —
     /// on top of the re-render the filter change already caused. At one keystroke per URL write that
-    /// is two full renders per character on a Server circuit. 200ms also coalesces a burst of chip
-    /// clicks into a single history write.
+    /// is two full renders per character on a Server circuit. <see cref="UrlSyncDebounce"/> (250ms,
+    /// matching Ideas.razor) also coalesces a burst of chip clicks into a single history write.
     /// </remarks>
     private void UpdateFilter(TaskFilterState next)
     {
