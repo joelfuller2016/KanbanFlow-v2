@@ -27,28 +27,18 @@ public static class ApiEndpoints
 
     private static void MapProjectEndpoints(this WebApplication app)
     {
-        // GET /api/projects — list all with feature/task counts
-        app.MapGet("/api/projects", async (AppDbContext db) =>
+        // GET /api/projects — list all with feature/task counts, progress, next task,
+        // last activity and active claims
+        app.MapGet("/api/projects", async (AppDbContext db, CancellationToken ct) =>
         {
-            // #157: project the counts in SQL (scalar subqueries) instead of loading the full
-            // Feature->Task graph just to count it.
-            var projects = await db.Projects
-                .AsNoTracking()
-                .Select(p => new
-                {
-                    p.Id,
-                    p.Name,
-                    p.Description,
-                    p.Goals,
-                    p.Readme,
-                    p.CreatedAt,
-                    p.UpdatedAt,
-                    FeatureCount = p.Features.Count,
-                    TaskCount = p.Features.SelectMany(f => f.Tasks).Count()
-                })
-                .ToListAsync();
-
-            return Results.Ok(projects);
+            // #281: the summary is built by Services/ProjectSummaryService, which the Home page
+            // also calls — so the list endpoint and the list PAGE cannot report different counts,
+            // a different "next task", or different progress. It in turn delegates to the two
+            // shared engines (ProjectProgressCalculator #125, TaskRanking #151/#188) rather than
+            // deriving anything itself. The nine keys this endpoint already returned are unchanged
+            // in name, type and order; everything new is appended.
+            var summaries = await Services.ProjectSummaryService.LoadAsync(db, actor: null, ct);
+            return Results.Ok(summaries);
         });
 
         // GET /api/projects/{id} — get one with features + task counts
