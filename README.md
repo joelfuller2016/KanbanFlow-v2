@@ -115,6 +115,8 @@ curl -X POST "http://127.0.0.1:5123/api/admin/run-tests?suite=all"   # suite=api
 
 ./scripts/smoke-api.ps1                 # ~50 HTTP calls against an ephemeral DB
 node ./scripts/smoke-mcp.mjs 1          # exercises the MCP tool surface (needs the app running)
+npm run test:scripts                    # node:test unit tests for scripts/*.mjs (the priority
+                                        # model behind portfolio-sync) — no app, no network, no DB
 npm run test:ui                         # Playwright browser e2e: New Project + add-task modals,
                                         # board render, status auto-placement, Settings "Run all"
 ```
