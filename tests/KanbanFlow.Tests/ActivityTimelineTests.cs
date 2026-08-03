@@ -1068,6 +1068,29 @@ public class ActivityTimelineTests
     }
 
     /// <summary>
+    /// Format() truncates long non-colliding values with a plain <c>text[..MaxValueLength]</c>
+    /// slice. If the high half of a surrogate pair sits at index 59, that slice emits the orphaned
+    /// high surrogate — mojibake that reaches the DOM. The fix mirrors the boundary check already
+    /// present in Window(). Divergence at 10 ensures Format() never sees a collision, so the
+    /// values go through the ordinary (non-windowed) truncation path.
+    /// </summary>
+    [Fact]
+    public void DiffFields_SurrogatePairAtFormatTruncationBoundary_IsNeverSplit()
+    {
+        // High surrogate at 59, low at 60 — straddles text[..60].
+        var before = WithSurrogatePairAt(LongValueDivergingAt(10, 'X'), 59);
+        var after  = WithSurrogatePairAt(LongValueDivergingAt(10, 'Y'), 59);
+
+        Assert.NotEqual(SixtyCharRule(before), SixtyCharRule(after));  // confirm non-colliding
+
+        var change = Assert.Single(ActivityTimelineBuilder.DiffFields(
+            FieldSnapshot("description", before), FieldSnapshot("description", after)));
+
+        Assert.False(HasLoneSurrogate(change.Before), $"Before carries a lone surrogate: {change.Before}");
+        Assert.False(HasLoneSurrogate(change.After),  $"After carries a lone surrogate: {change.After}");
+    }
+
+    /// <summary>
     /// GOAL 6 — a GitHub issue title is mirrored verbatim into these rows, so a payload past the
     /// cut must survive the window as INERT TEXT: unescaped, unmodified, still a plain string.
     /// Encoding is the renderer's job (<c>@change.After</c>); pre-escaping here would

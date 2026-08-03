@@ -579,7 +579,14 @@ public static class ActivityTimelineBuilder
         var text = Collapse(raw);
         if (text.Length == 0)
             return EmptyValue;
-        return text.Length <= MaxValueLength ? text : text[..MaxValueLength] + Ellipsis;
+        if (text.Length <= MaxValueLength)
+            return text;
+
+        var end = MaxValueLength;
+        // Never cut between the halves of a surrogate pair — mirrors Window()'s end-trim.
+        if (char.IsLowSurrogate(text[end]))
+            end--;
+        return text[..end] + Ellipsis;
     }
 
     /// <summary>
@@ -654,7 +661,7 @@ public static class ActivityTimelineBuilder
     /// the same offset and is <see cref="MaxValueLength"/> wide, while the first difference sits
     /// at most <see cref="DiffContextLength"/> characters past that start — so the differing
     /// character is inside both windows, or one side ends before it and the two windows differ in
-    /// length. <c>DiffFields_AnyPairSharingALongPrefix_RendersDistinctly</c> pins it over every
+    /// length. <c>DiffFields_ValuesDivergingAnywhere_NeverRenderAsTwoIdenticalStrings</c> pins it over every
     /// entry in <see cref="DisplayFields"/>.
     ///
     /// Two collisions are deliberately NOT repaired here, because truncation is not their cause
