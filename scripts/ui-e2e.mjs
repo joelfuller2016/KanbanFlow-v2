@@ -86,6 +86,11 @@ async function test(name, fn) {
 
 function assert(cond, msg) { if (!cond) throw new Error(msg); }
 
+// Playwright rejections that mean "the thing a teardown would clean up no longer exists", so the
+// teardown is moot and must not mask the failure that triggered it. Deliberately narrow: any other
+// rejection from a teardown is a real bug and is rethrown.
+const IS_CONTEXT_GONE = /execution context was destroyed|target (page|closed)|target page, context or browser has been closed|cannot find context with specified id|frame was detached|browser has been closed|has been closed/i;
+
 // Blazor Server renders static HTML first, then connects an interactive circuit a
 // moment later. A click that lands before the circuit is live is a no-op, so we retry
 // the click until the expected element appears.
@@ -657,57 +662,86 @@ async function main() {
       assert(beforeIds.join(",") === partialTasks.map((task) => task.id).join(","),
         `seed: expected dense persisted order [${partialTasks.map((task) => task.id)}], got [${beforeIds}]`);
 
-      await page.evaluate(({ visibleIds }) => {
-        const column = document.querySelector('[data-testid="board-column-Todo-cards"]');
-        if (!column) throw new Error("Todo card container not found");
-        const originalChildren = Array.from(column.children);
-        const originalRevert = window.KanbanFlow._revertDraggedNode;
+      let bodyErr, unexpectedTeardownErr;
+      try {
+        await page.evaluate(({ visibleIds }) => {
+          const column = document.querySelector('[data-testid="board-column-Todo-cards"]');
+          if (!column) throw new Error("Todo card container not found");
+          const originalChildren = Array.from(column.children);
+          const originalRevert = window.KanbanFlow._revertDraggedNode;
 
-        // Restore the complete Blazor-owned DOM synchronously after Sortable reports the partial
-        // drop but before invokeMethodAsync starts the server round-trip.
-        const patched = function (evt) {
-          originalRevert.call(window.KanbanFlow, evt);
-          for (const child of originalChildren) column.appendChild(child);
-          window.KanbanFlow._revertDraggedNode = originalRevert;
-          delete window.KanbanFlow._e2eRevertPatch;
-          delete window.KanbanFlow._e2eOriginalRevert;
-        };
+          // Restore the complete Blazor-owned DOM synchronously after Sortable reports the partial
+          // drop but before invokeMethodAsync starts the server round-trip.
+          const patched = function (evt) {
+            originalRevert.call(window.KanbanFlow, evt);
+            for (const child of originalChildren) column.appendChild(child);
+            window.KanbanFlow._revertDraggedNode = originalRevert;
+            delete window.KanbanFlow._e2eRevertPatch;
+            delete window.KanbanFlow._e2eOriginalRevert;
+          };
 
-        // Publish both halves so the teardown below can undo the patch even when `onEnd` — and
-        // therefore the self-restore above — never fires. Without this the helper stays patched
-        // for the rest of the run and the closure pins every removed node in memory.
-        window.KanbanFlow._e2eRevertPatch = patched;
-        window.KanbanFlow._e2eOriginalRevert = originalRevert;
-        window.KanbanFlow._revertDraggedNode = patched;
+          // Publish both halves so the finally block can undo the patch even when `onEnd` — and
+          // therefore the self-restore above — never fires. Without it the helper stays patched
+          // for the remainder of THIS document (the next drag test navigates, which tears down the
+          // JS context and the patch with it), and until then the closure keeps every removed node
+          // reachable and every later drop on this page runs the stale wrapper.
+          window.KanbanFlow._e2eRevertPatch = patched;
+          window.KanbanFlow._e2eOriginalRevert = originalRevert;
+          window.KanbanFlow._revertDraggedNode = patched;
 
-        for (const child of originalChildren) {
-          const id = Number(child.getAttribute("data-task-id"));
-          if (!visibleIds.includes(id)) child.remove();
+          for (const child of originalChildren) {
+            const id = Number(child.getAttribute("data-task-id"));
+            if (!visibleIds.includes(id)) child.remove();
+          }
+        }, { visibleIds: [visibleAnchor.id, movedVisible.id] });
+
+        const renderedIds = await page.$$eval(
+          '[data-testid="board-column-Todo-cards"] [data-task-id]',
+          (els) => els.map((el) => Number(el.getAttribute("data-task-id"))),
+        );
+        assert(renderedIds.join(",") === [visibleAnchor.id, movedVisible.id].join(","),
+          `staged board must render only the two visible cards, got [${renderedIds}]`);
+
+        await dragCardBefore(page,
+          `[data-testid="board-card-${movedVisible.id}"]`,
+          `[data-testid="board-card-${visibleAnchor.id}"]`);
+      } catch (err) {
+        bodyErr = err;
+      } finally {
+        // Must be a real finally: the staged-board assert above and dragCardBefore both throw, and
+        // the surrounding test() helper catches and continues to the next test — so a teardown
+        // placed merely *after* the drag is skipped on exactly the failure paths that leave the
+        // patch installed. Restore ONLY while our own patch is still the installed helper: if
+        // `onEnd` already restored it, or anything else replaced it since, overwriting here would
+        // reinstate a stale function. `?? {}` keeps this a no-op if the JS context is already gone.
+        //
+        // Best-effort by construction: `page.evaluate` REJECTS when the execution context is
+        // destroyed by a navigation, or when the page/context/browser has been closed. A throw
+        // inside a `finally` REPLACES the exception that put us here — so we store any unexpected
+        // teardown error in `unexpectedTeardownErr` and surface it AFTER the finally block, where
+        // it cannot mask the primary body failure. Context-gone errors are swallowed (teardown is
+        // moot once the page is gone); everything else is a real bug and surfaces below.
+        try {
+          await page.evaluate(() => {
+            const kf = window.KanbanFlow ?? {};
+            if (kf._e2eRevertPatch && kf._revertDraggedNode === kf._e2eRevertPatch) {
+              kf._revertDraggedNode = kf._e2eOriginalRevert;
+            }
+            delete kf._e2eRevertPatch;
+            delete kf._e2eOriginalRevert;
+          });
+        } catch (err) {
+          if (!IS_CONTEXT_GONE.test(err?.message ?? "")) unexpectedTeardownErr = err;
         }
-      }, { visibleIds: [visibleAnchor.id, movedVisible.id] });
-
-      const renderedIds = await page.$$eval(
-        '[data-testid="board-column-Todo-cards"] [data-task-id]',
-        (els) => els.map((el) => Number(el.getAttribute("data-task-id"))),
-      );
-      assert(renderedIds.join(",") === [visibleAnchor.id, movedVisible.id].join(","),
-        `staged board must render only the two visible cards, got [${renderedIds}]`);
-
-      await dragCardBefore(page,
-        `[data-testid="board-card-${movedVisible.id}"]`,
-        `[data-testid="board-card-${visibleAnchor.id}"]`);
-
-      // Finally-style teardown: undo the patch if the drop never fired. Restore ONLY while our own
-      // patch is still the installed helper — if `onEnd` already restored it, or anything else
-      // replaced it since, overwriting here would reinstate a stale function.
-      await page.evaluate(() => {
-        const kf = window.KanbanFlow;
-        if (kf._e2eRevertPatch && kf._revertDraggedNode === kf._e2eRevertPatch) {
-          kf._revertDraggedNode = kf._e2eOriginalRevert;
+      }
+      // Surface errors outside the finally so neither masks the other.
+      if (bodyErr) {
+        if (unexpectedTeardownErr) {
+          console.error(`[e2e teardown] additional error after body failure: ${unexpectedTeardownErr.message}`);
         }
-        delete kf._e2eRevertPatch;
-        delete kf._e2eOriginalRevert;
-      });
+        throw bodyErr;
+      }
+      if (unexpectedTeardownErr) throw unexpectedTeardownErr;
 
       const expectedIds = [hiddenBefore.id, movedVisible.id, visibleAnchor.id, hiddenMiddle.id, hiddenAfter.id];
       const afterTasks = await waitForProjectBoardOrder(partialProj.id, "Todo", expectedIds);
