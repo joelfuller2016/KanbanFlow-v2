@@ -773,6 +773,381 @@ async function main() {
         `fractional SortOrder did not survive GET -> PUT: ${roundTripped.sortOrder}`);
     });
 
+    // ── #112: the board filter bar ───────────────────────────────────────────────────────────
+    // The scenario above STAGED a partial board by deleting DOM nodes. This one is the real thing:
+    // ProjectView narrows its own list and hands the board a genuine subset, so these scenarios are
+    // what fail if `Items="allTasks"` is ever restored at the call site.
+    //
+    // THE SEED SHAPE IS THE TEST. Two hidden cards, and their POSITIONS are what give the drag
+    // scenario below its discriminating power (see the long note there). One hidden card in the
+    // middle is NOT enough: with persisted A,B,C*,D,E and rendered A,B,D,E, dragging E before B
+    // lands A,E,B,C,D under an identity anchor AND under a rendered-index anchor — the two readings
+    // agree whenever every hidden card sits AFTER the insertion point, so such a seed passes either
+    // way and proves nothing. Adding X* early is what pulls them apart. (Reviewer, PR #362.)
+    //
+    //   persisted:  A(0)  X*(1)  B(2)  C*(3)  D(4)  E(5)      * = hidden by `q=Keep`
+    //   rendered:   A     B      D     E
+    //
+    // Assignees and the claim are load-bearing too, not decoration: they are what lets the wiring
+    // scenario prove the assignee box writes `assignee=` and the claimed-by box writes `claimedBy=`.
+    const filterProj = await api("POST", "/api/projects", { name: `E2E Filter ${stamp}` });
+    const filterFeature = await api("POST", `/api/projects/${filterProj.id}/features`, { name: "E2E Filter Feature" });
+    const filterClaimant = `e2e-agent-${stamp}`;
+    const filterTasks = [];
+    for (const [label, priority, status, assignee] of [
+      ["Keep A", "High", "Todo", "alice"],
+      ["Skip X", "Low", "Todo", "alice"],
+      ["Keep B", "Low", "Todo", "bob"],
+      ["Skip C", "High", "Todo", "alice"],
+      ["Keep D", "Low", "Todo", "bob"],
+      ["Keep E", "High", "Todo", "carol"],
+    ]) {
+      filterTasks.push(await api("POST", `/api/features/${filterFeature.id}/tasks`, {
+        name: `E2E Filter ${label} ${stamp}`,
+        description: label.startsWith("Keep") ? "matching description" : "excluded description",
+        priority,
+        status,
+        assignee,
+        sortOrder: filterTasks.length,
+      }));
+    }
+    const [keepA, skipX, keepB, skipC, keepD, keepE] = filterTasks;
+    // A second status, so "≥2 statuses" is real and the Done/hide-done clause has something to bite.
+    const filterDone = await api("POST", `/api/features/${filterFeature.id}/tasks`, {
+      name: `E2E Filter Keep F ${stamp}`, description: "matching description",
+      priority: "High", status: "Done", sortOrder: 10, assignee: "carol",
+    });
+    // Exactly ONE claimed task, so `claimedBy` discriminates down to a single card.
+    await api("POST", `/api/tasks/${keepA.id}/claim`, { actor: filterClaimant });
+
+    const filterAllIds = [...filterTasks, filterDone].map((task) => task.id);
+    const filterKeepIds = [keepA.id, keepB.id, keepD.id, keepE.id, filterDone.id];
+    const filterAssigneeAliceIds = [keepA.id, skipX.id, skipC.id];
+    const sortedIds = (ids) => ids.slice().sort((a, b) => a - b).join(",");
+
+    const filterUrl = (query = "") => `${baseUrl}/project/${filterProj.id}${query}`;
+    const renderedBoardIds = (page) => page.$$eval(
+      '[data-testid="kanban-board"] [data-task-id]',
+      (els) => els.map((el) => Number(el.getAttribute("data-task-id"))),
+    );
+    // Per column: the count badge (computed by KanbanColumn from the MODEL it was handed) beside the
+    // ids actually rendered (put there by the Blazor DIFF). Under a filter those two can disagree
+    // only if the page filtered the render but not the list, which is exactly the bug worth naming.
+    const readBadges = (page) => page.evaluate((statuses) => statuses.map((status) => {
+      const column = document.querySelector(`[data-testid="board-column-${status}"]`);
+      const badge = column?.querySelector("h3 .badge");
+      return {
+        status,
+        badge: Number((badge?.textContent ?? "").replace(/[^0-9]/g, "")),
+        cards: column?.querySelectorAll("[data-task-id]").length ?? -1,
+      };
+    }), TASK_COLUMNS);
+
+    await test("Board filter narrows the board from the URL and survives a reload", async () => {
+      // Deep link, not a click: this is simultaneously the "a shared link works" case and the
+      // "filter state round-trips through the query string" case.
+      await page.goto(filterUrl("?q=Keep"));
+      await page.locator('[data-testid="board-filter-bar"]').waitFor({ state: "visible" });
+      for (const task of [keepA, keepB, keepD, keepE]) {
+        await page.locator(`[data-testid="board-card-${task.id}"]`).waitFor({ state: "visible" });
+      }
+
+      const shown = await renderedBoardIds(page);
+      assert(sortedIds(shown) === sortedIds(filterKeepIds),
+        `filtered board must render only matching cards — expected [${filterKeepIds}], got [${shown}]`);
+      for (const hidden of [skipX, skipC]) {
+        assert(!shown.includes(hidden.id), `the non-matching card ${hidden.id} is still rendered`);
+      }
+
+      const badges = await readBadges(page);
+      assert(badges.every((row) => row.badge === row.cards),
+        `each column's count badge must equal its rendered card count: ${JSON.stringify(badges)}`);
+      // …and the badges must sum to the FILTERED total, not the project total. Without this the
+      // per-column equality above also holds for a board that rendered nothing at all.
+      const badgeTotal = badges.reduce((sum, row) => sum + row.badge, 0);
+      assert(badgeTotal === filterKeepIds.length,
+        `count badges sum to ${badgeTotal}, expected ${filterKeepIds.length} (of ${filterAllIds.length} total)`);
+
+      // The summary line is the only place the user is told how much they are NOT seeing.
+      const summary = (await page.locator('[data-testid="board-filter-summary"]').textContent()).trim();
+      assert(summary === `Showing ${filterKeepIds.length} of ${filterAllIds.length} tasks`,
+        `filter summary reads "${summary}", expected "Showing ${filterKeepIds.length} of ${filterAllIds.length} tasks"`);
+
+      // The search box itself must be repopulated too — a board that is filtered while the control
+      // reads empty tells the user their view is unfiltered, which is worse than not filtering.
+      assert(await page.locator('[data-testid="board-filter-search"]').inputValue() === "Keep",
+        "the search box did not restore its value from the URL");
+
+      await page.reload();
+      await page.locator('[data-testid="board-filter-bar"]').waitFor({ state: "visible" });
+      await page.locator(`[data-testid="board-card-${keepA.id}"]`).waitFor({ state: "visible" });
+      const afterReload = await renderedBoardIds(page);
+      assert(sortedIds(afterReload) === sortedIds(filterKeepIds),
+        `the filter did not survive a reload — expected [${filterKeepIds}], got [${afterReload}]`);
+    });
+
+    await test("Board filter clauses combine, and Clear resets both the board and the URL", async () => {
+      await page.goto(filterUrl());
+      await page.locator('[data-testid="board-filter-bar"]').waitFor({ state: "visible" });
+      await page.locator(`[data-testid="board-card-${skipC.id}"]`).waitFor({ state: "visible" });
+      // A rendered card only proves the STATIC prerender landed. Every control below is
+      // `@oninput`/`@onchange`, so a keystroke sent before the interactive circuit is live is
+      // swallowed and the test reports "the filter does nothing" — see clickUntil's note on the
+      // same race. Sortable is bound from OnAfterRenderAsync, i.e. strictly after the circuit is
+      // live, so it is the cheapest honest readiness signal the page exposes.
+      await waitForSortableArmed(page, "Todo");
+
+      // Type into the real control (not the URL) so the oninput -> filter -> URL path is exercised.
+      // Settle on each control's own query key before touching the next one: three writes to the
+      // same URL in flight at once is a race the test would report as "the priority chip does
+      // nothing", which is a lie about which half is broken.
+      const waitForQuery = async (key, value) => {
+        try {
+          await page.waitForFunction(
+            ({ k, v }) => new URL(window.location.href).searchParams.get(k) === v,
+            { k: key, v: value }, { timeout: 10000 });
+        } catch {
+          throw new Error(`the "${key}" control never reached the URL — expected ${key}=${value}, URL is ${page.url()}`);
+        }
+      };
+
+      const waitForRendered = async (expectedIds, what) => {
+        try {
+          await page.waitForFunction(
+            (ids) => {
+              const rendered = [...document.querySelectorAll('[data-testid="kanban-board"] [data-task-id]')]
+                .map((el) => Number(el.getAttribute("data-task-id"))).sort((a, b) => a - b);
+              return rendered.join(",") === ids.join(",");
+            },
+            expectedIds.slice().sort((a, b) => a - b),
+            { timeout: 10000 },
+          );
+        } catch {
+          assert(false, `${what} — expected [${expectedIds}], got [${await renderedBoardIds(page)}]`);
+        }
+      };
+
+      await page.locator('[data-testid="board-filter-search"]').fill("Keep");
+      await waitForQuery("q", "Keep");
+      // Priority chips are btn-check inputs; the LABEL is the hit target, as it is for a user.
+      await page.locator('[data-testid="board-filter-priority-High"]').click();
+      await waitForQuery("priority", "High");
+      await page.locator('[data-testid="board-filter-hide-done"]').check();
+      await waitForQuery("hideDone", "true");
+      // Keep A and Keep E are the only High + non-Done + "Keep" tasks.
+      await waitForRendered([keepA.id, keepE.id], "search + priority + hide-done must AND together");
+
+      // Fourth clause, and the one that proves the ASSIGNEE box is wired to the assignee field:
+      // alice narrows {A, E} to {A} (E is carol's). Swapping this handler for the claimed-by one in
+      // ProjectView compiles and passes every other assertion in this file — the URL check below is
+      // what refuses it, because a miswired box writes its neighbour's query key.
+      await page.locator('[data-testid="board-filter-assignee"]').fill("alice");
+      await waitForQuery("assignee", "alice");
+      await waitForRendered([keepA.id], "adding assignee=alice must narrow the AND further");
+      assert(!page.url().includes("claimedBy="),
+        `the assignee box wrote the claimed-by query key: ${page.url()}`);
+
+      const url = new URL(page.url());
+      assert(url.searchParams.get("q") === "Keep", `URL lost the search term: ${page.url()}`);
+      assert(url.searchParams.get("priority") === "High", `URL lost the priority chip: ${page.url()}`);
+      assert(url.searchParams.get("hideDone") === "true", `URL lost hide-done: ${page.url()}`);
+
+      // Every column is empty except Backlog/Todo — those must say "no tasks MATCH", never the
+      // "no tasks in Review yet, add one" placeholder, which under a filter is a lie. Asserted
+      // through the dedicated testid, so the filtered placeholder is identified structurally rather
+      // than by matching prose that a copy edit would silently break.
+      const noMatchTestids = await page.evaluate(() =>
+        [...document.querySelectorAll('[data-testid$="-no-match"]')].map((el) => el.getAttribute("data-testid")));
+      const emptyStates = await page.evaluate(() =>
+        [...document.querySelectorAll(".kanban-column-empty")].map((el) => el.textContent.trim()));
+      assert(emptyStates.length > 0, "expected at least one empty column while filtered");
+      assert(noMatchTestids.length === emptyStates.length,
+        `every empty column must use the filtered placeholder — ${noMatchTestids.length} of ${emptyStates.length} did: ${JSON.stringify(emptyStates)}`);
+      assert(emptyStates.every((text) => text.includes("No tasks match these filters")),
+        `a filtered-out column showed the wrong empty state: ${JSON.stringify(emptyStates)}`);
+
+      await page.locator('[data-testid="board-filter-clear"]').click();
+      await page.locator(`[data-testid="board-card-${skipC.id}"]`).waitFor({ state: "visible" });
+      const cleared = await renderedBoardIds(page);
+      assert(cleared.length === filterAllIds.length,
+        `Clear must restore every card — expected ${filterAllIds.length}, got ${cleared.length}`);
+      // The URL write is debounced (ProjectView.UrlSyncDebounce), so poll rather than read once.
+      await page.waitForFunction(() => !window.location.href.includes("?"), null, { timeout: 10000 })
+        .catch(() => assert(false, `Clear must empty the query string too, got ${page.url()}`));
+      for (const box of ["search", "assignee", "claimed-by"]) {
+        assert(await page.locator(`[data-testid="board-filter-${box}"]`).inputValue() === "",
+          `Clear left the ${box} box populated`);
+      }
+    });
+
+    // Found by review (CodeRabbit, PR #362) and REPRODUCED before it was fixed: with the search box
+    // rendering `value="@Filter.Search"`, typing "KeepAlphaBetaGamma" with no inter-key delay left
+    // "KepAlphaBetaGmma" in the box — two characters silently eaten — and a caret placed mid-word
+    // jumped to the end. On a Server circuit the keystroke round-trips to the server, and the
+    // re-render it triggers carries a value that is already stale by the time it lands; the diff
+    // writes it back over the newer characters. The fix is that BoardFilterBar renders its text
+    // boxes from LOCAL fields that typing never touches (see the warning at the top of that file).
+    //
+    // Nothing else in this suite could catch it: every other filter assertion uses `fill()`, which
+    // sets the value in ONE event and so never races a re-render. This is the only scenario that
+    // types character by character, which is the only way a human uses the control.
+    await test("Fast typing in the filter box keeps every character and holds the caret", async () => {
+      await page.goto(filterUrl());
+      await page.locator('[data-testid="board-filter-bar"]').waitFor({ state: "visible" });
+      await waitForSortableArmed(page, "Todo");
+
+      const box = page.locator('[data-testid="board-filter-search"]');
+      await box.click();
+      await page.keyboard.type("KeepAlphaBetaGamma", { delay: 0 });
+      // The filter is debounced into the URL, so wait for the write rather than reading immediately.
+      await page.waitForFunction(() => window.location.href.includes("q="), null, { timeout: 10000 });
+      await page.waitForTimeout(600);
+      const burst = await box.inputValue();
+      assert(burst === "KeepAlphaBetaGamma",
+        `fast typing lost characters: box reads "${burst}", expected "KeepAlphaBetaGamma"`);
+
+      // Now type into the MIDDLE. A control that rewrites `value` on re-render snaps the caret to
+      // the end, so this would produce "abcdefXYZ" with selectionStart 9 instead of "abcXYZdef"/6.
+      await box.fill("abcdef");
+      await page.waitForTimeout(600);
+      await page.evaluate(() => {
+        const el = document.querySelector('[data-testid="board-filter-search"]');
+        el.focus();
+        el.setSelectionRange(3, 3);
+      });
+      await page.keyboard.type("XYZ", { delay: 0 });
+      await page.waitForTimeout(600);
+      const caret = await page.evaluate(() => {
+        const el = document.querySelector('[data-testid="board-filter-search"]');
+        return { value: el.value, selectionStart: el.selectionStart };
+      });
+      assert(caret.value === "abcXYZdef" && caret.selectionStart === 6,
+        `typing mid-word moved the caret or reordered the text: value="${caret.value}" ` +
+        `selectionStart=${caret.selectionStart}, expected "abcXYZdef"/6`);
+
+      // Clear must still be able to empty a box the bar otherwise never rewrites — the whole point
+      // of the reset token. Without it, "Clear" would leave the typed text sitting in the input.
+      await page.locator('[data-testid="board-filter-clear"]').click();
+      await page.waitForFunction(
+        () => document.querySelector('[data-testid="board-filter-search"]').value === "",
+        null, { timeout: 10000 })
+        .catch(async () => assert(false,
+          `Clear did not empty the search box — it still reads "${await box.inputValue()}"`));
+    });
+
+    // S2 (reviewer, PR #362): assignee and claimed-by are two near-identical string clauses over two
+    // different columns, and the predicate-level guard for confusing them
+    // (TaskFilterTests.ClaimedByFilter_DoesNotReadTheAssigneeField) says nothing about the WIRING.
+    // `OnClaimedByChanged="OnAssigneeChanged"` in ProjectView compiles. This is the test that refuses it.
+    await test("The claimed-by box filters by claim, not by assignee", async () => {
+      await page.goto(filterUrl());
+      await page.locator('[data-testid="board-filter-bar"]').waitFor({ state: "visible" });
+      await waitForSortableArmed(page, "Todo");
+
+      await page.locator('[data-testid="board-filter-claimed-by"]').fill(filterClaimant);
+      await page.waitForFunction(
+        (v) => new URL(window.location.href).searchParams.get("claimedBy") === v,
+        filterClaimant, { timeout: 10000 })
+        .catch(() => assert(false, `the claimed-by box never wrote claimedBy= to the URL: ${page.url()}`));
+      assert(!page.url().includes("assignee="),
+        `the claimed-by box wrote the assignee query key: ${page.url()}`);
+
+      // Only Keep A is claimed, and it is assigned to alice — who also owns Skip X and Skip C. So a
+      // claimed-by clause reading the ASSIGNEE column would render three cards here, not one.
+      await page.waitForFunction((id) => {
+        const rendered = [...document.querySelectorAll('[data-testid="kanban-board"] [data-task-id]')]
+          .map((el) => Number(el.getAttribute("data-task-id")));
+        return rendered.length === 1 && rendered[0] === id;
+      }, keepA.id, { timeout: 10000 })
+        .catch(async () => assert(false,
+          `claimedBy=${filterClaimant} must render only the claimed card ${keepA.id} — got [${await renderedBoardIds(page)}] ` +
+          `(alice's three cards are [${filterAssigneeAliceIds}], which is what an assignee-reading clause would show)`));
+
+      // And the same state as a shared link.
+      await page.goto(filterUrl(`?claimedBy=${encodeURIComponent(filterClaimant)}`));
+      await page.locator(`[data-testid="board-card-${keepA.id}"]`).waitFor({ state: "visible" });
+      const viaLink = await renderedBoardIds(page);
+      assert(viaLink.join(",") === String(keepA.id),
+        `?claimedBy= deep link must render only [${keepA.id}], got [${viaLink}]`);
+    });
+
+    // AC 5, and the only place filtering can CORRUPT data rather than merely mis-display it.
+    //
+    //   persisted:  A(0)  X*(1)  B(2)  C*(3)  D(4)  E(5)     * hidden by `q=Keep`
+    //   rendered:   A     B      D     E
+    //
+    // Drag E onto B's top edge: "put E before B". The third OnCardMoved argument is the next
+    // RENDERED card's identity — B — and MoveOnBoardAsync resolves it against the complete persisted
+    // column, so E lands immediately before B, i.e. AFTER the hidden X:
+    //
+    //   identity anchor  ->  A,  X,  E,  B,  C,  D     <- the correct answer, asserted below
+    //   rendered index   ->  A,  E,  X,  B,  C,  D     <- what "insert at visible index 1" produces
+    //
+    // Those two orders DIFFER, which is the entire point of the seed, and the test asserts the first
+    // and explicitly refuses the second. The naive seed — one hidden card, in the middle — cannot do
+    // this: with A,B,C*,D,E both readings yield A,E,B,C,D, because they only diverge when a hidden
+    // card sits BEFORE the insertion point. A guard that passes under the bug it names is worse than
+    // no guard, so X exists purely to move one hidden card in front of the anchor. (Reviewer, PR #362.)
+    await test("Dragging under an active filter persists the correct position across a hidden card", async () => {
+      await page.goto(filterUrl("?q=Keep"));
+      await page.locator('[data-testid="board-filter-bar"]').waitFor({ state: "visible" });
+      for (const task of [keepA, keepB, keepD, keepE]) {
+        await page.locator(`[data-testid="board-card-${task.id}"]`).waitFor({ state: "visible" });
+      }
+      await waitForSortableArmed(page, "Todo");
+
+      const seedOrder = [keepA.id, skipX.id, keepB.id, skipC.id, keepD.id, keepE.id];
+      const beforeTasks = (await api("GET", `/api/projects/${filterProj.id}/board`)).Todo;
+      const beforeIds = beforeTasks.map((task) => task.id);
+      const beforeRanks = new Map(beforeTasks.map((task) => [task.id, task.sortOrder]));
+      assert(beforeIds.join(",") === seedOrder.join(","),
+        `seed: expected persisted Todo order [${seedOrder}], got [${beforeIds}]`);
+
+      // Load-bearing precondition: both hidden cards must actually be absent from the DOM, or the
+      // drag below is an ordinary unfiltered drag and proves nothing about filtering.
+      const renderedInColumn = await page.$$eval(
+        '[data-testid="board-column-Todo-cards"] [data-task-id]',
+        (els) => els.map((el) => Number(el.getAttribute("data-task-id"))),
+      );
+      const expectedRendered = [keepA.id, keepB.id, keepD.id, keepE.id];
+      assert(renderedInColumn.join(",") === expectedRendered.join(","),
+        `the filtered Todo column must render exactly [A,B,D,E] = [${expectedRendered}], got [${renderedInColumn}]`);
+
+      await dragCardBefore(page,
+        `[data-testid="board-card-${keepE.id}"]`,
+        `[data-testid="board-card-${keepB.id}"]`);
+
+      const expectedOrder = [keepA.id, skipX.id, keepE.id, keepB.id, skipC.id, keepD.id];
+      const renderedIndexOrder = [keepA.id, keepE.id, skipX.id, keepB.id, skipC.id, keepD.id];
+      const afterTasks = await waitForProjectBoardOrder(filterProj.id, "Todo", expectedOrder);
+      const afterIds = afterTasks.map((task) => task.id);
+      // Say the wrong answer out loud. waitForProjectBoardOrder already failed if the order is not
+      // `expectedOrder`, but naming the rendered-index order here is what stops a future edit from
+      // quietly weakening the seed back into the shape where the two coincide.
+      assert(afterIds.join(",") !== renderedIndexOrder.join(","),
+        `the drag anchored on the RENDERED INDEX, not the persisted identity: got [${afterIds}]`);
+
+      for (const task of afterTasks.filter((task) => task.id !== keepE.id)) {
+        assert(task.sortOrder === beforeRanks.get(task.id),
+          `bystander ${task.id} SortOrder changed from ${beforeRanks.get(task.id)} to ${task.sortOrder}`);
+      }
+      // The moved card must take a rank strictly between the HIDDEN X and B — proof the server
+      // placed it against persisted neighbours, one of which the browser never rendered.
+      const movedAfter = afterTasks.find((task) => task.id === keepE.id);
+      assert(movedAfter.sortOrder > beforeRanks.get(skipX.id) && movedAfter.sortOrder < beforeRanks.get(keepB.id),
+        `moved card should rank between hidden X (${beforeRanks.get(skipX.id)}) and B ` +
+        `(${beforeRanks.get(keepB.id)}), got ${movedAfter.sortOrder}`);
+
+      // And the human's own confirmation: clear the filter and read the order off the board.
+      await page.locator('[data-testid="board-filter-clear"]').click();
+      await page.locator(`[data-testid="board-card-${skipC.id}"]`).waitFor({ state: "visible" });
+      await page.waitForFunction((ids) => {
+        const rendered = [...document.querySelectorAll('[data-testid="board-column-Todo-cards"] [data-task-id]')]
+          .map((el) => Number(el.getAttribute("data-task-id")));
+        return rendered.join(",") === ids.join(",");
+      }, expectedOrder, { timeout: 10000 });
+    });
+
     // The outline already has a live partial-DOM seam: expanded subtask cards are direct siblings
     // of task cards inside `.feature-tasks`, so evt.newIndex counts nodes the database task list
     // does not contain. Identity anchoring must scan past those non-task siblings.
@@ -852,6 +1227,356 @@ async function main() {
         domColumns.join(",") === expectedColumns.join(","),
         `columns must render in WorkStatus order — expected [${expectedColumns}], got [${domColumns}]`,
       );
+    });
+
+    // ── Regression guards (#322 phase 3): the two visible board defects ───────────────────────
+    // Both are LAYOUT bugs, so both are asserted on measured geometry in a real browser. Neither
+    // can be caught server-side, and neither shows up in a DOM/text assertion: the markup was
+    // always correct, it was the boxes that were wrong.
+    const visProj = await api("POST", "/api/projects", { name: `E2E Visual ${stamp}` });
+    // A deliberately long feature name: the ONLY input that exercises the ellipsis branch.
+    const visLongFeature = await api("POST", `/api/projects/${visProj.id}/features`,
+      { name: "Authentication & Session Lifecycle Management" });
+    const visShortFeature = await api("POST", `/api/projects/${visProj.id}/features`,
+      { name: "Dashboard" });
+
+    await test("Board card: a feature label is never shaved mid-glyph, and a long one really ellipsises (#322)", async () => {
+      // The defect this guards is SILENT. `.board-card-meta-label` used to be sized to exactly its
+      // own text (measured: box 54.797px === text 54.797px), so:
+      //   * the italic final glyph's INK leaned past the clip edge and was shaved — "Dashboard"
+      //     rendered as "Dashboarc", which reads as a different WORD, not as a truncation; and
+      //   * `text-overflow: ellipsis` could never fire, because nothing overflowed (scrollWidth
+      //     === clientWidth), so there was no "…" to signal the loss.
+      // Note what is NOT asserted: `scrollWidth > clientWidth` on a SHORT label. That is the
+      // condition the old markup already satisfied only for long names, and asserting it for short
+      // ones would demand the bug. The load-bearing measurement is the final glyph's HEADROOM
+      // against the clip edge, which is the thing the rasteriser actually consumes.
+      await api("POST", `/api/features/${visShortFeature.id}/tasks`,
+        { name: "Short label card", status: "Todo", priority: "Medium" });
+      await api("POST", `/api/features/${visLongFeature.id}/tasks`,
+        { name: "Long label card", status: "Todo", priority: "Critical" });
+      // AC4 names TWO viewports (1440x900 and 390x844) and the suite's default is 1280x720, so a
+      // single-viewport run silently drops half the criterion — and the halves genuinely differ:
+      // at the 180px column floor "Dashboard" DOES overflow and renders "Dashbo…", so the
+      // "renders the whole word" claim is width-dependent and has to be checked where it is made.
+      const restoreVis = page.viewportSize();
+      try {
+        for (const [vw, vh] of [[1440, 900], [390, 844]]) {
+          await page.setViewportSize({ width: vw, height: vh });
+          await page.goto(`${baseUrl}/project/${visProj.id}`);
+          await page.locator('[data-testid="board-column-Todo-cards"] .board-card-meta-label').first()
+            .waitFor({ state: "visible" });
+
+          const labels = await page.$$eval(".board-card-meta-label", (els) => els.map((el) => {
+            // Locate the text node EXPLICITLY rather than assuming `firstChild` is one. If the label's
+            // markup ever gains a wrapper (e.g. the text moves inside a <span> when CardMeta is
+            // extracted in a later phase), `firstChild` becomes an Element and `Range#setStart` throws
+            // IndexSizeError — the suite would then die with an opaque DOM exception instead of saying
+            // what actually broke. Offsets are taken from the TEXT NODE's own length, not
+            // `el.textContent.length`, which counts every descendant and would overrun a partial node.
+            // (Copilot, PR #335.)
+            const node = [...el.childNodes].find((n) => n.nodeType === Node.TEXT_NODE && n.nodeValue.trim() !== "");
+            if (!node) {
+              return { structureError: `no direct text node under .board-card-meta-label (found: ` +
+                `${[...el.childNodes].map((n) => n.nodeName).join(",") || "nothing"}) — the guard needs updating` };
+            }
+            const text = node.nodeValue;
+            // The FINAL glyph's own box, versus the box that clips it.
+            const last = document.createRange();
+            last.setStart(node, text.length - 1);
+            last.setEnd(node, text.length);
+            const cs = getComputedStyle(el);
+            const r = el.getBoundingClientRect();
+            // overflow:hidden clips at the PADDING box, so the trailing padding is real headroom.
+            const clipRight = r.right - parseFloat(cs.borderRightWidth);
+            const badge = el.parentElement.querySelector(".badge").getBoundingClientRect();
+            return {
+              text: text.trim(),
+              headroom: clipRight - last.getBoundingClientRect().right,
+              overflows: el.scrollWidth > el.clientWidth,
+              gutterToBadge: r.left - badge.right,
+              // Resolve the DECLARED side bearing and the root size, so the assertions below can be
+              // stated against what the stylesheet says rather than against a copied-out constant.
+              bearingPx: parseFloat(cs.paddingInlineEnd),
+              fontSizePx: parseFloat(cs.fontSize),
+              fontStyle: cs.fontStyle,
+              rootPx: parseFloat(getComputedStyle(document.documentElement).fontSize),
+              // The independently MEASURED constraint the bearing exists to clear: how far this
+              // italic font's final glyph paints PAST its own advance width. Canvas reports both
+              // (`actualBoundingBoxRight` is ink, `width` is advance), so the floor is derived from
+              // the font actually rendering on screen rather than copied from the design spec.
+              // Measured here: 0.771px for "Dashboard" at italic 11.2px Helvetica Neue, 1.400px for
+              // a "Wy" ending. This is exactly the quantity `Range`/`scrollWidth` cannot see, which
+              // is why the original bug reported "nothing is overflowing" while shaving a glyph.
+              inkOverhangPx: (() => {
+                const probe = document.createElement("canvas").getContext("2d");
+                probe.font = `${cs.fontStyle} ${cs.fontWeight} ${cs.fontSize} ${cs.fontFamily}`;
+                const m = probe.measureText(text);
+                // NOT clamped to >= 0. The SAME string upright measures -0.2289px, and that
+                // negative value is the only tell that the page is not in the state this guard
+                // thinks it is; clamping would erase it. The precondition below rejects it.
+                return m.actualBoundingBoxRight - m.width;
+              })(),
+            };
+          }));
+          assert(labels.length >= 2, `expected both seeded cards to render a feature label, saw ${labels.length}`);
+          // Surface a markup-shape change as a readable failure, not an IndexSizeError. (Copilot.)
+          const broken = labels.filter((l) => l.structureError);
+          assert(broken.length === 0, `label geometry could not be measured: ${broken[0]?.structureError}`);
+
+          const short = labels.find((l) => l.text === "Dashboard");
+          const long = labels.find((l) => l.text.startsWith("Authentication & Session"));
+          assert(short, `short-label card not rendered; saw ${JSON.stringify(labels.map((l) => l.text))}`);
+          assert(long, `long-label card not rendered; saw ${JSON.stringify(labels.map((l) => l.text))}`);
+
+          // (a) A label that FITS must clear its clip edge by the bearing the stylesheet DECLARES,
+          //     and (b) that declared bearing must clear the ink overhang actually MEASURED for this
+          //     font. Two assertions, because either one alone is worthless here:
+          //
+          //   * (a) alone is a TAUTOLOGY. For a non-overlapping right-aligned label,
+          //     `clipRight - lastGlyph.right` is arithmetically EQUAL to `padding-inline-end` — so
+          //     comparing headroom against `bearingPx` compares the padding with itself. Verified,
+          //     not assumed: written that way, weakening the token to `.02em` leaves the suite 27/27
+          //     GREEN with the glyph shaved again. (CodeRabbit proposed exactly this; it removes the
+          //     literal and the guard's power together.)
+          //   * (b) alone would not notice CSS failing to apply the padding at all.
+          //
+          // Neither hard-codes `0.15`. The old form did, which is the same guard-the-exemplar bug
+          // this file fixes twice elsewhere (`0.25 * rootPx` for the gutter, `--kf-board-drop-floor`
+          // read at runtime for the floor) — CodeRabbit was right that the literal had to go; it is
+          // the REPLACEMENT that has to be an independently measured quantity, not the declaration.
+          // PRECONDITION for (b): the label must actually be rendering ITALIC. Measured, this
+          // font overhangs +0.7711px italic but -0.2289px UPRIGHT for the same string -- so if the
+          // page loses `fst-italic` (Bootstrap's, not ours), the overhang goes negative and (b)
+          // degrades to `0 >= -0.2289` => true, passing on a completely unstyled page.
+          //
+          // Not hypothetical: it is the shape of the .NET 10 MapStaticAssets trap, where a
+          // stylesheet can return 200 with a body that parses to zero rules. Lose app.css ALONE
+          // and Bootstrap still supplies `fst-italic`, so the overhang stays +0.7711 and (b) bites
+          // correctly (`0 >= 0.7711` is false). Lose EVERY stylesheet and it does not. The suite
+          // still goes red either way -- `--kf-board-drop-floor` is then unresolved and the
+          // drop-floor guard's `Math.abs(NaN - x) <= 1` fails unconditionally -- but it would go
+          // red for the wrong reason while this assertion sat blind. (Reviewer, PR #335.)
+          assert(short.inkOverhangPx > 0,
+            `the feature label measures ${short.inkOverhangPx.toFixed(4)}px of ink past its advance ` +
+            `width at ${vw}x${vh} — non-positive means it is not rendering italic (computed ` +
+            `font-style: ${short.fontStyle}), so the page is not in the state this guard measures. ` +
+            `Suspect a stylesheet that loaded but parsed to zero rules; rebuild --no-incremental.`);
+          assert(short.headroom >= short.bearingPx - 0.05,
+            `feature label "${short.text}" clears its clip edge by ${short.headroom.toFixed(3)}px at ${vw}x${vh}, ` +
+            `but the stylesheet declares a ${short.bearingPx.toFixed(3)}px side bearing — the padding is not being applied`);
+          assert(short.bearingPx >= short.inkOverhangPx,
+            `the declared italic side bearing is ${short.bearingPx.toFixed(3)}px at ${vw}x${vh}, below the ` +
+            `${short.inkOverhangPx.toFixed(3)}px of ink this font paints past its advance width for ` +
+            `"${short.text}" — the final glyph will be shaved`);
+          // (b) A label that does NOT fit must genuinely overflow, so the ellipsis renders.
+          assert(long.overflows,
+            `long feature label "${long.text}" does not overflow its box at ${vw}x${vh}, so text-overflow:ellipsis cannot fire`);
+          // (c) Neither may collide with the priority badge (the badge is flex-shrink-0 for this).
+          // The gutter is Bootstrap's `ms-1` = 0.25rem. It is a MARGIN, so it is fixed against
+          // viewport — but it is REM, so it is not fixed against the root font size: a 12px root
+          // ("Small" in Chrome) makes it 3.00px and a hard-coded `>= 3.5` would false-RED on a user
+          // setting rather than on a regression. Derived from the measured root instead.
+          //
+          // Scope note, so this is not miscounted among the load-bearing guards: two in-flow flex
+          // siblings in DOM order cannot overlap, and this measures 4px on master, 4px with the fix,
+          // and 4-5px with the label rules reverted. It only catches `ms-1` being deleted from the
+          // markup. Kept for that, claimed as no more than that.
+          for (const l of labels) {
+            const expectedGutter = 0.25 * l.rootPx;
+            assert(l.gutterToBadge >= expectedGutter - 0.5,
+              `feature label "${l.text}" leaves ${l.gutterToBadge.toFixed(2)}px before its priority badge ` +
+              `at ${vw}x${vh}; the ms-1 gutter at a ${l.rootPx}px root should be ${expectedGutter.toFixed(2)}px`);
+          }
+        }
+      } finally {
+        // try/finally, not a bare restore: an assertion thrown mid-loop would otherwise leave the
+        // viewport at 390x844 for the ~17 tests that follow, turning one real failure into a
+        // screenful of spurious ones that bury it.
+        if (restoreVis) await page.setViewportSize(restoreVis);
+      }
+    });
+
+    await test("Board column: a 1-card column does not paint a dead region below its card (#322)", async () => {
+      // Every column used to stretch to the board's full height, so a column holding one 68px card
+      // painted ~545px of empty `bg-body-secondary` under it and the board read as EMPTY while work
+      // existed in it. Asserted against the epic's own AC5 threshold (200px), with a wide margin:
+      // the fix lands at ~36px, which is the drop floor doing its job, not residual dead space.
+      const deadProj = await api("POST", "/api/projects", { name: `E2E Dead ${stamp}` });
+      const deadFeature = await api("POST", `/api/projects/${deadProj.id}/features`, { name: "Dead Space Feature" });
+      await api("POST", `/api/features/${deadFeature.id}/tasks`, { name: "Only card", status: "Todo" });
+      await page.goto(`${baseUrl}/project/${deadProj.id}`);
+      await page.locator('[data-testid="board-column-Todo-cards"] .board-card').waitFor({ state: "visible" });
+
+      const geom = await page.evaluate(() => {
+        const col = document.querySelector('[data-testid="board-column-Todo"]');
+        const cards = [...col.querySelectorAll(".board-card")];
+        const last = cards[cards.length - 1].getBoundingClientRect();
+        const empty = document.querySelector('[data-testid="board-column-Review"]');
+        const emptyCards = document.querySelector('[data-testid="board-column-Review-cards"]');
+        // Resolve the DECLARED floor so the assertion below compares the rendered box against the
+        // token, instead of against a number copied out of it that can silently drift.
+        const rootPx = parseFloat(getComputedStyle(document.documentElement).fontSize);
+        const declared = getComputedStyle(document.documentElement)
+          .getPropertyValue("--kf-board-drop-floor").trim();
+        return {
+          cardCount: cards.length,
+          deadBelowLastCard: col.getBoundingClientRect().bottom - last.bottom,
+          columnH: col.getBoundingClientRect().height,
+          boardH: document.querySelector('[data-testid="kanban-board"]').getBoundingClientRect().height,
+          emptyColumnH: empty.getBoundingClientRect().height,
+          emptyDropTargetH: emptyCards.getBoundingClientRect().height,
+          declaredFloorPx: declared.endsWith("rem") ? parseFloat(declared) * rootPx : parseFloat(declared),
+          unusedBoardHeightBelowColumn:
+            document.querySelector('[data-testid="kanban-board"]').getBoundingClientRect().bottom
+            - col.getBoundingClientRect().bottom,
+          cardStridePx: (() => {
+            const c = cards[0];
+            return c.getBoundingClientRect().height + parseFloat(getComputedStyle(c).marginBottom);
+          })(),
+        };
+      });
+      assert(geom.cardCount === 1, `guard needs exactly one card to be meaningful, saw ${geom.cardCount}`);
+      assert(geom.deadBelowLastCard < 200,
+        `a 1-card column paints ${geom.deadBelowLastCard.toFixed(0)}px of dead space below its last card (limit 200px)`);
+      // The column must genuinely be shorter than the board, not merely under the threshold.
+      //
+      // `columnH < boardH` was a TAUTOLOGY as seeded: under `align-self: stretch` a 1-card column
+      // measures 470.6 against a 486.6 board, and the 16px difference is just the board's own
+      // `p-2`, so it could not fail in any configuration. Stated instead as the property the fix
+      // actually creates — a 1-card column leaves most of the board's height UNUSED — which is
+      // ~8px (the padding) under stretch and hundreds of px with the fix.
+      assert(geom.unusedBoardHeightBelowColumn > 100,
+        `a 1-card column leaves only ${geom.unusedBoardHeightBelowColumn.toFixed(0)}px of board height ` +
+        `unused below it (column ${geom.columnH.toFixed(0)}px / board ${geom.boardH.toFixed(0)}px) — it is still stretching`);
+      // …and the cure must not be worse: an EMPTY column has to stay a real drop target (#290).
+      // Two separate holes, because a single fixed threshold closes neither. (CodeRabbit, PR #335.)
+      //   (a) the RENDERED floor must match the DECLARED token — catches CSS breaking the floor;
+      assert(Math.abs(geom.emptyDropTargetH - geom.declaredFloorPx) <= 1,
+        `an empty column's drop target renders ${geom.emptyDropTargetH.toFixed(0)}px but ` +
+        `--kf-board-drop-floor declares ${geom.declaredFloorPx.toFixed(0)}px`);
+      //   (b) the DECLARED token must still clear one card's stride — catches the token itself being
+      //       quietly shrunk below the constraint it was derived from, which (a) alone would let
+      //       through with both numbers agreeing on a uselessly small target.
+      assert(geom.declaredFloorPx >= geom.cardStridePx,
+        `--kf-board-drop-floor is ${geom.declaredFloorPx.toFixed(0)}px, below one card's stride of ` +
+        `${geom.cardStridePx.toFixed(0)}px — an empty column no longer offers room for the card it asks for`);
+    });
+
+    await test("Board column: the empty-state placeholder never paints outside its column (#322)", async () => {
+      // The half of the dead-space fix that had NO coverage, and which shipped a real defect.
+      //
+      // The placeholder's natural height is a function of COLUMN WIDTH x status-name length: 76px
+      // at a 214px column, 97px at 182px, and 118px at the 180px `min-width` floor, where both the
+      // "In Progress" heading and the placeholder text wrap hardest. While every column stretched
+      // to ~470px that variation was invisible. Content-height columns exposed it: at 1024x768 the
+      // white dashed box hung 14px BELOW the grey column background (column bottom 401.75,
+      // placeholder bottom 415.75), because the placeholder was an `inset: 0` absolutely-positioned
+      // overlay and so could never push the column taller, only spill out of it.
+      //
+      // This runs at 1024x768 ON PURPOSE. It is GREEN at 1280x720 and 1440x900 — the default
+      // viewport the other guards use — so a fixed-viewport suite cannot see it at all.
+      //
+      // Paired with a dead-space assertion at the SAME viewport, because containment is trivially
+      // satisfiable by making every column taller again — which would trade this defect for the
+      // one the whole PR exists to remove.
+      const phProj = await api("POST", "/api/projects", { name: `E2E Placeholder ${stamp}` });
+      const phFeature = await api("POST", `/api/projects/${phProj.id}/features`, { name: "Placeholder Feature" });
+      await api("POST", `/api/features/${phFeature.id}/tasks`, { name: "Only card", status: "Todo" });
+
+      const restore = page.viewportSize();
+      await page.setViewportSize({ width: 1024, height: 768 });
+      try {
+        await page.goto(`${baseUrl}/project/${phProj.id}`);
+        await page.locator('[data-testid="board-column-Todo-cards"] .board-card').waitFor({ state: "visible" });
+
+        const g = await page.evaluate(() => {
+          const rows = [];
+          for (const col of document.querySelectorAll(".kanban-column")) {
+            const ph = col.querySelector(".kanban-column-empty");
+            if (!ph || !ph.firstElementChild) continue;
+            const cr = col.getBoundingClientRect();
+            rows.push({
+              status: col.getAttribute("data-testid").replace("board-column-", ""),
+              columnWidth: cr.width,
+              columnBottom: cr.bottom,
+              // the PAINTED box, not the inset:0 wrapper — the wrapper can never report a spill
+              placeholderBottom: ph.firstElementChild.getBoundingClientRect().bottom,
+            });
+          }
+          const todo = document.querySelector('[data-testid="board-column-Todo"]');
+          const cards = [...todo.querySelectorAll(".board-card")];
+          return {
+            rows,
+            deadBelowLastCard: todo.getBoundingClientRect().bottom - cards[cards.length - 1].getBoundingClientRect().bottom,
+          };
+        });
+
+        assert(g.rows.length > 0, "no empty column rendered a placeholder — the guard has nothing to measure");
+        for (const r of g.rows) {
+          assert(r.placeholderBottom <= r.columnBottom + 0.5,
+            `the "${r.status}" empty-state placeholder paints ` +
+            `${(r.placeholderBottom - r.columnBottom).toFixed(2)}px below its column at a ` +
+            `${r.columnWidth.toFixed(0)}px column width (1024x768)`);
+        }
+        // …and containment must not have been bought by re-growing the columns.
+        assert(g.deadBelowLastCard < 200,
+          `containment came at the cost of ${g.deadBelowLastCard.toFixed(0)}px of dead space below a ` +
+          `1-card column at 1024x768 — the defect this PR removes has been traded, not fixed`);
+      } finally {
+        if (restore) await page.setViewportSize(restore);
+      }
+    });
+
+    await test("Board column: a column taller than the board scrolls itself, not the board (#322)", async () => {
+      // The other unguarded half. `.kanban-column { max-height: 100% }` caps a long column and
+      // `.kanban-column-body { min-height: 0 }` is the release valve that lets
+      // `.board-column-cards`'s `overflow-auto` actually engage. Every other guard seeds <= 2 cards,
+      // so NEITHER was exercised: reverting `max-height` (column grows to 1038px) or the
+      // `min-height` (cards box 993px inside a 651px column) brings back the board's second
+      // vertical scrollbar with every other assertion still green.
+      const tallProj = await api("POST", "/api/projects", { name: `E2E Tall ${stamp}` });
+      const tallFeature = await api("POST", `/api/projects/${tallProj.id}/features`, { name: "Tall Feature" });
+      for (let i = 0; i < 14; i++) {
+        await api("POST", `/api/features/${tallFeature.id}/tasks`,
+          { name: `Tall probe ${i} with a deliberately long wrapping title`, status: "Todo", sortOrder: i * 10 });
+      }
+      await page.goto(`${baseUrl}/project/${tallProj.id}`);
+      await page.locator('[data-testid="board-column-Todo-cards"] .board-card').first().waitFor({ state: "visible" });
+
+      const g = await page.evaluate(() => {
+        const board = document.querySelector('[data-testid="kanban-board"]');
+        const col = document.querySelector('[data-testid="board-column-Todo"]');
+        const cards = document.querySelector('[data-testid="board-column-Todo-cards"]');
+        const before = cards.scrollTop;
+        cards.scrollTop = 99999;
+        const maxScroll = cards.scrollTop;
+        cards.scrollTop = before;
+        return {
+          cardCount: col.querySelectorAll(".board-card").length,
+          columnBottom: col.getBoundingClientRect().bottom,
+          boardBottom: board.getBoundingClientRect().bottom,
+          cardsClientH: cards.clientHeight,
+          cardsScrollH: cards.scrollHeight,
+          maxInternalScroll: maxScroll,
+          boardScrollH: board.scrollHeight,
+          boardClientH: board.clientHeight,
+        };
+      });
+
+      assert(g.cardCount >= 10, `guard needs a genuinely tall column, saw ${g.cardCount} cards`);
+      // the cap: the column may not grow past the board
+      assert(g.columnBottom <= g.boardBottom + 1,
+        `a ${g.cardCount}-card column overflows the board by ${(g.columnBottom - g.boardBottom).toFixed(0)}px — ` +
+        `max-height is not capping it`);
+      // the release valve: the cards box must actually be scrollable, not merely overflowing
+      assert(g.cardsScrollH > g.cardsClientH,
+        `the cards container is ${g.cardsClientH}px for ${g.cardsScrollH}px of cards — it is not bounded, so it cannot scroll`);
+      assert(g.maxInternalScroll > 0,
+        `the cards container reports ${g.maxInternalScroll}px of scroll range — overflow-auto never engaged`);
+      // and the whole point: the board itself must NOT gain a second vertical scrollbar
+      assert(g.boardScrollH <= g.boardClientH + 1,
+        `the board scrolls vertically (${g.boardScrollH}px in ${g.boardClientH}px) — the column overflow escaped to it`);
     });
 
     // ── Regression guard (#294): a drag must not corrupt the RENDER ───────────────────────────
@@ -1084,6 +1809,60 @@ async function main() {
     // The ideas board is the harder case — a moved idea can land ANYWHERE in the destination's
     // canonical order (`Priority desc, CreatedAt desc`), not just at the end — so the seed makes
     // the dragged card sort FIRST in Archived, ahead of the bystander already sitting there.
+    // The empty-state placeholder had ZERO coverage before #322 phase 3 — `kanban-column-empty`,
+    // `empty-column-*` and `add-idea-New-button` appeared nowhere in this suite — which is exactly
+    // why both #290's overlay contract and the placeholder's own geometry could break silently.
+    await test("Ideas board: an empty column's add affordance is contained, hit-testable, and opens the modal (#322/#290)", async () => {
+      const parked = await api("POST", "/api/ideas", { title: `E2E Empty ${stamp}` });
+      await api("PATCH", `/api/ideas/${parked.id}`, { status: "Triaging" });   // vacate New
+      await page.goto(`${baseUrl}/ideas`);
+      await page.locator('[data-testid="add-idea-New-button"]').waitFor({ state: "visible" });
+
+      const g = await page.evaluate(() => {
+        const col = document.querySelector('[data-testid="board-column-New"]');
+        const ph = col.querySelector(".kanban-column-empty");
+        const btn = document.querySelector('[data-testid="add-idea-New-button"]');
+        const cr = col.getBoundingClientRect(), br = btn.getBoundingClientRect();
+        return {
+          // #290: the placeholder must be a SIBLING of the sortable container, never a DOM child —
+          // a child with no data-task-id makes kanbanflow.js parseInt(undefined) => NaN on drag.
+          placeholderIsChildOfSortable: !!ph.closest(".board-column-cards"),
+          sortableNonCardChildren: [...col.querySelector(".board-column-cards").children]
+            .filter((n) => !n.classList.contains("board-card")).length,
+          placeholderPointerEvents: getComputedStyle(ph).pointerEvents,
+          buttonPointerEvents: getComputedStyle(btn).pointerEvents,
+          // the placeholder must not spill its column (the #322 phase 3 blocker)
+          overhang: ph.firstElementChild.getBoundingClientRect().bottom - cr.bottom,
+          btnH: br.height, btnW: br.width,
+          // is the button the topmost thing at its own centre? (paint order / click swallowing)
+          topmostAtCentre: (() => {
+            const el = document.elementFromPoint(br.left + br.width / 2, br.top + br.height / 2);
+            return el === btn || btn.contains(el);
+          })(),
+        };
+      });
+
+      assert(!g.placeholderIsChildOfSortable, "#290 broken: the placeholder is now a DOM child of .board-column-cards");
+      assert(g.sortableNonCardChildren === 0,
+        `#290 broken: the SortableJS container has ${g.sortableNonCardChildren} non-card child element(s)`);
+      assert(g.placeholderPointerEvents === "none",
+        `#290 broken: the placeholder is ${g.placeholderPointerEvents}, so a drop aimed at an empty column cannot fall through`);
+      assert(g.buttonPointerEvents === "auto",
+        `the add-idea button re-enables pointer events (pe-auto); it reports ${g.buttonPointerEvents}`);
+      assert(g.overhang <= 0.5,
+        `the /ideas empty placeholder paints ${g.overhang.toFixed(2)}px below its column`);
+      assert(g.btnH >= 24 && g.btnW >= 24,
+        `the add-idea target is ${g.btnW.toFixed(0)}x${g.btnH.toFixed(0)}px, under WCAG 2.5.8's 24x24`);
+      assert(g.topmostAtCentre,
+        "something paints above the add-idea button at its own centre — the click would be swallowed");
+
+      // …and it must actually WORK, not merely be positioned correctly.
+      await page.locator('[data-testid="add-idea-New-button"]').click();
+      await page.locator('[data-testid="idea-modal"]').waitFor({ state: "visible" });
+      await page.locator('[data-testid="idea-cancel-button"]').click();
+      await page.locator('[data-testid="idea-modal"]').waitFor({ state: "hidden" });
+    });
+
     await test("Ideas board: dragging ONE card moves exactly one card, and every badge matches its cards", async () => {
       // Clean slate: the seed IS the board, so every assertion below is exact.
       for (const i of await api("GET", "/api/ideas?limit=500")) {
@@ -1688,6 +2467,7 @@ async function main() {
     await api("DELETE", `/api/projects/${orderProj.id}`).catch(() => {});
     await api("DELETE", `/api/projects/${dragProj.id}`).catch(() => {});
     await api("DELETE", `/api/projects/${partialProj.id}`).catch(() => {});
+    await api("DELETE", `/api/projects/${filterProj.id}`).catch(() => {});
     await api("DELETE", `/api/projects/${outlineProj.id}`).catch(() => {});
     // delete the modal-created project too
     const all = await api("GET", "/api/projects");

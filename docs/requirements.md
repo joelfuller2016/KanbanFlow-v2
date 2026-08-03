@@ -226,6 +226,7 @@ The agent can navigate and read every entity in the graph.
 | R-1.4 | All list endpoints support `?limit=&offset=` paging. | ❌ Only `/activity` clamps `limit` to 500. Everything else is unbounded. |
 | R-1.5 | Search endpoint: `GET /api/projects/{id}/search?q=...` returns matches across project descriptions, task descriptions, comments, requirements. | ❌ Not implemented. |
 | R-1.6 | Per-task context endpoint: `GET /api/tasks/{id}/context` returns task + criteria + subtasks recursively + dependencies (resolved to names + status) + recent comments + related requirements + recent activity, in one call. | ⚠️ `GET /api/tasks/{id}` returns subtasks + criteria but not comments/deps/activity. Consolidate. |
+| R-1.7 | Completion is computed once, server-side, and served as a `progress` object (`completed`, `inProgress`, `blocked`, `total`, `percentComplete`) at project and feature level on `GET /api/projects/{id}` and `GET /api/projects/{id}/context`, so no surface recomputes it. Feature progress is recursive (own tasks + all descendant features'). | ✅ Shared `Services/ProjectProgressCalculator` (#125). MCP `get_project_context` does not yet carry it. |
 
 **Acceptance criteria:**
 - Every entity has a working `GET /api/...` route.
