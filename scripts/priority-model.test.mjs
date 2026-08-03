@@ -59,32 +59,57 @@ test("AC7: a severity word inside the title does not leak into the priority", ()
 
 // --- 2. Labels: the pre-#355 path must be byte-identical ----------------------------------
 
+// A FROZEN label -> priority corpus: every label vocabulary the six DEFAULT_REPOS actually
+// carry, plus topical decoys, with the value master's `priorityFromLabel` returned for each.
+//
+// Frozen as literals on purpose. The obvious way to write the differential below is to call the
+// live `priorityFromLabel()` on both sides — but then a regression IN that function produces the
+// same wrong answer on both sides and the differential stays green (CodeRabbit, PR #360). These
+// literals are the independent oracle that closes that hole.
+//
+// `P4`/`P9` are in the corpus for a specific reason: without them, widening the label regex
+// `^p([0-3])\b` to `^p([0-9])\b` is inert over this vocabulary — every P0-P3 label still resolves
+// the same way, so the mutation is undetectable by construction rather than by a gap in the
+// oracle. With them, the widened regex returns `undefined` for `P4` where the frozen value is
+// `null`, and the mutation goes red. An oracle you cannot make fail is not an oracle.
+const LEGACY_LABEL_PRIORITY = new Map([
+  ["P0", "Critical"], ["P1", "High"], ["P2", "Medium"], ["P3", "Low"],
+  ["P4", null], ["P9", null], ["P4-urgent", null],
+  ["P0-critical", "Critical"], ["P1-high", "High"], ["P2-medium", "Medium"], ["P3-low", "Low"],
+  ["priority:critical", "Critical"], ["priority:high", "High"],
+  ["priority:medium", "Medium"], ["priority:low", "Low"],
+  ["priority-high", "High"], ["priority-medium", "Medium"], ["priority-critical", "Critical"],
+  ["high-priority", "High"], ["medium-priority", "Medium"], ["low-priority", "Low"],
+  ["critical", "Critical"], ["high", "High"], ["medium", "Medium"], ["low", "Low"],
+  ["bug", null], ["enhancement", null], ["epic", null], ["tech-debt", null],
+  ["documentation", null], ["critical-path", null], ["size/medium", null], ["slow", null],
+]);
+
 // The pre-#355 implementation, transcribed verbatim from
-// `git show origin/master:scripts/portfolio-sync.mjs` (lines 275-283). AC3 says label-carrying
-// repos must behave exactly as before; a hardcoded expectation only asserts that, so keep the
-// old function here and DIFFERENTIAL against it. This is what makes AC3 self-verifying.
+// `git show origin/master:scripts/portfolio-sync.mjs` (lines 275-283), except that it reads the
+// frozen corpus instead of the live label parser. AC3 says label-carrying repos must behave
+// exactly as before; a hardcoded expectation only asserts that, so DIFFERENTIAL against this.
 function oldDerivePriority(issue) {
   let best = null;
   for (const label of issue.labels || []) {
-    const level = priorityFromLabel(label.name);
+    const level = LEGACY_LABEL_PRIORITY.get(label.name) ?? null;
     if (level && (best === null || SEVERITY_RANK[level] < SEVERITY_RANK[best])) best = level;
   }
   return best ?? "Medium";
 }
 
+test("the frozen corpus still describes the live label parser", () => {
+  // Guards the oracle itself: if `priorityFromLabel` changes, this names the label that moved
+  // rather than letting the differential below quietly compare two copies of the new behaviour.
+  for (const [label, expected] of LEGACY_LABEL_PRIORITY) {
+    assert.equal(priorityFromLabel(label), expected, `label "${label}" changed meaning`);
+  }
+});
+
 test("AC3 (differential): with no title prefix, the new chain matches the OLD function exactly", () => {
-  // Every label vocabulary the six DEFAULT_REPOS actually carry, plus topical decoys.
-  const vocab = [
-    "P0", "P1", "P2", "P3", "P0-critical", "P1-high", "P2-medium", "P3-low",
-    "priority:critical", "priority:high", "priority:medium", "priority:low",
-    "priority-high", "priority-medium", "priority-critical",
-    "high-priority", "medium-priority", "low-priority",
-    "critical", "high", "medium", "low",
-    "bug", "enhancement", "epic", "tech-debt", "documentation", "critical-path", "size/medium", "slow",
-  ];
   let compared = 0;
-  for (const a of vocab) {
-    for (const b of vocab) {
+  for (const a of LEGACY_LABEL_PRIORITY.keys()) {
+    for (const b of LEGACY_LABEL_PRIORITY.keys()) {
       // No milestone: isolates the label tier, which is the tier AC3 is about.
       const i = issue({ title: "a title with no prefix", labels: [a, b] });
       assert.equal(derivePriority(i), oldDerivePriority(i), `labels [${a}, ${b}] diverged`);
