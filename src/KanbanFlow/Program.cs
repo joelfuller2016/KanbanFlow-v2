@@ -17,8 +17,11 @@ var builder = WebApplication.CreateBuilder(args);
 // fresh empty one without a word. The resolution is registered so Settings.razor renders THIS
 // object rather than re-deriving the rule — the UI and the boot log below cannot disagree.
 //
-// DbPathResolverTests asserts this file names neither the working-directory API nor the env var,
-// so the rule cannot quietly grow a second copy again. Keep resolution logic inside DbPathResolver.
+// The rule lives in DbPathResolver and nowhere else — do not re-derive it here or in Settings.razor.
+// DbPathResolverTests enforces that mechanically by asserting this file contains neither the
+// working-directory API's identifier nor the env var as a quoted string literal, so mentioning
+// either by name in a comment will fail the build's test gate. Describe the behaviour in prose
+// instead, as above.
 var dbResolution = DbPathResolver.Resolve(builder.Environment.ContentRootPath);
 builder.Services.AddSingleton(dbResolution);
 

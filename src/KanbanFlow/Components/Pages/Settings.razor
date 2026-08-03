@@ -36,7 +36,10 @@
                     <dt class="col-5 text-muted">DB source</dt>
                     <dd class="col-7">
                         <span class="badge bg-secondary">@DbResolution.Source</span>
-                        <span class="text-muted ms-1">@(DbResolution.Existed ? "opened existing" : "will create new")</span>
+                        @* Existed is captured at RESOLUTION time, before EnsureCreated() runs — so the
+                           honest phrasing is what was FOUND then. Not "will create new": by the time
+                           this page can render, startup has completed and the file already exists. *@
+                        <span class="text-muted ms-1">@(DbResolution.Existed ? "opened existing" : "none found — created at startup")</span>
                     </dd>
 
                     @foreach (var shadowed in DbResolution.ShadowedPaths)

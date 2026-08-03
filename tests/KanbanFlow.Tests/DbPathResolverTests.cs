@@ -215,6 +215,22 @@ public sealed class DbPathResolverTests : IDisposable
     }
 
     [Fact]
+    public void Probe_DoesNotReportOneFileAsShadowingItself_WhenCandidatesDifferOnlyByCase()
+    {
+        // The same directory, spelled with different casing. On Windows that is one file, and
+        // de-duplication must collapse it or a single database warns about itself. On a
+        // case-sensitive filesystem the upper-cased directory simply does not exist, so nothing is
+        // found there either — the assertion holds on both, which is the point: the de-duplication
+        // must never be the thing that decides a real second database is invisible.
+        var app = NewDirectory("app");
+        WriteDatabase(app);
+
+        var resolution = DbPathResolver.Resolve(null, app.ToUpperInvariant(), app, app);
+
+        Assert.Empty(resolution.ShadowedPaths);
+    }
+
+    [Fact]
     public void Probe_ChecksTheContentRoot_WhenItDiffersFromTheLaunchDirectory()
     {
         var launch = NewDirectory("launch");

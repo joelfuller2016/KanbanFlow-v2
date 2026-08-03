@@ -51,6 +51,21 @@ public static class DbPathResolver
     public const string SourceDefault = "default";
 
     /// <summary>
+    /// How two candidate paths are compared when de-duplicating the probe list.
+    /// </summary>
+    /// <remarks>
+    /// Windows paths are case-insensitive, so the launch directory and the content root must collapse
+    /// to one candidate or a single database would be reported as shadowing itself. Linux paths are
+    /// NOT case-insensitive: collapsing there would merge two genuinely distinct files and silently
+    /// drop one from the probe — the failure this whole type exists to prevent. Erring toward
+    /// <see cref="StringComparer.Ordinal"/> off Windows is the safe direction, because its worst case
+    /// is a redundant warning about one file, never a database dropped. (macOS is usually
+    /// case-insensitive but can be formatted either way; the conservative choice is correct there too.)
+    /// </remarks>
+    internal static StringComparer PathComparer =>
+        OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
+
+    /// <summary>
     /// Resolve against the live process: the environment variable, the launch directory, the host's
     /// content root, and the application's own directory.
     /// </summary>
@@ -105,11 +120,6 @@ public static class DbPathResolver
         //    once its own file exists; (d) nothing is destroyed or migrated, and the adoption is
         //    stated out loud at boot and on the Settings page rather than inferred. KANBANFLOW_DB_PATH
         //    remains the explicit way to pin one. Revisit if this actually surprises anyone.
-        // On case-sensitive filesystems (Linux), two paths that differ only by case are genuinely
-        // distinct files — OrdinalIgnoreCase would collapse them and hide a shadowed database.
-        var pathComparer = Path.DirectorySeparatorChar == '/'
-            ? StringComparer.Ordinal
-            : StringComparer.OrdinalIgnoreCase;
         var candidates = new List<string>();
         foreach (var directory in new[] { currentDirectory, contentRootPath, appDirectory })
         {
@@ -117,7 +127,7 @@ public static class DbPathResolver
                 continue;
 
             var candidate = Path.GetFullPath(Path.Combine(directory, FileName));
-            if (!candidates.Contains(candidate, pathComparer))
+            if (!candidates.Contains(candidate, PathComparer))
                 candidates.Add(candidate);
         }
 
