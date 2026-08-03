@@ -10,21 +10,19 @@ using OpenAI;
 
 var builder = WebApplication.CreateBuilder(args);
 
-// Database
-var dbPath = Environment.GetEnvironmentVariable("KANBANFLOW_DB_PATH");
-if (string.IsNullOrWhiteSpace(dbPath))
-{
-    dbPath = Path.Combine(Environment.CurrentDirectory, "kanbanflow.db");
-}
-else
-{
-    dbPath = Path.GetFullPath(dbPath);
-    var dbDirectory = Path.GetDirectoryName(dbPath);
-    if (!string.IsNullOrWhiteSpace(dbDirectory))
-        Directory.CreateDirectory(dbDirectory);
-}
+// Database (#354): DbPathResolver owns which file is opened — KANBANFLOW_DB_PATH first, then a
+// probe for an existing kanbanflow.db, then a launch-directory-independent default. Resolving
+// against the process's working directory here (and again in Settings.razor) meant the same build
+// opened a different database depending on where it was started from, and EnsureCreated() made a
+// fresh empty one without a word. The resolution is registered so Settings.razor renders THIS
+// object rather than re-deriving the rule — the UI and the boot log below cannot disagree.
+//
+// DbPathResolverTests asserts this file names neither the working-directory API nor the env var,
+// so the rule cannot quietly grow a second copy again. Keep both out of the prose here too.
+var dbResolution = DbPathResolver.Resolve(builder.Environment.ContentRootPath);
+builder.Services.AddSingleton(dbResolution);
 
-builder.Services.AddDbContextFactory<AppDbContext>(options => options.UseSqlite($"Data Source={dbPath}"));
+builder.Services.AddDbContextFactory<AppDbContext>(options => options.UseSqlite($"Data Source={dbResolution.Path}"));
 
 // Audit-aware service layer (issue #88: route REST + UI mutations through one place)
 builder.Services.AddScoped<ITaskService, TaskService>();
@@ -55,7 +53,7 @@ builder.Services.AddScoped<ITestRunnerService, TestRunnerService>();
 builder.Services.AddSingleton<IMarkdownRenderer, MarkdownRenderer>();
 
 // LLM foundation (#218): provider-agnostic chat completions via ZeroRouter's OpenAI-compatible
-// API. Config is read from the environment the same way KANBANFLOW_DB_PATH is above (see
+// API. Config is read from the environment the same way DbPathResolver reads the database path (see
 // LlmOptions.FromEnvironment). The IChatClient is constructed once from the OpenAI connector and
 // is thread-safe + stateless, so it and the ILlmClient wrapper are singletons — the OpenAI client
 // pools connections internally, so we never create a per-call HttpClient (no socket exhaustion).
@@ -119,6 +117,26 @@ builder.Services.AddCors(options =>
     options.AddDefaultPolicy(policy => policy.AllowAnyOrigin().AllowAnyMethod().AllowAnyHeader()));
 
 var app = builder.Build();
+
+// Name the database that was opened, before anything touches it (#354). An app that says which
+// file it is using turns "my data is gone" into "wrong directory"; one that stays silent cannot be
+// diagnosed at all. Information level, unconditional — the path is not a secret (open-access
+// charter), and Settings.razor shows the same resolution in the UI.
+app.Logger.LogInformation(
+    "[db] {FileName} -> {Path} (source={Source}, existing={Existing})",
+    DbPathResolver.FileName, dbResolution.Path, dbResolution.Source,
+    // Lower-cased deliberately: the line is read by humans and grepped by scripts, and
+    // bool.ToString() would render "True". Issue #354 specifies existing=true|false.
+    dbResolution.Existed ? "true" : "false");
+
+// A second, unopened database at another candidate is the "empty board" trap itself. Say so and
+// carry on: a warning, never an error — refusing to start would be a roadblock.
+foreach (var shadowed in dbResolution.ShadowedPaths)
+{
+    app.Logger.LogWarning(
+        "[db] another {FileName} exists at {Path} and was NOT opened. Set {EnvironmentVariable} to choose it explicitly.",
+        DbPathResolver.FileName, shadowed, DbPathResolver.EnvironmentVariableName);
+}
 
 // Create DB + seed
 using (var scope = app.Services.CreateScope())

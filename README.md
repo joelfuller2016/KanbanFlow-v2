@@ -355,7 +355,23 @@ curl -s http://127.0.0.1:5123/api/admin/health
 #  "openApiUrl":"/openapi.json"}
 ```
 
-Custom database location:
+**Which database it opened.** The app names the file it is using, on every boot:
+
+```
+info: KanbanFlow[0]
+      [db] kanbanflow.db -> C:\...\src\KanbanFlow\kanbanflow.db (source=probe, existing=true)
+```
+
+`source` says how the file was chosen — `env` (`KANBANFLOW_DB_PATH` was set), `probe` (an existing
+`kanbanflow.db` was found) or `default` (nothing existed, so a new one was created). The same line
+appears on the Settings page. Resolution order, with `KANBANFLOW_DB_PATH` unset: the directory the
+app was launched from, then the content root, then the application's own directory — the first one
+that already holds a `kanbanflow.db` wins, and if nothing does, one is created beside the
+application. That last step is what makes the location independent of where you started the app
+from; if a second `kanbanflow.db` exists at another candidate, a warning names it rather than
+silently opening an empty board (#354).
+
+Custom database location — this override wins over every candidate above:
 
 ```powershell
 $env:KANBANFLOW_DB_PATH = "C:\path\to\my-projects.db"
