@@ -71,6 +71,14 @@ public sealed class MarkdownRenderer : IMarkdownRenderer
         // dynsrc, formaction, href, lowsrc, src), so it can never fire for a URL value.
         // DO NOT add a URI attribute to TaskListCheckboxAttributes: that set feeds both this
         // cancel and the PostProcessDom whitelist below, so one edit would widen both.
+        //
+        // ACCEPTED LOSS, decided not overlooked: because the cancel is scoped to <input>, a raw
+        // <ol type="A"> now loses its marker style (rendered "A." before, "1." after) - `type` was
+        // in the 95 defaults, so it used to survive on <ol>. Kept as a loss: markdown has no syntax
+        // for <ol type>, it can only arrive as raw HTML, and restoring it would mean a second
+        // per-tag exception in a mechanism whose whole point is a closed set. It is also milder
+        // than the class/id losses this renderer already accepts (dead heading anchors, no
+        // fenced-code highlighting). Pinned by OrderedListTypeAttribute_IsStripped_AcceptedLoss.
         _sanitizer.RemovingAttribute += (_, e) =>
         {
             if (e.Tag.LocalName.Equals("input", StringComparison.OrdinalIgnoreCase)

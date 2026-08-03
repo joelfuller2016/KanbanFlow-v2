@@ -340,8 +340,42 @@ public sealed class MarkdownRendererTests
     {
         var html = Render(markdown);
 
+        // Both kept attributes are asserted here rather than leaning on the Markdig fixture for
+        // `disabled`: this theory owns the "keeps its own" half of the whitelist, so it should fail
+        // on its own if either name is dropped from TaskListCheckboxAttributes.
+        Assert.Contains("disabled", html, StringComparison.Ordinal);
         Assert.Contains("type=\"checkbox\"", html, StringComparison.Ordinal);
         Assert.DoesNotContain(forbidden, html, StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// ACCEPTED LOSS, recorded so it is a decision rather than an unnoticed side effect (#340).
+    /// <c>type</c> is now globally disallowed and restored only on <c>&lt;input&gt;</c>, so a raw
+    /// <c>&lt;ol type="A"&gt;</c> loses its marker style: it rendered <c>A. First</c> before this
+    /// change and renders <c>1. First</c> after. Measured both directions - re-adding <c>type</c>
+    /// to <c>AllowedAttributes</c> turns this test RED with <c>type="A"</c> back in the output,
+    /// which is exactly the pre-#340 behaviour.
+    ///
+    /// Kept as a loss on purpose. Markdown has no syntax for <c>&lt;ol type&gt;</c> - it can only
+    /// arrive as raw HTML - and restoring it would mean a second per-tag exception in a mechanism
+    /// whose entire point is a closed set. It is also strictly less costly than the losses this
+    /// file already accepts (see <see cref="BenignMarkdown_RendersExactly"/>: dead heading anchors
+    /// and no fenced-code syntax highlighting, both from <c>class</c>/<c>id</c> stripping). The
+    /// degradation here is cosmetic and nothing in the app emits <c>&lt;ol type&gt;</c>.
+    ///
+    /// If a future change decides ordered-list markers are worth a per-tag exception, this test
+    /// SHOULD fail - update it deliberately, do not read the failure as a regression.
+    /// </summary>
+    [Theory]
+    [InlineData("<ol type=\"A\"><li>First</li></ol>")]
+    [InlineData("<ol type=\"i\"><li>First</li></ol>")]
+    public void OrderedListTypeAttribute_IsStripped_AcceptedLoss(string markdown)
+    {
+        var html = Render(markdown);
+
+        Assert.DoesNotContain("type", html, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("<ol>", html, StringComparison.Ordinal);
+        Assert.Contains("First", html, StringComparison.Ordinal);
     }
 
     // ── Empty input contract ────────────────────────────────────────────────────────────────────
