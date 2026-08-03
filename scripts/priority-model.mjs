@@ -64,10 +64,11 @@ export function priorityFromTitle(title) {
 // place as the last real signal because the #331 triage took unmilestoned from 44 -> 2, so it
 // now covers 114 of 116 open issues.
 //
-// The mapping is not invented here — it is the same M1..M7 -> P0..P3 table the backlog log book
-// ranks with, copied because that generator does not exist on master yet (#339). This is the
-// definition; #364 tracks pointing the generator at it so the copy goes away. Until it does,
-// a change here that is not mirrored there makes the board and the log book disagree.
+// This table is THE definition. There is no second copy to keep in step: #364 was decided in
+// favour of one rule for the whole repo, so the backlog log book imports these bands rather than
+// declaring its own, and it does not adjust the result by topical label (#355 — `bug` is a kind,
+// not an urgency). Edit here and every consumer moves with you; add a consumer by importing this,
+// never by transcribing it.
 const MILESTONE_BANDS = new Map([
   ["M1: Correctness & Audit Trail", "Critical"], // P0
   ["M2: Tech-debt & Foundation", "High"],        // P1
