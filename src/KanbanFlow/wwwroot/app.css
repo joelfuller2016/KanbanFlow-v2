@@ -312,6 +312,180 @@ h1:focus {
     margin-bottom: 0;
 }
 
+/* ═══════════════════════════════════════════════════════════════════════════════════════════
+   HOME PROJECT CARD (#281)
+
+   The card answers three questions — how far along, what's next, is anything happening — so it
+   carries a progress bar, the ranker's top pick and a recency/claims row. Every colour below is
+   a Bootstrap or `--kf-*` token, so light/dark come from `[data-bs-theme]` for free; there is no
+   hard-coded hex here on purpose.
+   ═══════════════════════════════════════════════════════════════════════════════════════════ */
+
+/* `auto-fit`, not `auto-fill`, and the difference IS the fix for AC 6. Both create as many
+   ~19rem tracks as fit the canvas; `auto-fill` then KEEPS the empty ones, so a lone project would
+   still render a narrow card marooned in a 1320px container. `auto-fit` collapses the empty
+   tracks, so 1 project widens to `.project-card`'s max-width and 20 projects pack four abreast.
+   `min(100%, 19rem)` keeps the track from overflowing a viewport narrower than 19rem. */
+.project-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 19rem), 1fr));
+    gap: 1.25rem;
+    align-items: start;
+}
+
+.project-card {
+    /* The cap is what stops the collapsed single-card case from stretching to a 1300px card that
+       is all whitespace and no information. */
+    max-width: 34rem;
+    width: 100%;
+    /* NO `height: 100%`. With it, a card with nothing to say is stretched to the height of the
+       busiest card in its row and renders as a tall empty box — the exact "does not earn its
+       space" complaint, reintroduced one row down. Paired with the grid's `align-items: start`,
+       every card is exactly as tall as what it actually knows. */
+}
+
+/* -- progress -- */
+.kf-card-progress {
+    margin-bottom: .75rem;
+}
+
+.kf-card-progress-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: .5rem;
+    font-size: .8125rem;
+    margin-bottom: .25rem;
+}
+
+.kf-card-progress-count {
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+}
+
+.kf-card-progress-bar {
+    height: .4375rem;
+}
+
+.kf-card-breakdown {
+    font-size: .75rem;
+    color: var(--bs-secondary-color);
+    margin-top: .25rem;
+}
+
+/* -- next task -- */
+.kf-next-task {
+    display: flex;
+    align-items: center;
+    gap: .5rem;
+    padding: .375rem .5rem;
+    margin-bottom: .5rem;
+    border: 1px solid var(--bs-border-color);
+    border-radius: .375rem;
+    background-color: var(--bs-tertiary-bg);
+    text-decoration: none;
+    color: var(--bs-body-color);
+    font-size: .8125rem;
+    transition: border-color .12s ease-in-out, background-color .12s ease-in-out;
+}
+
+.kf-next-task:hover,
+.kf-next-task:focus-visible {
+    border-color: var(--bs-primary);
+    background-color: var(--bs-secondary-bg);
+    color: var(--bs-body-color);
+}
+
+.kf-next-task-label {
+    flex: 0 0 auto;
+    text-transform: uppercase;
+    letter-spacing: .04em;
+    font-size: .625rem;
+    font-weight: 700;
+    color: var(--bs-secondary-color);
+}
+
+/* The name is the elastic part: it truncates so a long task title cannot push the priority chip
+   off the card or force the card taller than its siblings. */
+.kf-next-task-name {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.kf-next-task-prio {
+    flex: 0 0 auto;
+    font-size: .625rem;
+    font-weight: 700;
+    line-height: 1;
+    padding: .25rem .375rem;
+    border-radius: .25rem;
+    color: #fff;
+    background-color: var(--kf-prio-low);
+}
+
+/* Same four tokens the board's card borders use, so a Critical task is the same red in both
+   places. Medium is the one that needs dark ink — `--kf-prio-medium` is Bootstrap $warning. */
+.kf-next-task-prio[data-priority="Medium"] { background-color: var(--kf-prio-medium); color: #000; }
+.kf-next-task-prio[data-priority="High"] { background-color: var(--kf-prio-high); }
+.kf-next-task-prio[data-priority="Critical"] { background-color: var(--kf-prio-critical); }
+
+/* -- recency + claims -- */
+.kf-card-meta {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: .375rem;
+    font-size: .75rem;
+    color: var(--bs-secondary-color);
+}
+
+.kf-card-when {
+    white-space: nowrap;
+    /* A dotted underline is the standing "there is more on hover" affordance — the absolute
+       timestamp lives in the title attribute (#116 treatment, #306 clock). `text-decoration`
+       rather than `border-bottom`: a border paints a hard rule at the element's box edge, which
+       under a dark theme reads as a spell-check squiggle rather than a hint. */
+    text-decoration: underline dotted var(--bs-border-color);
+    text-underline-offset: .2em;
+    cursor: help;
+}
+
+.kf-claim-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: .25rem;
+    padding: .0625rem .375rem;
+    border-radius: 1rem;
+    background-color: var(--bs-info-bg-subtle);
+    color: var(--bs-info-text-emphasis);
+    border: 1px solid var(--bs-info-border-subtle);
+    max-width: 100%;
+}
+
+.kf-claim-actor {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.kf-claim-count {
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+}
+
+.kf-claim-count::before {
+    content: "×";
+}
+
+.kf-claim-more {
+    background-color: var(--bs-secondary-bg);
+    color: var(--bs-secondary-color);
+    border-color: var(--bs-border-color);
+}
+
 /* -- Responsive project workspace -- */
 .project-shell {
     height: calc(100vh - 56px);

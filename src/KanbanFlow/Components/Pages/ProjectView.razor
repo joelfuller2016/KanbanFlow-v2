@@ -360,6 +360,22 @@ else
     [Parameter]
     public int Id { get; set; }
 
+    /// <summary>
+    /// <c>?task={id}</c> — opens that task's detail panel on arrival (#281). This is what makes
+    /// the Home card's "Next" chip land ON the task rather than merely on the project. An id that
+    /// is absent, unparsable, or not part of this project is IGNORED: the page still loads, the
+    /// panel simply stays shut. A deep link is a hint, never a precondition.
+    /// </summary>
+    [SupplyParameterFromQuery(Name = "task")]
+    public int? DeepLinkTaskId { get; set; }
+
+    /// <summary>
+    /// Applied ONCE per component instance. Every later <see cref="LoadProject"/> — a save, a
+    /// drag, closing the panel — must not silently re-open a panel the user just dismissed while
+    /// the query string is still in the address bar.
+    /// </summary>
+    private bool deepLinkApplied;
+
     private Project? project;
     private List<TaskItem> allTasks = [];
     private bool notFound;
@@ -468,6 +484,20 @@ else
     protected override async Task OnInitializedAsync()
     {
         await LoadProject();
+        ApplyDeepLinkedTask();
+    }
+
+    /// <summary>Opens the task named by <see cref="DeepLinkTaskId"/>, if it exists here.</summary>
+    private void ApplyDeepLinkedTask()
+    {
+        if (deepLinkApplied || DeepLinkTaskId is not int taskId) return;
+        deepLinkApplied = true;
+
+        var task = allTasks.FirstOrDefault(t => t.Id == taskId);
+        if (task is not null)
+        {
+            OpenTaskDetail(task);
+        }
     }
 
     protected override async Task OnAfterRenderAsync(bool firstRender)

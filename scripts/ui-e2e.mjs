@@ -2067,6 +2067,131 @@ async function main() {
       await api("DELETE", `/api/tasks/${timelineTask.id}`).catch(() => {});
     });
 
+    // ══ Scenario H: the Home project card (#281) ═══════════════════════════════════════════
+    //
+    // The card is the only place a human sees a project's progress, what to work on next, and
+    // whether an agent is holding anything. Every number on it is SERVER-computed, so each
+    // assertion below compares the RENDERED PIXEL against the API that produced it — never
+    // against a constant the test also derived. A card that agreed with a hard-coded "2/4" while
+    // the endpoint said something else would be exactly the drift this issue exists to end.
+    const cardProj = await api("POST", "/api/projects", { name: `E2E Card ${stamp}` });
+    const cardFeature = await api("POST", `/api/projects/${cardProj.id}/features`, { name: "Card Feature" });
+    const cardTasks = {
+      doneA: await api("POST", `/api/features/${cardFeature.id}/tasks`, { name: `card done A ${stamp}`, status: "Done" }),
+      doneB: await api("POST", `/api/features/${cardFeature.id}/tasks`, { name: `card done B ${stamp}`, status: "Done" }),
+      low: await api("POST", `/api/features/${cardFeature.id}/tasks`, { name: `card low ${stamp}`, status: "Todo", priority: "Low" }),
+      critical: await api("POST", `/api/features/${cardFeature.id}/tasks`, { name: `card critical ${stamp}`, status: "Todo", priority: "Critical" }),
+    };
+
+    // A second project that nothing has ever happened to — the calm-empty case (AC 5).
+    const calmProj = await api("POST", "/api/projects", { name: `E2E Calm ${stamp}` });
+
+    const cardFor = (projectId) => page.locator(`[data-testid="project-card"][data-project-id="${projectId}"]`);
+
+    await test("Home card shows the server's progress, not a count derived in the page", async () => {
+      await page.goto(`${baseUrl}/`);
+      const card = cardFor(cardProj.id);
+      await card.waitFor({ state: "visible" });
+
+      const listed = (await api("GET", "/api/projects")).find((p) => p.id === cardProj.id);
+      assert(listed, "the project is missing from GET /api/projects");
+      assert(listed.progress, "GET /api/projects returned no progress object");
+
+      const rendered = (await card.locator('[data-testid="project-progress-count"]').innerText()).trim();
+      assert(
+        rendered === `${listed.progress.completed}/${listed.progress.total} done`,
+        `card shows "${rendered}" but the API says ` +
+        `"${listed.progress.completed}/${listed.progress.total} done"`,
+      );
+
+      // The number must be the WHOLE project, not the tasks the page happens to hold. Four were
+      // seeded and two are finished, so a card counting only open work would read "2/2".
+      assert(
+        rendered === "2/4 done",
+        `expected the card to count finished tasks too ("2/4 done"), got "${rendered}"`,
+      );
+
+      // The bar's width is an inline style built from progress.percentComplete. A culture that
+      // formats 50 as "50,0" would emit `width:50,0%`, which CSS drops — the bar would silently
+      // render empty while the text beside it still read 2/4.
+      const width = await card.locator('[data-testid="project-progress"] .progress-bar')
+        .evaluate((el) => el.style.width);
+      assert(width === `${listed.progress.percentComplete}%`,
+        `progress bar width is "${width}", expected "${listed.progress.percentComplete}%"`);
+    });
+
+    await test("Home card's next task is the ranker's #1, identical to the next-tasks endpoint", async () => {
+      await page.goto(`${baseUrl}/`);
+      const chip = cardFor(cardProj.id).locator('[data-testid="project-next-task"]');
+      await chip.waitFor({ state: "visible" });
+
+      // The same question, asked of the endpoint agents use. #151/#188 are two prior incidents of
+      // two surfaces answering it differently; this is the third surface.
+      const ranked = await api("GET", `/api/projects/${cardProj.id}/next-tasks?limit=5`);
+      const top = ranked.recommendations?.[0] ?? ranked.Recommendations?.[0];
+      assert(top, `next-tasks returned no recommendations: ${JSON.stringify(ranked).slice(0, 200)}`);
+
+      const chipTaskId = Number(await chip.getAttribute("data-task-id"));
+      assert(chipTaskId === top.id,
+        `card recommends task ${chipTaskId}, next-tasks recommends ${top.id}`);
+
+      // …and it is NOT simply the first Todo. The Low-priority task was created first; the ranker
+      // sorts by priority before id, so a "first open task" implementation would show the wrong one.
+      assert(chipTaskId === cardTasks.critical.id,
+        `expected the Critical task ${cardTasks.critical.id}, got ${chipTaskId}`);
+      assert((await chip.innerText()).includes(cardTasks.critical.name),
+        `the chip does not name the recommended task: "${await chip.innerText()}"`);
+    });
+
+    await test("Home card's next-task chip opens that task on the project page", async () => {
+      await page.goto(`${baseUrl}/`);
+      const chip = cardFor(cardProj.id).locator('[data-testid="project-next-task"]');
+      await chip.waitFor({ state: "visible" });
+      await chip.click();
+
+      await page.waitForURL(new RegExp(`/project/${cardProj.id}\\?task=${cardTasks.critical.id}$`));
+      // The panel must actually be open ON THAT TASK — a link that merely lands on the project is
+      // not "links straight to it", and a panel open on the wrong task is worse than none.
+      const title = page.locator('[data-testid="task-detail-panel"] #task-detail-title');
+      await title.waitFor({ state: "visible" });
+      assert((await title.innerText()).trim() === cardTasks.critical.name,
+        `detail panel opened on "${(await title.innerText()).trim()}", expected "${cardTasks.critical.name}"`);
+    });
+
+    await test("Home card shows a claim once an agent claims a task", async () => {
+      await api("POST", `/api/tasks/${cardTasks.critical.id}/claim`, { actor: `e2e-agent-${stamp}` });
+
+      await page.goto(`${baseUrl}/`);
+      const claim = cardFor(cardProj.id).locator('[data-testid="project-claim"]');
+      await claim.first().waitFor({ state: "visible" });
+      assert((await claim.first().innerText()).includes(`e2e-agent-${stamp}`),
+        `claim chip does not name the claimant: "${await claim.first().innerText()}"`);
+
+      // Recency is rendered relative with the absolute instant on hover — one clock (#306).
+      const when = cardFor(cardProj.id).locator('[data-testid="project-last-activity"]');
+      await when.waitFor({ state: "visible" });
+      const tooltip = await when.getAttribute("title");
+      assert(/UTC:/.test(tooltip || ""),
+        `last-activity tooltip must carry the absolute UTC instant, got "${tooltip}"`);
+      assert((await when.getAttribute("datetime") || "").length > 0,
+        "last-activity <time> must carry a machine-readable datetime attribute");
+    });
+
+    await test("A project with no activity renders calm — no placeholder chips", async () => {
+      await page.goto(`${baseUrl}/`);
+      const card = cardFor(calmProj.id);
+      await card.waitFor({ state: "visible" });
+
+      for (const testid of ["project-progress", "project-next-task", "project-claim", "project-last-activity"]) {
+        assert(await card.locator(`[data-testid="${testid}"]`).count() === 0,
+          `an untouched project rendered "${testid}" — AC 5 requires the card to stay calm`);
+      }
+      // …but it is still a real card with a way in, not a blank tile. `exact` matters: the ⋮
+      // menu's accessible name starts with "Open project actions for …", so a loose match here
+      // resolves to two buttons and fails on strict mode rather than on the product.
+      await card.getByRole("button", { name: "Open", exact: true }).waitFor({ state: "visible" });
+    });
+
     // ── Scenario E: Settings -> Run all shows an all-passed result table ──
     await test("Settings 'Run all' reports an all-passed result", async () => {
       await page.goto(`${baseUrl}/settings`);
@@ -2093,6 +2218,8 @@ async function main() {
     await api("DELETE", `/api/projects/${dragProj.id}`).catch(() => {});
     await api("DELETE", `/api/projects/${partialProj.id}`).catch(() => {});
     await api("DELETE", `/api/projects/${outlineProj.id}`).catch(() => {});
+    await api("DELETE", `/api/projects/${cardProj.id}`).catch(() => {});
+    await api("DELETE", `/api/projects/${calmProj.id}`).catch(() => {});
     // delete the modal-created project too
     const all = await api("GET", "/api/projects");
     const modalProj = all.find((p) => p.name === modalProjectName);
