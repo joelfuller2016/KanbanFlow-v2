@@ -273,14 +273,14 @@
                The trail was recorded and served by GET /api/tasks/{id}/activity from the start,
                and never rendered on either task surface. ActivityTimeline is that one renderer;
                EditItemModal mounts the SAME component, not a copy. *@
-            <section class="mb-4 pt-3 border-top" data-testid="task-history-section" aria-labelledby="task-comments-heading">
+            <section class="mb-4 pt-3 border-top" data-testid="task-history-section" aria-labelledby="task-history-heading">
                 @* No count badge here on purpose. It used to show comments.Count, which is now a
                    DIFFERENT number from the timeline below it (the merge adds activity events and
                    folds away the system comments they supersede) — a header saying 6 above a list
                    saying 7 is worse than no header count. The "All" chip carries it instead, and
                    it is computed from the very list it labels. *@
                 <div class="d-flex align-items-center mb-2">
-                    <h6 id="task-comments-heading" class="form-label small text-muted mb-0">History</h6>
+                    <h6 id="task-history-heading" class="form-label small text-muted mb-0">History</h6>
                 </div>
 
                 @if (commentsLoading)

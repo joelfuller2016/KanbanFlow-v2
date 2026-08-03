@@ -1754,6 +1754,43 @@ async function main() {
           `RAW JSON reached the user in the edit modal timeline:\n${modalText.slice(0, 800)}`);
 
         await page.locator('[data-testid="edit-item-cancel-button"]').click();
+        await modalTimeline.waitFor({ state: "hidden" });
+
+        // ── REOPEN: the trail must be re-queried, not served from the first open's cache ──
+        // This modal is never unmounted (its root is hidden with display:none and ProjectView
+        // leaves EditTaskId set), so without an explicit gate the component sees no parameter
+        // change on reopen and keeps the event list it cached. The symptom is precise and nasty:
+        // the COMMENT written by the same save reloads, the matching change row does not — #328's
+        // own bug, reintroduced on the surface #328 names in scope.
+        await api("PATCH", `/api/tasks/${historyTask.id}/status`, { status: "Done", actor: "e2e-reopen" });
+
+        await clickUntil(
+          () => page.locator(`[data-testid="outline-task-${historyTask.id}"]`).click(),
+          modalTimeline,
+        );
+
+        // Scope the match to an ACTIVITY-sourced row. Matching the timeline's innerText is
+        // vacuous here and it cost a full sabotage round to notice: the same PATCH also writes a
+        // system comment reading "Status changed from InProgress to Done", and THAT reloads with
+        // the comments on any reopen. A text match is satisfied by the comment whether or not the
+        // event trail was re-queried — a guard that passes against the bug it names.
+        try {
+          await page.waitForFunction(() => {
+            const root = document.querySelector('[data-testid="edit-item-activity"]');
+            return root && [...root.querySelectorAll('[data-timeline-source="activity"]')]
+              .some((el) => /InProgress[\s\S]{0,40}Done/.test(el.innerText));
+          }, null, { timeout: 10000 });
+        } catch {
+          throw new Error(
+            "reopening the outline-sidebar edit modal served a STALE activity trail: no " +
+            'ActivityEvent row shows "Status: InProgress → Done", recorded while the modal was ' +
+            "closed. The modal is never unmounted, so without an explicit parameter change the " +
+            "component keeps the event list it cached on the first open — the comment reloads " +
+            "and the matching change row does not.\n" +
+            `Rendered:\n${(await modalTimeline.innerText()).slice(0, 800)}`);
+        }
+
+        await page.locator('[data-testid="edit-item-cancel-button"]').click();
 
         assert(consoleErrors.length === 0,
           `the timeline logged ${consoleErrors.length} console error(s): ${consoleErrors.slice(0, 3).join(" | ")}`);

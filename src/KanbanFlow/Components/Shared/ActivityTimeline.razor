@@ -24,7 +24,7 @@
 @* One accessible name per region. When the caller already renders a visible heading for this
    block it passes the heading's id, so a screen reader announces ONE name ("History") instead
    of the caller's name plus this component's own — two names for one visual block. *@
-<section class="activity-timeline-section" data-testid="@($"{TestIdPrefix}")"
+<section class="activity-timeline-section" data-testid="@TestIdPrefix"
          aria-label="@(LabelledBy is null ? "Task history" : null)"
          aria-labelledby="@LabelledBy">
 
@@ -39,7 +39,9 @@
                         data-testid="@($"{TestIdPrefix}-filter-{filter}")"
                         @onclick="() => SetFilter(filter)">
                     @label
-                    <span class="badge rounded-pill text-bg-light border ms-1"
+                    @* NOT text-bg-light: Bootstrap 5.3's dark theme does not redefine
+                       --bs-light-rgb, so a "light" pill stays near-white on a dark board. *@
+                    <span class="badge rounded-pill text-bg-secondary ms-1"
                           data-testid="@($"{TestIdPrefix}-filter-{filter}-count")">@CountFor(filter)</span>
                 </button>
             }
@@ -91,7 +93,7 @@
                                surfaces goes through ActivityTimelineModel — there is no second
                                formatting call site left to drift. *@
                             <time class="small text-muted ms-auto"
-                                  datetime="@ActivityTimelineModel.Iso(entry.CreatedAtUtc)"
+                                  datetime="@ActivityTimelineModel.RoundTripUtc(entry.CreatedAtUtc)"
                                   title="@ActivityTimelineModel.Tooltip(entry.CreatedAtUtc)">
                                 @ActivityTimelineModel.Relative(entry.CreatedAtUtc, nowUtc)
                             </time>
@@ -135,17 +137,30 @@
             }
         </ol>
         </div>
-    }
 
-    @* The cap is real, so say so. "No history yet" and "we stopped looking at 500" are different
-       facts, and a component that renders a silent slice of a longer trail under a heading that
-       says History is the same dishonesty #328 exists to end. The underlying lifetime cap on
-       GET /api/{entity}/{id}/activity is tracked by #332. *@
-    @if (!loading && !loadFailed && truncated)
-    {
-        <div class="small text-muted mt-2" data-testid="@($"{TestIdPrefix}-truncated")">
-            Showing the newest @ActivityTimelineModel.MaxEntries entries — older history is not loaded.
-        </div>
+        @if (truncatedBy > 0 || eventsTruncated)
+        {
+            @* Say so. This component sits under a README requirement calling the audit log the
+               single source of truth; a silent cap that drops the oldest rows is the same class
+               of untruth #328 exists to fix.
+
+               Two DIFFERENT caps can clip the trail, and they know different amounts. The merge
+               cap knows exactly how many rows it dropped. The DB read only knows that MORE exist
+               past MaxEntries, never how many — so when IT is the one that clipped, say so
+               without inventing a number. The underlying lifetime cap on
+               GET /api/{entity}/{id}/activity is #332. *@
+            <div class="small text-muted mt-2" data-testid="@($"{TestIdPrefix}-truncated")">
+                Showing the @ActivityTimelineModel.MaxEntries most recent entries.
+                @if (eventsTruncated)
+                {
+                    <text>Older history is not loaded.</text>
+                }
+                else
+                {
+                    <text>@truncatedBy older one@(truncatedBy == 1 ? "" : "s") @(truncatedBy == 1 ? "is" : "are") not shown.</text>
+                }
+            </div>
+        }
     }
 </section>
 
@@ -196,10 +211,11 @@
     private IReadOnlyList<TimelineEntry> visible = [];
     private TimelineCounts counts = new(0, 0, 0, 0);
     private TimelineFilter activeFilter = TimelineFilter.All;
+    private int truncatedBy;
     private bool loading;
     private bool loadFailed;
     private bool eventsTruncated;
-    private bool truncated;
+
     private DateTime nowUtc = DateTime.UtcNow;
 
     protected override async Task OnParametersSetAsync()
@@ -214,10 +230,11 @@
             activeFilter = TimelineFilter.All;
             loadFailed = false;
             eventsTruncated = false;
-            truncated = false;
+
             events = [];
             entries = [];
             visible = [];
+            truncatedBy = 0;
             counts = new TimelineCounts(0, 0, 0, 0);
         }
 
@@ -317,10 +334,8 @@
     {
         mergedComments = Comments;
         nowUtc = DateTime.UtcNow;
-        var result = ActivityTimelineModel.BuildResult(Comments, events);
-        entries = result.Entries;
-        // Either end can be the one that clipped the trail: the DB read, or the merge's own cap.
-        truncated = eventsTruncated || result.IsTruncated;
+        entries = ActivityTimelineModel.Build(Comments, events, out var totalBeforeCap);
+        truncatedBy = totalBeforeCap - entries.Count;
         counts = ActivityTimelineModel.Count(entries);
         visible = ActivityTimelineModel.Filter(entries, activeFilter);
     }
@@ -359,7 +374,8 @@
         {
             CommentType.Comment or CommentType.Note => "text-bg-primary",
             CommentType.Decision => "text-bg-info",
-            CommentType.Question => "text-bg-light border text-dark",
+            // Not text-bg-light: Bootstrap 5.3's dark theme leaves --bs-light-rgb near-white.
+            CommentType.Question => "text-bg-secondary",
             CommentType.Blocked => "text-bg-danger",
             CommentType.Handoff => "text-bg-warning",
             CommentType.Verification => "text-bg-success",
