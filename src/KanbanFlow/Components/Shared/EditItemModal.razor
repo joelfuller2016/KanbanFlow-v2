@@ -177,47 +177,32 @@
                         </div>
                     }
 
-                    @* Activity Timeline *@
+                    @* Activity Timeline — the task's COMPLETE history (#328).
+                       This block used to render `taskComments` ONLY, so every field-level change
+                       (status, priority, assignment, rename) was recorded in ActivityEvent
+                       server-side and invisible here. ActivityTimeline merges both records and
+                       de-duplicates the pairs TaskService writes for a single action.
+
+                       It is the SAME component TaskDetailPanel uses — deliberately, so the two
+                       task surfaces cannot drift apart the way their timestamps did (#306).
+
+                       The old per-comment markup below rendered `comment.CreatedAt` raw, i.e. in
+                       UTC with no `.ToLocalTime()` and no tooltip — a THIRD clock alongside the
+                       two #306 documents in TaskDetailPanel. The timeline renders local time with
+                       the absolute UTC on hover, uniformly. *@
                     <div class="mb-3">
                         <div id="edit-item-activity-label" class="form-label small text-muted mb-1">Activity</div>
-                        <div class="border rounded p-2" style="max-height: 250px; overflow-y: auto; background: #f8f9fa;">
-                            @if (taskComments.Count == 0)
-                            {
-                                <small class="text-muted">No activity yet.</small>
-                            }
-                            @foreach (var comment in taskComments.OrderByDescending(c => c.CreatedAt))
-                            {
-                                <div class="mb-2 pb-2 @(comment != taskComments.OrderByDescending(c => c.CreatedAt).Last() ? "border-bottom" : "")">
-                                    <div class="d-flex align-items-center mb-1">
-                                        @if (comment.Type == CommentType.Comment)
-                                        {
-                                            <span class="badge bg-primary me-2" style="font-size: 0.6rem;">Comment</span>
-                                        }
-                                        else if (comment.Type == CommentType.StatusChange)
-                                        {
-                                            <span class="badge bg-warning text-dark me-2" style="font-size: 0.6rem;">Status</span>
-                                        }
-                                        else if (comment.Type == CommentType.Created)
-                                        {
-                                            <span class="badge bg-success me-2" style="font-size: 0.6rem;">Created</span>
-                                        }
-                                        else
-                                        {
-                                            <span class="badge bg-secondary me-2" style="font-size: 0.6rem;">@comment.Type</span>
-                                        }
-                                        <small class="text-muted fw-medium">@(comment.Author ?? "System")</small>
-                                        <small class="text-muted ms-auto" style="font-size: 0.65rem;">@comment.CreatedAt.ToString("MMM d, h:mm tt")</small>
-                                    </div>
-                                    @* Comment bodies are markdown — a plain `@comment.Text` HTML-encodes them, so a
-                                       mirrored GitHub comment renders as raw `**bold**` and its links are dead text.
-                                       MarkdownContent (already used by TaskDetailPanel/Home/ProjectView) renders +
-                                       sanitises. Bot reviews can be very long, so each body is capped to a scrollable
-                                       box rather than pushing the rest of the timeline off-screen. *@
-                                    <div class="task-comment-body small">
-                                        <MarkdownContent Markdown="@comment.Text" />
-                                    </div>
-                                </div>
-                            }
+                        @* This id labelled the comment list that the timeline replaced, and for a
+                           while it labelled nothing at all — leaving a screen reader with an
+                           unnamed scroll container holding the task's whole history. `tabindex="0"`
+                           is deliberate, not a stray: `.kf-timeline-panel` sets `overflow-y: auto`,
+                           and a scrollable region a keyboard cannot reach is a keyboard trap in
+                           reverse — the content simply cannot be scrolled to. *@
+                        <div class="border rounded p-2 kf-timeline-panel"
+                             role="region" aria-labelledby="edit-item-activity-label" tabindex="0">
+                            <ActivityTimeline TaskId="EditTaskId"
+                                              Comments="taskComments"
+                                              RefreshToken="activityRefreshToken" />
                         </div>
 
                         @* Add comment *@
@@ -343,9 +328,24 @@
     private List<TaskComment> taskComments = [];
     private string? newCommentText;
 
+    // Bumped whenever an action may have written new ActivityEvents, so ActivityTimeline re-reads
+    // the audit trail. Comments flow through the Comments parameter and need no token.
+    private int activityRefreshToken;
+    private bool wasOpen;
+    private int? lastOpenedTaskId;
+
     protected override void OnParametersSet()
     {
-        if (IsOpen)
+        // A FRESH OPEN, or a switch to a different task — not merely "the parent re-rendered".
+        //
+        // Everything below discards state and re-reads from the server, so running it on every
+        // parent render was wrong twice over: it threw away whatever the user had typed into the
+        // form, and it emptied `taskComments` mid-session. That second one became visible when the
+        // timeline started merging events: with an empty Comments list there is nothing for a
+        // `TaskCommentAdded` event to pair with, so the history rendered every comment TWICE until
+        // the async reload landed. The refresh-token bump below was already correctly guarded on
+        // this condition — the state reset simply was not.
+        if (IsOpen && (!wasOpen || EditTaskId != lastOpenedTaskId))
         {
             editName = InitialName;
             editDescription = InitialDescription;
@@ -362,11 +362,18 @@
             taskComments = [];
             RefreshGitHubLinks();
 
+            // ActivityTimeline only re-queries on a TaskId change, and closing then reopening the
+            // SAME task does not change it — so a reopen has to say so explicitly.
+            activityRefreshToken++;
+            lastOpenedTaskId = EditTaskId;
+
             if (EditMode == EditItemType.Task && EditTaskId.HasValue)
             {
                 _ = LoadTaskDetails();
             }
         }
+
+        wasOpen = IsOpen;
     }
 
     private bool CanUseAsParentFeature(Feature feature)
@@ -444,6 +451,9 @@
         var comment = await TaskService.AddCommentAsync(
             EditTaskId.Value, newCommentText, author: "User", type: CommentType.Comment, actor: "User");
         taskComments.Add(comment);
+        // AddCommentAsync also writes a paired TaskCommentAdded ActivityEvent; re-read so the
+        // timeline can de-duplicate the pair instead of showing the comment twice on next open.
+        activityRefreshToken++;
         newCommentText = null;
         StateHasChanged();
     }

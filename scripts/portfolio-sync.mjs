@@ -1,20 +1,59 @@
 #!/usr/bin/env node
-// Portfolio sync — reconcile GitHub (source of truth) into the KanbanFlow board.
+// GitHub <-> KanbanFlow sync — "KanbanFlow IS GitHub, visualised".
 //
-// One-way: GitHub -> KanbanFlow. This script NEVER writes to GitHub, and never touches
-// SQLite/EF directly — every mutation goes through the REST API so the ActivityEvent
-// audit trail stays complete.
+// GitHub is the source of truth for issue CONTENT. The board is the visualisation, plus the
+// one place where work that does not exist on GitHub yet can be drafted and then pushed.
 //
-// Idempotent. Re-running converges: repo -> Project (matched by name), milestone ->
-// Feature (matched by name), issue -> TaskItem (matched by the "#<n> " title prefix).
-// A second consecutive run creates nothing.
+// Four commands (full contract: docs/GITHUB-SYNC.md):
+//
+//   sync        GitHub -> board mirror. The default command.
+//   onboard     register a NEW repo: create/link the Project, then backfill everything.
+//   push-issue  PREVIEW ONLY. Computes and prints the exact GitHub issue a board task would
+//               become, and REFUSES to perform the write. See "why" below.
+//   status      health check: counts both sides, unsynced tasks, drift, orphans, last sync.
+//               Exit 0 = clean and complete · 1 = confirmed drift · 2 = incomplete or error.
+//
+// THIS FILE NEVER WRITES TO GITHUB. There is no create/update/close/label/delete call in it —
+// `grep -n "gh\(\"\|(\[\"\)" ` finds only reads. push-issue stops one step short of the write
+// on purpose: the board has no durable external-id column, so a task's only identity is the
+// "#<n> " title prefix, and that prefix does not exist until AFTER the issue is created. That
+// window is unrecoverable under additive-only rules — a crash, a concurrent push, or a sync
+// landing between create and stamp produces a duplicate issue that nothing is allowed to
+// close. Enabling the write needs a pending-operation id persisted BEFORE the GitHub call;
+// that is schema work, tracked separately. Until then, preview is the honest deliverable.
+//
+// Invariants this tool holds:
+//   * GitHub owns issue content. Nothing here can reword, close, re-label or delete an issue.
+//   * Every board mutation goes through the REST API — never SQLite/EF directly — so the
+//     ActivityEvent audit trail stays complete.
+//   * Idempotent. A second consecutive run of any command creates nothing.
+//   * --dry-run works for every command and prints exactly what WOULD be written.
+//
+// Status ownership is NOT symmetric, and the doc says so rather than claiming otherwise:
+// the sync ADVANCES a task to Review on an open linked PR only from Backlog/Todo/InProgress
+// (a hand-set Review/Done is left alone and reported as drift), but a CLOSED issue FORCES the
+// task to Done regardless of what a human set. There is no manual-pin field on TaskItem, so
+// "never override a hand-set status" is an aspiration, not the current behaviour. See the
+// field-ownership table in docs/GITHUB-SYNC.md.
+//
+// Identity: repo -> Project (durable "<!-- github: owner/repo -->" marker in the project
+// description; short-name matching survives only as a fallback for pre-marker boards),
+// milestone -> Feature (matched by name), issue -> TaskItem (matched by the "#<n> " title
+// prefix), GitHub comment -> TaskComment (matched by node id).
 //
 //   node scripts/portfolio-sync.mjs --dry-run
 //   node scripts/portfolio-sync.mjs --repos joelfuller2016/ZeroRouter
+//   node scripts/portfolio-sync.mjs onboard joelfuller2016/new-repo
+//   node scripts/portfolio-sync.mjs push-issue joelfuller2016/new-repo --all --dry-run
+//   node scripts/portfolio-sync.mjs status
 //   KANBANFLOW_PORTFOLIO_REPOS="o/a,o/b" node scripts/portfolio-sync.mjs
 
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+// `priorityFromLabel` is imported but unused HERE on purpose: PR #339's `labelForPriority()`
+// calls it, and that PR does not touch this import line, so dropping it would merge cleanly
+// and then throw ReferenceError at runtime. Remove only once nothing in this file calls it.
+import { derivePriority, priorityFromLabel } from "./priority-model.mjs";
 
 const execFileAsync = promisify(execFile);
 
@@ -32,7 +71,12 @@ const DEFAULT_REPOS = [
 
 const UNSORTED_FEATURE = "Unsorted";
 const BODY_EXCERPT_LIMIT = 1500;
-const GH_PAGE_LIMIT = 500;
+// High enough that no repo in the portfolio comes near it, because SATURATING it is a hard
+// failure, not a warning: a read that stopped early makes every count and every "no drift"
+// verdict downstream a lie. Overridable so the incompleteness path can actually be exercised.
+const GH_PAGE_LIMIT = Math.max(1, Number.parseInt(process.env.KANBANFLOW_GH_PAGE_LIMIT || "2000", 10) || 2000);
+
+const COMMANDS = ["sync", "onboard", "push-issue", "status"];
 
 // Statuses the sync is allowed to advance a task *out of* when GitHub shows a linked open
 // PR. A task a human has already parked in Review/Done is left alone (reported as drift
@@ -41,19 +85,50 @@ const ADVANCEABLE_TO_REVIEW = new Set(["Backlog", "Todo", "InProgress"]);
 
 function parseArgs(argv) {
   const args = {
+    command: "sync",
     dryRun: false, includeClosed: false, repos: null, actor: "portfolio-sync",
     comments: true, maxCommentChars: 0, // 0 = no cap; mirror the comment whole
+    allowWrite: false, task: null, all: false, strict: false, json: false, limit: 0,
+    error: null,
   };
-  for (let i = 0; i < argv.length; i++) {
+
+  // The command is an optional leading bare word. Omitting it means `sync`, so every
+  // pre-existing invocation (`portfolio-sync.mjs --dry-run`, `--repos …`) behaves exactly
+  // as it always has. A bare word that is NOT a command is an error rather than a silent
+  // fallback to sync — mistyping `statuss` must not quietly run a full mirror.
+  let i = 0;
+  if (argv.length > 0 && !argv[0].startsWith("-") && !argv[0].includes("/")) {
+    if (!COMMANDS.includes(argv[0])) {
+      args.error = `Unknown command "${argv[0]}". Valid commands: ${COMMANDS.join(", ")}.`;
+      return args;
+    }
+    args.command = argv[0];
+    i = 1;
+  }
+
+  for (; i < argv.length; i++) {
     const a = argv[i];
     if (a === "--dry-run") args.dryRun = true;
     else if (a === "--include-closed") args.includeClosed = true;
     else if (a === "--no-comments") args.comments = false;
     else if (a === "--max-comment-chars") args.maxCommentChars = Number.parseInt(argv[++i], 10) || 0;
-    else if (a === "--repos") args.repos = (argv[++i] || "").split(",").map((r) => r.trim()).filter(Boolean);
+    else if (a === "--repos") args.repos = [...(args.repos || []), ...(argv[++i] || "").split(",").map((r) => r.trim()).filter(Boolean)];
     else if (a === "--actor") args.actor = argv[++i] || args.actor;
+    // --push is the alias; both spellings mean "you may create issues on GitHub".
+    else if (a === "--allow-write" || a === "--push") args.allowWrite = true;
+    else if (a === "--task") args.task = Number.parseInt(argv[++i], 10);
+    else if (a === "--all") args.all = true;
+    else if (a === "--strict") args.strict = true;
+    else if (a === "--json") args.json = true;
+    else if (a === "--limit") args.limit = Number.parseInt(argv[++i], 10) || 0;
     else if (a === "--help" || a === "-h") args.help = true;
+    // `onboard owner/repo` — a bare owner/repo positional is a repo, so the common case
+    // needs no flag at all.
+    else if (!a.startsWith("-") && a.includes("/")) args.repos = [...(args.repos || []), a];
+    else { args.error = `Unknown option "${a}".`; return args; }
   }
+
+  if (args.task !== null && !Number.isFinite(args.task)) args.error = "--task needs an integer task id.";
   return args;
 }
 
@@ -66,7 +141,27 @@ function resolveRepos(args) {
 
 // --- GitHub (read-only) -----------------------------------------------------------------
 
+// "This file never writes to GitHub" is a property a future edit must not be able to break by
+// accident, so it is enforced here instead of at review time. A WHITELIST, not a blacklist:
+// anything that is not one of these four read verbs is refused, so a newly added `gh issue
+// create` / `issue edit` / `issue close` fails immediately and loudly.
+const GH_READ_VERBS = new Set(["issue list", "pr list", "label list", "api"]);
+// `gh api` is GET unless something makes it otherwise. These are the flags that do.
+const GH_API_WRITE_FLAGS = new Set(["--method", "-X", "-f", "--field", "-F", "--raw-field", "--input"]);
+
+function assertReadOnly(args) {
+  const verb = args[0] === "api" ? "api" : `${args[0]} ${args[1]}`;
+  if (!GH_READ_VERBS.has(verb)) {
+    throw new Error(`portfolio-sync is READ-ONLY against GitHub; refusing to run "gh ${verb}". If a write is genuinely needed, it belongs behind the durable-link design in docs/GITHUB-SYNC.md, not here.`);
+  }
+  if (args[0] === "api") {
+    const offender = args.find((a) => GH_API_WRITE_FLAGS.has(a) || /^--method=/.test(a));
+    if (offender) throw new Error(`portfolio-sync is READ-ONLY against GitHub; "gh api ${offender}" would issue a write.`);
+  }
+}
+
 async function gh(args) {
+  assertReadOnly(args);
   const { stdout } = await execFileAsync("gh", args, { maxBuffer: 64 * 1024 * 1024 });
   return JSON.parse(stdout || "[]");
 }
@@ -77,10 +172,14 @@ async function gh(args) {
 const ISSUE_FIELDS = "number,title,body,labels,milestone,assignees,state,updatedAt,url,comments";
 
 // Never truncate silently: a board that quietly drops issues past the limit still *looks*
-// like a full mirror, which is the one thing this tool must not do.
+// like a full mirror, which is the one thing this tool must not do. Saturation is RECORDED,
+// not just printed — `status` turns it into exit 2 ("I could not see everything"), because a
+// drift count computed over a partial read is worse than no drift count at all.
 function warnIfTruncated(repo, kind, list) {
   if (list.length >= GH_PAGE_LIMIT) {
-    console.warn(`  ! ${repo}: ${kind} hit the ${GH_PAGE_LIMIT} fetch limit — the mirror may be INCOMPLETE. Raise GH_PAGE_LIMIT.`);
+    const note = `${repo}: ${kind} hit the ${GH_PAGE_LIMIT}-item fetch bound — this read is INCOMPLETE, so every count and every "no drift" verdict derived from it is unreliable. Raise KANBANFLOW_GH_PAGE_LIMIT.`;
+    console.error(`  ! ${note}`);
+    stats.incomplete.push(note);
   }
   return list;
 }
@@ -136,6 +235,20 @@ async function fetchOpenPrs(repo, withComments) {
     }));
   }
   return list;
+}
+
+// Milestones are the Feature axis. Read-only: a milestone is only ever ATTACHED in a
+// push-issue preview, never created.
+async function fetchMilestones(repo) {
+  return gh(["api", `repos/${repo}/milestones?state=all&per_page=100`, "--paginate"]);
+}
+
+// The repo's label vocabulary. A push-issue preview picks the label that priorityFromLabel()
+// would read back as the priority the task already has — without it, pushing a High task
+// would create an unlabelled issue that the very next sync reads back as Medium (a silent
+// round-trip downgrade). Reported in the preview so the loss is visible before anyone acts.
+async function fetchLabels(repo) {
+  return gh(["label", "list", "-R", repo, "--limit", "200", "--json", "name"]);
 }
 
 // --- GitHub comments -> TaskComments -----------------------------------------------------
@@ -243,44 +356,10 @@ function mapIssueToOpenPr(prs) {
 
 // --- Mapping ----------------------------------------------------------------------------
 
-// Priority labels are a zoo across repos: bare `P0`; `P0-critical`; `priority:high`;
-// `high-priority`; `priority: medium`; or a plain `critical`. Matching ONLY the bare `p0..p3`
-// form silently mapped every issue in 5 of 6 repos to Medium — the whole 404-task portfolio
-// came out one flat priority, so the /next-tasks direction engine was ranking against a
-// constant. Recognise the real vocabularies, and be strict enough that a topical label which
-// merely CONTAINS a severity word (`critical-path`, `size/medium`, `slow`) is not mistaken
-// for a priority.
-const SEVERITY_WORDS = { critical: "Critical", high: "High", medium: "Medium", low: "Low" };
-const SEVERITY_RANK = { Critical: 0, High: 1, Medium: 2, Low: 3 };
-const PN_LEVELS = ["Critical", "High", "Medium", "Low"]; // P0..P3
-
-function priorityFromLabel(name) {
-  const n = String(name).trim().toLowerCase();
-
-  // "p0", "P0-critical", "p1-high", "p2 medium"
-  const pn = /^p([0-3])\b/.exec(n);
-  if (pn) return PN_LEVELS[Number(pn[1])];
-
-  // "priority:high", "priority: medium", "priority-critical", "high-priority"
-  // Use anchored patterns so "priority:critical-path" or "not-priority-medium" are rejected.
-  const priFirst = /^priority[:\-]\s*(critical|high|medium|low)$/.exec(n);
-  if (priFirst) return SEVERITY_WORDS[priFirst[1]];
-  const priSecond = /^(critical|high|medium|low)[:\-]priority$/.exec(n);
-  if (priSecond) return SEVERITY_WORDS[priSecond[1]];
-
-  // A label that IS a severity word, exactly — not one that merely contains it.
-  return SEVERITY_WORDS[n] ?? null;
-}
-
-function derivePriority(issue) {
-  // Highest severity present wins: an issue tagged both `bug` and `P0-critical` is Critical.
-  let best = null;
-  for (const label of issue.labels || []) {
-    const level = priorityFromLabel(label.name);
-    if (level && (best === null || SEVERITY_RANK[level] < SEVERITY_RANK[best])) best = level;
-  }
-  return best ?? "Medium";
-}
+// Priority resolution (title prefix -> label -> milestone -> Medium) lives in
+// ./priority-model.mjs, which is the single definition for the whole repo — the board and the
+// backlog log book both read it, so they cannot disagree. See #355 for the rule and #364 for
+// the decision that settled it.
 
 function deriveStatus(issue, linkedPr) {
   if (issue.state && issue.state.toUpperCase() === "CLOSED") return "Done";
@@ -305,6 +384,73 @@ function taskNameFor(issue) {
 function issueNumberFromTaskName(name) {
   const m = /^#(\d+)\s/.exec(String(name || ""));
   return m ? Number.parseInt(m[1], 10) : null;
+}
+
+// --- repo <-> project link ---------------------------------------------------------------
+//
+// Name matching is fragile: rename the repo or the project and the mirror silently forks into
+// a second project. The durable link is a marker stamped into the project description — the
+// same trick as the "#<n> " task prefix and the "<!-- gh:id -->" comment id, and it needs no
+// schema change. Resolution order is marker -> short name, so boards synced before the marker
+// existed keep working untouched.
+const REPO_LINK_RE = /<!--\s*github:\s*([A-Za-z0-9._-]+\/[A-Za-z0-9._-]+)\s*-->/;
+
+function repoLinkMarker(repo) {
+  return `<!-- github: ${repo} -->`;
+}
+
+function linkedRepoOf(project) {
+  const m = REPO_LINK_RE.exec(String(project?.description || ""));
+  return m ? m[1] : null;
+}
+
+function projectDescriptionFor(repo) {
+  return `${repoLinkMarker(repo)}\nSynced from https://github.com/${repo} — GitHub issues are the source of truth.`;
+}
+
+// Returns { project, linkedBy: "marker" | "name" | null, conflict }. `conflict` is a
+// human-readable warning that is ALWAYS surfaced — a forked or hijacked link is exactly the
+// class of failure that otherwise looks like a healthy mirror.
+function resolveProjectLink(repo, projects) {
+  const shortName = repo.split("/").pop();
+  const lower = repo.toLowerCase();
+
+  const marked = projects.filter((p) => (linkedRepoOf(p) || "").toLowerCase() === lower);
+  if (marked.length > 1) {
+    return {
+      project: marked[0], linkedBy: "marker",
+      conflict: `${marked.length} projects carry the ${repo} link marker (${marked.map((p) => `#${p.id} "${p.name}"`).join(", ")}) — the mirror is FORKED. Merge them by hand; syncing into #${marked[0].id}.`,
+    };
+  }
+  if (marked.length === 1) return { project: marked[0], linkedBy: "marker", conflict: null };
+
+  // Fallback: match the repo's short name, but only against a project no OTHER repo has
+  // claimed. Adopting a project already marked for a different repo would merge two repos'
+  // issues into one board permanently.
+  const named = projects.filter((p) => p.name.toLowerCase() === shortName.toLowerCase());
+  const unclaimed = named.filter((p) => linkedRepoOf(p) === null);
+  if (unclaimed.length === 1) return { project: unclaimed[0], linkedBy: "name", conflict: null };
+  if (unclaimed.length > 1) {
+    return {
+      project: unclaimed[0], linkedBy: "name",
+      conflict: `${unclaimed.length} unlinked projects are named "${shortName}" (${unclaimed.map((p) => `#${p.id}`).join(", ")}) — name matching is ambiguous. Run \`onboard ${repo}\` after deleting or renaming the wrong one; using #${unclaimed[0].id}.`,
+    };
+  }
+  if (named.length > 0) {
+    return {
+      project: null, linkedBy: null,
+      conflict: `project "${named[0].name}" (#${named[0].id}) is already linked to ${linkedRepoOf(named[0])}, so ${repo} will NOT be merged into it.`,
+    };
+  }
+  return { project: null, linkedBy: null, conflict: null };
+}
+
+// The sync stamps a provenance block into every task description it creates. When a task is
+// previewed for the other direction that block is noise on GitHub, so strip it out.
+function stripSyncBlock(description) {
+  return String(description || "")
+    .replace(/<!--\s*kanbanflow-sync\s*-->[\s\S]*?<!--\s*\/kanbanflow-sync\s*-->/g, "")
+    .trim();
 }
 
 function descriptionFor(issue, linkedPr) {
@@ -350,27 +496,42 @@ const stats = {
   projectsCreated: 0, featuresCreated: 0, tasksCreated: 0,
   tasksUpdated: 0, tasksMoved: 0, tasksUnchanged: 0,
   commentsCreated: 0, commentsUnchanged: 0, commentFetchFailures: 0,
+  projectsLinked: 0, issuesPreviewed: 0,
   biggestComment: { chars: 0, author: null, issue: null },
   drift: [],
+  incomplete: [], // a fetch that hit its bound — every count derived from it is unreliable
 };
 
 function plan(dryRun, verb, what) {
   console.log(`  ${dryRun ? "[dry-run] would" : "        "} ${verb} ${what}`);
 }
 
+// Drift wording lives here, shared, so `status` can never disagree with what `sync` reports.
+// Two kinds, and only two: both describe a disagreement the sync deliberately WILL NOT fix.
+const driftDoneButOpen = (repo, issue) =>
+  `${repo}#${issue.number}: board says Done, issue is still open — ${issue.url}`;
+const driftOrphanTask = (repo, taskName, issueNumber) =>
+  `${repo}: task "${taskName}" has no matching issue #${issueNumber} on GitHub (deleted or transferred?)`;
+
 async function ensureProject(repo, dryRun) {
   const shortName = repo.split("/").pop();
   const projects = await api("GET", "/api/projects");
-  // Case-insensitive: "ZeroRouter" and "zerorouter" are the same repo, and creating a second
-  // project for the same repo would fork the mirror permanently.
-  const existing = projects.find((p) => p.name.toLowerCase() === shortName.toLowerCase());
-  if (existing) return existing.id;
+  // Marker first, then the case-insensitive short name ("ZeroRouter" and "zerorouter" are the
+  // same repo, and creating a second project for one repo would fork the mirror permanently).
+  const link = resolveProjectLink(repo, projects);
+  if (link.conflict) console.warn(`  ! ${link.conflict}`);
+  if (link.project) return link.project.id;
 
-  plan(dryRun, "create project", shortName);
+  // The short name is taken by a project another repo owns, so it cannot be reused without
+  // merging two repos' issues into one board. Fall back to the unambiguous "owner/repo".
+  const nameTaken = projects.some((p) => p.name.toLowerCase() === shortName.toLowerCase());
+  const name = nameTaken ? repo : shortName;
+
+  plan(dryRun, "create project", name);
   if (dryRun) return null;
   const created = await api("POST", "/api/projects", {
-    name: shortName,
-    description: `Synced from https://github.com/${repo} — GitHub issues are the source of truth.`,
+    name,
+    description: projectDescriptionFor(repo),
   });
   stats.projectsCreated++;
   return created.id;
@@ -487,7 +648,7 @@ async function syncTasks(repo, projectId, issues, closedNumbers, prByIssue, feat
     } else if (!closed && linkedPr && ADVANCEABLE_TO_REVIEW.has(task.status) && task.status !== "Review") {
       patch.status = "Review";
     } else if (!closed && task.status === "Done") {
-      stats.drift.push(`${repo}#${issue.number}: board says Done, issue is still open — ${issue.url}`);
+      stats.drift.push(driftDoneButOpen(repo, issue));
     }
 
     if (Object.keys(patch).length === 0) { stats.tasksUnchanged++; continue; }
@@ -521,12 +682,12 @@ async function syncTasks(repo, projectId, issues, closedNumbers, prByIssue, feat
 
     // Genuinely absent from GitHub — deleted or transferred. Never auto-delete (the audit
     // trail is sacred); surface it and let a human decide.
-    stats.drift.push(`${repo}: task "${task.name}" has no matching issue #${n} on GitHub (deleted or transferred?)`);
+    stats.drift.push(driftOrphanTask(repo, task.name, n));
   }
 }
 
-async function syncRepo(repo, args) {
-  console.log(`\n${repo}`);
+async function syncRepo(repo, args, { header = true } = {}) {
+  if (header) console.log(`\n${repo}`);
   const [openIssues, closed, prs] = await Promise.all([
     fetchOpenIssues(repo),
     fetchClosedIssues(repo, args.includeClosed),
@@ -565,28 +726,414 @@ async function syncRepo(repo, args) {
   await syncTasks(repo, projectId, issues, closedNumbers, prByIssue, featureIds, args);
 }
 
-async function main() {
-  const args = parseArgs(process.argv.slice(2));
-  if (args.help) {
-    console.log(`portfolio-sync — reconcile GitHub into the KanbanFlow board (one-way, idempotent).
+// --- onboard ------------------------------------------------------------------------------
+//
+// Register a repo into the portfolio: make the repo<->project link DURABLE, then backfill
+// everything (milestones -> features, issues -> tasks, labels -> priority, comments).
+// Idempotent in both halves — re-running links nothing and creates nothing.
 
-  --dry-run              print the write plan, mutate nothing
-  --repos a/b,c/d        override the repo list
+async function linkProject(repo, args) {
+  const projects = await api("GET", "/api/projects");
+  const link = resolveProjectLink(repo, projects);
+  if (link.conflict) console.warn(`  ! ${link.conflict}`);
+
+  if (link.linkedBy === "marker") {
+    console.log(`          already linked → project #${link.project.id} "${link.project.name}"`);
+    return link.project.id;
+  }
+
+  if (link.linkedBy === "name") {
+    // Adopting a project the old name-matching found, and making that link permanent. This is
+    // the upgrade path for every project synced before the marker existed.
+    plan(args.dryRun, "link project", `#${link.project.id} "${link.project.name}" ← ${repo}  (name match → durable marker)`);
+    if (args.dryRun) return link.project.id;
+    const current = String(link.project.description || "").trim();
+    const description = current ? `${repoLinkMarker(repo)}\n${current}` : projectDescriptionFor(repo);
+    // PUT /api/projects/{id} is a TRUE partial update since #203: `name` is required (422
+    // without it) and any field NOT sent is preserved — so Goals and Readme are safe by
+    // omission. Sending them all back would be the riskier move here, not the safer one.
+    await api("PUT", `/api/projects/${link.project.id}`, { name: link.project.name, description });
+    stats.projectsLinked++;
+    return link.project.id;
+  }
+
+  // No project at all. Deliberately NOT created here: syncRepo's ensureProject creates it a
+  // moment later WITH the marker, and doing it in both places would print the plan twice and
+  // overstate a --dry-run's write set.
+  return null;
+}
+
+async function onboardRepo(repo, args) {
+  console.log(`\n${repo}  (onboard)`);
+  await linkProject(repo, args);
+  await syncRepo(repo, args, { header: false });
+}
+
+// --- push-issue (PREVIEW ONLY) -------------------------------------------------------------
+//
+// Computes, for every board task with no "#<n> " prefix, the exact GitHub issue it would
+// become — title, milestone, labels, body — and prints it. Then stops.
+//
+// WHY IT STOPS. Performing the write needs two operations that cannot be made one:
+// create the issue, then record its number on the board. The board's only identity for a
+// mirrored issue is the "#<n> " title prefix (TaskItem has no external-id column), and that
+// prefix cannot exist until the first operation has already succeeded. Everything that can
+// happen in that window produces a duplicate issue, and additive-only means nothing may close
+// it afterwards:
+//   * a crash between the two → the retry sees an unprefixed task and creates a second issue;
+//   * two concurrent push runs → both read the same unprefixed task, both create;
+//   * a `sync` landing mid-window → a second board task for the issue just created;
+//   * stamping the title races a human editing that same title — last writer wins, silently.
+// PUT /api/tasks/{id} has no ETag/version check, so there is nothing to lose that race on.
+//
+// The fix is a pending-operation id persisted through REST BEFORE the GitHub call and matched
+// back from the issue body on restart — real schema work, deliberately out of scope here.
+// Previewing is honest and useful; a write keyed on the title prefix would not be.
+
+function labelForPriority(labelNames, priority) {
+  // Pick a label the sync's own priorityFromLabel() will read back as this priority — the
+  // round trip has to be lossless or pushing a P0 silently returns as Medium.
+  return labelNames.find((n) => priorityFromLabel(n) === priority) ?? null;
+}
+
+function issueBodyFor(project, task, featureName) {
+  const description = stripSyncBlock(task.description);
+  const lines = [
+    `_From the KanbanFlow board — project **${project.name}**, feature **${featureName}**, task \`${task.id}\` (${task.status}/${task.priority})._`,
+    "",
+  ];
+  if (description) lines.push(description, "");
+  lines.push("---", "_GitHub owns this issue's content; the board task mirrors it._");
+  return lines.join("\n");
+}
+
+async function pushIssues(repo, args) {
+  console.log(`\n${repo}  (push-issue — PREVIEW ONLY, nothing is written to GitHub)`);
+  const projects = await api("GET", "/api/projects");
+  const link = resolveProjectLink(repo, projects);
+  if (link.conflict) console.warn(`  ! ${link.conflict}`);
+  if (!link.project) {
+    throw new Error(`${repo} has no project on the board. Run: node scripts/portfolio-sync.mjs onboard ${repo}`);
+  }
+  const projectId = link.project.id;
+
+  const tasks = await api("GET", `/api/projects/${projectId}/tasks`);
+  let candidates = tasks.filter((t) => issueNumberFromTaskName(t.name) === null);
+
+  if (args.task !== null) {
+    const chosen = tasks.find((t) => t.id === args.task);
+    if (!chosen) throw new Error(`task ${args.task} is not in project #${projectId} "${link.project.name}"`);
+    const already = issueNumberFromTaskName(chosen.name);
+    if (already !== null) {
+      console.log(`  task ${chosen.id} is already mirrored as #${already} — nothing to preview.`);
+      return;
+    }
+    candidates = [chosen];
+  } else if (!args.all) {
+    // Neither --task nor --all: list what COULD be pushed and stop.
+    console.log(`  ${candidates.length} task(s) have no "#<n> " prefix and would become issues:`);
+    for (const t of candidates.slice(0, 50)) console.log(`    ${String(t.id).padStart(5)}  [${t.status}/${t.priority}]  ${t.name}`);
+    if (candidates.length > 50) console.log(`    … and ${candidates.length - 50} more`);
+    console.log(`\n  Choose: --task <id> for one, --all for every one.`);
+    return;
+  }
+
+  if (args.limit > 0 && candidates.length > args.limit) {
+    console.log(`  ${candidates.length} candidates, capped at --limit ${args.limit}.`);
+    candidates = candidates.slice(0, args.limit);
+  }
+  if (candidates.length === 0) { console.log(`  no unsynced tasks — nothing to preview.`); return; }
+
+  const [milestones, labels] = await Promise.all([fetchMilestones(repo), fetchLabels(repo)]);
+  const milestoneTitles = new Set(milestones.map((m) => m.title));
+  const labelNames = labels.map((l) => l.name);
+
+  for (const task of candidates) {
+    const featureName = task.featureName || UNSORTED_FEATURE;
+    // A milestone is only ever ATTACHED, never created — so a feature with no matching
+    // milestone would land unfiled, and the preview says so instead of implying otherwise.
+    const milestone = featureName !== UNSORTED_FEATURE && milestoneTitles.has(featureName) ? featureName : null;
+    const label = labelForPriority(labelNames, task.priority);
+    const title = String(task.name).trim();
+    const body = issueBodyFor(link.project, task, featureName);
+
+    console.log(`  would create issue on ${repo} ← task ${task.id}`);
+    console.log(`      title:     ${title}`);
+    console.log(`      milestone: ${milestone ?? "(none)"}${featureName !== UNSORTED_FEATURE && !milestone ? `   ← feature "${featureName}" has no milestone on ${repo}; one would NOT be created` : ""}`);
+    console.log(`      labels:    ${label ?? "(none)"}`);
+    console.log(`      body:`);
+    for (const bodyLine of body.split("\n")) console.log(`      │ ${bodyLine}`);
+    if (task.priority !== "Medium" && !label) {
+      console.warn(`      ! no label on ${repo} maps to priority ${task.priority} — a sync would read this issue back as Medium.`);
+    }
+    stats.issuesPreviewed++;
+  }
+
+  console.log(`\n  Nothing was written. Performing these creates safely needs a durable board-side`);
+  console.log(`  issue link (see the "Why push-issue does not write" section of docs/GITHUB-SYNC.md).`);
+}
+
+// --- status -------------------------------------------------------------------------------
+//
+// Health check over both sides. Reports three distinct things that are easy to conflate:
+//   pending  — a disagreement `sync` WILL converge on its next run. Not a problem.
+//   unsynced — board tasks with no GitHub issue. `push-issue` candidates. Not a problem.
+//   drift    — a disagreement `sync` deliberately will NOT fix. Exits non-zero.
+// Read-only everywhere: it writes to neither GitHub nor the board.
+
+// KanbanFlow stores UTC but serialises DateTime with Kind=Unspecified, so its timestamps come
+// back WITHOUT a zone designator ("2026-08-02T22:08:43.594"). `new Date()` reads those as LOCAL
+// time, which reported a sync that had just run as "-239m ago" — exactly one UTC offset out.
+function asUtcDate(iso) {
+  const s = String(iso || "");
+  return new Date(/(?:Z|[+-]\d{2}:?\d{2})$/.test(s) ? s : `${s}Z`);
+}
+
+function agoText(iso) {
+  const ms = Date.now() - asUtcDate(iso).getTime();
+  if (!Number.isFinite(ms)) return "?";
+  const mins = Math.floor(ms / 60_000);
+  if (mins < 60) return `${mins}m ago`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 48) return `${hours}h ago`;
+  return `${Math.floor(hours / 24)}d ago`;
+}
+
+async function lastSyncAt(projectId, actor) {
+  try {
+    const events = await api("GET", `/api/projects/${projectId}/activity?limit=500`);
+    const hit = (events || []).find((e) => e.actor === actor);
+    return hit ? { at: hit.createdAt, eventType: hit.eventType } : null;
+  } catch (err) {
+    console.warn(`  ! could not read the activity trail for project ${projectId}: ${err.message}`);
+    return null;
+  }
+}
+
+async function statusRepo(repo, args, projects) {
+  const rec = {
+    repo, link: "none", projectId: null, projectName: null,
+    github: {}, board: { tasks: 0, mirrored: 0, unsynced: 0 },
+    pending: [], drift: [], unsynced: [], lastSync: null,
+  };
+
+  const link = resolveProjectLink(repo, projects);
+  rec.link = link.linkedBy ?? "none";
+  // A forked or ambiguous link is drift, not a warning: sync will not repair it and the
+  // mirror looks healthy while it silently splits.
+  if (link.conflict) rec.drift.push(`${repo}: ${link.conflict}`);
+  if (link.project) { rec.projectId = link.project.id; rec.projectName = link.project.name; }
+
+  const [openIssues, closedIssues, prs, milestones] = await Promise.all([
+    fetchOpenIssues(repo),
+    fetchClosedIssues(repo, false), // numbers only — enough to tell "closed" from "gone"
+    fetchOpenPrs(repo, false),
+    fetchMilestones(repo),
+  ]);
+  const closedNumbers = new Set(closedIssues.map((i) => i.number));
+  const openByNumber = new Map(openIssues.map((i) => [i.number, i]));
+  const prByIssue = mapIssueToOpenPr(prs);
+  rec.github = {
+    openIssues: openIssues.length, closedIssues: closedIssues.length,
+    openPrs: prs.length, linkedPrs: prByIssue.size, milestones: milestones.length,
+  };
+
+  if (!link.project) {
+    rec.pending.push(`${openIssues.length} issue(s) not on the board — no project yet (run \`onboard ${repo}\`)`);
+    return rec;
+  }
+
+  const tasks = await api("GET", `/api/projects/${link.project.id}/tasks`);
+  const byIssueNumber = new Map();
+  for (const t of tasks) {
+    const n = issueNumberFromTaskName(t.name);
+    if (n === null) rec.unsynced.push({ id: t.id, name: t.name, status: t.status, priority: t.priority });
+    else byIssueNumber.set(n, t);
+  }
+  rec.board = { tasks: tasks.length, mirrored: byIssueNumber.size, unsynced: rec.unsynced.length };
+
+  let closeLag = 0, titleLag = 0, priorityLag = 0, featureLag = 0, reviewLag = 0;
+  for (const [n, task] of byIssueNumber) {
+    const issue = openByNumber.get(n);
+    if (!issue) {
+      // Absent from the open set: either closed (sync converges it to Done) or genuinely gone.
+      if (closedNumbers.has(n)) { if (task.status !== "Done") closeLag++; }
+      else rec.drift.push(driftOrphanTask(repo, task.name, n));
+      continue;
+    }
+    // Same two conditions syncTasks uses, and the same message text (shared builders above),
+    // so `status` can never report drift that `sync` would not.
+    if (task.status === "Done") rec.drift.push(driftDoneButOpen(repo, issue));
+    if (task.name !== taskNameFor(issue)) titleLag++;
+    if (task.priority !== derivePriority(issue)) priorityLag++;
+    if ((task.featureName || "") !== featureNameFor(issue)) featureLag++;
+    if (prByIssue.get(n) && ADVANCEABLE_TO_REVIEW.has(task.status) && task.status !== "Review") reviewLag++;
+  }
+
+  const missing = openIssues.filter((i) => !byIssueNumber.has(i.number)).length;
+  if (missing) rec.pending.push(`${missing} GitHub issue(s) not on the board`);
+  if (closeLag) rec.pending.push(`${closeLag} task(s) whose issue is closed but which are not Done`);
+  if (titleLag) rec.pending.push(`${titleLag} task title(s) behind the issue title`);
+  if (priorityLag) rec.pending.push(`${priorityLag} task priority/-ies behind the issue labels`);
+  if (featureLag) rec.pending.push(`${featureLag} task(s) whose milestone moved`);
+  if (reviewLag) rec.pending.push(`${reviewLag} task(s) with an open linked PR not yet in Review`);
+
+  rec.lastSync = await lastSyncAt(link.project.id, args.actor);
+  return rec;
+}
+
+function printStatusRepo(rec) {
+  const g = rec.github;
+  console.log(`\n${rec.repo}`);
+  const linkText = rec.projectId === null
+    ? `UNLINKED — no project on the board`
+    : `project #${rec.projectId} "${rec.projectName}"  (${rec.link === "marker" ? "durable marker" : "name match only — run `onboard` to make it durable"})`;
+  console.log(`  link       ${linkText}`);
+  console.log(`  github     ${g.openIssues} open · ${g.closedIssues} closed issues · ${g.openPrs} open PRs (${g.linkedPrs} linked) · ${g.milestones} milestones`);
+  console.log(`  board      ${rec.board.tasks} tasks · ${rec.board.mirrored} mirrored · ${rec.board.unsynced} unsynced`);
+  // Normalised to an unambiguous ISO-with-Z rather than echoing the naive value back.
+  console.log(`  last sync  ${rec.lastSync ? `${asUtcDate(rec.lastSync.at).toISOString()}  (${agoText(rec.lastSync.at)}, ${rec.lastSync.eventType})` : "never — no activity by this actor"}`);
+  console.log(`  pending    ${rec.pending.length}${rec.pending.length ? "  (a `sync` run converges these)" : ""}`);
+  for (const p of rec.pending) console.log(`             · ${p}`);
+  console.log(`  unsynced   ${rec.unsynced.length}${rec.unsynced.length ? "  (`push-issue` candidates)" : ""}`);
+  for (const t of rec.unsynced.slice(0, 10)) console.log(`             · task ${t.id} [${t.status}/${t.priority}] ${t.name}`);
+  if (rec.unsynced.length > 10) console.log(`             · … and ${rec.unsynced.length - 10} more`);
+  console.log(`  drift      ${rec.drift.length}${rec.drift.length ? "  (`sync` will NOT fix these)" : ""}`);
+  for (const d of rec.drift) console.log(`             ! ${d}`);
+}
+
+async function statusAll(repos, args) {
+  const projects = await api("GET", "/api/projects");
+  const records = [];
+  const errors = [];
+  for (const repo of repos) {
+    try {
+      records.push(await statusRepo(repo, args, projects));
+    } catch (err) {
+      const note = `${repo}: ${err.message}`;
+      console.error(`  ERROR reading ${note}`);
+      errors.push(note);
+    }
+  }
+
+  const total = (key) => records.reduce((n, r) => n + r[key].length, 0);
+  const drift = total("drift"), pending = total("pending"), unsynced = total("unsynced");
+  const notDurable = records.filter((r) => r.link !== "marker").length;
+  // "I could not see everything" is a different answer from "I looked and it is clean", and
+  // conflating them is how a partial read reports a green board.
+  const blind = stats.incomplete.length > 0 || errors.length > 0;
+  const strictFail = args.strict && (pending > 0 || unsynced > 0 || notDurable > 0);
+  const exit = blind ? 2 : (drift > 0 || strictFail) ? 1 : 0;
+
+  if (args.json) {
+    console.log(JSON.stringify({
+      apiBaseUrl, exit, complete: !blind,
+      incomplete: stats.incomplete, errors,
+      repos: records, totals: { drift, pending, unsynced, notDurable },
+    }, null, 2));
+  } else {
+    for (const rec of records) printStatusRepo(rec);
+    console.log(`\n── summary ──`);
+    console.log(`repos:     ${records.length}${errors.length ? `  (${errors.length} could not be read)` : ""}`);
+    console.log(`drift:     ${drift}${drift ? "   ← FAIL" : ""}`);
+    console.log(`pending:   ${pending}`);
+    console.log(`unsynced:  ${unsynced}`);
+    console.log(`links not durable: ${notDurable}${notDurable ? "  (run `onboard <repo>`)" : ""}`);
+    if (blind) {
+      console.log(`\n── INCOMPLETE — this report cannot be trusted ──`);
+      for (const n of stats.incomplete) console.log(`  ! ${n}`);
+      for (const n of errors) console.log(`  ! could not read ${n}`);
+    }
+    console.log(`\nexit ${exit}  (0 = clean and complete · 1 = confirmed drift · 2 = incomplete or error)`);
+  }
+
+  // The gate an agent scripts against: `portfolio-sync.mjs status && <do work>`.
+  // --strict widens code 1 from "confirmed drift" to "anything outstanding at all".
+  process.exitCode = exit;
+}
+
+// --allow-write / --push are recognised so that asking for the write gets a real explanation
+// rather than "unknown option". They are refused, not honoured.
+function refusesWrite(args) {
+  if (!args.allowWrite) return false;
+  console.error(`
+push-issue is PREVIEW ONLY — --allow-write / --push is refused, by design.
+
+Creating the issue and recording its number on the board are two operations, and the board's
+only identity for a mirrored issue is the "#<n> " title prefix, which cannot exist until the
+first one has already succeeded. A crash, a second push run, or a \`sync\` landing in that
+window creates a duplicate issue — and additive-only means nothing here may close it.
+
+Enabling the write needs a pending-operation id persisted through REST BEFORE the GitHub call.
+That is schema work and is tracked separately. Until then:
+
+  node scripts/portfolio-sync.mjs push-issue ${args.repos?.[0] ?? "owner/repo"} --all
+      prints the exact issue each unsynced task would become, and writes nothing.
+
+See "Why push-issue does not write" in docs/GITHUB-SYNC.md.`);
+  process.exitCode = 2;
+  return true;
+}
+
+const HELP = `portfolio-sync — GitHub <-> KanbanFlow. GitHub is the source of truth; the board is
+the visualisation. Every command is idempotent and honours --dry-run.
+
+  sync                        GitHub -> board mirror. Read-only on GitHub. THE DEFAULT.
+  onboard <owner/repo>…       register a repo: link the Project durably, then backfill it.
+  push-issue <owner/repo>     PREVIEW ONLY: print the exact issue each unsynced board task
+                              would become. Refuses to write — see docs/GITHUB-SYNC.md.
+  status                      health check both sides.
+                              exit 0 = clean and complete · 1 = drift · 2 = incomplete/error
+
+common
+  --dry-run              print exactly what WOULD be written, write nothing
+  --repos a/b,c/d        override the repo list (bare "owner/repo" args work too)
+  --actor <name>         actor recorded on the audit trail (default: portfolio-sync)
+
+sync / onboard
   --include-closed       also mirror closed issues (as Done)
   --no-comments          skip GitHub comment mirroring (on by default)
   --max-comment-chars N  truncate each mirrored comment at N chars (default: no cap)
-  --actor <name>         actor recorded on the audit trail (default: portfolio-sync)
+
+push-issue
+  --task <id>            preview exactly this board task
+  --all                  preview every task with no "#<n> " prefix
+  --limit N              cap how many --all previews in one run
+
+status
+  --strict               also exit 1 on pending work, unsynced tasks, or a non-durable link
+  --json                 machine-readable report (includes the exit code and completeness)
+
+WRITE SURFACE ON GITHUB: NONE. This script only ever reads GitHub. It cannot create, close,
+delete, reword, re-label or reassign an issue. All writes go to the KanbanFlow REST API.
 
 Comments: issue comments, PR conversation, PR reviews (APPROVED -> Verification,
 CHANGES_REQUESTED -> Blocked), and inline file:line review comments are all mirrored onto
 the task, deduped by GitHub node id. Bot reviews are mirrored whole and can be very large.
 
-env: KANBANFLOW_API_URL (default http://127.0.0.1:5123), KANBANFLOW_PORTFOLIO_REPOS`);
+Full contract, mapping table and onboarding runbook: docs/GITHUB-SYNC.md
+env: KANBANFLOW_API_URL (default http://127.0.0.1:5123), KANBANFLOW_PORTFOLIO_REPOS`;
+
+async function main() {
+  const args = parseArgs(process.argv.slice(2));
+  if (args.help) { console.log(HELP); return; }
+  if (args.error) {
+    console.error(`${args.error}\n\n${HELP}`);
+    process.exitCode = 2;
+    return;
+  }
+  if (args.command === "push-issue" && refusesWrite(args)) return;
+  // `sync` and `status` sweep the whole portfolio by design. onboard/push-issue act on ONE
+  // repo at a time and must never fall back to the default six — silently onboarding or
+  // pushing to six repos because a repo argument was forgotten is not a recoverable mistake.
+  if ((args.command === "onboard" || args.command === "push-issue") && !args.repos?.length) {
+    console.error(`\`${args.command}\` needs an explicit repo:\n  node scripts/portfolio-sync.mjs ${args.command} owner/repo`);
+    process.exitCode = 2;
     return;
   }
 
   const repos = resolveRepos(args);
-  console.log(`portfolio-sync → ${apiBaseUrl}${args.dryRun ? "  (DRY RUN — no writes)" : ""}`);
+  console.log(`portfolio-sync ${args.command} → ${apiBaseUrl}${args.dryRun ? "  (DRY RUN — no writes)" : ""}`);
   console.log(`${repos.length} repos: ${repos.join(", ")}`);
 
   try {
@@ -597,16 +1144,33 @@ env: KANBANFLOW_API_URL (default http://127.0.0.1:5123), KANBANFLOW_PORTFOLIO_RE
     return;
   }
 
+  if (args.command === "status") {
+    if (args.dryRun) console.log(`(status is read-only — --dry-run has nothing to suppress)`);
+    await statusAll(repos, args);
+    return;
+  }
+
+  const runners = { sync: syncRepo, onboard: onboardRepo, "push-issue": pushIssues };
+  const run = runners[args.command];
   for (const repo of repos) {
     try {
-      await syncRepo(repo, args);
+      await run(repo, args);
     } catch (err) {
-      console.error(`  ERROR syncing ${repo}: ${err.message}`);
+      console.error(`  ERROR on ${repo}: ${err.message}`);
       process.exitCode = 1;
     }
   }
 
   console.log(`\n── summary ──`);
+  if (args.command === "push-issue") {
+    console.log(`issues previewed: ${stats.issuesPreviewed}`);
+    console.log(`issues created:   0   (push-issue never writes to GitHub)`);
+    return;
+  }
+
+  // Sync's summary, unchanged. The lifecycle counters print only when they are non-zero, so a
+  // plain `sync` run's output is byte-identical to what it has always been.
+  if (stats.projectsLinked) console.log(`projects linked:  ${stats.projectsLinked}`);
   console.log(`projects created: ${stats.projectsCreated}`);
   console.log(`features created: ${stats.featuresCreated}`);
   console.log(`tasks created:    ${stats.tasksCreated}`);
@@ -629,6 +1193,13 @@ env: KANBANFLOW_API_URL (default http://127.0.0.1:5123), KANBANFLOW_PORTFOLIO_RE
   if (stats.drift.length) {
     console.log(`\n── drift (${stats.drift.length}) — board and GitHub disagree ──`);
     for (const d of stats.drift) console.log(`  ! ${d}`);
+  }
+  // A mirror built from a read that stopped early is not a mirror. Same rule as the
+  // comment-fetch failures above: say so, and fail.
+  if (stats.incomplete.length) {
+    console.log(`\n── INCOMPLETE (${stats.incomplete.length}) — the mirror is missing data ──`);
+    for (const n of stats.incomplete) console.log(`  ! ${n}`);
+    process.exitCode = 1;
   }
 }
 

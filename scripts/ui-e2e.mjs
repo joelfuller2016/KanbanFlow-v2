@@ -86,6 +86,11 @@ async function test(name, fn) {
 
 function assert(cond, msg) { if (!cond) throw new Error(msg); }
 
+// Playwright rejections that mean "the thing a teardown would clean up no longer exists", so the
+// teardown is moot and must not mask the failure that triggered it. Deliberately narrow: any other
+// rejection from a teardown is a real bug and is rethrown.
+const IS_CONTEXT_GONE = /execution context was destroyed|target (page|closed)|target page, context or browser has been closed|cannot find context with specified id|frame was detached|browser has been closed|has been closed/i;
+
 // Blazor Server renders static HTML first, then connects an interactive circuit a
 // moment later. A click that lands before the circuit is live is a no-op, so we retry
 // the click until the expected element appears.
@@ -657,57 +662,86 @@ async function main() {
       assert(beforeIds.join(",") === partialTasks.map((task) => task.id).join(","),
         `seed: expected dense persisted order [${partialTasks.map((task) => task.id)}], got [${beforeIds}]`);
 
-      await page.evaluate(({ visibleIds }) => {
-        const column = document.querySelector('[data-testid="board-column-Todo-cards"]');
-        if (!column) throw new Error("Todo card container not found");
-        const originalChildren = Array.from(column.children);
-        const originalRevert = window.KanbanFlow._revertDraggedNode;
+      let bodyErr, unexpectedTeardownErr;
+      try {
+        await page.evaluate(({ visibleIds }) => {
+          const column = document.querySelector('[data-testid="board-column-Todo-cards"]');
+          if (!column) throw new Error("Todo card container not found");
+          const originalChildren = Array.from(column.children);
+          const originalRevert = window.KanbanFlow._revertDraggedNode;
 
-        // Restore the complete Blazor-owned DOM synchronously after Sortable reports the partial
-        // drop but before invokeMethodAsync starts the server round-trip.
-        const patched = function (evt) {
-          originalRevert.call(window.KanbanFlow, evt);
-          for (const child of originalChildren) column.appendChild(child);
-          window.KanbanFlow._revertDraggedNode = originalRevert;
-          delete window.KanbanFlow._e2eRevertPatch;
-          delete window.KanbanFlow._e2eOriginalRevert;
-        };
+          // Restore the complete Blazor-owned DOM synchronously after Sortable reports the partial
+          // drop but before invokeMethodAsync starts the server round-trip.
+          const patched = function (evt) {
+            originalRevert.call(window.KanbanFlow, evt);
+            for (const child of originalChildren) column.appendChild(child);
+            window.KanbanFlow._revertDraggedNode = originalRevert;
+            delete window.KanbanFlow._e2eRevertPatch;
+            delete window.KanbanFlow._e2eOriginalRevert;
+          };
 
-        // Publish both halves so the teardown below can undo the patch even when `onEnd` — and
-        // therefore the self-restore above — never fires. Without this the helper stays patched
-        // for the rest of the run and the closure pins every removed node in memory.
-        window.KanbanFlow._e2eRevertPatch = patched;
-        window.KanbanFlow._e2eOriginalRevert = originalRevert;
-        window.KanbanFlow._revertDraggedNode = patched;
+          // Publish both halves so the finally block can undo the patch even when `onEnd` — and
+          // therefore the self-restore above — never fires. Without it the helper stays patched
+          // for the remainder of THIS document (the next drag test navigates, which tears down the
+          // JS context and the patch with it), and until then the closure keeps every removed node
+          // reachable and every later drop on this page runs the stale wrapper.
+          window.KanbanFlow._e2eRevertPatch = patched;
+          window.KanbanFlow._e2eOriginalRevert = originalRevert;
+          window.KanbanFlow._revertDraggedNode = patched;
 
-        for (const child of originalChildren) {
-          const id = Number(child.getAttribute("data-task-id"));
-          if (!visibleIds.includes(id)) child.remove();
+          for (const child of originalChildren) {
+            const id = Number(child.getAttribute("data-task-id"));
+            if (!visibleIds.includes(id)) child.remove();
+          }
+        }, { visibleIds: [visibleAnchor.id, movedVisible.id] });
+
+        const renderedIds = await page.$$eval(
+          '[data-testid="board-column-Todo-cards"] [data-task-id]',
+          (els) => els.map((el) => Number(el.getAttribute("data-task-id"))),
+        );
+        assert(renderedIds.join(",") === [visibleAnchor.id, movedVisible.id].join(","),
+          `staged board must render only the two visible cards, got [${renderedIds}]`);
+
+        await dragCardBefore(page,
+          `[data-testid="board-card-${movedVisible.id}"]`,
+          `[data-testid="board-card-${visibleAnchor.id}"]`);
+      } catch (err) {
+        bodyErr = err;
+      } finally {
+        // Must be a real finally: the staged-board assert above and dragCardBefore both throw, and
+        // the surrounding test() helper catches and continues to the next test — so a teardown
+        // placed merely *after* the drag is skipped on exactly the failure paths that leave the
+        // patch installed. Restore ONLY while our own patch is still the installed helper: if
+        // `onEnd` already restored it, or anything else replaced it since, overwriting here would
+        // reinstate a stale function. `?? {}` keeps this a no-op if the JS context is already gone.
+        //
+        // Best-effort by construction: `page.evaluate` REJECTS when the execution context is
+        // destroyed by a navigation, or when the page/context/browser has been closed. A throw
+        // inside a `finally` REPLACES the exception that put us here — so we store any unexpected
+        // teardown error in `unexpectedTeardownErr` and surface it AFTER the finally block, where
+        // it cannot mask the primary body failure. Context-gone errors are swallowed (teardown is
+        // moot once the page is gone); everything else is a real bug and surfaces below.
+        try {
+          await page.evaluate(() => {
+            const kf = window.KanbanFlow ?? {};
+            if (kf._e2eRevertPatch && kf._revertDraggedNode === kf._e2eRevertPatch) {
+              kf._revertDraggedNode = kf._e2eOriginalRevert;
+            }
+            delete kf._e2eRevertPatch;
+            delete kf._e2eOriginalRevert;
+          });
+        } catch (err) {
+          if (!IS_CONTEXT_GONE.test(err?.message ?? "")) unexpectedTeardownErr = err;
         }
-      }, { visibleIds: [visibleAnchor.id, movedVisible.id] });
-
-      const renderedIds = await page.$$eval(
-        '[data-testid="board-column-Todo-cards"] [data-task-id]',
-        (els) => els.map((el) => Number(el.getAttribute("data-task-id"))),
-      );
-      assert(renderedIds.join(",") === [visibleAnchor.id, movedVisible.id].join(","),
-        `staged board must render only the two visible cards, got [${renderedIds}]`);
-
-      await dragCardBefore(page,
-        `[data-testid="board-card-${movedVisible.id}"]`,
-        `[data-testid="board-card-${visibleAnchor.id}"]`);
-
-      // Finally-style teardown: undo the patch if the drop never fired. Restore ONLY while our own
-      // patch is still the installed helper — if `onEnd` already restored it, or anything else
-      // replaced it since, overwriting here would reinstate a stale function.
-      await page.evaluate(() => {
-        const kf = window.KanbanFlow;
-        if (kf._e2eRevertPatch && kf._revertDraggedNode === kf._e2eRevertPatch) {
-          kf._revertDraggedNode = kf._e2eOriginalRevert;
+      }
+      // Surface errors outside the finally so neither masks the other.
+      if (bodyErr) {
+        if (unexpectedTeardownErr) {
+          console.error(`[e2e teardown] additional error after body failure: ${unexpectedTeardownErr.message}`);
         }
-        delete kf._e2eRevertPatch;
-        delete kf._e2eOriginalRevert;
-      });
+        throw bodyErr;
+      }
+      if (unexpectedTeardownErr) throw unexpectedTeardownErr;
 
       const expectedIds = [hiddenBefore.id, movedVisible.id, visibleAnchor.id, hiddenMiddle.id, hiddenAfter.id];
       const afterTasks = await waitForProjectBoardOrder(partialProj.id, "Todo", expectedIds);
@@ -1889,6 +1923,119 @@ async function main() {
       const notPromoted = await api("GET", `/api/ideas/${idea.id}`);
       assert(notPromoted.status === "New",
         `Esc on the PROMOTE confirm must cancel it — the idea is now ${notPromoted.status}`);
+    });
+
+    // ── Scenario: the activity timeline's fold survives a refresh of the SAME task (#328) ──
+    //
+    // ActivityTimeline re-reads its audit events when TaskId OR RefreshToken changes, and it used
+    // to reset `expanded` for BOTH — so posting a comment (which bumps RefreshToken; see
+    // TaskDetailPanel.AddCommentAsync) collapsed the history the reader had just opened, right
+    // underneath them. `eventLimit` was correctly guarded on "different task only" and `expanded`
+    // was not; the two are the same invariant.
+    //
+    // This is a browser test on purpose. The bug lived in the WIRING — which state resets sit
+    // inside which guard in OnParametersSet — so a unit test on an extracted helper would have
+    // gone green against the broken component. There is no bUnit in this repo by choice.
+    await test("Timeline: posting a comment does not re-collapse an expanded history (#328)", async () => {
+      const timelineTask = await api("POST", `/api/features/${feature.id}/tasks`,
+        { name: `E2E timeline fold ${stamp}` });
+
+      // CollapseAfter is 10 in TaskDetailPanel, so this has to clear 10 rows to produce a fold.
+      //
+      // The expected row count is 13, and every term matters:
+      //   12  comments. Each ALSO writes a paired TaskCommentAdded event, which the timeline
+      //       de-duplicates away — so this contributes 12 rows, not 24. Asserted, not assumed:
+      //       if de-duplication broke, the toggle below would read "Show all 25".
+      //  + 1  the task's own creation. TaskService writes a TaskCreated event AND a Created
+      //       comment for it; those de-duplicate to a single row too (the event wins, it carries
+      //       the snapshot).
+      const seeded = 12;
+      const expectedRows = seeded + 1;
+      for (let i = 1; i <= seeded; i++) {
+        await api("POST", `/api/tasks/${timelineTask.id}/comments`,
+          { text: `seeded comment ${i}`, author: "seed", type: "Note" });
+      }
+
+      await page.goto(`${baseUrl}/project/${proj.id}`);
+      await clickUntil(
+        () => page.locator(`[data-testid="board-card-${timelineTask.id}-title"]`).click(),
+        page.locator('[data-testid="task-detail-panel"]'),
+      );
+
+      const entries = page.locator('[data-testid="activity-timeline-entry"]');
+      const toggle = page.locator('[data-testid="activity-timeline-toggle"]');
+
+      // Folded: exactly CollapseAfter rows, with a toggle offering the rest.
+      await toggle.waitFor({ state: "visible" });
+
+      // …then settle on the MERGED total before asserting on it.
+      //
+      // The theory this guards against (raised in review): TaskDetailPanel awaits its comment
+      // load, but ActivityTimeline's event load is fire-and-forget, so there should be an
+      // intermediate render with all 12 comments and `events` still empty — nothing
+      // de-duplicated, 12 rows, which already exceeds CollapseAfter, so the toggle would be
+      // visible in that state reading "Show all 12". `folded === 10` is true there too and
+      // cannot separate the two states.
+      //
+      // MEASURED, and it did not reproduce. Sampling the toggle label every 5ms from before the
+      // panel opens, across 12 runs — 6 warm, and 6 with a deliberate `await Task.Delay(1500)`
+      // injected into LoadEventsAsync (confirmed to have reached the built DLL, not just the
+      // source) — the first state ever present in the DOM was "Show all 13 | rows=10", at +0ms.
+      // A 1500ms window would have been trivial to catch, so whatever Blazor is batching, the
+      // un-merged render does not reach the browser here.
+      //
+      // The wait is kept regardless: it is a no-op in the state that was actually measured, and
+      // one predicate evaluation is cheaper than diagnosing a load-dependent flake later. It is
+      // NOT evidence of a bug that was observed — do not cite it as one.
+      //
+      // The timeout is swallowed on purpose: if the merge is genuinely broken the assertion
+      // below reports WHAT it saw, which beats an opaque Playwright timeout.
+      await page.waitForFunction(
+        (n) => document.querySelector('[data-testid="activity-timeline-toggle"]')
+          ?.innerText.includes(`Show all ${n}`) ?? false,
+        expectedRows, { timeout: 10000 },
+      ).catch(() => { /* fall through to the diagnostic assertion */ });
+
+      const folded = await entries.count();
+      assert(folded === 10, `expected the timeline folded to 10 rows, saw ${folded}`);
+      assert(
+        (await toggle.innerText()).includes(`Show all ${expectedRows}`),
+        `expected "Show all ${expectedRows}" — ${seeded} comments must merge with their paired ` +
+        `TaskCommentAdded events into ${seeded} rows, not ${seeded * 2}. Saw "${await toggle.innerText()}"`,
+      );
+
+      // Expand.
+      await toggle.click();
+      await page.waitForFunction(
+        (n) => document.querySelectorAll('[data-testid="activity-timeline-entry"]').length === n,
+        expectedRows, { timeout: 10000 },
+      );
+
+      // Now post a comment THROUGH THE UI. This is the RefreshToken bump — the same task, not a
+      // different one.
+      await page.locator('[data-testid="task-comment-input"]').fill(`typed while expanded ${stamp}`);
+      await page.locator('[data-testid="task-comment-add-button"]').click();
+
+      // The new row must appear (proves the refresh actually happened — without this the
+      // assertion below could pass simply because nothing re-rendered at all)…
+      await page.waitForFunction(
+        (s) => [...document.querySelectorAll('[data-testid="activity-timeline-entry"]')]
+          .some((e) => e.textContent.includes(`typed while expanded ${s}`)),
+        stamp, { timeout: 10000 },
+      );
+
+      // …and the history must still be OPEN. On the broken build this is 10.
+      const after = await entries.count();
+      assert(
+        after === expectedRows + 1,
+        `history re-collapsed after a same-task refresh: expected ${expectedRows + 1} rows, saw ${after}`,
+      );
+      assert(
+        (await toggle.innerText()).includes("Show fewer"),
+        `toggle reverted to the folded label after a refresh: "${await toggle.innerText()}"`,
+      );
+
+      await api("DELETE", `/api/tasks/${timelineTask.id}`).catch(() => {});
     });
 
     // ── Scenario E: Settings -> Run all shows an all-passed result table ──
