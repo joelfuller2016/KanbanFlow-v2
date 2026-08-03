@@ -466,7 +466,7 @@ dotnet run --project src/KanbanFlow/KanbanFlow.csproj --urls http://127.0.0.1:51
 
 ## Surfaces at a glance
 
-- **Kanban UI** — a **Project Outline** (left panel: Project → Features → Tasks as draggable mini-cards) and a **Kanban Board** (main area: cards auto-placed by status; drag-and-drop or the done-checkbox to change it). Click a card for full detail; modals create/edit items.
+- **Kanban UI** — a **Project Outline** (left panel: Project → Features → Tasks as draggable mini-cards) and a **Kanban Board** (main area: cards auto-placed by status; drag-and-drop or the done-checkbox to change it). Click a card for full detail; modals create/edit items. A **filter bar** above the board narrows it in real time by free-text search (name + description), priority, assignee, claimed-by, and a hide-done switch — all AND-combined, all carried in the query string (`?q=&priority=&assignee=&claimedBy=&hideDone=`) so a filtered view survives a reload and can be shared as a link. Filtering never touches persisted order: a drag under an active filter anchors on the next *visible* card's identity and the server resolves it against the full persisted column.
 - **REST API** — full CRUD for every entity, so agents read and write project data over plain HTTP/JSON.
 - **MCP server** — the same capabilities as first-class agent tools (native in-process `/mcp` plus a Node stdio wrapper).
 - **OpenAPI spec** — machine-readable API description at `/openapi.json` (302 → `/openapi/v1.json`) so agents discover the surface without reading source.

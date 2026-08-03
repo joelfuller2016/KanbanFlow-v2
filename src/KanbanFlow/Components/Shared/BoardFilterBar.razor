@@ -1,0 +1,143 @@
+@* The task board's filter bar (#112).
+
+   PRESENTATIONAL ONLY — it owns no state. Every control reports through an EventCallback and the
+   HOST page (ProjectView) holds the TaskFilterState, narrows its task list, and syncs the URL. That
+   split is not stylistic: KanbanBoard became generic in PR #300 (`<TItem, TStatus>`) and is shared
+   with /ideas, so the filter cannot live on the board — it has to be applied at the call site that
+   knows what a TaskItem is. See TaskFilter.cs for why that is also the SAFE place.
+
+   Every text input binds with `@bind:event="oninput"` so the board narrows as you type (AC 2). The
+   host must therefore resolve its filtered list on CHANGE, never in a render-path computed property
+   — such a property re-runs on every render, i.e. once per keystroke. *@
+
+<section class="board-filter-bar border-bottom bg-white px-3 py-2"
+         data-testid="board-filter-bar"
+         aria-label="Filter board tasks">
+    <div class="row g-2 align-items-center">
+        <div class="col-12 col-md-4">
+            <label class="visually-hidden" for="board-filter-search">Search tasks by name or description</label>
+            <input id="board-filter-search"
+                   type="search"
+                   class="form-control form-control-sm"
+                   placeholder="Search name or description..."
+                   data-testid="board-filter-search"
+                   value="@Filter.Search"
+                   @oninput="e => OnSearchChanged.InvokeAsync(e.Value?.ToString())" />
+        </div>
+
+        <div class="col-6 col-md-2">
+            <label class="visually-hidden" for="board-filter-assignee">Filter by assignee</label>
+            <input id="board-filter-assignee"
+                   type="text"
+                   class="form-control form-control-sm"
+                   placeholder="Assignee..."
+                   data-testid="board-filter-assignee"
+                   value="@Filter.Assignee"
+                   @oninput="e => OnAssigneeChanged.InvokeAsync(e.Value?.ToString())" />
+        </div>
+
+        <div class="col-6 col-md-2">
+            <label class="visually-hidden" for="board-filter-claimed-by">Filter by claimed by</label>
+            <input id="board-filter-claimed-by"
+                   type="text"
+                   class="form-control form-control-sm"
+                   placeholder="Claimed by..."
+                   data-testid="board-filter-claimed-by"
+                   value="@Filter.ClaimedBy"
+                   @oninput="e => OnClaimedByChanged.InvokeAsync(e.Value?.ToString())" />
+        </div>
+
+        @* Priority multiselect. Real <input type="checkbox"> elements, not a <select multiple>: a
+           multiple-select is unusable with a touch keyboard and gives no at-a-glance read of what is
+           on. Bootstrap's btn-check renders them as a segmented control while keeping the checkbox
+           semantics (and therefore the keyboard and screen-reader behaviour) intact — the LABEL is
+           the hit target, which is what a user (and an e2e test) clicks. *@
+        <div class="col-12 col-md-4 d-flex flex-wrap align-items-center gap-2">
+            @* A flex row of `btn-check` pairs, NOT a `.btn-group`. Four chips do not fit beside the
+               hide-done switch at 390px, and a btn-group that wraps draws its rounded end-caps in
+               the middle of the row. Bootstrap's `.btn-check:checked + .btn` rule is an ADJACENT
+               SIBLING selector, so it works here exactly as it does inside a group — the input must
+               simply stay immediately before its label. *@
+            <div class="board-filter-priorities d-flex flex-wrap gap-1" role="group" aria-label="Filter by priority">
+                @foreach (var priority in Enum.GetValues<TaskPriority>())
+                {
+                    var isOn = Filter.Priorities.Contains(priority);
+                    <input type="checkbox"
+                           class="btn-check"
+                           autocomplete="off"
+                           id="@($"board-filter-priority-{priority}")"
+                           checked="@isOn"
+                           @onchange="e => OnPriorityToggled.InvokeAsync((priority, e.Value is true))" />
+                    <label class="btn btn-sm btn-outline-secondary"
+                           for="@($"board-filter-priority-{priority}")"
+                           data-testid="@($"board-filter-priority-{priority}")">@priority</label>
+                }
+            </div>
+
+            <div class="form-check form-switch mb-0">
+                <input class="form-check-input"
+                       type="checkbox"
+                       role="switch"
+                       id="board-filter-hide-done"
+                       data-testid="board-filter-hide-done"
+                       checked="@Filter.HideDone"
+                       @onchange="e => OnHideDoneChanged.InvokeAsync(e.Value is true)" />
+                <label class="form-check-label small" for="board-filter-hide-done">Hide done</label>
+            </div>
+        </div>
+    </div>
+
+    <div class="d-flex flex-wrap align-items-center gap-2 mt-2">
+        @* Announced politely, not assertively: narrowing a board is not an emergency, and with
+           `oninput` binding this text changes on every keystroke. *@
+        <span class="text-muted small" aria-live="polite" aria-atomic="true" data-testid="board-filter-summary">
+            @if (Filter.IsActive)
+            {
+                @($"Showing {MatchCount} of {TotalCount} task{(TotalCount == 1 ? "" : "s")}")
+            }
+            else
+            {
+                @($"{TotalCount} task{(TotalCount == 1 ? "" : "s")}")
+            }
+        </span>
+
+        @* Always rendered, never conditionally: `disabled` keeps the control's identity stable so a
+           keyboard user's focus is not thrown away the moment their last filter clears. *@
+        <button type="button"
+                class="btn btn-sm btn-outline-secondary ms-auto"
+                data-testid="board-filter-clear"
+                disabled="@(!Filter.IsActive)"
+                @onclick="() => OnClear.InvokeAsync()">
+            Clear filters
+        </button>
+    </div>
+</section>
+
+@code {
+    /// <summary>The current filter. The host owns it; this component only renders it.</summary>
+    [Parameter, EditorRequired] public TaskFilterState Filter { get; set; } = TaskFilterState.Empty;
+
+    /// <summary>How many tasks survive <see cref="Filter"/>.</summary>
+    [Parameter] public int MatchCount { get; set; }
+
+    /// <summary>How many tasks the project has in total.</summary>
+    [Parameter] public int TotalCount { get; set; }
+
+    /// <summary>Raised on every keystroke in the search box.</summary>
+    [Parameter] public EventCallback<string?> OnSearchChanged { get; set; }
+
+    /// <summary>Raised on every keystroke in the assignee box.</summary>
+    [Parameter] public EventCallback<string?> OnAssigneeChanged { get; set; }
+
+    /// <summary>Raised on every keystroke in the claimed-by box.</summary>
+    [Parameter] public EventCallback<string?> OnClaimedByChanged { get; set; }
+
+    /// <summary>Raised when a priority chip is switched on (<c>true</c>) or off (<c>false</c>).</summary>
+    [Parameter] public EventCallback<(TaskPriority Priority, bool Selected)> OnPriorityToggled { get; set; }
+
+    /// <summary>Raised when the hide-done switch is flipped.</summary>
+    [Parameter] public EventCallback<bool> OnHideDoneChanged { get; set; }
+
+    /// <summary>Raised when "Clear filters" is pressed.</summary>
+    [Parameter] public EventCallback OnClear { get; set; }
+}

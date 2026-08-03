@@ -739,6 +739,212 @@ async function main() {
         `fractional SortOrder did not survive GET -> PUT: ${roundTripped.sortOrder}`);
     });
 
+    // ── #112: the board filter bar ───────────────────────────────────────────────────────────
+    // The scenario above STAGED a partial board by deleting DOM nodes. This one is the real thing:
+    // ProjectView narrows its own list and hands the board a genuine subset, so these scenarios are
+    // what fail if `Items="allTasks"` is ever restored at the call site. Five Todo cards in one
+    // feature, four of which share a token the fifth does not — the odd one out sits in the MIDDLE
+    // of the persisted order, which is the only seed shape that can catch a drag anchoring against
+    // a rendered index instead of a persisted identity.
+    const filterProj = await api("POST", "/api/projects", { name: `E2E Filter ${stamp}` });
+    const filterFeature = await api("POST", `/api/projects/${filterProj.id}/features`, { name: "E2E Filter Feature" });
+    const filterTasks = [];
+    for (const [label, priority, status, assignee] of [
+      ["Keep A", "High", "Todo", "alice"],
+      ["Keep B", "Low", "Todo", "bob"],
+      ["Skip C", "High", "Todo", "alice"],
+      ["Keep D", "Low", "Todo", "bob"],
+      ["Keep E", "High", "Todo", "alice"],
+    ]) {
+      filterTasks.push(await api("POST", `/api/features/${filterFeature.id}/tasks`, {
+        name: `E2E Filter ${label} ${stamp}`,
+        description: label.startsWith("Keep") ? "matching description" : "excluded description",
+        priority,
+        status,
+        assignee,
+        sortOrder: filterTasks.length,
+      }));
+    }
+    const [keepA, keepB, skipC, keepD, keepE] = filterTasks;
+    // A second status, so "≥2 statuses" is real and the Done/hide-done clause has something to bite.
+    const filterDone = await api("POST", `/api/features/${filterFeature.id}/tasks`, {
+      name: `E2E Filter Keep F ${stamp}`, description: "matching description",
+      priority: "High", status: "Done", sortOrder: 10, assignee: "alice",
+    });
+    await api("POST", `/api/tasks/${keepA.id}/claim`, { actor: `e2e-agent-${stamp}` });
+
+    const filterUrl = (query = "") => `${baseUrl}/project/${filterProj.id}${query}`;
+    const renderedBoardIds = (page) => page.$$eval(
+      '[data-testid="kanban-board"] [data-task-id]',
+      (els) => els.map((el) => Number(el.getAttribute("data-task-id"))),
+    );
+    // Per column: the count badge (computed by KanbanColumn from the MODEL it was handed) beside the
+    // ids actually rendered (put there by the Blazor DIFF). Under a filter those two can disagree
+    // only if the page filtered the render but not the list, which is exactly the bug worth naming.
+    const readBadges = (page) => page.evaluate((statuses) => statuses.map((status) => {
+      const column = document.querySelector(`[data-testid="board-column-${status}"]`);
+      const badge = column?.querySelector("h3 .badge");
+      return {
+        status,
+        badge: Number((badge?.textContent ?? "").replace(/[^0-9]/g, "")),
+        cards: column?.querySelectorAll("[data-task-id]").length ?? -1,
+      };
+    }), TASK_COLUMNS);
+
+    await test("Board filter narrows the board from the URL and survives a reload", async () => {
+      // Deep link, not a click: this is simultaneously the "a shared link works" case and the
+      // "filter state round-trips through the query string" case.
+      await page.goto(filterUrl("?q=Keep"));
+      await page.locator('[data-testid="board-filter-bar"]').waitFor({ state: "visible" });
+      for (const task of [keepA, keepB, keepD, keepE]) {
+        await page.locator(`[data-testid="board-card-${task.id}"]`).waitFor({ state: "visible" });
+      }
+
+      const shown = await renderedBoardIds(page);
+      const expected = [keepA.id, keepB.id, keepD.id, keepE.id, filterDone.id].sort((a, b) => a - b);
+      assert(shown.slice().sort((a, b) => a - b).join(",") === expected.join(","),
+        `filtered board must render only matching cards — expected [${expected}], got [${shown}]`);
+      assert(!shown.includes(skipC.id), `the non-matching card ${skipC.id} is still rendered`);
+
+      const badges = await readBadges(page);
+      assert(badges.every((row) => row.badge === row.cards),
+        `each column's count badge must equal its rendered card count: ${JSON.stringify(badges)}`);
+
+      // The search box itself must be repopulated too — a board that is filtered while the control
+      // reads empty tells the user their view is unfiltered, which is worse than not filtering.
+      assert(await page.locator('[data-testid="board-filter-search"]').inputValue() === "Keep",
+        "the search box did not restore its value from the URL");
+
+      await page.reload();
+      await page.locator('[data-testid="board-filter-bar"]').waitFor({ state: "visible" });
+      await page.locator(`[data-testid="board-card-${keepA.id}"]`).waitFor({ state: "visible" });
+      const afterReload = await renderedBoardIds(page);
+      assert(afterReload.slice().sort((a, b) => a - b).join(",") === expected.join(","),
+        `the filter did not survive a reload — expected [${expected}], got [${afterReload}]`);
+    });
+
+    await test("Board filter clauses combine, and Clear resets both the board and the URL", async () => {
+      await page.goto(filterUrl());
+      await page.locator('[data-testid="board-filter-bar"]').waitFor({ state: "visible" });
+      await page.locator(`[data-testid="board-card-${skipC.id}"]`).waitFor({ state: "visible" });
+      // A rendered card only proves the STATIC prerender landed. Every control below is
+      // `@oninput`/`@onchange`, so a keystroke sent before the interactive circuit is live is
+      // swallowed and the test reports "the filter does nothing" — see clickUntil's note on the
+      // same race. Sortable is bound from OnAfterRenderAsync, i.e. strictly after the circuit is
+      // live, so it is the cheapest honest readiness signal the page exposes.
+      await waitForSortableArmed(page, "Todo");
+
+      // Type into the real control (not the URL) so the oninput -> filter -> URL path is exercised.
+      // Settle on each control's own query key before touching the next one: three writes to the
+      // same URL in flight at once is a race the test would report as "the priority chip does
+      // nothing", which is a lie about which half is broken.
+      const waitForQuery = async (key, value) => {
+        try {
+          await page.waitForFunction(
+            ({ k, v }) => new URL(window.location.href).searchParams.get(k) === v,
+            { k: key, v: value }, { timeout: 10000 });
+        } catch {
+          throw new Error(`the "${key}" control never reached the URL — expected ${key}=${value}, URL is ${page.url()}`);
+        }
+      };
+
+      await page.locator('[data-testid="board-filter-search"]').fill("Keep");
+      await waitForQuery("q", "Keep");
+      // Priority chips are btn-check inputs; the LABEL is the hit target, as it is for a user.
+      await page.locator('[data-testid="board-filter-priority-High"]').click();
+      await waitForQuery("priority", "High");
+      await page.locator('[data-testid="board-filter-hide-done"]').check();
+      await waitForQuery("hideDone", "true");
+      // Keep A and Keep E are the only High + non-Done + "Keep" tasks.
+      const expectedCombined = [keepA.id, keepE.id].sort((a, b) => a - b);
+      try {
+        await page.waitForFunction(
+          (ids) => {
+            const rendered = [...document.querySelectorAll('[data-testid="kanban-board"] [data-task-id]')]
+              .map((el) => Number(el.getAttribute("data-task-id"))).sort((a, b) => a - b);
+            return rendered.join(",") === ids.join(",");
+          },
+          expectedCombined,
+          { timeout: 10000 },
+        );
+      } catch {
+        assert(false, `search + priority + hide-done must AND together — expected [${expectedCombined}], got [${await renderedBoardIds(page)}]`);
+      }
+
+      const url = new URL(page.url());
+      assert(url.searchParams.get("q") === "Keep", `URL lost the search term: ${page.url()}`);
+      assert(url.searchParams.get("priority") === "High", `URL lost the priority chip: ${page.url()}`);
+      assert(url.searchParams.get("hideDone") === "true", `URL lost hide-done: ${page.url()}`);
+
+      // Every column is empty except Backlog/Todo — those must say "no tasks MATCH", never the
+      // "no tasks in Review yet, add one" placeholder, which under a filter is a lie.
+      const emptyStates = await page.evaluate(() =>
+        [...document.querySelectorAll(".kanban-column-empty")].map((el) => el.textContent.trim()));
+      assert(emptyStates.length > 0, "expected at least one empty column while filtered");
+      assert(emptyStates.every((text) => text.includes("No tasks match these filters")),
+        `a filtered-out column showed the wrong empty state: ${JSON.stringify(emptyStates)}`);
+
+      await page.locator('[data-testid="board-filter-clear"]').click();
+      await page.locator(`[data-testid="board-card-${skipC.id}"]`).waitFor({ state: "visible" });
+      const cleared = await renderedBoardIds(page);
+      assert(cleared.length === 6, `Clear must restore every card — expected 6, got ${cleared.length}`);
+      assert(!page.url().includes("?"), `Clear must empty the query string too, got ${page.url()}`);
+      assert(await page.locator('[data-testid="board-filter-search"]').inputValue() === "",
+        "Clear left the search box populated");
+    });
+
+    // AC 5, and the only place filtering can CORRUPT data rather than merely mis-display it.
+    // Persisted Todo order is A, B, C, D, E with C hidden by the filter. Dragging E onto B's top
+    // edge means "put E before B"; the third OnCardMoved argument is B's IDENTITY, so the server
+    // resolves it against the full persisted column and lands E at index 1 — A, E, B, C, D, with the
+    // hidden C still between B and D and every bystander's rank untouched. A rendered-INDEX
+    // implementation would instead read "index 1 of the four visible cards" and be right here by
+    // accident, so the assertion below checks the whole persisted sequence AND the bystander ranks.
+    await test("Dragging under an active filter persists the correct position across a hidden card", async () => {
+      await page.goto(filterUrl("?q=Keep"));
+      await page.locator('[data-testid="board-filter-bar"]').waitFor({ state: "visible" });
+      for (const task of [keepA, keepB, keepD, keepE]) {
+        await page.locator(`[data-testid="board-card-${task.id}"]`).waitFor({ state: "visible" });
+      }
+      await waitForSortableArmed(page, "Todo");
+
+      const beforeTasks = (await api("GET", `/api/projects/${filterProj.id}/board`)).Todo;
+      const beforeIds = beforeTasks.map((task) => task.id);
+      const beforeRanks = new Map(beforeTasks.map((task) => [task.id, task.sortOrder]));
+      assert(beforeIds.join(",") === [keepA.id, keepB.id, skipC.id, keepD.id, keepE.id].join(","),
+        `seed: expected persisted Todo order [${[keepA.id, keepB.id, skipC.id, keepD.id, keepE.id]}], got [${beforeIds}]`);
+
+      // Load-bearing precondition: the hidden card must actually be absent from the DOM, or the
+      // drag below is an ordinary unfiltered drag and proves nothing about filtering.
+      const renderedInColumn = await page.$$eval(
+        '[data-testid="board-column-Todo-cards"] [data-task-id]',
+        (els) => els.map((el) => Number(el.getAttribute("data-task-id"))),
+      );
+      assert(renderedInColumn.join(",") === [keepA.id, keepB.id, keepD.id, keepE.id].join(","),
+        `the filtered Todo column must render exactly [A,B,D,E], got [${renderedInColumn}]`);
+
+      await dragCardBefore(page,
+        `[data-testid="board-card-${keepE.id}"]`,
+        `[data-testid="board-card-${keepB.id}"]`);
+
+      const expectedOrder = [keepA.id, keepE.id, keepB.id, skipC.id, keepD.id];
+      const afterTasks = await waitForProjectBoardOrder(filterProj.id, "Todo", expectedOrder);
+
+      for (const task of afterTasks.filter((task) => task.id !== keepE.id)) {
+        assert(task.sortOrder === beforeRanks.get(task.id),
+          `bystander ${task.id} SortOrder changed from ${beforeRanks.get(task.id)} to ${task.sortOrder}`);
+      }
+
+      // And the human's own confirmation: clear the filter and read the order off the board.
+      await page.locator('[data-testid="board-filter-clear"]').click();
+      await page.locator(`[data-testid="board-card-${skipC.id}"]`).waitFor({ state: "visible" });
+      await page.waitForFunction((ids) => {
+        const rendered = [...document.querySelectorAll('[data-testid="board-column-Todo-cards"] [data-task-id]')]
+          .map((el) => Number(el.getAttribute("data-task-id")));
+        return rendered.join(",") === ids.join(",");
+      }, expectedOrder, { timeout: 10000 });
+    });
+
     // The outline already has a live partial-DOM seam: expanded subtask cards are direct siblings
     // of task cards inside `.feature-tasks`, so evt.newIndex counts nodes the database task list
     // does not contain. Identity anchoring must scan past those non-task siblings.
@@ -1541,6 +1747,7 @@ async function main() {
     await api("DELETE", `/api/projects/${orderProj.id}`).catch(() => {});
     await api("DELETE", `/api/projects/${dragProj.id}`).catch(() => {});
     await api("DELETE", `/api/projects/${partialProj.id}`).catch(() => {});
+    await api("DELETE", `/api/projects/${filterProj.id}`).catch(() => {});
     await api("DELETE", `/api/projects/${outlineProj.id}`).catch(() => {});
     // delete the modal-created project too
     const all = await api("GET", "/api/projects");
