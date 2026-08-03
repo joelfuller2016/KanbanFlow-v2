@@ -93,6 +93,18 @@ public static class DbPathResolver
         //    directory comes first so the historical behaviour is preserved whenever it happened to
         //    be right; the application's own directory comes last so a build started from anywhere
         //    still finds the database that ships beside it.
+        //
+        //    ACCEPTED TRADE-OFF (#354 review, D4). Starting from a brand-new directory with no
+        //    override, the app now ADOPTS the database beside it and the user's edits go into that
+        //    board — where before they got a fresh empty one scoped to that directory. That is a
+        //    write into a board the user did not explicitly pick, so it is not purely safer; it is
+        //    chosen deliberately. Rationale: (a) the alternative is the #354 bug itself, which
+        //    presented as total data loss; (b) for the overwhelmingly common case — one board, run
+        //    from wherever — adopting it is exactly what the user wants; (c) the per-directory-board
+        //    workflow is undocumented and still works, since the launch directory is candidate #1
+        //    once its own file exists; (d) nothing is destroyed or migrated, and the adoption is
+        //    stated out loud at boot and on the Settings page rather than inferred. KANBANFLOW_DB_PATH
+        //    remains the explicit way to pin one. Revisit if this actually surprises anyone.
         var candidates = new List<string>();
         foreach (var directory in new[] { currentDirectory, contentRootPath, appDirectory })
         {
@@ -119,13 +131,26 @@ public static class DbPathResolver
     /// The application's own directory — the one anchor that does not move with the launch directory.
     /// </summary>
     /// <remarks>
-    /// <see cref="AppContext.BaseDirectory"/> is launch-independent but, under <c>dotnet run</c>, it
-    /// is <c>bin/&lt;Configuration&gt;/&lt;TargetFramework&gt;/</c> — gitignored and erased by
-    /// <c>dotnet clean</c>, which would take the database with it. That development layout is
-    /// therefore stripped back to the project directory, where the database already lives. The strip
-    /// requires both a directory literally named <c>bin</c> two levels up AND a project file in the
-    /// directory above it, so a published application that happens to sit under a folder named
-    /// <c>bin</c> is never mistaken for a development build.
+    /// <para><see cref="AppContext.BaseDirectory"/> is launch-independent but, under <c>dotnet run</c>,
+    /// it is <c>bin/&lt;Configuration&gt;/&lt;TargetFramework&gt;/</c>. That directory is gitignored and
+    /// routinely wiped wholesale — <c>git clean -xdf</c>, "delete bin/obj and rebuild" troubleshooting,
+    /// IDE clean commands — so a database there is destroyed by an operation the user believes is safe.
+    /// The development layout is therefore stripped back to the project directory, where the database
+    /// already lives. (<c>dotnet clean</c> specifically is <em>not</em> the hazard: measured, it leaves
+    /// stray files alone, because MSBuild's Clean deletes only tracked outputs recorded in
+    /// <c>*.FileListAbsolute.txt</c>. The earlier claim that it erases the database was wrong.)</para>
+    ///
+    /// <para>The strip requires both a directory literally named <c>bin</c> two levels up AND a project
+    /// file in the directory above it, so a published application that happens to sit under a folder
+    /// named <c>bin</c> is never mistaken for a development build.</para>
+    ///
+    /// <para><b>Known gap (#383):</b> a RID-qualified build emits
+    /// <c>bin/&lt;Configuration&gt;/&lt;TargetFramework&gt;/&lt;RID&gt;/</c>, so the three-level walk
+    /// binds <c>bin</c> to the configuration segment, the name check fails, and the database IS created
+    /// inside <c>bin/</c> — the outcome this method exists to prevent. Same class for
+    /// <c>&lt;BaseOutputPath&gt;</c>, <c>&lt;OutputPath&gt;</c> and <c>--artifacts-path</c>. #383
+    /// replaces the fixed walk with a bounded search for the nearest ancestor holding a project file;
+    /// it is split out so the algorithm change does not invalidate this change's verification.</para>
     /// </remarks>
     public static string AppAnchorDirectory() => StripDevelopmentBuildLayout(AppContext.BaseDirectory);
 

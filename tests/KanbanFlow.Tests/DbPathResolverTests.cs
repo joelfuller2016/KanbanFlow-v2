@@ -166,6 +166,12 @@ public sealed class DbPathResolverTests : IDisposable
         var fromA = DbPathResolver.Resolve(null, launchA, launchA, app);
         var fromB = DbPathResolver.Resolve(null, launchB, launchB, app);
 
+        // Assert the SOURCE, not just the path. Without this the case is blind to the very thing it
+        // is named for: destroy the probe entirely and the default branch also lands on
+        // app/kanbanflow.db, so both resolutions still agree and the test stays green. Proven — it
+        // passed against a subject whose candidate list had been cut to the launch directory alone.
+        Assert.Equal(DbPathResolver.SourceProbe, fromA.Source);
+        Assert.Equal(DbPathResolver.SourceProbe, fromB.Source);
         Assert.Equal(expected, fromA.Path);
         Assert.Equal(fromA.Path, fromB.Path);
     }
