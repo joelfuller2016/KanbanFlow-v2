@@ -688,10 +688,10 @@ h1:focus {
    leaves the white count text at ≈2.9136:1. The text is 0.65rem (~10px), so it is normal text
    and WCAG AA wants 4.5:1. That is the defect this rule fixes.
 
-   A translucent BLACK veil composites to ≈#094db1 and puts the white text at ≈7.7547:1. It also
-   stays correct if the chip fill is ever re-themed, because it darkens whatever is underneath
-   rather than assuming a particular hue. (--bs-primary is Bootstrap stock #0d6efd here and does
-   not change under data-bs-theme="dark".)
+   Over Bootstrap's current `#0d6efd` fill, a translucent BLACK veil composites to ≈#094db1 and
+   puts the white text at ≈7.7547:1. (--bs-primary is Bootstrap stock #0d6efd here and does not
+   change under data-bs-theme="dark".) If the chip fill changes, recalculate: this overlay does
+   not guarantee contrast over arbitrary fills — over #fff it yields only ≈2.1204:1.
 
    The alternative — a solid white badge with primary-coloured text — was rejected for headroom,
    NOT because it fails. `#0d6efd` on `#fff` is 4.5008:1, which PASSES AA by 0.0008. An earlier
