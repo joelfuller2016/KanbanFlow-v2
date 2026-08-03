@@ -16,7 +16,7 @@
 | **Stack** | .NET 10 · Blazor Server · SQLite (EF Core 10) · Minimal APIs · Node 18+ for the MCP wrapper |
 | **Surfaces** | 5 UI routes · 60 REST endpoints · 24 native MCP tools · 50 Node-wrapper MCP tools |
 | **Sync** | **One-way**, GitHub → board. It **never writes to GitHub**. GitHub owns title, priority, milestone; the board owns dependencies, criteria, subtasks, claims, ordering, memory — see [Who owns what](#who-owns-what) |
-| **Tests** | 524 xUnit · 56 in-app integration · 25 Playwright e2e · 19 script unit · 2 smoke suites — [all local, no CI](#deliberate-non-features) |
+| **Tests** | 583 xUnit · 56 in-app integration · 30 Playwright e2e · 19 script unit · 2 smoke suites — [all local, no CI](#deliberate-non-features) |
 | **Runs at** | `http://127.0.0.1:5123` — localhost only, no auth, no Docker, no cloud |
 | **Log book** | [`docs/BACKLOG.md`](docs/BACKLOG.md) — the authoritative record of what happened |
 | **Deep detail** | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) |
@@ -580,9 +580,9 @@ the command beside it — not copied from the previous README, and not copied fr
 | Node-wrapper MCP tools | 50 | `tools/list` over stdio against `scripts/mcp-server.mjs` — [exact invocation](docs/ARCHITECTURE.md#mcp-surface-24-native--50-wrapper) |
 | Blazor routes | 5 | `grep -rn '@page' src/KanbanFlow/Components/ \| sort -u` → `/`, `/Error`, `/ideas`, `/project/{Id:int}`, `/settings` |
 | Razor components | 22 | `find src/KanbanFlow/Components -name '*.razor' \| wc -l` |
-| xUnit tests | 524 | `dotnet test tests/KanbanFlow.Tests` |
+| xUnit tests | 583 | `dotnet test tests/KanbanFlow.Tests` |
 | In-app integration tests | 56 | `grep -c 'results.Add(await RunTest' src/KanbanFlow/Services/TestRunnerService.cs` (28 API + 22 service + 6 UI) |
-| Playwright e2e scenarios | 25 | `npm run test:ui` |
+| Playwright e2e scenarios | 30 | `npm run test:ui` |
 | Script unit tests (`scripts/*.mjs`) | 19 | `npm run test:scripts` |
 
 Corrections this revision made to the previous README: **53 → 60** endpoints (both memory
@@ -703,7 +703,7 @@ All local. There is no CI — [on purpose](#deliberate-non-features).
 ```
 
 ```bash
-dotnet test tests/KanbanFlow.Tests      # 524 xUnit tests
+dotnet test tests/KanbanFlow.Tests      # 583 xUnit tests
 ```
 
 ```powershell
