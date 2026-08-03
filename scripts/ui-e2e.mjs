@@ -86,6 +86,15 @@ async function test(name, fn) {
 
 function assert(cond, msg) { if (!cond) throw new Error(msg); }
 
+// The API serialises stored-UTC DateTimes with Kind=Unspecified, i.e. with NO trailing "Z" — and
+// `new Date("2026-07-12T17:19:00")` reads a zoneless string as LOCAL. Pin the zone before
+// comparing, or a clock assertion quietly compares local against local and can never fail.
+// (#337 owns the wire format itself; this is the reader side.)
+function utcIso(value) {
+  const s = String(value);
+  return /(Z|[+-]\d{2}:?\d{2})$/.test(s) ? s : `${s}Z`;
+}
+
 // Playwright rejections that mean "the thing a teardown would clean up no longer exists", so the
 // teardown is moot and must not mask the failure that triggered it. Deliberately narrow: any other
 // rejection from a teardown is a real bug and is rethrown.
@@ -2440,6 +2449,166 @@ async function main() {
       );
 
       await api("DELETE", `/api/tasks/${timelineTask.id}`).catch(() => {});
+    });
+
+    // ── Scenario: reopening the outline-sidebar edit modal re-reads the audit trail (#374) ──
+    //
+    // EditItemModal is never unmounted — ProjectView leaves it in the tree with its root hidden,
+    // and closing does not clear EditTaskId. ActivityTimeline re-queries on a TaskId OR
+    // RefreshToken change, so without the explicit `activityRefreshToken++` on a fresh open
+    // (EditItemModal.razor:367) a reopen shows the events cached on the FIRST open.
+    //
+    // The symptom is #328's own bug, narrowed to one surface: the COMMENT written by a change
+    // reloads (the modal re-reads comments itself), while the matching ACTIVITY row does not. So
+    // the screen shows a task whose history half-updated.
+    //
+    // ⚠️ THE SCOPING BELOW IS LOAD-BEARING — DO NOT SIMPLIFY IT TO A TEXT MATCH. ⚠️
+    // A PATCH to status writes BOTH a system comment ("Status changed from Review to Done") and a
+    // TaskStatusChanged event. The comment reloads on every open whether or not the fix is
+    // present, so any assertion over the timeline's innerText passes against the broken build.
+    // This assertion scopes to rows whose `data-kind` is the ActivityEvent's EventType — comment
+    // rows carry `Comment:{CommentType}` instead (see TimelineEntry.Kind) — and reads the
+    // rendered per-change cells rather than the row's flattened text.
+    //
+    // That distinction is measured, not asserted on faith: the scenario computes the naive
+    // text signal too and REPORTS it in the failure message, so a RED run states in its own
+    // output that the loose variant was still satisfied. See #374 AC2.
+    await test("Timeline: reopening the edit modal re-reads the audit trail, it does not serve a cached one (#374)", async () => {
+      const reopenTask = await api("POST", `/api/features/${feature.id}/tasks`,
+        { name: `E2E reopen ${stamp}`, status: "Todo", priority: "Low" });
+
+      // History that exists BEFORE the first open, so the first open has something to cache.
+      await api("PATCH", `/api/tasks/${reopenTask.id}/status`, { status: "InProgress", actor: "e2e-bot" });
+      await api("PUT", `/api/tasks/${reopenTask.id}`,
+        { name: `E2E reopen ${stamp}`, priority: "High", assignee: "claude", actor: "e2e-bot" });
+      await api("PATCH", `/api/tasks/${reopenTask.id}/status`, { status: "Review", actor: "e2e-bot" });
+
+      const modalTimeline = page.locator('[data-testid="activity-timeline"]');
+      const openModal = async () => {
+        await clickUntil(
+          () => page.locator(`[data-testid="outline-task-${reopenTask.id}"]`).click(),
+          modalTimeline,
+        );
+      };
+
+      // Reads one signal per row, keeping ACTIVITY rows and COMMENT rows separable.
+      const readRows = () => page.evaluate(() =>
+        [...document.querySelectorAll('[data-testid="activity-timeline-entry"]')].map((row) => ({
+          kind: row.getAttribute("data-kind"),
+          isActivity: !(row.getAttribute("data-kind") ?? "").startsWith("Comment:"),
+          text: row.innerText,
+          when: row.querySelector("time")?.getAttribute("datetime") ?? null,
+          tooltip: row.querySelector("time")?.getAttribute("title") ?? null,
+          changes: [...row.querySelectorAll('[data-testid="activity-timeline-change"]')].map((c) => ({
+            label: c.querySelector(".kf-change-label")?.textContent?.trim() ?? "",
+            before: c.querySelector(".kf-change-before")?.textContent?.trim() ?? "",
+            after: c.querySelector(".kf-change-after")?.textContent?.trim() ?? "",
+          })),
+        })));
+
+      const consoleErrors = [];
+      const onConsole = (m) => { if (m.type() === "error") consoleErrors.push(m.text()); };
+      page.on("console", onConsole);
+
+      try {
+        await page.goto(`${baseUrl}/project/${proj.id}`);
+        await page.waitForLoadState("networkidle").catch(() => {});
+
+        // ── First open: caches whatever the trail holds now ──
+        await openModal();
+        await page.waitForFunction(
+          () => [...document.querySelectorAll('[data-testid="activity-timeline-entry"]')]
+            .some((r) => !(r.getAttribute("data-kind") ?? "").startsWith("Comment:")),
+          null, { timeout: 10000 },
+        );
+
+        const first = await readRows();
+
+        // #374 AC3 — a PER-ROW diff assertion. A regex over the whole timeline can take "Priority"
+        // from one row and "Low"/"High" from its neighbours and pass while no single row renders a
+        // readable change at all, so every cell below is read from ONE row's own change element.
+        const cellsOf = (rows) => rows.flatMap((r) => r.changes.map((c) => ({ ...c, kind: r.kind })));
+        const firstCells = cellsOf(first);
+        for (const [label, before, after] of [
+          ["Status", "Todo", "InProgress"],
+          ["Priority", "Low", "High"],
+        ]) {
+          assert(
+            firstCells.some((c) => c.label.startsWith(label) && c.before === before && c.after === after),
+            `no single row renders "${label}: ${before} → ${after}". Cells: ` +
+            JSON.stringify(firstCells).slice(0, 700),
+          );
+        }
+
+        // #374 AC5 — the machine-readable instant must be an unambiguous UTC one. Stored
+        // DateTimes arrive Kind=Unspecified, and ToString("O") on those emits no trailing Z, so a
+        // <time datetime> would silently mean LOCAL to every consumer. #337 owns the wire format;
+        // this only asserts the rendered attribute.
+        const stamps = first.map((r) => r.when);
+        assert(stamps.length > 0 && stamps.every((s) => /(Z|[+-]\d{2}:?\d{2})$/.test(s ?? "")),
+          `a timeline row's <time datetime> carries no zone designator: ${JSON.stringify(stamps)}`);
+
+        // #374 AC4 — the tooltip's INSTANT, not the presence of a "UTC:" label. A tooltip reading
+        // "UTC: 2026-07-12T17:19:00" with no designator wears the label while meaning local.
+        const apiTask = await api("GET", `/api/tasks/${reopenTask.id}`);
+        const updatedIso = utcIso(apiTask.updatedAt);
+        const tooltip = first[0].tooltip ?? "";
+        const instant = tooltip.split("UTC:")[1]?.trim().replace(/\)$/, "") ?? "";
+        assert(/(Z|[+-]\d{2}:?\d{2})$/.test(instant),
+          `the tooltip is labelled UTC but its value "${instant}" has no zone designator. ` +
+          `Full title: ${JSON.stringify(tooltip)}`);
+        assert(Math.abs(new Date(instant) - new Date(updatedIso)) < 5 * 60 * 1000,
+          `the tooltip instant ${instant} is not the instant the API reports (${updatedIso}).`);
+
+        // ── Close, mutate while closed, reopen ──
+        await page.locator('[data-testid="edit-item-cancel-button"]').click();
+        await modalTimeline.waitFor({ state: "hidden" });
+
+        await api("PATCH", `/api/tasks/${reopenTask.id}/status`, { status: "Done", actor: "e2e-reopen" });
+
+        await openModal();
+        // Settle: the comment written by that PATCH always arrives, so waiting on the ACTIVITY row
+        // is the only wait that distinguishes the two builds. Swallowed so the assertion below
+        // reports what it saw rather than an opaque Playwright timeout.
+        await page.waitForFunction(
+          () => [...document.querySelectorAll('[data-testid="activity-timeline-entry"]')]
+            .some((r) => !(r.getAttribute("data-kind") ?? "").startsWith("Comment:")
+              && [...r.querySelectorAll('[data-testid="activity-timeline-change"]')]
+                .some((c) => c.querySelector(".kf-change-after")?.textContent?.trim() === "Done")),
+          null, { timeout: 10000 },
+        ).catch(() => { /* fall through to the diagnostic assertion */ });
+
+        const second = await readRows();
+
+        // The LOOSE signal, computed only so a failure can report it (#374 AC2). This is what a
+        // naive innerText assertion would see — and it is true on the BROKEN build too, because
+        // the system comment reloads regardless.
+        const looseTextMatched = second.some((r) => /Review[\s\S]{0,60}Done/.test(r.text))
+          || /Review[\s\S]{0,60}Done/.test(second.map((r) => r.text).join("\n"));
+
+        // The REAL assertion: an ActivityEvent row rendering the change recorded while closed.
+        const activityShowsDone = second.some((r) => r.isActivity
+          && r.changes.some((c) => c.label.startsWith("Status") && c.after === "Done"));
+
+        assert(activityShowsDone,
+          "reopening the outline-sidebar edit modal served a STALE activity trail: no " +
+          '[data-kind] ActivityEvent row renders "Status: … → Done", recorded while the modal ' +
+          "was closed. The modal is never unmounted, so without the explicit refresh-token bump " +
+          "on a fresh open the component keeps the events it cached on the first open.\n" +
+          `  loose innerText variant matched: ${looseTextMatched}  <-- #374 AC2: when this is ` +
+          "true while the assertion above fails, that IS the demonstration that a text-scoped " +
+          "guard is fake-green here — the system comment written by the same PATCH reloads " +
+          "whether or not the fix is present.\n" +
+          `  rows: ${JSON.stringify(second.map((r) => ({ kind: r.kind, changes: r.changes })))
+            .slice(0, 900)}`);
+
+        assert(consoleErrors.length === 0,
+          `the timeline logged ${consoleErrors.length} console error(s): ${consoleErrors.slice(0, 3).join(" | ")}`);
+      } finally {
+        page.off("console", onConsole);
+        await page.locator('[data-testid="edit-item-cancel-button"]').click().catch(() => {});
+        await api("DELETE", `/api/tasks/${reopenTask.id}`).catch(() => {});
+      }
     });
 
     // ── Scenario E: Settings -> Run all shows an all-passed result table ──
