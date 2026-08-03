@@ -940,6 +940,12 @@ public class ActivityTimelineTests
         Assert.NotEqual(change.Before, change.After);
         Assert.Contains("X", change.Before, StringComparison.Ordinal);
         Assert.Contains("Y", change.After, StringComparison.Ordinal);
+        // Format() returns up to MaxValueLength content + 1 ellipsis = 61 chars for the
+        // non-collision path. The collision path (Window) must stay within 60 chars total.
+        // The bound here catches Window's old over-budget of 62 (60 content + 2 ellipses)
+        // while permitting Format's expected 61-char non-collision output.
+        Assert.True(change.Before.Length <= 61, $"Before rendered length {change.Before.Length} > 61: '{change.Before}'");
+        Assert.True(change.After.Length <= 61, $"After rendered length {change.After.Length} > 61: '{change.After}'");
     }
 
     /// <summary>

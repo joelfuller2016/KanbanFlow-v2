@@ -137,14 +137,15 @@ public static class ActivityTimelineBuilder
     /// added there without a label here is simply not rendered rather than leaking a raw JSON key.
     /// "id" and "featureId" are deliberately handled — id is never interesting, featureId is.
     ///
-    /// PUBLIC so the tests can parameterise over the WHOLE set rather than a hand-picked
-    /// exemplar. The X → X collision (#359) was reported against <c>description</c>, but the
-    /// truncation that causes it lives in <see cref="Format"/> and applies to every entry here —
-    /// <c>name</c> is already 60+ characters on 268 of the 409 live tasks. A guard written for one
-    /// field would be correct for the case someone measured and silently wrong for the rest, so
-    /// the guard enumerates THIS list; a field added below is covered the moment it is added.
+    /// INTERNAL (tests reach it via InternalsVisibleTo) so the tests can parameterise over the
+    /// WHOLE set rather than a hand-picked exemplar. The X → X collision (#359) was reported
+    /// against <c>description</c>, but the truncation that causes it lives in <see cref="Format"/>
+    /// and applies to every entry here — <c>name</c> is already 60+ characters on 268 of the
+    /// 409 live tasks. A guard written for one field would be correct for the case someone measured
+    /// and silently wrong for the rest, so the guard enumerates THIS list; a field added below is
+    /// covered the moment it is added.
     /// </summary>
-    public static IReadOnlyList<(string Json, string Label)> DisplayFields { get; } =
+    internal static IReadOnlyList<(string Json, string Label)> DisplayFields { get; } =
     [
         ("status", "Status"),
         ("priority", "Priority"),
@@ -715,15 +716,26 @@ public static class ActivityTimelineBuilder
     }
 
     /// <summary>
-    /// The <see cref="MaxValueLength"/>-wide slice at <paramref name="start"/>, marked with an
-    /// ellipsis on whichever end elides text. Plain text throughout: no markup is produced here,
-    /// so the caller's <c>@change.Before</c> stays Razor-encoded (#340/#341).
+    /// A slice of <paramref name="text"/> anchored at <paramref name="start"/>, marked with an
+    /// ellipsis on whichever end elides text, and guaranteed to fit within
+    /// <see cref="MaxValueLength"/> characters even when both ends elide. Plain text throughout:
+    /// no markup is produced here, so the caller's <c>@change.Before</c> stays Razor-encoded
+    /// (#340/#341).
     /// </summary>
     private static string Window(string text, int start)
     {
-        var end = Math.Min(text.Length, start + MaxValueLength);
-        // Never cut between the halves of a surrogate pair — a lone surrogate is not text.
-        if (end < text.Length && char.IsLowSurrogate(text[end])) end--;
+        // Reserve one slot for the leading ellipsis (if any); another will be reserved below
+        // when truncation is needed on the trailing end, so the combined output never exceeds
+        // MaxValueLength even when both ellipses fire.
+        var budget = MaxValueLength - (start > 0 ? 1 : 0);
+        var end = Math.Min(text.Length, start + budget);
+        if (end < text.Length)
+        {
+            // Reserve one char for the trailing ellipsis so total stays within MaxValueLength.
+            end--;
+            // Never cut between the halves of a surrogate pair — a lone surrogate is not text.
+            if (end > start && char.IsLowSurrogate(text[end])) end--;
+        }
 
         return (start > 0 ? Ellipsis : string.Empty)
              + text[start..end]
