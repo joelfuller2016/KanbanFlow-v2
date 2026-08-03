@@ -718,7 +718,7 @@ npm run test:scripts                    # node:test units for scripts/*.mjs — 
                                         # priority model behind portfolio-sync and the
                                         # log book (#360). No app, no network, no DB.
 npm run test:ui                         # Playwright e2e — builds, boots an isolated instance
-                                        # (scratch port + throwaway DB), drives chromium, tears down
+                                        # (fixed port 5198 + throwaway DB), drives chromium, tears down
 ```
 
 > **`test:ui` binds a fixed port (`5198`).** Two concurrent runs — two agents, or you and an
