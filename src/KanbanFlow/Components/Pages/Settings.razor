@@ -2,6 +2,9 @@
 @rendermode InteractiveServer
 @inject ITestRunnerService TestRunner
 @inject IAppStartupInfo Startup
+@* #354: the resolution Program.cs actually opened the database with — not a second copy of the
+   rule. Re-deriving it here is how the page and the boot log drifted apart in the first place. *@
+@inject DbPathResolution DbResolution
 
 <PageTitle>Settings - KanbanFlow</PageTitle>
 
@@ -28,7 +31,28 @@
                     <dd class="col-7 text-truncate" title="@Environment.MachineName">@Environment.MachineName</dd>
 
                     <dt class="col-5 text-muted">DB path</dt>
-                    <dd class="col-7 text-truncate font-monospace" title="@DbPath">@DbPath</dd>
+                    <dd class="col-7 text-truncate font-monospace" title="@DbResolution.Path">@DbResolution.Path</dd>
+
+                    <dt class="col-5 text-muted">DB source</dt>
+                    <dd class="col-7">
+                        <span class="badge bg-secondary">@DbResolution.Source</span>
+                        @* Existed is captured at RESOLUTION time, before EnsureCreated() runs, so this
+                           describes the resolution OUTCOME and claims nothing about the file's state
+                           now. "created new" would be a claim that only holds while EnsureCreated
+                           happens to run unconditionally before the first request; "will create new"
+                           is already false by the time this page can render. Both Copilot and
+                           CodeRabbit flagged the creation claim — this wording makes neither. *@
+                        <span class="text-muted ms-1">@(DbResolution.Existed ? "opened existing" : "no existing file — new database")</span>
+                    </dd>
+
+                    @* @key per repo convention (.github/copilot-instructions.md): each item renders a
+                       dt/dd PAIR, so an unkeyed diff could pair a label with another item's path. The
+                       full path is unique within the list and stable. *@
+                    @foreach (var shadowed in DbResolution.ShadowedPaths)
+                    {
+                        <dt class="col-5 text-warning" @key="@($"shadow-dt-{shadowed}")">Not opened</dt>
+                        <dd class="col-7 text-truncate font-monospace text-warning" @key="@($"shadow-dd-{shadowed}")" title="@shadowed">@shadowed</dd>
+                    }
 
                     <dt class="col-5 text-muted">Started</dt>
                     <dd class="col-7">@Startup.StartedAtUtc.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss")</dd>
@@ -151,22 +175,12 @@
     private string AppName { get; set; } = "KanbanFlow";
     private string AppVersion { get; set; } = "—";
     private string HostEnv { get; set; } = "—";
-    private string DbPath { get; set; } = "(default: ./kanbanflow.db)";
 
     protected override void OnInitialized()
     {
         var asm = typeof(Settings).Assembly;
         AppVersion = asm.GetName().Version?.ToString() ?? "—";
         HostEnv = Environment.GetEnvironmentVariable("ASPNETCORE_ENVIRONMENT") ?? "Production";
-        var configured = Environment.GetEnvironmentVariable("KANBANFLOW_DB_PATH");
-        if (!string.IsNullOrWhiteSpace(configured))
-        {
-            DbPath = Path.GetFullPath(configured);
-        }
-        else
-        {
-            DbPath = Path.Combine(Environment.CurrentDirectory, "kanbanflow.db");
-        }
     }
 
     private async Task RunSuite(string suite)

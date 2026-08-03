@@ -229,6 +229,155 @@ public sealed class MarkdownRendererTests
         Assert.DoesNotContain("onerror", html, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("<script", html, StringComparison.OrdinalIgnoreCase);
     }
+    // ── Per-tag attribute scoping (#340) ────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// AC1. <c>input</c> is allow-listed only so Markdig's task-list checkbox renders, but
+    /// <c>value</c> is in HtmlSanitizer's DEFAULT allow-list, so before #340 a stored description
+    /// or comment could paint a live, native-looking text box:
+    /// <c>&lt;input type="text" value="Enter password" onfocus=alert(1) autofocus&gt;</c> came back
+    /// as <c>&lt;input type="text" value="Enter password"&gt;</c>. The event handler was always
+    /// stripped - the surviving FORM FIELD is the defect (UI spoofing / phishing surface).
+    ///
+    /// Asserted on the re-parsed DOM rather than the string, because the property under test is
+    /// "does a live input render", and a substring check would also pass for a mangled-but-present
+    /// element. The bare <c>&lt;input&gt;</c> and <c>&lt;input value=...&gt;</c> cases matter
+    /// independently: an input with no <c>type</c> defaults to a text box in every browser, so
+    /// stripping <c>type</c> alone would NOT have closed this.
+    ///
+    /// The last three rows carry <c>disabled</c> ON PURPOSE and are what make this theory guard
+    /// BOTH halves of <c>IsTaskListCheckbox</c>. Without them every row was killed by the
+    /// <c>disabled</c> half alone, so the <c>type == "checkbox"</c> half was reachable by no test:
+    /// gutting it to <c>true</c> left the whole 646-test suite GREEN (measured). Under that same
+    /// mutation these three render as live form fields, so they are the rows that fail.
+    /// </summary>
+    [Theory]
+    [InlineData("<input type=\"text\" value=\"Enter password\" onfocus=alert(1) autofocus>")]
+    [InlineData("<input type=\"password\" value=\"hunter2\">")]
+    [InlineData("<input value=\"Enter password\">")]
+    [InlineData("<input>")]
+    [InlineData("<input type=\"submit\" value=\"Delete project\">")]
+    [InlineData("<input type=\"checkbox\">")]
+    [InlineData("<input type=\"image\" src=\"https://evil.example/x.png\">")]
+    [InlineData("<input type=\"text\" disabled value=\"Enter password\">")]
+    [InlineData("<input type=\"submit\" disabled value=\"Delete project\">")]
+    [InlineData("<input disabled value=\"Enter password\">")]
+    public void InjectedInput_DoesNotRenderAsLiveFormField(string markdown)
+    {
+        var html = Render(markdown);
+
+        var inputs = new HtmlParser().ParseDocument("<!doctype html><body>" + html)
+            .QuerySelectorAll("input");
+
+        Assert.Empty(inputs);
+        Assert.DoesNotContain("value=", html, StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// AC2. The cross-tag leakage the old global <c>AllowedAttributes.Add("type")</c> caused. Of
+    /// the five cases below, the first two (<c>p</c>/<c>type</c> and <c>a</c>/<c>checked</c>) are
+    /// the ones measured in #340 against the real configuration and quoted in the issue; the other
+    /// three were added here for coverage. All five survived verbatim before this fix. The
+    /// surrounding text is asserted too, so the fix cannot be faked by dropping the element
+    /// wholesale.
+    ///
+    /// The <c>td</c> case is wrapped in a real <c>&lt;table&gt;</c> deliberately. A bare
+    /// <c>&lt;td type="submit"&gt;x&lt;/td&gt;</c> was tried first and is a NON-guard: a stray
+    /// <c>td</c> outside table context is dropped by the parser anyway, so it stayed GREEN against
+    /// the sabotaged renderer (measured: 3 of 4 cases red, that one green). All five cases here
+    /// were re-measured red.
+    /// </summary>
+    [Theory]
+    [InlineData("<p type=\"submit\">x</p>", "type")]
+    [InlineData("<a href=\"https://e.example\" checked=\"checked\">x</a>", "checked")]
+    [InlineData("<p disabled=\"disabled\">x</p>", "disabled")]
+    [InlineData("<strong type=\"submit\">x</strong>", "type")]
+    [InlineData("<table><tr><td checked=\"checked\">x</td></tr></table>", "checked")]
+    public void TaskListAttributes_DoNotSurviveOnOtherTags(string markdown, string forbidden)
+    {
+        var html = Render(markdown);
+
+        Assert.DoesNotContain(forbidden, html, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("x", html, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// AC3. The other direction: the task-list checkbox must still render with its attributes
+    /// intact. <see cref="BenignMarkdown_RendersExactly"/> already pins the exact serialisation;
+    /// this asserts the same thing on the DOM, so a change that keeps the bytes but breaks the
+    /// element (or vice versa) still turns something red.
+    /// </summary>
+    [Fact]
+    public void TaskListCheckbox_StillRenders()
+    {
+        var html = Render("- [x] done\n- [ ] todo");
+
+        var inputs = new HtmlParser().ParseDocument("<!doctype html><body>" + html)
+            .QuerySelectorAll("input");
+
+        Assert.Equal(2, inputs.Length);
+        Assert.All(inputs, i =>
+        {
+            Assert.Equal("checkbox", i.GetAttribute("type"));
+            Assert.True(i.HasAttribute("disabled"));
+        });
+        Assert.True(inputs[0].HasAttribute("checked"));
+        Assert.False(inputs[1].HasAttribute("checked"));
+    }
+
+    /// <summary>
+    /// The surviving checkbox keeps ONLY the three attributes that make it one. Guards the
+    /// whitelist rather than a deny-list: a default-allowed attribute like <c>value</c>, or a
+    /// future addition to <c>AllowedAttributes</c>, must not ride along on the one element that is
+    /// permitted to be an input.
+    /// </summary>
+    [Theory]
+    [InlineData("<input type=\"checkbox\" disabled value=\"smuggled\">", "value")]
+    [InlineData("<input type=\"checkbox\" disabled title=\"smuggled\">", "title")]
+    [InlineData("<input type=\"checkbox\" disabled style=\"color:red\">", "style")]
+    [InlineData("<input type=\"checkbox\" disabled name=\"smuggled\">", "name")]
+    public void SurvivingCheckbox_KeepsOnlyItsOwnAttributes(string markdown, string forbidden)
+    {
+        var html = Render(markdown);
+
+        // Both kept attributes are asserted here rather than leaning on the Markdig fixture for
+        // `disabled`: this theory owns the "keeps its own" half of the whitelist, so it should fail
+        // on its own if either name is dropped from TaskListCheckboxAttributes.
+        Assert.Contains("disabled", html, StringComparison.Ordinal);
+        Assert.Contains("type=\"checkbox\"", html, StringComparison.Ordinal);
+        Assert.DoesNotContain(forbidden, html, StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// ACCEPTED LOSS, recorded so it is a decision rather than an unnoticed side effect (#340).
+    /// <c>type</c> is now globally disallowed and restored only on <c>&lt;input&gt;</c>, so a raw
+    /// <c>&lt;ol type="A"&gt;</c> loses its marker style: it rendered <c>A. First</c> before this
+    /// change and renders <c>1. First</c> after. Measured both directions - re-adding <c>type</c>
+    /// to <c>AllowedAttributes</c> turns this test RED with <c>type="A"</c> back in the output,
+    /// which is exactly the pre-#340 behaviour.
+    ///
+    /// Kept as a loss on purpose. Markdown has no syntax for <c>&lt;ol type&gt;</c> - it can only
+    /// arrive as raw HTML - and restoring it would mean a second per-tag exception in a mechanism
+    /// whose entire point is a closed set. It is also strictly less costly than the losses this
+    /// file already accepts (see <see cref="BenignMarkdown_RendersExactly"/>: dead heading anchors
+    /// and no fenced-code syntax highlighting, both from <c>class</c>/<c>id</c> stripping). The
+    /// degradation here is cosmetic and nothing in the app emits <c>&lt;ol type&gt;</c>.
+    ///
+    /// If a future change decides ordered-list markers are worth a per-tag exception, this test
+    /// SHOULD fail - update it deliberately, do not read the failure as a regression.
+    /// </summary>
+    [Theory]
+    [InlineData("<ol type=\"A\"><li>First</li></ol>")]
+    [InlineData("<ol type=\"i\"><li>First</li></ol>")]
+    public void OrderedListTypeAttribute_IsStripped_AcceptedLoss(string markdown)
+    {
+        var html = Render(markdown);
+
+        Assert.DoesNotContain("type", html, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("<ol>", html, StringComparison.Ordinal);
+        Assert.Contains("First", html, StringComparison.Ordinal);
+    }
+
     // ── Empty input contract ────────────────────────────────────────────────────────────────────
 
     [Fact]
