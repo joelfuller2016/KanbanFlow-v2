@@ -51,19 +51,30 @@ public static class DbPathResolver
     public const string SourceDefault = "default";
 
     /// <summary>
-    /// How two candidate paths are compared when de-duplicating the probe list.
+    /// How two candidate paths are compared when de-duplicating the probe list, for this host.
     /// </summary>
     /// <remarks>
-    /// Windows paths are case-insensitive, so the launch directory and the content root must collapse
-    /// to one candidate or a single database would be reported as shadowing itself. Linux paths are
-    /// NOT case-insensitive: collapsing there would merge two genuinely distinct files and silently
-    /// drop one from the probe — the failure this whole type exists to prevent. Erring toward
-    /// <see cref="StringComparer.Ordinal"/> off Windows is the safe direction, because its worst case
-    /// is a redundant warning about one file, never a database dropped. (macOS is usually
-    /// case-insensitive but can be formatted either way; the conservative choice is correct there too.)
+    /// <para>Matched to each platform's default filesystem semantics. Windows (NTFS) and macOS
+    /// (APFS/HFS+) are case-insensitive: the launch directory and the content root must collapse to one
+    /// candidate there, or a single database is reported as shadowing itself. Linux is case-sensitive,
+    /// where collapsing would merge two genuinely distinct files and silently drop one from the probe —
+    /// the failure this whole type exists to prevent.</para>
+    ///
+    /// <para>Filesystems can always be formatted against their platform default (case-sensitive APFS,
+    /// per-directory case sensitivity on NTFS for WSL), and a mounted volume can differ from the boot
+    /// volume. Detecting that for real means probing the filesystem at runtime — writing a file and
+    /// re-statting it under another case — which is far too much I/O and failure surface for bootstrap
+    /// path resolution, before logging even exists. The platform default is the right policy; the
+    /// residual mis-match is a redundant shadow warning, which is visible and harmless.</para>
+    ///
+    /// <para>This is only the DEFAULT. <see cref="Resolve(string?, string, string, string, StringComparer?)"/>
+    /// takes the comparer as a parameter so the behaviour of BOTH branches is tested on any host —
+    /// a test that reads this property would assert only whatever the test machine happens to be.</para>
     /// </remarks>
-    internal static StringComparer PathComparer =>
-        OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
+    internal static StringComparer DefaultPathComparer =>
+        OperatingSystem.IsWindows() || OperatingSystem.IsMacOS()
+            ? StringComparer.OrdinalIgnoreCase
+            : StringComparer.Ordinal;
 
     /// <summary>
     /// Resolve against the live process: the environment variable, the launch directory, the host's
@@ -85,13 +96,20 @@ public static class DbPathResolver
     /// <param name="currentDirectory">The launch directory (<c>Environment.CurrentDirectory</c>).</param>
     /// <param name="contentRootPath">The host content root. In practice equal to <paramref name="currentDirectory"/>.</param>
     /// <param name="appDirectory">The application's own directory — see <see cref="AppAnchorDirectory"/>.</param>
+    /// <param name="pathComparer">
+    /// How two candidate paths are compared when de-duplicating. Defaults to
+    /// <see cref="DefaultPathComparer"/>, the running platform's filesystem semantics. Passed in by
+    /// tests so both the case-sensitive and case-insensitive branches are exercised on any host.
+    /// </param>
     public static DbPathResolution Resolve(
         string? configuredPath,
         string currentDirectory,
         string contentRootPath,
-        string appDirectory)
+        string appDirectory,
+        StringComparer? pathComparer = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(appDirectory);
+        pathComparer ??= DefaultPathComparer;
 
         // 1. The explicit override wins outright, exactly as it did before this resolver existed:
         //    anchored to an absolute path and its parent directory created. Every harness that wants
@@ -127,7 +145,7 @@ public static class DbPathResolver
                 continue;
 
             var candidate = Path.GetFullPath(Path.Combine(directory, FileName));
-            if (!candidates.Contains(candidate, PathComparer))
+            if (!candidates.Contains(candidate, pathComparer))
                 candidates.Add(candidate);
         }
 

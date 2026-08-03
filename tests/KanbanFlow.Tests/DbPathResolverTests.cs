@@ -155,6 +155,33 @@ public sealed class DbPathResolverTests : IDisposable
     }
 
     [Fact]
+    public void Adoption_IsDeliberate_AFreshLaunchDirectoryOpensTheDatabaseBesideTheApp()
+    {
+        // PINS AN ACCEPTED TRADE-OFF (#354 review, D4) — not merely a happy path.
+        //
+        // Started from a brand-new directory with no override, the app ADOPTS the database beside it,
+        // and the user's subsequent edits are written INTO that board. Before #354 they would have got
+        // a fresh empty board scoped to the launch directory. This is therefore a write into a board
+        // the user did not explicitly pick, and it is chosen deliberately: the alternative is the #354
+        // bug itself, which presented as total data loss. See the rationale beside the candidate list
+        // in DbPathResolver.
+        //
+        // If this test ever fails, the trade-off has been reversed — which is a product decision, not
+        // a bug to be patched back into green.
+        var app = NewDirectory("app");
+        var existingBoard = WriteDatabase(app);
+        var freshLaunchDirectory = NewDirectory("fresh");
+
+        var resolution = DbPathResolver.Resolve(null, freshLaunchDirectory, freshLaunchDirectory, app);
+
+        Assert.Equal(DbPathResolver.SourceProbe, resolution.Source);
+        Assert.Equal(existingBoard, resolution.Path);
+        Assert.True(resolution.Existed);
+        // ...and specifically NOT a new board of its own in the directory it was launched from.
+        Assert.False(File.Exists(Path.Combine(freshLaunchDirectory, DbPathResolver.FileName)));
+    }
+
+    [Fact]
     public void Probe_ResolvesToTheSameFile_FromTwoDifferentLaunchDirectories()
     {
         // AC1, at the unit level: same build, two launch directories, ONE database.
@@ -214,20 +241,92 @@ public sealed class DbPathResolverTests : IDisposable
         Assert.Empty(resolution.ShadowedPaths);
     }
 
-    [Fact]
-    public void Probe_DoesNotReportOneFileAsShadowingItself_WhenCandidatesDifferOnlyByCase()
+    // ── Candidate de-duplication vs. filesystem case sensitivity. ──
+    //
+    // The comparer is passed IN rather than read from the host, so both branches are exercised
+    // wherever these run. A test that let the running OS pick would assert only whatever the test
+    // machine happens to be, and would silently cover nothing on the other platform.
+
+    /// <summary>
+    /// Two spellings of one directory path that differ ONLY by case, with a database readable at each.
+    /// On a case-insensitive filesystem that is one directory and one file addressed two ways; on a
+    /// case-sensitive one it is two directories and two files. Either way both paths exist, so the
+    /// comparer — not the host's filesystem — is what decides whether they collapse.
+    /// </summary>
+    private (string Lower, string Upper) NewCaseVariantDirectories()
     {
-        // The same directory, spelled with different casing. On Windows that is one file, and
-        // de-duplication must collapse it or a single database warns about itself. On a
-        // case-sensitive filesystem the upper-cased directory simply does not exist, so nothing is
-        // found there either — the assertion holds on both, which is the point: the de-duplication
-        // must never be the thing that decides a real second database is invisible.
+        var lower = NewDirectory("case");
+        var upper = lower.ToUpperInvariant();
+
+        Directory.CreateDirectory(upper);   // no-op on Windows/macOS; a second directory on Linux
+        _tempDirectories.Add(upper);
+        WriteDatabase(lower);
+        WriteDatabase(upper);
+
+        return (lower, upper);
+    }
+
+    [Fact]
+    public void Probe_CaseInsensitiveComparer_CollapsesCandidatesDifferingOnlyByCase()
+    {
+        // Windows / default macOS: one directory spelled two ways is ONE file. It must collapse, or a
+        // single database is reported as shadowing itself.
+        var (lower, upper) = NewCaseVariantDirectories();
+
+        var resolution = DbPathResolver.Resolve(
+            null, lower, upper, lower, StringComparer.OrdinalIgnoreCase);
+
+        Assert.Equal(Path.Combine(lower, DbPathResolver.FileName), resolution.Path);
+        Assert.Empty(resolution.ShadowedPaths);
+    }
+
+    [Fact]
+    public void Probe_CaseSensitiveComparer_KeepsCandidatesDifferingOnlyByCase()
+    {
+        // Linux: two paths differing only by case are two DIFFERENT files, and collapsing them would
+        // drop a real database from the probe — the failure this type exists to prevent. Both must
+        // survive de-duplication, so the second is reported as shadowed rather than vanishing.
+        var (lower, upper) = NewCaseVariantDirectories();
+
+        var resolution = DbPathResolver.Resolve(
+            null, lower, upper, lower, StringComparer.Ordinal);
+
+        Assert.Equal(Path.Combine(lower, DbPathResolver.FileName), resolution.Path);
+        Assert.Equal(new[] { Path.Combine(upper, DbPathResolver.FileName) }, resolution.ShadowedPaths);
+    }
+
+    [Fact]
+    public void DefaultPathComparer_MatchesThePlatformsFilesystemSemantics()
+    {
+        // The policy itself: case-insensitive where the platform default filesystem is
+        // (Windows NTFS, macOS APFS/HFS+), case-sensitive on Linux.
+        var expected = OperatingSystem.IsWindows() || OperatingSystem.IsMacOS()
+            ? StringComparer.OrdinalIgnoreCase
+            : StringComparer.Ordinal;
+
+        Assert.Same(expected, DbPathResolver.DefaultPathComparer);
+    }
+
+    [Fact]
+    public void Resolve_DefaultsToThePlatformComparer_WhenNoneIsPassed()
+    {
+        // Ties the injectable parameter back to the production call path: omitting the comparer must
+        // behave identically to passing the platform default, or the tests above would be exercising
+        // a code path the app never takes.
         var app = NewDirectory("app");
         WriteDatabase(app);
+        var launch = NewDirectory("launch");
 
-        var resolution = DbPathResolver.Resolve(null, app.ToUpperInvariant(), app, app);
+        var withDefault = DbPathResolver.Resolve(null, launch, launch, app);
+        var withExplicitComparer = DbPathResolver.Resolve(
+            null, launch, launch, app, DbPathResolver.DefaultPathComparer);
 
-        Assert.Empty(resolution.ShadowedPaths);
+        // Field-by-field, not record equality: ShadowedPaths is an IReadOnlyList, which the compiler's
+        // generated Equals compares by REFERENCE, so two identical resolutions would never be equal.
+        Assert.Equal(withExplicitComparer.Path, withDefault.Path);
+        Assert.Equal(withExplicitComparer.Source, withDefault.Source);
+        Assert.Equal(withExplicitComparer.Existed, withDefault.Existed);
+        Assert.Equal(withExplicitComparer.ShadowedPaths, withDefault.ShadowedPaths);
     }
 
     [Fact]
