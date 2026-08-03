@@ -357,7 +357,7 @@ curl -s http://127.0.0.1:5123/api/admin/health
 
 **Which database it opened.** The app names the file it is using, on every boot:
 
-```
+```text
 info: KanbanFlow[0]
       [db] kanbanflow.db -> C:\...\src\KanbanFlow\kanbanflow.db (source=probe, existing=true)
 ```

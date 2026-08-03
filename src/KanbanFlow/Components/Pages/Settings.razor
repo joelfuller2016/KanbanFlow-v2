@@ -36,10 +36,13 @@
                     <dt class="col-5 text-muted">DB source</dt>
                     <dd class="col-7">
                         <span class="badge bg-secondary">@DbResolution.Source</span>
-                        @* Existed is captured at RESOLUTION time, before EnsureCreated() runs — so the
-                           honest phrasing is what was FOUND then. Not "will create new": by the time
-                           this page can render, startup has completed and the file already exists. *@
-                        <span class="text-muted ms-1">@(DbResolution.Existed ? "opened existing" : "none found — created at startup")</span>
+                        @* Existed is captured at RESOLUTION time, before EnsureCreated() runs, so this
+                           describes the resolution OUTCOME and claims nothing about the file's state
+                           now. "created new" would be a claim that only holds while EnsureCreated
+                           happens to run unconditionally before the first request; "will create new"
+                           is already false by the time this page can render. Both Copilot and
+                           CodeRabbit flagged the creation claim — this wording makes neither. *@
+                        <span class="text-muted ms-1">@(DbResolution.Existed ? "opened existing" : "no existing file — new database")</span>
                     </dd>
 
                     @foreach (var shadowed in DbResolution.ShadowedPaths)
