@@ -6,17 +6,32 @@
    with /ideas, so the filter cannot live on the board — it has to be applied at the call site that
    knows what a TaskItem is. See TaskFilter.cs for why that is also the SAFE place.
 
-   Every text input is a one-way `value=` plus an explicit `@oninput` handler — deliberately NOT
-   `@bind` + `@bind:event="oninput"`. `@bind` needs a settable property to write through, and this
-   component has none: the state lives in the host, so the "set" half would have to be a
-   parameter-writing setter, which Blazor treats as component-owned state and which fights the
-   host's re-render. One-way value + explicit callback keeps the host the single writer, and because
-   the re-rendered `value` always equals what the user just typed, the diff writes nothing back to
-   the DOM and the caret never jumps.
+   ⚠️ THE TEXT BOXES RENDER FROM LOCAL FIELDS, NOT FROM `Filter`, AND THAT IS LOAD-BEARING.
+   `value="@Filter.Search"` looks obviously right and it CORRUPTS TYPING on a Server circuit.
+   Measured on this page before the fix: typing "KeepAlphaBetaGamma" with no inter-key delay left
+   "KepAlphaBetaGmma" in the box — two characters gone — and a caret placed mid-word jumped to the
+   end. The reasoning that it was safe ("the re-rendered value always equals what the user just
+   typed") is wrong, because the render is not synchronous: the keystroke goes to the SERVER, and by
+   the time its re-render arrives carrying value="Ke", the user has already typed "Kep" into the DOM.
+   The diff then writes the stale "Ke" back over it and the 'p' is gone. `@bind:event="oninput"` has
+   the identical defect — the bug is re-rendering the attribute at all, not which directive does it.
 
-   Either way the events arrive per KEYSTROKE (AC 2: the board narrows as you type), so the host
-   must resolve its filtered list on CHANGE, never in a render-path computed property — such a
-   property re-runs on every render, i.e. once per keystroke. *@
+   So the attribute must NOT change while the user types. `searchValue`/`assigneeValue`/`claimedByValue`
+   are written ONLY when the host changes the text from outside this bar (a URL/deep-link load, or
+   Clear), which the host signals by bumping `TextResetToken`. During typing the rendered attribute is
+   byte-identical render after render, the diff touches nothing, and the DOM stays the user's.
+   The filter itself still updates on EVERY keystroke — the board narrows as you type (AC 2); it is
+   only the write-back that stops.
+
+   …and that is exactly why each box is `@key`-ed on `TextResetToken`. Not keeping the DOM in sync
+   cuts BOTH ways: on Clear the rendered attribute goes from "" back to "" — no change — so the diff
+   would again write nothing and the typed text would sit there while the board showed every card.
+   (Measured: "Clear did not empty the search box — it still reads abcXYZdef".) A changed @key
+   discards the element and builds a fresh one, which is the one operation guaranteed to put the new
+   value in the DOM. It fires only on an external reset, never on a keystroke.
+
+   The host must resolve its filtered list on CHANGE, never in a render-path computed property —
+   such a property re-runs on every render, i.e. once per keystroke. *@
 
 <section class="board-filter-bar border-bottom bg-white px-3 py-2"
          data-testid="board-filter-bar"
@@ -25,23 +40,25 @@
         <div class="col-12 col-md-4">
             <label class="visually-hidden" for="board-filter-search">Search tasks by name or description</label>
             <input id="board-filter-search"
+                   @key="@($"search-{TextResetToken}")"
                    type="search"
                    class="form-control form-control-sm"
                    placeholder="Search name or description..."
                    data-testid="board-filter-search"
-                   value="@Filter.Search"
-                   @oninput="e => OnSearchChanged.InvokeAsync(e.Value?.ToString())" />
+                   value="@searchValue"
+                   @oninput="OnSearchInput" />
         </div>
 
         <div class="col-6 col-md-2">
             <label class="visually-hidden" for="board-filter-assignee">Filter by assignee</label>
             <input id="board-filter-assignee"
+                   @key="@($"assignee-{TextResetToken}")"
                    type="text"
                    class="form-control form-control-sm"
                    placeholder="Assignee..."
                    data-testid="board-filter-assignee"
-                   value="@Filter.Assignee"
-                   @oninput="e => OnAssigneeChanged.InvokeAsync(e.Value?.ToString())" />
+                   value="@assigneeValue"
+                   @oninput="OnAssigneeInput" />
         </div>
 
         <div class="col-6 col-md-2">
@@ -50,12 +67,13 @@
                name. The visible placeholder keeps the domain term ("Claimed by..."). *@
             <label class="visually-hidden" for="board-filter-claimed-by">Filter by who claimed the task</label>
             <input id="board-filter-claimed-by"
+                   @key="@($"claimed-by-{TextResetToken}")"
                    type="text"
                    class="form-control form-control-sm"
                    placeholder="Claimed by..."
                    data-testid="board-filter-claimed-by"
-                   value="@Filter.ClaimedBy"
-                   @oninput="e => OnClaimedByChanged.InvokeAsync(e.Value?.ToString())" />
+                   value="@claimedByValue"
+                   @oninput="OnClaimedByInput" />
         </div>
 
         @* Priority multiselect. Real <input type="checkbox"> elements, not a <select multiple>: a
@@ -70,16 +88,23 @@
                SIBLING selector, so it works here exactly as it does inside a group — the input must
                simply stay immediately before its label. *@
             <div class="board-filter-priorities d-flex flex-wrap gap-1" role="group" aria-label="Filter by priority">
+                @* @key on BOTH elements, not on a wrapper: the pair must stay ADJACENT SIBLINGS or
+                   Bootstrap's `.btn-check:checked + .btn` stops matching and a selected chip loses
+                   its fill. Keying each element separately preserves the flat structure while still
+                   making the diff identity-based, so a future change that filters or reorders the
+                   chips cannot pair an input with another priority's label. (CodeRabbit, PR #362.) *@
                 @foreach (var priority in Enum.GetValues<TaskPriority>())
                 {
                     var isOn = Filter.Priorities.Contains(priority);
                     <input type="checkbox"
+                           @key="@($"priority-input-{priority}")"
                            class="btn-check"
                            autocomplete="off"
                            id="@($"board-filter-priority-{priority}")"
                            checked="@isOn"
                            @onchange="e => OnPriorityToggled.InvokeAsync((priority, e.Value is true))" />
                     <label class="btn btn-sm btn-outline-secondary"
+                           @key="@($"priority-label-{priority}")"
                            for="@($"board-filter-priority-{priority}")"
                            data-testid="@($"board-filter-priority-{priority}")">@priority</label>
                 }
@@ -132,6 +157,14 @@
     /// <summary>The current filter. The host owns it; this component only renders it.</summary>
     [Parameter, EditorRequired] public TaskFilterState Filter { get; set; } = TaskFilterState.Empty;
 
+    /// <summary>
+    /// Bumped by the host whenever it changes the TEXT fields from outside this bar — a URL/deep-link
+    /// load, or Clear. That is the ONLY signal that makes this component rewrite the three inputs'
+    /// rendered values; see the ⚠️ note at the top for why rewriting them on any other render
+    /// silently eats the user's keystrokes.
+    /// </summary>
+    [Parameter] public int TextResetToken { get; set; }
+
     /// <summary>How many tasks survive <see cref="Filter"/>.</summary>
     [Parameter] public int MatchCount { get; set; }
 
@@ -155,4 +188,33 @@
 
     /// <summary>Raised when "Clear filters" is pressed.</summary>
     [Parameter] public EventCallback OnClear { get; set; }
+
+    // What the three text inputs actually RENDER. Never touched by typing — only by an external
+    // reset (see TextResetToken). `-1` guarantees the first OnParametersSet adopts, so a deep link
+    // populates the boxes on the very first render.
+    private string? searchValue;
+    private string? assigneeValue;
+    private string? claimedByValue;
+    private int adoptedTextResetToken = -1;
+
+    protected override void OnParametersSet()
+    {
+        if (adoptedTextResetToken == TextResetToken)
+        {
+            return;
+        }
+
+        adoptedTextResetToken = TextResetToken;
+        searchValue = Filter.Search;
+        assigneeValue = Filter.Assignee;
+        claimedByValue = Filter.ClaimedBy;
+    }
+
+    // The handlers deliberately do NOT update the rendered values: the DOM already holds exactly
+    // what the user typed, and writing it back is the whole bug. They only report upward.
+    private Task OnSearchInput(ChangeEventArgs e) => OnSearchChanged.InvokeAsync(e.Value?.ToString());
+
+    private Task OnAssigneeInput(ChangeEventArgs e) => OnAssigneeChanged.InvokeAsync(e.Value?.ToString());
+
+    private Task OnClaimedByInput(ChangeEventArgs e) => OnClaimedByChanged.InvokeAsync(e.Value?.ToString());
 }

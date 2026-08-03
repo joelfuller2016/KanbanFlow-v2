@@ -285,6 +285,7 @@ else
             @* #112 — the filter bar. It owns NO state: it renders `filter` and reports changes, and
                this page holds the state, narrows the list, and syncs the URL. *@
             <BoardFilterBar Filter="filter"
+                            TextResetToken="filterTextResetToken"
                             MatchCount="filteredTasks.Count"
                             TotalCount="allTasks.Count"
                             OnSearchChanged="OnSearchChanged"
@@ -329,7 +330,15 @@ else
                    task, or conclude the board is broken). Reusing KanbanColumn's existing
                    ColumnEmptyTemplate rather than adding a second placeholder keeps the #290
                    invariant intact for free: the placeholder stays a `pe-none` SIBLING overlay of
-                   the Sortable container, never a child of it. *@
+                   the Sortable container, never a child of it.
+
+                   NOT an aria-live region, deliberately. This template renders once PER COLUMN, so
+                   marking it live would announce "No tasks match these filters" up to five times for
+                   one keystroke — and announcing freshly-INSERTED content is unreliable across
+                   screen readers anyway. The single authoritative announcement is the filter bar's
+                   own `board-filter-summary` (aria-live="polite" aria-atomic="true"), whose TEXT
+                   changes to "Showing 0 of N tasks" — one region, one message, and it carries the
+                   count, which is strictly more information. (CodeRabbit, PR #362.) *@
                 <ColumnEmptyTemplate Context="status">
                     @if (filter.IsActive)
                     {
@@ -405,7 +414,12 @@ else
     private TaskFilterState filter = TaskFilterState.Empty;
     private List<TaskItem> filteredTasks = [];
     // Debounces only the URL write, never the board (see UpdateFilter for why the order matters).
-    private static readonly TimeSpan UrlSyncDebounce = TimeSpan.FromMilliseconds(200);
+    // 250ms matches Ideas.razor's existing DebouncedReload, so the two filter surfaces feel the same.
+    private static readonly TimeSpan UrlSyncDebounce = TimeSpan.FromMilliseconds(250);
+    // Bumped ONLY when this page changes the filter bar's TEXT fields itself (Clear). The bar
+    // rewrites its inputs on a bump and never otherwise — see the warning at the top of
+    // BoardFilterBar.razor: rewriting them mid-typing drops the user's keystrokes.
+    private int filterTextResetToken;
     private CancellationTokenSource? urlSyncCts;
     private bool notFound;
     private string? loadError;
@@ -517,6 +531,14 @@ else
         // it on every parameter set would fight the user: SyncFilterToUrl below navigates on every
         // keystroke, each navigation re-runs OnParametersSet, and a re-read there would race the
         // very field being typed into. One read in, one write out.
+        //
+        // No LocationChanged subscription is needed, and that depends ENTIRELY on `replace: true`
+        // in SyncFilterToUrlAsync: every filter write replaces the page's single history entry, so
+        // this route never accumulates a second one and Back always leaves the page (measured:
+        // history.length 3, Back from /project/N?q=Keep%20Alpha lands on "/", component disposed and
+        // re-created, OnInitialized runs again). Switch that flag to `false` and Back becomes an
+        // in-page popstate this component would ignore — at which point subscribe to
+        // Nav.LocationChanged, re-parse, and unsubscribe in DisposeAsync. (CodeRabbit, PR #362.)
         filter = TaskFilterState.FromUri(Nav.Uri);
         await LoadProject();
     }
@@ -957,8 +979,15 @@ else
         UpdateFilter(filter with { Priorities = next });
     }
 
-    /// <summary>Reset the filter AND the query string together — one is the other's persistence.</summary>
-    private void ClearFilters() => UpdateFilter(TaskFilterState.Empty);
+    /// <summary>
+    /// Reset the filter AND the query string together — one is the other's persistence — and bump the
+    /// bar's text-reset token, which is the only thing that empties its three text inputs.
+    /// </summary>
+    private void ClearFilters()
+    {
+        filterTextResetToken++;
+        UpdateFilter(TaskFilterState.Empty);
+    }
 
     // ── Drag-and-Drop Handlers ──
 

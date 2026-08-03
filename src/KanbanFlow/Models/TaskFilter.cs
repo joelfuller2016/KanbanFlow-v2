@@ -49,6 +49,38 @@ public sealed record TaskFilterState
         || !string.IsNullOrWhiteSpace(Search)
         || HideDone;
 
+    // ── Value equality ───────────────────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Hand-written because the compiler-generated record equality compares
+    /// <see cref="Priorities"/> by REFERENCE — <c>EqualityComparer&lt;IReadOnlyCollection&lt;T&gt;&gt;.Default</c>
+    /// on a List is reference equality — so two filters describing the identical view would compare
+    /// unequal, and even <c>Empty == new TaskFilterState()</c> would be false. A record that advertises
+    /// value semantics and does not have them is a trap for the first caller that trusts it.
+    /// Priorities compare as a SET (order-insensitive), matching how the predicate reads them.
+    /// </summary>
+    public bool Equals(TaskFilterState? other) =>
+        other is not null
+        && HideDone == other.HideDone
+        && string.Equals(Assignee, other.Assignee, StringComparison.Ordinal)
+        && string.Equals(ClaimedBy, other.ClaimedBy, StringComparison.Ordinal)
+        && string.Equals(Search, other.Search, StringComparison.Ordinal)
+        && Priorities.Count == other.Priorities.Count
+        && Priorities.All(other.Priorities.Contains);
+
+    /// <inheritdoc />
+    public override int GetHashCode()
+    {
+        // Order-insensitive over Priorities (XOR of one bit per member), to match Equals.
+        var priorityBits = 0;
+        foreach (var priority in Priorities)
+        {
+            priorityBits ^= 1 << (int)priority;
+        }
+
+        return HashCode.Combine(Assignee, ClaimedBy, Search, HideDone, priorityBits);
+    }
+
     // ── URL round-trip ───────────────────────────────────────────────────────────────────────────
 
     /// <summary>Query-string key for <see cref="Search"/>.</summary>

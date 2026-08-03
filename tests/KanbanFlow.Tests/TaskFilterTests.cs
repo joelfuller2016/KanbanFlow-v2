@@ -275,6 +275,69 @@ public sealed class TaskFilterTests
     }
 
     [Fact]
+    public void RoundTrip_NormalisesUntrimmedText_AndIsNotAnIdentity()
+    {
+        // ToQuery trims on the way out and FromQuery trims on the way in, so " widget " comes back
+        // as "widget". That asymmetry is INTENDED (a stray space must not become a search term), but
+        // it means the round trip is a normalisation, not an identity — pin it so a future change
+        // cannot drop either Trim and leave the doc comment quietly lying. (CodeRabbit, PR #362.)
+        var untrimmed = new TaskFilterState { Search = "  widget  ", Assignee = " alice ", ClaimedBy = " agent-7 " };
+        var round = TaskFilterState.FromQuery(untrimmed.ToQuery());
+
+        Assert.Equal("widget", round.Search);
+        Assert.Equal("alice", round.Assignee);
+        Assert.Equal("agent-7", round.ClaimedBy);
+        Assert.NotEqual(untrimmed, round);
+
+        // …and normalising is idempotent: a second lap changes nothing.
+        Assert.Equal(round, TaskFilterState.FromQuery(round.ToQuery()));
+    }
+
+    // ── Value equality (the LocationChanged/no-op guards would silently misbehave without it) ───
+
+    [Fact]
+    public void Equality_IsByValue_IncludingThePriorityCollection()
+    {
+        // The compiler-generated record equality compares Priorities by REFERENCE, so every one of
+        // these would be false without the hand-written Equals.
+        Assert.Equal(TaskFilterState.Empty, new TaskFilterState());
+        Assert.Equal(
+            new TaskFilterState { Search = "w", Priorities = [TaskPriority.Low, TaskPriority.High] },
+            new TaskFilterState { Search = "w", Priorities = [TaskPriority.Low, TaskPriority.High] });
+
+        // Priorities are a SET: selection order is not part of the view.
+        Assert.Equal(
+            new TaskFilterState { Priorities = [TaskPriority.High, TaskPriority.Low] },
+            new TaskFilterState { Priorities = [TaskPriority.Low, TaskPriority.High] });
+
+        Assert.Equal(
+            new TaskFilterState { Priorities = [TaskPriority.Low] }.GetHashCode(),
+            new TaskFilterState { Priorities = [TaskPriority.Low] }.GetHashCode());
+    }
+
+    [Fact]
+    public void Equality_StillSeparatesGenuinelyDifferentFilters()
+    {
+        // The other half: an equality that returns true too often is worse than reference equality.
+        var basis = new TaskFilterState
+        {
+            Search = "w",
+            Assignee = "alice",
+            ClaimedBy = "agent",
+            HideDone = true,
+            Priorities = [TaskPriority.Low],
+        };
+
+        Assert.NotEqual(basis, basis with { Search = "x" });
+        Assert.NotEqual(basis, basis with { Assignee = "bob" });
+        Assert.NotEqual(basis, basis with { ClaimedBy = "human" });
+        Assert.NotEqual(basis, basis with { HideDone = false });
+        Assert.NotEqual(basis, basis with { Priorities = [TaskPriority.High] });
+        Assert.NotEqual(basis, basis with { Priorities = [TaskPriority.Low, TaskPriority.High] });
+        Assert.NotEqual(basis, basis with { Priorities = [] });
+    }
+
+    [Fact]
     public void FromUri_ReadsTheQueryOffAnAbsoluteUrl()
     {
         var state = TaskFilterState.FromUri("http://localhost:5148/project/12?q=widget&hideDone=true");

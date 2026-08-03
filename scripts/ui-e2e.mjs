@@ -946,6 +946,61 @@ async function main() {
       }
     });
 
+    // Found by review (CodeRabbit, PR #362) and REPRODUCED before it was fixed: with the search box
+    // rendering `value="@Filter.Search"`, typing "KeepAlphaBetaGamma" with no inter-key delay left
+    // "KepAlphaBetaGmma" in the box — two characters silently eaten — and a caret placed mid-word
+    // jumped to the end. On a Server circuit the keystroke round-trips to the server, and the
+    // re-render it triggers carries a value that is already stale by the time it lands; the diff
+    // writes it back over the newer characters. The fix is that BoardFilterBar renders its text
+    // boxes from LOCAL fields that typing never touches (see the warning at the top of that file).
+    //
+    // Nothing else in this suite could catch it: every other filter assertion uses `fill()`, which
+    // sets the value in ONE event and so never races a re-render. This is the only scenario that
+    // types character by character, which is the only way a human uses the control.
+    await test("Fast typing in the filter box keeps every character and holds the caret", async () => {
+      await page.goto(filterUrl());
+      await page.locator('[data-testid="board-filter-bar"]').waitFor({ state: "visible" });
+      await waitForSortableArmed(page, "Todo");
+
+      const box = page.locator('[data-testid="board-filter-search"]');
+      await box.click();
+      await page.keyboard.type("KeepAlphaBetaGamma", { delay: 0 });
+      // The filter is debounced into the URL, so wait for the write rather than reading immediately.
+      await page.waitForFunction(() => window.location.href.includes("q="), null, { timeout: 10000 });
+      await page.waitForTimeout(600);
+      const burst = await box.inputValue();
+      assert(burst === "KeepAlphaBetaGamma",
+        `fast typing lost characters: box reads "${burst}", expected "KeepAlphaBetaGamma"`);
+
+      // Now type into the MIDDLE. A control that rewrites `value` on re-render snaps the caret to
+      // the end, so this would produce "abcdefXYZ" with selectionStart 9 instead of "abcXYZdef"/6.
+      await box.fill("abcdef");
+      await page.waitForTimeout(600);
+      await page.evaluate(() => {
+        const el = document.querySelector('[data-testid="board-filter-search"]');
+        el.focus();
+        el.setSelectionRange(3, 3);
+      });
+      await page.keyboard.type("XYZ", { delay: 0 });
+      await page.waitForTimeout(600);
+      const caret = await page.evaluate(() => {
+        const el = document.querySelector('[data-testid="board-filter-search"]');
+        return { value: el.value, selectionStart: el.selectionStart };
+      });
+      assert(caret.value === "abcXYZdef" && caret.selectionStart === 6,
+        `typing mid-word moved the caret or reordered the text: value="${caret.value}" ` +
+        `selectionStart=${caret.selectionStart}, expected "abcXYZdef"/6`);
+
+      // Clear must still be able to empty a box the bar otherwise never rewrites — the whole point
+      // of the reset token. Without it, "Clear" would leave the typed text sitting in the input.
+      await page.locator('[data-testid="board-filter-clear"]').click();
+      await page.waitForFunction(
+        () => document.querySelector('[data-testid="board-filter-search"]').value === "",
+        null, { timeout: 10000 })
+        .catch(async () => assert(false,
+          `Clear did not empty the search box — it still reads "${await box.inputValue()}"`));
+    });
+
     // S2 (reviewer, PR #362): assignee and claimed-by are two near-identical string clauses over two
     // different columns, and the predicate-level guard for confusing them
     // (TaskFilterTests.ClaimedByFilter_DoesNotReadTheAssigneeField) says nothing about the WIRING.
