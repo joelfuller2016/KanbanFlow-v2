@@ -1550,6 +1550,119 @@ async function main() {
         `Esc on the PROMOTE confirm must cancel it — the idea is now ${notPromoted.status}`);
     });
 
+    // ── Scenario: the activity timeline's fold survives a refresh of the SAME task (#328) ──
+    //
+    // ActivityTimeline re-reads its audit events when TaskId OR RefreshToken changes, and it used
+    // to reset `expanded` for BOTH — so posting a comment (which bumps RefreshToken; see
+    // TaskDetailPanel.AddCommentAsync) collapsed the history the reader had just opened, right
+    // underneath them. `eventLimit` was correctly guarded on "different task only" and `expanded`
+    // was not; the two are the same invariant.
+    //
+    // This is a browser test on purpose. The bug lived in the WIRING — which state resets sit
+    // inside which guard in OnParametersSet — so a unit test on an extracted helper would have
+    // gone green against the broken component. There is no bUnit in this repo by choice.
+    await test("Timeline: posting a comment does not re-collapse an expanded history (#328)", async () => {
+      const timelineTask = await api("POST", `/api/features/${feature.id}/tasks`,
+        { name: `E2E timeline fold ${stamp}` });
+
+      // CollapseAfter is 10 in TaskDetailPanel, so this has to clear 10 rows to produce a fold.
+      //
+      // The expected row count is 13, and every term matters:
+      //   12  comments. Each ALSO writes a paired TaskCommentAdded event, which the timeline
+      //       de-duplicates away — so this contributes 12 rows, not 24. Asserted, not assumed:
+      //       if de-duplication broke, the toggle below would read "Show all 25".
+      //  + 1  the task's own creation. TaskService writes a TaskCreated event AND a Created
+      //       comment for it; those de-duplicate to a single row too (the event wins, it carries
+      //       the snapshot).
+      const seeded = 12;
+      const expectedRows = seeded + 1;
+      for (let i = 1; i <= seeded; i++) {
+        await api("POST", `/api/tasks/${timelineTask.id}/comments`,
+          { text: `seeded comment ${i}`, author: "seed", type: "Note" });
+      }
+
+      await page.goto(`${baseUrl}/project/${proj.id}`);
+      await clickUntil(
+        () => page.locator(`[data-testid="board-card-${timelineTask.id}-title"]`).click(),
+        page.locator('[data-testid="task-detail-panel"]'),
+      );
+
+      const entries = page.locator('[data-testid="activity-timeline-entry"]');
+      const toggle = page.locator('[data-testid="activity-timeline-toggle"]');
+
+      // Folded: exactly CollapseAfter rows, with a toggle offering the rest.
+      await toggle.waitFor({ state: "visible" });
+
+      // …then settle on the MERGED total before asserting on it.
+      //
+      // The theory this guards against (raised in review): TaskDetailPanel awaits its comment
+      // load, but ActivityTimeline's event load is fire-and-forget, so there should be an
+      // intermediate render with all 12 comments and `events` still empty — nothing
+      // de-duplicated, 12 rows, which already exceeds CollapseAfter, so the toggle would be
+      // visible in that state reading "Show all 12". `folded === 10` is true there too and
+      // cannot separate the two states.
+      //
+      // MEASURED, and it did not reproduce. Sampling the toggle label every 5ms from before the
+      // panel opens, across 12 runs — 6 warm, and 6 with a deliberate `await Task.Delay(1500)`
+      // injected into LoadEventsAsync (confirmed to have reached the built DLL, not just the
+      // source) — the first state ever present in the DOM was "Show all 13 | rows=10", at +0ms.
+      // A 1500ms window would have been trivial to catch, so whatever Blazor is batching, the
+      // un-merged render does not reach the browser here.
+      //
+      // The wait is kept regardless: it is a no-op in the state that was actually measured, and
+      // one predicate evaluation is cheaper than diagnosing a load-dependent flake later. It is
+      // NOT evidence of a bug that was observed — do not cite it as one.
+      //
+      // The timeout is swallowed on purpose: if the merge is genuinely broken the assertion
+      // below reports WHAT it saw, which beats an opaque Playwright timeout.
+      await page.waitForFunction(
+        (n) => document.querySelector('[data-testid="activity-timeline-toggle"]')
+          ?.innerText.includes(`Show all ${n}`) ?? false,
+        expectedRows, { timeout: 10000 },
+      ).catch(() => { /* fall through to the diagnostic assertion */ });
+
+      const folded = await entries.count();
+      assert(folded === 10, `expected the timeline folded to 10 rows, saw ${folded}`);
+      assert(
+        (await toggle.innerText()).includes(`Show all ${expectedRows}`),
+        `expected "Show all ${expectedRows}" — ${seeded} comments must merge with their paired ` +
+        `TaskCommentAdded events into ${seeded} rows, not ${seeded * 2}. Saw "${await toggle.innerText()}"`,
+      );
+
+      // Expand.
+      await toggle.click();
+      await page.waitForFunction(
+        (n) => document.querySelectorAll('[data-testid="activity-timeline-entry"]').length === n,
+        expectedRows, { timeout: 10000 },
+      );
+
+      // Now post a comment THROUGH THE UI. This is the RefreshToken bump — the same task, not a
+      // different one.
+      await page.locator('[data-testid="task-comment-input"]').fill(`typed while expanded ${stamp}`);
+      await page.locator('[data-testid="task-comment-add-button"]').click();
+
+      // The new row must appear (proves the refresh actually happened — without this the
+      // assertion below could pass simply because nothing re-rendered at all)…
+      await page.waitForFunction(
+        (s) => [...document.querySelectorAll('[data-testid="activity-timeline-entry"]')]
+          .some((e) => e.textContent.includes(`typed while expanded ${s}`)),
+        stamp, { timeout: 10000 },
+      );
+
+      // …and the history must still be OPEN. On the broken build this is 10.
+      const after = await entries.count();
+      assert(
+        after === expectedRows + 1,
+        `history re-collapsed after a same-task refresh: expected ${expectedRows + 1} rows, saw ${after}`,
+      );
+      assert(
+        (await toggle.innerText()).includes("Show fewer"),
+        `toggle reverted to the folded label after a refresh: "${await toggle.innerText()}"`,
+      );
+
+      await api("DELETE", `/api/tasks/${timelineTask.id}`).catch(() => {});
+    });
+
     // ── Scenario E: Settings -> Run all shows an all-passed result table ──
     await test("Settings 'Run all' reports an all-passed result", async () => {
       await page.goto(`${baseUrl}/settings`);

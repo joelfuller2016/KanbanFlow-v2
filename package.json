@@ -7,10 +7,18 @@
   },
   "description": "Local automation & test scripts for KanbanFlow v2 (MCP server, smoke tests, UI e2e). Local-only; no CI.",
   "scripts": {
+    "backlog": "node scripts/backlog-sync.mjs",
+    "backlog:check": "node scripts/backlog-sync.mjs --check",
     "test:scripts": "node --test \"scripts/*.test.mjs\"",
     "test:ui": "node scripts/ui-e2e.mjs",
     "test:mcp": "node scripts/framing-ab.mjs all && node scripts/smoke-mcp.mjs",
-    "test:mcp-framing": "node scripts/framing-ab.mjs all"
+    "test:mcp-framing": "node scripts/framing-ab.mjs all",
+    "gh:sync": "node scripts/portfolio-sync.mjs sync",
+    "gh:sync:dry": "node scripts/portfolio-sync.mjs sync --dry-run",
+    "gh:status": "node scripts/portfolio-sync.mjs status",
+    "gh:onboard": "node scripts/portfolio-sync.mjs onboard",
+    "gh:push:preview": "node scripts/portfolio-sync.mjs push-issue",
+    "gh:standup": "node scripts/portfolio-standup.mjs"
   },
   "devDependencies": {
     "playwright": "^1.49.0"

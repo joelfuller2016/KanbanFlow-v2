@@ -516,6 +516,13 @@ public static class ApiEndpoints
                 .Where(e => e.ProjectId == id)
                 .AsNoTracking()
                 .OrderByDescending(e => e.CreatedAt)
+                // ── Id tiebreak (#328). CreatedAt alone is NOT a total order here: TaskService
+                // writes several events inside one SaveChangesAsync, so identical instants are
+                // routine. Without a tiebreak the sort is unstable, and a `Take(n)` over an
+                // unstable sort can return a different SET between two identical requests — not
+                // merely a different order. Applied to EVERY ActivityEvent query below, not just
+                // the one that surfaced it.
+                .ThenByDescending(e => e.Id)
                 .Take(take)
                 .ToListAsync();
 
@@ -533,6 +540,7 @@ public static class ApiEndpoints
                 .Where(e => e.EntityType == "Task" && e.EntityId == id)
                 .AsNoTracking()
                 .OrderByDescending(e => e.CreatedAt)
+                .ThenByDescending(e => e.Id)   // total order — see the note on /api/projects/{id}/activity
                 .Take(take)
                 .ToListAsync();
 
@@ -709,6 +717,7 @@ public static class ApiEndpoints
                 .Where(e => e.EntityType == "Idea" && e.EntityId == id)
                 .AsNoTracking()
                 .OrderByDescending(e => e.CreatedAt)
+                .ThenByDescending(e => e.Id)   // total order — see the note on /api/projects/{id}/activity
                 .Take(take)
                 .ToListAsync(ct);
 
@@ -1321,6 +1330,7 @@ public static class ApiEndpoints
             var recentActivity = await db.ActivityEvents
                 .Where(e => e.EntityType == "Task" && e.EntityId == id)
                 .OrderByDescending(e => e.CreatedAt)
+                .ThenByDescending(e => e.Id)   // total order — see the note on /api/projects/{id}/activity
                 .Take(20)
                 .AsNoTracking()
                 .Select(e => new
