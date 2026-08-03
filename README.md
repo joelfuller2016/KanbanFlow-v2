@@ -16,7 +16,7 @@
 | **Stack** | .NET 10 · Blazor Server · SQLite (EF Core 10) · Minimal APIs · Node 18+ for the MCP wrapper |
 | **Surfaces** | 5 UI routes · 60 REST endpoints · 24 native MCP tools · 50 Node-wrapper MCP tools |
 | **Sync** | **One-way**, GitHub → board. It **never writes to GitHub**. GitHub owns title, priority, milestone; the board owns dependencies, criteria, subtasks, claims, ordering, memory — see [Who owns what](#who-owns-what) |
-| **Tests** | 624 xUnit · 56 in-app integration · 35 Playwright e2e · 2 smoke suites — [all local, no CI](#deliberate-non-features) |
+| **Tests** | 624 xUnit · 56 in-app integration · 35 Playwright e2e · 19 script unit · 2 smoke suites — [all local, no CI](#deliberate-non-features) |
 | **Runs at** | `http://127.0.0.1:5123` — localhost only, no auth, no Docker, no cloud |
 | **Log book** | [`docs/BACKLOG.md`](docs/BACKLOG.md) — the authoritative record of what happened |
 | **Deep detail** | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) |
@@ -589,6 +589,7 @@ the command beside it — not copied from the previous README, and not copied fr
 | xUnit tests | 624 | `dotnet test tests/KanbanFlow.Tests` |
 | In-app integration tests | 56 | `grep -c 'results.Add(await RunTest' src/KanbanFlow/Services/TestRunnerService.cs` (28 API + 22 service + 6 UI) |
 | Playwright e2e scenarios | 35 | `npm run test:ui` |
+| Script unit tests (`scripts/*.mjs`) | 19 | `npm run test:scripts` |
 
 Corrections this revision made to the previous README: **53 → 60** endpoints (both memory
 endpoints and `GET /api/tasks/{id}/context` were missing from the route list entirely);
@@ -723,8 +724,13 @@ npm run test:scripts                    # node:test units for scripts/*.mjs — 
                                         # priority model behind portfolio-sync and the
                                         # log book (#360). No app, no network, no DB.
 npm run test:ui                         # Playwright e2e — builds, boots an isolated instance
-                                        # (scratch port + throwaway DB), drives chromium, tears down
+                                        # (fixed port 5198 + throwaway DB), drives chromium, tears down
 ```
+
+> **`test:ui` binds a fixed port (`5198`).** Two concurrent runs — two agents, or you and an
+> agent — share that port but get *separate* throwaway databases, so one run's API calls land on
+> the other's app and fail as `Feature <n> not found` rather than as a port clash. Override with
+> `UI_E2E_PORT=<free port> npm run test:ui` when anything else might be running the suite.
 
 ```bash
 # The in-app integration suite, from inside the live app.
