@@ -341,6 +341,58 @@ try {
     $openapi = Invoke-SmokeGet "/openapi/v1.json"
     Assert-Truthy $openapi.paths "GET /openapi/v1.json did not return an OpenAPI document with paths."
 
+    # --- #125: server-side progress at project and feature level -------------------
+    # Self-contained: its own project, so it neither depends on nor disturbs the assertions
+    # above. Shape: root -> child -> grandchild, so the recursive rollup is exercised over
+    # the real endpoints rather than only in the calculator's unit tests.
+    $pgProj = Invoke-SmokeJson "Post" "/api/projects" @{ name = "Progress smoke #125" }
+    $pgRoot = Invoke-SmokeJson "Post" "/api/projects/$($pgProj.id)/features" @{ name = "PG root" }
+    $pgChild = Invoke-SmokeJson "Post" "/api/projects/$($pgProj.id)/features" @{ name = "PG child"; parentFeatureId = $pgRoot.id }
+    $pgGrand = Invoke-SmokeJson "Post" "/api/projects/$($pgProj.id)/features" @{ name = "PG grandchild"; parentFeatureId = $pgChild.id }
+    $pgRootTask = Invoke-SmokeJson "Post" "/api/features/$($pgRoot.id)/tasks" @{ name = "PG root task" }
+    Invoke-SmokeJson "Post" "/api/features/$($pgChild.id)/tasks" @{ name = "PG child task" } | Out-Null
+    $pgGrandBlocked = Invoke-SmokeJson "Post" "/api/features/$($pgGrand.id)/tasks" @{ name = "PG grandchild blocked task" }
+    $pgGrandBlocker = Invoke-SmokeJson "Post" "/api/features/$($pgGrand.id)/tasks" @{ name = "PG grandchild blocking task" }
+    Invoke-SmokeJson "Post" "/api/tasks/$($pgGrandBlocked.id)/dependencies" @{ dependsOnTaskItemId = $pgGrandBlocker.id; type = "DependsOn" } | Out-Null
+
+    $pgProject = Invoke-SmokeGet "/api/projects/$($pgProj.id)"
+    Assert-Truthy ($null -ne $pgProject.progress) "#125: GET /api/projects/{id} is missing the progress object."
+    Assert-Truthy ($pgProject.progress.total -eq 4) "#125: GET /api/projects/{id} progress.total should count every task at any depth (got $($pgProject.progress.total))."
+    Assert-Truthy ($pgProject.progress.completed -eq 0) "#125: progress.completed should be 0 before anything is Done."
+    Assert-Truthy ($pgProject.progress.blocked -eq 1) "#125: progress.blocked should count the task with an open blocker (got $($pgProject.progress.blocked))."
+    Assert-Truthy ($pgProject.progress.percentComplete -eq 0.0) "#125: progress.percentComplete should be 0.0 with nothing Done."
+    # A JSON number round-trips as [long] or [double] depending on its value; the contract that
+    # matters to an agent parsing it is that it is never a formatted string like "0%".
+    Assert-Truthy ($pgProject.progress.percentComplete -isnot [string]) "#125: progress.percentComplete must be a number, not a formatted string."
+    $pgRootRow = $pgProject.features | Where-Object { $_.id -eq $pgRoot.id } | Select-Object -First 1
+    Assert-Truthy ($pgRootRow.progress.total -eq 4) "#125: GET /api/projects/{id} feature progress must include descendant features' tasks (got $($pgRootRow.progress.total))."
+
+    $pgContext = Invoke-SmokeGet "/api/projects/$($pgProj.id)/context"
+    Assert-Truthy ($null -ne $pgContext.progress) "#125: GET /api/projects/{id}/context is missing the progress object."
+    Assert-Truthy ($pgContext.progress.total -eq $pgProject.progress.total) "#125: /context and /api/projects/{id} disagree on progress.total."
+    Assert-Truthy ($pgContext.progress.blocked -eq 1) "#125: /context progress.blocked disagrees with the per-task isBlocked flags."
+    # Goal 4: the project total is the sum of the TOP-LEVEL features' totals plus any task that
+    # hangs off no top-level feature (none here), asserted rather than eyeballed.
+    $pgTopLevelTotal = ($pgContext.features | ForEach-Object { $_.progress.total } | Measure-Object -Sum).Sum
+    Assert-Truthy ($pgContext.progress.total -eq $pgTopLevelTotal) "#125: project progress.total ($($pgContext.progress.total)) != sum of top-level features[].progress.total ($pgTopLevelTotal)."
+    $pgContextRoot = $pgContext.features | Where-Object { $_.id -eq $pgRoot.id } | Select-Object -First 1
+    Assert-Truthy ($pgContextRoot.progress.total -eq 4) "#125: /context root feature progress.total should roll up the whole subtree."
+    $pgContextChild = $pgContextRoot.children | Where-Object { $_.id -eq $pgChild.id } | Select-Object -First 1
+    Assert-Truthy ($pgContextChild.progress.total -eq 3) "#125: /context child feature progress.total should be own 1 + grandchild 2 (got $($pgContextChild.progress.total))."
+    $pgContextGrand = $pgContextChild.children | Where-Object { $_.id -eq $pgGrand.id } | Select-Object -First 1
+    Assert-Truthy ($pgContextGrand.progress.total -eq 2) "#125: /context grandchild feature progress.total should be its own 2 tasks."
+    Assert-Truthy ($pgContextGrand.progress.blocked -eq 1) "#125: /context grandchild progress.blocked should count its blocked task."
+
+    # Moving a task to Done must raise percentComplete on BOTH endpoints, identically.
+    Invoke-SmokeJson "Patch" "/api/tasks/$($pgRootTask.id)/status" @{ status = "Done" } | Out-Null
+    $pgContextAfter = Invoke-SmokeGet "/api/projects/$($pgProj.id)/context"
+    $pgProjectAfter = Invoke-SmokeGet "/api/projects/$($pgProj.id)"
+    Assert-Truthy ($pgContextAfter.progress.percentComplete -gt $pgContext.progress.percentComplete) "#125: percentComplete did not rise after a task moved to Done."
+    Assert-Truthy ($pgContextAfter.progress.completed -eq 1) "#125: progress.completed did not count the newly Done task."
+    Assert-Truthy ($pgContextAfter.progress.percentComplete -eq 25.0) "#125: 1 of 4 Done should be 25.0 (got $($pgContextAfter.progress.percentComplete))."
+    Assert-Truthy ($pgProjectAfter.progress.percentComplete -eq $pgContextAfter.progress.percentComplete) "#125: /api/projects/{id} and /context report different percentComplete for the same project."
+    Invoke-SmokeDelete "/api/projects/$($pgProj.id)" | Out-Null
+
     # --- #224: mem0-style remember/recall over the memory store ---
     $memToken = "memtoken$([Guid]::NewGuid().ToString('N'))"
     $memNode = Invoke-SmokeJson "Post" "/api/memory" @{ content = "API smoke remembered fact $memToken"; type = "Semantic"; tags = "smoke"; source = "api-smoke"; confidence = 0.9; actor = "api-smoke" }

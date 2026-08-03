@@ -290,6 +290,7 @@ Requirements are organised by **capability**, not by entity. Every capability mu
 | R-1.3 | Activity is queryable per project and per task, time-ordered, with structured `before`/`after` snapshots. *(✅ implemented; surfaces only API-driven mutations — see issue #88.)* |
 | R-1.4 | List endpoints support `?limit=&offset=` paging. *(❌ only the activity endpoint clamps `limit` to 500; everything else is unbounded — gap for large projects.)* |
 | R-1.5 | A search endpoint returns matches across project descriptions, task descriptions, comments, and requirements: `GET /api/projects/{id}/search?q=...`. *(❌ not implemented.)* |
+| R-1.6 | Completion is computed **once, server-side** and served as a `progress` object at project and feature level, so no surface recomputes it: `{ completed, inProgress, blocked, total, percentComplete }` on `GET /api/projects/{id}` and `GET /api/projects/{id}/context`. Feature progress is recursive (own tasks + all descendant features'); `percentComplete` is a number rounded to one decimal, and `0.0` — never `NaN` — when `total` is 0. *(✅ implemented by the shared `Services/ProjectProgressCalculator`, issue #125.)* |
 
 ### C-2. Write everything
 
@@ -480,8 +481,8 @@ The OpenAPI document (R-5.1) is now the source of truth: GET `/openapi/v1.json` 
 
 ```
 /api/projects                               # list/create
-/api/projects/{id}                          # get/update/delete
-/api/projects/{id}/context                  # full graph for AI
+/api/projects/{id}                          # get/update/delete (+ progress, project + per feature)
+/api/projects/{id}/context                  # full graph for AI (+ progress, project + per feature)
 /api/projects/{id}/board                    # tasks grouped by status
 /api/projects/{id}/next-tasks               # direction
 /api/projects/{id}/activity                 # audit log
