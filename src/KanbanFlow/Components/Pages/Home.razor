@@ -1,5 +1,7 @@
 @page "/"
 @rendermode InteractiveServer
+@implements IDisposable
+@using System.Globalization
 @inject IDbContextFactory<AppDbContext> DbFactory
 @inject NavigationManager Nav
 @inject ITaskService TaskSvc
@@ -39,42 +41,132 @@ else if (projects.Count == 0)
 }
 else
 {
-    <div class="row g-4">
+    @* The grid is `auto-fit`, not a fixed 3-up row: with 20 projects it packs the canvas into as
+       many ~19rem columns as fit, and with 1 project the empty tracks collapse so the single card
+       widens (capped by `.project-card`'s max-width) instead of sitting in an ocean. #281 AC 6. *@
+    <div class="project-grid" data-testid="project-grid">
         @foreach (var p in projects)
         {
-            <div class="col-md-4" @key="p.Id">
-                <div class="card h-100 shadow-sm">
-                    <div class="card-body d-flex flex-column">
-                        <div class="d-flex justify-content-between align-items-start mb-2">
-                            <h5 class="card-title mb-0">@p.Name</h5>
-                            <div class="dropdown">
-                                <button class="btn btn-sm btn-link text-muted p-0" data-bs-toggle="dropdown" aria-expanded="false" aria-label="Open project actions for @p.Name">
-                                    <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" fill="currentColor" class="bi bi-three-dots-vertical" viewBox="0 0 16 16">
-                                        <path d="M9.5 13a1.5 1.5 0 1 1-3 0 1.5 1.5 0 0 1 3 0m0-5a1.5 1.5 0 1 1-3 0 1.5 1.5 0 0 1 3 0m0-5a1.5 1.5 0 1 1-3 0 1.5 1.5 0 0 1 3 0"/>
-                                    </svg>
-                                </button>
-                                <ul class="dropdown-menu dropdown-menu-end">
-                                    <li><button class="dropdown-item" @onclick="() => OpenEditModal(p)">Edit</button></li>
-                                    <li><hr class="dropdown-divider" /></li>
-                                    <li><button class="dropdown-item text-danger" @onclick="() => OpenDeleteModal(p)">Delete</button></li>
-                                </ul>
-                            </div>
-                        </div>
-                        @if (!string.IsNullOrWhiteSpace(p.Description))
-                        {
-                            <MarkdownContent Markdown="@p.Description"
-                                             CssClass="card-text text-muted small project-card-description" />
-                        }
-                        <div class="mt-auto">
-                            <div class="d-flex gap-2 mb-3">
-                                <span class="badge bg-primary">@p.FeatureCount features</span>
-                                <span class="badge bg-secondary">@p.TaskCount tasks</span>
-                            </div>
-                            <button class="btn btn-outline-primary btn-sm w-100" @onclick="() => NavigateToProject(p.Id)">
-                                Open
+            <div class="card project-card shadow-sm" @key="p.Id"
+                 data-testid="project-card" data-project-id="@p.Id">
+                <div class="card-body d-flex flex-column">
+                    <div class="d-flex justify-content-between align-items-start mb-2">
+                        <h5 class="card-title mb-0">@p.Name</h5>
+                        <div class="dropdown">
+                            <button class="btn btn-sm btn-link text-muted p-0" data-bs-toggle="dropdown" aria-expanded="false" aria-label="Open project actions for @p.Name">
+                                <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" fill="currentColor" class="bi bi-three-dots-vertical" viewBox="0 0 16 16">
+                                    <path d="M9.5 13a1.5 1.5 0 1 1-3 0 1.5 1.5 0 0 1 3 0m0-5a1.5 1.5 0 1 1-3 0 1.5 1.5 0 0 1 3 0m0-5a1.5 1.5 0 1 1-3 0 1.5 1.5 0 0 1 3 0"/>
+                                </svg>
                             </button>
+                            <ul class="dropdown-menu dropdown-menu-end">
+                                <li><button class="dropdown-item" @onclick="() => OpenEditModal(p)">Edit</button></li>
+                                <li><hr class="dropdown-divider" /></li>
+                                <li><button class="dropdown-item text-danger" @onclick="() => OpenDeleteModal(p)">Delete</button></li>
+                            </ul>
                         </div>
                     </div>
+                    @if (!string.IsNullOrWhiteSpace(p.Description))
+                    {
+                        <MarkdownContent Markdown="@p.Description"
+                                         CssClass="card-text text-muted small project-card-description" />
+                    }
+                    @* Everything below flows from the TOP; only the Open button is pinned to the
+                       bottom (`mt-auto` on the button itself). Wrapping the whole block in an
+                       `mt-auto` div — which is what this used to be, back when the block was two
+                       badges — pushes a sparse card's content into the middle of a row sized by
+                       its busiest sibling, leaving a dead gap under the title. *@
+                        @* ── Progress (AC 1) — server-computed, never derived here ──
+                           Rendered only when the project HAS tasks: a 0/0 bar is placeholder
+                           noise on a project nobody has filled in yet (AC 5). *@
+                        @if (p.Progress.Total > 0)
+                        {
+                            <div class="kf-card-progress" data-testid="project-progress">
+                                <div class="kf-card-progress-head">
+                                    <span class="text-muted">Progress</span>
+                                    <span class="kf-card-progress-count" data-testid="project-progress-count">
+                                        @p.Progress.Completed/@p.Progress.Total done
+                                    </span>
+                                </div>
+                                <div class="progress kf-card-progress-bar"
+                                     role="progressbar"
+                                     aria-label="@p.ProgressAriaLabel"
+                                     aria-valuenow="@p.ProgressPercentValue"
+                                     aria-valuemin="0"
+                                     aria-valuemax="100"
+                                     title="@p.ProgressAriaLabel">
+                                    <div class="progress-bar" style="width:@p.ProgressBarWidth"></div>
+                                </div>
+                                @if (p.ProgressBreakdown is not null)
+                                {
+                                    <div class="kf-card-breakdown" data-testid="project-progress-breakdown">
+                                        @p.ProgressBreakdown
+                                    </div>
+                                }
+                            </div>
+                        }
+
+                        @* ── What's next (AC 2) — the TaskRanking engine's #1 pick, linked
+                              straight to the task on the project page. *@
+                        @if (p.NextTask is not null)
+                        {
+                            <a class="kf-next-task" href="@p.NextTaskHref"
+                               data-testid="project-next-task"
+                               data-task-id="@p.NextTask.Id"
+                               title="@p.NextTask.Reason">
+                                <span class="kf-next-task-label">Next</span>
+                                <span class="kf-next-task-name">@p.NextTask.Name</span>
+                                <span class="kf-next-task-prio" data-priority="@p.NextTask.Priority">@p.NextTask.Priority</span>
+                            </a>
+                        }
+
+                        @* ── Recency (AC 3) + agent state (AC 4). The whole row disappears when
+                              there is nothing true to say about the project (AC 5). *@
+                        @if (p.HasMeta)
+                        {
+                            <div class="kf-card-meta">
+                                @if (p.ActivityRelative is not null)
+                                {
+                                    @* The dotted underline + `cursor: help` advertise "there is more here", so the
+                                       more has to be reachable by more than a mouse. `title` fires on hover only,
+                                       and `datetime` is machine-readable but unannounced, so the absolute instant
+                                       is ALSO carried as visually-hidden text: screen readers read it in document
+                                       order with no dependence on how `<time>` maps to an ARIA role (it maps to
+                                       `generic`, where `aria-label` is not guaranteed to be exposed at all).
+                                       `tabindex="0"` puts the same information in the keyboard's reach, and
+                                       `.kf-card-when:focus-visible` in app.css makes that stop visible. *@
+                                    <time class="kf-card-when"
+                                          data-testid="project-last-activity"
+                                          datetime="@p.ActivityMachine"
+                                          tabindex="0"
+                                          title="@p.ActivityTooltip">@p.ActivityRelative<span class="visually-hidden"> — @p.ActivityTooltip</span></time>
+                                }
+                                @foreach (var claim in p.VisibleClaims)
+                                {
+                                    <span class="kf-claim-chip" data-testid="project-claim" @key="claim.Actor">
+                                        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" width="11" height="11" fill="currentColor" aria-hidden="true">
+                                            <path d="M8 8a3 3 0 1 0 0-6 3 3 0 0 0 0 6m0 1c-3.1 0-6 1.6-6 3.6V15h12v-2.4C14 10.6 11.1 9 8 9"/>
+                                        </svg>
+                                        <span class="kf-claim-actor">@claim.Actor</span>
+                                        @if (claim.TaskCount > 1)
+                                        {
+                                            <span class="kf-claim-count">@claim.TaskCount</span>
+                                        }
+                                    </span>
+                                }
+                                @if (p.HiddenClaimLabel is not null)
+                                {
+                                    <span class="kf-claim-chip kf-claim-more" data-testid="project-claim-more">@p.HiddenClaimLabel</span>
+                                }
+                            </div>
+                        }
+
+                        <div class="d-flex gap-2 my-3">
+                            <span class="badge bg-primary">@p.FeatureCount features</span>
+                            <span class="badge bg-secondary">@p.TaskCount tasks</span>
+                        </div>
+                        <button class="btn btn-outline-primary btn-sm w-100 mt-auto" @onclick="() => NavigateToProject(p.Id)">
+                            Open
+                        </button>
                 </div>
             </div>
         }
@@ -161,7 +253,16 @@ else
 
 @code {
     // ── Project list data ──
-    private List<ProjectListItem>? projects;
+    private List<HomeProjectCard>? projects;
+
+    /// <summary>
+    /// Bounds every read this page starts to the page's own lifetime. <c>LoadProjects</c> runs on
+    /// init and again after every save and delete, and the summary it awaits reads every task and
+    /// every open task in the instance — so without this a navigation away leaves those queries
+    /// running to completion and their continuation resuming against a disposed component. Same
+    /// field, same disposal shape as <c>ProjectView.razor</c>.
+    /// </summary>
+    private readonly CancellationTokenSource cts = new();
 
     // ── Edit modal state ──
     private bool showEditModal;
@@ -173,7 +274,7 @@ else
 
     // ── Delete modal state ──
     private bool showDeleteModal;
-    private ProjectListItem? deletingProject;
+    private HomeProjectCard? deletingProject;
     private bool isDeleting;
     private string? deleteError;
     private ElementReference deleteModalDialog;
@@ -199,21 +300,104 @@ else
         }
     }
 
+    /// <summary>
+    /// Reads the list from the SERVER-SIDE summary (#281) and resolves every derived value ONCE,
+    /// here, into <see cref="HomeProjectCard"/>.
+    ///
+    /// Two rules are load-bearing and easy to undo by accident:
+    ///
+    ///   1. NOTHING is recomputed from the entity graph. The page used to run
+    ///      `p.Features.SelectMany(f => f.Tasks).Count()`, which meant Home's idea of a project's
+    ///      size was a second implementation of the API's — untested against it and free to drift.
+    ///      Progress, the next task and the claim state all come from ProjectSummaryService, which
+    ///      GET /api/projects also calls.
+    ///   2. NOTHING derived is computed in the render path. A `private string X => …` on the view
+    ///      model would re-run on every render of every card — including formatting and string
+    ///      concatenation — so every value the markup reads is a plain resolved property.
+    /// </summary>
     private async Task LoadProjects()
     {
-        using var db = await DbFactory.CreateDbContextAsync();
-        projects = await db.Projects
-            .AsNoTracking()
-            .OrderByDescending(p => p.UpdatedAt)
-            .Select(p => new ProjectListItem
-            {
-                Id = p.Id,
-                Name = p.Name,
-                Description = p.Description,
-                FeatureCount = p.Features.Count,
-                TaskCount = p.Features.SelectMany(f => f.Tasks).Count()
-            })
-            .ToListAsync();
+        // OperationCanceledException is swallowed HERE rather than at the call sites: SaveProject
+        // and ConfirmDelete both end in `await LoadProjects()` inside a `catch (Exception)` that
+        // renders the message to the user, so letting a cancelled navigation escape would paint
+        // "Failed to save" over a save that actually succeeded.
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync(cts.Token);
+            var summaries = await ProjectSummaryService.LoadAsync(db, actor: null, cts.Token);
+
+            // One "now" for the whole page: read per card, two cards rendered in the same pass could
+            // disagree about what "2m ago" means.
+            var nowUtc = DateTime.UtcNow;
+
+            projects = summaries
+                // Ordering is presentation and stays here — most-recently-touched first, exactly as
+                // this page has always shown it. ProjectSummaryService deliberately does not order, so
+                // that GET /api/projects keeps the order its consumers already see.
+                .OrderByDescending(s => s.UpdatedAt)
+                .Select(s => ToCard(s, nowUtc))
+                .ToList();
+        }
+        catch (OperationCanceledException)
+        {
+            // Component disposed during load — expected, and the list is left exactly as it was.
+        }
+    }
+
+    public void Dispose()
+    {
+        cts.Cancel();
+        cts.Dispose();
+    }
+
+    /// <summary>How many claim chips fit on a card before the rest collapse into "+N more".</summary>
+    private const int MaxVisibleClaims = 2;
+
+    private static HomeProjectCard ToCard(ProjectListSummary s, DateTime nowUtc)
+    {
+        var visibleClaims = s.ActiveClaims.Take(MaxVisibleClaims).ToList();
+        var hiddenClaims = s.ActiveClaims.Count - visibleClaims.Count;
+
+        // In-progress / blocked only appear when they are non-zero: "0 blocked" is the kind of
+        // zero-state noise AC 5 rules out.
+        var breakdown = new List<string>(2);
+        if (s.Progress.InProgress > 0) breakdown.Add($"{s.Progress.InProgress} in progress");
+        if (s.Progress.Blocked > 0) breakdown.Add($"{s.Progress.Blocked} blocked");
+
+        // InvariantCulture is NOT cosmetic here. PercentComplete is a double, and under a culture
+        // whose decimal separator is a comma `33.3` formats as "33,3" — which makes the inline
+        // style `width:33,3%` invalid, so the bar silently renders at zero width. The same value
+        // is what the API serialises, so the bar and the JSON agree digit for digit.
+        var percent = s.Progress.PercentComplete.ToString(CultureInfo.InvariantCulture);
+
+        return new HomeProjectCard
+        {
+            Id = s.Id,
+            Name = s.Name,
+            Description = s.Description,
+            FeatureCount = s.FeatureCount,
+            TaskCount = s.TaskCount,
+            Progress = s.Progress,
+            ProgressBarWidth = $"{percent}%",
+            ProgressPercentValue = percent,
+            ProgressAriaLabel = $"{s.Progress.Completed} of {s.Progress.Total} tasks done ({percent}%)",
+            ProgressBreakdown = breakdown.Count > 0 ? string.Join(" · ", breakdown) : null,
+            NextTask = s.NextTask,
+            NextTaskHref = s.NextTask is null ? "" : $"/project/{s.Id}?task={s.NextTask.Id}",
+            // ONE clock (#306): the same formatters the activity timeline uses — local on the
+            // face, absolute + round-trip UTC on hover, relative computed UTC-to-UTC. Writing
+            // `.ToLocalTime()` here instead would be a fourth clock in a codebase that just
+            // finished closing three.
+            ActivityRelative = s.LastActivityAt is DateTime at
+                ? ActivityTimelineBuilder.Relative(at, nowUtc) : null,
+            ActivityTooltip = s.LastActivityAt is DateTime at2
+                ? ActivityTimelineBuilder.FormatTooltip(at2) : null,
+            ActivityMachine = s.LastActivityAt is DateTime at3
+                ? ActivityTimelineBuilder.FormatMachine(at3) : null,
+            VisibleClaims = visibleClaims,
+            HiddenClaimLabel = hiddenClaims > 0 ? $"+{hiddenClaims} more" : null,
+            HasMeta = s.LastActivityAt is not null || s.ActiveClaims.Count > 0
+        };
     }
 
     private void NavigateToProject(int id)
@@ -231,30 +415,44 @@ else
         shouldFocusProjectModal = true;
     }
 
-    private void OpenEditModal(ProjectListItem p)
+    private void OpenEditModal(HomeProjectCard p)
     {
         editingProject = new ProjectFormModel { Id = p.Id };
         // Load full project data for editing
         _ = LoadProjectForEdit(p.Id);
     }
 
+    /// <summary>
+    /// Started fire-and-forget from <see cref="OpenEditModal"/>, so it outlives its caller and is
+    /// the read MOST able to resume against a disposed component — hence the same token and the
+    /// same swallow as <see cref="LoadProjects"/>. Without them the <c>StateHasChanged</c> below
+    /// throws into a task nobody observes.
+    /// </summary>
     private async Task LoadProjectForEdit(int id)
     {
-        using var db = await DbFactory.CreateDbContextAsync();
-        var project = await db.Projects.AsNoTracking().FirstOrDefaultAsync(p => p.Id == id);
-        if (project is not null)
+        try
         {
-            editingProject = new ProjectFormModel
+            await using var db = await DbFactory.CreateDbContextAsync(cts.Token);
+            var project = await db.Projects.AsNoTracking()
+                .FirstOrDefaultAsync(p => p.Id == id, cts.Token);
+            if (project is not null)
             {
-                Id = project.Id,
-                Name = project.Name,
-                Description = project.Description,
-                Goals = project.Goals
-            };
-            saveError = null;
-            showEditModal = true;
-            shouldFocusProjectModal = true;
-            StateHasChanged();
+                editingProject = new ProjectFormModel
+                {
+                    Id = project.Id,
+                    Name = project.Name,
+                    Description = project.Description,
+                    Goals = project.Goals
+                };
+                saveError = null;
+                showEditModal = true;
+                shouldFocusProjectModal = true;
+                StateHasChanged();
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // Component disposed while the edit form was loading — nothing to show it in.
         }
     }
 
@@ -320,7 +518,7 @@ else
 
     // ── Delete ──
 
-    private void OpenDeleteModal(ProjectListItem p)
+    private void OpenDeleteModal(HomeProjectCard p)
     {
         deletingProject = p;
         deleteError = null;
@@ -368,13 +566,49 @@ else
 
     // ── View models ──
 
-    private class ProjectListItem
+    /// <summary>
+    /// One project card, FULLY RESOLVED. Every member is a plain value assigned in
+    /// <see cref="ToCard"/> — deliberately no <c>=&gt;</c> computed members, because those re-run
+    /// on every render of every card, and this list can be 20 cards deep.
+    /// </summary>
+    private sealed class HomeProjectCard
     {
-        public int Id { get; set; }
-        public string Name { get; set; } = "";
-        public string? Description { get; set; }
-        public int FeatureCount { get; set; }
-        public int TaskCount { get; set; }
+        public required int Id { get; init; }
+        public required string Name { get; init; }
+        public string? Description { get; init; }
+        public required int FeatureCount { get; init; }
+        public required int TaskCount { get; init; }
+
+        /// <summary>The server's #125 progress object, verbatim. Never recomputed here.</summary>
+        public required ProjectProgress Progress { get; init; }
+
+        /// <summary>e.g. <c>"25%"</c> — an inline CSS width, so invariant-formatted.</summary>
+        public required string ProgressBarWidth { get; init; }
+        public required string ProgressPercentValue { get; init; }
+        public required string ProgressAriaLabel { get; init; }
+
+        /// <summary>e.g. <c>"2 in progress · 1 blocked"</c>; null when both counters are zero.</summary>
+        public string? ProgressBreakdown { get; init; }
+
+        public NextTaskSummary? NextTask { get; init; }
+
+        /// <summary>Deep link that opens the task on the project page; "" when there is no next task.</summary>
+        public required string NextTaskHref { get; init; }
+
+        public string? ActivityRelative { get; init; }
+        public string? ActivityTooltip { get; init; }
+        public string? ActivityMachine { get; init; }
+
+        public IReadOnlyList<ActiveClaim> VisibleClaims { get; init; } = [];
+
+        /// <summary>e.g. <c>"+2 more"</c>; null when every claim is already shown.</summary>
+        public string? HiddenClaimLabel { get; init; }
+
+        /// <summary>
+        /// Whether the recency/claims row has anything true to say. False on a project nobody has
+        /// touched, which is what keeps an untouched card calm instead of full of "unknown" chips.
+        /// </summary>
+        public required bool HasMeta { get; init; }
     }
 
     private class ProjectFormModel
