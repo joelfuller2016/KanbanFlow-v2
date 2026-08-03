@@ -140,7 +140,7 @@ public static class ApiEndpoints
         });
 
         // GET /api/projects/{id}/context — full AI-readable project context bundle
-        app.MapGet("/api/projects/{id:int}/context", async (int id, AppDbContext db) =>
+        app.MapGet("/api/projects/{id:int}/context", async (int id, AppDbContext db, CancellationToken ct) =>
         {
             var project = await db.Projects
                 .Include(p => p.Features)
@@ -159,7 +159,7 @@ public static class ApiEndpoints
                 .Include(p => p.TaskDependencies)
                 .AsSplitQuery()
                 .AsNoTracking()
-                .FirstOrDefaultAsync(p => p.Id == id);
+                .FirstOrDefaultAsync(p => p.Id == id, ct);
 
             if (project is null)
                 return Results.NotFound(new { message = $"Project {id} not found." });
