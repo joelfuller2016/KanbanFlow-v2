@@ -17,3 +17,8 @@ logs/
 node_modules/
 test-results/
 ui-e2e-artifacts/
+
+# Scratch space for agent/manual verification runs inside a worktree: throwaway SQLite DBs, app
+# logs, pristine file copies kept for mutation-proof restores, and one-off helper scripts. Never
+# part of the source tree — the existing *.db / logs/ rules cover some of it, but not all.
+_sandbox/

@@ -32,6 +32,24 @@ a, .btn-link {
     --kf-prio-high: #c2410c;                  /* deep orange; white text 5.2:1 — WCAG AA ✅    */
     --kf-prio-critical: #dc3545;              /* = Bootstrap $danger,   matches .bg-danger    */
     --kf-prio-none: var(--bs-border-color);   /* no priority set: the slot stays, the meaning goes */
+
+    /* -- Board geometry (#322 phase 3) ---------------------------------------------------------
+       The smallest region that still reads -- and behaves -- as a droppable column. Not a guess:
+       it is the max of three MEASURED constraints at 1440x900, rounded up to the next whole rem.
+
+         76.4px  one card's stride (68.4px card + 8px .mb-2), so an empty column always offers a
+                 target at least the size of the card it is asking for;
+         76px    the natural height of the empty-column placeholder ("No tasks in Review. Use
+                 "Task" to add one here." wraps to two lines at .p-3). The OLD 50px floor was
+                 already SMALLER than its own placeholder -- harmless only because the column
+                 stretched to 605px and hid it. Content-height columns expose that, so the floor
+                 has to be re-derived, not merely kept;
+         24px    WCAG 2.5.8 minimum target size (cleared ~4x over).
+
+       6rem = 96px clears all three with ~20px headroom, and still leaves a 1-card column only
+       ~20px of slack below its card -- against the ~545px void it replaces. Raising this trades
+       drop comfort for dead space; below 5rem the placeholder starts to clip. */
+    --kf-board-drop-floor: 6rem;
 }
 
 /* High-priority badge ("badge bg-orange text-white"). Bootstrap has no bg-orange, so without this
@@ -126,7 +144,62 @@ h1:focus {
    changes. It still needs the height, or the Promoted column collapses to nothing. */
 .board-column-cards,
 .board-column-cards-inert {
-    min-height: 50px;
+    min-height: var(--kf-board-drop-floor);
+}
+
+/* PRE-EXISTING BUG, found while verifying #322 phase 3 -- and proven to predate it: with the new
+   `align-self`/`max-height` on `.kanban-column` neutralised in the browser, the numbers below are
+   byte-identical, so this is master's behaviour, not a regression.
+
+   `.board-column-cards` carries `overflow-auto` so a column taller than the board scrolls INSIDE
+   itself. It never could. `.kanban-column-body` is a `flex-column` item with the default
+   `min-height: auto`, which in a column flex container refuses to shrink below content height -- so
+   with 13 cards the body stayed 993px inside a 651px column, `overflow-auto` never engaged
+   (scrollHeight === clientHeight === 993, max scrollTop 0) and the overflow escaped to the board,
+   which grew a second vertical scrollbar it is not supposed to have.
+
+   `min-height: 0` is the standard flexbox release valve and it is what makes phase 3's
+   `max-height: 100%` mean anything: without it the cap is decorative, because the body overflows
+   the capped column regardless. The cards container needs no equivalent -- its `min-height` is now
+   the explicit drop floor (96px), not `auto`, so it is already free to shrink to it. */
+.kanban-column-body {
+    /* Single-cell grid: `.board-column-cards` and `.kanban-column-empty` are stacked in the SAME
+       cell by the rule below, so the row sizes to whichever is taller. That is what stops the
+       empty-state placeholder painting outside its column -- as an `inset: 0` absolutely-positioned
+       overlay it could never push the column taller, only spill, and its height is width-dependent
+       (76px at a 214px column, 118px at the 180px `min-width` floor). A fixed floor cannot cover
+       that, because the number is a function of the column width and the status name; the grid
+       removes the failure mode instead of re-tuning a constant that was already wrong once.
+
+       ⚠️ These two declarations are NOT equally important, and the failure modes are asymmetric.
+
+       `min-height: 0` is LOAD-BEARING. It is the release valve that lets this box shrink below its
+       content when `.kanban-column`'s `max-height: 100%` caps a long column, which is the only
+       reason `.board-column-cards`'s `overflow-auto` ever engages. Delete it and a 14-card column
+       gives a 1069px cards box inside a capped column with the scroll DEAD, and the board grows the
+       second vertical scrollbar this PR exists to prevent (scrollHeight 1114 vs clientHeight 535).
+       Guarded: "a column taller than the board scrolls itself, not the board".
+
+       `grid-template-rows: minmax(0, auto)` is belt-and-braces, and was kept only after being
+       measured. The intuition that a bare `auto` track would size to the taller child's max-content
+       and blow past the cap is WRONG here, and both the author and an independent reviewer measured
+       it separately: `auto` is byte-identical to `minmax(0, auto)` (body 473.4px, internal scroll
+       live, no board scrollbar, suite 27/27). `.board-column-cards` already carries `overflow-auto`,
+       so it is a scroll container whose automatic minimum size is 0, and the track's growth limit is
+       capped by available free space during track maximisation regardless.
+
+       So: simplifying `minmax(0, auto)` → `auto` breaks nothing. Removing `min-height: 0` because
+       "the grid handles it" breaks everything. Do not confuse the two. */
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(0, auto);
+    min-height: 0;
+}
+
+/* Stack every child of the body in one cell, which is the whole point of the grid above. */
+.kanban-column-body > * {
+    grid-area: 1 / 1;
+    min-width: 0;
 }
 
 .feature-tasks {
@@ -152,6 +225,46 @@ h1:focus {
 
 .board-card-blocked-badge {
     font-size: .65rem;
+}
+
+/* #322 phase 3 -- the feature label in a card's meta row. Fixes a SILENT truncation: the label was
+   `flex: 0 1 auto` with `flex-basis: auto`, so its box was sized to max-content and ended up
+   EXACTLY as wide as its own text (measured: box 54.797px, text 54.797px -- zero slack). Two things
+   followed, and only the first is visible:
+
+     1. sub-pixel rasterisation of the `overflow: hidden` clip shaved the terminal glyph, so the
+        feature "Dashboard" rendered as "Dashboarc" -- a different WORD, not an obvious truncation;
+     2. `text-overflow: ellipsis` was structurally unable to fire, because ellipsis only renders
+        when content overflows its box, and this content overflowed by 0px (scrollWidth 55 ===
+        clientWidth 55). So the user got no "..." to tell them anything was missing.
+
+   Note this is NOT the `min-width: auto` mechanism it looks like: `overflow: hidden` already clamps
+   a flex item's automatic minimum size to zero (CSS Sizing 3), which is why a genuinely long label
+   DID shrink and DID ellipsis correctly. The bug was the absence of SLACK, not the presence of a
+   minimum.
+
+   Giving the label the remaining track fixes both directions at once: short labels get a box wider
+   than their text (no shave, and correctly no ellipsis), long labels overflow it and ellipsis as
+   designed. `min-width: 0` keeps the shrink available; `text-align: end` preserves the right-hand
+   position the old `justify-content: between` produced, so nothing moves visually. The badge is
+   marked `flex-shrink-0` in the markup so a long feature name can never squash the priority. */
+.board-card-meta-label {
+    flex: 1 1 0;
+    min-width: 0;
+    text-align: end;
+
+    /* Italic side bearing -- the half of this bug that a wider box does NOT fix, and the reason the
+       first attempt at it still rendered "Dashboarc". `text-align: end` seats the final glyph's
+       ADVANCE box flush against the clip edge (measured headroom: exactly 0.000px on every short
+       label). The label is `fst-italic`, and a slanted glyph's INK leans past its own advance width,
+       so the overhang is the part that gets clipped -- which is why the artefact looks like a
+       different letter ("d" -> "c") rather than a missing one, and why Range/scrollWidth both report
+       "nothing is overflowing". Those APIs measure advances; the rasteriser paints ink.
+
+       .15em ~= tan(12deg) x cap-height, i.e. the overhang a standard oblique actually produces. In
+       em so it tracks the font-size instead of decaying into a px hack if the type scale changes.
+       Costs 1.7px of trailing space at the current .7rem and buys back the whole final glyph. */
+    padding-inline-end: .15em;
 }
 
 /* ── Mini-card hover effect (left nav) ── */
@@ -368,10 +481,28 @@ h1:focus {
     min-width: 4.25rem;
 }
 
+/* #322 phase 3 -- columns fit their content instead of stretching to the board's full height.
+   The void was never a width bug: `.project-shell` (above) gives the shell a DEFINITE height, the
+   board row inherits it through two `flex-grow-1` links, and the row's default `align-items:
+   stretch` is what turns "the row is 651px" into "every column is 651px" -- so a column holding one
+   68px card painted 545px of `bg-body-secondary` underneath it, and an empty one painted 613px.
+   The board read as empty while work existed in it.
+
+   `align-self: flex-start` is the minimal lever: it changes only the CROSS-AXIS sizing of the
+   columns. `.project-shell`'s height is deliberately LEFT ALONE -- it is what bounds the board and
+   keeps scrolling inside one region instead of the page, and removing it would trade a cosmetic
+   void for a layout regression.
+
+   `max-height: 100%` is the other half: a column with more cards than fit is capped at the row and
+   scrolls internally via `.board-column-cards`'s own `overflow-auto`, exactly as it does today.
+   Without the cap a long column would grow the row and move the scrollbar to the board. The
+   percentage resolves against the flex container's content box, which is definite here. */
 .kanban-column {
     min-width: 180px;
     flex: 1 1 0;
     max-width: 260px;
+    align-self: flex-start;
+    max-height: 100%;
 }
 
 @media (max-width: 991.98px) {
@@ -766,6 +897,13 @@ h1:focus {
 /* `.board-column-cards` is still rendered — just narrow — so SortableJS still binds it and
    drag-to-archive keeps working. Must come after `.kanban-column-terminal`: same specificity. */
 .kanban-column-collapsed {
+    /* Deliberate exception to #322 phase 3's content-height columns: a collapsed terminal column is
+       a RAIL, and it is still a live drop target (see the note above). Shrink-wrapping it to the
+       height of its rotated label would leave drag-to-archive aiming at a ~90px stub beside
+       full-height peers. It keeps the full height precisely BECAUSE it has no cards to fit.
+       Lands correctly on source order alone -- same specificity as `.kanban-column`, declared
+       later -- which is the rule this whole block is fenced by. */
+    align-self: stretch;
     flex: 0 0 3rem;
     min-width: 3rem;   /* beats `.kanban-column`'s 180px, and its min(82vw, 260px) on mobile */
     max-width: 3rem;
