@@ -45,10 +45,13 @@
                         <span class="text-muted ms-1">@(DbResolution.Existed ? "opened existing" : "no existing file — new database")</span>
                     </dd>
 
+                    @* @key per repo convention (.github/copilot-instructions.md): each item renders a
+                       dt/dd PAIR, so an unkeyed diff could pair a label with another item's path. The
+                       full path is unique within the list and stable. *@
                     @foreach (var shadowed in DbResolution.ShadowedPaths)
                     {
-                        <dt class="col-5 text-warning">Not opened</dt>
-                        <dd class="col-7 text-truncate font-monospace text-warning" title="@shadowed">@shadowed</dd>
+                        <dt class="col-5 text-warning" @key="@($"shadow-dt-{shadowed}")">Not opened</dt>
+                        <dd class="col-7 text-truncate font-monospace text-warning" @key="@($"shadow-dd-{shadowed}")" title="@shadowed">@shadowed</dd>
                     }
 
                     <dt class="col-5 text-muted">Started</dt>

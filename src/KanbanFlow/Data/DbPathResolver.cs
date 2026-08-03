@@ -1,3 +1,5 @@
+using Microsoft.Data.Sqlite;
+
 namespace KanbanFlow.Data;
 
 /// <summary>
@@ -117,7 +119,15 @@ public static class DbPathResolver
         //    so its behaviour is deliberately unchanged.
         if (!string.IsNullOrWhiteSpace(configuredPath))
         {
-            var configured = Path.GetFullPath(configuredPath);
+            // Anchor a RELATIVE override against the launch directory that was passed in. The
+            // single-argument Path.GetFullPath would reach for Environment.CurrentDirectory instead —
+            // ambient process state, which is the very thing this type exists to stop depending on,
+            // and which would make the currentDirectory parameter a lie for this branch. Identical in
+            // production, where the two are the same value; absolute overrides ignore the base.
+            var basePath = string.IsNullOrWhiteSpace(currentDirectory)
+                ? Environment.CurrentDirectory
+                : Path.GetFullPath(currentDirectory);
+            var configured = Path.GetFullPath(configuredPath, basePath);
             EnsureParentDirectory(configured);
             return new DbPathResolution(configured, SourceEnvironment, File.Exists(configured), []);
         }
@@ -204,6 +214,19 @@ public static class DbPathResolver
 
         return targetFramework.FullName;
     }
+
+    /// <summary>
+    /// The SQLite connection string for a resolved database path.
+    /// </summary>
+    /// <remarks>
+    /// Built rather than interpolated. A connection string is a semicolon-delimited list of key/value
+    /// pairs, so a path containing <c>;</c> or <c>=</c> would silently truncate the data source or
+    /// introduce another keyword — opening the wrong database, or failing at startup. This resolver
+    /// derives the default path from the application's own location, which is whatever directory the
+    /// user installed into, so the path is not under our control. The builder quotes it correctly.
+    /// </remarks>
+    public static string ToConnectionString(string databasePath) =>
+        new SqliteConnectionStringBuilder { DataSource = databasePath }.ConnectionString;
 
     private static void EnsureParentDirectory(string path)
     {

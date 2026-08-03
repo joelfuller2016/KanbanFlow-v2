@@ -363,7 +363,7 @@ info: KanbanFlow[0]
 ```
 
 `source` says how the file was chosen — `env` (`KANBANFLOW_DB_PATH` was set), `probe` (an existing
-`kanbanflow.db` was found) or `default` (nothing existed, so a new one was created). The same line
+`kanbanflow.db` was found) or `default` (none existed anywhere, so this is a new database). The same line
 appears on the Settings page. Resolution order, with `KANBANFLOW_DB_PATH` unset: the directory the
 app was launched from, then the content root, then the application's own directory — the first one
 that already holds a `kanbanflow.db` wins, and if nothing does, one is created beside the

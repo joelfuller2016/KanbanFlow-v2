@@ -25,7 +25,8 @@ var builder = WebApplication.CreateBuilder(args);
 var dbResolution = DbPathResolver.Resolve(builder.Environment.ContentRootPath);
 builder.Services.AddSingleton(dbResolution);
 
-builder.Services.AddDbContextFactory<AppDbContext>(options => options.UseSqlite($"Data Source={dbResolution.Path}"));
+builder.Services.AddDbContextFactory<AppDbContext>(
+    options => options.UseSqlite(DbPathResolver.ToConnectionString(dbResolution.Path)));
 
 // Audit-aware service layer (issue #88: route REST + UI mutations through one place)
 builder.Services.AddScoped<ITaskService, TaskService>();

@@ -1,5 +1,6 @@
 using System.Runtime.CompilerServices;
 using KanbanFlow.Data;
+using Microsoft.Data.Sqlite;
 
 namespace KanbanFlow.Tests;
 
@@ -48,9 +49,12 @@ public sealed class DbPathResolverTests : IDisposable
             {
                 if (Directory.Exists(directory)) Directory.Delete(directory, recursive: true);
             }
-            catch (IOException)
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException)
             {
-                // A leftover temp directory is not a test failure.
+                // A leftover temp directory is not a test failure. UnauthorizedAccessException is
+                // listed explicitly because Directory.Delete throws it for a read-only or locked
+                // entry and it does NOT derive from IOException — uncaught, it would fail the whole
+                // class for a cleanup problem rather than an assertion.
             }
         }
     }
@@ -107,6 +111,37 @@ public sealed class DbPathResolverTests : IDisposable
         // fall-through lands is owned by the probe/default cases below — asserting it here as well
         // would make this case go red for a probe-ordering change that has nothing to do with it.
         Assert.NotEqual(DbPathResolver.SourceEnvironment, resolution.Source);
+    }
+
+    [Fact]
+    public void EnvironmentVariable_RelativePath_AnchorsToTheLaunchDirectory_NotTheProcessWorkingDirectory()
+    {
+        // A relative override must resolve against the launch directory that was PASSED IN. The
+        // single-argument Path.GetFullPath silently uses Environment.CurrentDirectory instead, which
+        // is the ambient state this whole type exists to stop depending on.
+        var launch = NewDirectory("launch");
+        var app = NewDirectory("app");
+
+        var resolution = DbPathResolver.Resolve(Path.Combine("nested", "board.db"), launch, launch, app);
+
+        Assert.Equal(Path.Combine(launch, "nested", "board.db"), resolution.Path);
+        // The temp launch directory is never the test host's working directory, so this pins that the
+        // process-wide value was not consulted.
+        Assert.NotEqual(Path.GetFullPath(Path.Combine("nested", "board.db")), resolution.Path);
+    }
+
+    [Fact]
+    public void ToConnectionString_KeepsAPathContainingConnectionStringDelimiters_Intact()
+    {
+        // A connection string is a semicolon-delimited list of key=value pairs. Interpolating a path
+        // that contains ';' or '=' truncates the data source or injects another keyword — opening the
+        // wrong database or failing at startup. The default path comes from wherever the user
+        // installed the app, so its characters are not under our control.
+        var awkward = Path.Combine(NewDirectory("odd"), "we;ird=name.db");
+
+        var connectionString = DbPathResolver.ToConnectionString(awkward);
+
+        Assert.Equal(awkward, new SqliteConnectionStringBuilder(connectionString).DataSource);
     }
 
     [Fact]
@@ -391,9 +426,12 @@ public sealed class DbPathResolverTests : IDisposable
     // ── The launch-independent anchor itself. ──
 
     [Fact]
-    public void AppAnchor_StripsTheDevelopmentBuildLayout_SoDotnetCleanCannotDeleteTheDatabase()
+    public void AppAnchor_StripsTheDevelopmentBuildLayout_SoTheDatabaseIsNotInsideBin()
     {
-        // bin/<Configuration>/<TargetFramework> is gitignored and erased by `dotnet clean`.
+        // bin/<Configuration>/<TargetFramework> is gitignored and routinely wiped wholesale by
+        // `git clean -xdf` and by "delete bin/obj and rebuild". NOT by `dotnet clean` — that was
+        // measured and leaves stray files alone; see AppAnchorDirectory's remarks. What is under
+        // test here is the strip itself, not any particular delete command.
         var project = NewDirectory("project");
         var binDirectory = Path.Combine(project, "bin", "Debug", "net10.0");
         Directory.CreateDirectory(binDirectory);
@@ -461,7 +499,14 @@ public sealed class DbPathResolverTests : IDisposable
                 return directory.FullName;
         }
 
+        // Deliberately loud rather than skipped. [CallerFilePath] bakes in the BUILD machine's source
+        // path, so this case needs the source tree beside the test assembly — true for `dotnet test`
+        // from a checkout, which is this repo's only gate (no CI). Dynamic skipping would need xunit
+        // v3 (Assert.Skip); on 2.9.3 the alternative is a silent no-op, and a guard that quietly
+        // passes when it cannot run is exactly the failure mode this guard exists to catch.
         throw new InvalidOperationException(
-            $"Could not locate the repository root (no *.slnx) above '{thisFile}'.");
+            $"Could not locate the repository root (no *.slnx) above '{thisFile}'. This case reads the "
+            + "source files it guards, so it must run from a checkout — run `dotnet test` from the "
+            + "repository rather than against a copied-out test assembly.");
     }
 }
