@@ -521,13 +521,14 @@ else
     /// and LoadIdeas' re-render IS the snap-back — if the write fails, the reload puts the card back
     /// in its real column for free, with no rollback state to get wrong.
     /// </summary>
-    /// <param name="newIndex">
+    /// <param name="beforeItemId">
     /// IGNORED, deliberately. Idea has no SortOrder column; a column's order is derived
     /// (Priority desc, CreatedAt desc — see OrderIdeas). The parameter exists only because the shared
-    /// kanbanflow.js contract passes it. Change an idea's PRIORITY to change its position.
+    /// kanbanflow.js contract passes the next visible item id (0 = append). Change an idea's
+    /// PRIORITY to change its position.
     /// </param>
     [JSInvokable]
-    public async Task OnCardMoved(int ideaId, string newStatus, int newIndex)
+    public async Task OnCardMoved(int ideaId, string newStatus, int beforeItemId)
     {
         // Reject undefined enum values up-front. data-status carries the ENUM NAME ("Triaging"),
         // never a display name — a failed TryParse here would swallow the drop with no error at all.
