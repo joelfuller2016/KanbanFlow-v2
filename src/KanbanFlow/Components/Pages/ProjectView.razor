@@ -282,12 +282,29 @@ else
                             aria-label="Dismiss error"></button>
                 </div>
             }
+            @* #112 — the filter bar. It owns NO state: it renders `filter` and reports changes, and
+               this page holds the state, narrows the list, and syncs the URL. *@
+            <BoardFilterBar Filter="filter"
+                            TextResetToken="filterTextResetToken"
+                            MatchCount="filteredTasks.Count"
+                            TotalCount="allTasks.Count"
+                            OnSearchChanged="OnSearchChanged"
+                            OnAssigneeChanged="OnAssigneeChanged"
+                            OnClaimedByChanged="OnClaimedByChanged"
+                            OnPriorityToggled="OnPriorityToggled"
+                            OnHideDoneChanged="OnHideDoneChanged"
+                            OnClear="ClearFilters" />
             @* The board is generic over <TItem, TStatus>. Pass the type arguments EXPLICITLY at
                every call site: with inferred type arguments Razor closes an EventCallback<T>
                handler before T is known and it degrades to object (CS1503). What a task *is* now
                lives entirely in these templates — the board no longer knows. *@
+            @* Items is `filteredTasks`, NOT `allTasks` (#112). The board explicitly supports a
+               partial subset — "Items may be a filtered/partial subset; the host resolves the anchor
+               against persisted order" (KanbanBoard.razor:13) — and OnCardMoved below is that host
+               resolution: its third argument is the next RENDERED card's identity, so a drag under an
+               active filter still lands where the user aimed it in the PERSISTED column. *@
             <KanbanBoard TItem="TaskItem" TStatus="WorkStatus"
-                         Items="allTasks"
+                         Items="filteredTasks"
                          StatusOf="t => t.Status"
                          IdOf="t => t.Id"
                          OrderColumnBy="OrderTasksInColumn"
@@ -308,10 +325,34 @@ else
                         <span class="small">Task</span>
                     </button>
                 </ColumnHeaderActions>
+                @* One empty-state mechanism, two truths (#112). A filtered-out column must NOT say
+                   "no tasks in Backlog" — that is a lie the user will act on (they add a duplicate
+                   task, or conclude the board is broken). Reusing KanbanColumn's existing
+                   ColumnEmptyTemplate rather than adding a second placeholder keeps the #290
+                   invariant intact for free: the placeholder stays a `pe-none` SIBLING overlay of
+                   the Sortable container, never a child of it.
+
+                   NOT an aria-live region, deliberately. This template renders once PER COLUMN, so
+                   marking it live would announce "No tasks match these filters" up to five times for
+                   one keystroke — and announcing freshly-INSERTED content is unreliable across
+                   screen readers anyway. The single authoritative announcement is the filter bar's
+                   own `board-filter-summary` (aria-live="polite" aria-atomic="true"), whose TEXT
+                   changes to "Showing 0 of N tasks" — one region, one message, and it carries the
+                   count, which is strictly more information. (CodeRabbit, PR #362.) *@
                 <ColumnEmptyTemplate Context="status">
-                    <div class="border rounded bg-white text-muted small text-center p-3" style="border-style: dashed !important;">
-                        No tasks in @(GetStatusDisplayName(status)). Use “Task” to add one here.
-                    </div>
+                    @if (filter.IsActive)
+                    {
+                        <div class="border rounded bg-white text-muted small text-center p-3" style="border-style: dashed !important;"
+                             data-testid="@($"board-column-{status}-no-match")">
+                            No tasks match these filters.
+                        </div>
+                    }
+                    else
+                    {
+                        <div class="border rounded bg-white text-muted small text-center p-3" style="border-style: dashed !important;">
+                            No tasks in @(GetStatusDisplayName(status)). Use “Task” to add one here.
+                        </div>
+                    }
                 </ColumnEmptyTemplate>
             </KanbanBoard>
         </div>
@@ -378,6 +419,24 @@ else
 
     private Project? project;
     private List<TaskItem> allTasks = [];
+
+    // ── Board filter (#112) ──
+    //
+    // `filter` is the state; `filteredTasks` is its RESOLVED result and the board's `Items`.
+    // Resolved on change (ApplyFilter), never in a computed property: with `oninput` binding a
+    // render-path property re-runs the whole predicate once per keystroke per render. `allTasks`
+    // stays UNFILTERED on purpose — the outline, the detail panel and the add/edit modals all read
+    // it, and none of them are filtered by the board's filter bar.
+    private TaskFilterState filter = TaskFilterState.Empty;
+    private List<TaskItem> filteredTasks = [];
+    // Debounces only the URL write, never the board (see UpdateFilter for why the order matters).
+    // 250ms matches Ideas.razor's existing DebouncedReload, so the two filter surfaces feel the same.
+    private static readonly TimeSpan UrlSyncDebounce = TimeSpan.FromMilliseconds(250);
+    // Bumped ONLY when this page changes the filter bar's TEXT fields itself (Clear). The bar
+    // rewrites its inputs on a bump and never otherwise — see the warning at the top of
+    // BoardFilterBar.razor: rewriting them mid-typing drops the user's keystrokes.
+    private int filterTextResetToken;
+    private CancellationTokenSource? urlSyncCts;
     private bool notFound;
     private string? loadError;
     // A refused or failed MOVE (board drag or outline drag). Separate from loadError, which
@@ -483,6 +542,20 @@ else
 
     protected override async Task OnInitializedAsync()
     {
+        // Read the filter off the URL ONCE, here, and never again (#112). The URL is this filter's
+        // only persistence, so a reload or a shared link must restore the exact view — but reading
+        // it on every parameter set would fight the user: SyncFilterToUrl below navigates on every
+        // keystroke, each navigation re-runs OnParametersSet, and a re-read there would race the
+        // very field being typed into. One read in, one write out.
+        //
+        // No LocationChanged subscription is needed, and that depends ENTIRELY on `replace: true`
+        // in SyncFilterToUrlAsync: every filter write replaces the page's single history entry, so
+        // this route never accumulates a second one and Back always leaves the page (measured:
+        // history.length 3, Back from /project/N?q=Keep%20Alpha lands on "/", component disposed and
+        // re-created, OnInitialized runs again). Switch that flag to `false` and Back becomes an
+        // in-page popstate this component would ignore — at which point subscribe to
+        // Nav.LocationChanged, re-parse, and unsubscribe in DisposeAsync. (CodeRabbit, PR #362.)
+        filter = TaskFilterState.FromUri(Nav.Uri);
         await LoadProject();
         ApplyDeepLinkedTask();
     }
@@ -653,6 +726,9 @@ else
 
             project = loaded;
             allTasks = project.Features.SelectMany(f => f.Tasks).ToList();
+            // Re-narrow after EVERY reload. A drag, a done-toggle, an edit and a delete all end in
+            // LoadProject, and each of them can change whether a task still matches the filter.
+            ApplyFilter();
             if (selectedTask is not null)
             {
                 selectedTask = allTasks.FirstOrDefault(t => t.Id == selectedTask.Id);
@@ -840,6 +916,112 @@ else
         await LoadProject();
     }
 
+    // ── Board filter (#112) ──
+
+    /// <summary>
+    /// Resolve <c>filteredTasks</c> from <c>allTasks</c> + <c>filter</c>. The ONLY writer of
+    /// <c>filteredTasks</c>; every filter mutation goes through <see cref="UpdateFilter"/>, which
+    /// calls this. Never call it from a render-path property (see the field comment).
+    /// </summary>
+    private void ApplyFilter() => filteredTasks = TaskFilter.Apply(allTasks, filter);
+
+    /// <summary>
+    /// The single mutation point: swap the state, re-narrow NOW, and push the new state to the URL
+    /// after a short quiet period so a reload restores the exact view and the link is shareable (AC 3).
+    /// </summary>
+    /// <remarks>
+    /// The split is deliberate, and in this order.
+    ///
+    /// The BOARD updates synchronously, so <c>filter</c> is never behind what the user has typed and
+    /// the cards narrow as they type (AC 2). Debouncing the STATE instead would leave <c>filter</c>
+    /// lagging the DOM for the length of the quiet period, which is the divergence that lets a render
+    /// land carrying text the user has already moved past.
+    ///
+    /// This is NOT what keeps the text boxes safe, though — that is BoardFilterBar's job, and it does
+    /// it by rendering them from LOCAL fields that typing never touches (see the warning at the top
+    /// of that file: a re-rendered <c>value</c> attribute eats keystrokes on a Server circuit no
+    /// matter which directive writes it).
+    ///
+    /// The URL write is debounced because it is the expensive half: NavigateTo notifies the Router,
+    /// which re-renders the whole matched route — this page, the outline and every rendered card —
+    /// on top of the re-render the filter change already caused. At one keystroke per URL write that
+    /// is two full renders per character on a Server circuit. <see cref="UrlSyncDebounce"/> (250ms,
+    /// matching Ideas.razor) also coalesces a burst of chip clicks into a single history write.
+    /// </remarks>
+    private void UpdateFilter(TaskFilterState next)
+    {
+        filter = next;
+        ApplyFilter();
+        _ = SyncFilterToUrlAsync();
+    }
+
+    private async Task SyncFilterToUrlAsync()
+    {
+        // One pending sync at a time: each keystroke cancels its predecessor, so only the last
+        // state in a burst reaches the URL.
+        urlSyncCts?.Cancel();
+        urlSyncCts?.Dispose();
+        urlSyncCts = new CancellationTokenSource();
+        var token = urlSyncCts.Token;
+
+        try
+        {
+            await Task.Delay(UrlSyncDebounce, token);
+        }
+        catch (OperationCanceledException)
+        {
+            return;
+        }
+
+        try
+        {
+            // The whole query string is REPLACED, not merged: this filter owns every parameter
+            // /project/{id} accepts, and rebuilding from `filter` is what makes Clear able to leave
+            // a genuinely empty query. Add a merge here if this route ever grows an unrelated param.
+            //
+            // replace: true so typing five characters leaves ONE history entry, not five — otherwise
+            // Back walks the user backwards through their own keystrokes instead of off the page.
+            // forceLoad: false keeps the SignalR circuit alive; a forced load would tear the page
+            // down and rebuild it, losing the board's collapse state and re-running the whole load.
+            Nav.NavigateTo($"/project/{Id}{filter.ToQuery()}", forceLoad: false, replace: true);
+        }
+        catch (ObjectDisposedException) { /* circuit torn down while the sync was pending */ }
+        catch (InvalidOperationException) { /* ditto — renderer already disposed */ }
+    }
+
+    private void OnSearchChanged(string? value) => UpdateFilter(filter with { Search = value });
+
+    private void OnAssigneeChanged(string? value) => UpdateFilter(filter with { Assignee = value });
+
+    private void OnClaimedByChanged(string? value) => UpdateFilter(filter with { ClaimedBy = value });
+
+    private void OnHideDoneChanged(bool value) => UpdateFilter(filter with { HideDone = value });
+
+    private void OnPriorityToggled((TaskPriority Priority, bool Selected) change)
+    {
+        var next = filter.Priorities.ToList();
+        if (change.Selected)
+        {
+            if (!next.Contains(change.Priority)) next.Add(change.Priority);
+        }
+        else
+        {
+            next.Remove(change.Priority);
+        }
+
+        UpdateFilter(filter with { Priorities = next });
+    }
+
+    /// <summary>
+    /// Reset the filter AND the query string together — one is the other's persistence — and bump the
+    /// bar's text-reset token, which is the only thing that empties its three text inputs.
+    /// </summary>
+    private void ClearFilters()
+    {
+        filterTextResetToken++;
+        UpdateFilter(TaskFilterState.Empty);
+    }
+
     // ── Drag-and-Drop Handlers ──
 
     [JSInvokable]
@@ -915,6 +1097,12 @@ else
     {
         _cts.Cancel();
         _cts.Dispose();
+
+        // A pending URL sync outlives the circuit otherwise: its Task.Delay would resume on a
+        // disposed renderer and NavigateTo would throw into a fire-and-forget continuation nobody
+        // observes. Cancelling makes the debounce return before it ever touches Nav.
+        urlSyncCts?.Cancel();
+        urlSyncCts?.Dispose();
 
         try
         {
