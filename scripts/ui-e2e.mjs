@@ -2451,6 +2451,338 @@ async function main() {
       await api("DELETE", `/api/tasks/${timelineTask.id}`).catch(() => {});
     });
 
+    // ══ Scenario H: the Home project card (#281) ═══════════════════════════════════════════
+    //
+    // The card is the only place a human sees a project's progress, what to work on next, and
+    // whether an agent is holding anything. Every number on it is SERVER-computed, so each
+    // assertion below compares the RENDERED PIXEL against the API that produced it — never
+    // against a constant the test also derived. A card that agreed with a hard-coded "2/4" while
+    // the endpoint said something else would be exactly the drift this issue exists to end.
+    const cardProj = await api("POST", "/api/projects", { name: `E2E Card ${stamp}` });
+    const cardFeature = await api("POST", `/api/projects/${cardProj.id}/features`, { name: "Card Feature" });
+    const cardTasks = {
+      doneA: await api("POST", `/api/features/${cardFeature.id}/tasks`, { name: `card done A ${stamp}`, status: "Done" }),
+      doneB: await api("POST", `/api/features/${cardFeature.id}/tasks`, { name: `card done B ${stamp}`, status: "Done" }),
+      low: await api("POST", `/api/features/${cardFeature.id}/tasks`, { name: `card low ${stamp}`, status: "Todo", priority: "Low" }),
+      critical: await api("POST", `/api/features/${cardFeature.id}/tasks`, { name: `card critical ${stamp}`, status: "Todo", priority: "Critical" }),
+    };
+
+    // A second project that nothing has ever happened to — the calm-empty case (AC 5).
+    const calmProj = await api("POST", "/api/projects", { name: `E2E Calm ${stamp}` });
+
+    const cardFor = (projectId) => page.locator(`[data-testid="project-card"][data-project-id="${projectId}"]`);
+
+    await test("Home card shows the server's progress, not a count derived in the page", async () => {
+      await page.goto(`${baseUrl}/`);
+      const card = cardFor(cardProj.id);
+      await card.waitFor({ state: "visible" });
+
+      const listed = (await api("GET", "/api/projects")).find((p) => p.id === cardProj.id);
+      assert(listed, "the project is missing from GET /api/projects");
+      assert(listed.progress, "GET /api/projects returned no progress object");
+
+      const rendered = (await card.locator('[data-testid="project-progress-count"]').innerText()).trim();
+      assert(
+        rendered === `${listed.progress.completed}/${listed.progress.total} done`,
+        `card shows "${rendered}" but the API says ` +
+        `"${listed.progress.completed}/${listed.progress.total} done"`,
+      );
+
+      // The number must be the WHOLE project, not the tasks the page happens to hold. Four were
+      // seeded and two are finished, so a card counting only open work would read "2/2".
+      assert(
+        rendered === "2/4 done",
+        `expected the card to count finished tasks too ("2/4 done"), got "${rendered}"`,
+      );
+
+      // The bar's width is an inline style built from progress.percentComplete. A culture that
+      // formats 50 as "50,0" would emit `width:50,0%`, which CSS drops — the bar would silently
+      // render empty while the text beside it still read 2/4.
+      const width = await card.locator('[data-testid="project-progress"] .progress-bar')
+        .evaluate((el) => el.style.width);
+      assert(width === `${listed.progress.percentComplete}%`,
+        `progress bar width is "${width}", expected "${listed.progress.percentComplete}%"`);
+    });
+
+    await test("Home card's next task is the ranker's #1, identical to the next-tasks endpoint", async () => {
+      await page.goto(`${baseUrl}/`);
+      const chip = cardFor(cardProj.id).locator('[data-testid="project-next-task"]');
+      await chip.waitFor({ state: "visible" });
+
+      // The same question, asked of the endpoint agents use. #151/#188 are two prior incidents of
+      // two surfaces answering it differently; this is the third surface.
+      const ranked = await api("GET", `/api/projects/${cardProj.id}/next-tasks?limit=5`);
+      const top = ranked.recommendations?.[0] ?? ranked.Recommendations?.[0];
+      assert(top, `next-tasks returned no recommendations: ${JSON.stringify(ranked).slice(0, 200)}`);
+
+      const chipTaskId = Number(await chip.getAttribute("data-task-id"));
+      assert(chipTaskId === top.id,
+        `card recommends task ${chipTaskId}, next-tasks recommends ${top.id}`);
+
+      // …and it is NOT simply the first Todo. The Low-priority task was created first; the ranker
+      // sorts by priority before id, so a "first open task" implementation would show the wrong one.
+      assert(chipTaskId === cardTasks.critical.id,
+        `expected the Critical task ${cardTasks.critical.id}, got ${chipTaskId}`);
+      assert((await chip.innerText()).includes(cardTasks.critical.name),
+        `the chip does not name the recommended task: "${await chip.innerText()}"`);
+    });
+
+    await test("Home card's next-task chip opens that task on the project page", async () => {
+      await page.goto(`${baseUrl}/`);
+      const chip = cardFor(cardProj.id).locator('[data-testid="project-next-task"]');
+      await chip.waitFor({ state: "visible" });
+      await chip.click();
+
+      await page.waitForURL(new RegExp(`/project/${cardProj.id}\\?task=${cardTasks.critical.id}$`));
+      // The panel must actually be open ON THAT TASK — a link that merely lands on the project is
+      // not "links straight to it", and a panel open on the wrong task is worse than none.
+      const title = page.locator('[data-testid="task-detail-panel"] #task-detail-title');
+      await title.waitFor({ state: "visible" });
+      assert((await title.innerText()).trim() === cardTasks.critical.name,
+        `detail panel opened on "${(await title.innerText()).trim()}", expected "${cardTasks.critical.name}"`);
+
+      // …and the deep link must SURVIVE using the page. SyncFilterToUrlAsync rebuilds the whole
+      // query string from the filter, so before the merge it landed on this PR it silently
+      // dropped `task=` on the first keystroke — after which the link is unshareable AND
+      // unrecoverable, because DeepLinkTaskId is [SupplyParameterFromQuery] and the value is gone
+      // from the component too. Typing into the filter is the cheapest way to make the page write
+      // the URL; the debounce is 250ms, so waitForURL does the waiting.
+      await page.locator('[data-testid="board-filter-bar"]').waitFor({ state: "visible" });
+      await page.locator('[data-testid="board-filter-search"]').fill("card");
+      await page.waitForURL((url) => url.searchParams.get("q") === "card", { timeout: 10000 });
+      const afterFilter = new URL(page.url());
+      assert(afterFilter.searchParams.get("task") === String(cardTasks.critical.id),
+        `filtering stripped the deep link: expected task=${cardTasks.critical.id}, got "${page.url()}"`);
+      assert(afterFilter.searchParams.get("q") === "card",
+        `merging the deep link back in lost the filter itself: "${page.url()}"`);
+    });
+
+    await test("Home card shows a claim once an agent claims a task", async () => {
+      // The LOW task, deliberately, not the Critical one. TaskRanking treats every claimed task as
+      // claimed-by-another when `actor` is null, and the Home summary passes null — so claiming the
+      // Critical task would sink it below the unclaimed Low one and quietly invert the ranking the
+      // two scenarios above assert. They pass today only because they run first. Claiming the task
+      // the ranker does NOT recommend removes that ordering dependency entirely.
+      await api("POST", `/api/tasks/${cardTasks.low.id}/claim`, { actor: `e2e-agent-${stamp}` });
+
+      await page.goto(`${baseUrl}/`);
+      const claim = cardFor(cardProj.id).locator('[data-testid="project-claim"]');
+      await claim.first().waitFor({ state: "visible" });
+      assert((await claim.first().innerText()).includes(`e2e-agent-${stamp}`),
+        `claim chip does not name the claimant: "${await claim.first().innerText()}"`);
+
+      // …and the recommendation must be UNCHANGED by the claim, which is the property that makes
+      // the ordering independent rather than merely lucky.
+      const chipTaskId = Number(await cardFor(cardProj.id)
+        .locator('[data-testid="project-next-task"]').getAttribute("data-task-id"));
+      assert(chipTaskId === cardTasks.critical.id,
+        `claiming the Low task moved the recommendation to ${chipTaskId}; ` +
+        `it must still be the Critical task ${cardTasks.critical.id}`);
+
+      // Recency is rendered relative with the absolute instant on hover — one clock (#306).
+      const when = cardFor(cardProj.id).locator('[data-testid="project-last-activity"]');
+      await when.waitFor({ state: "visible" });
+      const tooltip = await when.getAttribute("title");
+      assert(/UTC:/.test(tooltip || ""),
+        `last-activity tooltip must carry the absolute UTC instant, got "${tooltip}"`);
+      assert((await when.getAttribute("datetime") || "").length > 0,
+        "last-activity <time> must carry a machine-readable datetime attribute");
+
+      // ── The absolute instant must be reachable WITHOUT a mouse ──
+      // `title` fires on hover only and `datetime` is never announced, so on the pre-fix build a
+      // keyboard or screen-reader user saw "2m ago" and had no route to the exact time — while
+      // `cursor: help` and the dotted underline advertised that there was more to reach. Both
+      // assertions below fail on that build: `title` alone satisfies neither.
+      const reach = await when.evaluate((el) => ({
+        tabindex: el.getAttribute("tabindex"),
+        text: el.textContent,
+        // The hidden half must be hidden to the EYE, not to the accessibility tree: a
+        // `display:none`/`hidden` implementation would read to nobody at all.
+        hiddenWidth: el.querySelector(".visually-hidden")?.getBoundingClientRect().width ?? -1,
+      }));
+      assert(reach.tabindex === "0",
+        `the <time> must be focusable so the absolute instant is in the keyboard's reach, ` +
+        `tabindex="${reach.tabindex}"`);
+      assert(reach.text.includes(tooltip),
+        `the accessible text must carry the absolute instant "${tooltip}", got "${reach.text}"`);
+      assert(reach.hiddenWidth >= 0 && reach.hiddenWidth <= 1,
+        `the absolute instant must be visually hidden, not rendered — measured ${reach.hiddenWidth}px wide`);
+
+      // …and the focus stop must be VISIBLE. A silent tab stop is worse than no tab stop.
+      // The Tab press is not decoration: `:focus-visible` is a HEURISTIC on how focus arrived, and
+      // a programmatic .focus() after a mouse interaction does not match it. Pressing a key first
+      // puts the browser in keyboard-interaction mode so the subsequent focus is the keyboard case
+      // this assertion is about.
+      await page.keyboard.press("Tab");
+      await when.focus();
+      const focusRing = await when.evaluate((el) => {
+        const cs = getComputedStyle(el);
+        return {
+          matches: el.matches(":focus-visible"),
+          width: cs.outlineWidth,
+          style: cs.outlineStyle,
+          offset: cs.outlineOffset,
+        };
+      });
+      assert(focusRing.matches,
+        "the <time> did not match :focus-visible after keyboard focus — the tab stop is unreachable-looking");
+      // ⚠️ `outline-width > 0` ALONE CANNOT FAIL HERE, and asserting only that is how this guard
+      // was written first. Chromium's UA stylesheet already draws a ring on any :focus-visible
+      // element, so deleting `.kf-card-when:focus-visible` outright still measured a positive
+      // width — a green test over a stylesheet that had lost the rule (measured: the mutation ran
+      // and the scenario passed). `outline-style` is what separates them: the UA ring computes to
+      // the keyword `auto`, and only an authored rule computes to `solid`. The offset is asserted
+      // too, because the ring has to clear this element's own dotted underline to read as focus
+      // rather than as more decoration.
+      assert(focusRing.style === "solid",
+        ".kf-card-when:focus-visible must declare the app's own ring; computed outline-style is " +
+        `"${focusRing.style}" — "auto" means only the browser default is left`);
+      assert(parseFloat(focusRing.width) > 0,
+        `.kf-card-when:focus-visible must paint an outline, computed outline-width "${focusRing.width}"`);
+      assert(parseFloat(focusRing.offset) > 0,
+        `the focus ring must be offset clear of the dotted underline, computed "${focusRing.offset}"`);
+    });
+
+    await test("Home grid uses the canvas at 1440 and stays single-column at 390 (#281 AC 6)", async () => {
+      // AC 6 — "the grid uses the available canvas; the one-card-in-an-ocean layout is fixed" —
+      // was the only acceptance criterion with no automated coverage: every other scenario in this
+      // block runs at the suite's default 1280x720, so the layout was proven by hand once and then
+      // guarded by nothing. Same viewport-loop + try/finally shape as the #322 feature-label guard
+      // above; the restore is NOT optional, because an assertion thrown mid-loop would otherwise
+      // leave the viewport at 390x844 for every scenario that follows.
+      //
+      // ⚠️ WHAT THIS DELIBERATELY DOES **NOT** ASSERT: auto-fit vs auto-fill.
+      // `.project-grid` uses `auto-fit` specifically so a LONE project's empty tracks collapse.
+      // The two functions are indistinguishable once the cards outnumber the tracks — and by the
+      // time this runs the suite has created a dozen projects, so the first row is always full and
+      // both keywords produce identical geometry. Asserting it here would be a test that cannot
+      // fail. Isolating a single-project Home would mean deleting every other scenario's fixtures,
+      // which is a worse trade than naming the gap. What IS asserted below is the defect AC 6
+      // actually describes — dead canvas — and each assertion is failable by a real mutation:
+      //   * perRow >= 2       ← `grid-template-columns: 1fr` (the pre-#281 single-column layout)
+      //   * row spans grid    ← any `.project-card` max-width narrower than the computed track
+      //   * perRow === 1 @390 ← a track floor that lets two cards pack on a phone
+      //   * no overflow @390  ← `minmax(19rem, …)` without the `min(100%, …)` clamp
+      const restoreGrid = page.viewportSize();
+      try {
+        for (const [vw, vh, single] of [[1440, 900, false], [390, 844, true]]) {
+          await page.setViewportSize({ width: vw, height: vh });
+          await page.goto(`${baseUrl}/`);
+          await cardFor(cardProj.id).waitFor({ state: "visible" });
+
+          const g = await page.evaluate(() => {
+            const grid = document.querySelector('[data-testid="project-grid"]');
+            const cards = [...grid.querySelectorAll('[data-testid="project-card"]')];
+            const boxes = cards.map((c) => c.getBoundingClientRect());
+            const firstTop = Math.round(boxes[0].top);
+            const firstRow = boxes.filter((b) => Math.round(b.top) === firstTop);
+            return {
+              gridWidth: grid.getBoundingClientRect().width,
+              cardCount: boxes.length,
+              perRow: firstRow.length,
+              cardWidth: boxes[0].width,
+              // How much of the grid's width the first row actually covers, edge to edge.
+              rowSpan: firstRow[firstRow.length - 1].right - firstRow[0].left,
+              docScrollWidth: document.documentElement.scrollWidth,
+              innerWidth: window.innerWidth,
+            };
+          });
+
+          // The span check below is only meaningful over a SATURATED row, so state the
+          // precondition instead of letting a short row pass as "dead canvas".
+          assert(g.cardCount > g.perRow,
+            `guard needs a full first row: ${g.cardCount} cards, ${g.perRow} in the first row`);
+
+          // Nothing may spill sideways at either width — the AC 7 measurement, now automated.
+          assert(g.docScrollWidth <= g.innerWidth,
+            `at ${vw}x${vh} the page scrolls horizontally: ` +
+            `document ${g.docScrollWidth}px vs viewport ${g.innerWidth}px`);
+
+          if (single) {
+            assert(g.perRow === 1,
+              `at ${vw}x${vh} the grid packs ${g.perRow} cards per row; a phone must be single-column`);
+            assert(g.cardWidth <= vw,
+              `at ${vw}x${vh} a card is ${g.cardWidth.toFixed(0)}px wide, wider than the viewport`);
+          } else {
+            assert(g.perRow >= 2,
+              `at ${vw}x${vh} the grid draws ${g.perRow} card(s) across ${g.gridWidth.toFixed(0)}px ` +
+              "— that is the one-card-in-an-ocean layout AC 6 removes");
+            // Every track is `1fr` and every card is `width: 100%` of its track, so a full row
+            // must reach both edges of the grid. It stops short the moment `.project-card`'s cap
+            // falls below the computed track width — the "narrow card marooned in a wide
+            // container" half of the same defect, which perRow alone cannot see.
+            assert(Math.abs(g.rowSpan - g.gridWidth) <= 1.5,
+              `at ${vw}x${vh} a full row spans ${g.rowSpan.toFixed(1)}px of a ` +
+              `${g.gridWidth.toFixed(1)}px grid — ${(g.gridWidth - g.rowSpan).toFixed(1)}px of dead canvas`);
+          }
+        }
+      } finally {
+        if (restoreGrid) await page.setViewportSize(restoreGrid);
+      }
+    });
+
+    await test("The next-task priority chip keeps its fixed ink in both themes (#281)", async () => {
+      // `.kf-next-task-prio` paints `var(--bs-white)` on a `--kf-prio-*` background. Both sides are
+      // declared once on `:root` and never re-declared under `[data-bs-theme=dark]`, which is the
+      // whole reason the chip is readable in dark mode — and it is also why a typo in the variable
+      // name is INVISIBLE in review: an unresolvable `var()` is invalid at computed-value time, so
+      // `color` falls back to the inherited body colour and the chip silently turns grey-on-red.
+      // Measured in both themes, because "it looked fine" was only ever checked in one.
+      // The selector is resolved and measured INSIDE one page.evaluate, not through a Locator
+      // handle. On this Server circuit the static SSR pass renders the card and the interactive
+      // pass then REPLACES those nodes, so a handle resolved a round-trip earlier can be detached
+      // by the time it is measured — and `getComputedStyle` on a detached node returns every
+      // property as the empty string, which reads as "the token did not resolve" rather than as a
+      // stale handle. Measured: that is exactly what a Locator-based version of this reported.
+      const chipSelector = (projectId) =>
+        `[data-testid="project-card"][data-project-id="${projectId}"] ` +
+        '[data-testid="project-next-task"] .kf-next-task-prio';
+
+      for (const theme of ["light", "dark"]) {
+        await page.goto(`${baseUrl}/`);
+        // Wait for a node that is BOTH present and live — a non-empty computed colour is the
+        // cheapest proof the element is still attached and the stylesheet has applied.
+        await page.waitForFunction(
+          (sel) => {
+            const el = document.querySelector(sel);
+            return !!el && getComputedStyle(el).color !== "";
+          },
+          chipSelector(cardProj.id),
+          { timeout: 10000 },
+        );
+
+        const ink = await page.evaluate(({ sel, t }) => {
+          document.documentElement.setAttribute("data-bs-theme", t);
+          const el = document.querySelector(sel);
+          const cs = getComputedStyle(el);
+          return { color: cs.color, background: cs.backgroundColor, priority: el.dataset.priority };
+        }, { sel: chipSelector(cardProj.id), t: theme });
+
+        assert(ink.priority === "Critical",
+          `expected the Critical chip for this measurement, got "${ink.priority}"`);
+        assert(ink.color === "rgb(255, 255, 255)",
+          `[${theme}] the Critical chip's ink resolved to "${ink.color}", not white — ` +
+          "the colour token did not resolve");
+        assert(ink.background === "rgb(220, 53, 69)",
+          `[${theme}] the Critical chip's background resolved to "${ink.background}", not #dc3545`);
+      }
+    });
+
+    await test("A project with no activity renders calm — no placeholder chips", async () => {
+      await page.goto(`${baseUrl}/`);
+      const card = cardFor(calmProj.id);
+      await card.waitFor({ state: "visible" });
+
+      for (const testid of ["project-progress", "project-next-task", "project-claim", "project-last-activity"]) {
+        assert(await card.locator(`[data-testid="${testid}"]`).count() === 0,
+          `an untouched project rendered "${testid}" — AC 5 requires the card to stay calm`);
+      }
+      // …but it is still a real card with a way in, not a blank tile. `exact` matters: the ⋮
+      // menu's accessible name starts with "Open project actions for …", so a loose match here
+      // resolves to two buttons and fails on strict mode rather than on the product.
+      await card.getByRole("button", { name: "Open", exact: true }).waitFor({ state: "visible" });
+    });
+
     // ── Scenario: reopening the outline-sidebar edit modal re-reads the audit trail (#374) ──
     //
     // EditItemModal is never unmounted — ProjectView leaves it in the tree with its root hidden,
@@ -2638,6 +2970,8 @@ async function main() {
     await api("DELETE", `/api/projects/${partialProj.id}`).catch(() => {});
     await api("DELETE", `/api/projects/${filterProj.id}`).catch(() => {});
     await api("DELETE", `/api/projects/${outlineProj.id}`).catch(() => {});
+    await api("DELETE", `/api/projects/${cardProj.id}`).catch(() => {});
+    await api("DELETE", `/api/projects/${calmProj.id}`).catch(() => {});
     // delete the modal-created project too
     const all = await api("GET", "/api/projects");
     const modalProj = all.find((p) => p.name === modalProjectName);

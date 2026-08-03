@@ -401,6 +401,22 @@ else
     [Parameter]
     public int Id { get; set; }
 
+    /// <summary>
+    /// <c>?task={id}</c> — opens that task's detail panel on arrival (#281). This is what makes
+    /// the Home card's "Next" chip land ON the task rather than merely on the project. An id that
+    /// is absent, unparsable, or not part of this project is IGNORED: the page still loads, the
+    /// panel simply stays shut. A deep link is a hint, never a precondition.
+    /// </summary>
+    [SupplyParameterFromQuery(Name = "task")]
+    public int? DeepLinkTaskId { get; set; }
+
+    /// <summary>
+    /// Applied ONCE per component instance. Every later <see cref="LoadProject"/> — a save, a
+    /// drag, closing the panel — must not silently re-open a panel the user just dismissed while
+    /// the query string is still in the address bar.
+    /// </summary>
+    private bool deepLinkApplied;
+
     private Project? project;
     private List<TaskItem> allTasks = [];
 
@@ -541,6 +557,20 @@ else
         // Nav.LocationChanged, re-parse, and unsubscribe in DisposeAsync. (CodeRabbit, PR #362.)
         filter = TaskFilterState.FromUri(Nav.Uri);
         await LoadProject();
+        ApplyDeepLinkedTask();
+    }
+
+    /// <summary>Opens the task named by <see cref="DeepLinkTaskId"/>, if it exists here.</summary>
+    private void ApplyDeepLinkedTask()
+    {
+        if (deepLinkApplied || DeepLinkTaskId is not int taskId) return;
+        deepLinkApplied = true;
+
+        var task = allTasks.FirstOrDefault(t => t.Id == taskId);
+        if (task is not null)
+        {
+            OpenTaskDetail(task);
+        }
     }
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
@@ -945,15 +975,29 @@ else
 
         try
         {
-            // The whole query string is REPLACED, not merged: this filter owns every parameter
-            // /project/{id} accepts, and rebuilding from `filter` is what makes Clear able to leave
-            // a genuinely empty query. Add a merge here if this route ever grows an unrelated param.
+            // The query string is rebuilt from `filter`, not edited in place — that is what makes
+            // Clear able to leave a genuinely empty query — and then the ONE parameter this route
+            // owns outside the filter is merged back on.
+            //
+            // That merge is not optional. `?task=` arrived with #281 (the Home card's "Next" chip
+            // deep-links straight at a task), which is precisely the "if this route ever grows an
+            // unrelated param" case the previous version of this comment reserved. Without it the
+            // first keystroke in the filter box silently strips `task=` out of the address bar, so
+            // reloading or sharing the link no longer opens the task it named — and because
+            // DeepLinkTaskId is [SupplyParameterFromQuery], the value is gone from the component
+            // too and cannot be put back. `taskId` is an int, so no escaping is required.
             //
             // replace: true so typing five characters leaves ONE history entry, not five — otherwise
             // Back walks the user backwards through their own keystrokes instead of off the page.
             // forceLoad: false keeps the SignalR circuit alive; a forced load would tear the page
             // down and rebuild it, losing the board's collapse state and re-running the whole load.
-            Nav.NavigateTo($"/project/{Id}{filter.ToQuery()}", forceLoad: false, replace: true);
+            var query = filter.ToQuery();
+            if (DeepLinkTaskId is int taskId)
+            {
+                query = query.Length == 0 ? $"?task={taskId}" : $"{query}&task={taskId}";
+            }
+
+            Nav.NavigateTo($"/project/{Id}{query}", forceLoad: false, replace: true);
         }
         catch (ObjectDisposedException) { /* circuit torn down while the sync was pending */ }
         catch (InvalidOperationException) { /* ditto — renderer already disposed */ }
