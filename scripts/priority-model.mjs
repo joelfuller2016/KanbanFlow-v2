@@ -65,7 +65,9 @@ export function priorityFromTitle(title) {
 // now covers 114 of 116 open issues.
 //
 // The mapping is not invented here — it is the same M1..M7 -> P0..P3 table the backlog log book
-// ranks with. Change it in both places or the board and the log book disagree.
+// ranks with, copied because that generator does not exist on master yet (#339). This is the
+// definition; #364 tracks pointing the generator at it so the copy goes away. Until it does,
+// a change here that is not mirrored there makes the board and the log book disagree.
 const MILESTONE_BANDS = new Map([
   ["M1: Correctness & Audit Trail", "Critical"], // P0
   ["M2: Tech-debt & Foundation", "High"],        // P1
