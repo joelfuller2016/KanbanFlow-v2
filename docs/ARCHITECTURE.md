@@ -154,8 +154,8 @@ The machine-readable source of truth is the OpenAPI document at `/openapi/v1.jso
 | Route | Methods |
 |---|---|
 | `/api/projects` | `GET` list · `POST` create |
-| `/api/projects/{id}` | `GET` · `PUT` · `DELETE` |
-| `/api/projects/{id}/context` | `GET` — full graph in one AI-shaped payload |
+| `/api/projects/{id}` | `GET` · `PUT` · `DELETE` — `GET` carries `progress` at project and per-feature level (R-1.7) |
+| `/api/projects/{id}/context` | `GET` — full graph in one AI-shaped payload, incl. `progress` at project and per-feature level (R-1.7) |
 | `/api/projects/{id}/board` | `GET` — tasks grouped by status |
 | `/api/projects/{id}/next-tasks` | `GET` — ranked direction (`?actor=&limit=`) |
 | `/api/projects/{id}/activity` | `GET` — audit log (`?limit=`, clamped to 500) |
@@ -358,6 +358,7 @@ reachable from both REST and MCP.
 | R-1.3 | Activity queryable per project and per task, time-ordered, with `before`/`after` snapshots. | ✅ for tasks + ideas; ❌ other entities emit nothing (#149) |
 | R-1.4 | List endpoints support `?limit=&offset=`. | ❌ only activity clamps `limit` (500); ideas take both; the rest are unbounded |
 | R-1.5 | `GET /api/projects/{id}/search?q=` across descriptions, comments, requirements. | ❌ not implemented |
+| R-1.7 | Completion computed **once, server-side** and served as a `progress` object (`completed`, `inProgress`, `blocked`, `total`, `percentComplete`) at project *and* feature level on `GET /api/projects/{id}` and `GET /api/projects/{id}/context`, so no surface recomputes it. Feature progress is recursive (own tasks + all descendant features'); `blocked` counts *unfinished* tasks with an open blocker, matching `next-tasks.blockedTaskCount`; `percentComplete` is a number rounded to one decimal, `0.0` and never `NaN` when `total` is 0. | ⚠️ shared `Services/ProjectProgressCalculator` serves both REST endpoints (#125); the Home card (#281), the `ProjectOutline` header (#111) and MCP `get_project_context` still recompute or omit it |
 
 ### C-2. Write everything
 
