@@ -12,14 +12,19 @@ namespace KanbanFlow.Tests;
 /// The calculator is pure (no EF, no Blazor), so every case below exercises the REAL production
 /// code over in-memory inputs — no database, no browser, no fakes.
 ///
-/// Each test is deliberately scoped to ONE property so a defect produces a specific signal.
-/// The mutation proof for #125 is:
-///   (a) count Done as InProgress  → only the Done-counting tests go red
-///       (<see cref="MixedStatuses_CountsEveryBucketIndividually"/>, <see cref="AllTasksDone_IsOneHundredPercent"/>)
-///   (b) drop the <c>Total &gt; 0</c> guard → only <see cref="EmptyProject_HasZeroTotalAndZeroPercent_NeverNaN"/> goes red
-///   (c) roll up own tasks only     → only <see cref="ThreeLevelNesting_AncestorIncludesAllDescendantTasks"/> goes red
-/// Tests that are not about a given property are built so that property's sabotage leaves them
-/// green (e.g. scopes with equal Done/InProgress counts, and no empty scope outside case (b)).
+/// Each test is scoped to ONE property so a defect produces a specific signal. Tests that are not
+/// about a given property are built so that property's sabotage leaves them green (scopes with
+/// equal Done/InProgress counts; no empty scope outside the empty-project case; assertions that do
+/// not depend on the rollup where the rollup is not the subject). Measured blast radius:
+///   (a) count Done as InProgress → <see cref="MixedStatuses_CountsEveryBucketIndividually"/> and
+///       <see cref="AllTasksDone_IsOneHundredPercent"/>. It cannot be fewer: "all Done ⇒ 100%" is
+///       inherently a Done-counting assertion.
+///   (b) drop the <c>Total &gt; 0</c> guard → only <see cref="EmptyProject_HasZeroTotalAndZeroPercent_NeverNaN"/>.
+///   (c) roll up own tasks only → <see cref="ThreeLevelNesting_AncestorIncludesAllDescendantTasks"/>
+///       and <see cref="MultipleChildFeatures_AllSiblingSubtreesAreAdded"/> — the depth and the
+///       breadth halves of the recursion; every other test is built to survive it.
+///   (d) count a Done task as blocked → only <see cref="DoneTaskWithAnOpenBlocker_IsNotCountedAsBlocked"/>.
+///   (e) neuter the duplicate-id guard → only <see cref="DuplicateFeatureRows_DoNotInflateAnAncestorsRollup"/>.
 /// </summary>
 public sealed class ProjectProgressCalculatorTests
 {
@@ -171,6 +176,33 @@ public sealed class ProjectProgressCalculatorTests
     }
 
     [Fact]
+    public void MultipleChildFeatures_AllSiblingSubtreesAreAdded()
+    {
+        // The fold suspends and resumes a parent frame once per child; a mis-tracked resume
+        // cursor would drop or repeat a sibling. Uneven subtree sizes make either failure visible.
+        var report = ProjectProgressCalculator.Calculate(
+            [
+                Feat(1),
+                Feat(2, parentFeatureId: 1), Feat(3, parentFeatureId: 1), Feat(4, parentFeatureId: 1),
+                Feat(5, parentFeatureId: 3)
+            ],
+            [
+                Task(1, 1),
+                Task(2, 2),
+                Task(3, 3), Task(4, 3),
+                Task(5, 4), Task(6, 4), Task(7, 4),
+                Task(8, 5)
+            ],
+            NoBlockers);
+
+        Assert.Equal(1, report.ForFeature(2).Total);
+        Assert.Equal(3, report.ForFeature(3).Total); // own 2 + grandchild 1
+        Assert.Equal(3, report.ForFeature(4).Total);
+        Assert.Equal(8, report.ForFeature(1).Total); // own 1 + 1 + 3 + 3, each sibling exactly once
+        Assert.Equal(8, report.Project.Total);
+    }
+
+    [Fact]
     public void ProjectTotal_EqualsSumOfTopLevelFeatureTotalsPlusUnparentedTasks()
     {
         // Deliberately FLAT: the recursive rollup has its own test above, so this one isolates
@@ -191,13 +223,58 @@ public sealed class ProjectProgressCalculatorTests
         var topLevelTotal = features
             .Where(f => f.ParentFeatureId is null)
             .Sum(f => report.ForFeature(f.Id).Total);
-        var unparentedTotal = report.Project.Total - topLevelTotal;
+
+        // Derived from the INPUT, never from report.Project.Total — computing the residual by
+        // subtraction would make the identity below true for any implementation. Membership in
+        // topLevelIds is the exact test only because this fixture's roots have no children.
+        var topLevelIds = features.Where(f => f.ParentFeatureId is null).Select(f => f.Id).ToHashSet();
+        var unparentedTotal = tasks.Count(t => !topLevelIds.Contains(t.FeatureId));
 
         Assert.Equal(5, topLevelTotal);                                   // 2 + 3
         Assert.Equal(3, unparentedTotal);                                 // 2 orphaned + 1 dangling
         Assert.Equal(8, report.Project.Total);                            // every task, at any depth
         Assert.Equal(topLevelTotal + unparentedTotal, report.Project.Total);
         Assert.Equal(2, report.ForFeature(3).Total);                      // the orphan folds as its own root
+    }
+
+    [Fact]
+    public void DoneTaskWithAnOpenBlocker_IsNotCountedAsBlocked()
+    {
+        // Nothing is left for a blocker to hold up once the task is finished, and
+        // GET /api/projects/{id}/next-tasks counts blockedTaskCount over non-Done tasks only —
+        // if this rule drifted, two endpoints would report two "blocked" numbers for one project.
+        var report = ProjectProgressCalculator.Calculate(
+            [Feat(1)],
+            [
+                Task(1, 1, WorkStatus.Done),  // stale dependency: blocker never finished
+                Task(2, 1, WorkStatus.Todo)   // genuinely blocked
+            ],
+            [1, 2]);
+
+        // Only the Blocked rule is asserted here — Done-counting has its own tests, and pinning
+        // it again would make this test red for a defect it is not guarding.
+        Assert.Equal(1, report.Project.Blocked);
+        Assert.Equal(2, report.Project.Total);
+        Assert.Equal(1, report.ForFeature(1).Blocked);
+    }
+
+    [Fact]
+    public void DuplicateFeatureRows_DoNotInflateAnAncestorsRollup()
+    {
+        // Distinct-by-Id is the documented contract; a repeated row must still never make a
+        // feature report more tasks than the project contains.
+        var report = ProjectProgressCalculator.Calculate(
+            [Feat(1), Feat(2, parentFeatureId: 1), Feat(2, parentFeatureId: 1)],
+            [Task(1, 2)],
+            NoBlockers);
+
+        Assert.Equal(1, report.Project.Total);
+        Assert.Equal(1, report.ForFeature(2).Total);            // the deduped child still counts its own task
+        // An upper bound, matching this test's name: the duplicate row would make the parent
+        // report 2. Asserting the exact rollup here instead would redden this test for any
+        // rollup defect, not just the one it guards.
+        Assert.True(report.ForFeature(1).Total <= report.Project.Total,
+            $"Feature 1 reported {report.ForFeature(1).Total} tasks; the project only contains {report.Project.Total}.");
     }
 
     [Fact]
@@ -244,12 +321,39 @@ public sealed class ProjectProgressCalculatorTests
     // ── shape / scale ──────────────────────────────────────────────────────────────
 
     [Fact]
+    public void WideFeatureStar_FoldsInLinearTime()
+    {
+        // Guards goal 7 (single-pass, no rescan per node) at the one shape that can prove it: a
+        // root with N children makes the root's frame resume N times. Resuming from NextChild is
+        // O(N) overall and finishes in milliseconds; restarting the child scan at 0 on every
+        // resume is O(N^2) — 2e10 lookups here — and would never return.
+        const int width = 200_000;
+        var features = new ProgressFeature[width + 1];
+        var tasks = new ProgressTask[width];
+        features[0] = Feat(1);
+        for (var i = 0; i < width; i++)
+        {
+            var id = i + 2;
+            features[i + 1] = Feat(id, parentFeatureId: 1);
+            tasks[i] = Task(id, id);
+        }
+
+        var report = ProjectProgressCalculator.Calculate(features, tasks, NoBlockers);
+
+        // Deliberately depth-independent: the fold runs over the whole star whatever we assert,
+        // so a quadratic resume hangs before reaching this line. The multi-child rollup VALUE is
+        // asserted by MultipleChildFeatures_... below, keeping each defect to one signal.
+        Assert.Equal(width, report.Project.Total);
+        Assert.Equal(width + 1, report.ByFeatureId.Count); // every node folded exactly once
+    }
+
+    [Fact]
     public void DeepFeatureChain_FoldsWithoutStackOverflow()
     {
-        // Guards the "single-pass, iterative fold" requirement (goal 7): a recursive walk blows
-        // the stack at this depth and a per-node rescan of the feature set is quadratic. The
-        // rollup VALUES are asserted by the nesting test above; this one deliberately asserts
-        // only depth-independent facts so a rollup regression produces exactly one signal.
+        // Guards the ITERATIVE half of the fold: a recursive walk blows the 1 MB stack at this
+        // depth. (Non-quadratic is the star test's job; a slow implementation would still pass
+        // here.) The rollup VALUES are asserted by the nesting test, so this one deliberately
+        // asserts only depth-independent facts and a rollup regression stays a one-test signal.
         const int depth = 20_000;
         var features = new ProgressFeature[depth];
         var tasks = new ProgressTask[depth];

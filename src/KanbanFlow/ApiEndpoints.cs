@@ -87,8 +87,9 @@ public static class ApiEndpoints
 
             // #125: derived progress comes from the single shared calculator, so this endpoint,
             // /context and every other surface report the SAME number for the same project.
-            // Two narrow projections (three columns each) keep the #157 promise of not loading
-            // the whole Feature→Task graph just to count it.
+            // Two narrow projections — three scalar columns per task, one per blocked task — so
+            // the #157 fix still holds in spirit (no Feature→Task graph load, no tracked entities),
+            // though this endpoint now reads O(tasks) rows rather than O(features) COUNT results.
             var progressTasks = await db.Tasks
                 .Where(t => t.Feature.ProjectId == id)
                 .AsNoTracking()
@@ -128,6 +129,9 @@ public static class ApiEndpoints
                     f.SortOrder,
                     f.CreatedAt,
                     f.UpdatedAt,
+                    // taskCount/doneCount are this feature's OWN tasks; progress is the whole
+                    // subtree (own + all descendant features'). They differ on a nested feature
+                    // by design — consumers wanting the rollup must read progress.
                     f.TaskCount,
                     f.DoneCount,
                     Progress = progress.ForFeature(f.Id)
@@ -189,11 +193,17 @@ public static class ApiEndpoints
 
             // Single source for "which of this task's dependencies are still open?" — the per-task
             // IsBlocked flag and the #125 progress.blocked counter both read it, so the two halves
-            // of the same payload can never disagree.
-            List<TaskDependency> OpenBlockersOf(int taskId) => dependenciesByBlockedTask[taskId]
-                .Where(d => tasksById.TryGetValue(d.DependsOnTaskItemId, out var blocker) && blocker.Task.Status != WorkStatus.Done)
-                .OrderBy(d => d.CreatedAt)
-                .ToList();
+            // of the same payload can never disagree. Computed ONCE per task: MapTaskContext runs
+            // for every task twice (feature tree + flat list) and the progress set needs it again.
+            var openBlockersByTask = allTasks.ToDictionary(
+                x => x.Task.Id,
+                x => dependenciesByBlockedTask[x.Task.Id]
+                    .Where(d => tasksById.TryGetValue(d.DependsOnTaskItemId, out var blocker) && blocker.Task.Status != WorkStatus.Done)
+                    .OrderBy(d => d.CreatedAt)
+                    .ToList());
+
+            List<TaskDependency> OpenBlockersOf(int taskId) =>
+                openBlockersByTask.TryGetValue(taskId, out var blockers) ? blockers : [];
 
             object MapDependencyContext(TaskDependency dependency)
             {
@@ -287,7 +297,7 @@ public static class ApiEndpoints
             var progress = Services.ProjectProgressCalculator.Calculate(
                 project.Features.Select(f => new Services.ProgressFeature(f.Id, f.ParentFeatureId)),
                 allTasks.Select(x => new Services.ProgressTask(x.Task.Id, x.Task.FeatureId, x.Task.Status)),
-                allTasks.Where(x => OpenBlockersOf(x.Task.Id).Count > 0).Select(x => x.Task.Id));
+                openBlockersByTask.Where(entry => entry.Value.Count > 0).Select(entry => entry.Key));
 
             object MapFeatureContext(Feature feature) => new
             {

@@ -349,11 +349,14 @@ try {
     $pgRoot = Invoke-SmokeJson "Post" "/api/projects/$($pgProj.id)/features" @{ name = "PG root" }
     $pgChild = Invoke-SmokeJson "Post" "/api/projects/$($pgProj.id)/features" @{ name = "PG child"; parentFeatureId = $pgRoot.id }
     $pgGrand = Invoke-SmokeJson "Post" "/api/projects/$($pgProj.id)/features" @{ name = "PG grandchild"; parentFeatureId = $pgChild.id }
-    $pgRootTask = Invoke-SmokeJson "Post" "/api/features/$($pgRoot.id)/tasks" @{ name = "PG root task" }
+    # The blocker lives in the ROOT feature and the blocked task in the GRANDCHILD, so
+    # `grandchild.progress.blocked == 1` also pins the dependency DIRECTION: were it inverted,
+    # the root's task would be the blocked one and the grandchild would report 0.
+    $pgRootTask = Invoke-SmokeJson "Post" "/api/features/$($pgRoot.id)/tasks" @{ name = "PG root blocking task" }
     Invoke-SmokeJson "Post" "/api/features/$($pgChild.id)/tasks" @{ name = "PG child task" } | Out-Null
     $pgGrandBlocked = Invoke-SmokeJson "Post" "/api/features/$($pgGrand.id)/tasks" @{ name = "PG grandchild blocked task" }
-    $pgGrandBlocker = Invoke-SmokeJson "Post" "/api/features/$($pgGrand.id)/tasks" @{ name = "PG grandchild blocking task" }
-    Invoke-SmokeJson "Post" "/api/tasks/$($pgGrandBlocked.id)/dependencies" @{ dependsOnTaskItemId = $pgGrandBlocker.id; type = "DependsOn" } | Out-Null
+    Invoke-SmokeJson "Post" "/api/features/$($pgGrand.id)/tasks" @{ name = "PG grandchild plain task" } | Out-Null
+    Invoke-SmokeJson "Post" "/api/tasks/$($pgGrandBlocked.id)/dependencies" @{ dependsOnTaskItemId = $pgRootTask.id; type = "DependsOn" } | Out-Null
 
     $pgProject = Invoke-SmokeGet "/api/projects/$($pgProj.id)"
     Assert-Truthy ($null -ne $pgProject.progress) "#125: GET /api/projects/{id} is missing the progress object."
@@ -371,6 +374,11 @@ try {
     Assert-Truthy ($null -ne $pgContext.progress) "#125: GET /api/projects/{id}/context is missing the progress object."
     Assert-Truthy ($pgContext.progress.total -eq $pgProject.progress.total) "#125: /context and /api/projects/{id} disagree on progress.total."
     Assert-Truthy ($pgContext.progress.blocked -eq 1) "#125: /context progress.blocked disagrees with the per-task isBlocked flags."
+    # The two endpoints derive `blocked` by different routes (in-memory lookup vs SQL join), so
+    # pin their agreement rather than only checking each against a literal.
+    Assert-Truthy ($pgContext.progress.blocked -eq $pgProject.progress.blocked) "#125: /context and /api/projects/{id} disagree on progress.blocked."
+    $pgNext = Invoke-SmokeGet "/api/projects/$($pgProj.id)/next-tasks?limit=25"
+    Assert-Truthy ($pgNext.blockedTaskCount -eq $pgContext.progress.blocked) "#125: progress.blocked ($($pgContext.progress.blocked)) disagrees with next-tasks blockedTaskCount ($($pgNext.blockedTaskCount)) — one project, two numbers."
     # Goal 4: the project total is the sum of the TOP-LEVEL features' totals plus any task that
     # hangs off no top-level feature (none here), asserted rather than eyeballed.
     $pgTopLevelTotal = ($pgContext.features | ForEach-Object { $_.progress.total } | Measure-Object -Sum).Sum
@@ -383,14 +391,21 @@ try {
     Assert-Truthy ($pgContextGrand.progress.total -eq 2) "#125: /context grandchild feature progress.total should be its own 2 tasks."
     Assert-Truthy ($pgContextGrand.progress.blocked -eq 1) "#125: /context grandchild progress.blocked should count its blocked task."
 
-    # Moving a task to Done must raise percentComplete on BOTH endpoints, identically.
-    Invoke-SmokeJson "Patch" "/api/tasks/$($pgRootTask.id)/status" @{ status = "Done" } | Out-Null
+    # Moving a task to Done must raise percentComplete on BOTH endpoints, identically. The task
+    # moved is the BLOCKED one and its blocker stays open, which also pins the rule that a
+    # finished task is never counted as blocked (status change has no dependency gate, so this
+    # state is reachable) — and that next-tasks agrees.
+    Invoke-SmokeJson "Patch" "/api/tasks/$($pgGrandBlocked.id)/status" @{ status = "Done" } | Out-Null
     $pgContextAfter = Invoke-SmokeGet "/api/projects/$($pgProj.id)/context"
     $pgProjectAfter = Invoke-SmokeGet "/api/projects/$($pgProj.id)"
+    $pgNextAfter = Invoke-SmokeGet "/api/projects/$($pgProj.id)/next-tasks?limit=25"
     Assert-Truthy ($pgContextAfter.progress.percentComplete -gt $pgContext.progress.percentComplete) "#125: percentComplete did not rise after a task moved to Done."
     Assert-Truthy ($pgContextAfter.progress.completed -eq 1) "#125: progress.completed did not count the newly Done task."
     Assert-Truthy ($pgContextAfter.progress.percentComplete -eq 25.0) "#125: 1 of 4 Done should be 25.0 (got $($pgContextAfter.progress.percentComplete))."
     Assert-Truthy ($pgProjectAfter.progress.percentComplete -eq $pgContextAfter.progress.percentComplete) "#125: /api/projects/{id} and /context report different percentComplete for the same project."
+    Assert-Truthy ($pgContextAfter.progress.blocked -eq 0) "#125: a Done task with a still-open blocker must not be counted as blocked (got $($pgContextAfter.progress.blocked))."
+    Assert-Truthy ($pgProjectAfter.progress.blocked -eq 0) "#125: /api/projects/{id} still counts a Done task as blocked."
+    Assert-Truthy ($pgNextAfter.blockedTaskCount -eq $pgContextAfter.progress.blocked) "#125: progress.blocked and next-tasks blockedTaskCount disagree once the blocked task is Done."
     Invoke-SmokeDelete "/api/projects/$($pgProj.id)" | Out-Null
 
     # --- #224: mem0-style remember/recall over the memory store ---
