@@ -11,6 +11,7 @@ import {
   priorityFromTitle,
   priorityFromLabel,
   priorityFromMilestone,
+  SEVERITY_RANK,
 } from "./priority-model.mjs";
 
 const issue = ({ title = "untitled", labels = [], milestone = null } = {}) => ({
@@ -58,6 +59,41 @@ test("AC7: a severity word inside the title does not leak into the priority", ()
 
 // --- 2. Labels: the pre-#355 path must be byte-identical ----------------------------------
 
+// The pre-#355 implementation, transcribed verbatim from
+// `git show origin/master:scripts/portfolio-sync.mjs` (lines 275-283). AC3 says label-carrying
+// repos must behave exactly as before; a hardcoded expectation only asserts that, so keep the
+// old function here and DIFFERENTIAL against it. This is what makes AC3 self-verifying.
+function oldDerivePriority(issue) {
+  let best = null;
+  for (const label of issue.labels || []) {
+    const level = priorityFromLabel(label.name);
+    if (level && (best === null || SEVERITY_RANK[level] < SEVERITY_RANK[best])) best = level;
+  }
+  return best ?? "Medium";
+}
+
+test("AC3 (differential): with no title prefix, the new chain matches the OLD function exactly", () => {
+  // Every label vocabulary the six DEFAULT_REPOS actually carry, plus topical decoys.
+  const vocab = [
+    "P0", "P1", "P2", "P3", "P0-critical", "P1-high", "P2-medium", "P3-low",
+    "priority:critical", "priority:high", "priority:medium", "priority:low",
+    "priority-high", "priority-medium", "priority-critical",
+    "high-priority", "medium-priority", "low-priority",
+    "critical", "high", "medium", "low",
+    "bug", "enhancement", "epic", "tech-debt", "documentation", "critical-path", "size/medium", "slow",
+  ];
+  let compared = 0;
+  for (const a of vocab) {
+    for (const b of vocab) {
+      // No milestone: isolates the label tier, which is the tier AC3 is about.
+      const i = issue({ title: "a title with no prefix", labels: [a, b] });
+      assert.equal(derivePriority(i), oldDerivePriority(i), `labels [${a}, ${b}] diverged`);
+      compared++;
+    }
+  }
+  assert.ok(compared >= 900, `expected a real sweep, compared only ${compared}`);
+});
+
 test("AC3: with a priority label and no prefix, the label still decides (unchanged behaviour)", () => {
   assert.equal(derivePriority(issue({ title: "plain", labels: ["priority:high"] })), "High");
   assert.equal(derivePriority(issue({ title: "plain", labels: ["P0-critical"] })), "Critical");
@@ -67,6 +103,16 @@ test("AC3: with a priority label and no prefix, the label still decides (unchang
 
 test("highest severity wins across multiple labels", () => {
   assert.equal(derivePriority(issue({ title: "x", labels: ["bug", "P0-critical", "low"] })), "Critical");
+});
+
+test("a label named after an Object prototype member is not a priority", () => {
+  // A bare `SEVERITY_WORDS[n]` lookup walks the prototype chain, so these returned truthy
+  // non-strings (Object.prototype / the Object function) and the sync would PUT one as the
+  // priority. Pre-existing on master; closed when this module became the canonical definition.
+  for (const name of ["__proto__", "constructor", "toString", "hasOwnProperty", "valueOf"]) {
+    assert.equal(priorityFromLabel(name), null, `label "${name}" must not resolve to a priority`);
+  }
+  assert.equal(derivePriority(issue({ title: "x", labels: ["__proto__"] })), "Medium");
 });
 
 test("a topical label that merely contains a severity word is not a priority", () => {
@@ -82,7 +128,10 @@ test("AC4: prefix outranks a conflicting priority label", () => {
 
 // --- 3. Milestone band --------------------------------------------------------------------
 
-test("milestone bands match the backlog generator's M1..M7 -> P0..P3 table", () => {
+// NOTE the honest scope: this pins the table to the values recorded HERE. It goes red if
+// MILESTONE_BANDS changes (proven by mutation), but it cannot see the backlog generator's copy
+// — that file does not exist on master yet (#339). Import it here once it lands.
+test("milestone bands match the M1..M7 -> P0..P3 table recorded in this test", () => {
   const expected = [
     ["M1: Correctness & Audit Trail", "Critical"],
     ["M2: Tech-debt & Foundation", "High"],

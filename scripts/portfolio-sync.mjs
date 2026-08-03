@@ -248,7 +248,12 @@ function mapIssueToOpenPr(prs) {
 // --- Mapping ----------------------------------------------------------------------------
 
 // Priority resolution (title prefix -> label -> milestone -> Medium) lives in
-// ./priority-model.mjs so the board and the backlog log book cannot drift apart. See #355.
+// ./priority-model.mjs so the M1..M7 band table has one home. See #355.
+//
+// NOT yet a single source of truth for the whole ranking: the backlog log book (#339) shares
+// this band table but then adjusts the derived tier by one step for promoting/demoting labels,
+// which this function deliberately does not do (#355 forbids mapping topical labels to a
+// priority). The two therefore disagree on ~11% of issues until that conflict is resolved.
 
 function deriveStatus(issue, linkedPr) {
   if (issue.state && issue.state.toUpperCase() === "CLOSED") return "Done";

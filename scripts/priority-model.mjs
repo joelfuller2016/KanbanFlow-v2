@@ -42,7 +42,10 @@ export function priorityFromLabel(name) {
   if (priSecond) return SEVERITY_WORDS[priSecond[1]];
 
   // A label that IS a severity word, exactly — not one that merely contains it.
-  return SEVERITY_WORDS[n] ?? null;
+  // `Object.hasOwn` rather than a bare lookup: a plain-object index walks the prototype chain,
+  // so a label literally named `__proto__` or `constructor` returned a truthy non-string
+  // (Object.prototype / the Object function) and the sync would PUT that as the priority.
+  return Object.hasOwn(SEVERITY_WORDS, n) ? SEVERITY_WORDS[n] : null;
 }
 
 // Anchored at the start and requiring a separator, so a title that merely CONTAINS the token is
