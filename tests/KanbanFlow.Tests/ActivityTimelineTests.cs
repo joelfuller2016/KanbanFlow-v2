@@ -832,7 +832,7 @@ public class ActivityTimelineTests
     {
         // A BOM survives a round-trip through a text editor or a mis-encoded write. Utf8JsonReader
         // rejects it, but only after the string looked well-formed to every eye that read it.
-        { "﻿{\"status\":\"Todo\"}", "﻿{\"status\":\"Done\"}", "BOM-prefixed" },
+        { "\uFEFF{\"status\":\"Todo\"}", "\uFEFF{\"status\":\"Done\"}", "BOM-prefixed" },
         // Valid JSON followed by junk: Parse reads a complete document and THEN finds more input.
         { "{\"status\":\"Todo\"} trailing", "{\"status\":\"Done\"}", "trailing garbage" },
         { "{\"status\":\"Todo\"}", "{\"status\":\"Done\"} trailing", "trailing garbage (after side)" },
@@ -870,7 +870,7 @@ public class ActivityTimelineTests
 
         Assert.DoesNotContain("{", entry.Headline ?? string.Empty, StringComparison.Ordinal);
         Assert.DoesNotContain("{", entry.Badge, StringComparison.Ordinal);
-        Assert.False(shape is "BOM-prefixed" or "trailing garbage" or "over-deep nesting"
+        Assert.False(shape is "BOM-prefixed" or "trailing garbage" or "trailing garbage (after side)" or "over-deep nesting"
             && entry.Changes.Count > 0,
             $"{shape}: a payload the parser rejects must produce NO changes, so the row falls " +
             "back to its audit Message. Changes derived from an unparseable payload are invented.");
