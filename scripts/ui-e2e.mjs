@@ -1534,8 +1534,11 @@ async function main() {
     // different data-testid prefixes off the SAME component — if someone ever "fixes" one by
     // copying it, this test still passes, but the clock test below (which reads both) will not.
     await test("Task history timeline renders the ActivityEvent trail on both task surfaces (#328)", async () => {
+      // priority is stated, not defaulted: the "Priority: Low → High" assertion below depends on
+      // the starting value, and a fixture that leans on a server-side default silently changes
+      // meaning the day that default does.
       const historyTask = await api("POST", `/api/features/${feature.id}/tasks`, {
-        name: `E2E History ${stamp}`, status: "Todo", sortOrder: 90,
+        name: `E2E History ${stamp}`, status: "Todo", priority: "Low", sortOrder: 90,
       });
       // Real recorded history — three different event types plus a user comment.
       await api("PATCH", `/api/tasks/${historyTask.id}/status`, { status: "InProgress", actor: "e2e-bot" });
@@ -1580,12 +1583,16 @@ async function main() {
           `the timeline dropped the comments while adding the trail (${commentCount} comment rows) ` +
           "— it must MERGE the two, not replace one with the other.");
 
-        // AC2: a readable change line, not raw JSON.
+        // AC2: a readable change line, not raw JSON. Read each ROW on its own — a regex over the
+        // flattened timeline can stitch "Status" from one row to "Todo"/"InProgress" from its
+        // neighbours and pass while no single row renders a readable diff at all.
         const timelineText = await panelTimeline.innerText();
-        assert(/Status[\s\S]{0,40}Todo[\s\S]{0,40}InProgress/.test(timelineText),
-          `no "Status: Todo → InProgress" line in the panel timeline. Rendered:\n${timelineText.slice(0, 800)}`);
-        assert(/Priority[\s\S]{0,40}Low[\s\S]{0,40}High/.test(timelineText),
-          `no "Priority: Low → High" line in the panel timeline. Rendered:\n${timelineText.slice(0, 800)}`);
+        const rowTexts = await panelTimeline.locator("[data-timeline-kind]").allInnerTexts();
+        const anyRow = (re) => rowTexts.some((t) => re.test(t));
+        assert(anyRow(/Status[\s\S]{0,40}Todo[\s\S]{0,40}InProgress/),
+          `no single row renders "Status: Todo → InProgress". Rows:\n${rowTexts.join("\n---\n").slice(0, 800)}`);
+        assert(anyRow(/Priority[\s\S]{0,40}Low[\s\S]{0,40}High/),
+          `no single row renders "Priority: Low → High". Rows:\n${rowTexts.join("\n---\n").slice(0, 800)}`);
         assert(!/"(status|priority|featureId|claimedBy)"\s*:/.test(timelineText),
           `RAW JSON reached the user in the panel timeline:\n${timelineText.slice(0, 800)}`);
         assert(timelineText.includes("e2e-bot"),
@@ -1627,6 +1634,17 @@ async function main() {
             && root.querySelectorAll('[data-timeline-kind="StatusChange"]').length > 0
             && root.querySelectorAll('[data-timeline-kind="Comment"], [data-timeline-kind="FieldChange"]').length === 0;
         }, 'the "Status" chip did not narrow the timeline to status rows');
+
+        // The fourth chip. It renders the derived field-diff rows — the newest and least-proven
+        // path in the feature — and was the one chip nothing clicked, so a chip that showed an
+        // empty list, or failed to exclude status rows, would have shipped green.
+        await panelTimeline.locator('[data-testid="task-detail-activity-filter-FieldChanges"]').click();
+        await waitForRows(() => {
+          const root = document.querySelector('[data-testid="task-detail-activity"]');
+          return root
+            && root.querySelectorAll('[data-timeline-kind="FieldChange"]').length > 0
+            && root.querySelectorAll('[data-timeline-kind="StatusChange"], [data-timeline-kind="Comment"]').length === 0;
+        }, 'the "Field changes" chip did not narrow the timeline to field-change rows');
 
         await panelTimeline.locator('[data-testid="task-detail-activity-filter-All"]').click();
         await waitForRows(() => {
@@ -1671,6 +1689,32 @@ async function main() {
         assert(clock.created.title?.includes("UTC:") && clock.updated.title?.includes("UTC:"),
           `Created/Updated must expose the absolute UTC instant on hover (#306). ` +
           `Got created title=${JSON.stringify(clock.created.title)}, updated=${JSON.stringify(clock.updated.title)}.`);
+
+        // The LABEL is not the claim — the INSTANT is. "UTC: 2026-07-12T17:19:00" with no zone
+        // designator is a zoneless string wearing a UTC label, and every consumer reads it as
+        // local. Stored DateTimes arrive Kind=Unspecified (which is why utcIso exists above), so
+        // an "O" format on the C# side emits no trailing Z unless the Kind is normalised first.
+        for (const [label, rendered, iso] of [
+          ["Created", clock.created, utcIso(apiTask.createdAt)],
+          ["Updated", clock.updated, utcIso(apiTask.updatedAt)],
+        ]) {
+          const stamp = (rendered.title ?? "").split("UTC:")[1]?.trim().replace(/\)$/, "") ?? "";
+          assert(/(Z|[+-]\d{2}:?\d{2})$/.test(stamp),
+            `${label}'s tooltip is labelled UTC but its value "${stamp}" carries no zone ` +
+            `designator, so it silently means local time. Full title: ${JSON.stringify(rendered.title)}`);
+          assert(Math.abs(new Date(stamp).getTime() - new Date(iso).getTime()) < 1000,
+            `${label}'s tooltip instant "${stamp}" does not match the API's ${iso}.`);
+        }
+
+        // Same claim for the timeline rows' machine-readable <time datetime> attribute.
+        const rowStamps = await panelTimeline.locator("time[datetime]").evaluateAll(
+          (nodes) => nodes.map((n) => n.getAttribute("datetime")));
+        assert(rowStamps.length > 0, "no <time datetime> attributes on the timeline rows");
+        for (const stamp of rowStamps) {
+          assert(/(Z|[+-]\d{2}:?\d{2})$/.test(stamp ?? ""),
+            `a timeline row's machine-readable datetime "${stamp}" carries no zone designator — ` +
+            "a zoneless instant in a <time> element is read as local by every consumer.");
+        }
 
         // On a UTC box local == UTC and this proves nothing, so only assert where there IS a split.
         if (clock.offsetMinutes !== 0) {

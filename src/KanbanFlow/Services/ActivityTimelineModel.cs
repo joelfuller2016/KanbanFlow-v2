@@ -77,6 +77,19 @@ public sealed record TimelineEntry
 public sealed record TimelineCounts(int All, int Comments, int Status, int FieldChanges);
 
 /// <summary>
+/// The merged timeline plus how much of it was DISCARDED by <see cref="ActivityTimelineModel.MaxEntries"/>.
+/// Without this the component cannot tell "this task has no more history" from "we stopped
+/// looking", and a silent slice of a longer trail is exactly the dishonesty #328 exists to end
+/// (the underlying lifetime cap is tracked by #332).
+/// </summary>
+/// <param name="Entries">The rows to render — newest first, at most <see cref="ActivityTimelineModel.MaxEntries"/>.</param>
+/// <param name="TotalAvailable">How many rows the merge produced before the cap was applied.</param>
+public sealed record TimelineResult(IReadOnlyList<TimelineEntry> Entries, int TotalAvailable)
+{
+    public bool IsTruncated => TotalAvailable > Entries.Count;
+}
+
+/// <summary>
 /// Pure merge + diff logic for the task history timeline (#328). Deliberately free of any
 /// Blazor / EF / IO dependency: that is what makes the differ mutation-provable in xUnit
 /// without a browser, and what lets ONE implementation back BOTH task surfaces
@@ -127,6 +140,9 @@ public static class ActivityTimelineModel
         ("priority", "Priority"),
         ("assignee", "Assignee"),
         ("claimedBy", "Claimed by"),
+        // TaskActivitySnapshot emits claimedAt, and TimestampKeys below already knows how to
+        // render it — it was simply never looked up, so a claim showed WHO but never WHEN.
+        ("claimedAt", "Claimed at"),
         ("featureId", "Feature"),
         ("description", "Description"),
         ("completedAt", "Completed"),
@@ -146,47 +162,83 @@ public static class ActivityTimelineModel
     /// </remarks>
     public static IReadOnlyList<TimelineEntry> Build(
         IEnumerable<TaskComment>? comments,
+        IEnumerable<ActivityEvent>? events) => BuildResult(comments, events).Entries;
+
+    /// <summary>
+    /// <see cref="Build"/> plus the truncation state the UI needs to be honest about the cap.
+    /// </summary>
+    public static TimelineResult BuildResult(
+        IEnumerable<TaskComment>? comments,
         IEnumerable<ActivityEvent>? events)
     {
         var commentList = comments?.Where(c => c is not null).ToList() ?? [];
         var eventList = events?.Where(e => e is not null).ToList() ?? [];
 
-        var entries = new List<TimelineEntry>(commentList.Count + eventList.Count);
+        // Resolve every event ONCE, up front. Pairing below needs to know what an event actually
+        // changed — not merely its type — and the diff is the expensive part of this whole merge.
+        var eventEntries = new List<(ActivityEvent Source, TimelineEntry Entry)>(eventList.Count);
+        foreach (var activity in eventList)
+        {
+            eventEntries.Add((activity, FromActivityEvent(activity)));
+        }
+
+        // ── Pass 1: fold away the system-written change comments their events supersede ───────
+        // A system change comment is the lower-fidelity ECHO of an activity event (same action,
+        // same instant, no before/after values). Two rules make the fold safe:
+        //
+        //   EVIDENCE — drop it only when a matching event is actually present, so a task whose
+        //   history predates the audit boundary (#88) keeps its comments.
+        //
+        //   ONE-TO-ONE — and only when that event has not already accounted for a DIFFERENT
+        //   comment. An existence check was the bug: one event inside the window suppressed
+        //   every nearby row, so three status changes made in the same second (an agent doing
+        //   exactly what this app is built for) rendered as one, losing real history.
+        var consumedEvents = new HashSet<int>();
+        var survivingComments = new List<TaskComment>(commentList.Count);
 
         foreach (var comment in commentList)
         {
-            // A system-written change comment is the lower-fidelity ECHO of an activity event
-            // (same action, same instant, no before/after values). Drop it only when its event
-            // is actually present — a task whose history predates the audit trail keeps its
-            // comments, which is the whole point of checking instead of assuming.
             if (IsSystemChangeComment(comment.Type) &&
-                HasMatchingEvent(eventList, comment.Type, comment.CreatedAt))
+                TryConsumeMatchingEvent(eventEntries, consumedEvents, comment))
             {
                 continue;
             }
 
+            survivingComments.Add(comment);
+        }
+
+        var entries = new List<TimelineEntry>(survivingComments.Count + eventEntries.Count);
+
+        foreach (var comment in survivingComments)
+        {
             entries.Add(FromComment(comment));
         }
 
-        foreach (var activity in eventList)
+        // ── Pass 2: fold away the TaskCommentAdded events their comment rows supersede ────────
+        // Same two rules, mirrored: pair against a comment that SURVIVED pass 1 and that no
+        // other event has already claimed. Five comments posted in the same second must leave
+        // five rows, not one.
+        var consumedComments = new HashSet<int>();
+
+        foreach (var (source, entry) in eventEntries)
         {
-            // TaskCommentAdded is 1:1 with a comment row we just rendered in full. Suppress it
-            // when that row exists; keep it (as its Message) when it somehow does not, so the
-            // audit trail is never silently shortened.
-            if (string.Equals(activity.EventType, "TaskCommentAdded", StringComparison.Ordinal) &&
-                HasCommentNear(commentList, activity.CreatedAt))
+            if (string.Equals(source.EventType, "TaskCommentAdded", StringComparison.Ordinal) &&
+                TryConsumeMatchingComment(survivingComments, consumedComments, source.CreatedAt))
             {
                 continue;
             }
 
-            entries.Add(FromActivityEvent(activity));
+            entries.Add(entry);
         }
 
-        return entries
+        var ordered = entries
             .OrderByDescending(e => e.CreatedAtUtc)
             .ThenByDescending(e => e.Key, StringComparer.Ordinal)
-            .Take(MaxEntries)
             .ToList();
+
+        return new TimelineResult(
+            ordered.Count <= MaxEntries ? ordered : ordered.Take(MaxEntries).ToList(),
+            ordered.Count);
     }
 
     /// <summary>Counts for the filter chips, resolved once at merge time.</summary>
@@ -284,7 +336,7 @@ public static class ActivityTimelineModel
     /// </summary>
     public static string Relative(DateTime utc, DateTime nowUtc)
     {
-        var delta = nowUtc - utc;
+        var delta = AsUtc(nowUtc) - AsUtc(utc);
 
         // A clock skew or a future-stamped row must not render "-3m ago".
         if (delta < TimeSpan.Zero)
@@ -304,7 +356,7 @@ public static class ActivityTimelineModel
     /// server IS the client machine, which is what the already-correct comment rows relied on.)
     /// </summary>
     public static string Absolute(DateTime utc) =>
-        utc.ToLocalTime().ToString("MMM d, yyyy h:mm tt");
+        AsUtc(utc).ToLocalTime().ToString("MMM d, yyyy h:mm tt", CultureInfo.InvariantCulture);
 
     /// <summary>
     /// THE tooltip. One string for every timestamp in both task surfaces: the absolute local
@@ -312,7 +364,33 @@ public static class ActivityTimelineModel
     /// #306 asks for. Before this, three of the panel's five timestamps had no tooltip at all
     /// and EditItemModal's had neither a tooltip nor local time.
     /// </summary>
-    public static string Tooltip(DateTime utc) => $"{Absolute(utc)} (UTC: {utc:O})";
+    public static string Tooltip(DateTime utc) => $"{Absolute(utc)} (UTC: {Iso(utc)})";
+
+    /// <summary>
+    /// THE machine-readable instant — the <c>&lt;time datetime&gt;</c> attribute, and the value
+    /// inside <see cref="Tooltip"/>'s "UTC:" label.
+    /// </summary>
+    /// <remarks>
+    /// Goes through <see cref="AsUtc"/> first, and that is the whole point. EF/SQLite hands these
+    /// back as <see cref="DateTimeKind.Unspecified"/>, and "O" on an Unspecified value emits NO
+    /// trailing Z — a zoneless string wearing a UTC label, which every consumer (and every
+    /// <c>new Date(...)</c>) reads as local time. The e2e harness already carries a `utcIso`
+    /// helper for exactly this reason on the other side of the wire.
+    /// </remarks>
+    public static string Iso(DateTime utc) =>
+        AsUtc(utc).ToString("O", CultureInfo.InvariantCulture);
+
+    /// <summary>
+    /// Normalise any DateTime to a Kind=Utc instant. Unspecified is TREATED as UTC — which is
+    /// what this codebase stores, what <see cref="DateTime.ToLocalTime"/> already assumed, and
+    /// what makes one convention possible at all.
+    /// </summary>
+    public static DateTime AsUtc(DateTime value) => value.Kind switch
+    {
+        DateTimeKind.Utc => value,
+        DateTimeKind.Local => value.ToUniversalTime(),
+        _ => DateTime.SpecifyKind(value, DateTimeKind.Utc)
+    };
 
     // ── Internals ────────────────────────────────────────────────────────────────────────
 
@@ -368,30 +446,85 @@ public static class ActivityTimelineModel
         Models.CommentType.PriorityChange or
         Models.CommentType.AssigneeChange;
 
-    private static bool HasMatchingEvent(List<ActivityEvent> events, CommentType type, DateTime commentAt)
+    /// <summary>
+    /// Claim the ONE event that accounts for <paramref name="comment"/>, or claim nothing.
+    /// The nearest unclaimed candidate wins, so a burst of same-second changes pairs off
+    /// row-for-row instead of collapsing into whichever event happened to be enumerated first.
+    /// </summary>
+    private static bool TryConsumeMatchingEvent(
+        List<(ActivityEvent Source, TimelineEntry Entry)> events,
+        HashSet<int> consumed,
+        TaskComment comment)
     {
-        var eventType = EventTypeFor(type);
+        var eventType = EventTypeFor(comment.Type);
         if (eventType is null) return false;
 
-        foreach (var e in events)
+        var expectedField = ExpectedFieldFor(comment.Type);
+        var bestIndex = -1;
+        var bestDelta = TimeSpan.MaxValue;
+
+        for (var i = 0; i < events.Count; i++)
         {
-            if (!string.Equals(e.EventType, eventType, StringComparison.Ordinal)) continue;
-            if (Within(e.CreatedAt, commentAt)) return true;
+            if (consumed.Contains(i)) continue;
+
+            var (source, entry) = events[i];
+            if (!string.Equals(source.EventType, eventType, StringComparison.Ordinal)) continue;
+
+            var delta = (source.CreatedAt - comment.CreatedAt).Duration();
+            if (delta > DuplicateWindow) continue;
+
+            // TaskService writes one "TaskUpdated" for a name, description, priority or assignee
+            // edit alike, so type + window alone lets a NAME edit swallow an unrelated
+            // "Updated: Assignee" comment written in the same second. When the event says what it
+            // changed, make it agree; when it cannot (one-sided or unparseable snapshot), type and
+            // window are all there is and the pairing falls back to them.
+            if (expectedField is not null && entry.Changes.Count > 0 &&
+                !entry.Changes.Any(c => string.Equals(c.Field, expectedField, StringComparison.Ordinal)))
+            {
+                continue;
+            }
+
+            if (delta < bestDelta)
+            {
+                bestDelta = delta;
+                bestIndex = i;
+            }
         }
-        return false;
+
+        if (bestIndex < 0) return false;
+
+        consumed.Add(bestIndex);
+        return true;
     }
 
-    private static bool HasCommentNear(List<TaskComment> comments, DateTime eventAt)
+    /// <summary>Mirror of <see cref="TryConsumeMatchingEvent"/> for the TaskCommentAdded fold.</summary>
+    private static bool TryConsumeMatchingComment(
+        List<TaskComment> comments,
+        HashSet<int> consumed,
+        DateTime eventAt)
     {
-        foreach (var c in comments)
-        {
-            if (Within(c.CreatedAt, eventAt)) return true;
-        }
-        return false;
-    }
+        var bestIndex = -1;
+        var bestDelta = TimeSpan.MaxValue;
 
-    private static bool Within(DateTime a, DateTime b) =>
-        (a - b).Duration() <= DuplicateWindow;
+        for (var i = 0; i < comments.Count; i++)
+        {
+            if (consumed.Contains(i)) continue;
+
+            var delta = (comments[i].CreatedAt - eventAt).Duration();
+            if (delta > DuplicateWindow) continue;
+
+            if (delta < bestDelta)
+            {
+                bestDelta = delta;
+                bestIndex = i;
+            }
+        }
+
+        if (bestIndex < 0) return false;
+
+        consumed.Add(bestIndex);
+        return true;
+    }
 
     private static string? EventTypeFor(CommentType type) => type switch
     {
@@ -400,6 +533,20 @@ public static class ActivityTimelineModel
         Models.CommentType.FeatureChange => "TaskFeatureChanged",
         Models.CommentType.PriorityChange => "TaskUpdated",
         Models.CommentType.AssigneeChange => "TaskUpdated",
+        _ => null
+    };
+
+    /// <summary>
+    /// The change line an event must carry to count as this comment's echo. Null where the event
+    /// type is already unambiguous (TaskCreated is one-sided and has no derivable diff at all).
+    /// Labels must match <see cref="TrackedFields"/>.
+    /// </summary>
+    private static string? ExpectedFieldFor(CommentType type) => type switch
+    {
+        Models.CommentType.StatusChange => "Status",
+        Models.CommentType.FeatureChange => "Feature",
+        Models.CommentType.PriorityChange => "Priority",
+        Models.CommentType.AssigneeChange => "Assignee",
         _ => null
     };
 
@@ -509,11 +656,13 @@ public static class ActivityTimelineModel
     {
         if (string.IsNullOrWhiteSpace(raw)) return string.Empty;
 
+        // Absolute() normalises the Kind itself (AsUtc), so a snapshot timestamp serialised
+        // without a zone designator lands on the same clock as every other rendered instant.
         if (TimestampKeys.Contains(key) &&
             DateTime.TryParse(raw, CultureInfo.InvariantCulture,
                 DateTimeStyles.RoundtripKind, out var parsed))
         {
-            return Absolute(parsed.Kind == DateTimeKind.Local ? parsed.ToUniversalTime() : parsed);
+            return Absolute(parsed);
         }
 
         return raw;

@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Reflection;
 using System.Text.Json;
 using KanbanFlow.Models;
@@ -329,6 +330,120 @@ public class ActivityTimelineModelTests
         Assert.Equal(2, timeline.Count);
     }
 
+    // ── Suppression is ONE-TO-ONE, not "any counterpart nearby" ──────────────────────────────
+    // The window check has to CONSUME its match. An existence check silently deletes real
+    // history the moment two changes land inside the same window — which for an agent driving
+    // this board is the normal case, not the exotic one.
+
+    [Fact]
+    public void Three_status_changes_in_one_second_render_as_three_rows_not_one()
+    {
+        // Each change writes a comment AND an event. One event must account for ONE comment.
+        var timeline = ActivityTimelineModel.Build(
+            [
+                Comment(1, "Status changed from Todo to InProgress", T0, CommentType.StatusChange, "claude"),
+                Comment(2, "Status changed from InProgress to Review", T0.AddMilliseconds(300), CommentType.StatusChange, "claude"),
+                Comment(3, "Status changed from Review to Done", T0.AddMilliseconds(600), CommentType.StatusChange, "claude")
+            ],
+            [
+                Event(5, "TaskStatusChanged", T0.AddMilliseconds(2), Snapshot(status: "Todo"), Snapshot(status: "InProgress"), "1"),
+                Event(6, "TaskStatusChanged", T0.AddMilliseconds(302), Snapshot(status: "InProgress"), Snapshot(status: "Review"), "2"),
+                Event(7, "TaskStatusChanged", T0.AddMilliseconds(602), Snapshot(status: "Review"), Snapshot(status: "Done"), "3")
+            ]);
+
+        Assert.Equal(["a-7", "a-6", "a-5"], timeline.Select(e => e.Key));
+    }
+
+    [Fact]
+    public void One_event_cannot_swallow_several_comments_written_in_the_same_window()
+    {
+        // Three status comments, ONE event. Exactly one comment is the event's echo; the other
+        // two are history with no event behind them and must survive.
+        var timeline = ActivityTimelineModel.Build(
+            [
+                Comment(1, "Status changed from Todo to InProgress", T0, CommentType.StatusChange, "System"),
+                Comment(2, "Status changed from InProgress to Review", T0.AddMilliseconds(300), CommentType.StatusChange, "System"),
+                Comment(3, "Status changed from Review to Done", T0.AddMilliseconds(600), CommentType.StatusChange, "System")
+            ],
+            [Event(5, "TaskStatusChanged", T0.AddMilliseconds(2), Snapshot(status: "Todo"), Snapshot(status: "InProgress"), "1")]);
+
+        Assert.Equal(3, timeline.Count);
+        Assert.Contains(timeline, e => e.Key == "a-5");
+        // The NEAREST comment is the one folded away, not an arbitrary one.
+        Assert.DoesNotContain(timeline, e => e.Key == "c-1");
+        Assert.Contains(timeline, e => e.Key == "c-2");
+        Assert.Contains(timeline, e => e.Key == "c-3");
+    }
+
+    [Fact]
+    public void One_comment_cannot_swallow_several_TaskCommentAdded_events()
+    {
+        // The mirror case: five comments posted in a burst leave five rows. Before consumption,
+        // a single comment row absorbed every TaskCommentAdded event inside the window.
+        var timeline = ActivityTimelineModel.Build(
+            [Comment(1, "Please review", T0)],
+            [
+                Event(5, "TaskCommentAdded", T0.AddMilliseconds(3), null, null, "Comment added"),
+                Event(6, "TaskCommentAdded", T0.AddMilliseconds(400), null, null, "Comment added"),
+                Event(7, "TaskCommentAdded", T0.AddMilliseconds(800), null, null, "Comment added")
+            ]);
+
+        // c-1 pairs with the nearest event (a-5); the other two are unaccounted-for trail rows.
+        Assert.Equal(3, timeline.Count);
+        Assert.Contains(timeline, e => e.Key == "c-1");
+        Assert.DoesNotContain(timeline, e => e.Key == "a-5");
+        Assert.Contains(timeline, e => e.Key == "a-6");
+        Assert.Contains(timeline, e => e.Key == "a-7");
+    }
+
+    [Fact]
+    public void A_TaskUpdated_event_for_a_different_field_does_not_swallow_an_assignee_comment()
+    {
+        // TaskService writes ONE "TaskUpdated" for a name, description, priority or assignee edit
+        // alike, so EventTypeFor maps both PriorityChange and AssigneeChange onto it. Matching on
+        // type + window alone lets a NAME edit account for an unrelated "Updated: Assignee"
+        // comment written in the same second. The event has to have actually changed that field.
+        var timeline = ActivityTimelineModel.Build(
+            [Comment(1, "Updated: Assignee", T0, CommentType.AssigneeChange, "System")],
+            [Event(5, "TaskUpdated", T0.AddMilliseconds(2),
+                Snapshot(name: "old name"), Snapshot(name: "new name"), "Task updated: Name")]);
+
+        Assert.Equal(2, timeline.Count);
+        Assert.Contains(timeline, e => e.Key == "c-1");
+        Assert.Contains(timeline, e => e.Key == "a-5");
+
+        // …and the matching one still folds.
+        var matched = ActivityTimelineModel.Build(
+            [Comment(1, "Updated: Assignee", T0, CommentType.AssigneeChange, "System")],
+            [Event(5, "TaskUpdated", T0.AddMilliseconds(2),
+                Snapshot(assignee: null), Snapshot(assignee: "claude"), "Task updated: Assignee")]);
+
+        Assert.Equal("a-5", Assert.Single(matched).Key);
+    }
+
+    // ── The cap is reported, not hidden (#332) ───────────────────────────────────────────────
+
+    [Fact]
+    public void BuildResult_reports_how_much_of_the_trail_the_cap_discarded()
+    {
+        var many = Enumerable.Range(1, ActivityTimelineModel.MaxEntries + 25)
+            .Select(i => Comment(i, $"note {i}", T0.AddMinutes(i)))
+            .ToList();
+
+        var result = ActivityTimelineModel.BuildResult(many, []);
+
+        Assert.Equal(ActivityTimelineModel.MaxEntries, result.Entries.Count);
+        Assert.Equal(ActivityTimelineModel.MaxEntries + 25, result.TotalAvailable);
+        Assert.True(result.IsTruncated,
+            "a merge that discarded 25 rows must SAY so — a silent slice of a longer trail under " +
+            "a heading that says History is the dishonesty #328 exists to end.");
+
+        // An uncapped trail must not claim truncation, or the notice becomes noise.
+        var small = ActivityTimelineModel.BuildResult([Comment(1, "only one", T0)], []);
+        Assert.False(small.IsTruncated);
+        Assert.Equal(1, small.TotalAvailable);
+    }
+
     // ── Filter chips (#328 AC4) ──────────────────────────────────────────────────────────────
 
     [Fact]
@@ -380,17 +495,58 @@ public class ActivityTimelineModelTests
     [Fact]
     public void Absolute_renders_the_stored_UTC_instant_in_local_time()
     {
-        var offset = TimeZoneInfo.Local.GetUtcOffset(T0);
+        // Computed with TimeZoneInfo rather than by re-running the SUT's own expression: an
+        // assertion that mirrors the implementation passes for a WRONG zone too, and on a UTC
+        // agent the old offset-guarded half asserted nothing at all.
+        var expectedLocal = TimeZoneInfo.ConvertTimeFromUtc(T0, TimeZoneInfo.Local);
 
-        Assert.Equal(T0.ToLocalTime().ToString("MMM d, yyyy h:mm tt"), ActivityTimelineModel.Absolute(T0));
+        Assert.Equal(
+            expectedLocal.ToString("MMM d, yyyy h:mm tt", CultureInfo.InvariantCulture),
+            ActivityTimelineModel.Absolute(T0));
 
-        // On a UTC box the two strings are identical and this proves nothing, so only assert the
-        // difference where there IS one. (In US Eastern — the repo owner's zone — this is the
-        // exact 4-hour split #306 documents: the comment said 9:19 AM, "Updated:" said 1:19 PM.)
-        if (offset != TimeSpan.Zero)
+        // Pin the FORMAT too, so a silent format-string change goes red on any agent. Absolute()
+        // formats with InvariantCulture, so this holds under a non-English machine locale as well.
+        Assert.Matches(@"^[A-Za-z]{3} \d{1,2}, \d{4} \d{1,2}:\d{2} (AM|PM)$", ActivityTimelineModel.Absolute(T0));
+
+        // And where there IS an offset, the raw-UTC rendering must differ. (In US Eastern — the
+        // repo owner's zone — this is the exact 4-hour split #306 documents: the comment said
+        // 9:19 AM, "Updated:" said 1:19 PM.)
+        if (TimeZoneInfo.Local.GetUtcOffset(T0) != TimeSpan.Zero)
         {
-            Assert.NotEqual(T0.ToString("MMM d, yyyy h:mm tt"), ActivityTimelineModel.Absolute(T0));
+            Assert.NotEqual(
+                T0.ToString("MMM d, yyyy h:mm tt", CultureInfo.InvariantCulture),
+                ActivityTimelineModel.Absolute(T0));
         }
+    }
+
+    [Theory]
+    [InlineData(DateTimeKind.Utc)]
+    [InlineData(DateTimeKind.Unspecified)]   // what EF/SQLite actually hands back
+    [InlineData(DateTimeKind.Local)]
+    public void The_machine_readable_instant_always_carries_a_zone_designator(DateTimeKind kind)
+    {
+        // "O" on a Kind=Unspecified value emits NO trailing Z — a zoneless string wearing a UTC
+        // label, which every consumer (and every `new Date(...)`) reads as LOCAL time. That is
+        // the <time datetime> attribute and the value inside the tooltip's "UTC:" label, so a
+        // missing Z is a silently wrong instant on both task surfaces.
+        var value = kind == DateTimeKind.Local
+            ? T0.ToLocalTime()
+            : DateTime.SpecifyKind(T0, kind);
+
+        var iso = ActivityTimelineModel.Iso(value);
+
+        Assert.EndsWith("Z", iso, StringComparison.Ordinal);
+        Assert.Equal(T0, DateTime.Parse(iso, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind).ToUniversalTime());
+        Assert.Contains($"UTC: {iso}", ActivityTimelineModel.Tooltip(value), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void A_local_kind_instant_is_normalised_rather_than_double_converted()
+    {
+        // A Kind=Local value must mean the same instant as its UTC twin, not be shifted twice.
+        Assert.Equal(ActivityTimelineModel.Absolute(T0), ActivityTimelineModel.Absolute(T0.ToLocalTime()));
+        Assert.Equal(ActivityTimelineModel.Iso(T0), ActivityTimelineModel.Iso(T0.ToLocalTime()));
+        Assert.Equal("just now", ActivityTimelineModel.Relative(T0.ToLocalTime(), T0));
     }
 
     [Fact]
@@ -415,6 +571,14 @@ public class ActivityTimelineModelTests
     [Theory]
     [InlineData(0, "just now")]
     [InlineData(44, "just now")]
+    // Bucket BOUNDARIES — where an off-by-one lives. Relative floors with (int), so 59m59s must
+    // read "59m ago", not "1h ago"; the mid-bucket samples below can never catch that.
+    [InlineData(45, "1m ago")]                  // first tick past "just now"
+    [InlineData(60 * 59 + 59, "59m ago")]       // last second before the hour bucket
+    [InlineData(60 * 60, "1h ago")]             // exact hour boundary
+    [InlineData(60 * 60 * 24 - 1, "23h ago")]   // last second before the day bucket
+    [InlineData(60 * 60 * 24, "1d ago")]        // exact day boundary
+    [InlineData(60 * 60 * 24 * 29, "29d ago")]  // last day before the absolute fallback
     [InlineData(60 * 5, "5m ago")]
     [InlineData(60 * 60 * 3, "3h ago")]
     [InlineData(60 * 60 * 24 * 2, "2d ago")]
@@ -436,6 +600,9 @@ public class ActivityTimelineModelTests
     {
         var now = T0.AddDays(45);
         Assert.Equal(ActivityTimelineModel.Absolute(T0), ActivityTimelineModel.Relative(T0, now));
+
+        // The boundary itself: exactly 30 days is already past the relative buckets.
+        Assert.Equal(ActivityTimelineModel.Absolute(T0), ActivityTimelineModel.Relative(T0, T0.AddDays(30)));
     }
 
     // ── The whitelist is pinned to the REAL producer ─────────────────────────────────────────
@@ -478,10 +645,75 @@ public class ActivityTimelineModelTests
 
         // And the hand-written fixture in this file agrees with the real one, so every other
         // test here is exercising the shape the app genuinely stores.
+        using var realDoc = JsonDocument.Parse(Real(WorkStatus.Todo, TaskPriority.Low, null));
+        using var fixtureDoc = JsonDocument.Parse(Snapshot());
+
         Assert.Equal(
-            JsonDocument.Parse(Real(WorkStatus.Todo, TaskPriority.Low, null)).RootElement
-                .EnumerateObject().Select(p => p.Name).Order().ToArray(),
-            JsonDocument.Parse(Snapshot()).RootElement
-                .EnumerateObject().Select(p => p.Name).Order().ToArray());
+            realDoc.RootElement.EnumerateObject().Select(p => p.Name).Order().ToArray(),
+            fixtureDoc.RootElement.EnumerateObject().Select(p => p.Name).Order().ToArray());
+    }
+
+    // ── Adversarial: no event shape may print raw JSON or throw ──────────────────────────────
+
+    [Theory]
+    // A payload whose whitelisted field holds a nested object — the classic stringify leak.
+    [InlineData("""{"status":{"raw":"{\"a\":1}"}}""", """{"status":{"raw":"{\"b\":2}"}}""")]
+    // Arrays in a whitelisted slot.
+    [InlineData("""{"assignee":["a","b"]}""", """{"assignee":["c"]}""")]
+    // Root is an object but every value is a deeply nested structure.
+    [InlineData("""{"name":{"x":{"y":{"z":[1,2,3]}}}}""", """{"name":{"x":{"y":{"z":[4]}}}}""")]
+    // Duplicate keys (legal JSON), one of them structured.
+    [InlineData("""{"status":"Todo","status":{"nope":1}}""", """{"status":"Done","status":{"nope":2}}""")]
+    // Trailing garbage, a BOM, a bare number, and `null` — malformed or wrong-kind roots.
+    [InlineData("""{"status":"Todo"} trailing""", """{"status":"Done"}""")]
+    [InlineData("﻿{\"status\":\"Todo\"}", "﻿{\"status\":\"Done\"}")]
+    [InlineData("42", "43")]
+    [InlineData("null", "null")]
+    // Only one side parses — must NOT be read as "the value went away".
+    [InlineData("""{"status":"Todo"}""", "{ broken")]
+    public void No_event_payload_can_make_the_differ_throw_or_emit_json(string before, string after)
+    {
+        // Whatever comes back, it is a list of whitelisted LABELS and scalar display values —
+        // there is no code path from an unlabelled payload to the screen.
+        var changes = ActivityTimelineModel.DeriveChanges(before, after);
+
+        foreach (var change in changes)
+        {
+            Assert.Contains(change.Field, new[]
+            {
+                "Name", "Status", "Priority", "Assignee", "Claimed by", "Claimed at",
+                "Feature", "Description", "Completed", "Order"
+            });
+            foreach (var value in new[] { change.Before, change.After })
+            {
+                Assert.DoesNotContain("{", value, StringComparison.Ordinal);
+                Assert.DoesNotContain("[", value, StringComparison.Ordinal);
+                Assert.DoesNotContain("\":", value, StringComparison.Ordinal);
+            }
+        }
+
+        // …and the same payload routed through the full merge renders no JSON anywhere either.
+        var entry = Assert.Single(ActivityTimelineModel.Build(null,
+            [Event(9, "TaskUpdated", T0, before, after, "Task updated")]));
+
+        foreach (var text in new[] { entry.Summary, entry.Label, entry.Actor, entry.Body })
+        {
+            if (text is null) continue;
+            Assert.DoesNotContain("{", text, StringComparison.Ordinal);
+        }
+    }
+
+    [Fact]
+    public void A_deeply_nested_payload_is_refused_rather_than_overflowing_the_parser()
+    {
+        // JsonDocument's default depth limit is 64; past it Parse throws, and an uncaught
+        // JsonException here would take down the whole render, not just one row.
+        var deep = string.Concat(Enumerable.Repeat("""{"a":""", 200)) + "1" + new string('}', 200);
+
+        Assert.Empty(ActivityTimelineModel.DeriveChanges(deep, deep));
+
+        var entry = Assert.Single(ActivityTimelineModel.Build(null,
+            [Event(9, "TaskUpdated", T0, deep, deep, "Task updated")]));
+        Assert.Equal("Task updated", entry.Summary);
     }
 }

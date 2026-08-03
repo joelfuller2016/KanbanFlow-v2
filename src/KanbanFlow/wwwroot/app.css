@@ -488,6 +488,12 @@ h1:focus {
 }
 
 .activity-timeline-dot {
+    /* The ring is whatever surface the timeline sits ON, so the dot punches a clean hole in the
+       rail behind it. A variable for the same reason --kf-comment-cover is one: this component is
+       mounted twice, and the outline-sidebar modal puts it on --bs-tertiary-bg, where a
+       body-coloured ring is a visible halo — worst in dark mode, where the two are far apart. */
+    --kf-timeline-ring: var(--bs-body-bg);
+
     position: absolute;
     left: -1.0rem;
     top: 0.4rem;
@@ -495,8 +501,7 @@ h1:focus {
     height: 0.55rem;
     border-radius: 50%;
     background-color: var(--bs-secondary-bg);
-    /* The ring is the page background, so the dot punches a clean hole in the rail behind it. */
-    box-shadow: 0 0 0 2px var(--bs-body-bg);
+    box-shadow: 0 0 0 2px var(--kf-timeline-ring);
     border: 1px solid var(--bs-secondary-color);
 }
 
@@ -575,6 +580,12 @@ h1:focus {
 
 .edit-item-activity-surface .task-comment-body {
     --kf-comment-cover: var(--bs-tertiary-bg);
+}
+
+/* Same reason, the other borrowed surface colour: the rail dots' ring must be this panel's
+   background, not the page's, or every dot wears a halo the card-click surface does not have. */
+.edit-item-activity-surface .activity-timeline-dot {
+    --kf-timeline-ring: var(--bs-tertiary-bg);
 }
 
 /* ══════════════════════════════════════════════════════════════════════════════════════════════

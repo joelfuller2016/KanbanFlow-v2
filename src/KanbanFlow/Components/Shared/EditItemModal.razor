@@ -185,11 +185,17 @@
                        raw UTC, no .ToLocalTime(), no tooltip — which #306's evidence does not
                        cover. Routing both surfaces through one component is what retires it. *@
                     <div class="mb-3">
-                        <div id="edit-item-activity-label" class="form-label small text-muted mb-1">Activity</div>
+                        @* "History", not "Activity": the block now holds the same merged trail the
+                           card-click panel labels History, and it is the ONE accessible name for
+                           the region (passed to the component as LabelledBy) rather than a second
+                           name competing with the component's own. *@
+                        <div id="edit-item-activity-label" class="form-label small text-muted mb-1">History</div>
                         <div class="border rounded p-2 edit-item-activity-surface">
                             <ActivityTimeline TestIdPrefix="edit-item-activity"
                                               TaskId="@EditTaskId"
-                                              Comments="taskComments" />
+                                              Comments="taskComments"
+                                              Watermark="@activityWatermark"
+                                              LabelledBy="edit-item-activity-label" />
                         </div>
 
                         @* Add comment *@
@@ -315,10 +321,26 @@
     private List<TaskComment> taskComments = [];
     private string? newCommentText;
 
+    // ProjectView keeps this modal MOUNTED, so reopening the same task leaves EditTaskId
+    // unchanged — and <ActivityTimeline> reloads the trail only when TaskId or Watermark moves.
+    // Without a watermark, a status change made between two opens of the same task would be
+    // absent from the second open's timeline: the events loaded on the first open, and nothing
+    // ever told the component they were stale. Stamped on the open transition, not on every
+    // parameter set, so a parent re-render does not re-query the trail.
+    private bool wasOpen;
+    private int? activityTaskId;
+    private DateTime? activityWatermark;
+
     protected override void OnParametersSet()
     {
         if (IsOpen)
         {
+            if (!wasOpen || EditTaskId != activityTaskId)
+            {
+                activityTaskId = EditTaskId;
+                activityWatermark = DateTime.UtcNow;
+            }
+
             editName = InitialName;
             editDescription = InitialDescription;
             editGoals = InitialGoals;
@@ -339,6 +361,8 @@
                 _ = LoadTaskDetails();
             }
         }
+
+        wasOpen = IsOpen;
     }
 
     private bool CanUseAsParentFeature(Feature feature)

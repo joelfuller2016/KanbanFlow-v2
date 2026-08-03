@@ -1,4 +1,6 @@
+@using Microsoft.Extensions.Logging
 @inject IDbContextFactory<AppDbContext> DbFactory
+@inject ILogger<ActivityTimeline> Logger
 
 @*
     ONE history component, used by BOTH task surfaces (#328):
@@ -19,7 +21,12 @@
       • Pass `Watermark` (e.g. the task's UpdatedAt) to force an event reload after a mutation.
 *@
 
-<section class="activity-timeline-section" data-testid="@($"{TestIdPrefix}")" aria-label="Task history">
+@* One accessible name per region. When the caller already renders a visible heading for this
+   block it passes the heading's id, so a screen reader announces ONE name ("History") instead
+   of the caller's name plus this component's own — two names for one visual block. *@
+<section class="activity-timeline-section" data-testid="@($"{TestIdPrefix}")"
+         aria-label="@(LabelledBy is null ? "Task history" : null)"
+         aria-labelledby="@LabelledBy">
 
     <div class="d-flex flex-wrap align-items-center gap-2 mb-2">
         <div class="btn-group btn-group-sm" role="group" aria-label="Filter task history">
@@ -84,7 +91,7 @@
                                surfaces goes through ActivityTimelineModel — there is no second
                                formatting call site left to drift. *@
                             <time class="small text-muted ms-auto"
-                                  datetime="@entry.CreatedAtUtc.ToString("O")"
+                                  datetime="@ActivityTimelineModel.Iso(entry.CreatedAtUtc)"
                                   title="@ActivityTimelineModel.Tooltip(entry.CreatedAtUtc)">
                                 @ActivityTimelineModel.Relative(entry.CreatedAtUtc, nowUtc)
                             </time>
@@ -129,6 +136,17 @@
         </ol>
         </div>
     }
+
+    @* The cap is real, so say so. "No history yet" and "we stopped looking at 500" are different
+       facts, and a component that renders a silent slice of a longer trail under a heading that
+       says History is the same dishonesty #328 exists to end. The underlying lifetime cap on
+       GET /api/{entity}/{id}/activity is tracked by #332. *@
+    @if (!loading && !loadFailed && truncated)
+    {
+        <div class="small text-muted mt-2" data-testid="@($"{TestIdPrefix}-truncated")">
+            Showing the newest @ActivityTimelineModel.MaxEntries entries — older history is not loaded.
+        </div>
+    }
 </section>
 
 @code {
@@ -154,6 +172,12 @@
     /// </summary>
     [Parameter] public string TestIdPrefix { get; set; } = "activity-timeline";
 
+    /// <summary>
+    /// Id of the caller's own visible heading for this block. Supplied, it becomes this region's
+    /// single accessible name; omitted, the component names itself "Task history".
+    /// </summary>
+    [Parameter] public string? LabelledBy { get; set; }
+
     private static readonly (TimelineFilter Filter, string Label)[] Chips =
     [
         (TimelineFilter.All, "All"),
@@ -174,6 +198,8 @@
     private TimelineFilter activeFilter = TimelineFilter.All;
     private bool loading;
     private bool loadFailed;
+    private bool eventsTruncated;
+    private bool truncated;
     private DateTime nowUtc = DateTime.UtcNow;
 
     protected override async Task OnParametersSetAsync()
@@ -187,6 +213,8 @@
             loadedTaskId = TaskId;
             activeFilter = TimelineFilter.All;
             loadFailed = false;
+            eventsTruncated = false;
+            truncated = false;
             events = [];
             entries = [];
             visible = [];
@@ -240,22 +268,38 @@
             // truth for "this task's trail", read straight from the DbContext because this is
             // Blazor Server and an HTTP hop to our own process would buy nothing.
             using var db = await DbFactory.CreateDbContextAsync();
+            // MaxEntries + 1: the extra row is not rendered, it is the ANSWER to "is there more
+            // history past the cap?". Without it a full page and an exactly-full trail are
+            // indistinguishable and the UI has to guess.
             var loaded = await db.ActivityEvents
                 .Where(e => e.EntityType == "Task" && e.EntityId == taskId)
                 .AsNoTracking()
                 .OrderByDescending(e => e.CreatedAt)
                 .ThenByDescending(e => e.Id)
-                .Take(ActivityTimelineModel.MaxEntries)
+                .Take(ActivityTimelineModel.MaxEntries + 1)
                 .ToListAsync();
 
+            var overflowed = loaded.Count > ActivityTimelineModel.MaxEntries;
+            if (overflowed)
+                loaded.RemoveRange(ActivityTimelineModel.MaxEntries, loaded.Count - ActivityTimelineModel.MaxEntries);
+
             if (IsCurrentLoad(taskId, version))
+            {
                 events = loaded;
+                eventsTruncated = overflowed;
+            }
         }
-        catch
+        catch (Exception ex)
         {
+            // Log before clearing: a trail that silently fails to load is exactly the class of
+            // problem this feature exists to make visible, and "reopen the task" is not a
+            // diagnosis. (DB timeout, pool exhaustion, a malformed row — the stack says which.)
+            Logger.LogError(ex, "Failed to load the activity trail for task {TaskId}.", taskId);
+
             if (IsCurrentLoad(taskId, version))
             {
                 events = [];
+                eventsTruncated = false;
                 loadFailed = true;
             }
         }
@@ -273,7 +317,10 @@
     {
         mergedComments = Comments;
         nowUtc = DateTime.UtcNow;
-        entries = ActivityTimelineModel.Build(Comments, events);
+        var result = ActivityTimelineModel.BuildResult(Comments, events);
+        entries = result.Entries;
+        // Either end can be the one that clipped the trail: the DB read, or the merge's own cap.
+        truncated = eventsTruncated || result.IsTruncated;
         counts = ActivityTimelineModel.Count(entries);
         visible = ActivityTimelineModel.Filter(entries, activeFilter);
     }
