@@ -7,6 +7,14 @@ individually-green PRs can break `master` once merged (exactly what happened wit
 the #142 NU1605 downgrade). These scripts close that gap by letting an **external
 scheduler** run the same gate the bots can't. See issue #147.
 
+That gate also runs the **NuGet audit**. Advisory hits surface during `dotnet restore` as `NU1902`
+(moderate) or `NU1903` (high), and are re-emitted at build time from the restore assets — so
+`-warnaserror` promotes them to errors even though the build step passes `--no-restore`. Measured:
+reverting to the vulnerable `AngleSharp` with the suppression deleted fails the build with
+`error NU1902` in both projects (exit 1, 2 errors). Close those by **bumping the dependency**, never
+by adding an audit suppression — see
+[reviews/2026-08-02-anglesharp-cve-suppression-removal.md](reviews/2026-08-02-anglesharp-cve-suppression-removal.md) (#320).
+
 ## Scripts
 
 | Script | Purpose |
