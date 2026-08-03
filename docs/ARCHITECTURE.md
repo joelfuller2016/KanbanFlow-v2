@@ -380,7 +380,7 @@ reachable from both REST and MCP.
 | R-3.3 | Tasks blocked by incomplete dependencies are excluded. | ✅ |
 | R-3.4 | A step-context endpoint returns everything needed to act on one task. | ✅ `GET /api/tasks/{id}/context` (MCP `get_step_context`) |
 | R-3.5 | `next-tasks` de-prioritises tasks claimed by other actors. | ✅ |
-| R-3.6 | The ranking algorithm is documented so its output is predictable. | ❌ lives only in `BuildNextTaskReason` source |
+| R-3.6 | The ranking algorithm is documented so its output is predictable. | ❌ lives only in source — `TaskRanking.RankNextTasks`/`BuildReason` plus `BuildBlockedTaskReason` in `ApiEndpoints.cs` ([#366](https://github.com/joelfuller2016/KanbanFlow-v2/issues/366)) |
 
 ### C-4. Add and update documentation
 
