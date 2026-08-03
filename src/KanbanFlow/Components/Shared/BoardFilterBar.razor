@@ -6,9 +6,17 @@
    with /ideas, so the filter cannot live on the board — it has to be applied at the call site that
    knows what a TaskItem is. See TaskFilter.cs for why that is also the SAFE place.
 
-   Every text input binds with `@bind:event="oninput"` so the board narrows as you type (AC 2). The
-   host must therefore resolve its filtered list on CHANGE, never in a render-path computed property
-   — such a property re-runs on every render, i.e. once per keystroke. *@
+   Every text input is a one-way `value=` plus an explicit `@oninput` handler — deliberately NOT
+   `@bind` + `@bind:event="oninput"`. `@bind` needs a settable property to write through, and this
+   component has none: the state lives in the host, so the "set" half would have to be a
+   parameter-writing setter, which Blazor treats as component-owned state and which fights the
+   host's re-render. One-way value + explicit callback keeps the host the single writer, and because
+   the re-rendered `value` always equals what the user just typed, the diff writes nothing back to
+   the DOM and the caret never jumps.
+
+   Either way the events arrive per KEYSTROKE (AC 2: the board narrows as you type), so the host
+   must resolve its filtered list on CHANGE, never in a render-path computed property — such a
+   property re-runs on every render, i.e. once per keystroke. *@
 
 <section class="board-filter-bar border-bottom bg-white px-3 py-2"
          data-testid="board-filter-bar"
@@ -37,7 +45,10 @@
         </div>
 
         <div class="col-6 col-md-2">
-            <label class="visually-hidden" for="board-filter-claimed-by">Filter by claimed by</label>
+            @* "Filter by claimed by" is what the field is called, and it is gibberish read aloud —
+               this label IS the control's accessible name, so it has to be a sentence, not a column
+               name. The visible placeholder keeps the domain term ("Claimed by..."). *@
+            <label class="visually-hidden" for="board-filter-claimed-by">Filter by who claimed the task</label>
             <input id="board-filter-claimed-by"
                    type="text"
                    class="form-control form-control-sm"
