@@ -811,4 +811,85 @@ public class ActivityTimelineTests
 
         Assert.Equal(payload, change.After);
     }
+
+    // ══════════════════════════════════════════════════════════════════════════════════════════
+    //  Adversarial payload shapes (#374 AC6)
+    //
+    //  DiffFields is documented to "yield empty rather than throwing: a corrupt audit row must
+    //  not take the panel down." The existing theory proves that for syntactically-broken text
+    //  ("not json") and a non-object root ("[1,2,3]"). It does NOT cover the shapes below, and
+    //  they fail through DIFFERENT code paths — a BOM and a depth overflow are not "not json",
+    //  they are inputs a reader accepts right up until it does not.
+    //
+    //  Every case here asserts the same two properties: it does not throw, and nothing that
+    //  reaches a rendered field carries JSON punctuation. `Build` is exercised alongside
+    //  `DiffFields` because the component renders entries, not raw diffs, and the fallback to
+    //  `Message` is part of the contract being guarded.
+    // ══════════════════════════════════════════════════════════════════════════════════════════
+
+    /// <summary>Every payload the differ may legally be handed, and why it is a distinct path.</summary>
+    public static TheoryData<string, string, string> AdversarialPayloads() => new()
+    {
+        // A BOM survives a round-trip through a text editor or a mis-encoded write. Utf8JsonReader
+        // rejects it, but only after the string looked well-formed to every eye that read it.
+        { "﻿{\"status\":\"Todo\"}", "﻿{\"status\":\"Done\"}", "BOM-prefixed" },
+        // Valid JSON followed by junk: Parse reads a complete document and THEN finds more input.
+        { "{\"status\":\"Todo\"} trailing", "{\"status\":\"Done\"}", "trailing garbage" },
+        { "{\"status\":\"Todo\"}", "{\"status\":\"Done\"} trailing", "trailing garbage (after side)" },
+        // ~200 levels, well past JsonDocument's default depth limit of 64.
+        { DeeplyNested(200), DeeplyNested(200), "over-deep nesting" },
+        // Legal JSON. Not a parse failure at all — a semantic ambiguity the differ must survive.
+        { "{\"status\":\"Todo\",\"status\":\"Sneaky\"}", "{\"status\":\"Done\",\"status\":\"Sneaky\"}", "duplicate keys" },
+    };
+
+    private static string DeeplyNested(int depth) =>
+        string.Concat(Enumerable.Repeat("{\"a\":", depth)) + "1" + new string('}', depth);
+
+    [Theory]
+    [MemberData(nameof(AdversarialPayloads))]
+    public void DiffFields_AdversarialPayloads_NeverThrowAndNeverLeakJson(
+        string before, string after, string shape)
+    {
+        var changes = ActivityTimelineBuilder.DiffFields(before, after);
+
+        foreach (var change in changes)
+        {
+            Assert.Contains(change.Label, DisplayLabels);
+            foreach (var value in new[] { change.Before, change.After })
+            {
+                Assert.DoesNotContain("{", value, StringComparison.Ordinal);
+                Assert.DoesNotContain("[", value, StringComparison.Ordinal);
+                Assert.DoesNotContain("\":", value, StringComparison.Ordinal);
+            }
+        }
+
+        // …and the same payload routed through the full merge renders no JSON either. An entry
+        // with no derivable diff must fall back to its recorded Message, never to its payload.
+        var entry = Assert.Single(ActivityTimelineBuilder.Build(
+            null, [Event(9, "TaskUpdated", T0, before, after, message: "Task updated")]));
+
+        Assert.DoesNotContain("{", entry.Headline ?? string.Empty, StringComparison.Ordinal);
+        Assert.DoesNotContain("{", entry.Badge, StringComparison.Ordinal);
+        Assert.False(shape is "BOM-prefixed" or "trailing garbage" or "over-deep nesting"
+            && entry.Changes.Count > 0,
+            $"{shape}: a payload the parser rejects must produce NO changes, so the row falls " +
+            "back to its audit Message. Changes derived from an unparseable payload are invented.");
+    }
+
+    /// <summary>The labels <c>DisplayFields</c> can emit — mirrored here so a whitelist change is loud.</summary>
+    private static readonly string[] DisplayLabels =
+    [
+        "Status", "Priority", "Assigned", "Claimed by", "Name",
+        "Feature", "Description", "Order", "Completed", "Claimed at"
+    ];
+
+    // AC6's fifth shape — a STRUCTURED (object/array) value in a whitelisted slot — is NOT
+    // guarded here, deliberately. Writing that assertion proved it is a live defect rather than
+    // missing coverage: RawValue's fallback arm (`_ => new JsonRead(true, el.GetRawText())`,
+    // ActivityTimelineModel.cs:542) hands an object's RAW TEXT to Format, so
+    //     {"assignee":{"name":"claude","id":7}}  →  {"assignee":{"name":"joel","id":9}}
+    // renders `Assigned: {"name":"claude","id":7} → {"name":"joel","id":9}` — raw JSON on screen,
+    // against #328 AC2's "Raw JSON is never shown to the user". #374 is scoped to tests only, so
+    // the fix is filed separately rather than smuggled in here; the failing assertion and its
+    // observed output are recorded on that issue. Add the guard WITH the fix, not before it.
 }
