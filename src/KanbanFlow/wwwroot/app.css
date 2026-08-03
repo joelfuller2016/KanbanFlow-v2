@@ -685,13 +685,21 @@ h1:focus {
 
 /* DARKEN, do not lighten. This was `rgba(255, 255, 255, 0.28)`, i.e. a translucent WHITE veil
    over the chip's `var(--bs-primary)` fill — which lifts the effective background to ≈#5197fe and
-   leaves the white count text at ≈2.9:1. The text is 0.65rem (~10px), so it is normal text and
-   WCAG AA wants 4.5:1. Inverting to a solid white badge with primary-coloured text does not fix
-   it either: #0d6efd on #fff is ≈4.24:1, still short.
-   A translucent BLACK veil composites to ≈#094db1 and puts the white text at ≈7.8:1. It also
+   leaves the white count text at ≈2.9136:1. The text is 0.65rem (~10px), so it is normal text
+   and WCAG AA wants 4.5:1. That is the defect this rule fixes.
+
+   A translucent BLACK veil composites to ≈#094db1 and puts the white text at ≈7.7547:1. It also
    stays correct if the chip fill is ever re-themed, because it darkens whatever is underneath
    rather than assuming a particular hue. (--bs-primary is Bootstrap stock #0d6efd here and does
-   not change under data-bs-theme="dark".) */
+   not change under data-bs-theme="dark".)
+
+   The alternative — a solid white badge with primary-coloured text — was rejected for headroom,
+   NOT because it fails. `#0d6efd` on `#fff` is 4.5008:1, which PASSES AA by 0.0008. An earlier
+   version of this comment said ≈4.24:1 and called it "still short"; that figure was wrong (the
+   `/1.055` divisor was dropped from the green channel when linearising) and the claim is
+   withdrawn. It was also self-refuting: WCAG contrast is symmetric, so white-on-primary and
+   primary-on-white are necessarily the same number — inverting could never have changed it.
+   7.75:1 is still the better choice on a 0.018% margin, but for margin, not for failure. #370 */
 .kf-chip-active .kf-chip-count {
     background: rgba(0, 0, 0, 0.3);
     color: #fff;
