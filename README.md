@@ -714,8 +714,9 @@ dotnet test tests/KanbanFlow.Tests      # 524 xUnit tests
 ```bash
 node ./scripts/smoke-mcp.mjs 1          # MCP tool surface — needs the app running on :5123
 npm run test:mcp                        # stdio framing A/B + the MCP smoke suite
-npm run test:scripts                    # node:test unit tests for scripts/*.mjs (the priority
-                                        # model behind portfolio-sync) — no app, no network, no DB
+npm run test:scripts                    # node:test units for scripts/*.mjs — the shared
+                                        # priority model behind portfolio-sync and the
+                                        # log book (#360). No app, no network, no DB.
 npm run test:ui                         # Playwright e2e — builds, boots an isolated instance
                                         # (scratch port + throwaway DB), drives chromium, tears down
 ```
