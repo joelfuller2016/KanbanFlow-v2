@@ -176,7 +176,7 @@ cannot onboard a repo. That parity gap is [#231](https://github.com/joelfuller20
 |---|---|---|---|
 | Repo | `Project` | `<!-- github: owner/repo -->` marker in `Project.Description`; falls back to `Project.Name` == repo short name (case-insensitive) | GitHub → board |
 | Milestone | `Feature` | `Feature.Name` == milestone title, within the project; issues with no milestone go to a feature literally named `Unsorted` | GitHub → board |
-| Issue | `TaskItem` | the **`#<n> ` title prefix** — trailing space included (`/^#(\d+)\s/`) | GitHub → board |
+| Issue | `TaskItem` | the **`#<n>` title prefix followed by one space** — the space is part of the key (`/^#(\d+)\s/`) | GitHub → board |
 | Issue labels (`P0`…`P3`, `priority:high`, `critical`, …) | `TaskItem.Priority` | — reconciled every run | GitHub → board (GitHub always wins) |
 | Issue state + linked open PR | `TaskItem.Status` | — | GitHub → board, **advance-only** (see below) |
 | Issue body | `TaskItem.Description` | `<!-- kanbanflow-sync -->` block + first 1500 chars | GitHub → board |
@@ -206,7 +206,7 @@ from GitHub (`closed` → `Done`; open + linked open PR → `Review`; open + ass
 
 **The two fragile keys.** Both are data, not decoration:
 
-- Strip or edit the `#<n> ` prefix on a task title and the task is orphaned — the next sync
+- Strip or edit the `#<n>` prefix (the number, then one space) on a task title and the task is orphaned — the next sync
   creates a duplicate. Rename the *issue*, not the task.
 - Edit a mirrored comment's text and you strip its `<!-- gh:ID -->` marker — the next sync
   re-adds it as a duplicate. The marker is hidden where the body renders as Markdown
@@ -229,7 +229,7 @@ The single most useful table here. Before you edit a field, know which side wins
 
 | Field | Owner | What that means in practice |
 |---|---|---|
-| Task **title** | **GitHub** | Reconciled every run (`syncTasks()`). Rename the issue; renaming the task is undone — and stripping the `#<n> ` prefix orphans it |
+| Task **title** | **GitHub** | Reconciled every run (`syncTasks()`). Rename the issue; renaming the task is undone — and stripping the `#<n>` prefix, the number followed by one space, orphans it |
 | Task **priority** | **GitHub** | Reconciled every run (`syncTasks()`) from `P0`…`P3` / `priority:high` / bare severity labels. Setting it on the board is undone on the next sync |
 | Task **status** | **Shared, GitHub-dominant** | You may move it freely, **except** that a closed issue forces `Done` (`syncTasks()`). Board `Done` + open issue is reported as drift, not corrected |
 | Task **feature** (milestone) | **GitHub** | An issue's milestone change moves the task via `PATCH /api/tasks/{id}/feature` (`syncTasks()`) |

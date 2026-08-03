@@ -1331,6 +1331,35 @@ async function main() {
 
       // Folded: exactly CollapseAfter rows, with a toggle offering the rest.
       await toggle.waitFor({ state: "visible" });
+
+      // …then settle on the MERGED total before asserting on it.
+      //
+      // The theory this guards against (raised in review): TaskDetailPanel awaits its comment
+      // load, but ActivityTimeline's event load is fire-and-forget, so there should be an
+      // intermediate render with all 12 comments and `events` still empty — nothing
+      // de-duplicated, 12 rows, which already exceeds CollapseAfter, so the toggle would be
+      // visible in that state reading "Show all 12". `folded === 10` is true there too and
+      // cannot separate the two states.
+      //
+      // MEASURED, and it did not reproduce. Sampling the toggle label every 5ms from before the
+      // panel opens, across 12 runs — 6 warm, and 6 with a deliberate `await Task.Delay(1500)`
+      // injected into LoadEventsAsync (confirmed to have reached the built DLL, not just the
+      // source) — the first state ever present in the DOM was "Show all 13 | rows=10", at +0ms.
+      // A 1500ms window would have been trivial to catch, so whatever Blazor is batching, the
+      // un-merged render does not reach the browser here.
+      //
+      // The wait is kept regardless: it is a no-op in the state that was actually measured, and
+      // one predicate evaluation is cheaper than diagnosing a load-dependent flake later. It is
+      // NOT evidence of a bug that was observed — do not cite it as one.
+      //
+      // The timeout is swallowed on purpose: if the merge is genuinely broken the assertion
+      // below reports WHAT it saw, which beats an opaque Playwright timeout.
+      await page.waitForFunction(
+        (n) => document.querySelector('[data-testid="activity-timeline-toggle"]')
+          ?.innerText.includes(`Show all ${n}`) ?? false,
+        expectedRows, { timeout: 10000 },
+      ).catch(() => { /* fall through to the diagnostic assertion */ });
+
       const folded = await entries.count();
       assert(folded === 10, `expected the timeline folded to 10 rows, saw ${folded}`);
       assert(

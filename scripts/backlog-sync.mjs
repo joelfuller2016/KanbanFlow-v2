@@ -597,6 +597,18 @@ function assertRendered(body, model) {
   if (ledgerRows.length !== model.completed.length) {
     throw new Error(`Rendered ${ledgerRows.length} completed rows but ${model.completed.length} issues are closed-as-completed.`);
   }
+
+  // The THIRD section gets the same treatment as the other two. It was left unchecked, which
+  // made the whole assertion an incomplete enumeration: a renderer defect could drop or
+  // duplicate not-planned rows while the header still reported model.notPlanned.length, and
+  // nothing here would notice. "Not an accomplishment" is still history, and the file's claim
+  // that every issue appears exactly once covers this section too.
+  // When notPlanned is empty the renderer emits "_None._" and no table, so 0 === 0 holds.
+  const notPlanned = sectionBounds(body, "## 🚫 Closed — not planned", "## 🧮 How the ranking is computed");
+  const notPlannedRows = notPlanned.match(/^\| \[#\d+\]\(/gm) || [];
+  if (notPlannedRows.length !== model.notPlanned.length) {
+    throw new Error(`Rendered ${notPlannedRows.length} not-planned rows but ${model.notPlanned.length} issues are closed-as-not-planned.`);
+  }
   return rows.length;
 }
 
