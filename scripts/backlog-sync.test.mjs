@@ -132,6 +132,30 @@ test("no milestone is a legitimate state, not an error", () => {
   assert.equal(milestoneOf(issue({ milestone: null })).short, "—");
 });
 
+test("a milestone title with stray whitespace resolves the same way in both consumers", () => {
+  // Copilot, PR #373. `priorityFromMilestone` trims before its lookup; `milestoneOf` did not.
+  // A title carrying whitespace was therefore KNOWN to the shared model and UNKNOWN here, so the
+  // board banded the issue correctly while the generator hard-failed on it — the two consumers
+  // disagreeing about a milestone, one layer below the band table #364 already unified.
+  for (const padded of [
+    " M4: UI / UX Polish",
+    "M4: UI / UX Polish ",
+    "\tM4: UI / UX Polish\n",
+  ]) {
+    const i = issue({ number: 900, title: "no prefix", milestone: padded });
+
+    // The board's half: the shared model already tolerated this.
+    assert.equal(priorityFromMilestone(padded), "Medium", `model rejected ${JSON.stringify(padded)}`);
+
+    // The log book's half: must not throw, must land in the same place, and must agree on tier.
+    assert.equal(milestoneOf(i).short, "M4", `milestoneOf rejected ${JSON.stringify(padded)}`);
+    assert.equal(tierOfIssue(i), boardTier(i), `tier disagrees for ${JSON.stringify(padded)}`);
+  }
+
+  // The guard is narrowed to whitespace only — a genuinely unknown milestone must still be loud.
+  assert.throws(() => milestoneOf(issue({ number: 901, milestone: " M8: Invented " })), /does not know/);
+});
+
 // ── The two milestone lists must not drift ────────────────────────────────────────────────
 //
 // Removing the duplicated `tier` column left a smaller coupling: this file lists the milestones

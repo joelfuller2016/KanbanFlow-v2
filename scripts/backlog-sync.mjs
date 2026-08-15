@@ -105,15 +105,24 @@ const NO_MILESTONE = { title: null, short: "—", rank: MILESTONES.length };
 // This is the LOUD half of the contract `priority-model.mjs` describes: the sync must keep running
 // so it degrades to "Medium" quietly; the log book exists to be trusted, so it stops.
 function milestoneOf(issue) {
-  const title = issue.milestone?.title;
-  if (!title) return NO_MILESTONE;
+  const raw = issue.milestone?.title;
+  if (!raw) return NO_MILESTONE;
+  // Trim before the lookup, because `priorityFromMilestone` does `String(title).trim()` before
+  // its own. Without this, a milestone title carrying stray whitespace is KNOWN to the shared
+  // model — so the board bands the issue correctly — but UNKNOWN here, and the generator
+  // hard-fails on an issue the board renders fine. That is the two consumers disagreeing about a
+  // milestone: the exact defect #364 exists to prevent, reappearing one layer down in the lookup
+  // key instead of in the band table. Both sides must normalise the key identically.
+  const title = String(raw).trim();
   const known = MILESTONE_BY_TITLE.get(title);
   if (!known) {
+    // Report the RAW title, quoted, so stray whitespace is visible rather than silently trimmed
+    // out of the very error message meant to explain the mismatch.
     throw new Error(
-      `Issue #${issue.number} carries the milestone "${title}", which this generator does not know. ` +
-      `Add it to MILESTONES in scripts/backlog-sync.mjs (name + order) AND to MILESTONE_BANDS in ` +
-      `scripts/priority-model.mjs (its P0–P3 band) — both, or the board and this file will disagree ` +
-      `about it. Refusing to render it as "no milestone".`,
+      `Issue #${issue.number} carries the milestone ${JSON.stringify(raw)}, which this generator ` +
+      `does not know. Add it to MILESTONES in scripts/backlog-sync.mjs (name + order) AND to ` +
+      `MILESTONE_BANDS in scripts/priority-model.mjs (its P0–P3 band) — both, or the board and ` +
+      `this file will disagree about it. Refusing to render it as "no milestone".`,
     );
   }
   return known;
