@@ -404,12 +404,12 @@ public sealed class MarkdownRendererTests
     /// correctly allow-lists those attributes these three fixtures SHOULD fail - update them, do
     /// not read the failure as a regression.
     ///
-    /// <c>style</c> is now also stripped (#340 closed by #357): removing it from
-    /// <c>AllowedAttributes</c> closes the CSS-overlay attack surface introduced when
-    /// <c>EditableMarkdown</c> began rendering third-party GitHub issue bodies. The two raw-HTML
-    /// fixtures that previously pinned the normalised <c>rgba(...)</c> output now pin the stripped
-    /// output (<c>&lt;p&gt;x&lt;/p&gt;</c>). Markdown has no syntax that emits inline styles, so
-    /// nothing legitimate is lost.
+    /// AND ONE THING DELIBERATELY KEPT, for symmetry: the two style fixtures pin <c>style</c> as an
+    /// ALLOWED attribute on user-supplied markdown. Since #381 its properties come from a closed
+    /// six-property colour/text allow-list; layout, positioning, sizing, stacking and transforms
+    /// are dropped. <c>color</c> and <c>font-weight</c> remain intentionally byte-exact here, while
+    /// TaskDescriptionRenderingTests pins the viewport-overlay rejection from both GenericAttributes
+    /// and raw HTML. Rebuilding the broader AllowedAttributes defaults remains separate scope.
     /// </summary>
     [Theory]
     [InlineData("This is **bold** text.", "<p>This is <strong>bold</strong> text.</p>\n")]
@@ -423,8 +423,8 @@ public sealed class MarkdownRendererTests
     [InlineData("~~gone~~ stays", "<p><del>gone</del> stays</p>\n")]
     [InlineData("- [x] done\n- [ ] todo", "<ul>\n<li><input disabled=\"disabled\" type=\"checkbox\" checked=\"checked\"> done</li>\n<li><input disabled=\"disabled\" type=\"checkbox\"> todo</li>\n</ul>\n")]
     [InlineData("> quoted text", "<blockquote>\n<p>quoted text</p>\n</blockquote>\n")]
-    [InlineData("<p style=\"color:red\">x</p>", "<p>x</p>\n")]
-    [InlineData("<p style=\"color:red;font-weight:bold\">x</p>", "<p>x</p>\n")]
+    [InlineData("<p style=\"color:red\">x</p>", "<p style=\"color: rgba(255, 0, 0, 1)\">x</p>\n")]
+    [InlineData("<p style=\"color:red;font-weight:bold\">x</p>", "<p style=\"color: rgba(255, 0, 0, 1); font-weight: bold\">x</p>\n")]
     public void BenignMarkdown_RendersExactly(string markdown, string expected)
     {
         Assert.Equal(expected, Render(markdown));

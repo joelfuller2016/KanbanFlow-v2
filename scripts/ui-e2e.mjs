@@ -3127,8 +3127,25 @@ async function main() {
       const spaceFocused = await page.evaluate(() => document.activeElement?.getAttribute("data-testid"));
       assert(spaceFocused === "task-detail-description-edit",
         `Space must open the editor with the caret in it; document.activeElement was ${JSON.stringify(spaceFocused)}`);
-      await page.keyboard.press("Tab");
+
+      // Escape is the keyboard discard path: restore the session's seed, do not write, and return
+      // focus to the read surface instead of stranding it when the textarea disappears.
+      const escapedSuffix = `\n\nDiscarded by Escape ${stamp}.`;
+      await edit.focus();
+      await page.keyboard.press("Control+End");
+      await page.keyboard.type(escapedSuffix, { delay: 0 });
+      assert((await edit.inputValue()).endsWith(escapedSuffix), "Escape fixture never reached the textarea");
+      await page.keyboard.press("Escape");
       await read.waitFor({ state: "visible" });
+      const escapeFocused = await page.evaluate(() => document.activeElement?.getAttribute("data-testid"));
+      assert(escapeFocused === "task-detail-description-read",
+        `Escape did not return focus to read mode; document.activeElement was ${JSON.stringify(escapeFocused)}`);
+      await sleep(600);
+      const afterEscape = await api("GET", `/api/tasks/${syncedTask.id}`);
+      assert(afterEscape.updatedAt === before.updatedAt, "Escape wrote an audit-visible task update");
+      assert(afterEscape.description === before.description, "Escape persisted the discarded description draft");
+      assert(!(await read.innerText()).includes(`Discarded by Escape ${stamp}.`),
+        "Escape left the discarded draft in read mode");
 
       // Keydown guard: the JS handler stops Enter/Space on a rendered link from bubbling
       // to the wrapper's BeginEdit handler. Removing lines 248-252 of kanbanflow.js would
@@ -3174,6 +3191,7 @@ async function main() {
     // this payload is what an outside contributor can put on a synced repo — and #357 is the change
     // that turns those bytes into live DOM. Before it they were inert for one accidental reason:
     // they never left a <textarea>.
+    const layoutProbeText = `Layout containment ${stamp}`;
     const xssTask = await api("POST", `/api/features/${feature.id}/tasks`, {
       name: `E2E hostile description ${stamp}`,
       status: "Todo",
@@ -3187,11 +3205,13 @@ async function main() {
         "",
         "<a href=\"https://x.example\" onclick=\"steal()\">x</a>",
         "",
+        `<p style="position:fixed;inset:0;top:0;right:0;bottom:0;left:0;width:100vw;height:100vh;min-width:100vw;min-height:100vh;z-index:999999;transform:scale(2);display:block;overflow:visible;pointer-events:auto;background-color:red">${layoutProbeText}</p>`,
+        "",
         "This part is **bold** and must survive.",
       ].join("\n"),
     });
 
-    await test("A hostile issue body in a description is inert when rendered (#357)", async () => {
+    await test("A hostile issue body in a description is inert and panel-contained (#357/#381)", async () => {
       // Arm a real dialog listener: Playwright auto-dismisses dialogs when nobody is listening, so
       // "no alert appeared" proves nothing unless something is watching for one.
       const dialogs = [];
@@ -3220,6 +3240,30 @@ async function main() {
           `a javascript: href survived: ${JSON.stringify(probe.hrefs)}`);
         assert(dialogs.length === 0, `alert() fired: ${JSON.stringify(dialogs)}`);
         assert(pageErrors.length === 0, `the page threw while rendering hostile markup: ${JSON.stringify(pageErrors)}`);
+
+        // CSS is part of the sanitizer boundary too. Stored Markdown must not position a child
+        // against the viewport or size it beyond the task panel that owns the description.
+        const layoutProbe = read.getByText(layoutProbeText, { exact: true });
+        await layoutProbe.waitFor({ state: "visible" });
+        const geometry = await layoutProbe.evaluate((el) => {
+          const probeRect = el.getBoundingClientRect();
+          const panelRect = el.closest('[data-testid="task-detail-panel"]').getBoundingClientRect();
+          const cornerHit = document.elementFromPoint(8, 8);
+          return {
+            position: getComputedStyle(el).position,
+            ownsViewportCorner: cornerHit === el || el.contains(cornerHit),
+            probe: { left: probeRect.left, top: probeRect.top, right: probeRect.right, bottom: probeRect.bottom },
+            panel: { left: panelRect.left, top: panelRect.top, right: panelRect.right, bottom: panelRect.bottom },
+          };
+        });
+        assert(geometry.position !== "fixed", `hostile CSS retained position:fixed: ${JSON.stringify(geometry)}`);
+        assert(!geometry.ownsViewportCorner,
+          `hostile Markdown intercepted a viewport hit-test outside its task panel: ${JSON.stringify(geometry)}`);
+        assert(geometry.probe.left >= geometry.panel.left - 1
+          && geometry.probe.right <= geometry.panel.right + 1
+          && geometry.probe.top >= geometry.panel.top - 1
+          && geometry.probe.bottom <= geometry.panel.bottom + 1,
+        `hostile Markdown escaped the task panel: ${JSON.stringify(geometry)}`);
 
         // Non-vacuity: this must not pass because nothing rendered.
         assert(probe.strong >= 4, `benign markdown stopped rendering alongside the payload (strong=${probe.strong})`);
@@ -3259,8 +3303,26 @@ async function main() {
       await page.locator('#edit-item-name').focus();
       assert(await edit.isVisible(), "modal description left edit mode on blur before Save/Cancel");
 
+      // The dialog's native Escape handler runs before Blazor's delegated textarea handler. The
+      // field must own this key: discard only its draft, keep the modal open, and restore focus.
+      const modalEscapeSuffix = `\n\nDiscarded by modal Escape ${stamp}.`;
+      await edit.focus();
+      await page.keyboard.press("Control+End");
+      await page.keyboard.type(modalEscapeSuffix, { delay: 0 });
+      await page.keyboard.press("Escape");
+      await read.waitFor({ state: "visible" });
+      assert(await page.locator('[data-testid="edit-item-modal"]').isVisible(),
+        "Escape in the description editor closed the entire edit modal");
+      const modalEscapeFocused = await page.evaluate(() => document.activeElement?.getAttribute("data-testid"));
+      assert(modalEscapeFocused === "edit-item-description-read",
+        `modal Escape did not return focus to description read mode; active element was ${JSON.stringify(modalEscapeFocused)}`);
+      assert(!(await read.innerText()).includes(`Discarded by modal Escape ${stamp}.`),
+        "modal Escape left the discarded description draft in read mode");
+
       // Cancel must DISCARD the buffer, and reopening must land in READ mode showing the original
       // text — that reopen is what descriptionResetToken exists for.
+      await read.click();
+      await edit.waitFor({ state: "visible" });
       await edit.focus();
       await page.keyboard.press("Control+End");
       await page.keyboard.type(`\n\nDiscarded ${stamp}.`, { delay: 0 });

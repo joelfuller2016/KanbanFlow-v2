@@ -33,6 +33,11 @@ public sealed class TaskDescriptionRenderingTests
     private static readonly MarkdownRenderer Renderer = new();
 
     private const string IssueUrl = "https://github.com/joelfuller2016/ZeroRouter/issues/72";
+    private const string LayoutEscapeStyle =
+        "position:fixed;inset:0;top:0;right:0;bottom:0;left:0;" +
+        "width:100vw;height:100vh;min-width:100vw;max-width:none;min-height:100vh;max-height:none;" +
+        "z-index:999999;transform:scale(2);display:block;overflow:visible;pointer-events:auto;" +
+        "background-color:red;color:white;font-weight:bold";
 
     /// <summary>
     /// Template-faithful fixture: the exact line sequence <c>descriptionFor()</c> emits at
@@ -153,38 +158,38 @@ public sealed class TaskDescriptionRenderingTests
         Assert.Contains($"<a href=\"{IssueUrl}\">", html, StringComparison.Ordinal);
     }
 
-    /// <summary>
-    /// CSS overlay spoofing, escalated by #357.
-    ///
-    /// HtmlSanitizer's default AllowedCssProperties (239 entries in 9.1.974) includes position,
-    /// inset, z-index, width, height, background, and pointer-events. An external contributor
-    /// can supply a GitHub issue body with a <c>style</c> attribute that paints an element over
-    /// the whole application window, creating a clickjacking or credential-phishing surface.
-    /// The renderer must strip <c>style</c> entirely — Markdown has no syntax that emits one.
-    ///
-    /// The non-vacuity assertion ensures this cannot pass against a renderer that returns empty.
-    /// </summary>
-    [Fact]
-    public void HostileIssueBody_CssOverlayProperties_AreStripped()
+    [Theory]
+    [InlineData("# Layout probe {style=\"" + LayoutEscapeStyle + "\"}")]
+    [InlineData("<p style=\"" + LayoutEscapeStyle + "\">Layout probe</p>")]
+    public void HostileIssueBody_CannotUseInlineCssToEscapeItsPanel(string body)
     {
-        var description = SyncedDescription(string.Join("\n\n",
-            "<p style=\"position:fixed;inset:0;z-index:9999;width:100vw;height:100vh;background:white;pointer-events:all\">Fake login</p>",
-            "This part is **bold** and must survive."));
-
-        var html = Renderer.RenderToSafeHtml(description);
+        var html = Renderer.RenderToSafeHtml(SyncedDescription(body));
         var dom = new HtmlParser().ParseDocument("<!doctype html><body>" + html);
+        var probe = dom.QuerySelectorAll("h1, p").Single(e => e.TextContent == "Layout probe");
+        var style = probe.GetAttribute("style") ?? string.Empty;
+        var properties = style
+            .Split(';', StringSplitOptions.RemoveEmptyEntries)
+            .Select(declaration => declaration.Split(':', 2)[0].Trim())
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
-        // The style attribute must not survive on any element.
-        Assert.Empty(dom.All.Where(e => e.HasAttribute("style")));
+        // Layout and stacking properties let stored Markdown cover or escape the task panel.
+        foreach (var forbidden in new[]
+                 {
+                     "position", "inset", "top", "right", "bottom", "left",
+                     "width", "height", "min-width", "max-width", "min-height", "max-height",
+                     "z-index", "transform", "display", "overflow", "pointer-events"
+                 })
+        {
+            Assert.DoesNotContain(forbidden, properties);
+        }
+        Assert.DoesNotContain("100vw", style, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("100vh", style, StringComparison.OrdinalIgnoreCase);
 
-        // Belt-and-suspenders: individual properties must also be absent (verifies the
-        // sanitizer did not rewrite the attribute rather than simply drop it).
-        Assert.DoesNotContain("position", html, StringComparison.OrdinalIgnoreCase);
-        Assert.DoesNotContain("z-index", html, StringComparison.OrdinalIgnoreCase);
-        Assert.DoesNotContain("pointer-events", html, StringComparison.OrdinalIgnoreCase);
-
-        // Non-vacuity: benign markdown in the same description still renders.
-        Assert.Contains("<strong>bold</strong>", html, StringComparison.Ordinal);
+        // Non-layout emphasis remains available; this must not pass by stripping all style/content.
+        Assert.Contains("background-color", properties);
+        Assert.Contains("color", properties);
+        Assert.Contains("font-weight", properties);
+        Assert.Equal("Layout probe", probe.TextContent);
     }
 
     // ── Storage boundary: the marker bytes must round-trip ──────────────────────────────────────
@@ -215,7 +220,8 @@ public sealed class TaskDescriptionRenderingTests
         }
 
         // What the UI hands back after a user types at the end of the raw source in the textarea.
-        var edited = original + "\n\nAdded by a human.";
+        var intended = original + "\n\nAdded by a human.";
+        var edited = intended + "  \r\n\t";
 
         var svc = new TaskService(f);
         await svc.UpdateAsync(taskId, new TaskUpdate(Description: edited), actor: "tester");
@@ -231,6 +237,8 @@ public sealed class TaskDescriptionRenderingTests
         Assert.StartsWith(original, stored, StringComparison.Ordinal);
         // …and the edit actually landed, so this cannot pass by the update having been a no-op.
         Assert.Contains("Added by a human.", stored, StringComparison.Ordinal);
+        // TaskService owns normalization: trailing transport/editor whitespace is not persisted.
+        Assert.Equal(intended, stored);
     }
 
 }

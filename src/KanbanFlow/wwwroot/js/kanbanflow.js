@@ -303,6 +303,14 @@ window.KanbanFlow = {
         }
         dialog._kfKeydown = function (event) {
             if (event.key === 'Escape') {
+                // EditableMarkdown owns Escape while its textarea is active: it discards only
+                // that field's draft and restores read mode. This native dialog listener runs
+                // before Blazor's delegated key handler, so closing here would discard the whole
+                // form before the component can handle the key.
+                var target = event.target;
+                if (target && target.matches && target.matches('[data-kf-escape-discard]')) {
+                    return;
+                }
                 event.preventDefault();
                 if (dotNetRef) {
                     dotNetRef.invokeMethodAsync('CloseFromJs').catch(function () { /* component/circuit disposed */ });
