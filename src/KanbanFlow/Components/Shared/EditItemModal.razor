@@ -187,8 +187,16 @@
                     <div class="mb-3">
                         <div id="edit-item-activity-label" class="form-label small text-muted mb-1">Activity</div>
                         <div class="border rounded p-2 edit-item-activity-surface">
+                            @* TaskId is gated on IsOpen so CLOSING the modal clears the timeline
+                               and REOPENING re-queries the trail. This modal is never unmounted
+                               — its root is hidden with display:none and ProjectView leaves
+                               EditTaskId set — so without the gate nothing changes between opens
+                               and the component keeps serving the event list it cached the first
+                               time. Save a priority change here and reopen: the "Updated:
+                               Priority" comment reloads, the "Priority: Low → High" row does not.
+                               That is #328's own symptom, on the surface #328 names in scope. *@
                             <ActivityTimeline TestIdPrefix="edit-item-activity"
-                                              TaskId="@EditTaskId"
+                                              TaskId="@(IsOpen ? EditTaskId : null)"
                                               Comments="taskComments" />
                         </div>
 
@@ -315,10 +323,24 @@
     private List<TaskComment> taskComments = [];
     private string? newCommentText;
 
+    // What the last reset was performed FOR. OnParametersSet runs on EVERY parent render — the
+    // modal's parameters include AllFeatures (a List<Feature>), and Blazor treats any non-known-
+    // immutable reference type as "may have changed", so ProjectView re-rendering for any reason
+    // re-invoked this. Unguarded, that meant: re-issue LoadTaskDetails(), blank taskComments to a
+    // fresh list (re-merging the whole timeline and flashing it empty), and reset editName back
+    // to InitialName UNDER A USER WHO WAS TYPING. Reset on an actual open / target transition.
+    private bool wasOpen;
+    private (EditItemType Mode, int ProjectId, int? FeatureId, int? TaskId) loadedTarget;
+
     protected override void OnParametersSet()
     {
-        if (IsOpen)
+        var target = (EditMode, EditProjectId, EditFeatureId, EditTaskId);
+        var isNewTarget = !wasOpen || !target.Equals(loadedTarget);
+        wasOpen = IsOpen;
+
+        if (IsOpen && isNewTarget)
         {
+            loadedTarget = target;
             editName = InitialName;
             editDescription = InitialDescription;
             editGoals = InitialGoals;

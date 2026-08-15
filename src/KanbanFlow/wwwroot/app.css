@@ -445,8 +445,10 @@ h1:focus {
     background:
         linear-gradient(var(--kf-comment-cover) 30%, transparent) center top,
         linear-gradient(transparent, var(--kf-comment-cover) 70%) center bottom,
-        radial-gradient(farthest-side at 50% 0, rgba(0, 0, 0, 0.14), rgba(0, 0, 0, 0)) center top,
-        radial-gradient(farthest-side at 50% 100%, rgba(0, 0, 0, 0.14), rgba(0, 0, 0, 0)) center bottom;
+        /* The shadow has to invert with the theme too — a black shadow on a near-black surface is
+           no shadow, which would leave the cover revealing an affordance that isn't drawn. */
+        radial-gradient(farthest-side at 50% 0, rgba(var(--bs-emphasis-color-rgb), 0.14), rgba(var(--bs-emphasis-color-rgb), 0)) center top,
+        radial-gradient(farthest-side at 50% 100%, rgba(var(--bs-emphasis-color-rgb), 0.14), rgba(var(--bs-emphasis-color-rgb), 0)) center bottom;
     background-repeat: no-repeat;
     background-size: 100% 2rem, 100% 2rem, 100% 0.5rem, 100% 0.5rem;
     background-attachment: local, local, scroll, scroll;
@@ -460,6 +462,16 @@ h1:focus {
    outline edit), so this is the only place the timeline is styled. Colours are `var(--bs-*)`
    only, so `data-bs-theme="dark"` recolours the rail, the dots and the diff chips for free —
    a hardcoded hex here would be a light-mode-only feature. */
+/* Which surface this timeline is sitting ON. The dot's ring and the diff chips are both defined
+   RELATIVE to it, so they cannot be constants: `.edit-item-activity-surface` is --bs-tertiary-bg
+   in BOTH themes, which is exactly what `.activity-timeline-value` used for its chip — so every
+   Todo / InProgress / Low / High chip vanished on the outline-edit surface while looking fine on
+   the panel. Same component, two backdrops; the backdrop has to be a parameter. */
+.activity-timeline-section {
+    --kf-timeline-surface: var(--bs-body-bg);
+    --kf-timeline-chip: var(--bs-tertiary-bg);
+}
+
 .activity-timeline {
     position: relative;
     margin: 0;
@@ -495,8 +507,9 @@ h1:focus {
     height: 0.55rem;
     border-radius: 50%;
     background-color: var(--bs-secondary-bg);
-    /* The ring is the page background, so the dot punches a clean hole in the rail behind it. */
-    box-shadow: 0 0 0 2px var(--bs-body-bg);
+    /* The ring is whatever surface the timeline sits on, so the dot punches a clean hole in the
+       rail behind it — a hardcoded page background would be a visible halo inside the modal. */
+    box-shadow: 0 0 0 2px var(--kf-timeline-surface);
     border: 1px solid var(--bs-secondary-color);
 }
 
@@ -541,7 +554,7 @@ h1:focus {
     max-width: 100%;
     padding: 0 0.3rem;
     border-radius: var(--bs-border-radius-sm);
-    background-color: var(--bs-tertiary-bg);
+    background-color: var(--kf-timeline-chip);
     font-family: var(--bs-font-monospace);
     font-size: 0.78rem;
     overflow-wrap: anywhere;
@@ -573,8 +586,15 @@ h1:focus {
     background: var(--bs-tertiary-bg);
 }
 
+/* Everything nested here is told which surface it landed on, so the timeline renders the same
+   whichever of the two task surfaces mounted it. */
 .edit-item-activity-surface .task-comment-body {
     --kf-comment-cover: var(--bs-tertiary-bg);
+}
+
+.edit-item-activity-surface .activity-timeline-section {
+    --kf-timeline-surface: var(--bs-tertiary-bg);
+    --kf-timeline-chip: var(--bs-secondary-bg);
 }
 
 /* ══════════════════════════════════════════════════════════════════════════════════════════════

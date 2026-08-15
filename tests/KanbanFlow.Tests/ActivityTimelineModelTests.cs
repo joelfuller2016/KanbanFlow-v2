@@ -216,6 +216,77 @@ public class ActivityTimelineModelTests
     }
 
     [Fact]
+    public void An_edit_past_the_display_cap_is_still_reported_as_a_change()
+    {
+        // Truncation is for DISPLAY. Compare the truncated forms instead and two descriptions
+        // differing at character 95 collapse to the identical 80-char string, so a real edit
+        // reports as "no change" — and because a sibling field usually did change,
+        // changes.Count > 0 also suppresses the Message that would have named it. The edit
+        // disappears from the audit trail on a screen whose whole job is the audit trail.
+        var head = new string('a', ActivityTimelineModel.MaxValueChars + 10);
+        var before = head + "ORIGINAL ending";
+        var after = head + "REWRITTEN ending";
+
+        var changes = ActivityTimelineModel.DeriveChanges(
+            Snapshot(description: before, priority: "Low"),
+            Snapshot(description: after, priority: "High"));
+
+        Assert.Contains(changes, c => c.Field == "Description");
+        Assert.Contains(changes, c => c.Field == "Priority");
+
+        // …and it is still truncated for display.
+        var description = changes.Single(c => c.Field == "Description");
+        Assert.EndsWith("…", description.Before);
+        Assert.EndsWith("…", description.After);
+        Assert.Equal(ActivityTimelineModel.MaxValueChars + 1, description.Before.Length);
+    }
+
+    [Fact]
+    public void An_unchanged_field_is_not_reported_even_when_both_sides_exceed_the_cap()
+    {
+        // The other direction of the same guard: comparing untruncated must not make every long
+        // field look changed.
+        var same = new string('a', ActivityTimelineModel.MaxValueChars + 40) + " tail";
+
+        var changes = ActivityTimelineModel.DeriveChanges(
+            Snapshot(description: same, priority: "Low"),
+            Snapshot(description: same, priority: "High"));
+
+        Assert.DoesNotContain(changes, c => c.Field == "Description");
+        Assert.Single(changes);
+    }
+
+    [Fact]
+    public void The_snapshots_internal_bookkeeping_fields_stay_out_of_the_timeline()
+    {
+        // sortOrder rides along in the snapshot but TaskService.cs:639-648 says it "must NOT emit
+        // an activity event or comment (the #88 audit boundary)" — and a board drag emits
+        // TaskStatusChanged, whose snapshots carry the new rank. Tracking it would render
+        // "Order: 3 → 1.5", an internal fractional rank (#307) shown nowhere else in the app.
+        // featureId is excluded for a different reason: a raw FK is not the human-readable line
+        // AC2 asks for, and this model is pure — it has no DbContext to resolve a name with.
+        var changes = ActivityTimelineModel.DeriveChanges(
+            Snapshot(status: "Todo", sortOrder: 3, featureId: 2),
+            Snapshot(status: "InProgress", sortOrder: 1.5, featureId: 5));
+
+        Assert.Single(changes);
+        Assert.Equal("Status", changes[0].Field);
+    }
+
+    [Fact]
+    public void A_feature_move_falls_back_to_its_message_rather_than_a_raw_foreign_key()
+    {
+        var entry = Assert.Single(ActivityTimelineModel.Build(null,
+        [
+            Event(1, "TaskFeatureChanged", T0, Snapshot(featureId: 2), Snapshot(featureId: 5),
+                "Task 'Ship the timeline' reassigned from feature 2 to feature 5")
+        ]));
+
+        Assert.Empty(entry.Changes);
+        Assert.Equal("Task 'Ship the timeline' reassigned from feature 2 to feature 5", entry.Summary);
+    }
+
+    [Fact]
     public void DeriveChanges_matches_field_names_case_insensitively()
     {
         // The snapshot is camelCase today. A serializer-option change must degrade to
@@ -239,14 +310,86 @@ public class ActivityTimelineModelTests
         Assert.Empty(entry.Changes);
         Assert.Equal("Something happened to the task", entry.Summary);
 
-        // Nothing anywhere on the rendered entry carries the payload or its punctuation.
-        foreach (var text in new[] { entry.Summary, entry.Label, entry.Actor, entry.Body })
+        // Scan EVERY string the component can render, including the change lines — the summary
+        // alone is a value this test set itself, so asserting only over it would pass against a
+        // differ that leaked through Changes.
+        var rendered = new List<string?> { entry.Summary, entry.Label, entry.Actor, entry.Body };
+        rendered.AddRange(entry.Changes.SelectMany(c => new[] { c.Field, c.Before, c.After }));
+
+        foreach (var text in rendered)
         {
             if (text is null) continue;
             Assert.DoesNotContain("{", text, StringComparison.Ordinal);
             Assert.DoesNotContain("\"", text, StringComparison.Ordinal);
             Assert.DoesNotContain("someFieldWeDoNotKnow", text, StringComparison.Ordinal);
+            Assert.DoesNotContain("and its value", text, StringComparison.Ordinal);
         }
+    }
+
+    [Fact]
+    public void A_payload_that_mixes_known_and_unknown_keys_renders_only_the_known_ones()
+    {
+        // The load-bearing half: a payload the differ CAN partly read must still not carry the
+        // unreadable half through. Same shape as a snapshot gaining a field we do not label yet.
+        var before = """{"status":"Todo","secretInternalRank":{"a":1},"unlabelledNewField":"leak-me"}""";
+        var after = """{"status":"Done","secretInternalRank":{"a":2},"unlabelledNewField":"leak-me-too"}""";
+
+        var entry = Assert.Single(ActivityTimelineModel.Build(null,
+            [Event(1, "TaskStatusChanged", T0, before, after, "status changed")]));
+
+        var change = Assert.Single(entry.Changes);
+        Assert.Equal("Status", change.Field);
+
+        var rendered = new List<string?> { entry.Summary, entry.Label, entry.Actor, entry.Body };
+        rendered.AddRange(entry.Changes.SelectMany(c => new[] { c.Field, c.Before, c.After }));
+        foreach (var text in rendered.Where(t => t is not null))
+        {
+            Assert.DoesNotContain("leak-me", text!, StringComparison.Ordinal);
+            Assert.DoesNotContain("secretInternalRank", text!, StringComparison.Ordinal);
+            Assert.DoesNotContain("{", text!, StringComparison.Ordinal);
+        }
+    }
+
+    // ── Ordering + the entry cap ─────────────────────────────────────────────────────────────
+
+    [Fact]
+    public void Same_instant_rows_tiebreak_numerically_not_lexicographically()
+    {
+        // Ordering by the string key sorts "c-9" above "c-10". Ten comments stamped at the same
+        // second is not hypothetical: a bulk import or a mirrored GitHub sync writes exactly that.
+        var sameInstant = Enumerable.Range(1, 12)
+            .Select(i => Comment(i, $"comment {i}", T0))
+            .ToList();
+
+        var keys = ActivityTimelineModel.Build(sameInstant, null).Select(e => e.Key).ToArray();
+
+        Assert.Equal(
+            Enumerable.Range(1, 12).Reverse().Select(i => $"c-{i}").ToArray(),
+            keys);
+    }
+
+    [Fact]
+    public void The_entry_cap_keeps_the_newest_and_reports_what_it_hid()
+    {
+        // A silent cap on the surface whose whole job is audit honesty is the same class of
+        // untruth this issue exists to fix — so Build tells the caller how much it dropped.
+        var many = Enumerable.Range(1, ActivityTimelineModel.MaxEntries + 25)
+            .Select(i => Comment(i, $"comment {i}", T0.AddMinutes(i)))
+            .ToList();
+
+        var timeline = ActivityTimelineModel.Build(many, null, out var totalBeforeCap);
+
+        Assert.Equal(ActivityTimelineModel.MaxEntries, timeline.Count);
+        Assert.Equal(ActivityTimelineModel.MaxEntries + 25, totalBeforeCap);
+        Assert.Equal($"c-{ActivityTimelineModel.MaxEntries + 25}", timeline[0].Key);   // newest kept
+        Assert.DoesNotContain(timeline, e => e.Key == "c-1");                          // oldest dropped
+    }
+
+    [Fact]
+    public void An_uncapped_timeline_reports_no_hidden_rows()
+    {
+        ActivityTimelineModel.Build([Comment(1, "only one", T0)], null, out var totalBeforeCap);
+        Assert.Equal(1, totalBeforeCap);
     }
 
     [Fact]
@@ -412,6 +555,31 @@ public class ActivityTimelineModelTests
         Assert.Contains($"UTC: {T0:O}", tooltip, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void The_UTC_tooltip_is_tagged_UTC_even_for_the_Unspecified_kind_the_database_returns()
+    {
+        // The Kind production actually hands us. `ToString("O")` on an Unspecified DateTime emits
+        // NO zone designator, so a tooltip built straight off it says "UTC:" above a string that
+        // is not a UTC instant, and <time datetime> claims local to every machine consumer.
+        // Asserting only over a Kind=Utc fixture passes against exactly that bug — the one Kind
+        // the app never produces is the one that hides it.
+        var fromDatabase = DateTime.SpecifyKind(T0, DateTimeKind.Unspecified);
+
+        Assert.EndsWith("Z", ActivityTimelineModel.RoundTripUtc(fromDatabase), StringComparison.Ordinal);
+        Assert.Equal(ActivityTimelineModel.RoundTripUtc(T0), ActivityTimelineModel.RoundTripUtc(fromDatabase));
+        Assert.Contains($"UTC: {T0:O}", ActivityTimelineModel.Tooltip(fromDatabase), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void A_local_kind_value_is_converted_rather_than_relabelled()
+    {
+        // Defence in depth: nothing passes Local today, but silently stamping "Utc" on a Local
+        // value would shift the instant by the whole offset.
+        var local = T0.ToLocalTime();
+        Assert.Equal(ActivityTimelineModel.RoundTripUtc(T0), ActivityTimelineModel.RoundTripUtc(local));
+        Assert.Equal(ActivityTimelineModel.Absolute(T0), ActivityTimelineModel.Absolute(local));
+    }
+
     [Theory]
     [InlineData(0, "just now")]
     [InlineData(44, "just now")]
@@ -445,7 +613,8 @@ public class ActivityTimelineModelTests
     {
         // The differ is a WHITELIST over TaskService.TaskActivitySnapshot's keys. A rename there
         // would silently blank every change line while the suite stayed green on hand-written
-        // fixtures — so read the producer's own output and diff against it.
+        // fixtures — so read the producer's own output and diff against it. (The lookup is
+        // runtime reflection, so a rename fails THIS TEST, not the compiler.)
         var snapshotMethod = typeof(TaskService).GetMethod(
             "TaskActivitySnapshot", BindingFlags.NonPublic | BindingFlags.Static);
 

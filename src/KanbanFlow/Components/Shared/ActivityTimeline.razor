@@ -19,7 +19,7 @@
       • Pass `Watermark` (e.g. the task's UpdatedAt) to force an event reload after a mutation.
 *@
 
-<section class="activity-timeline-section" data-testid="@($"{TestIdPrefix}")" aria-label="Task history">
+<section class="activity-timeline-section" data-testid="@TestIdPrefix" aria-label="Task history">
 
     <div class="d-flex flex-wrap align-items-center gap-2 mb-2">
         <div class="btn-group btn-group-sm" role="group" aria-label="Filter task history">
@@ -32,7 +32,9 @@
                         data-testid="@($"{TestIdPrefix}-filter-{filter}")"
                         @onclick="() => SetFilter(filter)">
                     @label
-                    <span class="badge rounded-pill text-bg-light border ms-1"
+                    @* NOT text-bg-light: Bootstrap 5.3's dark theme does not redefine
+                       --bs-light-rgb, so a "light" pill stays near-white on a dark board. *@
+                    <span class="badge rounded-pill text-bg-secondary ms-1"
                           data-testid="@($"{TestIdPrefix}-filter-{filter}-count")">@CountFor(filter)</span>
                 </button>
             }
@@ -84,7 +86,7 @@
                                surfaces goes through ActivityTimelineModel — there is no second
                                formatting call site left to drift. *@
                             <time class="small text-muted ms-auto"
-                                  datetime="@entry.CreatedAtUtc.ToString("O")"
+                                  datetime="@ActivityTimelineModel.RoundTripUtc(entry.CreatedAtUtc)"
                                   title="@ActivityTimelineModel.Tooltip(entry.CreatedAtUtc)">
                                 @ActivityTimelineModel.Relative(entry.CreatedAtUtc, nowUtc)
                             </time>
@@ -128,6 +130,17 @@
             }
         </ol>
         </div>
+
+        @if (truncatedBy > 0)
+        {
+            @* Say so. This component sits under a README requirement calling the audit log the
+               single source of truth; a silent cap that drops the oldest rows is the same class
+               of untruth #328 exists to fix. *@
+            <div class="small text-muted mt-2" data-testid="@($"{TestIdPrefix}-truncated")">
+                Showing the @ActivityTimelineModel.MaxEntries most recent entries.
+                @truncatedBy older one@(truncatedBy == 1 ? "" : "s") @(truncatedBy == 1 ? "is" : "are") not shown.
+            </div>
+        }
     }
 </section>
 
@@ -172,6 +185,7 @@
     private IReadOnlyList<TimelineEntry> visible = [];
     private TimelineCounts counts = new(0, 0, 0, 0);
     private TimelineFilter activeFilter = TimelineFilter.All;
+    private int truncatedBy;
     private bool loading;
     private bool loadFailed;
     private DateTime nowUtc = DateTime.UtcNow;
@@ -190,6 +204,7 @@
             events = [];
             entries = [];
             visible = [];
+            truncatedBy = 0;
             counts = new TimelineCounts(0, 0, 0, 0);
         }
 
@@ -273,7 +288,8 @@
     {
         mergedComments = Comments;
         nowUtc = DateTime.UtcNow;
-        entries = ActivityTimelineModel.Build(Comments, events);
+        entries = ActivityTimelineModel.Build(Comments, events, out var totalBeforeCap);
+        truncatedBy = totalBeforeCap - entries.Count;
         counts = ActivityTimelineModel.Count(entries);
         visible = ActivityTimelineModel.Filter(entries, activeFilter);
     }
@@ -312,7 +328,8 @@
         {
             CommentType.Comment or CommentType.Note => "text-bg-primary",
             CommentType.Decision => "text-bg-info",
-            CommentType.Question => "text-bg-light border text-dark",
+            // Not text-bg-light: Bootstrap 5.3's dark theme leaves --bs-light-rgb near-white.
+            CommentType.Question => "text-bg-secondary",
             CommentType.Blocked => "text-bg-danger",
             CommentType.Handoff => "text-bg-warning",
             CommentType.Verification => "text-bg-success",

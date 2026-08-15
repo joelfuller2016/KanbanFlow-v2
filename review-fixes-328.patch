@@ -1,0 +1,695 @@
+diff --git a/scripts/ui-e2e.mjs b/scripts/ui-e2e.mjs
+index d5a4725..474cb59 100644
+--- a/scripts/ui-e2e.mjs
++++ b/scripts/ui-e2e.mjs
+@@ -1709,6 +1709,43 @@ async function main() {
+         assert(!/"(status|priority|featureId|claimedBy)"\s*:/.test(modalText),
+           `RAW JSON reached the user in the edit modal timeline:\n${modalText.slice(0, 800)}`);
+ 
++        await page.locator('[data-testid="edit-item-cancel-button"]').click();
++        await modalTimeline.waitFor({ state: "hidden" });
++
++        // ── REOPEN: the trail must be re-queried, not served from the first open's cache ──
++        // This modal is never unmounted (its root is hidden with display:none and ProjectView
++        // leaves EditTaskId set), so without an explicit gate the component sees no parameter
++        // change on reopen and keeps the event list it cached. The symptom is precise and nasty:
++        // the COMMENT written by the same save reloads, the matching change row does not — #328's
++        // own bug, reintroduced on the surface #328 names in scope.
++        await api("PATCH", `/api/tasks/${historyTask.id}/status`, { status: "Done", actor: "e2e-reopen" });
++
++        await clickUntil(
++          () => page.locator(`[data-testid="outline-task-${historyTask.id}"]`).click(),
++          modalTimeline,
++        );
++
++        // Scope the match to an ACTIVITY-sourced row. Matching the timeline's innerText is
++        // vacuous here and it cost a full sabotage round to notice: the same PATCH also writes a
++        // system comment reading "Status changed from InProgress to Done", and THAT reloads with
++        // the comments on any reopen. A text match is satisfied by the comment whether or not the
++        // event trail was re-queried — a guard that passes against the bug it names.
++        try {
++          await page.waitForFunction(() => {
++            const root = document.querySelector('[data-testid="edit-item-activity"]');
++            return root && [...root.querySelectorAll('[data-timeline-source="activity"]')]
++              .some((el) => /InProgress[\s\S]{0,40}Done/.test(el.innerText));
++          }, null, { timeout: 10000 });
++        } catch {
++          throw new Error(
++            "reopening the outline-sidebar edit modal served a STALE activity trail: no " +
++            'ActivityEvent row shows "Status: InProgress → Done", recorded while the modal was ' +
++            "closed. The modal is never unmounted, so without an explicit parameter change the " +
++            "component keeps the event list it cached on the first open — the comment reloads " +
++            "and the matching change row does not.\n" +
++            `Rendered:\n${(await modalTimeline.innerText()).slice(0, 800)}`);
++        }
++
+         await page.locator('[data-testid="edit-item-cancel-button"]').click();
+ 
+         assert(consoleErrors.length === 0,
+diff --git a/src/KanbanFlow/Components/Shared/ActivityTimeline.razor b/src/KanbanFlow/Components/Shared/ActivityTimeline.razor
+index 7fc4f40..240088f 100644
+--- a/src/KanbanFlow/Components/Shared/ActivityTimeline.razor
++++ b/src/KanbanFlow/Components/Shared/ActivityTimeline.razor
+@@ -19,7 +19,7 @@
+       • Pass `Watermark` (e.g. the task's UpdatedAt) to force an event reload after a mutation.
+ *@
+ 
+-<section class="activity-timeline-section" data-testid="@($"{TestIdPrefix}")" aria-label="Task history">
++<section class="activity-timeline-section" data-testid="@TestIdPrefix" aria-label="Task history">
+ 
+     <div class="d-flex flex-wrap align-items-center gap-2 mb-2">
+         <div class="btn-group btn-group-sm" role="group" aria-label="Filter task history">
+@@ -32,7 +32,9 @@
+                         data-testid="@($"{TestIdPrefix}-filter-{filter}")"
+                         @onclick="() => SetFilter(filter)">
+                     @label
+-                    <span class="badge rounded-pill text-bg-light border ms-1"
++                    @* NOT text-bg-light: Bootstrap 5.3's dark theme does not redefine
++                       --bs-light-rgb, so a "light" pill stays near-white on a dark board. *@
++                    <span class="badge rounded-pill text-bg-secondary ms-1"
+                           data-testid="@($"{TestIdPrefix}-filter-{filter}-count")">@CountFor(filter)</span>
+                 </button>
+             }
+@@ -84,7 +86,7 @@
+                                surfaces goes through ActivityTimelineModel — there is no second
+                                formatting call site left to drift. *@
+                             <time class="small text-muted ms-auto"
+-                                  datetime="@entry.CreatedAtUtc.ToString("O")"
++                                  datetime="@ActivityTimelineModel.RoundTripUtc(entry.CreatedAtUtc)"
+                                   title="@ActivityTimelineModel.Tooltip(entry.CreatedAtUtc)">
+                                 @ActivityTimelineModel.Relative(entry.CreatedAtUtc, nowUtc)
+                             </time>
+@@ -128,6 +130,17 @@
+             }
+         </ol>
+         </div>
++
++        @if (truncatedBy > 0)
++        {
++            @* Say so. This component sits under a README requirement calling the audit log the
++               single source of truth; a silent cap that drops the oldest rows is the same class
++               of untruth #328 exists to fix. *@
++            <div class="small text-muted mt-2" data-testid="@($"{TestIdPrefix}-truncated")">
++                Showing the @ActivityTimelineModel.MaxEntries most recent entries.
++                @truncatedBy older one@(truncatedBy == 1 ? "" : "s") @(truncatedBy == 1 ? "is" : "are") not shown.
++            </div>
++        }
+     }
+ </section>
+ 
+@@ -172,6 +185,7 @@
+     private IReadOnlyList<TimelineEntry> visible = [];
+     private TimelineCounts counts = new(0, 0, 0, 0);
+     private TimelineFilter activeFilter = TimelineFilter.All;
++    private int truncatedBy;
+     private bool loading;
+     private bool loadFailed;
+     private DateTime nowUtc = DateTime.UtcNow;
+@@ -190,6 +204,7 @@
+             events = [];
+             entries = [];
+             visible = [];
++            truncatedBy = 0;
+             counts = new TimelineCounts(0, 0, 0, 0);
+         }
+ 
+@@ -273,7 +288,8 @@
+     {
+         mergedComments = Comments;
+         nowUtc = DateTime.UtcNow;
+-        entries = ActivityTimelineModel.Build(Comments, events);
++        entries = ActivityTimelineModel.Build(Comments, events, out var totalBeforeCap);
++        truncatedBy = totalBeforeCap - entries.Count;
+         counts = ActivityTimelineModel.Count(entries);
+         visible = ActivityTimelineModel.Filter(entries, activeFilter);
+     }
+@@ -312,7 +328,8 @@
+         {
+             CommentType.Comment or CommentType.Note => "text-bg-primary",
+             CommentType.Decision => "text-bg-info",
+-            CommentType.Question => "text-bg-light border text-dark",
++            // Not text-bg-light: Bootstrap 5.3's dark theme leaves --bs-light-rgb near-white.
++            CommentType.Question => "text-bg-secondary",
+             CommentType.Blocked => "text-bg-danger",
+             CommentType.Handoff => "text-bg-warning",
+             CommentType.Verification => "text-bg-success",
+diff --git a/src/KanbanFlow/Components/Shared/EditItemModal.razor b/src/KanbanFlow/Components/Shared/EditItemModal.razor
+index 8ae6289..5d8dc1c 100644
+--- a/src/KanbanFlow/Components/Shared/EditItemModal.razor
++++ b/src/KanbanFlow/Components/Shared/EditItemModal.razor
+@@ -187,8 +187,16 @@
+                     <div class="mb-3">
+                         <div id="edit-item-activity-label" class="form-label small text-muted mb-1">Activity</div>
+                         <div class="border rounded p-2 edit-item-activity-surface">
++                            @* TaskId is gated on IsOpen so CLOSING the modal clears the timeline
++                               and REOPENING re-queries the trail. This modal is never unmounted
++                               — its root is hidden with display:none and ProjectView leaves
++                               EditTaskId set — so without the gate nothing changes between opens
++                               and the component keeps serving the event list it cached the first
++                               time. Save a priority change here and reopen: the "Updated:
++                               Priority" comment reloads, the "Priority: Low → High" row does not.
++                               That is #328's own symptom, on the surface #328 names in scope. *@
+                             <ActivityTimeline TestIdPrefix="edit-item-activity"
+-                                              TaskId="@EditTaskId"
++                                              TaskId="@(IsOpen ? EditTaskId : null)"
+                                               Comments="taskComments" />
+                         </div>
+ 
+@@ -315,10 +323,24 @@
+     private List<TaskComment> taskComments = [];
+     private string? newCommentText;
+ 
++    // What the last reset was performed FOR. OnParametersSet runs on EVERY parent render — the
++    // modal's parameters include AllFeatures (a List<Feature>), and Blazor treats any non-known-
++    // immutable reference type as "may have changed", so ProjectView re-rendering for any reason
++    // re-invoked this. Unguarded, that meant: re-issue LoadTaskDetails(), blank taskComments to a
++    // fresh list (re-merging the whole timeline and flashing it empty), and reset editName back
++    // to InitialName UNDER A USER WHO WAS TYPING. Reset on an actual open / target transition.
++    private bool wasOpen;
++    private (EditItemType Mode, int ProjectId, int? FeatureId, int? TaskId) loadedTarget;
++
+     protected override void OnParametersSet()
+     {
+-        if (IsOpen)
++        var target = (EditMode, EditProjectId, EditFeatureId, EditTaskId);
++        var isNewTarget = !wasOpen || !target.Equals(loadedTarget);
++        wasOpen = IsOpen;
++
++        if (IsOpen && isNewTarget)
+         {
++            loadedTarget = target;
+             editName = InitialName;
+             editDescription = InitialDescription;
+             editGoals = InitialGoals;
+diff --git a/src/KanbanFlow/Components/Shared/TaskDetailPanel.razor b/src/KanbanFlow/Components/Shared/TaskDetailPanel.razor
+index 5d97d1d..4092e6e 100644
+--- a/src/KanbanFlow/Components/Shared/TaskDetailPanel.razor
++++ b/src/KanbanFlow/Components/Shared/TaskDetailPanel.razor
+@@ -273,14 +273,14 @@
+                The trail was recorded and served by GET /api/tasks/{id}/activity from the start,
+                and never rendered on either task surface. ActivityTimeline is that one renderer;
+                EditItemModal mounts the SAME component, not a copy. *@
+-            <section class="mb-4 pt-3 border-top" data-testid="task-history-section" aria-labelledby="task-comments-heading">
++            <section class="mb-4 pt-3 border-top" data-testid="task-history-section" aria-labelledby="task-history-heading">
+                 @* No count badge here on purpose. It used to show comments.Count, which is now a
+                    DIFFERENT number from the timeline below it (the merge adds activity events and
+                    folds away the system comments they supersede) — a header saying 6 above a list
+                    saying 7 is worse than no header count. The "All" chip carries it instead, and
+                    it is computed from the very list it labels. *@
+                 <div class="d-flex align-items-center mb-2">
+-                    <h6 id="task-comments-heading" class="form-label small text-muted mb-0">History</h6>
++                    <h6 id="task-history-heading" class="form-label small text-muted mb-0">History</h6>
+                 </div>
+ 
+                 @if (commentsLoading)
+diff --git a/src/KanbanFlow/Services/ActivityTimelineModel.cs b/src/KanbanFlow/Services/ActivityTimelineModel.cs
+index ad07e50..ce9f472 100644
+--- a/src/KanbanFlow/Services/ActivityTimelineModel.cs
++++ b/src/KanbanFlow/Services/ActivityTimelineModel.cs
+@@ -43,6 +43,9 @@ public sealed record TimelineEntry
+     /// <summary>Stable @key: "c-{commentId}" or "a-{eventId}".</summary>
+     public required string Key { get; init; }
+ 
++    /// <summary>The source row's integer id. Used to tiebreak ordering numerically, not as text.</summary>
++    public required int SourceId { get; init; }
++
+     public required TimelineEntryKind Kind { get; init; }
+ 
+     /// <summary>UTC instant, exactly as stored. Rendering decides the clock — see ActivityTimeline.razor.</summary>
+@@ -127,15 +130,28 @@ public static class ActivityTimelineModel
+         ("priority", "Priority"),
+         ("assignee", "Assignee"),
+         ("claimedBy", "Claimed by"),
+-        ("featureId", "Feature"),
+         ("description", "Description"),
+-        ("completedAt", "Completed"),
+-        ("sortOrder", "Order")
++        ("completedAt", "Completed")
+     ];
+ 
++    // Deliberately NOT tracked, though both are in the snapshot:
++    //
++    //   sortOrder — TaskService.cs:639-648 states the rule outright: "SortOrder is a UI reorder
++    //     concern … it rides along silently and must NOT emit an activity event or comment (the
++    //     #88 audit boundary)." It rides along in the SNAPSHOT too, so tracking it would surface
++    //     it anyway on the back of a TaskStatusChanged: dragging a card would render
++    //     "Order: 3 → 1.5" — an internal fractional rank (#307) the user never sees anywhere
++    //     else in the app, attached to an event the codebase says must not report it.
++    //
++    //   featureId — a raw foreign key. "Feature: 2 → 3" is not the human-readable line AC2 asks
++    //     for, and this model is pure: it has no DbContext with which to resolve a name. Dropping
++    //     it leaves TaskFeatureChanged with no derivable diff, so it falls back to its Message
++    //     ("Task 'X' reassigned from feature 2 to feature 3") — the same information in one line
++    //     instead of two, without pretending to be resolved.
++
+     // Keys whose values are ISO timestamps, rendered as local time instead of raw round-trip text.
+     private static readonly HashSet<string> TimestampKeys =
+-        new(StringComparer.OrdinalIgnoreCase) { "completedAt", "claimedAt" };
++        new(StringComparer.OrdinalIgnoreCase) { "completedAt" };
+ 
+     /// <summary>
+     /// Merge comments and activity events into ONE chronological timeline, newest first.
+@@ -146,7 +162,19 @@ public static class ActivityTimelineModel
+     /// </remarks>
+     public static IReadOnlyList<TimelineEntry> Build(
+         IEnumerable<TaskComment>? comments,
+-        IEnumerable<ActivityEvent>? events)
++        IEnumerable<ActivityEvent>? events) => Build(comments, events, out _);
++
++    /// <inheritdoc cref="Build(IEnumerable{TaskComment}?, IEnumerable{ActivityEvent}?)"/>
++    /// <param name="totalBeforeCap">
++    /// How many rows the merge produced before <see cref="MaxEntries"/> was applied. The caller
++    /// must SAY when it has hidden history: this component sits under a README requirement that
++    /// calls the audit log the single source of truth, and a silent "500" with older rows dropped
++    /// and nothing on screen to say so is the same class of lie #328 exists to fix.
++    /// </param>
++    public static IReadOnlyList<TimelineEntry> Build(
++        IEnumerable<TaskComment>? comments,
++        IEnumerable<ActivityEvent>? events,
++        out int totalBeforeCap)
+     {
+         var commentList = comments?.Where(c => c is not null).ToList() ?? [];
+         var eventList = events?.Where(e => e is not null).ToList() ?? [];
+@@ -182,9 +210,15 @@ public static class ActivityTimelineModel
+             entries.Add(FromActivityEvent(activity));
+         }
+ 
++        totalBeforeCap = entries.Count;
++
++        // Tiebreak NUMERICALLY, not by the string key: ordering by "c-9" vs "c-10" is
++        // lexicographic over an integer id and puts row 9 above row 10. Within one instant the
++        // comment comes first and its event second, matching the order TaskService writes them.
+         return entries
+             .OrderByDescending(e => e.CreatedAtUtc)
+-            .ThenByDescending(e => e.Key, StringComparer.Ordinal)
++            .ThenBy(e => e.IsActivityEvent)
++            .ThenByDescending(e => e.SourceId)
+             .Take(MaxEntries)
+             .ToList();
+     }
+@@ -254,13 +288,18 @@ public static class ActivityTimelineModel
+                 if ((hasBefore && IsStructured(beforeValue)) || (hasAfter && IsStructured(afterValue)))
+                     continue;
+ 
+-                var beforeText = hasBefore ? Display(beforeValue, key) : EmptyValue;
+-                var afterText = hasAfter ? Display(afterValue, key) : EmptyValue;
++                // Compare the FULL values and truncate only for display. Truncating first makes
++                // two descriptions that differ at character 95 collapse to the same 80-char
++                // string, so a real edit reports as "no change" — and because a sibling field
++                // usually did change, changes.Count > 0 suppresses the Message that would have
++                // named it. The edit would vanish from the audit trail entirely.
++                var beforeText = hasBefore ? Display(beforeValue, key) : string.Empty;
++                var afterText = hasAfter ? Display(afterValue, key) : string.Empty;
+ 
+                 if (string.Equals(beforeText, afterText, StringComparison.Ordinal))
+                     continue;
+ 
+-                changes.Add(new TimelineFieldChange(label, beforeText, afterText));
++                changes.Add(new TimelineFieldChange(label, Truncate(beforeText), Truncate(afterText)));
+ 
+                 if (changes.Count >= MaxChangesPerEvent)
+                     break;
+@@ -284,7 +323,7 @@ public static class ActivityTimelineModel
+     /// </summary>
+     public static string Relative(DateTime utc, DateTime nowUtc)
+     {
+-        var delta = nowUtc - utc;
++        var delta = AsUtc(nowUtc) - AsUtc(utc);
+ 
+         // A clock skew or a future-stamped row must not render "-3m ago".
+         if (delta < TimeSpan.Zero)
+@@ -304,7 +343,24 @@ public static class ActivityTimelineModel
+     /// server IS the client machine, which is what the already-correct comment rows relied on.)
+     /// </summary>
+     public static string Absolute(DateTime utc) =>
+-        utc.ToLocalTime().ToString("MMM d, yyyy h:mm tt");
++        AsUtc(utc).ToLocalTime().ToString("MMM d, yyyy h:mm tt");
++
++    /// <summary>
++    /// The stored instant, unambiguously tagged UTC. EF/SQLite hands these back with
++    /// <see cref="DateTimeKind.Unspecified"/>, and <c>ToString("O")</c> on an Unspecified value
++    /// emits NO zone designator — so a tooltip built straight off it says "UTC:" above a string
++    /// that is not a UTC instant, and a <c>&lt;time datetime&gt;</c> attribute claims local to
++    /// every machine consumer. Normalise first; the storage contract is UTC.
++    /// </summary>
++    public static DateTime AsUtc(DateTime value) => value.Kind switch
++    {
++        DateTimeKind.Utc => value,
++        DateTimeKind.Local => value.ToUniversalTime(),
++        _ => DateTime.SpecifyKind(value, DateTimeKind.Utc)
++    };
++
++    /// <summary>The round-trip UTC instant, e.g. for a <c>&lt;time datetime&gt;</c> attribute.</summary>
++    public static string RoundTripUtc(DateTime utc) => AsUtc(utc).ToString("O");
+ 
+     /// <summary>
+     /// THE tooltip. One string for every timestamp in both task surfaces: the absolute local
+@@ -312,13 +368,14 @@ public static class ActivityTimelineModel
+     /// #306 asks for. Before this, three of the panel's five timestamps had no tooltip at all
+     /// and EditItemModal's had neither a tooltip nor local time.
+     /// </summary>
+-    public static string Tooltip(DateTime utc) => $"{Absolute(utc)} (UTC: {utc:O})";
++    public static string Tooltip(DateTime utc) => $"{Absolute(utc)} (UTC: {RoundTripUtc(utc)})";
+ 
+     // ── Internals ────────────────────────────────────────────────────────────────────────
+ 
+     private static TimelineEntry FromComment(TaskComment comment) => new()
+     {
+         Key = $"c-{comment.Id}",
++        SourceId = comment.Id,
+         Kind = KindOf(comment.Type),
+         CreatedAtUtc = comment.CreatedAt,
+         Actor = ActorOf(comment.Author),
+@@ -334,6 +391,7 @@ public static class ActivityTimelineModel
+         return new TimelineEntry
+         {
+             Key = $"a-{activity.Id}",
++            SourceId = activity.Id,
+             Kind = string.Equals(activity.EventType, "TaskStatusChanged", StringComparison.Ordinal)
+                 ? TimelineEntryKind.StatusChange
+                 : TimelineEntryKind.FieldChange,
+@@ -393,13 +451,17 @@ public static class ActivityTimelineModel
+     private static bool Within(DateTime a, DateTime b) =>
+         (a - b).Duration() <= DuplicateWindow;
+ 
++    // Only the three system comment types a producer actually writes (TaskService writes
++    // StatusChange, Created, FeatureChange and Note; SeedData writes Created and StatusChange).
++    // PriorityChange and AssigneeChange are deliberately absent: mapping them both to
++    // "TaskUpdated" would let ONE event suppress TWO comments, because HasMatchingEvent does
++    // not consume the event it matched. Nothing writes them today, and "kept" is the safe
++    // direction for a row we cannot account for.
+     private static string? EventTypeFor(CommentType type) => type switch
+     {
+         Models.CommentType.StatusChange => "TaskStatusChanged",
+         Models.CommentType.Created => "TaskCreated",
+         Models.CommentType.FeatureChange => "TaskFeatureChanged",
+-        Models.CommentType.PriorityChange => "TaskUpdated",
+-        Models.CommentType.AssigneeChange => "TaskUpdated",
+         _ => null
+     };
+ 
+@@ -488,6 +550,7 @@ public static class ActivityTimelineModel
+     private static bool IsStructured(JsonElement value) =>
+         value.ValueKind is JsonValueKind.Object or JsonValueKind.Array;
+ 
++    /// <summary>Display text for one JSON scalar. NOT truncated — callers compare, then truncate.</summary>
+     private static string Display(JsonElement value, string key)
+     {
+         var text = value.ValueKind switch
+@@ -502,7 +565,7 @@ public static class ActivityTimelineModel
+             _ => string.Empty
+         };
+ 
+-        return Truncate(Collapse(text));
++        return Collapse(text);
+     }
+ 
+     private static string FormatString(string? raw, string key)
+diff --git a/src/KanbanFlow/wwwroot/app.css b/src/KanbanFlow/wwwroot/app.css
+index 9cd4a61..5f36f51 100644
+--- a/src/KanbanFlow/wwwroot/app.css
++++ b/src/KanbanFlow/wwwroot/app.css
+@@ -445,8 +445,10 @@ h1:focus {
+     background:
+         linear-gradient(var(--kf-comment-cover) 30%, transparent) center top,
+         linear-gradient(transparent, var(--kf-comment-cover) 70%) center bottom,
+-        radial-gradient(farthest-side at 50% 0, rgba(0, 0, 0, 0.14), rgba(0, 0, 0, 0)) center top,
+-        radial-gradient(farthest-side at 50% 100%, rgba(0, 0, 0, 0.14), rgba(0, 0, 0, 0)) center bottom;
++        /* The shadow has to invert with the theme too — a black shadow on a near-black surface is
++           no shadow, which would leave the cover revealing an affordance that isn't drawn. */
++        radial-gradient(farthest-side at 50% 0, rgba(var(--bs-emphasis-color-rgb), 0.14), rgba(var(--bs-emphasis-color-rgb), 0)) center top,
++        radial-gradient(farthest-side at 50% 100%, rgba(var(--bs-emphasis-color-rgb), 0.14), rgba(var(--bs-emphasis-color-rgb), 0)) center bottom;
+     background-repeat: no-repeat;
+     background-size: 100% 2rem, 100% 2rem, 100% 0.5rem, 100% 0.5rem;
+     background-attachment: local, local, scroll, scroll;
+@@ -460,6 +462,16 @@ h1:focus {
+    outline edit), so this is the only place the timeline is styled. Colours are `var(--bs-*)`
+    only, so `data-bs-theme="dark"` recolours the rail, the dots and the diff chips for free —
+    a hardcoded hex here would be a light-mode-only feature. */
++/* Which surface this timeline is sitting ON. The dot's ring and the diff chips are both defined
++   RELATIVE to it, so they cannot be constants: `.edit-item-activity-surface` is --bs-tertiary-bg
++   in BOTH themes, which is exactly what `.activity-timeline-value` used for its chip — so every
++   Todo / InProgress / Low / High chip vanished on the outline-edit surface while looking fine on
++   the panel. Same component, two backdrops; the backdrop has to be a parameter. */
++.activity-timeline-section {
++    --kf-timeline-surface: var(--bs-body-bg);
++    --kf-timeline-chip: var(--bs-tertiary-bg);
++}
++
+ .activity-timeline {
+     position: relative;
+     margin: 0;
+@@ -495,8 +507,9 @@ h1:focus {
+     height: 0.55rem;
+     border-radius: 50%;
+     background-color: var(--bs-secondary-bg);
+-    /* The ring is the page background, so the dot punches a clean hole in the rail behind it. */
+-    box-shadow: 0 0 0 2px var(--bs-body-bg);
++    /* The ring is whatever surface the timeline sits on, so the dot punches a clean hole in the
++       rail behind it — a hardcoded page background would be a visible halo inside the modal. */
++    box-shadow: 0 0 0 2px var(--kf-timeline-surface);
+     border: 1px solid var(--bs-secondary-color);
+ }
+ 
+@@ -541,7 +554,7 @@ h1:focus {
+     max-width: 100%;
+     padding: 0 0.3rem;
+     border-radius: var(--bs-border-radius-sm);
+-    background-color: var(--bs-tertiary-bg);
++    background-color: var(--kf-timeline-chip);
+     font-family: var(--bs-font-monospace);
+     font-size: 0.78rem;
+     overflow-wrap: anywhere;
+@@ -573,10 +586,17 @@ h1:focus {
+     background: var(--bs-tertiary-bg);
+ }
+ 
++/* Everything nested here is told which surface it landed on, so the timeline renders the same
++   whichever of the two task surfaces mounted it. */
+ .edit-item-activity-surface .task-comment-body {
+     --kf-comment-cover: var(--bs-tertiary-bg);
+ }
+ 
++.edit-item-activity-surface .activity-timeline-section {
++    --kf-timeline-surface: var(--bs-tertiary-bg);
++    --kf-timeline-chip: var(--bs-secondary-bg);
++}
++
+ /* ══════════════════════════════════════════════════════════════════════════════════════════════
+    Kanban columns — terminal rails, inert columns, drag affordance, priority borders, empty states.
+    Emitted by Components/Shared/KanbanColumn.razor; shared by /project/{id} and /ideas.
+diff --git a/tests/KanbanFlow.Tests/ActivityTimelineModelTests.cs b/tests/KanbanFlow.Tests/ActivityTimelineModelTests.cs
+index e38ecd1..c598fd9 100644
+--- a/tests/KanbanFlow.Tests/ActivityTimelineModelTests.cs
++++ b/tests/KanbanFlow.Tests/ActivityTimelineModelTests.cs
+@@ -215,6 +215,77 @@ public class ActivityTimelineModelTests
+         Assert.EndsWith("…", description.After);
+     }
+ 
++    [Fact]
++    public void An_edit_past_the_display_cap_is_still_reported_as_a_change()
++    {
++        // Truncation is for DISPLAY. Compare the truncated forms instead and two descriptions
++        // differing at character 95 collapse to the identical 80-char string, so a real edit
++        // reports as "no change" — and because a sibling field usually did change,
++        // changes.Count > 0 also suppresses the Message that would have named it. The edit
++        // disappears from the audit trail on a screen whose whole job is the audit trail.
++        var head = new string('a', ActivityTimelineModel.MaxValueChars + 10);
++        var before = head + "ORIGINAL ending";
++        var after = head + "REWRITTEN ending";
++
++        var changes = ActivityTimelineModel.DeriveChanges(
++            Snapshot(description: before, priority: "Low"),
++            Snapshot(description: after, priority: "High"));
++
++        Assert.Contains(changes, c => c.Field == "Description");
++        Assert.Contains(changes, c => c.Field == "Priority");
++
++        // …and it is still truncated for display.
++        var description = changes.Single(c => c.Field == "Description");
++        Assert.EndsWith("…", description.Before);
++        Assert.EndsWith("…", description.After);
++        Assert.Equal(ActivityTimelineModel.MaxValueChars + 1, description.Before.Length);
++    }
++
++    [Fact]
++    public void An_unchanged_field_is_not_reported_even_when_both_sides_exceed_the_cap()
++    {
++        // The other direction of the same guard: comparing untruncated must not make every long
++        // field look changed.
++        var same = new string('a', ActivityTimelineModel.MaxValueChars + 40) + " tail";
++
++        var changes = ActivityTimelineModel.DeriveChanges(
++            Snapshot(description: same, priority: "Low"),
++            Snapshot(description: same, priority: "High"));
++
++        Assert.DoesNotContain(changes, c => c.Field == "Description");
++        Assert.Single(changes);
++    }
++
++    [Fact]
++    public void The_snapshots_internal_bookkeeping_fields_stay_out_of_the_timeline()
++    {
++        // sortOrder rides along in the snapshot but TaskService.cs:639-648 says it "must NOT emit
++        // an activity event or comment (the #88 audit boundary)" — and a board drag emits
++        // TaskStatusChanged, whose snapshots carry the new rank. Tracking it would render
++        // "Order: 3 → 1.5", an internal fractional rank (#307) shown nowhere else in the app.
++        // featureId is excluded for a different reason: a raw FK is not the human-readable line
++        // AC2 asks for, and this model is pure — it has no DbContext to resolve a name with.
++        var changes = ActivityTimelineModel.DeriveChanges(
++            Snapshot(status: "Todo", sortOrder: 3, featureId: 2),
++            Snapshot(status: "InProgress", sortOrder: 1.5, featureId: 5));
++
++        Assert.Single(changes);
++        Assert.Equal("Status", changes[0].Field);
++    }
++
++    [Fact]
++    public void A_feature_move_falls_back_to_its_message_rather_than_a_raw_foreign_key()
++    {
++        var entry = Assert.Single(ActivityTimelineModel.Build(null,
++        [
++            Event(1, "TaskFeatureChanged", T0, Snapshot(featureId: 2), Snapshot(featureId: 5),
++                "Task 'Ship the timeline' reassigned from feature 2 to feature 5")
++        ]));
++
++        Assert.Empty(entry.Changes);
++        Assert.Equal("Task 'Ship the timeline' reassigned from feature 2 to feature 5", entry.Summary);
++    }
++
+     [Fact]
+     public void DeriveChanges_matches_field_names_case_insensitively()
+     {
+@@ -239,16 +310,88 @@ public class ActivityTimelineModelTests
+         Assert.Empty(entry.Changes);
+         Assert.Equal("Something happened to the task", entry.Summary);
+ 
+-        // Nothing anywhere on the rendered entry carries the payload or its punctuation.
+-        foreach (var text in new[] { entry.Summary, entry.Label, entry.Actor, entry.Body })
++        // Scan EVERY string the component can render, including the change lines — the summary
++        // alone is a value this test set itself, so asserting only over it would pass against a
++        // differ that leaked through Changes.
++        var rendered = new List<string?> { entry.Summary, entry.Label, entry.Actor, entry.Body };
++        rendered.AddRange(entry.Changes.SelectMany(c => new[] { c.Field, c.Before, c.After }));
++
++        foreach (var text in rendered)
+         {
+             if (text is null) continue;
+             Assert.DoesNotContain("{", text, StringComparison.Ordinal);
+             Assert.DoesNotContain("\"", text, StringComparison.Ordinal);
+             Assert.DoesNotContain("someFieldWeDoNotKnow", text, StringComparison.Ordinal);
++            Assert.DoesNotContain("and its value", text, StringComparison.Ordinal);
+         }
+     }
+ 
++    [Fact]
++    public void A_payload_that_mixes_known_and_unknown_keys_renders_only_the_known_ones()
++    {
++        // The load-bearing half: a payload the differ CAN partly read must still not carry the
++        // unreadable half through. Same shape as a snapshot gaining a field we do not label yet.
++        var before = """{"status":"Todo","secretInternalRank":{"a":1},"unlabelledNewField":"leak-me"}""";
++        var after = """{"status":"Done","secretInternalRank":{"a":2},"unlabelledNewField":"leak-me-too"}""";
++
++        var entry = Assert.Single(ActivityTimelineModel.Build(null,
++            [Event(1, "TaskStatusChanged", T0, before, after, "status changed")]));
++
++        var change = Assert.Single(entry.Changes);
++        Assert.Equal("Status", change.Field);
++
++        var rendered = new List<string?> { entry.Summary, entry.Label, entry.Actor, entry.Body };
++        rendered.AddRange(entry.Changes.SelectMany(c => new[] { c.Field, c.Before, c.After }));
++        foreach (var text in rendered.Where(t => t is not null))
++        {
++            Assert.DoesNotContain("leak-me", text!, StringComparison.Ordinal);
++            Assert.DoesNotContain("secretInternalRank", text!, StringComparison.Ordinal);
++            Assert.DoesNotContain("{", text!, StringComparison.Ordinal);
++        }
++    }
++
++    // ── Ordering + the entry cap ─────────────────────────────────────────────────────────────
++
++    [Fact]
++    public void Same_instant_rows_tiebreak_numerically_not_lexicographically()
++    {
++        // Ordering by the string key sorts "c-9" above "c-10". Ten comments stamped at the same
++        // second is not hypothetical: a bulk import or a mirrored GitHub sync writes exactly that.
++        var sameInstant = Enumerable.Range(1, 12)
++            .Select(i => Comment(i, $"comment {i}", T0))
++            .ToList();
++
++        var keys = ActivityTimelineModel.Build(sameInstant, null).Select(e => e.Key).ToArray();
++
++        Assert.Equal(
++            Enumerable.Range(1, 12).Reverse().Select(i => $"c-{i}").ToArray(),
++            keys);
++    }
++
++    [Fact]
++    public void The_entry_cap_keeps_the_newest_and_reports_what_it_hid()
++    {
++        // A silent cap on the surface whose whole job is audit honesty is the same class of
++        // untruth this issue exists to fix — so Build tells the caller how much it dropped.
++        var many = Enumerable.Range(1, ActivityTimelineModel.MaxEntries + 25)
++            .Select(i => Comment(i, $"comment {i}", T0.AddMinutes(i)))
++            .ToList();
++
++        var timeline = ActivityTimelineModel.Build(many, null, out var totalBeforeCap);
++
++        Assert.Equal(ActivityTimelineModel.MaxEntries, timeline.Count);
++        Assert.Equal(ActivityTimelineModel.MaxEntries + 25, totalBeforeCap);
++        Assert.Equal($"c-{ActivityTimelineModel.MaxEntries + 25}", timeline[0].Key);   // newest kept
++        Assert.DoesNotContain(timeline, e => e.Key == "c-1");                          // oldest dropped
++    }
++
++    [Fact]
++    public void An_uncapped_timeline_reports_no_hidden_rows()
++    {
++        ActivityTimelineModel.Build([Comment(1, "only one", T0)], null, out var totalBeforeCap);
++        Assert.Equal(1, totalBeforeCap);
++    }
++
+     [Fact]
+     public void An_event_with_neither_diff_nor_message_still_renders_without_json()
+     {
+@@ -412,6 +555,31 @@ public class ActivityTimelineModelTests
+         Assert.Contains($"UTC: {T0:O}", tooltip, StringComparison.Ordinal);
+     }
+ 
++    [Fact]
++    public void The_UTC_tooltip_is_tagged_UTC_even_for_the_Unspecified_kind_the_database_returns()
++    {
++        // The Kind production actually hands us. `ToString("O")` on an Unspecified DateTime emits
++        // NO zone designator, so a tooltip built straight off it says "UTC:" above a string that
++        // is not a UTC instant, and <time datetime> claims local to every machine consumer.
++        // Asserting only over a Kind=Utc fixture passes against exactly that bug — the one Kind
++        // the app never produces is the one that hides it.
++        var fromDatabase = DateTime.SpecifyKind(T0, DateTimeKind.Unspecified);
++
++        Assert.EndsWith("Z", ActivityTimelineModel.RoundTripUtc(fromDatabase), StringComparison.Ordinal);
++        Assert.Equal(ActivityTimelineModel.RoundTripUtc(T0), ActivityTimelineModel.RoundTripUtc(fromDatabase));
++        Assert.Contains($"UTC: {T0:O}", ActivityTimelineModel.Tooltip(fromDatabase), StringComparison.Ordinal);
++    }
++
++    [Fact]
++    public void A_local_kind_value_is_converted_rather_than_relabelled()
++    {
++        // Defence in depth: nothing passes Local today, but silently stamping "Utc" on a Local
++        // value would shift the instant by the whole offset.
++        var local = T0.ToLocalTime();
++        Assert.Equal(ActivityTimelineModel.RoundTripUtc(T0), ActivityTimelineModel.RoundTripUtc(local));
++        Assert.Equal(ActivityTimelineModel.Absolute(T0), ActivityTimelineModel.Absolute(local));
++    }
++
+     [Theory]
+     [InlineData(0, "just now")]
+     [InlineData(44, "just now")]
+@@ -445,7 +613,8 @@ public class ActivityTimelineModelTests
+     {
+         // The differ is a WHITELIST over TaskService.TaskActivitySnapshot's keys. A rename there
+         // would silently blank every change line while the suite stayed green on hand-written
+-        // fixtures — so read the producer's own output and diff against it.
++        // fixtures — so read the producer's own output and diff against it. (The lookup is
++        // runtime reflection, so a rename fails THIS TEST, not the compiler.)
+         var snapshotMethod = typeof(TaskService).GetMethod(
+             "TaskActivitySnapshot", BindingFlags.NonPublic | BindingFlags.Static);
+ 

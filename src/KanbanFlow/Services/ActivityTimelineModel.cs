@@ -43,6 +43,9 @@ public sealed record TimelineEntry
     /// <summary>Stable @key: "c-{commentId}" or "a-{eventId}".</summary>
     public required string Key { get; init; }
 
+    /// <summary>The source row's integer id. Used to tiebreak ordering numerically, not as text.</summary>
+    public required int SourceId { get; init; }
+
     public required TimelineEntryKind Kind { get; init; }
 
     /// <summary>UTC instant, exactly as stored. Rendering decides the clock — see ActivityTimeline.razor.</summary>
@@ -127,15 +130,28 @@ public static class ActivityTimelineModel
         ("priority", "Priority"),
         ("assignee", "Assignee"),
         ("claimedBy", "Claimed by"),
-        ("featureId", "Feature"),
         ("description", "Description"),
-        ("completedAt", "Completed"),
-        ("sortOrder", "Order")
+        ("completedAt", "Completed")
     ];
+
+    // Deliberately NOT tracked, though both are in the snapshot:
+    //
+    //   sortOrder — TaskService.cs:639-648 states the rule outright: "SortOrder is a UI reorder
+    //     concern … it rides along silently and must NOT emit an activity event or comment (the
+    //     #88 audit boundary)." It rides along in the SNAPSHOT too, so tracking it would surface
+    //     it anyway on the back of a TaskStatusChanged: dragging a card would render
+    //     "Order: 3 → 1.5" — an internal fractional rank (#307) the user never sees anywhere
+    //     else in the app, attached to an event the codebase says must not report it.
+    //
+    //   featureId — a raw foreign key. "Feature: 2 → 3" is not the human-readable line AC2 asks
+    //     for, and this model is pure: it has no DbContext with which to resolve a name. Dropping
+    //     it leaves TaskFeatureChanged with no derivable diff, so it falls back to its Message
+    //     ("Task 'X' reassigned from feature 2 to feature 3") — the same information in one line
+    //     instead of two, without pretending to be resolved.
 
     // Keys whose values are ISO timestamps, rendered as local time instead of raw round-trip text.
     private static readonly HashSet<string> TimestampKeys =
-        new(StringComparer.OrdinalIgnoreCase) { "completedAt", "claimedAt" };
+        new(StringComparer.OrdinalIgnoreCase) { "completedAt" };
 
     /// <summary>
     /// Merge comments and activity events into ONE chronological timeline, newest first.
@@ -146,7 +162,19 @@ public static class ActivityTimelineModel
     /// </remarks>
     public static IReadOnlyList<TimelineEntry> Build(
         IEnumerable<TaskComment>? comments,
-        IEnumerable<ActivityEvent>? events)
+        IEnumerable<ActivityEvent>? events) => Build(comments, events, out _);
+
+    /// <inheritdoc cref="Build(IEnumerable{TaskComment}?, IEnumerable{ActivityEvent}?)"/>
+    /// <param name="totalBeforeCap">
+    /// How many rows the merge produced before <see cref="MaxEntries"/> was applied. The caller
+    /// must SAY when it has hidden history: this component sits under a README requirement that
+    /// calls the audit log the single source of truth, and a silent "500" with older rows dropped
+    /// and nothing on screen to say so is the same class of lie #328 exists to fix.
+    /// </param>
+    public static IReadOnlyList<TimelineEntry> Build(
+        IEnumerable<TaskComment>? comments,
+        IEnumerable<ActivityEvent>? events,
+        out int totalBeforeCap)
     {
         var commentList = comments?.Where(c => c is not null).ToList() ?? [];
         var eventList = events?.Where(e => e is not null).ToList() ?? [];
@@ -182,9 +210,15 @@ public static class ActivityTimelineModel
             entries.Add(FromActivityEvent(activity));
         }
 
+        totalBeforeCap = entries.Count;
+
+        // Tiebreak NUMERICALLY, not by the string key: ordering by "c-9" vs "c-10" is
+        // lexicographic over an integer id and puts row 9 above row 10. Within one instant the
+        // comment comes first and its event second, matching the order TaskService writes them.
         return entries
             .OrderByDescending(e => e.CreatedAtUtc)
-            .ThenByDescending(e => e.Key, StringComparer.Ordinal)
+            .ThenBy(e => e.IsActivityEvent)
+            .ThenByDescending(e => e.SourceId)
             .Take(MaxEntries)
             .ToList();
     }
@@ -254,13 +288,18 @@ public static class ActivityTimelineModel
                 if ((hasBefore && IsStructured(beforeValue)) || (hasAfter && IsStructured(afterValue)))
                     continue;
 
-                var beforeText = hasBefore ? Display(beforeValue, key) : EmptyValue;
-                var afterText = hasAfter ? Display(afterValue, key) : EmptyValue;
+                // Compare the FULL values and truncate only for display. Truncating first makes
+                // two descriptions that differ at character 95 collapse to the same 80-char
+                // string, so a real edit reports as "no change" — and because a sibling field
+                // usually did change, changes.Count > 0 suppresses the Message that would have
+                // named it. The edit would vanish from the audit trail entirely.
+                var beforeText = hasBefore ? Display(beforeValue, key) : string.Empty;
+                var afterText = hasAfter ? Display(afterValue, key) : string.Empty;
 
                 if (string.Equals(beforeText, afterText, StringComparison.Ordinal))
                     continue;
 
-                changes.Add(new TimelineFieldChange(label, beforeText, afterText));
+                changes.Add(new TimelineFieldChange(label, Truncate(beforeText), Truncate(afterText)));
 
                 if (changes.Count >= MaxChangesPerEvent)
                     break;
@@ -284,7 +323,7 @@ public static class ActivityTimelineModel
     /// </summary>
     public static string Relative(DateTime utc, DateTime nowUtc)
     {
-        var delta = nowUtc - utc;
+        var delta = AsUtc(nowUtc) - AsUtc(utc);
 
         // A clock skew or a future-stamped row must not render "-3m ago".
         if (delta < TimeSpan.Zero)
@@ -304,7 +343,24 @@ public static class ActivityTimelineModel
     /// server IS the client machine, which is what the already-correct comment rows relied on.)
     /// </summary>
     public static string Absolute(DateTime utc) =>
-        utc.ToLocalTime().ToString("MMM d, yyyy h:mm tt");
+        AsUtc(utc).ToLocalTime().ToString("MMM d, yyyy h:mm tt");
+
+    /// <summary>
+    /// The stored instant, unambiguously tagged UTC. EF/SQLite hands these back with
+    /// <see cref="DateTimeKind.Unspecified"/>, and <c>ToString("O")</c> on an Unspecified value
+    /// emits NO zone designator — so a tooltip built straight off it says "UTC:" above a string
+    /// that is not a UTC instant, and a <c>&lt;time datetime&gt;</c> attribute claims local to
+    /// every machine consumer. Normalise first; the storage contract is UTC.
+    /// </summary>
+    public static DateTime AsUtc(DateTime value) => value.Kind switch
+    {
+        DateTimeKind.Utc => value,
+        DateTimeKind.Local => value.ToUniversalTime(),
+        _ => DateTime.SpecifyKind(value, DateTimeKind.Utc)
+    };
+
+    /// <summary>The round-trip UTC instant, e.g. for a <c>&lt;time datetime&gt;</c> attribute.</summary>
+    public static string RoundTripUtc(DateTime utc) => AsUtc(utc).ToString("O");
 
     /// <summary>
     /// THE tooltip. One string for every timestamp in both task surfaces: the absolute local
@@ -312,13 +368,14 @@ public static class ActivityTimelineModel
     /// #306 asks for. Before this, three of the panel's five timestamps had no tooltip at all
     /// and EditItemModal's had neither a tooltip nor local time.
     /// </summary>
-    public static string Tooltip(DateTime utc) => $"{Absolute(utc)} (UTC: {utc:O})";
+    public static string Tooltip(DateTime utc) => $"{Absolute(utc)} (UTC: {RoundTripUtc(utc)})";
 
     // ── Internals ────────────────────────────────────────────────────────────────────────
 
     private static TimelineEntry FromComment(TaskComment comment) => new()
     {
         Key = $"c-{comment.Id}",
+        SourceId = comment.Id,
         Kind = KindOf(comment.Type),
         CreatedAtUtc = comment.CreatedAt,
         Actor = ActorOf(comment.Author),
@@ -334,6 +391,7 @@ public static class ActivityTimelineModel
         return new TimelineEntry
         {
             Key = $"a-{activity.Id}",
+            SourceId = activity.Id,
             Kind = string.Equals(activity.EventType, "TaskStatusChanged", StringComparison.Ordinal)
                 ? TimelineEntryKind.StatusChange
                 : TimelineEntryKind.FieldChange,
@@ -393,13 +451,17 @@ public static class ActivityTimelineModel
     private static bool Within(DateTime a, DateTime b) =>
         (a - b).Duration() <= DuplicateWindow;
 
+    // Only the three system comment types a producer actually writes (TaskService writes
+    // StatusChange, Created, FeatureChange and Note; SeedData writes Created and StatusChange).
+    // PriorityChange and AssigneeChange are deliberately absent: mapping them both to
+    // "TaskUpdated" would let ONE event suppress TWO comments, because HasMatchingEvent does
+    // not consume the event it matched. Nothing writes them today, and "kept" is the safe
+    // direction for a row we cannot account for.
     private static string? EventTypeFor(CommentType type) => type switch
     {
         Models.CommentType.StatusChange => "TaskStatusChanged",
         Models.CommentType.Created => "TaskCreated",
         Models.CommentType.FeatureChange => "TaskFeatureChanged",
-        Models.CommentType.PriorityChange => "TaskUpdated",
-        Models.CommentType.AssigneeChange => "TaskUpdated",
         _ => null
     };
 
@@ -488,6 +550,7 @@ public static class ActivityTimelineModel
     private static bool IsStructured(JsonElement value) =>
         value.ValueKind is JsonValueKind.Object or JsonValueKind.Array;
 
+    /// <summary>Display text for one JSON scalar. NOT truncated — callers compare, then truncate.</summary>
     private static string Display(JsonElement value, string key)
     {
         var text = value.ValueKind switch
@@ -502,7 +565,7 @@ public static class ActivityTimelineModel
             _ => string.Empty
         };
 
-        return Truncate(Collapse(text));
+        return Collapse(text);
     }
 
     private static string FormatString(string? raw, string key)
