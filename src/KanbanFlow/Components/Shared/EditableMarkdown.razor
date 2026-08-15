@@ -38,12 +38,11 @@
        them byte-for-byte. Stripping at the STORAGE boundary would have destroyed the link;
        stripping happens at the RENDER boundary only, which is what #336 asks for.
 
-   NO preventDefault ON THE READ ELEMENT'S KEYDOWN, deliberately. Space scrolls a focused
-   non-input element, and the obvious fix — `@@onkeydown:preventDefault` — is evaluated at
-   RENDER time in Blazor, so it cannot be scoped to one key: it would swallow Tab as well and
-   turn the read element into a keyboard trap. A one-frame scroll is a far smaller defect than
-   an unreachable panel, and the textarea is focused with preventScroll immediately after. This
-   is also exactly what the existing task-name toggle in TaskDetailPanel does.
+   SEMANTIC EDIT CONTROL, OUTSIDE THE MARKDOWN. The rendered content can contain links, so it
+   cannot itself be a button (interactive descendants are forbidden) and a focusable generic div
+   has no valid interactive role. The sibling native button owns the accessible edit action and
+   Enter/Space behavior. Clicking non-link Markdown remains a pointer convenience; links stop that
+   click from bubbling and navigate normally.
    ══════════════════════════════════════════════════════════════════════════════════════════ *@
 
 @inject IJSRuntime JS
@@ -66,25 +65,26 @@
 }
 else
 {
-    @* Not a <label for>: in read mode the control is a div, which `for` cannot target, and a
-       label pointing at an id that is not in the DOM is worse than no association at all. The
-       read element carries its own accessible name instead. *@
-    <span class="form-label small text-muted mb-1 d-block">@Label</span>
+    @* A native sibling button exposes the edit action to the accessibility tree without wrapping
+       Markdown links in an interactive role. The content box remains click-to-edit for pointer
+       users; its links are intercepted in JS so their clicks do not bubble to BeginEdit. *@
+    <div class="d-flex align-items-center justify-content-between gap-2 mb-1">
+        <span class="form-label small text-muted mb-0">@Label</span>
+        <button type="button"
+                class="btn btn-link btn-sm p-0 text-decoration-none markdown-editable-control"
+                title="@readAriaLabel"
+                aria-label="@readAriaLabel"
+                data-testid="@readControlTestId"
+                @ref="readControlRef"
+                @onclick="BeginEdit">Edit</button>
+    </div>
 
-    @* tabindex="0" + aria-label makes the surface reachable and self-describing for keyboard
-       users (Enter/Space handled by HandleReadKeyDown below). role="button" is intentionally
-       omitted: ARIA forbids interactive descendants inside that role, and a rendered description
-       can contain links. Link clicks are intercepted in JS (KanbanFlow.initMarkdownEditable,
-       called from OnAfterRenderAsync) so they navigate normally without triggering BeginEdit. *@
     <div class="markdown-editable-read"
-         tabindex="0"
          title="Click to edit"
-         aria-label="@readAriaLabel"
          data-testid="@readTestId"
          style="@rowsStyle"
-         @ref="readRef"
-         @onclick="BeginEdit"
-         @onkeydown="HandleReadKeyDown">
+         @ref="readRegionRef"
+         @onclick="BeginEdit">
         <MarkdownContent Markdown="@Value" CssClass="small" EmptyText="@Placeholder" />
     </div>
 }
@@ -106,7 +106,10 @@ else
     /// <summary>DOM id of the textarea, so the edit-mode label can target it.</summary>
     [Parameter, EditorRequired] public string ElementId { get; set; } = default!;
 
-    /// <summary>Prefix for the two data-testid hooks: <c>{TestId}-read</c> / <c>{TestId}-edit</c>.</summary>
+    /// <summary>
+    /// Prefix for the three data-testid hooks: <c>{TestId}-read</c>,
+    /// <c>{TestId}-edit-control</c>, and <c>{TestId}-edit</c>.
+    /// </summary>
     [Parameter, EditorRequired] public string TestId { get; set; } = default!;
 
     [Parameter] public string Label { get; set; } = "Description";
@@ -134,7 +137,8 @@ else
     // newer DOM value. HandleInputAsync still reports every current value to the parent.
     private string? renderedEditValue;
     private ElementReference editorRef;
-    private ElementReference readRef;
+    private ElementReference readRegionRef;
+    private ElementReference readControlRef;
     private object? lastResetToken;
     private bool resetTokenSeen;
     // Link interception only needs re-arming when the rendered markup changes; skip the
@@ -156,6 +160,7 @@ else
     // on EVERY render, and this component re-renders on every keystroke while editing — the same
     // trap EditItemModal's RefreshGitHubLinks comment already documents.
     private string readTestId = string.Empty;
+    private string readControlTestId = string.Empty;
     private string editTestId = string.Empty;
     private string readAriaLabel = string.Empty;
     private string rowsStyle = string.Empty;
@@ -179,6 +184,7 @@ else
         }
 
         readTestId = $"{TestId}-read";
+        readControlTestId = $"{TestId}-edit-control";
         editTestId = $"{TestId}-edit";
         readAriaLabel = $"Edit {Label}";
         // Drives .markdown-editable-read's min-height so switching modes does not make the
@@ -202,7 +208,7 @@ else
                 var capturedValue = Value;
                 try
                 {
-                    await JS.InvokeVoidAsync("KanbanFlow.initMarkdownEditable", readRef);
+                    await JS.InvokeVoidAsync("KanbanFlow.initMarkdownEditable", readRegionRef);
                     if (_readGen == capturedGen && !editing
                         && string.Equals(Value, capturedValue, StringComparison.Ordinal))
                     {
@@ -217,7 +223,7 @@ else
 
             if (!readFocusPending) return;
             readFocusPending = false;
-            try { await readRef.FocusAsync(preventScroll: true); }
+            try { await readControlRef.FocusAsync(preventScroll: true); }
             catch (JSDisconnectedException) { }
             catch (ObjectDisposedException) { }
             catch (InvalidOperationException) { }
@@ -254,15 +260,6 @@ else
         renderedEditValue = Value;
         editing = true;
         focusPending = true;
-    }
-
-    private void HandleReadKeyDown(KeyboardEventArgs e)
-    {
-        // Same key set as TaskDetailPanel's name toggle — keep the two in step.
-        if (e.Key is "Enter" or " " or "Spacebar")
-        {
-            BeginEdit();
-        }
     }
 
     private Task HandleInputAsync(ChangeEventArgs e)

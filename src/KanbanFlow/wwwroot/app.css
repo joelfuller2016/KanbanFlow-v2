@@ -769,11 +769,11 @@ h1:focus {
    3 in the modal) so the read box reserves the height its own textarea would occupy. Without it
    the surrounding panel jumps every time the field flips mode, which reads as a layout bug.
 
-   The affordance is hover-only, on purpose: a permanent "click to edit" label is visual noise on
-   a panel that is already dense, and `cursor: text` plus a faint frame is the same signal Azure
-   DevOps uses. No hardcoded colours — every value is a `var(--bs-*)` token, so `data-bs-theme=
-   "dark"` resolves with no parallel dark ruleset (#39). (`.markdown-body pre` above still pins
-   #f8f9fa; that is #346's territory, not this block's.) */
+   The content box keeps the click-anywhere pointer convenience, while the sibling native Edit
+   button exposes a valid semantic action without wrapping Markdown links inside a button role.
+   No hardcoded colours — every value is a `var(--bs-*)` token, so `data-bs-theme="dark"`
+   resolves with no parallel dark ruleset (#39). (`.markdown-body pre` above still pins #f8f9fa;
+   that is #346's territory, not this block's.) */
 .markdown-editable-read {
     padding: .25rem .5rem;
     border: 1px solid transparent;
@@ -794,11 +794,10 @@ h1:focus {
     background-color: var(--bs-tertiary-bg);
 }
 
-/* Matches `.outline-action-btn:focus-visible` above — the field is keyboard-reachable (Tab) and
-   activates on Enter/Space, so it needs a focus ring that is actually visible. */
-.markdown-editable-read:focus-visible {
+/* The native sibling is the keyboard/AT edit action. Keep its focus ring explicit instead of
+   relying on a browser-specific default for the link-styled Bootstrap button. */
+.markdown-editable-control:focus-visible {
     outline: 0;
-    border-color: var(--bs-border-color);
     box-shadow: 0 0 0 .2rem rgba(var(--bs-primary-rgb), .25);
 }
 
@@ -806,7 +805,7 @@ h1:focus {
    leaves no visible indicator on a keyboard tab stop. Restore an outline using the system
    Highlight colour so the control is reachable without a pointing device. */
 @media (forced-colors: active) {
-    .markdown-editable-read:focus-visible {
+    .markdown-editable-control:focus-visible {
         outline: 2px solid Highlight;
         outline-offset: 2px;
     }

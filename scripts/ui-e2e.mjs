@@ -3093,14 +3093,29 @@ async function main() {
 
       const read = page.locator('[data-testid="task-detail-description-read"]');
       await read.waitFor({ state: "visible" });
+      const editControl = page.locator('[data-testid="task-detail-description-edit-control"]');
+      await editControl.waitFor({ state: "visible" });
 
-      // In the tab order for real — without this the field is unreachable without a mouse.
-      const tabIndex = await read.evaluate((el) => el.tabIndex);
-      assert(tabIndex === 0, `read element must be focusable; tabIndex was ${tabIndex}`);
+      // Accessibility-tree guard: the edit action is a real sibling button, not a focusable
+      // generic wrapper and not a button role containing the Markdown's interactive links.
+      const readSemantics = await read.evaluate((el) => ({
+        tabIndex: el.tabIndex,
+        role: el.getAttribute("role"),
+        ariaLabel: el.getAttribute("aria-label"),
+      }));
+      assert(readSemantics.tabIndex < 0 && readSemantics.role === null && readSemantics.ariaLabel === null,
+        `rendered Markdown still masquerades as an interactive control: ${JSON.stringify(readSemantics)}`);
+      assert(await editControl.evaluate((el) => el.tagName === "BUTTON" && el.type === "button"),
+        "description edit control is not a native type=button");
+      assert(await page.locator('[data-testid="task-detail-panel"]')
+        .getByRole("button", { name: "Edit Description", exact: true }).count() === 1,
+        "description edit action is missing from the accessibility tree");
+      const tabIndex = await editControl.evaluate((el) => el.tabIndex);
+      assert(tabIndex === 0, `edit control must be in the tab order; tabIndex was ${tabIndex}`);
 
       const before = await api("GET", `/api/tasks/${syncedTask.id}`);
 
-      await read.focus();
+      await editControl.focus();
       await page.keyboard.press("Enter");
       const edit = page.locator('[data-testid="task-detail-description-edit"]');
       await edit.waitFor({ state: "visible" });
@@ -3121,7 +3136,7 @@ async function main() {
 
       // AC 7 names both activation keys. Exercise Space independently after Enter returned the
       // field to read mode, and require the same one-step focus handoff.
-      await read.focus();
+      await editControl.focus();
       await page.keyboard.press("Space");
       await edit.waitFor({ state: "visible" });
       const spaceFocused = await page.evaluate(() => document.activeElement?.getAttribute("data-testid"));
@@ -3138,7 +3153,7 @@ async function main() {
       await page.keyboard.press("Escape");
       await read.waitFor({ state: "visible" });
       const escapeFocused = await page.evaluate(() => document.activeElement?.getAttribute("data-testid"));
-      assert(escapeFocused === "task-detail-description-read",
+      assert(escapeFocused === "task-detail-description-edit-control",
         `Escape did not return focus to read mode; document.activeElement was ${JSON.stringify(escapeFocused)}`);
       await sleep(600);
       const afterEscape = await api("GET", `/api/tasks/${syncedTask.id}`);
@@ -3147,9 +3162,9 @@ async function main() {
       assert(!(await read.innerText()).includes(`Discarded by Escape ${stamp}.`),
         "Escape left the discarded draft in read mode");
 
-      // Keydown guard: the JS handler stops Enter/Space on a rendered link from bubbling
-      // to the wrapper's BeginEdit handler. Removing lines 248-252 of kanbanflow.js would
-      // leave this coverage in place but still break keyboard navigation on rendered links.
+      // Rendered links remain independent of the sibling edit button and the content box's
+      // pointer shortcut. Space must do nothing; Enter must activate the link without letting
+      // its synthetic click bubble to the content box's BeginEdit handler.
       const link = read.locator(`a[href="${syncIssueUrl}"]`).first();
 
       // Space first: it does not activate the link, so the task page is still loaded when
@@ -3161,17 +3176,23 @@ async function main() {
       assert(await page.locator('[data-testid="task-detail-description-edit"]').count() === 0,
         "Space on a rendered link bubbled to the wrapper and opened the description editor");
 
-      // Enter activates the link (navigation). Capture the task URL so we can return if the
-      // browser leaves the page. Wrapper isolation for Enter is implied by the same handler
-      // path already exercised by Space above; we are not asserting from post-navigation state.
-      const taskUrl = page.url();
-      await link.focus();
+      // Prove Enter still performs the link's native activation without letting this test leave
+      // the app. If the keydown guard regresses, the wrapper enters edit mode before this click.
+      await link.evaluate((el) => {
+        el.dataset.e2eActivated = "false";
+        el.addEventListener("click", (event) => {
+          event.preventDefault();
+          el.dataset.e2eActivated = "true";
+        }, { once: true });
+      });
       await page.keyboard.press("Enter");
-      await sleep(400);
-      if (page.url() !== taskUrl) {
-        await page.goto(taskUrl);
-        await page.waitForLoadState("domcontentloaded");
-      }
+      await page.waitForFunction((href) =>
+        document.querySelector(`a[href="${href}"]`)?.dataset.e2eActivated === "true", syncIssueUrl);
+      await sleep(600); // let a regressed Blazor click bubble complete before the negative check
+      assert(await page.locator('[data-testid="task-detail-description-edit"]').count() === 0,
+        "Enter on a rendered link bubbled to the wrapper and opened the description editor");
+      assert(await link.getAttribute("data-e2e-activated") === "true",
+        "Enter on a rendered link did not preserve native link activation");
     });
 
     const emptyDescriptionTask = await api("POST", `/api/features/${feature.id}/tasks`, {
@@ -3326,7 +3347,7 @@ async function main() {
       assert(await page.locator('[data-testid="edit-item-modal"]').isVisible(),
         "Escape in the description editor closed the entire edit modal");
       const modalEscapeFocused = await page.evaluate(() => document.activeElement?.getAttribute("data-testid"));
-      assert(modalEscapeFocused === "edit-item-description-read",
+      assert(modalEscapeFocused === "edit-item-description-edit-control",
         `modal Escape did not return focus to description read mode; active element was ${JSON.stringify(modalEscapeFocused)}`);
       assert(!(await read.innerText()).includes(`Discarded by modal Escape ${stamp}.`),
         "modal Escape left the discarded description draft in read mode");
