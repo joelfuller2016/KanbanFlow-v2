@@ -3151,15 +3151,27 @@ async function main() {
       // to the wrapper's BeginEdit handler. Removing lines 248-252 of kanbanflow.js would
       // leave this coverage in place but still break keyboard navigation on rendered links.
       const link = read.locator(`a[href="${syncIssueUrl}"]`).first();
+
+      // Space first: it does not activate the link, so the task page is still loaded when
+      // the assertion runs. Pressing Enter BEFORE Space would navigate to the external href;
+      // any assertion on the post-navigation page passes trivially (no editor there either).
       await link.focus();
-      await page.keyboard.press("Enter");
-      await sleep(300);
-      assert(await page.locator('[data-testid="task-detail-description-edit"]').count() === 0,
-        "Enter on a rendered link bubbled to the wrapper and opened the description editor");
       await page.keyboard.press("Space");
       await sleep(300);
       assert(await page.locator('[data-testid="task-detail-description-edit"]').count() === 0,
         "Space on a rendered link bubbled to the wrapper and opened the description editor");
+
+      // Enter activates the link (navigation). Capture the task URL so we can return if the
+      // browser leaves the page. Wrapper isolation for Enter is implied by the same handler
+      // path already exercised by Space above; we are not asserting from post-navigation state.
+      const taskUrl = page.url();
+      await link.focus();
+      await page.keyboard.press("Enter");
+      await sleep(400);
+      if (page.url() !== taskUrl) {
+        await page.goto(taskUrl);
+        await page.waitForLoadState("domcontentloaded");
+      }
     });
 
     const emptyDescriptionTask = await api("POST", `/api/features/${feature.id}/tasks`, {

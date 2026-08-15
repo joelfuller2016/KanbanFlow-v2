@@ -141,6 +141,16 @@ else
     // interop round trip on every unrelated parent re-render (e.g. comment-box keystrokes).
     private bool readInitialized;
     private string? initializedFor;
+    // Incremented whenever the read subtree is torn down (edit transition or reset-token change).
+    // OnAfterRenderAsync captures this before the JS interop await; the continuation checks it
+    // on resume to avoid committing stale initialization if edit mode was entered during the
+    // await (Blazor Server releases the circuit thread at every async suspension point, so a
+    // click event CAN be dispatched while initMarkdownEditable is in flight).
+    private int _readGen;
+    // Set while a blur-triggered OnCommit is in flight. Prevents a second rapid blur from
+    // invoking OnCommit again before the first write reaches the database. Cleared in finally
+    // so the guard is released whether the commit succeeds or fails.
+    private bool _commitInProgress;
 
     // Resolved once per parameter change, never in the render path. Computed properties re-run
     // on EVERY render, and this component re-renders on every keystroke while editing — the same
@@ -161,6 +171,11 @@ else
             readFocusPending = false;
             suppressBlurCommit = false;
             renderedEditValue = Value;
+            // Invalidate any read-mode interop that may be in flight for the previous token's
+            // content. The Value is about to change (different task or new modal session), so a
+            // stale initMarkdownEditable continuation must not mark the fresh subtree as ready.
+            _readGen++;
+            readInitialized = false;
         }
 
         readTestId = $"{TestId}-read";
@@ -179,11 +194,21 @@ else
             {
                 // Wire up link-click interception so rendered <a> elements do not bubble their
                 // clicks to the wrapper's BeginEdit handler. Flags are set only after success.
+                // Capture generation and value BEFORE the await: if edit mode begins while
+                // initMarkdownEditable is in flight, the circuit dispatches that click event
+                // during the suspension, increments _readGen, and clears readInitialized.
+                // The check below ensures the stale continuation does not re-set them.
+                var capturedGen = _readGen;
+                var capturedValue = Value;
                 try
                 {
                     await JS.InvokeVoidAsync("KanbanFlow.initMarkdownEditable", readRef);
-                    readInitialized = true;
-                    initializedFor = Value;
+                    if (_readGen == capturedGen && !editing
+                        && string.Equals(Value, capturedValue, StringComparison.Ordinal))
+                    {
+                        readInitialized = true;
+                        initializedFor = capturedValue;
+                    }
                 }
                 catch (JSDisconnectedException) { }
                 catch (ObjectDisposedException) { }
@@ -200,6 +225,9 @@ else
         }
 
         // Edit mode replaces the read subtree; the next read render must re-arm.
+        // Increment _readGen so any in-flight initMarkdownEditable continuation sees
+        // a changed generation and does not commit its (now-stale) results.
+        _readGen++;
         readInitialized = false;
 
         // One click, not two. Without this the click lands on a div, the textarea appears
@@ -218,7 +246,9 @@ else
 
     private void BeginEdit()
     {
-        if (editing) return;
+        // Do not start a new edit while a commit is in flight: the in-progress write would
+        // race with the next blur commit and could produce duplicate audit entries.
+        if (editing || _commitInProgress) return;
         suppressBlurCommit = false;
         readFocusPending = false;
         renderedEditValue = Value;
@@ -267,11 +297,18 @@ else
         // the description back into read mode before the modal closes (#357 plan step 5).
         if (!OnCommit.HasDelegate) return;
 
-        // On Blazor Server an unhandled exception in an event handler terminates the circuit and
-        // takes the user's buffer with it. Catch failures here so the textarea stays open and
-        // the user's text is preserved for a retry.
+        // Guard against overlapping blur commits. Blazor Server processes one event at a time,
+        // but rapid focus shifts (e.g. tab-away → tab-back → tab-away) can queue a second blur
+        // before the first OnCommit.InvokeAsync finishes. Without a guard, both blurs call the
+        // service and write duplicate audit entries. Return early and also block BeginEdit (above)
+        // so the user cannot start a new edit while a write is in flight.
+        if (!editing || _commitInProgress) return;
+        _commitInProgress = true;
         try
         {
+            // On Blazor Server an unhandled exception in an event handler terminates the circuit
+            // and takes the user's buffer with it. Catch failures here so the textarea stays open
+            // and the user's text is preserved for a retry.
             await OnCommit.InvokeAsync();
             editing = false;
         }
@@ -279,6 +316,10 @@ else
         {
             // editing remains true — the user keeps their buffer.
             Logger.LogError(ex, "Markdown commit failed for {ElementId}; the editor stays open.", ElementId);
+        }
+        finally
+        {
+            _commitInProgress = false;
         }
     }
 }
