@@ -45,6 +45,8 @@
    is also exactly what the existing task-name toggle in TaskDetailPanel does.
    ══════════════════════════════════════════════════════════════════════════════════════════ *@
 
+@inject IJSRuntime JS
+
 @if (editing)
 {
     <label class="form-label small text-muted mb-1" for="@ElementId">@Label</label>
@@ -65,21 +67,18 @@ else
        read element carries its own accessible name instead. *@
     <span class="form-label small text-muted mb-1 d-block">@Label</span>
 
-    @* role="button" + tabindex="0" matches the task-name toggle two elements up in
-       TaskDetailPanel, and is what #357's acceptance criteria ask for. Known trade-off, stated
-       rather than hidden: a rendered description can contain links, and interactive descendants
-       inside a role="button" is not ideal ARIA. The alternatives are worse for this issue — a
-       real <button> may only contain phrasing content (so <p>/<ul>/<table> would be invalid and
-       the links inside it unusable), and a separate "Edit" affordance is explicitly ruled out by
-       the no-roadblocks requirement (edit must stay ONE click away). Links stay reachable in a
-       screen reader's browse mode, which reads the DOM. *@
+    @* tabindex="0" + aria-label makes the surface reachable and self-describing for keyboard
+       users (Enter/Space handled by HandleReadKeyDown below). role="button" is intentionally
+       omitted: ARIA forbids interactive descendants inside that role, and a rendered description
+       can contain links. Link clicks are intercepted in JS (KanbanFlow.initMarkdownEditable,
+       called from OnAfterRenderAsync) so they navigate normally without triggering BeginEdit. *@
     <div class="markdown-editable-read"
-         role="button"
          tabindex="0"
          title="Click to edit"
          aria-label="@readAriaLabel"
          data-testid="@readTestId"
          style="@rowsStyle"
+         @ref="readRef"
          @onclick="BeginEdit"
          @onkeydown="HandleReadKeyDown">
         <MarkdownContent Markdown="@Value" CssClass="small" EmptyText="@Placeholder" />
@@ -124,6 +123,7 @@ else
     private bool editing;
     private bool focusPending;
     private ElementReference editorRef;
+    private ElementReference readRef;
     private object? lastResetToken;
     private bool resetTokenSeen;
 
@@ -155,9 +155,20 @@ else
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
+        if (!editing)
+        {
+            // After each read-mode render, wire up link-click interception so rendered <a>
+            // elements do not bubble their clicks to the wrapper's BeginEdit handler.
+            try { await JS.InvokeVoidAsync("KanbanFlow.initMarkdownEditable", readRef); }
+            catch (JSDisconnectedException) { }
+            catch (ObjectDisposedException) { }
+            catch (InvalidOperationException) { }
+            return;
+        }
+
         // One click, not two. Without this the click lands on a div, the textarea appears
         // unfocused, and the user has to click again — which is the roadblock #357 forbids.
-        if (!focusPending || !editing) return;
+        if (!focusPending) return;
         focusPending = false;
 
         try

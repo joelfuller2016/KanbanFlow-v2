@@ -231,6 +231,21 @@ window.KanbanFlow = {
         }
     },
 
+    // Prevent link clicks inside an EditableMarkdown read-surface from bubbling up to the
+    // wrapper's @onclick (which would wrongly enter edit mode). Called by EditableMarkdown after
+    // each read-mode render so new <a> elements picked up by Markdig are also covered. The
+    // sentinel property (_kfLinkInit) keeps the listener from being attached twice to the same
+    // element if Blazor preserves the node across re-renders.
+    initMarkdownEditable: function (el) {
+        if (!el) return;
+        el.querySelectorAll('a[href]').forEach(function (a) {
+            if (!a._kfLinkInit) {
+                a._kfLinkInit = true;
+                a.addEventListener('click', function (e) { e.stopPropagation(); });
+            }
+        });
+    },
+
     destroyProjectOutlineAccessibility: function () {
         if (this._outlineObserver) {
             this._outlineObserver.disconnect();
