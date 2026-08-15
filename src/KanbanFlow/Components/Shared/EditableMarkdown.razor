@@ -1,0 +1,322 @@
+@* ══════════════════════════════════════════════════════════════════════════════════════════
+   A markdown field that READS as rendered content and EDITS as raw source (#357).
+
+   The task Description was the last markdown-bearing field in the app that never rendered:
+   both surfaces bound it straight into a <textarea>, so the field was permanently in EDIT
+   mode and every mirrored task showed `<!-- kanbanflow-sync -->` and `**Issue:**` to the user
+   as literal text. The component did not have a rendering bug — it had no READ STATE. This
+   adds the missing state, Azure-DevOps style: read renders, one click (or Enter/Space) swaps
+   in the raw source with the caret already in it. The detail panel commits and returns to read
+   on blur; the edit modal keeps editing until its own Save/Cancel action closes the modal.
+
+   ONE COMPONENT, USED TWICE — TaskDetailPanel (the card-click surface) and EditItemModal
+   (the outline's Edit Task). Do not fork it: a second copy is exactly how this codebase ended
+   up rendering two different clocks (#306) and is why ActivityTimeline carries the same
+   warning. The two call sites differ only in what they do with OnCommit — the panel saves on
+   blur through ITaskService, the modal defers to its own Save Changes button — never in how
+   the field looks or behaves.
+
+   RENDERING GOES THROUGH MarkdownContent, i.e. Markdig + the Ganss.Xss allow-list in
+   Services/MarkdownRenderer.cs. No second renderer, no second sanitiser, no WYSIWYG: storage
+   stays markdown text. That matters more here than on the other seven render sites, because a
+   task description is generated from a GITHUB ISSUE BODY by scripts/portfolio-sync.mjs — so
+   anyone who can open an issue on a synced repo authors bytes that this component turns into
+   live DOM. Those bytes were previously inert only because they never left a <textarea>.
+   The renderer's known allow-list defect #341 (class/id stripped) is INHERITED here, not fixed
+   and not worsened. The #381 CSS overlay vector is FIXED in MarkdownRenderer.cs with a closed
+   six-property colour/text allow-list: safe inline presentation survives, while no externally
+   authored task description can position, size, stack or transform an element over the app.
+
+   SYNC MARKERS ARE PROTOCOL, NOT CONTENT (the rule stated on #336). The
+   `<!-- kanbanflow-sync --> … <!-- /kanbanflow-sync -->` block is the durable repo↔board
+   link: the bytes MUST survive round-trip, and no surface may show them to a human. Both
+   halves fall out of this design rather than needing code:
+     • invisible — the sanitiser drops HTML comments, so they never reach the DOM. That is
+       ASSERTED, not assumed: TaskDescriptionRenderingTests goes red if a renderer
+       or dependency change ever starts keeping comments.
+     • durable — the textarea shows the RAW source, markers included, so an edit round-trips
+       them byte-for-byte. Stripping at the STORAGE boundary would have destroyed the link;
+       stripping happens at the RENDER boundary only, which is what #336 asks for.
+
+   SEMANTIC EDIT CONTROL, OUTSIDE THE MARKDOWN. The rendered content can contain links, so it
+   cannot itself be a button (interactive descendants are forbidden) and a focusable generic div
+   has no valid interactive role. The sibling native button owns the accessible edit action and
+   Enter/Space behavior. Clicking non-link Markdown remains a pointer convenience; links stop that
+   click from bubbling and navigate normally.
+   ══════════════════════════════════════════════════════════════════════════════════════════ *@
+
+@inject IJSRuntime JS
+@inject ILogger<EditableMarkdown> Logger
+
+@if (editing)
+{
+    <label class="form-label small text-muted mb-1" for="@ElementId">@Label</label>
+    <textarea id="@ElementId"
+              @ref="editorRef"
+              class="form-control form-control-sm"
+              rows="@Rows"
+              placeholder="@Placeholder"
+              data-testid="@editTestId"
+              data-kf-escape-discard="true"
+              value="@renderedEditValue"
+              @oninput="HandleInputAsync"
+              @onkeydown="HandleEditKeyDownAsync"
+              @onblur="HandleBlurAsync"></textarea>
+}
+else
+{
+    @* A native sibling button exposes the edit action to the accessibility tree without wrapping
+       Markdown links in an interactive role. The content box remains click-to-edit for pointer
+       users; its links are intercepted in JS so their clicks do not bubble to BeginEdit. *@
+    <div class="d-flex align-items-center justify-content-between gap-2 mb-1">
+        <span class="form-label small text-muted mb-0">@Label</span>
+        <button type="button"
+                class="btn btn-link btn-sm p-0 text-decoration-none markdown-editable-control"
+                title="@readAriaLabel"
+                aria-label="@readAriaLabel"
+                data-testid="@readControlTestId"
+                @ref="readControlRef"
+                @onclick="BeginEdit">Edit</button>
+    </div>
+
+    <div class="markdown-editable-read"
+         title="Click to edit"
+         data-testid="@readTestId"
+         style="@rowsStyle"
+         @ref="readRegionRef"
+         @onclick="BeginEdit">
+        <MarkdownContent Markdown="@Value" CssClass="small" EmptyText="@Placeholder" />
+    </div>
+}
+
+@code {
+    /// <summary>Raw markdown source. Two-way bound: use <c>@@bind-Value</c>.</summary>
+    [Parameter] public string? Value { get; set; }
+
+    [Parameter] public EventCallback<string?> ValueChanged { get; set; }
+
+    /// <summary>
+    /// Raised on blur, AFTER <see cref="ValueChanged"/> has delivered the final keystroke.
+    /// Wire it to persist immediately (TaskDetailPanel); leave it unset to defer to an explicit
+    /// save (EditItemModal). Unset is a real mode, not an oversight — it is checked via
+    /// <c>HasDelegate</c>.
+    /// </summary>
+    [Parameter] public EventCallback OnCommit { get; set; }
+
+    /// <summary>DOM id of the textarea, so the edit-mode label can target it.</summary>
+    [Parameter, EditorRequired] public string ElementId { get; set; } = default!;
+
+    /// <summary>
+    /// Prefix for the three data-testid hooks: <c>{TestId}-read</c>,
+    /// <c>{TestId}-edit-control</c>, and <c>{TestId}-edit</c>.
+    /// </summary>
+    [Parameter, EditorRequired] public string TestId { get; set; } = default!;
+
+    [Parameter] public string Label { get; set; } = "Description";
+
+    /// <summary>Shown in the textarea when empty AND as the read-mode empty state, so the two modes agree.</summary>
+    [Parameter] public string Placeholder { get; set; } = "Add a description...";
+
+    [Parameter] public int Rows { get; set; } = 4;
+
+    /// <summary>
+    /// Change this to force the field back to READ mode. A fresh open, or a switch to a
+    /// different item, must not inherit the previous one's edit state — and the reset cannot
+    /// simply run on every OnParametersSet, because the parent re-renders on EVERY keystroke
+    /// (ValueChanged), which would eject the user mid-word.
+    /// </summary>
+    [Parameter] public object? ResetToken { get; set; }
+
+    private bool editing;
+    private bool focusPending;
+    private bool readFocusPending;
+    private bool suppressBlurCommit;
+    // Seeded when edit mode begins, then deliberately left unchanged while the user types. On a
+    // Blazor Server circuit each input event can render after a newer character is already in the
+    // browser; changing this attribute on every event would let a stale render overwrite that
+    // newer DOM value. HandleInputAsync still reports every current value to the parent.
+    private string? renderedEditValue;
+    private ElementReference editorRef;
+    private ElementReference readRegionRef;
+    private ElementReference readControlRef;
+    private object? lastResetToken;
+    private bool resetTokenSeen;
+    // Link interception only needs re-arming when the rendered markup changes; skip the
+    // interop round trip on every unrelated parent re-render (e.g. comment-box keystrokes).
+    private bool readInitialized;
+    private string? initializedFor;
+    // Incremented whenever the read subtree is torn down (edit transition or reset-token change).
+    // OnAfterRenderAsync captures this before the JS interop await; the continuation checks it
+    // on resume to avoid committing stale initialization if edit mode was entered during the
+    // await (Blazor Server releases the circuit thread at every async suspension point, so a
+    // click event CAN be dispatched while initMarkdownEditable is in flight).
+    private int _readGen;
+    // Set while a blur-triggered OnCommit is in flight. Prevents a second rapid blur from
+    // invoking OnCommit again before the first write reaches the database. Cleared in finally
+    // so the guard is released whether the commit succeeds or fails.
+    private bool _commitInProgress;
+
+    // Resolved once per parameter change, never in the render path. Computed properties re-run
+    // on EVERY render, and this component re-renders on every keystroke while editing — the same
+    // trap EditItemModal's RefreshGitHubLinks comment already documents.
+    private string readTestId = string.Empty;
+    private string readControlTestId = string.Empty;
+    private string editTestId = string.Empty;
+    private string readAriaLabel = string.Empty;
+    private string rowsStyle = string.Empty;
+
+    protected override void OnParametersSet()
+    {
+        if (!resetTokenSeen || !Equals(ResetToken, lastResetToken))
+        {
+            resetTokenSeen = true;
+            lastResetToken = ResetToken;
+            editing = false;
+            focusPending = false;
+            readFocusPending = false;
+            suppressBlurCommit = false;
+            renderedEditValue = Value;
+            // Invalidate any read-mode interop that may be in flight for the previous token's
+            // content. The Value is about to change (different task or new modal session), so a
+            // stale initMarkdownEditable continuation must not mark the fresh subtree as ready.
+            _readGen++;
+            readInitialized = false;
+        }
+
+        readTestId = $"{TestId}-read";
+        readControlTestId = $"{TestId}-edit-control";
+        editTestId = $"{TestId}-edit";
+        readAriaLabel = $"Edit {Label}";
+        // Drives .markdown-editable-read's min-height so switching modes does not make the
+        // surrounding panel jump: the read box reserves the same height the textarea occupies.
+        rowsStyle = $"--kf-editable-rows: {Rows};";
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!editing)
+        {
+            if (!readInitialized || !string.Equals(initializedFor, Value, StringComparison.Ordinal))
+            {
+                // Wire up link-click interception so rendered <a> elements do not bubble their
+                // clicks to the wrapper's BeginEdit handler. Flags are set only after success.
+                // Capture generation and value BEFORE the await: if edit mode begins while
+                // initMarkdownEditable is in flight, the circuit dispatches that click event
+                // during the suspension, increments _readGen, and clears readInitialized.
+                // The check below ensures the stale continuation does not re-set them.
+                var capturedGen = _readGen;
+                var capturedValue = Value;
+                try
+                {
+                    await JS.InvokeVoidAsync("KanbanFlow.initMarkdownEditable", readRegionRef);
+                    if (_readGen == capturedGen && !editing
+                        && string.Equals(Value, capturedValue, StringComparison.Ordinal))
+                    {
+                        readInitialized = true;
+                        initializedFor = capturedValue;
+                    }
+                }
+                catch (JSDisconnectedException) { }
+                catch (ObjectDisposedException) { }
+                catch (InvalidOperationException) { }
+            }
+
+            if (!readFocusPending) return;
+            readFocusPending = false;
+            try { await readControlRef.FocusAsync(preventScroll: true); }
+            catch (JSDisconnectedException) { }
+            catch (ObjectDisposedException) { }
+            catch (InvalidOperationException) { }
+            return;
+        }
+
+        // Edit mode replaces the read subtree; the next read render must re-arm.
+        // Increment _readGen so any in-flight initMarkdownEditable continuation sees
+        // a changed generation and does not commit its (now-stale) results.
+        _readGen++;
+        readInitialized = false;
+
+        // One click, not two. Without this the click lands on a div, the textarea appears
+        // unfocused, and the user has to click again — which is the roadblock #357 forbids.
+        if (!focusPending) return;
+        focusPending = false;
+
+        try
+        {
+            await editorRef.FocusAsync(preventScroll: true);
+        }
+        catch (JSDisconnectedException) { }
+        catch (ObjectDisposedException) { }
+        catch (InvalidOperationException) { }
+    }
+
+    private void BeginEdit()
+    {
+        // Do not start a new edit while a commit is in flight: the in-progress write would
+        // race with the next blur commit and could produce duplicate audit entries.
+        if (editing || _commitInProgress) return;
+        suppressBlurCommit = false;
+        readFocusPending = false;
+        renderedEditValue = Value;
+        editing = true;
+        focusPending = true;
+    }
+
+    private Task HandleInputAsync(ChangeEventArgs e)
+    {
+        // Report every keystroke so blur (and the modal's Save button) sees the current buffer,
+        // but do not rewrite renderedEditValue. The DOM already holds exactly what the user typed;
+        // keeping the rendered attribute stable prevents a delayed Server render from replacing a
+        // newer browser value or moving its caret (the same invariant as BoardFilterBar).
+        return ValueChanged.InvokeAsync(e.Value?.ToString());
+    }
+
+    private async Task HandleEditKeyDownAsync(KeyboardEventArgs e)
+    {
+        if (e.Key != "Escape") return;
+
+        // Escape is discard, not blur-save: restore the value this editing session opened with,
+        // remove the textarea, and focus the newly rendered read surface. Keep suppression set
+        // until the next BeginEdit because removing a focused element may enqueue a late blur.
+        suppressBlurCommit = true;
+        editing = false;
+        focusPending = false;
+        readFocusPending = true;
+        await ValueChanged.InvokeAsync(renderedEditValue);
+    }
+
+    private async Task HandleBlurAsync()
+    {
+        if (suppressBlurCommit) return;
+
+        // An unset callback is the modal's explicit-save mode. Keep the textarea alive across
+        // focus changes so clicking another field or the Save button does not unexpectedly turn
+        // the description back into read mode before the modal closes (#357 plan step 5).
+        if (!OnCommit.HasDelegate) return;
+
+        // Guard against overlapping blur commits. Blazor Server processes one event at a time,
+        // but rapid focus shifts (e.g. tab-away → tab-back → tab-away) can queue a second blur
+        // before the first OnCommit.InvokeAsync finishes. Without a guard, both blurs call the
+        // service and write duplicate audit entries. Return early and also block BeginEdit (above)
+        // so the user cannot start a new edit while a write is in flight.
+        if (!editing || _commitInProgress) return;
+        _commitInProgress = true;
+        try
+        {
+            // On Blazor Server an unhandled exception in an event handler terminates the circuit
+            // and takes the user's buffer with it. Catch failures here so the textarea stays open
+            // and the user's text is preserved for a retry.
+            await OnCommit.InvokeAsync();
+            editing = false;
+        }
+        catch (Exception ex)
+        {
+            // editing remains true — the user keeps their buffer.
+            Logger.LogError(ex, "Markdown commit failed for {ElementId}; the editor stays open.", ElementId);
+        }
+        finally
+        {
+            _commitInProgress = false;
+        }
+    }
+}

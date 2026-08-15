@@ -25,6 +25,25 @@ public sealed class MarkdownRenderer : IMarkdownRenderer
             .Build();
 
         _sanitizer = new HtmlSanitizer();
+
+        // Inline style remains available for benign emphasis and Markdig GenericAttributes, but
+        // its property set is closed rather than inherited from HtmlSanitizer's broad defaults
+        // (#381). Layout, positioning, sizing, stacking and transform properties let stored
+        // Markdown cover the viewport or escape its panel, so only colour/text presentation
+        // survives. Keep the attribute explicit so later default-attribute hardening cannot
+        // silently strip the six permitted declarations along with the dangerous ones.
+        _sanitizer.AllowedAttributes.Add("style");
+        _sanitizer.AllowedCssProperties.Clear();
+        foreach (var property in new[]
+        {
+            "color", "background-color",
+            "font-weight", "font-style",
+            "text-decoration", "text-align"
+        })
+        {
+            _sanitizer.AllowedCssProperties.Add(property);
+        }
+
         _sanitizer.AllowedTags.Clear();
         // Allow tags Markdig actually emits with UseAdvancedExtensions on. Notably:
         //   - <del> for strikethrough (~~text~~)

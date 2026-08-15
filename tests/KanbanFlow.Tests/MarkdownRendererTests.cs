@@ -394,10 +394,7 @@ public sealed class MarkdownRendererTests
     /// (9.1.974 / AngleSharp 1.6.0): 13/13 identical, so neither the AngleSharp 0.17 -> 1.6 jump nor
     /// the AngleSharp.Css 0.17 -> 1.0 jump changed how benign markdown serialises. Pinning them here
     /// means a future dependency bump that DOES alter rendering fails the gate instead of silently
-    /// shipping. The last two cover the <c>style</c> attribute specifically, because AngleSharp.Css
-    /// went up a full major and owns CSS sanitisation - the riskiest untested half of this bump.
-    /// (The CSS serialiser normalises: <c>color:red</c> comes back as <c>rgba(255, 0, 0, 1)</c>.
-    /// Identical on both versions, so it is pinned, not a regression.)
+    /// shipping.
     ///
     /// KNOWN, DELIBERATELY PINNED LOSSES - these fixtures record what the allow-list already strips
     /// today; they are NOT an endorsement of it. <c>AllowedAttributes</c> contains neither
@@ -408,11 +405,11 @@ public sealed class MarkdownRendererTests
     /// not read the failure as a regression.
     ///
     /// AND ONE THING DELIBERATELY KEPT, for symmetry: the two style fixtures pin <c>style</c> as an
-    /// ALLOWED attribute on user-supplied markdown. That is HtmlSanitizer's default and pre-dates
-    /// #320; it is recorded here so nobody reads the class/id note above and assumes every
-    /// attribute is stripped. It is not free-form - HtmlSanitizer runs the CSS through
-    /// AllowedCssProperties (239 entries), which is why the two hostile CSS cases in
-    /// DangerousUrlSchemes_AreDropped (expression(...) and url(javascript:...)) are neutralised.
+    /// ALLOWED attribute on user-supplied markdown. Since #381 its properties come from a closed
+    /// six-property colour/text allow-list; layout, positioning, sizing, stacking and transforms
+    /// are dropped. <c>color</c> and <c>font-weight</c> remain intentionally byte-exact here, while
+    /// TaskDescriptionRenderingTests pins the viewport-overlay rejection from both GenericAttributes
+    /// and raw HTML. Rebuilding the broader AllowedAttributes defaults remains separate scope.
     /// </summary>
     [Theory]
     [InlineData("This is **bold** text.", "<p>This is <strong>bold</strong> text.</p>\n")]

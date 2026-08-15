@@ -231,6 +231,26 @@ window.KanbanFlow = {
         }
     },
 
+    // Prevent link clicks inside an EditableMarkdown read-surface from bubbling up to the
+    // wrapper's @onclick (which would wrongly enter edit mode). Called by EditableMarkdown after
+    // each read-mode render so new <a> elements picked up by Markdig are also covered. The
+    // sentinel property (_kfLinkInit) keeps the listener from being attached twice to the same
+    // element if Blazor preserves the node across re-renders.
+    //
+    // Enter on a focused <a> causes the browser to synthesize a click — that click is what this
+    // listener intercepts. A separate keydown listener is not needed: the read wrapper exposes its
+    // edit action via a sibling <button>, not a keydown handler on the content div, so a keydown
+    // that bubbles past an <a> finds no handler and causes no harm.
+    initMarkdownEditable: function (el) {
+        if (!el) return;
+        el.querySelectorAll('a[href]').forEach(function (a) {
+            if (!a._kfLinkInit) {
+                a._kfLinkInit = true;
+                a.addEventListener('click', function (e) { e.stopPropagation(); });
+            }
+        });
+    },
+
     destroyProjectOutlineAccessibility: function () {
         if (this._outlineObserver) {
             this._outlineObserver.disconnect();
@@ -280,6 +300,14 @@ window.KanbanFlow = {
         }
         dialog._kfKeydown = function (event) {
             if (event.key === 'Escape') {
+                // EditableMarkdown owns Escape while its textarea is active: it discards only
+                // that field's draft and restores read mode. This native dialog listener runs
+                // before Blazor's delegated key handler, so closing here would discard the whole
+                // form before the component can handle the key.
+                var target = event.target;
+                if (target && target.matches && target.matches('[data-kf-escape-discard]')) {
+                    return;
+                }
                 event.preventDefault();
                 if (dotNetRef) {
                     dotNetRef.invokeMethodAsync('CloseFromJs').catch(function () { /* component/circuit disposed */ });

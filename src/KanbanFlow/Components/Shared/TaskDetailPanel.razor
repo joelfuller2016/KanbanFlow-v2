@@ -132,15 +132,22 @@
                        @onchange="OnAssigneeChanged" />
             </div>
 
-            @* Description *@
+            @* Description (#357). This was a bare <textarea>: the field had no READ state at all,
+               so a mirrored task showed `<!-- kanbanflow-sync -->` and `**Issue:**` as literal
+               text and its issue URL was dead. EditableMarkdown adds the missing state and is the
+               SAME component EditItemModal uses — do not fork it (#306).
+
+               The write path below is untouched: OnCommit fires on blur and calls
+               SaveDescriptionAsync exactly as @onblur did, so the ITaskService routing, the
+               unchanged-guard and the audit trail all behave as before. *@
             <div class="mb-3">
-                <label class="form-label small text-muted mb-1" for="task-detail-description">Description</label>
-                <textarea id="task-detail-description" class="form-control form-control-sm" rows="4"
-                          placeholder="Add a description..."
-                          @bind="editingDescription"
-                          @bind:event="oninput"
-                          @onblur="SaveDescriptionAsync"
-                          @onfocus="StartEditingDescription"></textarea>
+                <EditableMarkdown ElementId="task-detail-description"
+                                  TestId="task-detail-description"
+                                  Label="Description"
+                                  Rows="4"
+                                  ResetToken="descriptionResetToken"
+                                  @bind-Value="editingDescription"
+                                  OnCommit="SaveDescriptionAsync" />
             </div>
 
             @* Acceptance criteria *@
@@ -431,8 +438,11 @@
     private bool isEditingName;
     private string? editingName;
 
-    // Description editing
+    // Description editing. The buffer and token are reset ONLY on a fresh open or a task switch.
+    // An ordinary parent re-render must preserve an in-progress draft instead of reseeding it from
+    // the task's last persisted Description (#357).
     private string? editingDescription;
+    private int descriptionResetToken;
 
     // Subtask input
     private string? newSubtaskText;
@@ -468,7 +478,8 @@
 
     protected override async Task OnParametersSetAsync()
     {
-        if (IsOpen && !wasOpen)
+        var freshOpen = IsOpen && !wasOpen;
+        if (freshOpen)
         {
             shouldInitializeDialogFocus = true;
         }
@@ -478,13 +489,19 @@
         // Reset editing state when task changes
         isEditingName = false;
         confirmingDelete = false;
-        editingDescription = Task?.Description;
         newSubtaskText = null;
         newAcceptanceCriterionText = null;
         addingChildSubtaskToId = AddSubtaskParentId;
         newChildSubtaskText = null;
 
         var taskId = IsOpen ? Task?.Id : null;
+        var taskChanged = taskId != loadedCommentsTaskId;
+
+        if (freshOpen || taskChanged)
+        {
+            editingDescription = Task?.Description;
+            descriptionResetToken++;   // a new editing session always starts in read mode (#357)
+        }
 
         // Every panel mutation ends in OnTaskUpdated, and ProjectView re-fetches the task — so a
         // changed Task.UpdatedAt is the one cheap signal that new ActivityEvents exist, without
@@ -497,7 +514,7 @@
             activityRefreshToken++;
         }
 
-        if (taskId != loadedCommentsTaskId)
+        if (taskChanged)
         {
             loadedCommentsTaskId = taskId;
             commentSaveVersion++;
@@ -722,10 +739,9 @@
 
     // ── Description ──
 
-    private void StartEditingDescription()
-    {
-        editingDescription = Task?.Description;
-    }
+    // StartEditingDescription() lived here and re-seeded the buffer from the task on @onfocus.
+    // It is gone, not lost: OnParametersSetAsync seeds a new editing session on fresh open/task
+    // switch, while ordinary parent re-renders deliberately preserve the live draft.
 
     private async Task SaveDescriptionAsync()
     {

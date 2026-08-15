@@ -761,6 +761,63 @@ h1:focus {
 .markdown-body table td, .markdown-body table th { border: 1px solid #dee2e6; padding: 0.25rem 0.5rem; }
 .markdown-body img { max-width: 100%; }
 
+/* ── #357 click-to-edit markdown field ────────────────────────────────────────────────────────
+   Emitted by Components/Shared/EditableMarkdown.razor; shared by TaskDetailPanel (card click)
+   and EditItemModal (outline → Edit Task). ONE component, ONE stylesheet block — do not fork.
+
+   `--kf-editable-rows` is set inline by the component from its Rows parameter (4 on the panel,
+   3 in the modal) so the read box reserves the height its own textarea would occupy. Without it
+   the surrounding panel jumps every time the field flips mode, which reads as a layout bug.
+
+   The content box keeps the click-anywhere pointer convenience, while the sibling native Edit
+   button exposes a valid semantic action without wrapping Markdown links inside a button role.
+   No hardcoded colours — every value is a `var(--bs-*)` token, so `data-bs-theme="dark"`
+   resolves with no parallel dark ruleset (#39). (`.markdown-body pre` above still pins #f8f9fa;
+   that is #346's territory, not this block's.) */
+.markdown-editable-read {
+    padding: .25rem .5rem;
+    border: 1px solid transparent;
+    border-radius: var(--bs-border-radius-sm);
+    min-height: calc(var(--kf-editable-rows, 4) * 1.5em + .5rem);
+    /* A synced description carries the sync block plus up to 1500 chars of issue body. Uncapped,
+       that pushes the acceptance criteria, subtasks and history off-screen — the same reasoning
+       (and roughly the same cap) as `.task-comment-body` below. A scrollbar IS the affordance;
+       native scrollbars dispatch no click events, so dragging one cannot trip edit mode. */
+    max-height: 18rem;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    cursor: text;
+}
+
+.markdown-editable-read:hover {
+    border-color: var(--bs-border-color);
+    background-color: var(--bs-tertiary-bg);
+}
+
+/* The native sibling is the keyboard/AT edit action. Keep its focus ring explicit instead of
+   relying on a browser-specific default for the link-styled Bootstrap button. */
+.markdown-editable-control:focus-visible {
+    outline: 0;
+    box-shadow: 0 0 0 .2rem rgba(var(--bs-primary-rgb), .25);
+}
+
+/* box-shadow is not painted in forced-colors mode (Windows High Contrast), and outline: 0
+   leaves no visible indicator on a keyboard tab stop. Restore an outline using the system
+   Highlight colour so the control is reachable without a pointing device. */
+@media (forced-colors: active) {
+    .markdown-editable-control:focus-visible {
+        outline: 2px solid Highlight;
+        outline-offset: 2px;
+    }
+}
+
+/* Wide content scrolls inside the box rather than widening the 480px offcanvas panel.
+   overflow-x sits on the container so tables keep their native display and AT semantics. */
+.markdown-editable-read { overflow-x: auto; }
+.markdown-editable-read table { max-width: 100%; }
+.markdown-editable-read pre { max-width: 100%; }
+.markdown-editable-read :is(p, ul, ol):last-child { margin-bottom: 0; }
+
 /* A mirrored GitHub comment can be enormous (bot code-review bodies run to 100k+ chars).
    Cap each one to its own scroll box so a single comment can't push the rest of the
    activity timeline off-screen.
