@@ -212,9 +212,17 @@ else
         // the description back into read mode before the modal closes (#357 plan step 5).
         if (!OnCommit.HasDelegate) return;
 
-        // Only return to read after the commit completes. If a future save path throws, leaving
-        // the editor open preserves the user's buffer and gives them a chance to retry.
-        await OnCommit.InvokeAsync();
-        editing = false;
+        // On Blazor Server an unhandled exception in an event handler terminates the circuit and
+        // takes the user's buffer with it. Catch failures here so the textarea stays open and
+        // the user's text is preserved for a retry.
+        try
+        {
+            await OnCommit.InvokeAsync();
+            editing = false;
+        }
+        catch (Exception)
+        {
+            // editing remains true — the user keeps their buffer.
+        }
     }
 }

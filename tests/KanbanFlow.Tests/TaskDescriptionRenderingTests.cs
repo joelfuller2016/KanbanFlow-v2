@@ -91,18 +91,20 @@ public sealed class TaskDescriptionRenderingTests
     }
 
     [Fact]
-    public void RenderingADescription_DoesNotMutateTheSource()
+    public void RenderStripsTheMarkers_WhileTheEditableSourceKeepsThem()
     {
-        // Render boundary, not storage boundary (#336). RenderToSafeHtml is pure: the caller's
-        // string still carries the markers afterwards, which is what lets the textarea hand the
-        // user the raw source and hand it back unchanged.
+        // Render boundary, not storage boundary (#336). The markers must disappear from the HTML
+        // the user sees but survive byte-for-byte in the textarea source, which is what lets a
+        // synced edit round-trip them. Asserting source equality is not a test — strings are
+        // immutable; the meaningful claim is that the two sides disagree in exactly one direction.
         var source = SyncedDescription("body");
-        var copy = new string(source.AsSpan());
 
-        _ = Renderer.RenderToSafeHtml(source);
+        var html = Renderer.RenderToSafeHtml(source);
 
-        Assert.Equal(copy, source, StringComparer.Ordinal);
         Assert.Contains("<!-- kanbanflow-sync -->", source, StringComparison.Ordinal);
+        Assert.DoesNotContain("kanbanflow-sync", html, StringComparison.OrdinalIgnoreCase);
+        // Non-vacuity: the body between the markers must have survived the render.
+        Assert.Contains("<strong>Issue:</strong>", html, StringComparison.Ordinal);
     }
 
     // ── Render boundary: hostile issue bodies ───────────────────────────────────────────────────

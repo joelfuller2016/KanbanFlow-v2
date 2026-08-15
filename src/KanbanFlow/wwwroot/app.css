@@ -802,8 +802,20 @@ h1:focus {
     box-shadow: 0 0 0 .2rem rgba(var(--bs-primary-rgb), .25);
 }
 
-/* Wide content scrolls inside the box rather than widening the 480px offcanvas panel. */
-.markdown-editable-read table { display: block; overflow-x: auto; max-width: 100%; }
+/* box-shadow is not painted in forced-colors mode (Windows High Contrast), and outline: 0
+   leaves no visible indicator on a keyboard tab stop. Restore an outline using the system
+   Highlight colour so the control is reachable without a pointing device. */
+@media (forced-colors: active) {
+    .markdown-editable-read:focus-visible {
+        outline: 2px solid Highlight;
+        outline-offset: 2px;
+    }
+}
+
+/* Wide content scrolls inside the box rather than widening the 480px offcanvas panel.
+   overflow-x sits on the container so tables keep their native display and AT semantics. */
+.markdown-editable-read { overflow-x: auto; }
+.markdown-editable-read table { max-width: 100%; }
 .markdown-editable-read pre { max-width: 100%; }
 .markdown-editable-read :is(p, ul, ol):last-child { margin-bottom: 0; }
 

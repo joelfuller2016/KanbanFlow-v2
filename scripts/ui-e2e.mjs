@@ -3222,7 +3222,34 @@ async function main() {
       await page.locator('#edit-item-name').focus();
       assert(await edit.isVisible(), "modal description left edit mode on blur before Save/Cancel");
 
+      // Cancel must DISCARD the buffer, and reopening must land in READ mode showing the original
+      // text — that reopen is what descriptionResetToken exists for.
+      await edit.focus();
+      await page.keyboard.press("Control+End");
+      await page.keyboard.type(`\n\nDiscarded ${stamp}.`, { delay: 0 });
       await page.locator('[data-testid="edit-item-cancel-button"]').click();
+      const afterCancel = await api("GET", `/api/tasks/${syncedTask.id}`);
+      assert(!afterCancel.description.includes(`Discarded ${stamp}.`),
+        "Cancel persisted a buffered modal description edit");
+
+      await clickUntil(
+        () => page.locator(`[data-testid="outline-task-${syncedTask.id}"]`).click(),
+        page.locator('[data-testid="edit-item-modal"] [data-testid="edit-item-description-read"]'),
+      );
+      assert(await page.locator('[data-testid="edit-item-description-edit"]').count() === 0,
+        "reopening the modal inherited the previous session's edit mode");
+      assert(!(await read.evaluate((el) => el.innerText)).includes(`Discarded ${stamp}.`),
+        "the discarded buffer survived into the reopened modal");
+
+      // Save Changes must persist a buffered edit through the modal's save flow.
+      await read.click();
+      await edit.waitFor({ state: "visible" });
+      await page.keyboard.press("Control+End");
+      await page.keyboard.type(`\n\nSaved from modal ${stamp}.`, { delay: 0 });
+      await page.locator('[data-testid="edit-item-save-button"]').click();
+      const saved = await waitForApiDescription(
+        syncedTask.id, (d) => d.includes(`Saved from modal ${stamp}.`), "picked up the modal save");
+      assert(saved.startsWith(syncBlock), "the modal save mangled the sync block");
     });
 
     await api("DELETE", `/api/tasks/${syncedTask.id}`).catch(() => {});
