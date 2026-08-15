@@ -90,9 +90,11 @@ public static class KanbanMcpTools
             .ToList();
 
         var tasks = (await db.Tasks.AsNoTracking()
+                .Include(t => t.Feature)
                 .Where(t => t.Feature.ProjectId == projectId)
                 .ToListAsync(cancellationToken))
-            .OrderBy(t => t.FeatureId)
+            .OrderBy(t => t.Feature.SortOrder)
+            .ThenBy(t => t.FeatureId)
             .ThenBy(TaskOrdering.EffectiveRank)
             .ThenBy(t => t.SortOrder)
             .ThenBy(t => t.Id)
@@ -214,6 +216,7 @@ public static class KanbanMcpTools
         [Description("Optional initial status: Backlog | Todo | InProgress | Review | Done (case-insensitive). Defaults to Backlog.")] string? status = null,
         [Description("Optional initial priority: Low | Medium | High | Critical (case-insensitive). Defaults to Low.")] string? priority = null,
         [Description("Optional free-text assignee label.")] string? assignee = null,
+        [Description("Optional finite numeric ordering rank. When omitted, appends after the feature's current tasks.")] double? sortOrder = null,
         [Description("Optional actor label recorded in the audit trail (default 'mcp-agent').")] string? actor = null,
         CancellationToken cancellationToken = default)
     {
@@ -238,13 +241,15 @@ public static class KanbanMcpTools
         try
         {
             var created = await taskService.CreateAsync(
-                new TaskCreate(featureId, name, description, parsedStatus, parsedPriority, assignee),
+                new TaskCreate(
+                    featureId, name, description, parsedStatus, parsedPriority, assignee,
+                    SortOrder: sortOrder),
                 string.IsNullOrWhiteSpace(actor) ? DefaultActor : actor.Trim(),
                 cancellationToken);
             return new TaskDetailResult(
                 created.Id, created.FeatureId, created.Name, created.Description,
                 created.Status.ToString(), created.Priority.ToString(), created.Assignee,
-                "Task created; audit event recorded.");
+                created.SortOrder, "Task created; audit event recorded.");
         }
         catch (FeatureNotFoundException)
         {
@@ -1048,7 +1053,7 @@ public sealed record ChecklistItem(int Id, string Text, bool Completed);
 public sealed record TaskDetail(int Id, int FeatureId, string Name, string? Description, string Status, string Priority, string? Assignee, string? ClaimedBy, IReadOnlyList<ChecklistItem> AcceptanceCriteria, IReadOnlyList<ChecklistItem> Subtasks, IReadOnlyList<int> DependsOnTaskIds);
 public sealed record NextTask(int Id, string Name, string Status, string Priority, string? ClaimedBy, string Reason);
 public sealed record TaskStatusResult(int Id, string Name, string Status, string Message);
-public sealed record TaskDetailResult(int Id, int FeatureId, string Name, string? Description, string Status, string Priority, string? Assignee, string Message);
+public sealed record TaskDetailResult(int Id, int FeatureId, string Name, string? Description, string Status, string Priority, string? Assignee, double SortOrder, string Message);
 public sealed record TaskDeleteResult(int Id, bool Deleted, string Message);
 public sealed record TaskCommentResult(int Id, int TaskItemId, string Text, string? Author, string Type, DateTime CreatedAt);
 public sealed record TaskClaimResult(int Id, string Name, string? ClaimedBy, DateTime? ClaimedAt, string Message);

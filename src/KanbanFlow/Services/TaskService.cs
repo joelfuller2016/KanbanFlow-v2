@@ -175,6 +175,15 @@ public sealed class TaskService(IDbContextFactory<AppDbContext> dbFactory) : ITa
                 "TaskStatusChanged", before, TaskActivitySnapshot(task),
                 $"Task '{task.Name}' status changed from {oldStatus} to {newStatus}");
         }
+        else if (orderChanged)
+        {
+            // A combined status + order move is represented by the single semantic status event
+            // above. A pure reorder still needs its own audit row, but never a system comment.
+            AddActivityEvent(
+                db, projectId, "Task", task.Id, actor,
+                "TaskReordered", before, TaskActivitySnapshot(task),
+                $"Task '{task.Name}' reordered on the board");
+        }
 
         await db.SaveChangesAsync(ct);
         return task;
@@ -370,6 +379,15 @@ public sealed class TaskService(IDbContextFactory<AppDbContext> dbFactory) : ITa
                 "TaskFeatureChanged", before, TaskActivitySnapshot(task),
                 $"Task '{task.Name}' reassigned from feature {oldFeatureId} to feature {newFeatureId}");
         }
+        else if (orderChanged)
+        {
+            // A combined feature + order move is represented by the single semantic feature
+            // event above. A pure reorder is audited independently and does not create a comment.
+            AddActivityEvent(
+                db, projectId, "Task", task.Id, actor,
+                "TaskReordered", before, TaskActivitySnapshot(task),
+                $"Task '{task.Name}' reordered in feature {newFeatureId}");
+        }
 
         await db.SaveChangesAsync(ct);
         return task;
@@ -454,7 +472,9 @@ public sealed class TaskService(IDbContextFactory<AppDbContext> dbFactory) : ITa
         }
 
         // Equal integral ranks are normal across features. Their effective ranks are distinct
-        // legacy positions derived from Id, so persist a fractional midpoint between them.
+        // legacy positions derived from Id, so persist a fractional midpoint between them. If
+        // no distinct double exists, reusing a neighbor's raw rank is safe only when the moving
+        // task's Id supplies the strict tie-break on both sides; TryCandidate proves that order.
         var effectiveMidpoint = Midpoint(
             TaskOrdering.EffectiveRank(lower),
             TaskOrdering.EffectiveRank(upper));

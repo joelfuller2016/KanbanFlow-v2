@@ -100,6 +100,9 @@ public sealed class TaskSortOrderSqliteCompatibilityTests
         return Assert.IsType<string>(await command.ExecuteScalarAsync());
     }
 
+    // Maintenance note: this fixture deliberately freezes the legacy declaration below. Keep
+    // enough surrounding columns for the current EF model to materialize TaskItem, but never
+    // change Tasks.SortOrder from INTEGER here; doing so would erase the compatibility condition.
     private const string LegacySchemaAndRows = """
         CREATE TABLE Projects (
             Id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,

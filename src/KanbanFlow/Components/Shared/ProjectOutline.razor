@@ -174,7 +174,8 @@
                 var taskIsExpanded = ExpandedTasks.Contains(task.Id);
                 var taskIsDone = task.Status == WorkStatus.Done;
 
-                <div class="card mb-1" style="border-left: 4px solid @GetDepthColor(depth + 1); @(taskIsDone ? "opacity: 0.6;" : "") cursor: pointer;"
+                <div class="card mb-1" @key="task.Id"
+                     style="border-left: 4px solid @GetDepthColor(depth + 1); @(taskIsDone ? "opacity: 0.6;" : "") cursor: pointer;"
                      data-testid="outline-task-@task.Id" data-task-id="@task.Id"
                      @onclick="() => OnOpenEditTask.InvokeAsync(task)">
                     <div class="card-body p-2">

@@ -125,7 +125,8 @@ window.KanbanFlow = {
                     if (!Number.isInteger(taskId) || taskId <= 0 || !newStatus) {
                         return;
                     }
-                    dotNetRef.invokeMethodAsync('OnCardMoved', taskId, newStatus, beforeTaskId);
+                    dotNetRef.invokeMethodAsync('OnCardMoved', taskId, newStatus, beforeTaskId)
+                        .catch(function () { /* component/circuit disposed */ });
                 }
             });
             this._boardSortables.push(sortable);
@@ -159,7 +160,8 @@ window.KanbanFlow = {
                         || !Number.isInteger(newFeatureId) || newFeatureId <= 0) {
                         return;
                     }
-                    dotNetRef.invokeMethodAsync('OnTaskReordered', taskId, newFeatureId, beforeTaskId);
+                    dotNetRef.invokeMethodAsync('OnTaskReordered', taskId, newFeatureId, beforeTaskId)
+                        .catch(function () { /* component/circuit disposed */ });
                 }
             });
             this._navSortables.push(sortable);

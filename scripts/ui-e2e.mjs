@@ -663,13 +663,25 @@ async function main() {
         const originalChildren = Array.from(column.children);
         const originalRevert = window.KanbanFlow._revertDraggedNode;
 
+        const restorePatchedRevert = () => {
+          for (const child of originalChildren) column.appendChild(child);
+          if (window.KanbanFlow._revertDraggedNode === patchedRevert) {
+            window.KanbanFlow._revertDraggedNode = originalRevert;
+          }
+          delete window.__kanbanFlowPartialDragCleanup;
+        };
+
         // Restore the complete Blazor-owned DOM synchronously after Sortable reports the partial
         // drop but before invokeMethodAsync starts the server round-trip.
-        window.KanbanFlow._revertDraggedNode = function (evt) {
-          originalRevert.call(window.KanbanFlow, evt);
-          for (const child of originalChildren) column.appendChild(child);
-          window.KanbanFlow._revertDraggedNode = originalRevert;
+        const patchedRevert = function (evt) {
+          try {
+            originalRevert.call(window.KanbanFlow, evt);
+          } finally {
+            restorePatchedRevert();
+          }
         };
+        window.__kanbanFlowPartialDragCleanup = restorePatchedRevert;
+        window.KanbanFlow._revertDraggedNode = patchedRevert;
 
         for (const child of originalChildren) {
           const id = Number(child.getAttribute("data-task-id"));
@@ -677,16 +689,22 @@ async function main() {
         }
       }, { visibleIds: [visibleAnchor.id, movedVisible.id] });
 
-      const renderedIds = await page.$$eval(
-        '[data-testid="board-column-Todo-cards"] [data-task-id]',
-        (els) => els.map((el) => Number(el.getAttribute("data-task-id"))),
-      );
-      assert(renderedIds.join(",") === [visibleAnchor.id, movedVisible.id].join(","),
-        `staged board must render only the two visible cards, got [${renderedIds}]`);
+      try {
+        const renderedIds = await page.$$eval(
+          '[data-testid="board-column-Todo-cards"] [data-task-id]',
+          (els) => els.map((el) => Number(el.getAttribute("data-task-id"))),
+        );
+        assert(renderedIds.join(",") === [visibleAnchor.id, movedVisible.id].join(","),
+          `staged board must render only the two visible cards, got [${renderedIds}]`);
 
-      await dragCardBefore(page,
-        `[data-testid="board-card-${movedVisible.id}"]`,
-        `[data-testid="board-card-${visibleAnchor.id}"]`);
+        await dragCardBefore(page,
+          `[data-testid="board-card-${movedVisible.id}"]`,
+          `[data-testid="board-card-${visibleAnchor.id}"]`);
+      } finally {
+        // If Sortable never reaches onEnd, its one-shot wrapper cannot restore itself. Always
+        // hand the DOM and helper back here too so later scenarios exercise production behavior.
+        await page.evaluate(() => window.__kanbanFlowPartialDragCleanup?.()).catch(() => {});
+      }
 
       const expectedIds = [hiddenBefore.id, movedVisible.id, visibleAnchor.id, hiddenMiddle.id, hiddenAfter.id];
       const afterTasks = await waitForProjectBoardOrder(partialProj.id, "Todo", expectedIds);
@@ -1519,6 +1537,8 @@ async function main() {
     await api("DELETE", `/api/projects/${proj.id}`).catch(() => {});
     await api("DELETE", `/api/projects/${orderProj.id}`).catch(() => {});
     await api("DELETE", `/api/projects/${dragProj.id}`).catch(() => {});
+    await api("DELETE", `/api/projects/${partialProj.id}`).catch(() => {});
+    await api("DELETE", `/api/projects/${outlineProj.id}`).catch(() => {});
     // delete the modal-created project too
     const all = await api("GET", "/api/projects");
     const modalProj = all.find((p) => p.name === modalProjectName);

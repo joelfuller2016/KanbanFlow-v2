@@ -109,6 +109,10 @@ Existing SQLite databases may still declare `Tasks.SortOrder` as
 Fresh databases declare it as `REAL`. The declarations can be normalized when schema migrations
 are introduced by #86; both forms have the same runtime ordering semantics.
 
+Every non-no-op identity-anchored move produces exactly one audit event. A pure order change emits
+`TaskReordered` without a comment. A move that also changes status or feature emits only its existing
+`TaskStatusChanged` or `TaskFeatureChanged` event and corresponding comment. No-op moves emit neither.
+
 ### 3.4 Subtask
 
 | Field | Type | Required | Notes |

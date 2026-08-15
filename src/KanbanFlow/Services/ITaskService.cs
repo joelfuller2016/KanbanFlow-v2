@@ -34,8 +34,9 @@ public interface ITaskService
     /// task identity in the destination status column. <paramref name="beforeTaskId"/> is
     /// <c>0</c> to append. The destination order is resolved from the complete persisted
     /// project/status scope, never from a rendered DOM index, so filtered boards are safe.
-    /// A status change emits the same comment and activity event as
-    /// <see cref="ChangeStatusAsync"/>; a same-status reorder remains non-audited.
+    /// A status change emits the same comment and single activity event as
+    /// <see cref="ChangeStatusAsync"/>, even when its order also changes. A pure same-status
+    /// reorder emits one <c>TaskReordered</c> activity event and no comment. A no-op emits neither.
     /// </summary>
     /// <exception cref="TaskNotFoundException">The task does not exist.</exception>
     /// <exception cref="ValidationException">
@@ -94,7 +95,9 @@ public interface ITaskService
     /// task identity in the destination feature. <paramref name="beforeTaskId"/> is <c>0</c>
     /// to append. The anchor is resolved across every task in the feature regardless of status,
     /// matching the outline's persisted ordering scope. Cross-feature moves retain the validation,
-    /// comment, and activity-event behavior of <see cref="ReassignToFeatureAsync"/>.
+    /// comment, and single activity-event behavior of <see cref="ReassignToFeatureAsync"/>, even
+    /// when their order also changes. A pure same-feature reorder emits one <c>TaskReordered</c>
+    /// activity event and no comment. A no-op emits neither.
     /// </summary>
     /// <exception cref="TaskNotFoundException">The task does not exist.</exception>
     /// <exception cref="FeatureNotFoundException">The destination feature does not exist.</exception>

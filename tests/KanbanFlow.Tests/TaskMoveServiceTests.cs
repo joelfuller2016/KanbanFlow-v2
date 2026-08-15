@@ -54,6 +54,7 @@ public sealed class TaskMoveServiceTests
     {
         await using var db = factory.CreateDbContext();
         var tasks = await db.Tasks
+            .AsNoTracking()
             .Where(t => t.Feature.ProjectId == projectId && t.Status == status)
             .ToArrayAsync();
         return TaskOrdering.Order(tasks).Select(t => t.Id).ToArray();
@@ -65,6 +66,7 @@ public sealed class TaskMoveServiceTests
     {
         await using var db = factory.CreateDbContext();
         return await db.Tasks
+            .AsNoTracking()
             .Where(t => taskIds.Contains(t.Id))
             .ToDictionaryAsync(t => t.Id, t => t.SortOrder);
     }
@@ -119,7 +121,8 @@ public sealed class TaskMoveServiceTests
         AssertBystanderRanksUnchanged(ranksBefore, ranksAfter, seed.MovedId);
 
         await using var db = factory.CreateDbContext();
-        Assert.Equal(0, await db.ActivityEvents.CountAsync());
+        Assert.Equal(1, await db.ActivityEvents.CountAsync(e =>
+            e.EntityId == seed.MovedId && e.EventType == "TaskReordered" && e.Actor == "board-user"));
         Assert.Equal(0, await db.TaskComments.CountAsync());
     }
 
@@ -221,6 +224,27 @@ public sealed class TaskMoveServiceTests
     }
 
     [Fact]
+    public async Task MoveOnBoard_ExistingNeighborAnchor_IsNoOpWithoutWrites()
+    {
+        using var factory = new SqliteTestFactory();
+        var seed = SeedDenseBoard(factory);
+        var ranksBefore = await TaskRanks(factory, seed.MovedId, seed.HiddenAfterId);
+        var orderBefore = await BoardOrder(factory, seed.ProjectId, WorkStatus.Todo);
+        var countingFactory = new CountingSaveFactory(factory);
+        var service = new TaskService(countingFactory);
+
+        await service.MoveOnBoardAsync(
+            seed.MovedId, WorkStatus.Todo, seed.ProjectId, seed.HiddenAfterId, "board-user");
+
+        Assert.Equal(0, countingFactory.SaveCount);
+        Assert.Equal(orderBefore, await BoardOrder(factory, seed.ProjectId, WorkStatus.Todo));
+        Assert.Equal(ranksBefore, await TaskRanks(factory, seed.MovedId, seed.HiddenAfterId));
+        await using var check = factory.CreateDbContext();
+        Assert.Equal(0, await check.ActivityEvents.CountAsync());
+        Assert.Equal(0, await check.TaskComments.CountAsync());
+    }
+
+    [Fact]
     public async Task MoveOnBoard_StatusChangeAndOrderPersistTogether_WithOneAuditTrail()
     {
         using var factory = new SqliteTestFactory();
@@ -262,10 +286,16 @@ public sealed class TaskMoveServiceTests
         AssertBystanderRanksUnchanged(ranksBefore, ranksAfter, movingId);
 
         await using var check = factory.CreateDbContext();
-        Assert.Equal(1, await check.ActivityEvents.CountAsync(e =>
-            e.EntityId == movingId && e.EventType == "TaskStatusChanged" && e.Actor == "board-user"));
-        Assert.Equal(1, await check.TaskComments.CountAsync(c =>
-            c.TaskItemId == movingId && c.Type == CommentType.StatusChange && c.Author == "board-user"));
+        var activity = Assert.Single(await check.ActivityEvents
+            .Where(e => e.EntityId == movingId)
+            .ToListAsync());
+        Assert.Equal("TaskStatusChanged", activity.EventType);
+        Assert.Equal("board-user", activity.Actor);
+        var comment = Assert.Single(await check.TaskComments
+            .Where(c => c.TaskItemId == movingId)
+            .ToListAsync());
+        Assert.Equal(CommentType.StatusChange, comment.Type);
+        Assert.Equal("board-user", comment.Author);
     }
 
     [Fact]
@@ -326,6 +356,7 @@ public sealed class TaskMoveServiceTests
     {
         await using var db = factory.CreateDbContext();
         var tasks = await db.Tasks
+            .AsNoTracking()
             .Where(t => t.FeatureId == featureId)
             .ToArrayAsync();
         return TaskOrdering.Order(tasks).Select(t => t.Id).ToArray();
@@ -357,14 +388,20 @@ public sealed class TaskMoveServiceTests
         AssertBystanderRanksUnchanged(ranksBefore, ranksAfter, seed.MovedId);
 
         await using var db = factory.CreateDbContext();
-        Assert.Equal(1, await db.ActivityEvents.CountAsync(e =>
-            e.EntityId == seed.MovedId && e.EventType == "TaskFeatureChanged" && e.Actor == "outline-user"));
-        Assert.Equal(1, await db.TaskComments.CountAsync(c =>
-            c.TaskItemId == seed.MovedId && c.Type == CommentType.FeatureChange && c.Author == "outline-user"));
+        var activity = Assert.Single(await db.ActivityEvents
+            .Where(e => e.EntityId == seed.MovedId)
+            .ToListAsync());
+        Assert.Equal("TaskFeatureChanged", activity.EventType);
+        Assert.Equal("outline-user", activity.Actor);
+        var comment = Assert.Single(await db.TaskComments
+            .Where(c => c.TaskItemId == seed.MovedId)
+            .ToListAsync());
+        Assert.Equal(CommentType.FeatureChange, comment.Type);
+        Assert.Equal("outline-user", comment.Author);
     }
 
     [Fact]
-    public async Task MoveInOutline_ZeroAnchor_AppendsWithinSameFeatureWithoutAudit()
+    public async Task MoveInOutline_ZeroAnchor_AppendsWithinSameFeatureWithReorderAudit()
     {
         using var factory = new SqliteTestFactory();
         var seed = SeedDenseOutline(factory);
@@ -385,8 +422,37 @@ public sealed class TaskMoveServiceTests
         Assert.Equal(3d, ranksAfter[seed.DestinationFirstId]);
         AssertBystanderRanksUnchanged(ranksBefore, ranksAfter, seed.DestinationFirstId);
         await using var db = factory.CreateDbContext();
-        Assert.Equal(0, await db.ActivityEvents.CountAsync());
+        Assert.Equal(1, await db.ActivityEvents.CountAsync(e =>
+            e.EntityId == seed.DestinationFirstId
+            && e.EventType == "TaskReordered"
+            && e.Actor == "outline-user"));
         Assert.Equal(0, await db.TaskComments.CountAsync());
+    }
+
+    [Fact]
+    public async Task MoveInOutline_ExistingNeighborAnchor_IsNoOpWithoutWrites()
+    {
+        using var factory = new SqliteTestFactory();
+        var seed = SeedDenseOutline(factory);
+        var ranksBefore = await TaskRanks(factory, seed.DestinationAnchorId, seed.DestinationLastId);
+        var orderBefore = await FeatureOrder(factory, seed.DestinationFeatureId);
+        var countingFactory = new CountingSaveFactory(factory);
+        var service = new TaskService(countingFactory);
+
+        await service.MoveInOutlineAsync(
+            seed.DestinationAnchorId,
+            seed.DestinationFeatureId,
+            seed.DestinationLastId,
+            "outline-user");
+
+        Assert.Equal(0, countingFactory.SaveCount);
+        Assert.Equal(orderBefore, await FeatureOrder(factory, seed.DestinationFeatureId));
+        Assert.Equal(
+            ranksBefore,
+            await TaskRanks(factory, seed.DestinationAnchorId, seed.DestinationLastId));
+        await using var check = factory.CreateDbContext();
+        Assert.Equal(0, await check.ActivityEvents.CountAsync());
+        Assert.Equal(0, await check.TaskComments.CountAsync());
     }
 
     [Fact]
@@ -580,13 +646,26 @@ public sealed class TaskMoveServiceTests
     public async Task MoveMethods_RejectSelfAnchorAndMissingTask()
     {
         using var factory = new SqliteTestFactory();
-        var seed = SeedDenseBoard(factory);
-        var service = new TaskService(factory);
+        var board = SeedDenseBoard(factory);
+        var outline = SeedDenseOutline(factory);
+        var ranksBefore = await TaskRanks(factory, board.MovedId, outline.MovedId);
+        var countingFactory = new CountingSaveFactory(factory);
+        var service = new TaskService(countingFactory);
 
         await Assert.ThrowsAsync<ValidationException>(() => service.MoveOnBoardAsync(
-            seed.MovedId, WorkStatus.Todo, seed.ProjectId, seed.MovedId, "board-user"));
+            board.MovedId, WorkStatus.Todo, board.ProjectId, board.MovedId, "board-user"));
         await Assert.ThrowsAsync<TaskNotFoundException>(() => service.MoveOnBoardAsync(
-            999_999, WorkStatus.Todo, seed.ProjectId, beforeTaskId: 0, actor: "board-user"));
+            999_999, WorkStatus.Todo, board.ProjectId, beforeTaskId: 0, actor: "board-user"));
+        await Assert.ThrowsAsync<ValidationException>(() => service.MoveInOutlineAsync(
+            outline.MovedId, outline.SourceFeatureId, outline.MovedId, "outline-user"));
+        await Assert.ThrowsAsync<TaskNotFoundException>(() => service.MoveInOutlineAsync(
+            999_999, outline.DestinationFeatureId, beforeTaskId: 0, actor: "outline-user"));
+
+        Assert.Equal(0, countingFactory.SaveCount);
+        Assert.Equal(ranksBefore, await TaskRanks(factory, board.MovedId, outline.MovedId));
+        await using var check = factory.CreateDbContext();
+        Assert.Equal(0, await check.ActivityEvents.CountAsync());
+        Assert.Equal(0, await check.TaskComments.CountAsync());
     }
 
     private sealed class ThrowOnSaveFactory(SqliteTestFactory inner) : IDbContextFactory<AppDbContext>
