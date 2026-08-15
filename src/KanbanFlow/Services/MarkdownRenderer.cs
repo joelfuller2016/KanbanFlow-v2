@@ -59,6 +59,18 @@ public sealed class MarkdownRenderer : IMarkdownRenderer
         _sanitizer.AllowedAttributes.Remove("disabled");
         _sanitizer.AllowedAttributes.Remove("checked");
         //
+        // `style` is also removed (#340 CSS overlay). HtmlSanitizer's default AllowedCssProperties
+        // contains 239 entries, including position, inset, z-index, width, height, background, and
+        // pointer-events. An external contributor can supply a GitHub issue body with:
+        //   <p style="position:fixed;inset:0;z-index:9999;width:100vw;height:100vh;background:white">
+        // which the sanitizer would pass through as-is (CSS is safe-by-syntax; no script executes).
+        // The element can then cover the application UI for clickjacking or credential phishing.
+        // This matters specifically for task descriptions, which EditableMarkdown now renders and
+        // which portfolio-sync.mjs builds from third-party GitHub issue bodies — the first render
+        // site in the app where the HTML author is not the logged-in user (#357).
+        // Markdown has no syntax that emits inline styles, so nothing legitimate is lost.
+        _sanitizer.AllowedAttributes.Remove("style");
+        //
         // RemovingAttribute fires only for an attribute that is ALREADY slated for removal, and its
         // Cancel merely KEEPS it - so it can loosen but never tighten. That is exactly the
         // direction needed here: leave the three attributes globally disallowed, and cancel their

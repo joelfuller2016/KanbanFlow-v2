@@ -22,9 +22,10 @@
    task description is generated from a GITHUB ISSUE BODY by scripts/portfolio-sync.mjs — so
    anyone who can open an issue on a synced repo authors bytes that this component turns into
    live DOM. Those bytes were previously inert only because they never left a <textarea>.
-   The renderer's two known allow-list defects (#340 global attribute list, #341 class/id
-   stripped) are INHERITED here, not fixed and not worsened: this adds one more field to a
-   pipeline that already serves seven.
+   The renderer's known allow-list defect #341 (class/id stripped) is INHERITED here, not fixed
+   and not worsened. The #340 CSS overlay vector (style=) is FIXED in MarkdownRenderer.cs:
+   `style` is stripped from AllowedAttributes so that no externally-authored task description
+   can cover the application UI with a positioned element.
 
    SYNC MARKERS ARE PROTOCOL, NOT CONTENT (the rule stated on #336). The
    `<!-- kanbanflow-sync --> … <!-- /kanbanflow-sync -->` block is the durable repo↔board

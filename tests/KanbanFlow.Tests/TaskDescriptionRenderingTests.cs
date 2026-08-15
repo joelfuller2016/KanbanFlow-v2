@@ -153,6 +153,40 @@ public sealed class TaskDescriptionRenderingTests
         Assert.Contains($"<a href=\"{IssueUrl}\">", html, StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// CSS overlay spoofing, escalated by #357.
+    ///
+    /// HtmlSanitizer's default AllowedCssProperties (239 entries in 9.1.974) includes position,
+    /// inset, z-index, width, height, background, and pointer-events. An external contributor
+    /// can supply a GitHub issue body with a <c>style</c> attribute that paints an element over
+    /// the whole application window, creating a clickjacking or credential-phishing surface.
+    /// The renderer must strip <c>style</c> entirely — Markdown has no syntax that emits one.
+    ///
+    /// The non-vacuity assertion ensures this cannot pass against a renderer that returns empty.
+    /// </summary>
+    [Fact]
+    public void HostileIssueBody_CssOverlayProperties_AreStripped()
+    {
+        var description = SyncedDescription(string.Join("\n\n",
+            "<p style=\"position:fixed;inset:0;z-index:9999;width:100vw;height:100vh;background:white;pointer-events:all\">Fake login</p>",
+            "This part is **bold** and must survive."));
+
+        var html = Renderer.RenderToSafeHtml(description);
+        var dom = new HtmlParser().ParseDocument("<!doctype html><body>" + html);
+
+        // The style attribute must not survive on any element.
+        Assert.Empty(dom.All.Where(e => e.HasAttribute("style")));
+
+        // Belt-and-suspenders: individual properties must also be absent (verifies the
+        // sanitizer did not rewrite the attribute rather than simply drop it).
+        Assert.DoesNotContain("position", html, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("z-index", html, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("pointer-events", html, StringComparison.OrdinalIgnoreCase);
+
+        // Non-vacuity: benign markdown in the same description still renders.
+        Assert.Contains("<strong>bold</strong>", html, StringComparison.Ordinal);
+    }
+
     // ── Storage boundary: the marker bytes must round-trip ──────────────────────────────────────
 
     /// <summary>
