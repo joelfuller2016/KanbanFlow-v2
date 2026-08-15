@@ -3069,6 +3069,7 @@ async function main() {
       }, unrelatedFilter);
       await page.waitForFunction((value) => new URL(window.location.href).searchParams.get("q") === value,
         unrelatedFilter, { timeout: 10000 });
+      await page.locator(`[data-testid="board-card-${syncedTask.id}"]`).waitFor({ state: "visible" });
       assert(await edit.inputValue() === appended,
         "an unrelated parent re-render overwrote the unsaved description buffer");
 
