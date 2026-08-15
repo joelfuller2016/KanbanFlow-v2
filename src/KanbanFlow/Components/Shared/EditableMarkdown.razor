@@ -1,0 +1,209 @@
+@* ══════════════════════════════════════════════════════════════════════════════════════════
+   A markdown field that READS as rendered content and EDITS as raw source (#357).
+
+   The task Description was the last markdown-bearing field in the app that never rendered:
+   both surfaces bound it straight into a <textarea>, so the field was permanently in EDIT
+   mode and every mirrored task showed `<!-- kanbanflow-sync -->` and `**Issue:**` to the user
+   as literal text. The component did not have a rendering bug — it had no READ STATE. This
+   adds the missing state, Azure-DevOps style: read renders, one click (or Enter/Space) swaps
+   in the raw source with the caret already in it. The detail panel commits and returns to read
+   on blur; the edit modal keeps editing until its own Save/Cancel action closes the modal.
+
+   ONE COMPONENT, USED TWICE — TaskDetailPanel (the card-click surface) and EditItemModal
+   (the outline's Edit Task). Do not fork it: a second copy is exactly how this codebase ended
+   up rendering two different clocks (#306) and is why ActivityTimeline carries the same
+   warning. The two call sites differ only in what they do with OnCommit — the panel saves on
+   blur through ITaskService, the modal defers to its own Save Changes button — never in how
+   the field looks or behaves.
+
+   RENDERING GOES THROUGH MarkdownContent, i.e. Markdig + the Ganss.Xss allow-list in
+   Services/MarkdownRenderer.cs. No second renderer, no second sanitiser, no WYSIWYG: storage
+   stays markdown text. That matters more here than on the other seven render sites, because a
+   task description is generated from a GITHUB ISSUE BODY by scripts/portfolio-sync.mjs — so
+   anyone who can open an issue on a synced repo authors bytes that this component turns into
+   live DOM. Those bytes were previously inert only because they never left a <textarea>.
+   The renderer's two known allow-list defects (#340 global attribute list, #341 class/id
+   stripped) are INHERITED here, not fixed and not worsened: this adds one more field to a
+   pipeline that already serves seven.
+
+   SYNC MARKERS ARE PROTOCOL, NOT CONTENT (the rule stated on #336). The
+   `<!-- kanbanflow-sync --> … <!-- /kanbanflow-sync -->` block is the durable repo↔board
+   link: the bytes MUST survive round-trip, and no surface may show them to a human. Both
+   halves fall out of this design rather than needing code:
+     • invisible — the sanitiser drops HTML comments, so they never reach the DOM. That is
+       ASSERTED, not assumed: TaskDescriptionRenderingTests goes red if a renderer
+       or dependency change ever starts keeping comments.
+     • durable — the textarea shows the RAW source, markers included, so an edit round-trips
+       them byte-for-byte. Stripping at the STORAGE boundary would have destroyed the link;
+       stripping happens at the RENDER boundary only, which is what #336 asks for.
+
+   NO preventDefault ON THE READ ELEMENT'S KEYDOWN, deliberately. Space scrolls a focused
+   non-input element, and the obvious fix — `@@onkeydown:preventDefault` — is evaluated at
+   RENDER time in Blazor, so it cannot be scoped to one key: it would swallow Tab as well and
+   turn the read element into a keyboard trap. A one-frame scroll is a far smaller defect than
+   an unreachable panel, and the textarea is focused with preventScroll immediately after. This
+   is also exactly what the existing task-name toggle in TaskDetailPanel does.
+   ══════════════════════════════════════════════════════════════════════════════════════════ *@
+
+@if (editing)
+{
+    <label class="form-label small text-muted mb-1" for="@ElementId">@Label</label>
+    <textarea id="@ElementId"
+              @ref="editorRef"
+              class="form-control form-control-sm"
+              rows="@Rows"
+              placeholder="@Placeholder"
+              data-testid="@editTestId"
+              value="@Value"
+              @oninput="HandleInputAsync"
+              @onblur="HandleBlurAsync"></textarea>
+}
+else
+{
+    @* Not a <label for>: in read mode the control is a div, which `for` cannot target, and a
+       label pointing at an id that is not in the DOM is worse than no association at all. The
+       read element carries its own accessible name instead. *@
+    <span class="form-label small text-muted mb-1 d-block">@Label</span>
+
+    @* role="button" + tabindex="0" matches the task-name toggle two elements up in
+       TaskDetailPanel, and is what #357's acceptance criteria ask for. Known trade-off, stated
+       rather than hidden: a rendered description can contain links, and interactive descendants
+       inside a role="button" is not ideal ARIA. The alternatives are worse for this issue — a
+       real <button> may only contain phrasing content (so <p>/<ul>/<table> would be invalid and
+       the links inside it unusable), and a separate "Edit" affordance is explicitly ruled out by
+       the no-roadblocks requirement (edit must stay ONE click away). Links stay reachable in a
+       screen reader's browse mode, which reads the DOM. *@
+    <div class="markdown-editable-read"
+         role="button"
+         tabindex="0"
+         title="Click to edit"
+         aria-label="@readAriaLabel"
+         data-testid="@readTestId"
+         style="@rowsStyle"
+         @onclick="BeginEdit"
+         @onkeydown="HandleReadKeyDown">
+        <MarkdownContent Markdown="@Value" CssClass="small" EmptyText="@Placeholder" />
+    </div>
+}
+
+@code {
+    /// <summary>Raw markdown source. Two-way bound: use <c>@@bind-Value</c>.</summary>
+    [Parameter] public string? Value { get; set; }
+
+    [Parameter] public EventCallback<string?> ValueChanged { get; set; }
+
+    /// <summary>
+    /// Raised on blur, AFTER <see cref="ValueChanged"/> has delivered the final keystroke.
+    /// Wire it to persist immediately (TaskDetailPanel); leave it unset to defer to an explicit
+    /// save (EditItemModal). Unset is a real mode, not an oversight — it is checked via
+    /// <c>HasDelegate</c>.
+    /// </summary>
+    [Parameter] public EventCallback OnCommit { get; set; }
+
+    /// <summary>DOM id of the textarea, so the edit-mode label can target it.</summary>
+    [Parameter, EditorRequired] public string ElementId { get; set; } = default!;
+
+    /// <summary>Prefix for the two data-testid hooks: <c>{TestId}-read</c> / <c>{TestId}-edit</c>.</summary>
+    [Parameter, EditorRequired] public string TestId { get; set; } = default!;
+
+    [Parameter] public string Label { get; set; } = "Description";
+
+    /// <summary>Shown in the textarea when empty AND as the read-mode empty state, so the two modes agree.</summary>
+    [Parameter] public string Placeholder { get; set; } = "Add a description...";
+
+    [Parameter] public int Rows { get; set; } = 4;
+
+    /// <summary>
+    /// Change this to force the field back to READ mode. A fresh open, or a switch to a
+    /// different item, must not inherit the previous one's edit state — and the reset cannot
+    /// simply run on every OnParametersSet, because the parent re-renders on EVERY keystroke
+    /// (ValueChanged), which would eject the user mid-word.
+    /// </summary>
+    [Parameter] public object? ResetToken { get; set; }
+
+    private bool editing;
+    private bool focusPending;
+    private ElementReference editorRef;
+    private object? lastResetToken;
+    private bool resetTokenSeen;
+
+    // Resolved once per parameter change, never in the render path. Computed properties re-run
+    // on EVERY render, and this component re-renders on every keystroke while editing — the same
+    // trap EditItemModal's RefreshGitHubLinks comment already documents.
+    private string readTestId = string.Empty;
+    private string editTestId = string.Empty;
+    private string readAriaLabel = string.Empty;
+    private string rowsStyle = string.Empty;
+
+    protected override void OnParametersSet()
+    {
+        if (!resetTokenSeen || !Equals(ResetToken, lastResetToken))
+        {
+            resetTokenSeen = true;
+            lastResetToken = ResetToken;
+            editing = false;
+            focusPending = false;
+        }
+
+        readTestId = $"{TestId}-read";
+        editTestId = $"{TestId}-edit";
+        readAriaLabel = $"Edit {Label}";
+        // Drives .markdown-editable-read's min-height so switching modes does not make the
+        // surrounding panel jump: the read box reserves the same height the textarea occupies.
+        rowsStyle = $"--kf-editable-rows: {Rows};";
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        // One click, not two. Without this the click lands on a div, the textarea appears
+        // unfocused, and the user has to click again — which is the roadblock #357 forbids.
+        if (!focusPending || !editing) return;
+        focusPending = false;
+
+        try
+        {
+            await editorRef.FocusAsync(preventScroll: true);
+        }
+        catch (JSDisconnectedException) { }
+        catch (ObjectDisposedException) { }
+        catch (InvalidOperationException) { }
+    }
+
+    private void BeginEdit()
+    {
+        if (editing) return;
+        editing = true;
+        focusPending = true;
+    }
+
+    private void HandleReadKeyDown(KeyboardEventArgs e)
+    {
+        // Same key set as TaskDetailPanel's name toggle — keep the two in step.
+        if (e.Key is "Enter" or " " or "Spacebar")
+        {
+            BeginEdit();
+        }
+    }
+
+    private Task HandleInputAsync(ChangeEventArgs e)
+    {
+        // Equivalent to @bind:event="oninput", which is what TaskDetailPanel used before #357:
+        // the parent holds the buffer, so blur (and the modal's Save button) always sees the
+        // latest keystroke without a change event.
+        Value = e.Value?.ToString();
+        return ValueChanged.InvokeAsync(Value);
+    }
+
+    private async Task HandleBlurAsync()
+    {
+        // An unset callback is the modal's explicit-save mode. Keep the textarea alive across
+        // focus changes so clicking another field or the Save button does not unexpectedly turn
+        // the description back into read mode before the modal closes (#357 plan step 5).
+        if (!OnCommit.HasDelegate) return;
+
+        // Only return to read after the commit completes. If a future save path throws, leaving
+        // the editor open preserves the user's buffer and gives them a chance to retry.
+        await OnCommit.InvokeAsync();
+        editing = false;
+    }
+}

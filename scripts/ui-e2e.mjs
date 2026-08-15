@@ -2943,6 +2943,292 @@ async function main() {
       }
     });
 
+    // ── #357: the task description READS as rendered markdown and EDITS as raw source ──────────
+    //
+    // These are the behavioural regression tests for #357. They fail on master: before the fix the
+    // description was an unconditional <textarea>, so `task-detail-description-read` does not exist
+    // and the first waitFor times out. (Mutation-proved: reverting only the TaskDetailPanel markup
+    // takes exactly these cases red and leaves the other 35 green.)
+    //
+    // Template-faithful fixture — this is the exact line sequence descriptionFor() emits at
+    // scripts/portfolio-sync.mjs:456-473, not an approximation of it. Every mirrored task on the
+    // real board starts with these six lines, and the whole point of the issue is what a HUMAN sees
+    // when they do.
+    const syncIssueUrl = "https://github.com/joelfuller2016/KanbanFlow-v2/issues/357";
+    const syncBlock = [
+      "<!-- kanbanflow-sync -->",
+      `**Issue:** ${syncIssueUrl}`,
+      "**State:** OPEN · **Milestone:** M4: UI / UX Polish · **Labels:** bug, ui",
+      "**Open PR:** none",
+      "**Synced:** 2026-08-02T21:14:07.482Z",
+      "<!-- /kanbanflow-sync -->",
+      "",
+    ].join("\n");
+
+    // The description save is a blur -> SignalR round-trip -> ITaskService write, so poll the API
+    // rather than read once. Same reasoning as waitForApiStatus above.
+    async function waitForApiDescription(taskId, predicate, what, timeoutMs = 8000) {
+      const deadline = Date.now() + timeoutMs;
+      let last;
+      do {
+        last = (await api("GET", `/api/tasks/${taskId}`)).description;
+        if (predicate(last ?? "")) return last ?? "";
+        await sleep(200);
+      } while (Date.now() < deadline);
+      throw new Error(`stored description never ${what}; last value started: ${JSON.stringify((last ?? "").slice(0, 120))}`);
+    }
+
+    // Counts what actually reached the DOM inside the read region — elements, attributes and
+    // comment NODES. Asserting on innerText alone cannot see an <img> or a surviving handler, and
+    // asserting on innerHTML alone cannot tell "not rendered" from "rendered inert".
+    const READ_REGION_PROBE = (el) => {
+      const walker = document.createTreeWalker(el, NodeFilter.SHOW_COMMENT);
+      const comments = [];
+      while (walker.nextNode()) comments.push(walker.currentNode.data ?? "");
+      return {
+        text: el.innerText,
+        comments,
+        strong: el.querySelectorAll("strong").length,
+        scripts: el.querySelectorAll("script").length,
+        hrefs: [...el.querySelectorAll("a")].map((a) => a.getAttribute("href")),
+        handlerAttrs: [...el.querySelectorAll("*")]
+          .flatMap((n) => [...n.attributes].map((a) => a.name))
+          .filter((n) => n.toLowerCase().startsWith("on")),
+      };
+    };
+
+    const syncedTask = await api("POST", `/api/features/${feature.id}/tasks`, {
+      name: `E2E synced description ${stamp}`,
+      status: "Todo",
+      description: `${syncBlock}\n## Summary\n\nA real **body** with a [named link](https://example.com/docs).`,
+    });
+
+    await test("Task description renders markdown in read mode, one click opens the raw source (#357)", async () => {
+      await page.goto(`${baseUrl}/project/${proj.id}`);
+      await clickUntil(
+        () => page.locator(`[data-testid="board-card-${syncedTask.id}-title"]`).click(),
+        page.locator('[data-testid="task-detail-panel"]'),
+      );
+
+      const read = page.locator('[data-testid="task-detail-description-read"]');
+      await read.waitFor({ state: "visible" });
+      const probe = await read.evaluate(READ_REGION_PROBE);
+
+      // The defect, stated as an assertion: none of this may be visible to a human.
+      assert(!probe.text.includes("<!--"), `an HTML comment is visible as text: ${JSON.stringify(probe.text.slice(0, 120))}`);
+      assert(!probe.text.includes("kanbanflow-sync"), "the sync marker is visible as text");
+      assert(!probe.text.includes("**Issue:**"), "raw ** markers are visible as text");
+      // Stronger than "invisible": the sync markers are not in the DOM even as comment nodes.
+      // Blazor itself emits harmless `<!--!-->` framework markers around component fragments, so
+      // asserting zero comments would test framework internals rather than the sanitiser.
+      assert(!probe.comments.some((c) => c.includes("kanbanflow-sync")),
+        `a sync marker survived as a comment node: ${JSON.stringify(probe.comments)}`);
+
+      // Non-vacuity: an empty read region would satisfy every assertion above. The block's
+      // metadata must have RENDERED, with the issue URL as a working link (AC 4).
+      assert(probe.strong >= 4, `expected the ** labels to render as <strong>, saw ${probe.strong}`);
+      assert(probe.hrefs.includes(syncIssueUrl), `expected the issue URL to autolink; hrefs = ${JSON.stringify(probe.hrefs)}`);
+      assert(probe.hrefs.includes("https://example.com/docs"), `expected the body's named link; hrefs = ${JSON.stringify(probe.hrefs)}`);
+
+      // ONE click into edit, with the caret already in the textarea. A second click would be the
+      // roadblock the issue forbids.
+      await read.click();
+      const edit = page.locator('[data-testid="task-detail-description-edit"]');
+      await edit.waitFor({ state: "visible" });
+      const focused = await page.evaluate(() => document.activeElement?.getAttribute("data-testid"));
+      assert(focused === "task-detail-description-edit",
+        `after one click the textarea must hold the caret; document.activeElement was ${JSON.stringify(focused)}`);
+
+      // Edit mode shows the RAW source, markers included — that is what makes the round trip
+      // below possible at all.
+      const raw = await edit.inputValue();
+      assert(raw.includes("<!-- kanbanflow-sync -->"), "edit mode must show the raw sync block");
+      assert(raw.includes("**Issue:**"), "edit mode must show the raw markdown source");
+
+      // Round trip: type at the end of the raw source, blur, and require the marker block to
+      // survive in STORAGE byte-for-byte. Stripping at the storage boundary would silently break
+      // the sync's idempotency anchor (#336) and this is the assertion that would catch it.
+      const appended = `${raw}\n\nEdited by e2e ${stamp}.`;
+      await edit.fill(appended);
+      await page.keyboard.press("Tab"); // blur -> SaveDescriptionAsync -> back to read mode
+
+      await read.waitFor({ state: "visible" });
+      const stored = await waitForApiDescription(
+        syncedTask.id, (d) => d.includes(`Edited by e2e ${stamp}.`), "picked up the edit");
+      assert(stored.includes("<!-- kanbanflow-sync -->"), "the sync block's opening marker was lost on save");
+      assert(stored.includes("<!-- /kanbanflow-sync -->"), "the sync block's closing marker was lost on save");
+      assert(stored.startsWith(syncBlock), "the stored sync block is no longer byte-identical to what the sync wrote");
+      assert(stored.includes(`**Issue:** ${syncIssueUrl}`), "the issue link inside the block was mangled on save");
+    });
+
+    await test("Task description: Tab reaches read mode, Enter/Space edit, and no-op blur writes nothing (#357)", async () => {
+      await page.goto(`${baseUrl}/project/${proj.id}`);
+      await clickUntil(
+        () => page.locator(`[data-testid="board-card-${syncedTask.id}-title"]`).click(),
+        page.locator('[data-testid="task-detail-panel"]'),
+      );
+
+      const read = page.locator('[data-testid="task-detail-description-read"]');
+      await read.waitFor({ state: "visible" });
+
+      // In the tab order for real — without this the field is unreachable without a mouse.
+      const tabIndex = await read.evaluate((el) => el.tabIndex);
+      assert(tabIndex === 0, `read element must be focusable; tabIndex was ${tabIndex}`);
+
+      const before = await api("GET", `/api/tasks/${syncedTask.id}`);
+
+      await read.focus();
+      await page.keyboard.press("Enter");
+      const edit = page.locator('[data-testid="task-detail-description-edit"]');
+      await edit.waitFor({ state: "visible" });
+      const focused = await page.evaluate(() => document.activeElement?.getAttribute("data-testid"));
+      assert(focused === "task-detail-description-edit",
+        `Enter must open the editor with the caret in it; document.activeElement was ${JSON.stringify(focused)}`);
+
+      // Blur without typing. The unchanged-guard in SaveDescriptionAsync must still swallow this:
+      // no write, so no ActivityEvent and no UpdatedAt bump. AC 3.
+      await page.keyboard.press("Tab");
+      await read.waitFor({ state: "visible" });
+      await sleep(600); // give a write, if one were going to happen, time to land
+
+      const after = await api("GET", `/api/tasks/${syncedTask.id}`);
+      assert(after.updatedAt === before.updatedAt,
+        `a no-op description blur wrote to the task: updatedAt ${before.updatedAt} -> ${after.updatedAt}`);
+      assert(after.description === before.description, "a no-op description blur changed the stored description");
+
+      // AC 7 names both activation keys. Exercise Space independently after Enter returned the
+      // field to read mode, and require the same one-step focus handoff.
+      await read.focus();
+      await page.keyboard.press("Space");
+      await edit.waitFor({ state: "visible" });
+      const spaceFocused = await page.evaluate(() => document.activeElement?.getAttribute("data-testid"));
+      assert(spaceFocused === "task-detail-description-edit",
+        `Space must open the editor with the caret in it; document.activeElement was ${JSON.stringify(spaceFocused)}`);
+      await page.keyboard.press("Tab");
+      await read.waitFor({ state: "visible" });
+    });
+
+    const emptyDescriptionTask = await api("POST", `/api/features/${feature.id}/tasks`, {
+      name: `E2E empty description ${stamp}`,
+      status: "Todo",
+    });
+
+    await test("An empty task description renders a clickable placeholder (#357)", async () => {
+      await page.goto(`${baseUrl}/project/${proj.id}`);
+      await clickUntil(
+        () => page.locator(`[data-testid="board-card-${emptyDescriptionTask.id}-title"]`).click(),
+        page.locator('[data-testid="task-detail-panel"]'),
+      );
+
+      const read = page.locator('[data-testid="task-detail-description-read"]');
+      await read.waitFor({ state: "visible" });
+      assert((await read.innerText()).includes("Add a description..."), "empty read mode did not show its placeholder");
+
+      await read.click();
+      const edit = page.locator('[data-testid="task-detail-description-edit"]');
+      await edit.waitFor({ state: "visible" });
+      assert(await edit.inputValue() === "", "empty description editor did not start empty");
+      const focused = await page.evaluate(() => document.activeElement?.getAttribute("data-testid"));
+      assert(focused === "task-detail-description-edit", "empty placeholder did not enter edit mode in one click");
+      await page.keyboard.press("Tab");
+    });
+
+    // The provenance test. A task description is a GitHub ISSUE BODY (portfolio-sync writes it), so
+    // this payload is what an outside contributor can put on a synced repo — and #357 is the change
+    // that turns those bytes into live DOM. Before it they were inert for one accidental reason:
+    // they never left a <textarea>.
+    const xssTask = await api("POST", `/api/features/${feature.id}/tasks`, {
+      name: `E2E hostile description ${stamp}`,
+      status: "Todo",
+      description: [
+        syncBlock,
+        "<img src=x onerror=alert(1)>",
+        "",
+        "<script>alert(1)</script>",
+        "",
+        "[click me](javascript:alert(1))",
+        "",
+        "<a href=\"https://x.example\" onclick=\"steal()\">x</a>",
+        "",
+        "This part is **bold** and must survive.",
+      ].join("\n"),
+    });
+
+    await test("A hostile issue body in a description is inert when rendered (#357)", async () => {
+      // Arm a real dialog listener: Playwright auto-dismisses dialogs when nobody is listening, so
+      // "no alert appeared" proves nothing unless something is watching for one.
+      const dialogs = [];
+      const onDialog = async (d) => { dialogs.push(d.message()); await d.dismiss().catch(() => {}); };
+      const pageErrors = [];
+      const onPageError = (e) => pageErrors.push(e.message);
+      page.on("dialog", onDialog);
+      page.on("pageerror", onPageError);
+
+      try {
+        await page.goto(`${baseUrl}/project/${proj.id}`);
+        await clickUntil(
+          () => page.locator(`[data-testid="board-card-${xssTask.id}-title"]`).click(),
+          page.locator('[data-testid="task-detail-panel"]'),
+        );
+
+        const read = page.locator('[data-testid="task-detail-description-read"]');
+        await read.waitFor({ state: "visible" });
+        const probe = await read.evaluate(READ_REGION_PROBE);
+        await sleep(500); // an onerror/onload handler would have fired well inside this
+
+        assert(probe.scripts === 0, `a <script> element reached the DOM (${probe.scripts})`);
+        assert(probe.handlerAttrs.length === 0,
+          `event-handler attributes survived sanitisation: ${JSON.stringify(probe.handlerAttrs)}`);
+        assert(!probe.hrefs.some((h) => (h ?? "").toLowerCase().startsWith("javascript:")),
+          `a javascript: href survived: ${JSON.stringify(probe.hrefs)}`);
+        assert(dialogs.length === 0, `alert() fired: ${JSON.stringify(dialogs)}`);
+        assert(pageErrors.length === 0, `the page threw while rendering hostile markup: ${JSON.stringify(pageErrors)}`);
+
+        // Non-vacuity: this must not pass because nothing rendered.
+        assert(probe.strong >= 4, `benign markdown stopped rendering alongside the payload (strong=${probe.strong})`);
+        assert(probe.text.includes("bold"), "the benign body text is missing — the payload check would be vacuous");
+      } finally {
+        page.off("dialog", onDialog);
+        page.off("pageerror", onPageError);
+      }
+    });
+
+    await test("Edit Task modal renders the description too, from the same shared component (#357)", async () => {
+      await page.goto(`${baseUrl}/project/${proj.id}`);
+      await clickUntil(
+        () => page.locator(`[data-testid="outline-task-${syncedTask.id}"]`).click(),
+        page.locator('[data-testid="edit-item-modal"] [data-testid="edit-item-description-read"]'),
+      );
+
+      const read = page.locator('[data-testid="edit-item-description-read"]');
+      const probe = await read.evaluate(READ_REGION_PROBE);
+      assert(!probe.text.includes("<!--"), "the modal still shows an HTML comment as text");
+      assert(!probe.comments.some((c) => c.includes("kanbanflow-sync")),
+        `a sync marker survived as a modal comment node: ${JSON.stringify(probe.comments)}`);
+      assert(probe.hrefs.includes(syncIssueUrl), `the modal did not autolink the issue URL; hrefs = ${JSON.stringify(probe.hrefs)}`);
+
+      // Identical interaction to the panel: one click, caret in the raw source.
+      await read.click();
+      const edit = page.locator('[data-testid="edit-item-description-edit"]');
+      await edit.waitFor({ state: "visible" });
+      const focused = await page.evaluate(() => document.activeElement?.getAttribute("data-testid"));
+      assert(focused === "edit-item-description-edit",
+        `the modal must behave like the panel; document.activeElement was ${JSON.stringify(focused)}`);
+      const raw = await edit.inputValue();
+      assert(raw.includes("<!-- kanbanflow-sync -->"), "the modal's edit mode must show the raw sync block");
+
+      // The modal owns persistence through Save Changes, so moving focus must not collapse its
+      // textarea back to read mode. That would be a surprising state change while the form is open.
+      await page.locator('#edit-item-name').focus();
+      assert(await edit.isVisible(), "modal description left edit mode on blur before Save/Cancel");
+
+      await page.locator('[data-testid="edit-item-cancel-button"]').click();
+    });
+
+    await api("DELETE", `/api/tasks/${syncedTask.id}`).catch(() => {});
+    await api("DELETE", `/api/tasks/${xssTask.id}`).catch(() => {});
+    await api("DELETE", `/api/tasks/${emptyDescriptionTask.id}`).catch(() => {});
+
     // ── Scenario E: Settings -> Run all shows an all-passed result table ──
     await test("Settings 'Run all' reports an all-passed result", async () => {
       await page.goto(`${baseUrl}/settings`);

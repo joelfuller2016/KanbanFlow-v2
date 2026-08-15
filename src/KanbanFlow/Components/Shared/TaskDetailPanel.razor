@@ -132,15 +132,22 @@
                        @onchange="OnAssigneeChanged" />
             </div>
 
-            @* Description *@
+            @* Description (#357). This was a bare <textarea>: the field had no READ state at all,
+               so a mirrored task showed `<!-- kanbanflow-sync -->` and `**Issue:**` as literal
+               text and its issue URL was dead. EditableMarkdown adds the missing state and is the
+               SAME component EditItemModal uses — do not fork it (#306).
+
+               The write path below is untouched: OnCommit fires on blur and calls
+               SaveDescriptionAsync exactly as @onblur did, so the ITaskService routing, the
+               unchanged-guard and the audit trail all behave as before. *@
             <div class="mb-3">
-                <label class="form-label small text-muted mb-1" for="task-detail-description">Description</label>
-                <textarea id="task-detail-description" class="form-control form-control-sm" rows="4"
-                          placeholder="Add a description..."
-                          @bind="editingDescription"
-                          @bind:event="oninput"
-                          @onblur="SaveDescriptionAsync"
-                          @onfocus="StartEditingDescription"></textarea>
+                <EditableMarkdown ElementId="task-detail-description"
+                                  TestId="task-detail-description"
+                                  Label="Description"
+                                  Rows="4"
+                                  ResetToken="descriptionResetToken"
+                                  @bind-Value="editingDescription"
+                                  OnCommit="SaveDescriptionAsync" />
             </div>
 
             @* Acceptance criteria *@
@@ -431,8 +438,12 @@
     private bool isEditingName;
     private string? editingName;
 
-    // Description editing
+    // Description editing. The buffer is seeded below on every parameter set; the token is bumped
+    // ONLY on a fresh open or a task switch, which is what returns EditableMarkdown to read mode
+    // (#357). It must not be bumped on an ordinary re-render — the field raises ValueChanged on
+    // every keystroke, so that would eject the user mid-word.
     private string? editingDescription;
+    private int descriptionResetToken;
 
     // Subtask input
     private string? newSubtaskText;
@@ -471,6 +482,7 @@
         if (IsOpen && !wasOpen)
         {
             shouldInitializeDialogFocus = true;
+            descriptionResetToken++;   // a fresh open never lands in description edit mode (#357)
         }
 
         wasOpen = IsOpen;
@@ -499,6 +511,7 @@
 
         if (taskId != loadedCommentsTaskId)
         {
+            descriptionResetToken++;   // one task's edit state must not carry into another (#357)
             loadedCommentsTaskId = taskId;
             commentSaveVersion++;
             var loadVersion = ++commentLoadVersion;
@@ -722,10 +735,11 @@
 
     // ── Description ──
 
-    private void StartEditingDescription()
-    {
-        editingDescription = Task?.Description;
-    }
+    // StartEditingDescription() lived here and re-seeded the buffer from the task on @onfocus.
+    // It is gone, not lost: OnParametersSetAsync above already assigns `editingDescription =
+    // Task?.Description` on every parameter set, which is at least as fresh, and the field no
+    // longer has a focus event to hang it off. Two functions seeding the same buffer is exactly
+    // the drift #357 asked to avoid.
 
     private async Task SaveDescriptionAsync()
     {
