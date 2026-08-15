@@ -3059,7 +3059,10 @@ async function main() {
       // Force an unrelated ProjectView re-render without moving focus. TaskDetailPanel receives
       // its parameters again when the board filter changes; that must not reseed this live edit
       // buffer from the task's last persisted Description.
-      const unrelatedFilter = `description-buffer-${stamp}`;
+      // Must match the task under test: a non-matching term filters its card off the board,
+      // and the buffer assertion below would then test how the panel reacts to losing its
+      // own card — a different question from the one this guard asks.
+      const unrelatedFilter = `E2E synced description ${stamp}`;
       await page.locator('[data-testid="board-filter-search"]').evaluate((el, value) => {
         el.value = value;
         el.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: value }));
@@ -3247,6 +3250,10 @@ async function main() {
       await page.keyboard.press("Control+End");
       await page.keyboard.type(`\n\nDiscarded ${stamp}.`, { delay: 0 });
       await page.locator('[data-testid="edit-item-cancel-button"]').click();
+      // Negative assertion: a regression's write would arrive after an immediate read. Give
+      // it time to land before declaring that none did — same pattern as the positive legs.
+      await page.locator('[data-testid="edit-item-modal"]').waitFor({ state: "hidden" });
+      await sleep(600);
       const afterCancel = await api("GET", `/api/tasks/${syncedTask.id}`);
       assert(!afterCancel.description.includes(`Discarded ${stamp}.`),
         "Cancel persisted a buffered modal description edit");
@@ -3263,6 +3270,9 @@ async function main() {
       // Save Changes must persist a buffered edit through the modal's save flow.
       await read.click();
       await edit.waitFor({ state: "visible" });
+      // The component focuses the textarea from OnAfterRenderAsync, so visibility is not proof
+      // the caret has landed. Park it explicitly, exactly as the first edit leg above does.
+      await edit.focus();
       await page.keyboard.press("Control+End");
       await page.keyboard.type(`\n\nSaved from modal ${stamp}.`, { delay: 0 });
       await page.locator('[data-testid="edit-item-save-button"]').click();
