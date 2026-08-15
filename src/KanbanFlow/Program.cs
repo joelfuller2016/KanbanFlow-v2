@@ -30,6 +30,8 @@ builder.Services.AddDbContextFactory<AppDbContext>(
 
 // Audit-aware service layer (issue #88: route REST + UI mutations through one place)
 builder.Services.AddScoped<ITaskService, TaskService>();
+// Dependency graph mutations (#414): cycle validation and insertion share one transaction.
+builder.Services.AddScoped<ITaskDependencyService, TaskDependencyService>();
 // Ideas inbox service (#180) — same single-audit-boundary rule as ITaskService.
 builder.Services.AddScoped<IIdeaService, IdeaService>();
 // Bi-temporal memory store (#221) — same single-audit-boundary rule.

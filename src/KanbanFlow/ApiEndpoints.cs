@@ -1790,7 +1790,11 @@ public static class ApiEndpoints
         });
 
         // POST /api/tasks/{taskId}/dependencies — create a dependency for a task
-        app.MapPost("/api/tasks/{taskId:int}/dependencies", async (int taskId, TaskDependencyDto dto, AppDbContext db) =>
+        app.MapPost("/api/tasks/{taskId:int}/dependencies", async (
+            int taskId,
+            TaskDependencyDto dto,
+            Services.ITaskDependencyService dependencyService,
+            CancellationToken ct) =>
         {
             if (!TryParseDefinedEnum<TaskDependencyType>(dto.Type ?? nameof(TaskDependencyType.DependsOn), out var type))
                 return Results.UnprocessableEntity(new { message = $"Invalid dependency type: {dto.Type}. Valid values: {string.Join(", ", Enum.GetNames<TaskDependencyType>())}" });
@@ -1802,49 +1806,34 @@ public static class ApiEndpoints
             if (blockedTaskId.Value == blockingTaskId.Value)
                 return Results.UnprocessableEntity(new { message = "A task cannot depend on itself." });
 
-            var tasks = await db.Tasks
-                .Where(t => t.Id == blockedTaskId.Value || t.Id == blockingTaskId.Value)
-                .Include(t => t.Feature)
-                .ToListAsync();
-
-            var blockedTask = tasks.SingleOrDefault(t => t.Id == blockedTaskId.Value);
-            var blockingTask = tasks.SingleOrDefault(t => t.Id == blockingTaskId.Value);
-
-            if (blockedTask is null)
-                return Results.NotFound(new { message = $"Task {blockedTaskId.Value} not found." });
-            if (blockingTask is null)
-                return Results.NotFound(new { message = $"Task {blockingTaskId.Value} not found." });
-
-            var projectId = blockedTask.Feature.ProjectId;
-            if (blockingTask.Feature.ProjectId != projectId)
-                return Results.UnprocessableEntity(new { message = "Task dependencies must stay within the same project." });
-
-            var duplicateExists = await db.TaskDependencies.AnyAsync(d =>
-                d.TaskItemId == blockedTaskId.Value &&
-                d.DependsOnTaskItemId == blockingTaskId.Value);
-            if (duplicateExists)
-                return Results.Conflict(new { message = "This task dependency already exists." });
-
-            var projectDependencies = await db.TaskDependencies
-                .Where(d => d.ProjectId == projectId)
-                .AsNoTracking()
-                .ToListAsync();
-
-            if (WouldCreateTaskDependencyCycle(blockedTaskId.Value, blockingTaskId.Value, projectDependencies))
-                return Results.UnprocessableEntity(new { message = "This dependency would create a cycle." });
-
-            var dependency = new TaskDependency
+            try
             {
-                ProjectId = projectId,
-                TaskItemId = blockedTaskId.Value,
-                DependsOnTaskItemId = blockingTaskId.Value,
-                Type = type
-            };
+                var created = await dependencyService.CreateAsync(
+                    new Services.TaskDependencyCreate(
+                        blockedTaskId.Value,
+                        blockingTaskId.Value,
+                        type),
+                    ct);
 
-            db.TaskDependencies.Add(dependency);
-            await db.SaveChangesAsync();
-
-            return Results.Created($"/api/task-dependencies/{dependency.Id}", MapTaskDependency(dependency, blockedTask.Name, blockingTask.Name));
+                return Results.Created(
+                    $"/api/task-dependencies/{created.Dependency.Id}",
+                    MapTaskDependency(
+                        created.Dependency,
+                        created.BlockedTaskName,
+                        created.BlockingTaskName));
+            }
+            catch (Services.TaskNotFoundException ex)
+            {
+                return Results.NotFound(new { message = $"Task {ex.TaskId} not found." });
+            }
+            catch (Services.TaskDependencyAlreadyExistsException ex)
+            {
+                return Results.Conflict(new { message = ex.Message });
+            }
+            catch (Services.ValidationException ex)
+            {
+                return Results.UnprocessableEntity(new { message = ex.Message });
+            }
         });
 
         // DELETE /api/task-dependencies/{id} — delete a dependency
@@ -2695,31 +2684,6 @@ public static class ApiEndpoints
         // For DependsOn, the route task is blocked by another task; accept the blocking-task aliases only.
         var blockingTaskId = dto.DependsOnTaskItemId ?? dto.BlockingTaskItemId ?? dto.BlockingTaskId;
         return (routeTaskId, blockingTaskId, "DependsOnTaskItemId, BlockingTaskItemId, or BlockingTaskId is required.");
-    }
-
-    private static bool WouldCreateTaskDependencyCycle(int blockedTaskId, int blockingTaskId, IReadOnlyCollection<TaskDependency> projectDependencies)
-    {
-        var dependenciesByBlockedTask = projectDependencies.ToLookup(d => d.TaskItemId, d => d.DependsOnTaskItemId);
-        var visited = new HashSet<int>();
-
-        bool HasPath(int currentTaskId, int targetTaskId)
-        {
-            if (currentTaskId == targetTaskId)
-                return true;
-
-            if (!visited.Add(currentTaskId))
-                return false;
-
-            foreach (var nextTaskId in dependenciesByBlockedTask[currentTaskId])
-            {
-                if (HasPath(nextTaskId, targetTaskId))
-                    return true;
-            }
-
-            return false;
-        }
-
-        return HasPath(blockingTaskId, blockedTaskId);
     }
 
     private static bool WouldCreateFeatureCycle(int featureId, int proposedParentFeatureId, IReadOnlyCollection<Feature> allProjectFeatures)
