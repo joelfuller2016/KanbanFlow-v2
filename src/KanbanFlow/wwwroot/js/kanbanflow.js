@@ -242,6 +242,14 @@ window.KanbanFlow = {
             if (!a._kfLinkInit) {
                 a._kfLinkInit = true;
                 a.addEventListener('click', function (e) { e.stopPropagation(); });
+                // Enter/Space on a focused link bubbles to the read wrapper and trips
+                // HandleReadKeyDown -> BeginEdit. Stop propagation so the link activates
+                // normally (preventDefault is intentionally absent) without entering edit mode.
+                a.addEventListener('keydown', function (e) {
+                    if (e.key === 'Enter' || e.key === ' ' || e.key === 'Spacebar') {
+                        e.stopPropagation();
+                    }
+                });
             }
         });
     },
