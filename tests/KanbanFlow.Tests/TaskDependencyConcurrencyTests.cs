@@ -203,6 +203,26 @@ public sealed class TaskDependencyConcurrencyTests
             return new ValueTask<InterceptionResult<DbDataReader>>(result);
         }
 
+        public override ValueTask<InterceptionResult<int>> NonQueryExecutingAsync(
+            DbCommand command,
+            CommandEventData eventData,
+            InterceptionResult<int> result,
+            CancellationToken cancellationToken = default)
+        {
+            Observe(command, eventData.Context);
+            return new ValueTask<InterceptionResult<int>>(result);
+        }
+
+        public override ValueTask<InterceptionResult<object>> ScalarExecutingAsync(
+            DbCommand command,
+            CommandEventData eventData,
+            InterceptionResult<object> result,
+            CancellationToken cancellationToken = default)
+        {
+            Observe(command, eventData.Context);
+            return new ValueTask<InterceptionResult<object>>(result);
+        }
+
         private void Observe(DbCommand command, DbContext? context)
         {
             if (Volatile.Read(ref _armed) == 0)
