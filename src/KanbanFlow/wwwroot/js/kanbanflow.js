@@ -236,20 +236,17 @@ window.KanbanFlow = {
     // each read-mode render so new <a> elements picked up by Markdig are also covered. The
     // sentinel property (_kfLinkInit) keeps the listener from being attached twice to the same
     // element if Blazor preserves the node across re-renders.
+    //
+    // Enter on a focused <a> causes the browser to synthesize a click — that click is what this
+    // listener intercepts. A separate keydown listener is not needed: the read wrapper exposes its
+    // edit action via a sibling <button>, not a keydown handler on the content div, so a keydown
+    // that bubbles past an <a> finds no handler and causes no harm.
     initMarkdownEditable: function (el) {
         if (!el) return;
         el.querySelectorAll('a[href]').forEach(function (a) {
             if (!a._kfLinkInit) {
                 a._kfLinkInit = true;
                 a.addEventListener('click', function (e) { e.stopPropagation(); });
-                // Enter/Space on a focused link bubbles to the read wrapper and trips
-                // HandleReadKeyDown -> BeginEdit. Stop propagation so the link activates
-                // normally (preventDefault is intentionally absent) without entering edit mode.
-                a.addEventListener('keydown', function (e) {
-                    if (e.key === 'Enter' || e.key === ' ' || e.key === 'Spacebar') {
-                        e.stopPropagation();
-                    }
-                });
             }
         });
     },
