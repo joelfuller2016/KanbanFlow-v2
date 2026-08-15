@@ -3048,8 +3048,27 @@ async function main() {
       // Round trip: type at the end of the raw source, blur, and require the marker block to
       // survive in STORAGE byte-for-byte. Stripping at the storage boundary would silently break
       // the sync's idempotency anchor (#336) and this is the assertion that would catch it.
-      const appended = `${raw}\n\nEdited by e2e ${stamp}.`;
-      await edit.fill(appended);
+      const typedSuffix = `\n\nEdited by e2e ${stamp}.`;
+      const appended = `${raw}${typedSuffix}`;
+      await edit.focus();
+      await page.keyboard.press("Control+End");
+      await page.keyboard.type(typedSuffix, { delay: 0 });
+      assert(await edit.inputValue() === appended,
+        "rapid description typing lost or reordered characters before blur");
+
+      // Force an unrelated ProjectView re-render without moving focus. TaskDetailPanel receives
+      // its parameters again when the board filter changes; that must not reseed this live edit
+      // buffer from the task's last persisted Description.
+      const unrelatedFilter = `description-buffer-${stamp}`;
+      await page.locator('[data-testid="board-filter-search"]').evaluate((el, value) => {
+        el.value = value;
+        el.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: value }));
+      }, unrelatedFilter);
+      await page.waitForFunction((value) => new URL(window.location.href).searchParams.get("q") === value,
+        unrelatedFilter, { timeout: 10000 });
+      assert(await edit.inputValue() === appended,
+        "an unrelated parent re-render overwrote the unsaved description buffer");
+
       await page.keyboard.press("Tab"); // blur -> SaveDescriptionAsync -> back to read mode
 
       await read.waitFor({ state: "visible" });

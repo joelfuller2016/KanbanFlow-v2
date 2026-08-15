@@ -56,7 +56,7 @@
               rows="@Rows"
               placeholder="@Placeholder"
               data-testid="@editTestId"
-              value="@Value"
+              value="@renderedEditValue"
               @oninput="HandleInputAsync"
               @onblur="HandleBlurAsync"></textarea>
 }
@@ -122,6 +122,11 @@ else
 
     private bool editing;
     private bool focusPending;
+    // Seeded when edit mode begins, then deliberately left unchanged while the user types. On a
+    // Blazor Server circuit each input event can render after a newer character is already in the
+    // browser; changing this attribute on every event would let a stale render overwrite that
+    // newer DOM value. HandleInputAsync still reports every current value to the parent.
+    private string? renderedEditValue;
     private ElementReference editorRef;
     private ElementReference readRef;
     private object? lastResetToken;
@@ -143,6 +148,7 @@ else
             lastResetToken = ResetToken;
             editing = false;
             focusPending = false;
+            renderedEditValue = Value;
         }
 
         readTestId = $"{TestId}-read";
@@ -183,6 +189,7 @@ else
     private void BeginEdit()
     {
         if (editing) return;
+        renderedEditValue = Value;
         editing = true;
         focusPending = true;
     }
@@ -198,11 +205,11 @@ else
 
     private Task HandleInputAsync(ChangeEventArgs e)
     {
-        // Equivalent to @bind:event="oninput", which is what TaskDetailPanel used before #357:
-        // the parent holds the buffer, so blur (and the modal's Save button) always sees the
-        // latest keystroke without a change event.
-        Value = e.Value?.ToString();
-        return ValueChanged.InvokeAsync(Value);
+        // Report every keystroke so blur (and the modal's Save button) sees the current buffer,
+        // but do not rewrite renderedEditValue. The DOM already holds exactly what the user typed;
+        // keeping the rendered attribute stable prevents a delayed Server render from replacing a
+        // newer browser value or moving its caret (the same invariant as BoardFilterBar).
+        return ValueChanged.InvokeAsync(e.Value?.ToString());
     }
 
     private async Task HandleBlurAsync()

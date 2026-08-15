@@ -438,10 +438,9 @@
     private bool isEditingName;
     private string? editingName;
 
-    // Description editing. The buffer is seeded below on every parameter set; the token is bumped
-    // ONLY on a fresh open or a task switch, which is what returns EditableMarkdown to read mode
-    // (#357). It must not be bumped on an ordinary re-render — the field raises ValueChanged on
-    // every keystroke, so that would eject the user mid-word.
+    // Description editing. The buffer and token are reset ONLY on a fresh open or a task switch.
+    // An ordinary parent re-render must preserve an in-progress draft instead of reseeding it from
+    // the task's last persisted Description (#357).
     private string? editingDescription;
     private int descriptionResetToken;
 
@@ -479,10 +478,10 @@
 
     protected override async Task OnParametersSetAsync()
     {
-        if (IsOpen && !wasOpen)
+        var freshOpen = IsOpen && !wasOpen;
+        if (freshOpen)
         {
             shouldInitializeDialogFocus = true;
-            descriptionResetToken++;   // a fresh open never lands in description edit mode (#357)
         }
 
         wasOpen = IsOpen;
@@ -490,13 +489,19 @@
         // Reset editing state when task changes
         isEditingName = false;
         confirmingDelete = false;
-        editingDescription = Task?.Description;
         newSubtaskText = null;
         newAcceptanceCriterionText = null;
         addingChildSubtaskToId = AddSubtaskParentId;
         newChildSubtaskText = null;
 
         var taskId = IsOpen ? Task?.Id : null;
+        var taskChanged = taskId != loadedCommentsTaskId;
+
+        if (freshOpen || taskChanged)
+        {
+            editingDescription = Task?.Description;
+            descriptionResetToken++;   // a new editing session always starts in read mode (#357)
+        }
 
         // Every panel mutation ends in OnTaskUpdated, and ProjectView re-fetches the task — so a
         // changed Task.UpdatedAt is the one cheap signal that new ActivityEvents exist, without
@@ -509,9 +514,8 @@
             activityRefreshToken++;
         }
 
-        if (taskId != loadedCommentsTaskId)
+        if (taskChanged)
         {
-            descriptionResetToken++;   // one task's edit state must not carry into another (#357)
             loadedCommentsTaskId = taskId;
             commentSaveVersion++;
             var loadVersion = ++commentLoadVersion;
@@ -736,10 +740,8 @@
     // ── Description ──
 
     // StartEditingDescription() lived here and re-seeded the buffer from the task on @onfocus.
-    // It is gone, not lost: OnParametersSetAsync above already assigns `editingDescription =
-    // Task?.Description` on every parameter set, which is at least as fresh, and the field no
-    // longer has a focus event to hang it off. Two functions seeding the same buffer is exactly
-    // the drift #357 asked to avoid.
+    // It is gone, not lost: OnParametersSetAsync seeds a new editing session on fresh open/task
+    // switch, while ordinary parent re-renders deliberately preserve the live draft.
 
     private async Task SaveDescriptionAsync()
     {
