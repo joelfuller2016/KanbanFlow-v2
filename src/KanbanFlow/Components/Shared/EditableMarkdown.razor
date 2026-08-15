@@ -46,6 +46,7 @@
    ══════════════════════════════════════════════════════════════════════════════════════════ *@
 
 @inject IJSRuntime JS
+@inject ILogger<EditableMarkdown> Logger
 
 @if (editing)
 {
@@ -131,6 +132,10 @@ else
     private ElementReference readRef;
     private object? lastResetToken;
     private bool resetTokenSeen;
+    // Link interception only needs re-arming when the rendered markup changes; skip the
+    // interop round trip on every unrelated parent re-render (e.g. comment-box keystrokes).
+    private bool readInitialized;
+    private string? initializedFor;
 
     // Resolved once per parameter change, never in the render path. Computed properties re-run
     // on EVERY render, and this component re-renders on every keystroke while editing — the same
@@ -163,14 +168,24 @@ else
     {
         if (!editing)
         {
-            // After each read-mode render, wire up link-click interception so rendered <a>
-            // elements do not bubble their clicks to the wrapper's BeginEdit handler.
-            try { await JS.InvokeVoidAsync("KanbanFlow.initMarkdownEditable", readRef); }
+            if (readInitialized && string.Equals(initializedFor, Value, StringComparison.Ordinal)) return;
+
+            // Wire up link-click interception so rendered <a> elements do not bubble their
+            // clicks to the wrapper's BeginEdit handler. Flags are set only after success.
+            try
+            {
+                await JS.InvokeVoidAsync("KanbanFlow.initMarkdownEditable", readRef);
+                readInitialized = true;
+                initializedFor = Value;
+            }
             catch (JSDisconnectedException) { }
             catch (ObjectDisposedException) { }
             catch (InvalidOperationException) { }
             return;
         }
+
+        // Edit mode replaces the read subtree; the next read render must re-arm.
+        readInitialized = false;
 
         // One click, not two. Without this the click lands on a div, the textarea appears
         // unfocused, and the user has to click again — which is the roadblock #357 forbids.
@@ -227,9 +242,10 @@ else
             await OnCommit.InvokeAsync();
             editing = false;
         }
-        catch (Exception)
+        catch (Exception ex)
         {
             // editing remains true — the user keeps their buffer.
+            Logger.LogError(ex, "Markdown commit failed for {ElementId}; the editor stays open.", ElementId);
         }
     }
 }

@@ -3129,6 +3129,20 @@ async function main() {
         `Space must open the editor with the caret in it; document.activeElement was ${JSON.stringify(spaceFocused)}`);
       await page.keyboard.press("Tab");
       await read.waitFor({ state: "visible" });
+
+      // Keydown guard: the JS handler stops Enter/Space on a rendered link from bubbling
+      // to the wrapper's BeginEdit handler. Removing lines 248-252 of kanbanflow.js would
+      // leave this coverage in place but still break keyboard navigation on rendered links.
+      const link = read.locator(`a[href="${syncIssueUrl}"]`).first();
+      await link.focus();
+      await page.keyboard.press("Enter");
+      await sleep(300);
+      assert(await page.locator('[data-testid="task-detail-description-edit"]').count() === 0,
+        "Enter on a rendered link bubbled to the wrapper and opened the description editor");
+      await page.keyboard.press("Space");
+      await sleep(300);
+      assert(await page.locator('[data-testid="task-detail-description-edit"]').count() === 0,
+        "Space on a rendered link bubbled to the wrapper and opened the description editor");
     });
 
     const emptyDescriptionTask = await api("POST", `/api/features/${feature.id}/tasks`, {
