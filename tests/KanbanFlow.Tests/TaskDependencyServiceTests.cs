@@ -169,4 +169,26 @@ public sealed class TaskDependencyServiceTests
         using var db = factory.CreateDbContext();
         Assert.Equal(2, await db.TaskDependencies.CountAsync());
     }
+
+    [Fact]
+    public void WouldCreateCycle_DeepAcyclicChainDetectsClosingEdgeIteratively()
+    {
+        const int edgeCount = 50_000;
+        var dependencies = Enumerable.Range(0, edgeCount)
+            .Select(taskId => new TaskDependency
+            {
+                TaskItemId = taskId,
+                DependsOnTaskItemId = taskId + 1
+            })
+            .ToArray();
+
+        Assert.True(TaskDependencyService.WouldCreateCycle(
+            blockedTaskId: edgeCount,
+            blockingTaskId: 0,
+            dependencies));
+        Assert.False(TaskDependencyService.WouldCreateCycle(
+            blockedTaskId: 0,
+            blockingTaskId: edgeCount,
+            dependencies));
+    }
 }

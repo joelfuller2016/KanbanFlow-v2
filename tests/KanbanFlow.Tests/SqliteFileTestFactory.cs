@@ -37,10 +37,17 @@ public sealed class SqliteFileTestFactory : IDbContextFactory<AppDbContext>, IDi
     }
 
     /// <summary>Creates a factory with multiple cooperating interceptors.</summary>
+    /// <param name="interceptors">Interceptors attached after schema creation.</param>
+    /// <param name="commandTimeoutSeconds">
+    /// Maps to SQLite's busy timeout. Must exceed however long a test deliberately holds the write
+    /// lock, otherwise the blocked writer fails with SQLITE_BUSY instead of serializing behind it.
+    /// </param>
     public SqliteFileTestFactory(
         IReadOnlyCollection<IInterceptor> interceptors,
         int commandTimeoutSeconds = 30)
     {
+        ArgumentNullException.ThrowIfNull(interceptors);
+
         _path = Path.Combine(Path.GetTempPath(), $"kanbanflow-test-{Guid.NewGuid():N}.db");
 
         var builder = new DbContextOptionsBuilder<AppDbContext>()

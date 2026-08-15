@@ -256,6 +256,25 @@ public sealed class TaskDependencyConcurrencyTests
 
     private sealed record RaceOutcome(TaskDependencyCreateResult? Created, Exception? Error);
 
+    private sealed class RaceHarness : IDisposable
+    {
+        public ImmediateTransactionRendezvous Rendezvous { get; } = new();
+        public DependencyTransactionSpanProbe SpanProbe { get; }
+        public SqliteFileTestFactory Factory { get; }
+        public TaskDependencyService Service { get; }
+
+        public RaceHarness()
+        {
+            SpanProbe = new DependencyTransactionSpanProbe(Rendezvous);
+            Factory = new SqliteFileTestFactory(
+                new IInterceptor[] { Rendezvous, SpanProbe });
+            Rendezvous.ConfigureReservationProbe(Factory.ConnectionString);
+            Service = new TaskDependencyService(Factory);
+        }
+
+        public void Dispose() => Factory.Dispose();
+    }
+
     private static int[] SeedTasks(SqliteFileTestFactory factory, params string[] names)
     {
         using var db = factory.CreateDbContext();
@@ -387,27 +406,25 @@ public sealed class TaskDependencyConcurrencyTests
     [Fact]
     public async Task ConcurrentOppositeEdges_PersistExactlyOneAcyclicEdge()
     {
-        var rendezvous = new ImmediateTransactionRendezvous();
-        var spanProbe = new DependencyTransactionSpanProbe(rendezvous);
-        using var factory = new SqliteFileTestFactory(
-            new IInterceptor[] { rendezvous, spanProbe });
-        rendezvous.ConfigureReservationProbe(factory.ConnectionString);
-        var ids = SeedTasks(factory, "A", "B");
-        var service = new TaskDependencyService(factory);
+        using var harness = new RaceHarness();
+        var ids = SeedTasks(harness.Factory, "A", "B");
 
         var outcomes = await RaceAsync(
-            rendezvous,
-            spanProbe,
-            service,
+            harness.Rendezvous,
+            harness.SpanProbe,
+            harness.Service,
             new TaskDependencyCreate(ids[0], ids[1], TaskDependencyType.DependsOn),
             new TaskDependencyCreate(ids[1], ids[0], TaskDependencyType.DependsOn));
 
         AssertOneCreateAndOneCycle(outcomes);
-        Assert.Equal(2, rendezvous.StartingCount);
-        Assert.Equal(2, rendezvous.StartedCount);
-        AssertTransactionSpan(rendezvous, spanProbe, expectedGraphReads: 2);
+        Assert.Equal(2, harness.Rendezvous.StartingCount);
+        Assert.Equal(2, harness.Rendezvous.StartedCount);
+        AssertTransactionSpan(
+            harness.Rendezvous,
+            harness.SpanProbe,
+            expectedGraphReads: 2);
 
-        using var db = factory.CreateDbContext();
+        using var db = harness.Factory.CreateDbContext();
         var persisted = await db.TaskDependencies.AsNoTracking().ToListAsync();
         Assert.Single(persisted);
         AssertAcyclic(persisted);
@@ -416,26 +433,29 @@ public sealed class TaskDependencyConcurrencyTests
     [Fact]
     public async Task ConcurrentIdenticalEdges_PersistOneAndReturnDomainConflict()
     {
-        var rendezvous = new ImmediateTransactionRendezvous();
-        var spanProbe = new DependencyTransactionSpanProbe(rendezvous);
-        using var factory = new SqliteFileTestFactory(
-            new IInterceptor[] { rendezvous, spanProbe });
-        rendezvous.ConfigureReservationProbe(factory.ConnectionString);
-        var ids = SeedTasks(factory, "blocked", "blocker");
-        var service = new TaskDependencyService(factory);
+        using var harness = new RaceHarness();
+        var ids = SeedTasks(harness.Factory, "blocked", "blocker");
         var request = new TaskDependencyCreate(
             ids[0],
             ids[1],
             TaskDependencyType.DependsOn);
 
-        var outcomes = await RaceAsync(rendezvous, spanProbe, service, request, request);
+        var outcomes = await RaceAsync(
+            harness.Rendezvous,
+            harness.SpanProbe,
+            harness.Service,
+            request,
+            request);
 
         AssertOneCreateAndOneDuplicate(outcomes);
-        Assert.Equal(2, rendezvous.StartingCount);
-        Assert.Equal(2, rendezvous.StartedCount);
-        AssertTransactionSpan(rendezvous, spanProbe, expectedGraphReads: 1);
+        Assert.Equal(2, harness.Rendezvous.StartingCount);
+        Assert.Equal(2, harness.Rendezvous.StartedCount);
+        AssertTransactionSpan(
+            harness.Rendezvous,
+            harness.SpanProbe,
+            expectedGraphReads: 1);
 
-        using var db = factory.CreateDbContext();
+        using var db = harness.Factory.CreateDbContext();
         var persisted = await db.TaskDependencies.AsNoTracking().ToListAsync();
         Assert.Single(persisted);
         AssertAcyclic(persisted);
@@ -444,14 +464,10 @@ public sealed class TaskDependencyConcurrencyTests
     [Fact]
     public async Task ConcurrentEdgesClosingTransitiveCycle_PersistOnlyOneCandidate()
     {
-        var rendezvous = new ImmediateTransactionRendezvous();
-        var spanProbe = new DependencyTransactionSpanProbe(rendezvous);
-        using var factory = new SqliteFileTestFactory(
-            new IInterceptor[] { rendezvous, spanProbe });
-        rendezvous.ConfigureReservationProbe(factory.ConnectionString);
-        var ids = SeedTasks(factory, "A", "B", "C");
+        using var harness = new RaceHarness();
+        var ids = SeedTasks(harness.Factory, "A", "B", "C");
 
-        using (var seed = factory.CreateDbContext())
+        using (var seed = harness.Factory.CreateDbContext())
         {
             var projectId = seed.Tasks
                 .Where(t => t.Id == ids[0])
@@ -467,20 +483,22 @@ public sealed class TaskDependencyConcurrencyTests
             seed.SaveChanges();
         }
 
-        var service = new TaskDependencyService(factory);
         var outcomes = await RaceAsync(
-            rendezvous,
-            spanProbe,
-            service,
+            harness.Rendezvous,
+            harness.SpanProbe,
+            harness.Service,
             new TaskDependencyCreate(ids[1], ids[2], TaskDependencyType.DependsOn),
             new TaskDependencyCreate(ids[2], ids[0], TaskDependencyType.DependsOn));
 
         AssertOneCreateAndOneCycle(outcomes);
-        Assert.Equal(2, rendezvous.StartingCount);
-        Assert.Equal(2, rendezvous.StartedCount);
-        AssertTransactionSpan(rendezvous, spanProbe, expectedGraphReads: 2);
+        Assert.Equal(2, harness.Rendezvous.StartingCount);
+        Assert.Equal(2, harness.Rendezvous.StartedCount);
+        AssertTransactionSpan(
+            harness.Rendezvous,
+            harness.SpanProbe,
+            expectedGraphReads: 2);
 
-        using var db = factory.CreateDbContext();
+        using var db = harness.Factory.CreateDbContext();
         var persisted = await db.TaskDependencies.AsNoTracking().ToListAsync();
         Assert.Equal(2, persisted.Count);
         Assert.Contains(persisted, d =>

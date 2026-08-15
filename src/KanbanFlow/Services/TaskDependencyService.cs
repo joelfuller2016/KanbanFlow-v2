@@ -85,7 +85,7 @@ public sealed class TaskDependencyService(IDbContextFactory<AppDbContext> dbFact
             blockingTask.Name);
     }
 
-    private static bool WouldCreateCycle(
+    internal static bool WouldCreateCycle(
         int blockedTaskId,
         int blockingTaskId,
         IReadOnlyCollection<TaskDependency> projectDependencies)
@@ -93,17 +93,20 @@ public sealed class TaskDependencyService(IDbContextFactory<AppDbContext> dbFact
         var dependenciesByBlockedTask = projectDependencies
             .ToLookup(d => d.TaskItemId, d => d.DependsOnTaskItemId);
         var visited = new HashSet<int>();
+        var pending = new Stack<int>();
+        pending.Push(blockingTaskId);
 
-        bool HasPath(int currentTaskId)
+        while (pending.TryPop(out var currentTaskId))
         {
             if (currentTaskId == blockedTaskId)
                 return true;
             if (!visited.Add(currentTaskId))
-                return false;
+                continue;
 
-            return dependenciesByBlockedTask[currentTaskId].Any(HasPath);
+            foreach (var nextTaskId in dependenciesByBlockedTask[currentTaskId])
+                pending.Push(nextTaskId);
         }
 
-        return HasPath(blockingTaskId);
+        return false;
     }
 }
