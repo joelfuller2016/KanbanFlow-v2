@@ -524,8 +524,34 @@ function Restore-ProcessEnvironment([hashtable]$Snapshot) {
     }
 }
 
+function Wait-TaskBounded {
+    param(
+        [Parameter(Mandatory)][Threading.Tasks.Task]$Task,
+        [ValidateRange(1000, 60000)][int]$TimeoutMilliseconds
+    )
+
+    $timeoutTask = [Threading.Tasks.Task]::Delay($TimeoutMilliseconds)
+    $winner = [Threading.Tasks.Task]::WhenAny(
+        [Threading.Tasks.Task[]]@($Task, $timeoutTask)
+    ).GetAwaiter().GetResult()
+    if (-not [object]::ReferenceEquals($winner, $Task)) {
+        return [pscustomobject]@{ Status = 'timeout'; Error = $null }
+    }
+    try {
+        $Task.GetAwaiter().GetResult()
+        return [pscustomobject]@{ Status = 'completed'; Error = $null }
+    }
+    catch {
+        return [pscustomobject]@{ Status = 'faulted'; Error = $_.Exception.Message }
+    }
+}
+
 function Invoke-GitChecked {
-    param([Parameter(Mandatory)][string[]]$Arguments)
+    param(
+        [Parameter(Mandatory)][string[]]$Arguments,
+        [ValidateRange(1000, 600000)][int]$TimeoutMilliseconds = 120000,
+        [ValidateRange(1000, 60000)][int]$StreamDrainTimeoutMilliseconds = 10000
+    )
 
     $startInfo = [Diagnostics.ProcessStartInfo]::new()
     $startInfo.FileName = 'git'
@@ -543,7 +569,52 @@ function Invoke-GitChecked {
         }
         $stdoutTask = $process.StandardOutput.ReadToEndAsync()
         $stderrTask = $process.StandardError.ReadToEndAsync()
-        $process.WaitForExit()
+        $streamDrainTask = [Threading.Tasks.Task]::WhenAll(
+            [Threading.Tasks.Task[]]@($stdoutTask, $stderrTask)
+        )
+        if (-not $process.WaitForExit($TimeoutMilliseconds)) {
+            $killError = $null
+            try {
+                $process.Kill($true)
+            }
+            catch {
+                $killError = $_.Exception.Message
+            }
+            $exitedAfterKill = $process.WaitForExit(10000)
+            $drainResult = Wait-TaskBounded -Task $streamDrainTask `
+                -TimeoutMilliseconds $StreamDrainTimeoutMilliseconds
+            $drainDetail = switch ($drainResult.Status) {
+                'completed' { '' }
+                'timeout' {
+                    " Redirected stream drain exceeded $StreamDrainTimeoutMilliseconds ms."
+                }
+                default { " Redirected stream drain failed: $($drainResult.Error)" }
+            }
+            $killDetail = if ($null -eq $killError) { '' } else { " Kill reported: $killError" }
+            if (-not $exitedAfterKill) {
+                throw "git timed out after $TimeoutMilliseconds ms and the Git process did not " +
+                    "exit within the 10000 ms termination grace period.$killDetail$drainDetail"
+            }
+            $timeoutStderr = if ($drainResult.Status -eq 'completed') {
+                $stderrTask.GetAwaiter().GetResult().Trim()
+            }
+            else {
+                ''
+            }
+            $stderrDetail = if ([string]::IsNullOrWhiteSpace($timeoutStderr)) { '' } else {
+                " stderr: $timeoutStderr"
+            }
+            throw "git timed out after $TimeoutMilliseconds ms.$killDetail$drainDetail$stderrDetail"
+        }
+        $drainResult = Wait-TaskBounded -Task $streamDrainTask `
+            -TimeoutMilliseconds $StreamDrainTimeoutMilliseconds
+        if ($drainResult.Status -eq 'timeout') {
+            throw "git exited, but redirected streams did not close within " +
+                "$StreamDrainTimeoutMilliseconds ms."
+        }
+        if ($drainResult.Status -eq 'faulted') {
+            throw "git redirected stream drain failed: $($drainResult.Error)"
+        }
         $stdout = $stdoutTask.GetAwaiter().GetResult()
         $stderr = $stderrTask.GetAwaiter().GetResult()
         if ($process.ExitCode -ne 0) {
@@ -572,6 +643,15 @@ function Get-RegisteredWorktreePaths {
     return $paths.ToArray()
 }
 ~~~
+
+The checked Git helper accepts only a 1,000–600,000 ms process timeout and a
+1,000–60,000 ms stream-drain timeout; they default to 120,000 ms and 10,000 ms. On process timeout
+it terminates the full process tree, allows a bounded 10,000 ms exit grace period, performs only a
+bounded combined-stream
+drain, preserves the process-timeout error as primary, and disposes the process in all cases. Phase
+0A tests cover invalid bounds; success, nonzero exit, and startup failure; normal and timeout-path
+stream-drain timeout/fault; timeout/recursive-kill; post-kill grace failure; timeout-error precedence;
+and disposal.
 
 Snapshot every process variable before changing it and restore it in finally. Required names across
 the runbook are KANBANFLOW_DB_PATH, ASPNETCORE_ENVIRONMENT, KANBANFLOW_API_URL, UI_E2E_PORT, and

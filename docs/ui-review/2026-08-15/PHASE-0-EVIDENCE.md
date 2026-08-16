@@ -22,7 +22,7 @@ seventh manifest artifact. The two capture and base revisions have no difference
 
 | File | Reviewed source SHA-256 | PR file SHA-256 | Bytes | Dimensions |
 | --- | --- | --- | ---: | ---: |
-| `IMPLEMENTATION-PLAN.md` | `F1F184FB186CCD6481B7862AD7BD7830818B10F7BBB4DC0C476FF4E2D9171EFA` | `177F6522C48F403C3312B0CBA7D7B9A535D4CEAC6F3F017F794075464414C20B` | 98,986 | — |
+| `IMPLEMENTATION-PLAN.md` | `F1F184FB186CCD6481B7862AD7BD7830818B10F7BBB4DC0C476FF4E2D9171EFA` | `080DAEF49902A37ECD692018D044D4A49D14650C0C0E9713A7842FC40AF5CBD2` | 102,653 | — |
 | `README.md` | `AFC7C88510B9D9AE124475021DADBECCC998684D955424F8F5ACC28F1E41416D` | `F4433F1EF52D675CB18866D14089B72A4DC550633673217B46A70183123FE287` | 9,720 | — |
 | `SELECTOR-INVENTORY.md` | Generated from the exact base | `35EC34E14E04F38197B01D785205BA44C509170E44DE7F24E85D588100B5FDF8` | 26,728 | — |
 | `current-projects.png` | `391A17905655C5D847604D42A072A20A864C766E135928F6F2AF629BD78F03DF` | `391A17905655C5D847604D42A072A20A864C766E135928F6F2AF629BD78F03DF` | 28,865 | 1440 × 1000 |
@@ -194,6 +194,11 @@ authoritative for Phase 0A:
   failure. After Git removes the isolated worktree, require both zero exact registrations and an
   absent filesystem path. This per-head bundle convention starts with Phase 0A; the root-level files
   in this PR are documented pre-Phase-0A evidence.
+- Give every checked Git subprocess a validated bounded timeout. On timeout, recursively terminate
+  its process tree, use a bounded exit grace period and separately bounded redirected-stream drain,
+  keep the process-timeout error primary even if stream draining faults or times out, and dispose the
+  process on success and every failure path. Phase 0A must test invalid bounds, normal and timeout
+  drain timeout/fault, recursive kill, grace failure, timeout-error precedence, and disposal.
 - A deliberate teardown failure produces a nonzero harness result and a preserved diagnostic path.
   This is the chosen refinement of #352's older cleanup wording.
 - Discover and validate every critical fingerprinted same-origin asset from rendered DOM: Bootstrap
