@@ -817,6 +817,10 @@ The script must:
 8. Assert CSS/JS assets are loaded before capturing.
 9. Save SHA, viewport, route, fixture, browser/OS, locale, time zone, deviceScaleFactor, color
    scheme, font scale, reduced-motion/forced-colors setting, PID, port, and DB path in a manifest.
+   The manifest also contains one `screenshots[]` record per generated PNG with its filename only,
+   SHA-256, byte count, raster width/height, route, fixture/state, and viewport. Compute each record
+   from the final on-disk bytes after capture, reject duplicate/path-bearing filenames, and write the
+   manifest only after every record is complete.
 10. Provide deterministic loading, delayed-save, and forced-failure seams or request interceptors so
     Loading, Saving, and Error are asserted before capture rather than raced.
 11. Capture board/detail as viewport screenshots so fixed-height and overflow defects remain
@@ -954,8 +958,11 @@ npm run test:ui:shots -- --mode serve --out $shotDir
 The serve command is implemented in Phase 0A. It stays in the foreground, owns a unique port and
 GUID-named DB directory, snapshots/restores process environment, seeds empty/normal/stress states,
 and prints/writes manifest.json containing canonicalRepo, worktree, headSha, baseUrl, PID, port,
-dbPath, dbSource=env, dbExisted=false, fixture IDs/routes, Ideas reset/populate steps, and log paths.
-It must stop and clean up on Ctrl+C while preserving screenshots/manifests.
+dbPath, dbSource=env, dbExisted=false, fixture IDs/routes, Ideas reset/populate steps, log paths, and
+the per-screenshot records defined in section 7.1. Before entering foreground review, serve mode
+creates its deterministic representative screenshot set through the same capture pipeline. Images
+taken outside that pipeline remain transient and cannot be approved by the cleanup procedure. The
+command must stop and clean up on Ctrl+C while preserving screenshots/manifests.
 
 ### 8.3 Verify identity and assets before judging the UI
 
@@ -1059,7 +1066,8 @@ In browser DevTools:
 1. Stop the foreground serve command with Ctrl+C and let it restore environment/clean its DB.
 2. In either terminal, reload the external artifact manifest so cleanup is self-contained.
 3. Confirm the manifest PID and listener are gone.
-4. Copy only approved screenshots into the repository by explicit filename and verify hashes.
+4. Copy only approved, manifest-listed screenshots into the repository by explicit filename and
+   verify filename, SHA-256, byte count, and raster dimensions before copying.
 5. Resolve and validate the detached worktree before asking Git to remove it.
 
 ~~~powershell
@@ -1124,6 +1132,11 @@ if (-not $shotRoot.StartsWith($tempRoot, [StringComparison]::OrdinalIgnoreCase) 
 
 $reviewDir = Join-Path $repo 'docs\ui-review\2026-08-15'
 New-Item -ItemType Directory -Path $reviewDir -Force | Out-Null
+$screenshotRecords = @($manifest.screenshots)
+if ($screenshotRecords.Count -eq 0) {
+    throw 'The external manifest has no screenshot records.'
+}
+Add-Type -AssemblyName System.Drawing
 $approvedNames = (Read-Host 'Comma-separated approved screenshot filenames').Split(
     ',',
     [System.StringSplitOptions]::RemoveEmptyEntries
@@ -1132,8 +1145,22 @@ if ($approvedNames.Count -eq 0) {
     throw 'At least one representative screenshot must be preserved before worktree cleanup.'
 }
 foreach ($name in $approvedNames) {
-    if ([IO.Path]::GetFileName($name) -ne $name) {
-        throw "Screenshot name must not contain a path: $name"
+    if ([IO.Path]::GetFileName($name) -ne $name -or
+        [IO.Path]::GetExtension($name) -ine '.png') {
+        throw "Screenshot must be a PNG filename without a path: $name"
+    }
+    $records = @($screenshotRecords | Where-Object {
+        ([string]$_.filename).Equals($name, [StringComparison]::Ordinal)
+    })
+    if ($records.Count -ne 1) {
+        throw "Expected exactly one manifest record for approved screenshot: $name"
+    }
+    $record = $records[0]
+    if ([string]$record.sha256 -notmatch '^[0-9a-fA-F]{64}$' -or
+        [int64]$record.bytes -le 0 -or
+        [int]$record.width -le 0 -or
+        [int]$record.height -le 0) {
+        throw "Screenshot manifest metadata is incomplete or invalid: $name"
     }
     $source = Join-Path $shotDir $name
     $destination = Join-Path $reviewDir $name
@@ -1143,10 +1170,31 @@ foreach ($name in $approvedNames) {
     if (Test-Path -LiteralPath $destination) {
         throw "Refusing to overwrite existing evidence: $destination"
     }
+    $sourceItem = Get-Item -LiteralPath $source
+    $sourceHash = (Get-FileHash -LiteralPath $source -Algorithm SHA256).Hash
+    $image = [Drawing.Image]::FromFile($source)
+    try {
+        $sourceWidth = $image.Width
+        $sourceHeight = $image.Height
+    }
+    finally {
+        $image.Dispose()
+    }
+    if ($sourceItem.Length -ne [int64]$record.bytes -or
+        -not $sourceHash.Equals([string]$record.sha256, [StringComparison]::OrdinalIgnoreCase) -or
+        $sourceWidth -ne [int]$record.width -or
+        $sourceHeight -ne [int]$record.height) {
+        throw "Approved screenshot does not match its capture-manifest record: $name"
+    }
     Copy-Item -LiteralPath $source -Destination $destination
-    if ((Get-FileHash -LiteralPath $source).Hash -ne
-        (Get-FileHash -LiteralPath $destination).Hash) {
-        throw "Evidence hash mismatch: $name"
+    $destinationItem = Get-Item -LiteralPath $destination
+    $destinationHash = (Get-FileHash -LiteralPath $destination -Algorithm SHA256).Hash
+    if ($destinationItem.Length -ne [int64]$record.bytes -or
+        -not $destinationHash.Equals(
+            [string]$record.sha256,
+            [StringComparison]::OrdinalIgnoreCase
+        )) {
+        throw "Copied evidence does not match its capture-manifest record: $name"
     }
 }
 $manifestDestination = Join-Path $reviewDir (
