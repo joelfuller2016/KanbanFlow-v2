@@ -22,7 +22,7 @@ seventh manifest artifact. The two capture and base revisions have no difference
 
 | File | Reviewed source SHA-256 | PR file SHA-256 | Bytes | Dimensions |
 | --- | --- | --- | ---: | ---: |
-| `IMPLEMENTATION-PLAN.md` | `F1F184FB186CCD6481B7862AD7BD7830818B10F7BBB4DC0C476FF4E2D9171EFA` | `080DAEF49902A37ECD692018D044D4A49D14650C0C0E9713A7842FC40AF5CBD2` | 102,653 | — |
+| `IMPLEMENTATION-PLAN.md` | `F1F184FB186CCD6481B7862AD7BD7830818B10F7BBB4DC0C476FF4E2D9171EFA` | `09C0D913B229AA938A15E8C76508D9900DFAA4579918174B652E64F51A3083D5` | 104,139 | — |
 | `README.md` | `AFC7C88510B9D9AE124475021DADBECCC998684D955424F8F5ACC28F1E41416D` | `F4433F1EF52D675CB18866D14089B72A4DC550633673217B46A70183123FE287` | 9,720 | — |
 | `SELECTOR-INVENTORY.md` | Generated from the exact base | `35EC34E14E04F38197B01D785205BA44C509170E44DE7F24E85D588100B5FDF8` | 26,728 | — |
 | `current-projects.png` | `391A17905655C5D847604D42A072A20A864C766E135928F6F2AF629BD78F03DF` | `391A17905655C5D847604D42A072A20A864C766E135928F6F2AF629BD78F03DF` | 28,865 | 1440 × 1000 |
@@ -199,6 +199,10 @@ authoritative for Phase 0A:
   keep the process-timeout error primary even if stream draining faults or times out, and dispose the
   process on success and every failure path. Phase 0A must test invalid bounds, normal and timeout
   drain timeout/fault, recursive kill, grace failure, timeout-error precedence, and disposal.
+- Route every executable Git call in the PowerShell runbook—including fetch, object validation,
+  worktree creation, identity/status checks, publication, and cleanup—through that checked helper.
+  Use a bounded 600,000 ms fetch override and an AST contract test that rejects raw `git`/`git.exe`
+  commands in PowerShell fences.
 - A deliberate teardown failure produces a nonzero harness result and a preserved diagnostic path.
   This is the chosen refinement of #352's older cleanup wording.
 - Discover and validate every critical fingerprinted same-origin asset from rendered DOM: Bootstrap

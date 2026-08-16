@@ -652,6 +652,10 @@ drain, preserves the process-timeout error as primary, and disposes the process 
 0A tests cover invalid bounds; success, nonzero exit, and startup failure; normal and timeout-path
 stream-drain timeout/fault; timeout/recursive-kill; post-kill grace failure; timeout-error precedence;
 and disposal.
+Every executable Git command in the PowerShell runbook goes through this helper; remote fetches use
+its bounded 600,000 ms override. A static AST test fails if a `git` or `git.exe` command invocation is
+added to any PowerShell fence, so setup, identity validation, publication, and cleanup cannot bypass
+the timeout/process-tree/stream-drain contract.
 
 Snapshot every process variable before changing it and restore it in finally. Required names across
 the runbook are KANBANFLOW_DB_PATH, ASPNETCORE_ENVIRONMENT, KANBANFLOW_API_URL, UI_E2E_PORT, and
@@ -671,7 +675,9 @@ $baselineEnv = Save-ProcessEnvironment @(
     'UI_E2E_PORT',
     'SKIP_BUILD'
 )
-$repo = [IO.Path]::GetFullPath((git rev-parse --show-toplevel).Trim()).TrimEnd('\')
+$repo = [IO.Path]::GetFullPath(
+    (Invoke-GitChecked -Arguments @('rev-parse', '--show-toplevel')).Trim()
+).TrimEnd('\')
 $reviewSha = '3245d16c6a937d051fff8e7e111d1639b6364f16'
 $expectedHead = $reviewSha
 $work = Join-Path $env:TEMP ('kf-ui-verify-' + [guid]::NewGuid().ToString('N'))
@@ -679,17 +685,23 @@ $callerLocation = (Get-Location).Path
 $worktreeCreated = $false
 $preserveWorktree = $false
 try {
-    git -C $repo fetch --prune origin
+    [void](Invoke-GitChecked -Arguments @(
+        '-C', $repo, 'fetch', '--prune', 'origin'
+    ) -TimeoutMilliseconds 600000)
     $reviewObject = "$reviewSha^{commit}"
-    git -C $repo cat-file -e $reviewObject
-    git -C $repo worktree add --detach $work $reviewSha
+    [void](Invoke-GitChecked -Arguments @('-C', $repo, 'cat-file', '-e', $reviewObject))
+    [void](Invoke-GitChecked -Arguments @(
+        '-C', $repo, 'worktree', 'add', '--detach', $work, $reviewSha
+    ))
     $worktreeCreated = $true
-    $actualHead = (git -C $work rev-parse HEAD).Trim()
+    $actualHead = (Invoke-GitChecked -Arguments @('-C', $work, 'rev-parse', 'HEAD')).Trim()
     if ($actualHead -ne $reviewSha) {
         throw "Expected review SHA $reviewSha, got $actualHead."
     }
     Set-Location $work
-    $actualRoot = [IO.Path]::GetFullPath((git rev-parse --show-toplevel).Trim()).TrimEnd('\')
+    $actualRoot = [IO.Path]::GetFullPath(
+        (Invoke-GitChecked -Arguments @('rev-parse', '--show-toplevel')).Trim()
+    ).TrimEnd('\')
     $expectedRoot = [IO.Path]::GetFullPath($work).TrimEnd('\')
     if (-not $actualRoot.Equals($expectedRoot, [StringComparison]::OrdinalIgnoreCase)) {
         throw 'The verification worktree identity does not match.'
@@ -1119,21 +1131,29 @@ Run the section 6.0 prelude first. Replace `$reviewSha` with the literal head be
 every PR; the evidence-base value below is not a moving alias.
 
 ~~~powershell
-$repo = [IO.Path]::GetFullPath((git rev-parse --show-toplevel).Trim()).TrimEnd('\')
+$repo = [IO.Path]::GetFullPath(
+    (Invoke-GitChecked -Arguments @('rev-parse', '--show-toplevel')).Trim()
+).TrimEnd('\')
 $reviewSha = '3245d16c6a937d051fff8e7e111d1639b6364f16'
 $work = Join-Path $env:TEMP ('kf-ui-run-' + [guid]::NewGuid().ToString('N'))
-git -C $repo fetch --prune origin
+[void](Invoke-GitChecked -Arguments @(
+    '-C', $repo, 'fetch', '--prune', 'origin'
+) -TimeoutMilliseconds 600000)
 $reviewObject = "$reviewSha^{commit}"
-git -C $repo cat-file -e $reviewObject
-git -C $repo worktree add --detach $work $reviewSha
-$actualHead = (git -C $work rev-parse HEAD).Trim()
+[void](Invoke-GitChecked -Arguments @('-C', $repo, 'cat-file', '-e', $reviewObject))
+[void](Invoke-GitChecked -Arguments @(
+    '-C', $repo, 'worktree', 'add', '--detach', $work, $reviewSha
+))
+$actualHead = (Invoke-GitChecked -Arguments @('-C', $work, 'rev-parse', 'HEAD')).Trim()
 if ($actualHead -ne $reviewSha) {
     throw "Expected review SHA $reviewSha, got $actualHead."
 }
 Set-Location $work
-git status --short --branch
+(Invoke-GitChecked -Arguments @('-C', $work, 'status', '--short', '--branch')).TrimEnd()
 $expectedHead = $reviewSha
-$actualRoot = [IO.Path]::GetFullPath((git rev-parse --show-toplevel).Trim()).TrimEnd('\')
+$actualRoot = [IO.Path]::GetFullPath(
+    (Invoke-GitChecked -Arguments @('-C', $work, 'rev-parse', '--show-toplevel')).Trim()
+).TrimEnd('\')
 $expectedRoot = [IO.Path]::GetFullPath($work).TrimEnd('\')
 if (-not $actualRoot.Equals($expectedRoot, [StringComparison]::OrdinalIgnoreCase)) {
     throw 'The UI worktree identity does not match.'
@@ -1185,7 +1205,7 @@ availability records. The command must clean up while preserving screenshots/man
 
 ### 8.3 Verify identity and assets before judging the UI
 
-In a second terminal:
+In a second terminal, run the section 6.0 prelude first, then:
 
 ~~~powershell
 $ErrorActionPreference = 'Stop'
@@ -1193,7 +1213,10 @@ $PSNativeCommandUseErrorActionPreference = $true
 $shotDir = (Read-Host 'Paste the exact output directory printed by the serve command').Trim()
 $manifest = Get-Content -LiteralPath (Join-Path $shotDir 'manifest.json') -Raw | ConvertFrom-Json
 Set-Location -LiteralPath $manifest.worktree
-if ((git rev-parse HEAD).Trim() -ne $manifest.headSha) {
+$servedHead = (Invoke-GitChecked -Arguments @(
+    '-C', [string]$manifest.worktree, 'rev-parse', 'HEAD'
+)).Trim()
+if ($servedHead -ne $manifest.headSha) {
     throw 'The review terminal is not on the served SHA.'
 }
 if ($manifest.dbSource -ne 'env' -or $manifest.dbExisted -ne $false) {
@@ -1337,7 +1360,9 @@ if (-not ($work + '\').StartsWith($tempRoot, [StringComparison]::OrdinalIgnoreCa
     throw 'The worktree path from the manifest failed validation.'
 }
 
-$actualRepo = [IO.Path]::GetFullPath((git -C $repo rev-parse --show-toplevel).Trim()).TrimEnd('\')
+$actualRepo = [IO.Path]::GetFullPath(
+    (Invoke-GitChecked -Arguments @('-C', $repo, 'rev-parse', '--show-toplevel')).Trim()
+).TrimEnd('\')
 if (-not (Test-Path -LiteralPath (Join-Path $repo '.git') -PathType Container) -or
     -not $actualRepo.Equals($repo, [StringComparison]::OrdinalIgnoreCase)) {
     throw 'The trusted canonical checkout identity does not match.'
@@ -1345,21 +1370,25 @@ if (-not (Test-Path -LiteralPath (Join-Path $repo '.git') -PathType Container) -
 if (-not $manifestRepo.Equals($repo, [StringComparison]::OrdinalIgnoreCase)) {
     throw 'The external manifest does not name the trusted canonical repository.'
 }
-$repoCommon = [IO.Path]::GetFullPath(
-    (git -C $repo rev-parse --path-format=absolute --git-common-dir).Trim()
-).TrimEnd('\')
-$workCommon = [IO.Path]::GetFullPath(
-    (git -C $work rev-parse --path-format=absolute --git-common-dir).Trim()
-).TrimEnd('\')
+$repoCommonOutput = Invoke-GitChecked -Arguments @(
+    '-C', $repo, 'rev-parse', '--path-format=absolute', '--git-common-dir'
+)
+$repoCommon = [IO.Path]::GetFullPath($repoCommonOutput.Trim()).TrimEnd('\')
+$workCommonOutput = Invoke-GitChecked -Arguments @(
+    '-C', $work, 'rev-parse', '--path-format=absolute', '--git-common-dir'
+)
+$workCommon = [IO.Path]::GetFullPath($workCommonOutput.Trim()).TrimEnd('\')
 if (-not $repoCommon.Equals($workCommon, [StringComparison]::OrdinalIgnoreCase)) {
     throw 'The review worktree does not belong to the trusted canonical repository.'
 }
-$workHead = (git -C $work rev-parse HEAD).Trim()
+$workHead = (Invoke-GitChecked -Arguments @('-C', $work, 'rev-parse', 'HEAD')).Trim()
 if ($workHead -ne [string]$manifest.headSha) {
     throw 'The review worktree HEAD does not match the external manifest.'
 }
-$workStatus = @(git -C $work status --porcelain --untracked-files=all)
-if ($workStatus.Count -ne 0) {
+$workStatus = Invoke-GitChecked -Arguments @(
+    '-C', $work, 'status', '--porcelain', '--untracked-files=all'
+)
+if (-not [string]::IsNullOrWhiteSpace($workStatus)) {
     throw 'The review worktree is not clean; preserve it and inspect before cleanup.'
 }
 
