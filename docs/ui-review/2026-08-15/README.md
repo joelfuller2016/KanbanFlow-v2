@@ -9,6 +9,8 @@
 - **Authority:** [IMPLEMENTATION-PLAN.md](IMPLEMENTATION-PLAN.md) is the reviewed delivery
   contract. [PHASE-0-EVIDENCE.md](PHASE-0-EVIDENCE.md) records provenance, decisions, issue
   ownership, and compatibility boundaries for the evidence PR.
+  [BROWSER-RUN-EVIDENCE.md](BROWSER-RUN-EVIDENCE.md) records the exact-head runtime smoke,
+  environment, diagnostics, and screenshot hashes.
 
 This folder keeps the review screenshots, redesign mock, and implementation
 notes together inside the KanbanFlow-v2 repository.
@@ -17,26 +19,56 @@ The screenshots document the current UI and proposed direction. They are not geo
 accessibility, performance, or pixel-diff baselines. Those baselines may be recorded only after the
 minimum trustworthy UI harness described as Phase 0A in the implementation plan is merged.
 
-## Screenshots
+## Original review evidence
 
 | View | File |
 | --- | --- |
 | Projects landing page | [`current-projects.png`](current-projects.png) |
 | Project board | [`current-board.png`](current-board.png) |
 | Board with task detail open | [`current-task-detail.png`](current-task-detail.png) |
-| Proposed board redesign | [`proposed-board-redesign.png`](proposed-board-redesign.png) |
+| Conceptual proposed desktop composition | [`proposed-board-redesign.png`](proposed-board-redesign.png) |
 
-### Current board
+These original images retain their pre-PR provenance. The three current-state captures came from
+`652c60d` with UI files byte-identical to the planning base; their browser/runtime metadata was not
+retained. The conceptual mock's authoring method, tool, prompt, and source-reference record were also
+not retained, so none is inferred.
+
+### Original current board
 
 ![Current KanbanFlow board](current-board.png)
 
-### Proposed direction
+### Conceptual proposed direction—not implemented
 
 ![Proposed KanbanFlow board redesign](proposed-board-redesign.png)
 
 The mock preserves the application's existing entities, workflow states, task
 names, requirements, AI tools, outline, and task-detail fields. It intentionally
 does not add dates, avatars, analytics, estimates, or new backend behavior.
+
+## Exact-head browser smoke
+
+The following screenshots were captured from PR #416 commit
+`77aa135f435f62933c26d3fb099a580091baf3d4` in Microsoft Edge `151.0.4129.86`
+at a `1440 × 1000` viewport against a fresh database in a GUID-named temporary run directory. See
+[BROWSER-RUN-EVIDENCE.md](BROWSER-RUN-EVIDENCE.md) for the routes, fixture IDs, runtime and asset
+checks, diagnostics, hashes, and limitations.
+
+### Projects
+
+![PR #416 Projects page](browser-run-77aa135-projects-1440x1000.png)
+
+### Board
+
+![PR #416 project board](browser-run-77aa135-board-1440x1000.png)
+
+### Task detail
+
+![PR #416 Registration form task detail](browser-run-77aa135-task-detail-1440x1000.png)
+
+This is manual browser-smoke and human-review evidence, not a deterministic geometry, pixel, Axe,
+performance, or accessibility baseline. Phase 0A remains required. Because #416 changes no
+application code, these screenshots show the current UI; the proposed composition above is not an
+“after” screenshot.
 
 ## Primary findings
 

@@ -23,7 +23,7 @@ seventh manifest artifact. The two capture and base revisions have no difference
 | File | Reviewed source SHA-256 | PR file SHA-256 | Bytes | Dimensions |
 | --- | --- | --- | ---: | ---: |
 | `IMPLEMENTATION-PLAN.md` | `F1F184FB186CCD6481B7862AD7BD7830818B10F7BBB4DC0C476FF4E2D9171EFA` | `72D3CE147811B36157878ED0560370E97F494350E4FDF6FFD09EEDC73F3DE6D7` | 65,624 | — |
-| `README.md` | `AFC7C88510B9D9AE124475021DADBECCC998684D955424F8F5ACC28F1E41416D` | `FEDA93DD067D91E19E77A1383249C5CE7BDCED26952ED3654F8F7AD85F562E4A` | 8,186 | — |
+| `README.md` | `AFC7C88510B9D9AE124475021DADBECCC998684D955424F8F5ACC28F1E41416D` | `F4433F1EF52D675CB18866D14089B72A4DC550633673217B46A70183123FE287` | 9,720 | — |
 | `SELECTOR-INVENTORY.md` | Generated from the exact base | `35EC34E14E04F38197B01D785205BA44C509170E44DE7F24E85D588100B5FDF8` | 26,728 | — |
 | `current-projects.png` | `391A17905655C5D847604D42A072A20A864C766E135928F6F2AF629BD78F03DF` | `391A17905655C5D847604D42A072A20A864C766E135928F6F2AF629BD78F03DF` | 28,865 | 1440 × 1000 |
 | `current-board.png` | `407D178944DFED1FE14A75AEC2B981BAD45E705C7561AD7821B1C6AABE584BDD` | `407D178944DFED1FE14A75AEC2B981BAD45E705C7561AD7821B1C6AABE584BDD` | 93,057 | 1440 × 1000 |
@@ -37,11 +37,38 @@ byte-identical to their source copies. The selector inventory was generated dire
 revision. The plan records the images as local/untracked in its historical planning context and
 identifies this evidence PR as their publication step.
 
-The current screenshot files have raster dimensions of 1440 × 1000 and the proposed composition is
-1505 × 1045. The original ad-hoc capture did not preserve the browser build, device scale factor,
-font manifest, route/record-ID manifest, server log, or database manifest; those fields are
-explicitly **not captured**, not inferred. This is why the images remain review evidence rather
-than baselines.
+The original current-state screenshot files have raster dimensions of 1440 × 1000 and the proposed
+composition is 1505 × 1045. The original ad-hoc capture did not preserve the browser build, device
+scale factor, font manifest, route/record-ID manifest, server log, or database manifest; those
+fields are explicitly **not captured**, not inferred. The conceptual mock's authoring method, tool,
+prompt, and source-reference record were not retained either. This is why the original images remain
+review evidence rather than baselines.
+
+### Exact-head browser smoke evidence
+
+After the original bundle was published, PR #416 commit
+`77aa135f435f62933c26d3fb099a580091baf3d4` was built and served from its isolated worktree. The
+three clean viewport captures and [browser-run record](BROWSER-RUN-EVIDENCE.md) below are a separate
+exact-head smoke-evidence set; they do not replace the original design-review files.
+
+| File | SHA-256 | Bytes | Dimensions |
+| --- | --- | ---: | ---: |
+| `BROWSER-RUN-EVIDENCE.md` | `4BE082CEBFB9030AFEE27D01058C98EFB022F8804EA50F510DB778AD15988DAF` | 5,659 | — |
+| `browser-run-77aa135-projects-1440x1000.png` | `02ED96CF33B0104BDAA523FE68FCFEC630E3AD5F521891AE6E6CB453916B1CB2` | 28,871 | 1440 × 1000 |
+| `browser-run-77aa135-board-1440x1000.png` | `407D178944DFED1FE14A75AEC2B981BAD45E705C7561AD7821B1C6AABE584BDD` | 93,057 | 1440 × 1000 |
+| `browser-run-77aa135-task-detail-1440x1000.png` | `E767385AAA6070D8263B4556EB9B4D3CFEB5C3B16B1130B6EAA1272D1F13C4C7` | 107,089 | 1440 × 1000 |
+
+The run records Microsoft Edge `151.0.4129.86`, Playwright `1.60.0`, device scale factor `1`, the
+exact routes and seeded IDs, a fresh environment-selected temporary database, an OS-assigned
+loopback listener, the real `/api/admin/health` response, loaded styles and JavaScript runtimes, and
+zero collected page, console, request, or same-origin HTTP errors. A visible Edge window confirmed
+the same listener; the committed images came from a separate headless Edge context without browser
+chrome. The captured `src/KanbanFlow` tree is
+`8d12f9738851b1f10f33f9fb1f95436a80bc341e`; the evidence-only follow-up must leave that tree and
+all runtime inputs unchanged.
+
+This remains manual browser-smoke and human-review evidence, not a deterministic geometry, pixel,
+Axe, performance, or accessibility baseline. Phase 0A remains required.
 
 ## Decision register
 
