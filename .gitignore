@@ -8,6 +8,8 @@ obj/
 .gsd-*/
 .worktrees/
 *.png
+# Reviewed UI evidence is intentionally versioned; other PNGs remain ignored.
+!docs/ui-review/**/*.png
 .playwright-mcp/
 notes.md
 task_plan.md
