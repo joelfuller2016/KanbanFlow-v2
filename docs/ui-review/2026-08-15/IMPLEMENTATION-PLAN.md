@@ -5,10 +5,10 @@
 - **Planning baseline:** UI tree from origin/master at 3245d16; the screenshots were captured from
   fix/414-atomic-dependency-cycle at 652c60d, whose UI files were byte-identical to that baseline
 - **Status:** Reviewed plan only; no application code has been changed
-- **Local evidence inventory:** docs/ui-review/2026-08-15/current-projects.png,
-  current-board.png, current-task-detail.png, and proposed-board-redesign.png. These files are
-  currently local/untracked and must be published in the first documentation PR before GitHub links
-  can be treated as evidence.
+- **Evidence inventory:** docs/ui-review/2026-08-15/current-projects.png, current-board.png,
+  current-task-detail.png, and proposed-board-redesign.png. These files were local/untracked during
+  planning and are published by the Phase 0 evidence PR before their GitHub links are treated as
+  evidence.
 
 This is a proposed dated implementation-plan refresh for issue #322. It becomes the active sequence
 only after the Phase 0 maintainer decision; until then, the issue body remains canonical. The
@@ -198,9 +198,10 @@ are not deferred to the last phase.
 
 ### Phase 0 — Baseline, contract, and design approval
 
-1. Create the evidence PR from a fresh origin/master worktree. Copy the reviewed local plan/images
-   into it by explicit file path, record SHA-256 hashes before and after, and never assume an
-   untracked canonical folder appears in a new worktree.
+1. Resolve the intended review ref to one immutable SHA, then create the evidence PR from a fresh
+   worktree detached at that SHA. Copy the reviewed local plan/images into it by explicit file path,
+   record SHA-256 hashes before and after, and never assume an untracked canonical folder appears in
+   a new worktree.
 2. Record the exact base SHA and publish the review directory before treating its GitHub links as
    evidence.
 3. Complete Phase 0A below before recording any geometry, accessibility, performance, or visual
@@ -223,16 +224,26 @@ and no duplicate child issues.
 
 This is the first implementation PR and precedes every visual PR.
 
-1. Allocate a unique loopback port, use a fresh DB, and build/test from an isolated worktree.
+1. With `UI_E2E_PORT` unset, empty, or `0`, let the child bind an OS-assigned loopback port and read
+   the bound URL from its startup stream. A valid explicit override from `1` through `65535` wins and
+   must bind exactly that port or fail immediately if unavailable. In both paths, prove the exact
+   child PID owns the listener, use a fresh DB, and build/test from an isolated worktree with per-run
+   `bin` and `obj` outputs.
 2. Print an unconditional terminal PASS/FAIL summary even when setup or teardown fails (#314).
-3. Assert fingerprinted CSS/JS returns 200/304, application cssRules is non-zero, and a known style
-   computes correctly before trusting DOM geometry (#353).
+3. Discover every critical fingerprinted same-origin asset from the rendered DOM and validate
+   Bootstrap CSS/JS, `app.css`, scoped `KanbanFlow.styles.css`, SortableJS, `kanbanflow.js`, and
+   Blazor. Require expected MIME types, nonempty 200 bodies (or browser-proven loaded state for a
+   cached 304), readable application/Bootstrap/scoped cssRules, known computed-style sentinels, and
+   ready Bootstrap, Sortable, KanbanFlow, and Blazor runtimes before trusting behavior or geometry
+   (#353).
 4. Fail on pageerror, non-allowlisted console errors, and unexpected same-origin failures. The
    allowlist is explicit in source and limited to deliberate navigation aborts and SignalR teardown.
-5. On failure save a viewport screenshot, DOM snapshot, server tail, exact SHA, port, DB path,
-   browser version, and failing scenario.
-6. Keep runs serial and unique-port by default; never share a build output with another live run
-   (#351/#352).
+5. On every failure save a manifest and complete server stdout/stderr, explicitly marking
+   unavailable fields. When a browser/page exists, also save a viewport screenshot, DOM snapshot,
+   browser version, page diagnostics, exact SHA, port, DB path, and failing scenario.
+6. Keep scenarios within one run serial. Independent bare runs may coexist only because each owns a
+   unique port, DB, `BaseOutputPath`, and `BaseIntermediateOutputPath`; never share a mutable build
+   output with another live run (#351/#352).
 7. Add @axe-core/playwright now and make serious/critical results a hard gate with a reviewed,
    issue-linked exception list. Broader WCAG A/AA assertions remain explicit keyboard/DOM tests.
 8. Freeze these commands:
@@ -243,7 +254,8 @@ This is the first implementation PR and precedes every visual PR.
      manual fixture, printing project/task IDs, routes, PID, port, DB, and manifest.
 
 **Exit:** the baseline commands fail reliably under deliberate asset, startup, assertion, and
-teardown mutations; early visual PRs can use the same capture and Axe foundation.
+teardown mutations. A teardown failure returns nonzero and preserves/reports its diagnostic path;
+early visual PRs can use the same capture and Axe foundation.
 
 ### Phase 1 — Design docs, tokens, landmarks, and shell
 
@@ -415,7 +427,9 @@ ActivityTimeline.razor, scoped CSS, and detail focus JS.
   the document does not overflow horizontally.
 - Mobile detail has dialog semantics, inert background, Tab/Shift+Tab containment, Escape close,
   and exact-opener focus restoration.
-- Escape cancels an inner Markdown edit first and closes the drawer only when no inner edit owns it.
+- Escape inside a Markdown editor restores the seeded value, suppresses the blur commit caused by
+  leaving edit mode, and returns focus to that editor's read control. Only a subsequent Escape, when
+  no inner editor owns the key, may close the drawer and restore focus to its exact opener.
 - The first desktop pane viewport shows metadata, dependency state, description, and the start of
   acceptance criteria without a large blank region.
 - Deep-linked tasks open once and preserve filter query state.
@@ -510,8 +524,9 @@ SKIP_BUILD. Removing a variable is correct only when its prior value was null.
 
 ### 6.1 Baseline and hard gates
 
-Run from a fresh worktree at the exact review SHA. Record actual counts rather than copying stale
-README numbers.
+Run from the canonical checkout, derive its repository path, and create a fresh worktree at the
+literal review SHA. Replace `$reviewSha` for each PR and record actual counts rather than copying
+stale README numbers.
 
 ~~~powershell
 $baselineEnv = Save-ProcessEnvironment @(
@@ -521,13 +536,24 @@ $baselineEnv = Save-ProcessEnvironment @(
     'UI_E2E_PORT',
     'SKIP_BUILD'
 )
-$repo = 'C:\Users\joelf\KanbanFlow-v2'
+$repo = [IO.Path]::GetFullPath((git rev-parse --show-toplevel).Trim()).TrimEnd('\')
+$reviewSha = '3245d16c6a937d051fff8e7e111d1639b6364f16'
+$expectedHead = $reviewSha
 $work = Join-Path $env:TEMP ('kf-ui-verify-' + [guid]::NewGuid().ToString('N'))
+$callerLocation = (Get-Location).Path
+$worktreeCreated = $false
+$preserveWorktree = $false
 try {
     git -C $repo fetch --prune origin
-    git -C $repo worktree add --detach $work origin/master
+    $reviewObject = "$reviewSha^{commit}"
+    git -C $repo cat-file -e $reviewObject
+    git -C $repo worktree add --detach $work $reviewSha
+    $worktreeCreated = $true
+    $actualHead = (git -C $work rev-parse HEAD).Trim()
+    if ($actualHead -ne $reviewSha) {
+        throw "Expected review SHA $reviewSha, got $actualHead."
+    }
     Set-Location $work
-    $expectedHead = (git rev-parse HEAD).Trim()
     $actualRoot = [IO.Path]::GetFullPath((git rev-parse --show-toplevel).Trim()).TrimEnd('\')
     $expectedRoot = [IO.Path]::GetFullPath($work).TrimEnd('\')
     if (-not $actualRoot.Equals($expectedRoot, [StringComparison]::OrdinalIgnoreCase)) {
@@ -540,52 +566,111 @@ try {
     npm ci
     npx playwright install chromium
 
-    pwsh -NoProfile -File .\scripts\verify.ps1
+    $savedNativePreference = $PSNativeCommandUseErrorActionPreference
+    try {
+        $PSNativeCommandUseErrorActionPreference = $false
+        $verifyOutput = @(& pwsh -NoProfile -File .\scripts\verify.ps1 2>&1)
+        $verifyExit = $LASTEXITCODE
+    } finally {
+        $PSNativeCommandUseErrorActionPreference = $savedNativePreference
+    }
+    $verifyOutput | ForEach-Object { Write-Host $_ }
+    $verifyLines = @($verifyOutput | ForEach-Object { $_.ToString().TrimEnd() })
+    if ($verifyLines.Count -eq 0 -or
+        $verifyLines[-1] -ne 'Build + tests passed. Safe to push.') {
+        throw "verify.ps1 did not report hard success (exit $verifyExit)."
+    }
+    if ($verifyExit -ne 0) {
+        Write-Warning "verify.ps1 hard gates passed but its advisory exit was $verifyExit."
+    }
     npm run test:scripts
+
+    # Keep the UI/Axe gate inside this exact-SHA worktree lifecycle.
+    [Environment]::SetEnvironmentVariable(
+        'UI_E2E_PORT',
+        $null,
+        [EnvironmentVariableTarget]::Process
+    )
+    [Environment]::SetEnvironmentVariable(
+        'SKIP_BUILD',
+        $null,
+        [EnvironmentVariableTarget]::Process
+    )
+    npm run test:ui
+
+    # When the MCP wrapper is required, invoke it here before API smoke.
+    # pwsh -NoProfile -File .\scripts\smoke-mcp-isolated.ps1 -ExpectedHead $expectedHead
     pwsh -NoProfile -File .\scripts\smoke-api.ps1
+} catch {
+    if ($worktreeCreated) {
+        $preserveWorktree = $true
+        Write-Warning "Verification failed; detached diagnostic worktree preserved at $work"
+    }
+    throw
 } finally {
-    Restore-ProcessEnvironment $baselineEnv
+    try {
+        Set-Location $repo
+        if ($worktreeCreated -and -not $preserveWorktree) {
+            try {
+                git -C $repo worktree remove $work
+            } catch {
+                Write-Warning "Worktree cleanup failed; inspect the registered path: $work"
+                throw
+            }
+        }
+    } finally {
+        Restore-ProcessEnvironment $baselineEnv
+        Set-Location $callerLocation
+    }
 }
 ~~~
 
 Require the verify script's final success line and zero hard failures. Formatting is advisory. The
 current script-unit set includes a live GitHub-backed case that may report SKIP when offline; record
-SKIP separately from PASS.
+SKIP separately from PASS. At the published evidence base, `smoke-api.ps1` reaches the pre-existing
+[#338](https://github.com/joelfuller2016/KanbanFlow-v2/issues/338) failure because recall accepts
+`k=0`. Report that command as an issue-linked known failure, not PASS; it continues to block the
+Phase 0 green-baseline exit until #338 is fixed and this exact command succeeds. Do not mask any
+other smoke failure under that exception.
 
 ### 6.2 UI E2E
 
-Run UI E2E serially with a unique port. SKIP_BUILD is valid only immediately after building the
-same worktree and SHA.
+Run scenarios within one UI E2E invocation serially. By default, the Phase 0A runner must launch its
+child on an OS-assigned loopback port, read the bound address from that child's startup stream, and
+prove the exact child PID owns the listener before navigation. A caller-side probe followed by
+releasing the port is not sufficient. Each bare run builds into unique `BaseOutputPath` and
+`BaseIntermediateOutputPath` directories and launches that exact DLL.
 
-~~~powershell
-$uiEnv = Save-ProcessEnvironment @('UI_E2E_PORT', 'SKIP_BUILD')
-$listener = [Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback, 0)
-$listener.Start()
-try {
-    $env:UI_E2E_PORT = [string]$listener.LocalEndpoint.Port
-    $listener.Stop()
-    $env:SKIP_BUILD = '1'
-    npm run test:ui
-} finally {
-    $listener.Stop()
-    Restore-ProcessEnvironment $uiEnv
-}
-~~~
-
-The current baseline has 48 named scenarios. Require the final summary and compare the count to the
+Section 6.1 invokes the frozen default `npm run test:ui` command inside its exact-SHA worktree `try`,
+after the verified build/script tests and before API smoke. Do not invoke the gate from the caller
+checkout after that outer `finally` removes the worktree. Dynamic port/build allocation belongs
+inside the runner. A valid explicit `UI_E2E_PORT=1..65535` must instead bind exactly that port and
+fail before tests if it is invalid, busy, or owned by another PID. Test both automatic and explicit
+paths. `SKIP_BUILD=1` is only an exclusive immutable-prebuild shortcut immediately after building
+the same worktree/SHA; it does not prove #352. Prove build isolation with two concurrent bare runs,
+each using distinct output/intermediate directories, ports, and DBs while scenarios inside each run
+remain serial. The pre-Phase 0A script at the evidence base still defaults to a fixed port and cannot
+satisfy this contract, so its best-effort unique-port result is evidence only and does not close
+#351. At evidence base `3245d16c6a937d051fff8e7e111d1639b6364f16`, the script has 48 named checks:
+one helper guard and 47 browser scenarios. Require the final summary and compare the count to the
 baseline captured in Phase 0. If the harness dies without a summary, treat the run as failed; issue
 #314 owns making that unmistakable.
 
 Required additions:
 
-- Static-asset trust gate: app.css and fingerprinted JS return 200/304, stylesheet cssRules is
-  non-zero, and a known token computes to its expected value. Coordinate #353.
+- Static-asset trust gate: discover fingerprinted same-origin URLs from rendered DOM; validate
+  expected MIME types and nonempty 200 bodies or browser-proven loaded state for cached 304s;
+  require readable application/Bootstrap/scoped cssRules and known computed sentinels; and prove
+  Bootstrap, Sortable, KanbanFlow, and Blazor runtime readiness. Coordinate #353.
 - Fail on pageerror, unexpected console error, failed same-origin request, or unhandled response.
-- Screenshot/DOM artifact on every failure plus the server stderr tail and exact SHA/port/DB path.
+- A manifest plus complete app stdout/stderr on every failure, with unavailable fields explicitly
+  marked. When a browser/page exists, also preserve its screenshot, DOM, browser version, and page
+  diagnostics together with the exact SHA/port/DB path.
 - Geometry assertions for the board top, contained scrolling, content-height short lanes, minimum
   target size, split-pane width, no desktop scrim, and no document horizontal overflow.
-- Functional scenarios for filter disclosure/chips, keyboard Move to, outline selection, desktop
-  split pane, mobile drawer, save states, empty-column drop, and /ideas regressions.
+- Phase 0A functional scenarios for current application behavior and `/ideas` regressions. Filter
+  disclosure/chips, keyboard Move to, outline selection, desktop split pane, mobile drawer, save
+  states, and other future behavior are added by the visual PR that first introduces each state.
 - Per-scenario isolation or a documented fixture reset so one failure cannot contaminate later
   scenarios.
 - A closed-but-mounted Filters disclosure is inert/non-focusable and absent from the accessibility
@@ -615,6 +700,9 @@ Add focused tests close to the behavior:
   zero database commands during pure rerender/filter presentation.
 - Markdown security regressions keep script/event handlers, unsafe URL schemes, and layout-escaping
   style properties inert while benign Markdown remains visible.
+- Markdown Escape restores the seeded value, suppresses the blur commit triggered by leaving edit
+  mode, returns focus to the editor's read control, and lets only a later unowned Escape close the
+  responsive detail surface.
 
 ### 6.4 Accessibility automation
 
@@ -622,15 +710,16 @@ Phase 0A adds @axe-core/playwright as a dev dependency. Run Axe only after each 
 settled. Fail on serious or critical violations and push failures into the harness's real
 results/exit path; every exception must link an existing issue and have a removal condition.
 
-Scan:
+Scan routes and record IDs emitted by the generated fixture manifest; never assume project ID `1`:
 
-- /
-- /project/1 default board
-- /project/1 with filters open and active chips
-- /project/1 with task detail open in desktop and mobile modes
-- /ideas empty and populated
-- /settings
-- /Error
+- the manifest Home route
+- the manifest's normal project-board route
+- that project route with filters open and active chips once their owning PR lands
+- that project route with task detail open in desktop and mobile modes once Phase 6 lands
+- the manifest's canonical Ideas route, scanned empty and then populated through its scripted
+  fixture-reset/state steps (or an explicitly approved Development-only fixture seam)
+- the manifest Settings route
+- the manifest Error route
 - create/edit/delete confirmation dialogs for semantic/Axe regression only. Keyboard trap/Escape
   remediation remains #200 unless that issue is explicitly pulled into this epic.
 
@@ -656,6 +745,9 @@ The UI plan changes no public contract, but the complete release candidate still
 
 Add a scripts/smoke-mcp-isolated.ps1 wrapper so the safe path is one command in one verified
 worktree:
+
+When MCP smoke is required, invoke this command at the marked point inside the section 6.1 `try`,
+before API smoke and before the outer worktree cleanup:
 
 ~~~powershell
 pwsh -NoProfile -File .\scripts\smoke-mcp-isolated.ps1 -ExpectedHead $expectedHead
@@ -715,7 +807,8 @@ The script must:
 1. Build or require an explicitly matching prebuilt SHA.
 2. Choose a unique loopback port and temporary KANBANFLOW_DB_PATH.
 3. Start in Development.
-4. Seed a fresh, named fixture through existing APIs: empty, normal, and stress projects.
+4. Seed a fresh, named fixture through existing APIs: empty, normal, and stress projects plus
+   scripted sequential reset/populate steps for the single canonical `/ideas` route.
 5. Use stable names/content and mask volatile timestamps or IDs.
 6. Disable animation/caret blink for capture while separately testing reduced motion.
 7. Never use networkidle as readiness because Blazor Server keeps SignalR alive. Wait for health, a
@@ -803,16 +896,24 @@ For every representative before/after pair:
 
 ### 8.1 Prepare the exact source
 
-Run the section 6.0 prelude first.
+Run the section 6.0 prelude first. Replace `$reviewSha` with the literal head being reviewed for
+every PR; the evidence-base value below is not a moving alias.
 
 ~~~powershell
-$repo = 'C:\Users\joelf\KanbanFlow-v2'
+$repo = [IO.Path]::GetFullPath((git rev-parse --show-toplevel).Trim()).TrimEnd('\')
+$reviewSha = '3245d16c6a937d051fff8e7e111d1639b6364f16'
 $work = Join-Path $env:TEMP ('kf-ui-run-' + [guid]::NewGuid().ToString('N'))
 git -C $repo fetch --prune origin
-git -C $repo worktree add --detach $work origin/master
+$reviewObject = "$reviewSha^{commit}"
+git -C $repo cat-file -e $reviewObject
+git -C $repo worktree add --detach $work $reviewSha
+$actualHead = (git -C $work rev-parse HEAD).Trim()
+if ($actualHead -ne $reviewSha) {
+    throw "Expected review SHA $reviewSha, got $actualHead."
+}
 Set-Location $work
 git status --short --branch
-$expectedHead = (git rev-parse HEAD).Trim()
+$expectedHead = $reviewSha
 $actualRoot = [IO.Path]::GetFullPath((git rev-parse --show-toplevel).Trim()).TrimEnd('\')
 $expectedRoot = [IO.Path]::GetFullPath($work).TrimEnd('\')
 if (-not $actualRoot.Equals($expectedRoot, [StringComparison]::OrdinalIgnoreCase)) {
@@ -828,7 +929,23 @@ profile-root Git repository. git rev-parse --show-toplevel must return the workt
 ~~~powershell
 npm ci
 npx playwright install chromium
-pwsh -NoProfile -File .\scripts\verify.ps1
+$savedNativePreference = $PSNativeCommandUseErrorActionPreference
+try {
+    $PSNativeCommandUseErrorActionPreference = $false
+    $verifyOutput = @(& pwsh -NoProfile -File .\scripts\verify.ps1 2>&1)
+    $verifyExit = $LASTEXITCODE
+} finally {
+    $PSNativeCommandUseErrorActionPreference = $savedNativePreference
+}
+$verifyOutput | ForEach-Object { Write-Host $_ }
+$verifyLines = @($verifyOutput | ForEach-Object { $_.ToString().TrimEnd() })
+if ($verifyLines.Count -eq 0 -or
+    $verifyLines[-1] -ne 'Build + tests passed. Safe to push.') {
+    throw "verify.ps1 did not report hard success (exit $verifyExit)."
+}
+if ($verifyExit -ne 0) {
+    Write-Warning "verify.ps1 hard gates passed but its advisory exit was $verifyExit."
+}
 
 $shotDir = Join-Path $env:TEMP ('kf-ui-artifacts-' + [guid]::NewGuid().ToString('N'))
 npm run test:ui:shots -- --mode serve --out $shotDir
@@ -836,9 +953,9 @@ npm run test:ui:shots -- --mode serve --out $shotDir
 
 The serve command is implemented in Phase 0A. It stays in the foreground, owns a unique port and
 GUID-named DB directory, snapshots/restores process environment, seeds empty/normal/stress states,
-and prints/writes manifest.json containing worktree, headSha, baseUrl, PID, port, dbPath,
-dbSource=env, dbExisted=false, fixture IDs/routes, and log paths. It must stop and clean up on Ctrl+C
-while preserving screenshots/manifests.
+and prints/writes manifest.json containing canonicalRepo, worktree, headSha, baseUrl, PID, port,
+dbPath, dbSource=env, dbExisted=false, fixture IDs/routes, Ideas reset/populate steps, and log paths.
+It must stop and clean up on Ctrl+C while preserving screenshots/manifests.
 
 ### 8.3 Verify identity and assets before judging the UI
 
@@ -869,16 +986,21 @@ if (-not $owner) {
 In browser DevTools:
 
 1. Confirm the page URL uses the intended port.
-2. Confirm the HTML references fingerprinted app CSS and kanbanflow JS.
+2. Confirm the HTML references the critical fingerprinted Bootstrap, app, scoped, SortableJS,
+   kanbanflow, and Blazor assets.
 3. Confirm those requests return 200 or 304.
-4. Confirm document.styleSheets contains non-zero application rules.
-5. Confirm the console is free of page errors before capture.
+4. Confirm application/Bootstrap/scoped style sheets expose readable non-zero rules and their known
+   computed-style sentinels match.
+5. Confirm Bootstrap, Sortable, KanbanFlow, and Blazor runtimes report ready and the console is free
+   of page errors before capture.
 
 ### 8.4 Manual interaction sequence
 
-1. **Projects:** use the manifest's empty/one/three/many routes; keyboard through navigation,
-   New Project, first card, Open, menu, and confirmation. Treat #200 as a known separate gap rather
-   than claiming an Escape/trap fix here.
+1. **Projects:** use the manifest's Home route plus its empty/normal/stress project-board routes;
+   review the sequential empty/one/three/many Home captures rather than assuming several versions of
+   `/` are simultaneously served. Keyboard through navigation, New Project, first card, Open, menu,
+   and confirmation. Treat #200 as a known separate gap rather than claiming an Escape/trap fix
+   here.
 2. **Outline:** open/close, disclose levels, select task, add at each supported level, toggle done,
    drag, contextual menu, and focus restoration.
 3. **Board header:** open Requirements and AI tools, close them, search, open Filters, add/remove
@@ -889,7 +1011,8 @@ In browser DevTools:
    verify Saving/Saved/Error, open a link, close, and verify focus returns.
 6. **Task detail mobile:** verify background inertness, Tab/Shift+Tab containment, Escape ordering,
    full-width layout, and focus restoration.
-7. **Ideas and Settings:** use the seeded routes, repeat shared board/modal/navigation smoke, and run
+7. **Ideas and Settings:** use the canonical Ideas route and execute the manifest's empty-then-
+   populated reset/state steps sequentially; repeat shared board/modal/navigation smoke. Run
    Settings tests only after manifest DB identity remains source=env/existing=false.
 8. Repeat key flows at every viewport, 200 percent zoom, forced colors, and reduced motion.
 
@@ -906,13 +1029,16 @@ In browser DevTools:
 
 **UI E2E reports unrelated feature/task failures**
 
-- A fixed-port collision can send one run to another run's isolated DB. Set UI_E2E_PORT uniquely
-  and run serially; see #351.
+- At the pre-Phase 0A baseline, a fixed-port collision can send one run to another run's isolated DB;
+  do not treat that run as trustworthy. The Phase 0A runner must bind an OS-assigned port internally
+  and verify exact child-PID ownership. Scenarios inside each run remain serial; independent default
+  runs may coexist with isolated ports, DBs, and build outputs; see #351.
 
 **Build copy/lock errors**
 
-- Another UI run may own the same bin/obj output. Do not build the same worktree concurrently; see
-  #352.
+- The pre-Phase 0A harness and `SKIP_BUILD`/shared-output shortcuts are exclusive: another UI run may
+  own the same bin/obj output. Bare Phase 0A runs instead use per-run output/intermediate paths and
+  must pass the two-concurrent-run guard; see #352.
 
 **Plausible geometry on an unstyled page**
 
@@ -937,11 +1063,50 @@ In browser DevTools:
 5. Resolve and validate the detached worktree before asking Git to remove it.
 
 ~~~powershell
-$repo = 'C:\Users\joelf\KanbanFlow-v2'
 $shotDir = (Read-Host 'Paste the exact external artifact directory').Trim()
 $manifestPath = Join-Path $shotDir 'manifest.json'
 $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
-$work = [string]$manifest.worktree
+$repoInput = (Read-Host 'Paste the trusted canonical checkout path').Trim()
+if ([string]::IsNullOrWhiteSpace([string]$manifest.canonicalRepo) -or
+    [string]::IsNullOrWhiteSpace([string]$manifest.worktree) -or
+    [string]::IsNullOrWhiteSpace([string]$manifest.headSha)) {
+    throw 'The external manifest is missing repository/worktree identity fields.'
+}
+$repo = [IO.Path]::GetFullPath((Resolve-Path -LiteralPath $repoInput).Path).TrimEnd('\')
+$manifestRepo = [IO.Path]::GetFullPath([string]$manifest.canonicalRepo).TrimEnd('\')
+$work = [IO.Path]::GetFullPath([string]$manifest.worktree).TrimEnd('\')
+$tempRoot = [IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd('\') + '\'
+$workLeaf = Split-Path -Leaf $work
+if (-not ($work + '\').StartsWith($tempRoot, [StringComparison]::OrdinalIgnoreCase) -or
+    $workLeaf -notmatch '^kf-ui-run-[0-9a-f]{32}$') {
+    throw 'The worktree path from the manifest failed validation.'
+}
+
+$actualRepo = [IO.Path]::GetFullPath((git -C $repo rev-parse --show-toplevel).Trim()).TrimEnd('\')
+if (-not (Test-Path -LiteralPath (Join-Path $repo '.git') -PathType Container) -or
+    -not $actualRepo.Equals($repo, [StringComparison]::OrdinalIgnoreCase)) {
+    throw 'The trusted canonical checkout identity does not match.'
+}
+if (-not $manifestRepo.Equals($repo, [StringComparison]::OrdinalIgnoreCase)) {
+    throw 'The external manifest does not name the trusted canonical repository.'
+}
+$repoCommon = [IO.Path]::GetFullPath(
+    (git -C $repo rev-parse --path-format=absolute --git-common-dir).Trim()
+).TrimEnd('\')
+$workCommon = [IO.Path]::GetFullPath(
+    (git -C $work rev-parse --path-format=absolute --git-common-dir).Trim()
+).TrimEnd('\')
+if (-not $repoCommon.Equals($workCommon, [StringComparison]::OrdinalIgnoreCase)) {
+    throw 'The review worktree does not belong to the trusted canonical repository.'
+}
+$workHead = (git -C $work rev-parse HEAD).Trim()
+if ($workHead -ne [string]$manifest.headSha) {
+    throw 'The review worktree HEAD does not match the external manifest.'
+}
+$workStatus = @(git -C $work status --porcelain --untracked-files=all)
+if ($workStatus.Count -ne 0) {
+    throw 'The review worktree is not clean; preserve it and inspect before cleanup.'
+}
 
 if (Get-Process -Id $manifest.pid -ErrorAction SilentlyContinue) {
     throw 'The review app is still running.'
@@ -951,7 +1116,6 @@ if (Get-NetTCPConnection -State Listen -LocalPort $manifest.port -ErrorAction Si
 }
 
 $shotRoot = [IO.Path]::GetFullPath($shotDir).TrimEnd('\') + '\'
-$tempRoot = [IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd('\') + '\'
 $shotLeaf = Split-Path -Leaf $shotDir
 if (-not $shotRoot.StartsWith($tempRoot, [StringComparison]::OrdinalIgnoreCase) -or
     $shotLeaf -notmatch '^kf-ui-artifacts-[0-9a-f]{32}$') {
@@ -998,7 +1162,7 @@ if ((Get-FileHash -LiteralPath $manifestPath).Hash -ne
 }
 
 Set-Location $repo
-$resolvedWork = [IO.Path]::GetFullPath($work).TrimEnd('\')
+$resolvedWork = $work
 $leaf = Split-Path -Leaf $resolvedWork
 if (-not $resolvedWork.StartsWith($tempRoot, [StringComparison]::OrdinalIgnoreCase) -or
     $leaf -notmatch '^kf-ui-run-[0-9a-f]{32}$') {
@@ -1043,6 +1207,8 @@ Every PR must:
 - Add behavior assertions, not only screenshots.
 - Run focused tests, verify.ps1, script tests where relevant, API smoke, full UI E2E on a unique
   port, and /ideas regressions for shared board changes.
+- Report any issue-linked known red baseline separately and keep the applicable phase exit blocked
+  until its removal condition passes; never include it in a green count.
 - Report actual pass/fail/skip counts and the final UI summary.
 - Preserve unrelated work and never use the normal user database.
 - Resolve valid review threads and recheck the final pushed head.

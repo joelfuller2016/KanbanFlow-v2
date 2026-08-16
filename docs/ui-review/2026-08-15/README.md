@@ -2,9 +2,10 @@
 
 - **Date:** 2026-08-15
 - **Status:** Design proposal; no application code has been changed
-- **Published plan:** [issue #322 implementation-plan comment](https://github.com/joelfuller2016/KanbanFlow-v2/issues/322#issuecomment-5304724077)
+- **Original reviewed draft:** [issue #322 implementation-plan comment](https://github.com/joelfuller2016/KanbanFlow-v2/issues/322#issuecomment-5304724077)
 - **Source:** `fix/414-atomic-dependency-cycle` at `652c60d`, running with the
-  Development launch profile and an isolated sample database
+  Development launch profile; the ad-hoc capture did not preserve a database manifest, so database
+  isolation is not claimed
 - **Authority:** [IMPLEMENTATION-PLAN.md](IMPLEMENTATION-PLAN.md) is the reviewed delivery
   contract. [PHASE-0-EVIDENCE.md](PHASE-0-EVIDENCE.md) records provenance, decisions, issue
   ownership, and compatibility boundaries for the evidence PR.
