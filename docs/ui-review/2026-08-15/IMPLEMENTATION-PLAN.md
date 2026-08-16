@@ -536,19 +536,24 @@ function Invoke-GitChecked {
         [void]$startInfo.ArgumentList.Add($argument)
     }
     $process = [Diagnostics.Process]::new()
-    $process.StartInfo = $startInfo
-    if (-not $process.Start()) {
-        throw 'Failed to start git.'
+    try {
+        $process.StartInfo = $startInfo
+        if (-not $process.Start()) {
+            throw 'Failed to start git.'
+        }
+        $stdoutTask = $process.StandardOutput.ReadToEndAsync()
+        $stderrTask = $process.StandardError.ReadToEndAsync()
+        $process.WaitForExit()
+        $stdout = $stdoutTask.GetAwaiter().GetResult()
+        $stderr = $stderrTask.GetAwaiter().GetResult()
+        if ($process.ExitCode -ne 0) {
+            throw "git failed with exit $($process.ExitCode): $($stderr.Trim())"
+        }
+        return $stdout
     }
-    $stdoutTask = $process.StandardOutput.ReadToEndAsync()
-    $stderrTask = $process.StandardError.ReadToEndAsync()
-    $process.WaitForExit()
-    $stdout = $stdoutTask.GetAwaiter().GetResult()
-    $stderr = $stderrTask.GetAwaiter().GetResult()
-    if ($process.ExitCode -ne 0) {
-        throw "git failed with exit $($process.ExitCode): $($stderr.Trim())"
+    finally {
+        $process.Dispose()
     }
-    return $stdout
 }
 
 function Get-RegisteredWorktreePaths {
@@ -743,7 +748,8 @@ Required additions:
   missing, unexpected, null, and case-only duplicate entries; JSON objects where arrays are required;
   nested-array records; boolean, string, or fractional values where JSON integers are required;
   route, fixture-state, and viewport mismatches; incomplete captured metadata; a missing planned
-  source or source hash/byte/raster mismatch; an unavailable result in a success manifest; a
+  source or source hash/byte/raster mismatch; a renamed JPEG or other non-PNG payload with a `.png`
+  filename; an unavailable result in a success manifest; a
   complete pre-launch failure with one unavailable record and reason for each of the four trusted
   diagnostics; omission or duplication of any required diagnostic name/kind; a mid-run failure that
   preserves captured representative and diagnostic records while marking the remainder unavailable;
@@ -751,11 +757,11 @@ Required additions:
   clean serve shutdown that becomes successful only after the complete trusted plan validates.
   Raster dimensions may legitimately differ from viewport dimensions for a full-page capture.
 - Publication-contract tests prove the index names exactly the approved PNG subset and frozen
-  full-run-manifest hash; staged hash/byte/raster corruption and a forced pre-rename copy failure
-  leave no final bundle; a destination collision creates no new/partial bundle and leaves the
-  pre-existing destination byte-for-byte unchanged; an owned staging failure removes only known
-  files; and an atomic rename leaves the complete bundle while a later worktree-cleanup failure
-  reports the worktree without removing valid evidence.
+  full-run-manifest hash; staged hash/byte/raster corruption, a source swap, a staged reparse point,
+  and a forced pre-rename copy failure leave no final bundle; a destination collision creates no
+  new/partial bundle and leaves the pre-existing destination byte-for-byte unchanged; an owned
+  staging failure removes only known files; and an atomic rename leaves the complete bundle while a
+  later worktree-cleanup failure reports the exact worktree without removing valid evidence.
 - Geometry assertions for the board top, contained scrolling, content-height short lanes, minimum
   target size, split-pane width, no desktop scrim, and no document horizontal overflow.
 - Phase 0A functional scenarios for current application behavior and `/ideas` regressions. Filter
@@ -985,10 +991,12 @@ and continuously tests them.
 
 Use:
 
-    docs/ui-review/2026-08-15/capture-FULL_HEAD_SHA/STATE-WIDTHxHEIGHT-before.png
-    docs/ui-review/2026-08-15/capture-FULL_HEAD_SHA/STATE-WIDTHxHEIGHT-after.png
-    docs/ui-review/2026-08-15/capture-FULL_HEAD_SHA/capture-run-manifest-SHORT_SHA.json
-    docs/ui-review/2026-08-15/capture-FULL_HEAD_SHA/publication-index.json
+~~~text
+docs/ui-review/2026-08-15/capture-FULL_HEAD_SHA/STATE-WIDTHxHEIGHT-before.png
+docs/ui-review/2026-08-15/capture-FULL_HEAD_SHA/STATE-WIDTHxHEIGHT-after.png
+docs/ui-review/2026-08-15/capture-FULL_HEAD_SHA/capture-run-manifest-SHORT_SHA.json
+docs/ui-review/2026-08-15/capture-FULL_HEAD_SHA/publication-index.json
+~~~
 
 This fixed date is the #322 modernization review root. Phase 0A and later #322 captures use the
 per-head bundle convention; another initiative creates and reviews a different dated root before
@@ -1562,17 +1570,36 @@ foreach ($record in $screenshotRecords) {
     if (($sourceItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
         throw "Successful manifest screenshot cannot be a reparse point: $source"
     }
+    $signatureStream = [IO.File]::Open(
+        $source,
+        [IO.FileMode]::Open,
+        [IO.FileAccess]::Read,
+        [IO.FileShare]::Read
+    )
+    try {
+        $signatureBytes = [byte[]]::new(8)
+        $signatureLength = $signatureStream.Read($signatureBytes, 0, $signatureBytes.Length)
+    }
+    finally {
+        $signatureStream.Dispose()
+    }
+    if ($signatureLength -ne 8 -or
+        [Convert]::ToHexString($signatureBytes) -cne '89504E470D0A1A0A') {
+        throw "Successful manifest screenshot is not PNG-encoded: $source"
+    }
     $sourceHash = (Get-FileHash -LiteralPath $source -Algorithm SHA256).Hash
     $image = [Drawing.Image]::FromFile($source)
     try {
         $sourceWidth = $image.Width
         $sourceHeight = $image.Height
+        $sourceFormat = $image.RawFormat.Guid
     }
     finally {
         $image.Dispose()
     }
     if ($sourceItem.Length -ne $record.bytes -or
         -not $sourceHash.Equals([string]$record.sha256, [StringComparison]::OrdinalIgnoreCase) -or
+        $sourceFormat -ne [Drawing.Imaging.ImageFormat]::Png.Guid -or
         $sourceWidth -ne $record.width -or
         $sourceHeight -ne $record.height) {
         throw "Screenshot does not match its capture-manifest result: $canonicalName"
@@ -1744,6 +1771,9 @@ try {
             Copy-Item -LiteralPath $entry.Source -Destination $stagedPath
         }
         $stagedItem = Get-Item -LiteralPath $stagedPath
+        if (($stagedItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+            throw "Staged evidence cannot be a reparse point: $($entry.Leaf)"
+        }
         $stagedHash = (Get-FileHash -LiteralPath $stagedPath -Algorithm SHA256).Hash
         if ($stagedItem.Length -ne $entry.Bytes -or
             -not $stagedHash.Equals($entry.Hash, [StringComparison]::OrdinalIgnoreCase)) {
@@ -1752,9 +1782,10 @@ try {
         if ($entry.IsImage) {
             $stagedImage = [Drawing.Image]::FromFile($stagedPath)
             try {
-                if ($stagedImage.Width -ne $entry.Width -or
+                if ($stagedImage.RawFormat.Guid -ne [Drawing.Imaging.ImageFormat]::Png.Guid -or
+                    $stagedImage.Width -ne $entry.Width -or
                     $stagedImage.Height -ne $entry.Height) {
-                    throw "Staged evidence failed dimension verification: $($entry.Leaf)"
+                    throw "Staged evidence failed PNG format/dimension verification: $($entry.Leaf)"
                 }
             }
             finally {
@@ -1813,20 +1844,27 @@ if (-not $resolvedWork.StartsWith($tempRoot, [StringComparison]::OrdinalIgnoreCa
     $leaf -notmatch '^kf-ui-run-[0-9a-f]{32}$') {
     throw 'The worktree cleanup target failed validation.'
 }
-$registeredBefore = @(Get-RegisteredWorktreePaths -Repository $repo)
-$exactBefore = @($registeredBefore | Where-Object {
-    $_.Equals($resolvedWork, [StringComparison]::OrdinalIgnoreCase)
-})
-if ($exactBefore.Count -ne 1) {
-    throw 'The exact worktree must be registered once immediately before cleanup.'
+try {
+    $registeredBefore = @(Get-RegisteredWorktreePaths -Repository $repo)
+    $exactBefore = @($registeredBefore | Where-Object {
+        $_.Equals($resolvedWork, [StringComparison]::OrdinalIgnoreCase)
+    })
+    if ($exactBefore.Count -ne 1) {
+        throw 'The exact worktree must be registered once immediately before cleanup.'
+    }
+    [void](Invoke-GitChecked -Arguments @('-C', $repo, 'worktree', 'remove', $resolvedWork))
+    $registeredAfter = @(Get-RegisteredWorktreePaths -Repository $repo)
+    $exactAfter = @($registeredAfter | Where-Object {
+        $_.Equals($resolvedWork, [StringComparison]::OrdinalIgnoreCase)
+    })
 }
-[void](Invoke-GitChecked -Arguments @('-C', $repo, 'worktree', 'remove', $resolvedWork))
-$registeredAfter = @(Get-RegisteredWorktreePaths -Repository $repo)
-$exactAfter = @($registeredAfter | Where-Object {
-    $_.Equals($resolvedWork, [StringComparison]::OrdinalIgnoreCase)
-})
+catch {
+    throw "Worktree cleanup failed for $resolvedWork; the published evidence bundle remains for " +
+        "an explicit retry. $($_.Exception.Message)"
+}
 if ($exactAfter.Count -ne 0 -or (Test-Path -LiteralPath $resolvedWork)) {
-    throw 'The worktree remains registered or present after removal.'
+    throw "Worktree $resolvedWork remains registered or present after removal; the published " +
+        'evidence bundle remains for an explicit retry.'
 }
 ~~~
 

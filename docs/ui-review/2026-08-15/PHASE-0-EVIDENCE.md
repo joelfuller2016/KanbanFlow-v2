@@ -22,7 +22,7 @@ seventh manifest artifact. The two capture and base revisions have no difference
 
 | File | Reviewed source SHA-256 | PR file SHA-256 | Bytes | Dimensions |
 | --- | --- | --- | ---: | ---: |
-| `IMPLEMENTATION-PLAN.md` | `F1F184FB186CCD6481B7862AD7BD7830818B10F7BBB4DC0C476FF4E2D9171EFA` | `C230E85AD822026AD634787C2CF13DAF621293F30D63B7DF4651D3AAFE571DC7` | 97,513 | — |
+| `IMPLEMENTATION-PLAN.md` | `F1F184FB186CCD6481B7862AD7BD7830818B10F7BBB4DC0C476FF4E2D9171EFA` | `177F6522C48F403C3312B0CBA7D7B9A535D4CEAC6F3F017F794075464414C20B` | 98,986 | — |
 | `README.md` | `AFC7C88510B9D9AE124475021DADBECCC998684D955424F8F5ACC28F1E41416D` | `F4433F1EF52D675CB18866D14089B72A4DC550633673217B46A70183123FE287` | 9,720 | — |
 | `SELECTOR-INVENTORY.md` | Generated from the exact base | `35EC34E14E04F38197B01D785205BA44C509170E44DE7F24E85D588100B5FDF8` | 26,728 | — |
 | `current-projects.png` | `391A17905655C5D847604D42A072A20A864C766E135928F6F2AF629BD78F03DF` | `391A17905655C5D847604D42A072A20A864C766E135928F6F2AF629BD78F03DF` | 28,865 | 1440 × 1000 |
@@ -186,9 +186,10 @@ authoritative for Phase 0A:
   a nonempty inline value) or `unavailable` record (with reason and null captured fields), including
   pre-launch and mid-run failures.
 - Publish an approved screenshot subset and its frozen manifest only after validating the complete
-  planned/result set and every source. Stage the bundle in a non-reparse-point tracked review
-  directory, verify its bytes and dimensions, and materialize it with one same-parent directory
-  rename before normal Git review/commit. Include a publication index that lists the approved PNGs
+  planned/result set and every source, including the PNG signature and decoded PNG format. Stage the
+  bundle in a non-reparse-point tracked review directory, verify its bytes, PNG format, and
+  dimensions, and materialize it with one same-parent directory rename before normal Git
+  review/commit. Include a publication index that lists the approved PNGs
   and binds them to the frozen full-run manifest hash; clean only the exact GUID staging directory on
   failure. After Git removes the isolated worktree, require both zero exact registrations and an
   absent filesystem path. This per-head bundle convention starts with Phase 0A; the root-level files
