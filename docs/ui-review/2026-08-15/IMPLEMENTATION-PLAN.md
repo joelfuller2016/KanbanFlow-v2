@@ -238,9 +238,11 @@ This is the first implementation PR and precedes every visual PR.
    (#353).
 4. Fail on pageerror, non-allowlisted console errors, and unexpected same-origin failures. The
    allowlist is explicit in source and limited to deliberate navigation aborts and SignalR teardown.
-5. On every failure save a manifest and complete server stdout/stderr, explicitly marking
-   unavailable fields. When a browser/page exists, also save a viewport screenshot, DOM snapshot,
-   browser version, page diagnostics, exact SHA, port, DB path, and failing scenario.
+5. On every failure save complete server stdout/stderr and a failure manifest with
+   `runStatus=failed`, the failure stage/reason, every completed screenshot record, and explicit
+   `status=unavailable` entries for planned captures or browser/page artifacts that could not be
+   produced. When a browser/page exists, also save a viewport screenshot, DOM snapshot, browser
+   version, page diagnostics, exact SHA, port, DB path, and failing scenario.
 6. Keep scenarios within one run serial. Independent bare runs may coexist only because each owns a
    unique port, DB, `BaseOutputPath`, and `BaseIntermediateOutputPath`; never share a mutable build
    output with another live run (#351/#352).
@@ -663,9 +665,10 @@ Required additions:
   require readable application/Bootstrap/scoped cssRules and known computed sentinels; and prove
   Bootstrap, Sortable, KanbanFlow, and Blazor runtime readiness. Coordinate #353.
 - Fail on pageerror, unexpected console error, failed same-origin request, or unhandled response.
-- A manifest plus complete app stdout/stderr on every failure, with unavailable fields explicitly
-  marked. When a browser/page exists, also preserve its screenshot, DOM, browser version, and page
-  diagnostics together with the exact SHA/port/DB path.
+- A failure manifest plus complete app stdout/stderr on every failure. Preserve completed screenshot
+  records and mark every unproduced planned capture or browser/page artifact explicitly unavailable
+  with a reason. When a browser/page exists, also preserve its screenshot, DOM, browser version, and
+  page diagnostics together with the exact SHA/port/DB path.
 - Geometry assertions for the board top, contained scrolling, content-height short lanes, minimum
   target size, split-pane width, no desktop scrim, and no document horizontal overflow.
 - Phase 0A functional scenarios for current application behavior and `/ideas` regressions. Filter
@@ -817,10 +820,15 @@ The script must:
 8. Assert CSS/JS assets are loaded before capturing.
 9. Save SHA, viewport, route, fixture, browser/OS, locale, time zone, deviceScaleFactor, color
    scheme, font scale, reduced-motion/forced-colors setting, PID, port, and DB path in a manifest.
-   The manifest also contains one `screenshots[]` record per generated PNG with its filename only,
-   SHA-256, byte count, raster width/height, route, fixture/state, and viewport. Compute each record
-   from the final on-disk bytes after capture, reject duplicate/path-bearing filenames, and write the
-   manifest only after every record is complete.
+   The manifest also contains one `screenshots[]` record per planned PNG with its filename only,
+   route, fixture/state, viewport, and `status`. A `status=captured` record includes SHA-256, byte
+   count, and raster width/height computed from the final on-disk bytes. Reject duplicate or
+   path-bearing filenames. On success, set `runStatus=success` and write the manifest only after
+   every planned record is captured and complete. On failure, still write `runStatus=failed`, the
+   failure stage/reason, all completed `captured` records, and `status=unavailable` records with an
+   explicit reason and null hash/byte/dimension fields for every remaining planned capture. Apply
+   the same captured/unavailable contract to browser/page artifacts so pre-launch failures remain
+   diagnosable rather than indistinguishable from an omitted record.
 10. Provide deterministic loading, delayed-save, and forced-failure seams or request interceptors so
     Loading, Saving, and Error are asserted before capture rather than raced.
 11. Capture board/detail as viewport screenshots so fixed-height and overflow defects remain
@@ -962,7 +970,9 @@ dbPath, dbSource=env, dbExisted=false, fixture IDs/routes, Ideas reset/populate 
 the per-screenshot records defined in section 7.1. Before entering foreground review, serve mode
 creates its deterministic representative screenshot set through the same capture pipeline. Images
 taken outside that pipeline remain transient and cannot be approved by the cleanup procedure. The
-command must stop and clean up on Ctrl+C while preserving screenshots/manifests.
+manifest reports `runStatus=running` while foreground review is active, becomes `success` after an
+intentional clean Ctrl+C shutdown, and becomes `failed` with the section 7.1 availability records on
+any error. The command must clean up while preserving screenshots/manifests.
 
 ### 8.3 Verify identity and assets before judging the UI
 
@@ -1066,8 +1076,9 @@ In browser DevTools:
 1. Stop the foreground serve command with Ctrl+C and let it restore environment/clean its DB.
 2. In either terminal, reload the external artifact manifest so cleanup is self-contained.
 3. Confirm the manifest PID and listener are gone.
-4. Copy only approved, manifest-listed screenshots into the repository by explicit filename and
-   verify filename, SHA-256, byte count, and raster dimensions before copying.
+4. Copy only approved, `status=captured` screenshots from a successful manifest into the repository
+   by explicit filename and verify filename, SHA-256, byte count, and raster dimensions before
+   copying. Preserve a failure directory for diagnosis; do not publish its partial captures.
 5. Resolve and validate the detached worktree before asking Git to remove it.
 
 ~~~powershell
@@ -1131,10 +1142,34 @@ if (-not $shotRoot.StartsWith($tempRoot, [StringComparison]::OrdinalIgnoreCase) 
 }
 
 $reviewDir = Join-Path $repo 'docs\ui-review\2026-08-15'
-New-Item -ItemType Directory -Path $reviewDir -Force | Out-Null
+if ([string]$manifest.runStatus -ne 'success') {
+    throw 'Only a successful capture/serve manifest can publish screenshots.'
+}
+if ($null -eq $manifest.screenshots) {
+    throw 'The successful manifest is missing its screenshot record array.'
+}
 $screenshotRecords = @($manifest.screenshots)
 if ($screenshotRecords.Count -eq 0) {
     throw 'The external manifest has no screenshot records.'
+}
+$seenScreenshotNames = [Collections.Generic.HashSet[string]]::new(
+    [StringComparer]::OrdinalIgnoreCase
+)
+foreach ($record in $screenshotRecords) {
+    if ($null -eq $record) {
+        throw 'The successful manifest contains a null screenshot record.'
+    }
+    $recordName = [string]$record.filename
+    if ([IO.Path]::GetFileName($recordName) -ne $recordName -or
+        [IO.Path]::GetExtension($recordName) -ine '.png' -or
+        -not $seenScreenshotNames.Add($recordName) -or
+        [string]$record.status -ne 'captured' -or
+        [string]$record.sha256 -notmatch '^[0-9a-fA-F]{64}$' -or
+        [int64]$record.bytes -le 0 -or
+        [int]$record.width -le 0 -or
+        [int]$record.height -le 0) {
+        throw "Successful manifest has an invalid, duplicate, or incomplete record: $recordName"
+    }
 }
 Add-Type -AssemblyName System.Drawing
 $approvedNames = (Read-Host 'Comma-separated approved screenshot filenames').Split(
@@ -1144,6 +1179,7 @@ $approvedNames = (Read-Host 'Comma-separated approved screenshot filenames').Spl
 if ($approvedNames.Count -eq 0) {
     throw 'At least one representative screenshot must be preserved before worktree cleanup.'
 }
+New-Item -ItemType Directory -Path $reviewDir -Force | Out-Null
 foreach ($name in $approvedNames) {
     if ([IO.Path]::GetFileName($name) -ne $name -or
         [IO.Path]::GetExtension($name) -ine '.png') {
@@ -1156,7 +1192,8 @@ foreach ($name in $approvedNames) {
         throw "Expected exactly one manifest record for approved screenshot: $name"
     }
     $record = $records[0]
-    if ([string]$record.sha256 -notmatch '^[0-9a-fA-F]{64}$' -or
+    if ([string]$record.status -ne 'captured' -or
+        [string]$record.sha256 -notmatch '^[0-9a-fA-F]{64}$' -or
         [int64]$record.bytes -le 0 -or
         [int]$record.width -le 0 -or
         [int]$record.height -le 0) {

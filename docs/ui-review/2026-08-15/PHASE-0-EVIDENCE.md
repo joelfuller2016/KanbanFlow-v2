@@ -22,7 +22,7 @@ seventh manifest artifact. The two capture and base revisions have no difference
 
 | File | Reviewed source SHA-256 | PR file SHA-256 | Bytes | Dimensions |
 | --- | --- | --- | ---: | ---: |
-| `IMPLEMENTATION-PLAN.md` | `F1F184FB186CCD6481B7862AD7BD7830818B10F7BBB4DC0C476FF4E2D9171EFA` | `B109EC321EF5F0B6912D98080102092530FBB409FC2A88FC3B3C0A48A65EA596` | 68,066 | — |
+| `IMPLEMENTATION-PLAN.md` | `F1F184FB186CCD6481B7862AD7BD7830818B10F7BBB4DC0C476FF4E2D9171EFA` | `DC02C20797B2B50AAD039F7BEE482A3FD967F1F1C924B223DDD2A40964AA57AC` | 70,273 | — |
 | `README.md` | `AFC7C88510B9D9AE124475021DADBECCC998684D955424F8F5ACC28F1E41416D` | `F4433F1EF52D675CB18866D14089B72A4DC550633673217B46A70183123FE287` | 9,720 | — |
 | `SELECTOR-INVENTORY.md` | Generated from the exact base | `35EC34E14E04F38197B01D785205BA44C509170E44DE7F24E85D588100B5FDF8` | 26,728 | — |
 | `current-projects.png` | `391A17905655C5D847604D42A072A20A864C766E135928F6F2AF629BD78F03DF` | `391A17905655C5D847604D42A072A20A864C766E135928F6F2AF629BD78F03DF` | 28,865 | 1440 × 1000 |
@@ -169,9 +169,11 @@ authoritative for Phase 0A:
 - Phase 0A gates current application states and supplies the shared runner, assets, failure handling,
   artifacts, Axe baseline, and capture/serve foundation. Filters chips, Move to, modeless detail,
   save/error feedback, landmarks, and other future states are added by their owning visual PRs.
-- Always preserve a manifest plus complete app stdout/stderr and explicitly mark unavailable
-  browser/page artifacts. Add screenshot, DOM, browser version, and page diagnostics whenever a
-  browser/page exists; pre-launch failures cannot provide them.
+- Always preserve complete app stdout/stderr and a manifest. Successful capture manifests contain a
+  complete record for every planned screenshot. Failure manifests preserve completed screenshot
+  records and add explicit unavailable entries—with reasons and null hash/byte/dimension fields—for
+  every unproduced planned capture or browser/page artifact. Add screenshot, DOM, browser version,
+  and page diagnostics whenever a browser/page exists; pre-launch failures cannot provide them.
 - A deliberate teardown failure produces a nonzero harness result and a preserved diagnostic path.
   This is the chosen refinement of #352's older cleanup wording.
 - Discover and validate every critical fingerprinted same-origin asset from rendered DOM: Bootstrap
