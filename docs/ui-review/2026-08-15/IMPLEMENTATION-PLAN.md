@@ -239,10 +239,15 @@ This is the first implementation PR and precedes every visual PR.
 4. Fail on pageerror, non-allowlisted console errors, and unexpected same-origin failures. The
    allowlist is explicit in source and limited to deliberate navigation aborts and SignalR teardown.
 5. On every failure save complete server stdout/stderr and a failure manifest with
-   `runStatus=failed`, the failure stage/reason, every completed screenshot record, and explicit
-   `status=unavailable` entries for planned captures or browser/page artifacts that could not be
-   produced. When a browser/page exists, also save a viewport screenshot, DOM snapshot, browser
-   version, page diagnostics, exact SHA, port, DB path, and failing scenario.
+   `runStatus=failed`, the failure stage/reason, the immutable `plannedCaptures[]` matrix, every
+   completed screenshot record, and an explicit `status=unavailable` record for each planned
+   capture that could not be produced. Store ad-hoc failure screenshots, DOM snapshots, browser
+   versions, and page diagnostics in a separate `failureArtifacts[]` collection so they cannot be
+   mistaken for planned representative captures. The exact-head trusted plan defines four required
+   name/kind records—viewport screenshot, DOM snapshot, browser version, and page diagnostics—and
+   every failed run emits each exactly once as `captured` or `unavailable` with an explicit reason.
+   When a browser/page exists, preserve those available diagnostics together with the exact SHA,
+   port, DB path, and failing scenario.
 6. Keep scenarios within one run serial. Independent bare runs may coexist only because each owns a
    unique port, DB, `BaseOutputPath`, and `BaseIntermediateOutputPath`; never share a mutable build
    output with another live run (#351/#352).
@@ -518,6 +523,49 @@ function Restore-ProcessEnvironment([hashtable]$Snapshot) {
         )
     }
 }
+
+function Invoke-GitChecked {
+    param([Parameter(Mandatory)][string[]]$Arguments)
+
+    $startInfo = [Diagnostics.ProcessStartInfo]::new()
+    $startInfo.FileName = 'git'
+    $startInfo.UseShellExecute = $false
+    $startInfo.RedirectStandardOutput = $true
+    $startInfo.RedirectStandardError = $true
+    foreach ($argument in $Arguments) {
+        [void]$startInfo.ArgumentList.Add($argument)
+    }
+    $process = [Diagnostics.Process]::new()
+    $process.StartInfo = $startInfo
+    if (-not $process.Start()) {
+        throw 'Failed to start git.'
+    }
+    $stdoutTask = $process.StandardOutput.ReadToEndAsync()
+    $stderrTask = $process.StandardError.ReadToEndAsync()
+    $process.WaitForExit()
+    $stdout = $stdoutTask.GetAwaiter().GetResult()
+    $stderr = $stderrTask.GetAwaiter().GetResult()
+    if ($process.ExitCode -ne 0) {
+        throw "git failed with exit $($process.ExitCode): $($stderr.Trim())"
+    }
+    return $stdout
+}
+
+function Get-RegisteredWorktreePaths {
+    param([Parameter(Mandatory)][string]$Repository)
+
+    $raw = Invoke-GitChecked -Arguments @(
+        '-C', $Repository, 'worktree', 'list', '--porcelain', '-z'
+    )
+    $paths = [Collections.Generic.List[string]]::new()
+    foreach ($field in $raw.Split([char]0)) {
+        if ($field.StartsWith('worktree ', [StringComparison]::Ordinal)) {
+            $candidate = $field.Substring('worktree '.Length).Trim()
+            [void]$paths.Add([IO.Path]::GetFullPath($candidate).TrimEnd('\'))
+        }
+    }
+    return $paths.ToArray()
+}
 ~~~
 
 Snapshot every process variable before changing it and restore it in finally. Required names across
@@ -614,7 +662,24 @@ try {
         Set-Location $repo
         if ($worktreeCreated -and -not $preserveWorktree) {
             try {
-                git -C $repo worktree remove $work
+                $resolvedWork = [IO.Path]::GetFullPath($work).TrimEnd('\')
+                $registeredBefore = @(Get-RegisteredWorktreePaths -Repository $repo)
+                $exactBefore = @($registeredBefore | Where-Object {
+                    $_.Equals($resolvedWork, [StringComparison]::OrdinalIgnoreCase)
+                })
+                if ($exactBefore.Count -ne 1) {
+                    throw 'The verification worktree is not registered exactly once.'
+                }
+                [void](Invoke-GitChecked -Arguments @(
+                    '-C', $repo, 'worktree', 'remove', $resolvedWork
+                ))
+                $registeredAfter = @(Get-RegisteredWorktreePaths -Repository $repo)
+                $exactAfter = @($registeredAfter | Where-Object {
+                    $_.Equals($resolvedWork, [StringComparison]::OrdinalIgnoreCase)
+                })
+                if ($exactAfter.Count -ne 0 -or (Test-Path -LiteralPath $resolvedWork)) {
+                    throw "Worktree remains registered or present after removal: $resolvedWork"
+                }
             } catch {
                 Write-Warning "Worktree cleanup failed; inspect the registered path: $work"
                 throw
@@ -665,10 +730,32 @@ Required additions:
   require readable application/Bootstrap/scoped cssRules and known computed sentinels; and prove
   Bootstrap, Sortable, KanbanFlow, and Blazor runtime readiness. Coordinate #353.
 - Fail on pageerror, unexpected console error, failed same-origin request, or unhandled response.
-- A failure manifest plus complete app stdout/stderr on every failure. Preserve completed screenshot
-  records and mark every unproduced planned capture or browser/page artifact explicitly unavailable
-  with a reason. When a browser/page exists, also preserve its screenshot, DOM, browser version, and
-  page diagnostics together with the exact SHA/port/DB path.
+- A failure manifest plus complete app stdout/stderr on every failure. Retain the immutable
+  `plannedCaptures[]` matrix, preserve completed screenshot records, and mark every unproduced
+  planned capture explicitly unavailable with a reason. Store any ad-hoc failure screenshot, DOM,
+  browser version, and page diagnostics in `failureArtifacts[]`, separate from the one-to-one
+  planned screenshot results. Require exactly one captured-or-unavailable record for each trusted
+  `viewport-screenshot`, `dom-snapshot`, `browser-version`, and `page-diagnostics` contract,
+  together with the exact SHA/port/DB path.
+- Manifest-contract tests cover a complete success; a one-record manifest truncated below the
+  source-controlled capture plan; wrong plan path, hash, manifest schema, trusted-plan schema, or
+  required failure-artifact name/kind/storage matrix;
+  missing, unexpected, null, and case-only duplicate entries; JSON objects where arrays are required;
+  nested-array records; boolean, string, or fractional values where JSON integers are required;
+  route, fixture-state, and viewport mismatches; incomplete captured metadata; a missing planned
+  source or source hash/byte/raster mismatch; an unavailable result in a success manifest; a
+  complete pre-launch failure with one unavailable record and reason for each of the four trusted
+  diagnostics; omission or duplication of any required diagnostic name/kind; a mid-run failure that
+  preserves captured representative and diagnostic records while marking the remainder unavailable;
+  publication rejection for running/failed manifests; and a
+  clean serve shutdown that becomes successful only after the complete trusted plan validates.
+  Raster dimensions may legitimately differ from viewport dimensions for a full-page capture.
+- Publication-contract tests prove the index names exactly the approved PNG subset and frozen
+  full-run-manifest hash; staged hash/byte/raster corruption and a forced pre-rename copy failure
+  leave no final bundle; a destination collision creates no new/partial bundle and leaves the
+  pre-existing destination byte-for-byte unchanged; an owned staging failure removes only known
+  files; and an atomic rename leaves the complete bundle while a later worktree-cleanup failure
+  reports the worktree without removing valid evidence.
 - Geometry assertions for the board top, contained scrolling, content-height short lanes, minimum
   target size, split-pane width, no desktop scrim, and no document horizontal overflow.
 - Phase 0A functional scenarios for current application behavior and `/ideas` regressions. Filter
@@ -818,17 +905,38 @@ The script must:
    proven interactive action/marker, target data-testid, document.fonts.ready, the relevant API or
    state predicate, and two animation frames.
 8. Assert CSS/JS assets are loaded before capturing.
-9. Save SHA, viewport, route, fixture, browser/OS, locale, time zone, deviceScaleFactor, color
-   scheme, font scale, reduced-motion/forced-colors setting, PID, port, and DB path in a manifest.
-   The manifest also contains one `screenshots[]` record per planned PNG with its filename only,
-   route, fixture/state, viewport, and `status`. A `status=captured` record includes SHA-256, byte
-   count, and raster width/height computed from the final on-disk bytes. Reject duplicate or
-   path-bearing filenames. On success, set `runStatus=success` and write the manifest only after
-   every planned record is captured and complete. On failure, still write `runStatus=failed`, the
-   failure stage/reason, all completed `captured` records, and `status=unavailable` records with an
-   explicit reason and null hash/byte/dimension fields for every remaining planned capture. Apply
-   the same captured/unavailable contract to browser/page artifacts so pre-launch failures remain
-   diagnosable rather than indistinguishable from an omitted record.
+9. Save SHA, browser/OS, locale, time zone, deviceScaleFactor, color scheme, font scale,
+   reduced-motion/forced-colors setting, PID, port, and DB path in a manifest. Add a
+   source-controlled `scripts/ui-screenshot-plan.json` at the exact tested head with `schemaVersion`,
+   a nonempty `captures[]` matrix, and a `requiredFailureArtifacts[]` matrix. The latter fixes these
+   name/kind/storage contracts: `viewport-screenshot`/`viewportScreenshot`/file,
+   `dom-snapshot`/`domSnapshot`/file, `browser-version`/`browserVersion`/inline, and
+   `page-diagnostics`/`pageDiagnostics`/file. Each trusted capture record has a basename-only unique `.png`
+   `filename`, a root-relative `routeTemplate` whose only substitutions are positive JSON-integer
+   `{fixture:NAME}` IDs, nonempty `fixtureState`, and positive `viewport.width` and
+   `viewport.height`; schema versions and all dimensions/counts are native JSON integers, never
+   booleans, numeric strings, or fractions. The manifest records the fixed plan path, SHA-256, and
+   schema version, plus a
+   resolved `plannedCaptures[]` array derived from that trusted file. A failure before route IDs can
+   be resolved may leave `route=null` only with a nonempty `routeUnavailableReason`; a successful
+   manifest requires every route resolved. The manifest also contains exactly one `screenshots[]`
+   result for every independently trusted capture and no unexpected results. Each result repeats
+   the resolved identity fields and adds
+   `status`. A `status=captured` result includes SHA-256, byte count, and raster width/height computed
+   from the final on-disk bytes. Reject null records, path-bearing or case-insensitively duplicate
+   filenames, wrong JSON collection/record shapes, and any route, fixture-state, or viewport
+   mismatch among the trusted plan, resolved plan, and result arrays. On success,
+   set `runStatus=success` and write the manifest only after every planned result is captured and
+   complete. On failure, still write `runStatus=failed`, the failure stage/reason, all completed
+   `captured` results, and exactly one `status=unavailable` result with an explicit reason and null
+   hash/byte/raster-dimension fields for every remaining planned capture. Put browser/page failure
+   diagnostics in a separate `failureArtifacts[]` collection. Emit exactly one record for every
+   trusted required name/kind/storage contract; optional diagnostics are additive and cannot reuse a
+   required name. Each record has `captured` or `unavailable` status. A captured file record has a
+   basename-only filename, SHA-256, and byte count; a captured inline value is nonempty. An
+   unavailable record has an explicit reason and null captured fields. Even a pre-launch failure
+   emits all four required records as unavailable. This keeps failures diagnosable without adding
+   unexpected entries to `screenshots[]`.
 10. Provide deterministic loading, delayed-save, and forced-failure seams or request interceptors so
     Loading, Saving, and Error are asserted before capture rather than raced.
 11. Capture board/detail as viewport screenshots so fixed-height and overflow defects remain
@@ -877,13 +985,24 @@ and continuously tests them.
 
 Use:
 
-    docs/ui-review/YYYY-MM-DD/STATE-WIDTHxHEIGHT-before.png
-    docs/ui-review/YYYY-MM-DD/STATE-WIDTHxHEIGHT-after.png
+    docs/ui-review/2026-08-15/capture-FULL_HEAD_SHA/STATE-WIDTHxHEIGHT-before.png
+    docs/ui-review/2026-08-15/capture-FULL_HEAD_SHA/STATE-WIDTHxHEIGHT-after.png
+    docs/ui-review/2026-08-15/capture-FULL_HEAD_SHA/capture-run-manifest-SHORT_SHA.json
+    docs/ui-review/2026-08-15/capture-FULL_HEAD_SHA/publication-index.json
 
-Keep transient failures and full matrices under ignored ui-e2e-artifacts/SHORT_SHA/. Commit only
-the representative evidence reviewed in the PR. Because the repository currently ignores PNGs,
-prefer a narrow !docs/ui-review/**/*.png exception and explicit file paths; otherwise intentionally
-force-add only reviewed images. Do not glob-add unrelated local screenshots.
+This fixed date is the #322 modernization review root. Phase 0A and later #322 captures use the
+per-head bundle convention; another initiative creates and reviews a different dated root before
+changing the literal runbook path. The existing root-level current-state images, browser-smoke files,
+and conceptual composition predate Phase 0A and remain explicitly documented historical evidence.
+Each new bundle belongs to one exact head and is materialized with the same-parent atomic rename in
+section 8.6, then reviewed and committed normally; before and after images from different heads
+therefore live in different bundles. The capture-run manifest inventories the full transient run,
+while `publication-index.json` lists the approved PNG subset in this bundle and binds it to the
+frozen run-manifest hash.
+Keep transient failures and full matrices under ignored ui-e2e-artifacts/SHORT_SHA/. Commit only the
+representative evidence reviewed in the PR. Because the repository currently ignores PNGs, prefer a
+narrow !docs/ui-review/**/*.png exception and explicit file paths; otherwise intentionally force-add
+only reviewed images. Do not glob-add unrelated local screenshots.
 
 ### 7.5 Reviewer checklist
 
@@ -966,13 +1085,15 @@ npm run test:ui:shots -- --mode serve --out $shotDir
 The serve command is implemented in Phase 0A. It stays in the foreground, owns a unique port and
 GUID-named DB directory, snapshots/restores process environment, seeds empty/normal/stress states,
 and prints/writes manifest.json containing canonicalRepo, worktree, headSha, baseUrl, PID, port,
-dbPath, dbSource=env, dbExisted=false, fixture IDs/routes, Ideas reset/populate steps, log paths, and
-the per-screenshot records defined in section 7.1. Before entering foreground review, serve mode
+dbPath, dbSource=env, dbExisted=false, a `fixtureIds` map and resolved routes, Ideas reset/populate
+steps, log paths, the trusted capture-plan path/hash/schema, and the planned-capture/result records
+defined in section 7.1. Before entering foreground review, serve mode
 creates its deterministic representative screenshot set through the same capture pipeline. Images
 taken outside that pipeline remain transient and cannot be approved by the cleanup procedure. The
-manifest reports `runStatus=running` while foreground review is active, becomes `success` after an
-intentional clean Ctrl+C shutdown, and becomes `failed` with the section 7.1 availability records on
-any error. The command must clean up while preserving screenshots/manifests.
+manifest reports `runStatus=running` while foreground review is active. An intentional clean Ctrl+C
+shutdown may change it to `success` only after the one-to-one planned-capture/result validator
+passes. Any setup, capture, runtime, or teardown error changes it to `failed` with the section 7.1
+availability records. The command must clean up while preserving screenshots/manifests.
 
 ### 8.3 Verify identity and assets before judging the UI
 
@@ -1076,17 +1197,44 @@ In browser DevTools:
 1. Stop the foreground serve command with Ctrl+C and let it restore environment/clean its DB.
 2. In either terminal, reload the external artifact manifest so cleanup is self-contained.
 3. Confirm the manifest PID and listener are gone.
-4. Copy only approved, `status=captured` screenshots from a successful manifest into the repository
-   by explicit filename and verify filename, SHA-256, byte count, and raster dimensions before
-   copying. Preserve a failure directory for diagnosis; do not publish its partial captures.
-5. Resolve and validate the detached worktree before asking Git to remove it.
+4. Require the successful manifest to contain exactly one complete result for every immutable
+   planned capture and no unexpected result. Validate every planned source before any repository
+   write, stage the approved screenshots, frozen full-run manifest, and a publication index in a new
+   per-head bundle, then publish the verified bundle with one same-parent atomic directory rename.
+   The index lists the bundled PNG subset and binds it to the full-run manifest hash, whose remaining
+   screenshot records may refer to transient files outside the bundle. Preserve a failure directory
+   for diagnosis; do not publish its partial captures.
+5. Resolve and validate the detached worktree before asking Git to remove it, then prove the exact
+   path is no longer registered or present. If cleanup fails after the atomic evidence rename, keep
+   the published bundle and report the worktree path for an explicit retry; do not roll back valid
+   evidence merely to hide a cleanup failure.
+
+Run the section 6.0 prelude in this terminal first; the cleanup uses its checked Git helpers.
 
 ~~~powershell
-$shotDir = (Read-Host 'Paste the exact external artifact directory').Trim()
+$ErrorActionPreference = 'Stop'
+$PSNativeCommandUseErrorActionPreference = $true
+$shotDirInput = (Read-Host 'Paste the exact external artifact directory').Trim()
+$shotDir = [IO.Path]::GetFullPath(
+    (Resolve-Path -LiteralPath $shotDirInput).Path
+).TrimEnd('\')
 $manifestPath = Join-Path $shotDir 'manifest.json'
-$manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
+$manifestItem = Get-Item -LiteralPath $manifestPath -Force
+if (($manifestItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+    throw 'The external manifest cannot be a reparse point.'
+}
+$manifestBytes = [IO.File]::ReadAllBytes($manifestPath)
+$strictUtf8 = [Text.UTF8Encoding]::new($false, $true)
+$manifestText = $strictUtf8.GetString($manifestBytes).TrimStart([char]0xFEFF)
+$manifest = $manifestText | ConvertFrom-Json
+if (-not ($manifest -is [pscustomobject])) {
+    throw 'The external manifest must be one JSON object.'
+}
 $repoInput = (Read-Host 'Paste the trusted canonical checkout path').Trim()
-if ([string]::IsNullOrWhiteSpace([string]$manifest.canonicalRepo) -or
+if ($manifest.canonicalRepo -isnot [string] -or
+    $manifest.worktree -isnot [string] -or
+    $manifest.headSha -isnot [string] -or
+    [string]::IsNullOrWhiteSpace([string]$manifest.canonicalRepo) -or
     [string]::IsNullOrWhiteSpace([string]$manifest.worktree) -or
     [string]::IsNullOrWhiteSpace([string]$manifest.headSha)) {
     throw 'The external manifest is missing repository/worktree identity fields.'
@@ -1140,74 +1288,280 @@ if (-not $shotRoot.StartsWith($tempRoot, [StringComparison]::OrdinalIgnoreCase) 
     $shotLeaf -notmatch '^kf-ui-artifacts-[0-9a-f]{32}$') {
     throw 'The artifact source failed validation.'
 }
+$shotDir = $shotRoot.TrimEnd('\')
+$shotDirItem = Get-Item -LiteralPath $shotDir -Force
+if (($shotDirItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+    throw 'The artifact source cannot be a reparse point.'
+}
 
 $reviewDir = Join-Path $repo 'docs\ui-review\2026-08-15'
-if ([string]$manifest.runStatus -ne 'success') {
+if ($manifest.runStatus -isnot [string] -or
+    [string]$manifest.runStatus -cne 'success') {
     throw 'Only a successful capture/serve manifest can publish screenshots.'
 }
-if ($null -eq $manifest.screenshots) {
-    throw 'The successful manifest is missing its screenshot record array.'
+if ([string]$manifest.headSha -notmatch '^(?:[0-9a-fA-F]{40}|[0-9a-fA-F]{64})$') {
+    throw 'The successful manifest has an invalid head SHA.'
 }
+$trustedPlanRelative = 'scripts/ui-screenshot-plan.json'
+if ($manifest.capturePlanPath -isnot [string] -or
+    $manifest.capturePlanSha256 -isnot [string] -or
+    $manifest.capturePlanSchemaVersion -isnot [long] -or
+    [string]$manifest.capturePlanPath -cne $trustedPlanRelative -or
+    [string]$manifest.capturePlanSha256 -notmatch '^[0-9a-fA-F]{64}$' -or
+    $manifest.capturePlanSchemaVersion -ne 1) {
+    throw 'The manifest does not identify the required trusted capture plan.'
+}
+$trustedPlanPath = [IO.Path]::GetFullPath((Join-Path $work $trustedPlanRelative))
+if (-not ($trustedPlanPath + '\').StartsWith(
+        $work + '\',
+        [StringComparison]::OrdinalIgnoreCase
+    ) -or -not (Test-Path -LiteralPath $trustedPlanPath -PathType Leaf)) {
+    throw 'The exact-head trusted capture plan is missing or outside the worktree.'
+}
+$trustedPlanItem = Get-Item -LiteralPath $trustedPlanPath -Force
+if (($trustedPlanItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+    throw 'The exact-head trusted capture plan cannot be a reparse point.'
+}
+$trustedPlanBytes = [IO.File]::ReadAllBytes($trustedPlanPath)
+$trustedPlanHash = [Convert]::ToHexString(
+    [Security.Cryptography.SHA256]::HashData($trustedPlanBytes)
+)
+if (-not $trustedPlanHash.Equals(
+        [string]$manifest.capturePlanSha256,
+        [StringComparison]::OrdinalIgnoreCase
+    )) {
+    throw 'The manifest capture-plan hash does not match the exact-head trusted plan.'
+}
+$trustedPlanText = $strictUtf8.GetString($trustedPlanBytes).TrimStart([char]0xFEFF)
+$trustedPlan = $trustedPlanText | ConvertFrom-Json
+if (-not ($trustedPlan -is [pscustomobject]) -or
+    $trustedPlan.schemaVersion -isnot [long] -or
+    $trustedPlan.schemaVersion -ne 1 -or
+    $trustedPlan.captures -isnot [Array] -or
+    @($trustedPlan.captures).Count -eq 0 -or
+    $trustedPlan.requiredFailureArtifacts -isnot [Array] -or
+    @($trustedPlan.requiredFailureArtifacts).Count -ne 4 -or
+    -not ($manifest.fixtureIds -is [pscustomobject])) {
+    throw 'The exact-head trusted capture plan or fixture-ID map has an invalid shape.'
+}
+$requiredFailureContracts = [Collections.Generic.Dictionary[string, object]]::new(
+    [StringComparer]::Ordinal
+)
+$requiredFailureContracts.Add('viewport-screenshot', [pscustomobject]@{
+    kind = 'viewportScreenshot'; storage = 'file'
+})
+$requiredFailureContracts.Add('dom-snapshot', [pscustomobject]@{
+    kind = 'domSnapshot'; storage = 'file'
+})
+$requiredFailureContracts.Add('browser-version', [pscustomobject]@{
+    kind = 'browserVersion'; storage = 'inline'
+})
+$requiredFailureContracts.Add('page-diagnostics', [pscustomobject]@{
+    kind = 'pageDiagnostics'; storage = 'file'
+})
+$seenFailureContracts = [Collections.Generic.HashSet[string]]::new(
+    [StringComparer]::Ordinal
+)
+foreach ($contract in @($trustedPlan.requiredFailureArtifacts)) {
+    if (-not ($contract -is [pscustomobject]) -or
+        $contract.name -isnot [string] -or
+        $contract.kind -isnot [string] -or
+        $contract.storage -isnot [string] -or
+        -not $requiredFailureContracts.ContainsKey([string]$contract.name) -or
+        -not $seenFailureContracts.Add([string]$contract.name)) {
+        throw 'The trusted capture plan has an invalid failure-artifact contract.'
+    }
+    $requiredContract = $requiredFailureContracts[[string]$contract.name]
+    if (-not ([string]$requiredContract.kind).Equals(
+            [string]$contract.kind,
+            [StringComparison]::Ordinal
+        ) -or
+        -not ([string]$requiredContract.storage).Equals(
+            [string]$contract.storage,
+            [StringComparison]::Ordinal
+        )) {
+        throw "Trusted failure-artifact contract mismatch: $($contract.name)"
+    }
+}
+$expectedByName = [Collections.Generic.Dictionary[string, object]]::new(
+    [StringComparer]::OrdinalIgnoreCase
+)
+foreach ($template in @($trustedPlan.captures)) {
+    if (-not ($template -is [pscustomobject]) -or
+        -not ($template.viewport -is [pscustomobject]) -or
+        $template.filename -isnot [string] -or
+        $template.routeTemplate -isnot [string] -or
+        $template.fixtureState -isnot [string] -or
+        $template.viewport.width -isnot [long] -or
+        $template.viewport.height -isnot [long]) {
+        throw 'The trusted capture plan contains a non-object record or viewport.'
+    }
+    $expectedName = [string]$template.filename
+    $routeTemplate = [string]$template.routeTemplate
+    $expectedFixtureState = [string]$template.fixtureState
+    if ([IO.Path]::GetFileName($expectedName) -ne $expectedName -or
+        [IO.Path]::GetExtension($expectedName) -ine '.png' -or
+        [string]::IsNullOrWhiteSpace($routeTemplate) -or
+        [string]::IsNullOrWhiteSpace($expectedFixtureState) -or
+        $template.viewport.width -le 0 -or
+        $template.viewport.height -le 0 -or
+        $expectedByName.ContainsKey($expectedName)) {
+        throw "Trusted capture plan has an invalid or duplicate record: $expectedName"
+    }
+    $resolvedRoute = $routeTemplate
+    foreach ($token in [regex]::Matches(
+        $routeTemplate,
+        '\{fixture:([A-Za-z][A-Za-z0-9]*)\}'
+    )) {
+        $fixtureName = $token.Groups[1].Value
+        $fixtureProperties = @($manifest.fixtureIds.PSObject.Properties | Where-Object {
+            $_.Name.Equals($fixtureName, [StringComparison]::Ordinal)
+        })
+        if ($fixtureProperties.Count -ne 1 -or
+            $fixtureProperties[0].Value -isnot [long] -or
+            $fixtureProperties[0].Value -le 0) {
+            throw "Manifest cannot resolve capture-plan fixture ID: $fixtureName"
+        }
+        $resolvedRoute = $resolvedRoute.Replace(
+            $token.Value,
+            [Convert]::ToString(
+                $fixtureProperties[0].Value,
+                [Globalization.CultureInfo]::InvariantCulture
+            )
+        )
+    }
+    if ($resolvedRoute.Contains('{') -or $resolvedRoute.Contains('}') -or
+        -not $resolvedRoute.StartsWith('/') -or $resolvedRoute.StartsWith('//')) {
+        throw "Trusted capture plan produced an invalid route: $expectedName"
+    }
+    $expectedByName.Add($expectedName, [pscustomobject]@{
+        filename = $expectedName
+        route = $resolvedRoute
+        fixtureState = $expectedFixtureState
+        viewport = [pscustomobject]@{
+            width = $template.viewport.width
+            height = $template.viewport.height
+        }
+    })
+}
+
+if ($manifest.plannedCaptures -isnot [Array] -or
+    $manifest.screenshots -isnot [Array]) {
+    throw 'The successful manifest requires JSON arrays for plans and results.'
+}
+$plannedCaptureRecords = @($manifest.plannedCaptures)
 $screenshotRecords = @($manifest.screenshots)
-if ($screenshotRecords.Count -eq 0) {
-    throw 'The external manifest has no screenshot records.'
+if ($plannedCaptureRecords.Count -ne $expectedByName.Count -or
+    $screenshotRecords.Count -ne $expectedByName.Count) {
+    throw 'The successful manifest does not match the trusted capture-plan cardinality.'
+}
+$plannedByName = [Collections.Generic.Dictionary[string, object]]::new(
+    [StringComparer]::OrdinalIgnoreCase
+)
+foreach ($planned in $plannedCaptureRecords) {
+    if (-not ($planned -is [pscustomobject]) -or
+        -not ($planned.viewport -is [pscustomobject]) -or
+        $planned.filename -isnot [string] -or
+        $planned.route -isnot [string] -or
+        $planned.fixtureState -isnot [string] -or
+        $planned.viewport.width -isnot [long] -or
+        $planned.viewport.height -isnot [long]) {
+        throw 'The successful manifest contains a non-object plan or viewport.'
+    }
+    $plannedName = [string]$planned.filename
+    $plannedRoute = [string]$planned.route
+    $plannedFixtureState = [string]$planned.fixtureState
+    if ([IO.Path]::GetFileName($plannedName) -ne $plannedName -or
+        [IO.Path]::GetExtension($plannedName) -ine '.png' -or
+        [string]::IsNullOrWhiteSpace($plannedRoute) -or
+        -not $plannedRoute.StartsWith('/') -or
+        $plannedRoute.StartsWith('//') -or
+        [string]::IsNullOrWhiteSpace($plannedFixtureState) -or
+        $planned.viewport.width -le 0 -or
+        $planned.viewport.height -le 0 -or
+        -not $expectedByName.ContainsKey($plannedName) -or
+        $plannedByName.ContainsKey($plannedName)) {
+        throw "Successful manifest has an invalid, unexpected, or duplicate plan: $plannedName"
+    }
+    $expected = $expectedByName[$plannedName]
+    if (-not ([string]$expected.filename).Equals(
+            $plannedName,
+            [StringComparison]::Ordinal
+        ) -or
+        -not ([string]$expected.route).Equals($plannedRoute, [StringComparison]::Ordinal) -or
+        -not ([string]$expected.fixtureState).Equals(
+            $plannedFixtureState,
+            [StringComparison]::Ordinal
+        ) -or
+        $expected.viewport.width -ne $planned.viewport.width -or
+        $expected.viewport.height -ne $planned.viewport.height) {
+        throw "Manifest plan does not match the exact-head trusted capture: $plannedName"
+    }
+    $plannedByName.Add($plannedName, $planned)
 }
 $seenScreenshotNames = [Collections.Generic.HashSet[string]]::new(
     [StringComparer]::OrdinalIgnoreCase
 )
 foreach ($record in $screenshotRecords) {
-    if ($null -eq $record) {
-        throw 'The successful manifest contains a null screenshot record.'
+    if (-not ($record -is [pscustomobject]) -or
+        -not ($record.viewport -is [pscustomobject]) -or
+        $record.filename -isnot [string] -or
+        $record.route -isnot [string] -or
+        $record.fixtureState -isnot [string] -or
+        $record.status -isnot [string] -or
+        $record.sha256 -isnot [string] -or
+        $record.viewport.width -isnot [long] -or
+        $record.viewport.height -isnot [long] -or
+        $record.bytes -isnot [long] -or
+        $record.width -isnot [long] -or
+        $record.height -isnot [long]) {
+        throw 'The successful manifest contains a non-object result or viewport.'
     }
     $recordName = [string]$record.filename
+    $recordRoute = [string]$record.route
+    $recordFixtureState = [string]$record.fixtureState
     if ([IO.Path]::GetFileName($recordName) -ne $recordName -or
         [IO.Path]::GetExtension($recordName) -ine '.png' -or
         -not $seenScreenshotNames.Add($recordName) -or
-        [string]$record.status -ne 'captured' -or
+        -not $plannedByName.ContainsKey($recordName) -or
+        [string]$record.status -cne 'captured' -or
         [string]$record.sha256 -notmatch '^[0-9a-fA-F]{64}$' -or
-        [int64]$record.bytes -le 0 -or
-        [int]$record.width -le 0 -or
-        [int]$record.height -le 0) {
-        throw "Successful manifest has an invalid, duplicate, or incomplete record: $recordName"
+        $record.bytes -le 0 -or
+        $record.width -le 0 -or
+        $record.height -le 0 -or
+        [string]::IsNullOrWhiteSpace($recordRoute) -or
+        [string]::IsNullOrWhiteSpace($recordFixtureState) -or
+        $record.viewport.width -le 0 -or
+        $record.viewport.height -le 0) {
+        throw "Successful manifest has an invalid, unexpected, or incomplete result: $recordName"
+    }
+    $planned = $plannedByName[$recordName]
+    if (-not ([string]$planned.filename).Equals($recordName, [StringComparison]::Ordinal) -or
+        -not ([string]$planned.route).Equals($recordRoute, [StringComparison]::Ordinal) -or
+        -not ([string]$planned.fixtureState).Equals(
+            $recordFixtureState,
+            [StringComparison]::Ordinal
+        ) -or
+        $planned.viewport.width -ne $record.viewport.width -or
+        $planned.viewport.height -ne $record.viewport.height) {
+        throw "Screenshot result identity does not match its planned capture: $recordName"
     }
 }
+
 Add-Type -AssemblyName System.Drawing
-$approvedNames = (Read-Host 'Comma-separated approved screenshot filenames').Split(
-    ',',
-    [System.StringSplitOptions]::RemoveEmptyEntries
-) | ForEach-Object Trim
-if ($approvedNames.Count -eq 0) {
-    throw 'At least one representative screenshot must be preserved before worktree cleanup.'
-}
-New-Item -ItemType Directory -Path $reviewDir -Force | Out-Null
-foreach ($name in $approvedNames) {
-    if ([IO.Path]::GetFileName($name) -ne $name -or
-        [IO.Path]::GetExtension($name) -ine '.png') {
-        throw "Screenshot must be a PNG filename without a path: $name"
-    }
-    $records = @($screenshotRecords | Where-Object {
-        ([string]$_.filename).Equals($name, [StringComparison]::Ordinal)
-    })
-    if ($records.Count -ne 1) {
-        throw "Expected exactly one manifest record for approved screenshot: $name"
-    }
-    $record = $records[0]
-    if ([string]$record.status -ne 'captured' -or
-        [string]$record.sha256 -notmatch '^[0-9a-fA-F]{64}$' -or
-        [int64]$record.bytes -le 0 -or
-        [int]$record.width -le 0 -or
-        [int]$record.height -le 0) {
-        throw "Screenshot manifest metadata is incomplete or invalid: $name"
-    }
-    $source = Join-Path $shotDir $name
-    $destination = Join-Path $reviewDir $name
+$validatedArtifactsByName = [Collections.Generic.Dictionary[string, object]]::new(
+    [StringComparer]::OrdinalIgnoreCase
+)
+foreach ($record in $screenshotRecords) {
+    $canonicalName = [string]$record.filename
+    $source = Join-Path $shotDir $canonicalName
     if (-not (Test-Path -LiteralPath $source -PathType Leaf)) {
-        throw "Approved screenshot does not exist: $source"
-    }
-    if (Test-Path -LiteralPath $destination) {
-        throw "Refusing to overwrite existing evidence: $destination"
+        throw "Successful manifest screenshot does not exist: $source"
     }
     $sourceItem = Get-Item -LiteralPath $source
+    if (($sourceItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+        throw "Successful manifest screenshot cannot be a reparse point: $source"
+    }
     $sourceHash = (Get-FileHash -LiteralPath $source -Algorithm SHA256).Hash
     $image = [Drawing.Image]::FromFile($source)
     try {
@@ -1217,33 +1571,239 @@ foreach ($name in $approvedNames) {
     finally {
         $image.Dispose()
     }
-    if ($sourceItem.Length -ne [int64]$record.bytes -or
+    if ($sourceItem.Length -ne $record.bytes -or
         -not $sourceHash.Equals([string]$record.sha256, [StringComparison]::OrdinalIgnoreCase) -or
-        $sourceWidth -ne [int]$record.width -or
-        $sourceHeight -ne [int]$record.height) {
-        throw "Approved screenshot does not match its capture-manifest record: $name"
+        $sourceWidth -ne $record.width -or
+        $sourceHeight -ne $record.height) {
+        throw "Screenshot does not match its capture-manifest result: $canonicalName"
     }
-    Copy-Item -LiteralPath $source -Destination $destination
-    $destinationItem = Get-Item -LiteralPath $destination
-    $destinationHash = (Get-FileHash -LiteralPath $destination -Algorithm SHA256).Hash
-    if ($destinationItem.Length -ne [int64]$record.bytes -or
-        -not $destinationHash.Equals(
-            [string]$record.sha256,
-            [StringComparison]::OrdinalIgnoreCase
-        )) {
-        throw "Copied evidence does not match its capture-manifest record: $name"
-    }
+    $validatedArtifactsByName.Add($canonicalName, [pscustomobject]@{
+        Source = $source
+        Leaf = $canonicalName
+        Hash = ([string]$record.sha256).ToUpperInvariant()
+        Bytes = $record.bytes
+        Width = $record.width
+        Height = $record.height
+        Route = [string]$record.route
+        FixtureState = [string]$record.fixtureState
+        ViewportWidth = $record.viewport.width
+        ViewportHeight = $record.viewport.height
+        IsImage = $true
+        IsManifest = $false
+        IsPublicationIndex = $false
+    })
 }
-$manifestDestination = Join-Path $reviewDir (
-    'review-manifest-' + ([string]$manifest.headSha).Substring(0, 7) + '.json'
+
+$approvedNames = @((Read-Host 'Comma-separated approved screenshot filenames').Split(
+    ',',
+    [System.StringSplitOptions]::RemoveEmptyEntries
+) | ForEach-Object Trim | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+if ($approvedNames.Count -eq 0) {
+    throw 'At least one representative screenshot must be preserved before worktree cleanup.'
+}
+$approvedNameSet = [Collections.Generic.HashSet[string]]::new(
+    [StringComparer]::OrdinalIgnoreCase
 )
-if (Test-Path -LiteralPath $manifestDestination) {
-    throw "Refusing to overwrite existing evidence: $manifestDestination"
+$approvedEntries = [Collections.Generic.List[object]]::new()
+foreach ($name in $approvedNames) {
+    if ([IO.Path]::GetFileName($name) -ne $name -or
+        [IO.Path]::GetExtension($name) -ine '.png' -or
+        -not $approvedNameSet.Add($name)) {
+        throw "Screenshot approval must name a unique PNG without a path: $name"
+    }
+    if (-not $validatedArtifactsByName.ContainsKey($name)) {
+        throw "Approved screenshot is not in the validated capture set: $name"
+    }
+    [void]$approvedEntries.Add($validatedArtifactsByName[$name])
 }
-Copy-Item -LiteralPath $manifestPath -Destination $manifestDestination
-if ((Get-FileHash -LiteralPath $manifestPath).Hash -ne
-    (Get-FileHash -LiteralPath $manifestDestination).Hash) {
-    throw 'Evidence manifest hash mismatch.'
+
+$reviewDirFull = [IO.Path]::GetFullPath($reviewDir).TrimEnd('\')
+$reviewDirExisted = Test-Path -LiteralPath $reviewDirFull -PathType Container
+if (-not $reviewDirExisted) {
+    throw "The tracked review directory must exist before publication: $reviewDirFull"
+}
+$reviewDirItem = Get-Item -LiteralPath $reviewDirFull -Force
+if (($reviewDirItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+    throw "The review directory cannot be a reparse point: $reviewDirFull"
+}
+$publicationLeaf = 'capture-' + ([string]$manifest.headSha).ToLowerInvariant()
+$publicationDir = Join-Path $reviewDirFull $publicationLeaf
+if (-not ([IO.Path]::GetDirectoryName($publicationDir)).Equals(
+        $reviewDirFull,
+        [StringComparison]::OrdinalIgnoreCase
+    ) -or $publicationLeaf -notmatch '^capture-(?:[0-9a-f]{40}|[0-9a-f]{64})$' -or
+    (Test-Path -LiteralPath $publicationDir)) {
+    throw "Refusing to overwrite an existing capture publication: $publicationDir"
+}
+$manifestLeaf = 'capture-run-manifest-' +
+    ([string]$manifest.headSha).Substring(0, 7) + '.json'
+$manifestHash = [Convert]::ToHexString(
+    [Security.Cryptography.SHA256]::HashData($manifestBytes)
+)
+$publicationIndexObject = [ordered]@{
+    schemaVersion = 1
+    headSha = [string]$manifest.headSha
+    capturePlan = [ordered]@{
+        path = $trustedPlanRelative
+        sha256 = $trustedPlanHash
+        schemaVersion = 1
+    }
+    captureRunManifest = [ordered]@{
+        filename = $manifestLeaf
+        sha256 = $manifestHash
+        bytes = $manifestBytes.LongLength
+    }
+    approvedScreenshots = @($approvedEntries | ForEach-Object {
+        [ordered]@{
+            filename = $_.Leaf
+            sha256 = $_.Hash
+            bytes = $_.Bytes
+            width = $_.Width
+            height = $_.Height
+            route = $_.Route
+            fixtureState = $_.FixtureState
+            viewport = [ordered]@{
+                width = $_.ViewportWidth
+                height = $_.ViewportHeight
+            }
+        }
+    })
+}
+$publicationIndexJson = $publicationIndexObject | ConvertTo-Json -Depth 8
+$publicationIndexBytes = [Text.UTF8Encoding]::new($false).GetBytes(
+    $publicationIndexJson + "`n"
+)
+$publicationIndexHash = [Convert]::ToHexString(
+    [Security.Cryptography.SHA256]::HashData($publicationIndexBytes)
+)
+$publishEntries = [Collections.Generic.List[object]]::new()
+foreach ($entry in $approvedEntries) {
+    [void]$publishEntries.Add($entry)
+}
+[void]$publishEntries.Add([pscustomobject]@{
+    Source = $manifestPath
+    Leaf = $manifestLeaf
+    Hash = $manifestHash
+    Bytes = [int64]$manifestBytes.LongLength
+    Width = 0
+    Height = 0
+    IsImage = $false
+    IsManifest = $true
+    IsPublicationIndex = $false
+})
+[void]$publishEntries.Add([pscustomobject]@{
+    Source = $null
+    Leaf = 'publication-index.json'
+    Hash = $publicationIndexHash
+    Bytes = $publicationIndexBytes.LongLength
+    Width = 0
+    Height = 0
+    IsImage = $false
+    IsManifest = $false
+    IsPublicationIndex = $true
+})
+
+# All manifest, source, and destination checks above finish before this first repository write.
+$stageLeaf = '.kf-ui-publish-' + [guid]::NewGuid().ToString('N')
+$publishStage = Join-Path $reviewDirFull $stageLeaf
+if (-not ([IO.Path]::GetDirectoryName($publishStage)).Equals(
+        $reviewDirFull,
+        [StringComparison]::OrdinalIgnoreCase
+    ) -or $stageLeaf -notmatch '^\.kf-ui-publish-[0-9a-f]{32}$' -or
+    (Test-Path -LiteralPath $publishStage)) {
+    throw 'The evidence staging directory failed validation.'
+}
+$publicationSucceeded = $false
+$stageCreated = $false
+$publicationError = $null
+$rollbackError = $null
+try {
+    $createdStage = New-Item -ItemType Directory -Path $publishStage
+    $stageCreated = $true
+    $createdStageFull = [IO.Path]::GetFullPath($createdStage.FullName).TrimEnd('\')
+    if (-not $createdStageFull.Equals(
+            $publishStage,
+            [StringComparison]::OrdinalIgnoreCase
+        ) -or
+        -not ([IO.Path]::GetDirectoryName($createdStageFull)).Equals(
+            $reviewDirFull,
+            [StringComparison]::OrdinalIgnoreCase
+        ) -or
+        ($createdStage.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+        throw 'The created evidence staging directory failed its identity check.'
+    }
+    foreach ($entry in $publishEntries) {
+        $stagedPath = Join-Path $publishStage $entry.Leaf
+        if ($entry.IsManifest) {
+            [IO.File]::WriteAllBytes($stagedPath, $manifestBytes)
+        }
+        elseif ($entry.IsPublicationIndex) {
+            [IO.File]::WriteAllBytes($stagedPath, $publicationIndexBytes)
+        }
+        else {
+            Copy-Item -LiteralPath $entry.Source -Destination $stagedPath
+        }
+        $stagedItem = Get-Item -LiteralPath $stagedPath
+        $stagedHash = (Get-FileHash -LiteralPath $stagedPath -Algorithm SHA256).Hash
+        if ($stagedItem.Length -ne $entry.Bytes -or
+            -not $stagedHash.Equals($entry.Hash, [StringComparison]::OrdinalIgnoreCase)) {
+            throw "Staged evidence failed byte/hash verification: $($entry.Leaf)"
+        }
+        if ($entry.IsImage) {
+            $stagedImage = [Drawing.Image]::FromFile($stagedPath)
+            try {
+                if ($stagedImage.Width -ne $entry.Width -or
+                    $stagedImage.Height -ne $entry.Height) {
+                    throw "Staged evidence failed dimension verification: $($entry.Leaf)"
+                }
+            }
+            finally {
+                $stagedImage.Dispose()
+            }
+        }
+    }
+
+    # The staging and destination directories share a parent, so this publishes the set together.
+    [IO.Directory]::Move($publishStage, $publicationDir)
+    $publicationSucceeded = $true
+}
+catch {
+    $publicationError = $_
+}
+finally {
+    if (-not $publicationSucceeded -and $stageCreated -and
+        (Test-Path -LiteralPath $publishStage -PathType Container)) {
+        try {
+            $stageItem = Get-Item -LiteralPath $publishStage -Force
+            if (($stageItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+                throw "Refusing to traverse a reparse-point staging path: $publishStage"
+            }
+            foreach ($entry in $publishEntries) {
+                $stagedPath = Join-Path $publishStage $entry.Leaf
+                if (Test-Path -LiteralPath $stagedPath -PathType Leaf) {
+                    Remove-Item -LiteralPath $stagedPath -Force
+                }
+            }
+            if (@(Get-ChildItem -LiteralPath $publishStage -Force).Count -eq 0) {
+                Remove-Item -LiteralPath $publishStage -Force
+            }
+            else {
+                throw "Staging cleanup found unexpected content: $publishStage"
+            }
+        }
+        catch {
+            $rollbackError = $_
+        }
+    }
+}
+if ($null -ne $rollbackError) {
+    throw "Evidence publication failed and staging cleanup failed; preserve $publishStage. $rollbackError"
+}
+if ($null -ne $publicationError) {
+    throw $publicationError
+}
+if (-not $publicationSucceeded) {
+    throw 'Evidence publication did not complete.'
 }
 
 Set-Location $repo
@@ -1253,12 +1813,21 @@ if (-not $resolvedWork.StartsWith($tempRoot, [StringComparison]::OrdinalIgnoreCa
     $leaf -notmatch '^kf-ui-run-[0-9a-f]{32}$') {
     throw 'The worktree cleanup target failed validation.'
 }
-$porcelain = git -C $repo worktree list --porcelain
-if ($porcelain -notcontains ('worktree ' + $resolvedWork.Replace('\', '/')) -and
-    $porcelain -notcontains ('worktree ' + $resolvedWork)) {
-    throw 'The exact worktree is not registered; refusing cleanup.'
+$registeredBefore = @(Get-RegisteredWorktreePaths -Repository $repo)
+$exactBefore = @($registeredBefore | Where-Object {
+    $_.Equals($resolvedWork, [StringComparison]::OrdinalIgnoreCase)
+})
+if ($exactBefore.Count -ne 1) {
+    throw 'The exact worktree must be registered once immediately before cleanup.'
 }
-git -C $repo worktree remove $resolvedWork
+[void](Invoke-GitChecked -Arguments @('-C', $repo, 'worktree', 'remove', $resolvedWork))
+$registeredAfter = @(Get-RegisteredWorktreePaths -Repository $repo)
+$exactAfter = @($registeredAfter | Where-Object {
+    $_.Equals($resolvedWork, [StringComparison]::OrdinalIgnoreCase)
+})
+if ($exactAfter.Count -ne 0 -or (Test-Path -LiteralPath $resolvedWork)) {
+    throw 'The worktree remains registered or present after removal.'
+}
 ~~~
 
 The serve script may recursively remove only its own resolved GUID-named data directory after
