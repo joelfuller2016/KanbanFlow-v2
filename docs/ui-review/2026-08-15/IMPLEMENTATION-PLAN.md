@@ -81,12 +81,14 @@ with a persistent reopen control, to preserve at least 640 pixels and two full l
 At 1600 and wider the outline remains open only when the measured board width still meets that
 contract. Mobile modal behavior must provide all four.
 
-### 2.4 Projects grid
+### 2.4 Home and portfolio handoff
 
-First audit the current layout against completed #281 AC6. Only if a measured gap remains, use a
-max-width content frame and a capped auto-fill grid that naturally produces three, two, and one
-columns. A single project card should stay near 360–400 pixels instead of stretching across the
-page. This is a conditional grid-only follow-up, not a second project-summary implementation.
+Completed #281 remains the source of Home summary facts. The later-created portfolio epic #420 now
+owns cross-project information architecture: #421 owns derived state/activity, #422 owns Home
+lenses/cards/Empty disclosure/grid behavior, and #423 owns Home discovery and views. This plan
+records current Home evidence and supplies shared visual/accessibility primitives; it does not
+authorize a separate #322 Projects-grid implementation. #424 separately owns Ideas totals/paging,
+and #425 remains decision-gated metadata.
 
 ### 2.5 Visual verification
 
@@ -109,7 +111,8 @@ Preserve:
 - Identity-anchored move semantics and persisted SortOrder.
 - Current task-filter semantics, URL round-trip behavior, task deep links, and text reset token.
 - Existing data-testid values across Home, Project, Ideas, Settings, dialogs, and detail.
-- Shared board behavior used by /ideas unless a change is explicitly scoped to the task board.
+- Shared board behavior used by /ideas unless a change is explicitly scoped to the task board;
+  coordinate shared `KanbanBoard`/`KanbanColumn` changes with #424's paging work.
 
 ## 3. Existing issue ownership
 
@@ -121,7 +124,12 @@ dated refresh.
 | Visual language, board density, outline hierarchy, target size, axe | #322 | Parent epic |
 | AI/Requirements compaction | #58, completed | Preserve compact default; improve presentation only |
 | Board filters | #112 / PR #362, completed | Preserve behavior; compact presentation |
-| Project-card summaries | #281 / PR #377, completed | Preserve data; audit the remaining grid-layout gap |
+| Project-card summaries | #281 / PR #377, completed | Preserve its progress, next-task, recency, claim, and count facts |
+| Derived portfolio state and activity | #421, open under peer epic #420 | Consume its state/activity contract; do not derive a competing Home model under #322 |
+| Home lenses, cards, Empty disclosure, and grid | #422, open under peer epic #420 | #422 owns implementation; #322 contributes visual primitives, evidence, and accessibility coordination |
+| Home discovery and views | #423, open under peer epic #420 | #423 owns search/filter/sort/group and compact/card view state |
+| Ideas totals and paging | #424, open under peer epic #420 | #424 owns retrieval; coordinate any shared `KanbanBoard`/`KanbanColumn` change and preserve task-board contracts |
+| Portfolio focus/lifecycle/tags | #425, decision-gated under peer epic #420 | No implementation until its capability-specific gate passes; #322 adds no duplicate metadata |
 | Board dead-space and column geometry | PR #335, completed | Preserve content-height card stacks |
 | Empty-column interaction and tests | #119 and #342, open | Coordinate before lane changes |
 | Task detail dependencies and related requirements | #109, open | Coordinate; activity timeline already shipped in #328 |
@@ -140,8 +148,9 @@ dated refresh.
 | UI harness reliability | #314, #351, #352, #353, open | Prerequisites for trustworthy visual automation |
 | Documentation count drift | #345, open | Do not pin mutable counts without its chosen guard/convention |
 
-Potential new child issues should be created only after the Phase 0 design review confirms the
-direction. The legitimate gaps are:
+The later-created #420–#425 portfolio issues are peer ownership, not #322 children. Do not create
+another #322 Home/grid, Home-discovery, Ideas-paging, or portfolio-metadata implementation. The
+remaining legitimate #322 child gaps are:
 
 1. Desktop task-detail information architecture and explicit save feedback.
 2. Post-#112 filter presentation compaction with unchanged filter semantics.
@@ -155,10 +164,10 @@ direction. The legitimate gaps are:
 | 0 evidence and contract | #322, #279 ownership audit | Approve dated refresh and publish evidence |
 | 0A minimum harness trust | #314, #351, #352, #353 | Trustworthy summary/assets/artifacts before visual baselines |
 | 1 docs/tokens/shell | #322, #346, #370 | Primary pairing and source-reference location |
-| 2 Projects gap, conditional | completed #281; #200 remains separate | Prove a measured AC6 gap before code |
+| 2 Home evidence/handoff, coordination only | completed #281; #421/#422/#423; #200 remains separate | Link measurements to #422; no separate #322 Home code |
 | 3 outline | #322 and completed outline accessibility contracts | Preserve drag DOM and non-hover access |
 | 4 utilities/filters | completed #58/#112; #111/#113 | Compact header without semantic/filter change |
-| 5 board/cards | #110, #119, #342; #407 excluded | Empty-lane behavior and regression guard first |
+| 5 board/cards | #110, #119, #342, #424; #407 excluded | Empty-lane behavior first; shared board changes coordinate with Ideas paging |
 | 6 detail | #109, #116/#306, #167, completed #74/#328 | Desktop complementary vs narrow modal contract |
 | 7 performance/errors | #167 | Reproducible benchmark and privacy-safe telemetry |
 | 8 rollout/docs | #322, #345 | Generated/current counts rather than stale pinned totals |
@@ -168,7 +177,7 @@ direction. The legitimate gaps are:
 ### In scope
 
 - Application shell, landmarks, heading hierarchy, and stable navigation.
-- Projects page composition and responsive card grid.
+- Home evidence plus reusable visual/accessibility primitives consumed by #420/#422/#423.
 - Project outline hierarchy, selection, contextual actions, and responsive drawer behavior.
 - Project header, Requirements/AI utility presentation, task count, and filters.
 - Board work-surface geometry, lane headers, task-card hierarchy, completion treatment, and a
@@ -190,6 +199,8 @@ direction. The legitimate gaps are:
 - A frontend build system, Tailwind, Storybook, or a new component framework.
 - Dark-mode selection. Tokens should be theme-ready, but #346 owns hard-coded light surfaces.
 - Repair of pre-existing backend persistence concerns that are not required by the UI change.
+- Portfolio state/activity (#421), Home lenses/cards/grid (#422), Home discovery/views (#423),
+  Ideas totals/paging (#424), and decision-gated portfolio metadata (#425).
 
 ## 5. Delivery plan
 
@@ -206,12 +217,13 @@ are not deferred to the last phase.
    evidence.
 3. Complete Phase 0A below before recording any geometry, accessibility, performance, or visual
    baseline.
-4. Record the approved board-height, split-pane threshold, Projects grid, palette, spacing, radius,
-   and typography decisions.
+4. Record the approved board-height, split-pane threshold, Home ownership handoff, palette,
+   spacing, radius, and typography decisions.
 5. Inventory every data-testid, SortableJS selector, JS interop entry point, and shared /ideas board
    selector touched by the proposed components.
-6. Resolve issue ownership for #109/#110/#111/#113/#116 because #279 also references them, and
-   coordinate the task-detail save/error/identity work with #167.
+6. Resolve issue ownership for #109/#110/#111/#113/#116 because #279 also references them,
+   coordinate the task-detail save/error/identity work with #167, and record #420/#421/#422/#423/
+   #424/#425 as peer portfolio ownership rather than #322 children.
 7. Record that completed #74 remains the modal contract below 1280 pixels, while the proposed
    desktop layout intentionally adopts non-modal complementary-region semantics.
 8. Resolve #370's primary-color policy or record an approved interim pairing before tokens freeze.
@@ -290,29 +302,27 @@ Likely files: docs/design/ui/*, app.css, MainLayout.razor, ProjectViewLayout.raz
 - No raw user content is added to telemetry/logs or unsafe unencoded attributes. Razor-encoded
   names remain allowed where required for accessible names and title text.
 
-### Conditional Phase 2 — Projects grid gap
+### Phase 2 — Home evidence and portfolio handoff (coordination only)
 
-Likely files: Home.razor and its route-scoped card styles.
+No Home runtime files are owned by this #322 phase.
 
-1. Re-run #281 AC6 against one, three, and twenty-project fixtures at every review viewport.
-2. If #281 passes, close this phase with evidence and make no Projects-page code change.
-3. Only if a measured layout gap remains, put Projects and New Project in one max-width frame and
-   use the approved capped auto-fill grid. Add an isolated one-project test that proves the new
-   360–400-pixel behavior and explicitly supersedes #281's current auto-fit decision.
-4. Preserve the completed #281 card composition and ProjectSummaryService data exactly; do not
-   rebuild progress, next task, claim/activity state, counts, or Open.
-5. Preserve loading, empty, sparse/no-metadata, menu, and delete-confirmation behavior.
+1. Re-run completed #281's one-, three-, and twenty-project checks at the review viewports and link
+   the measured evidence to #422.
+2. Preserve #281's progress, next-task, recency, claim, and count contracts while #421 establishes
+   the one derived state/activity model consumed by Home.
+3. Let #422 own Home lenses, card/list presentation, Empty disclosure, post-create behavior, and any
+   grid change; let #423 own Home search/filter/sort/group and view persistence.
+4. Supply #322 tokens, landmarks, target-size rules, selector compatibility, and the shared Axe
+   foundation without implementing a competing Home layout.
+5. Keep #425 metadata decision-gated and separate from this evidence handoff.
 
 **Acceptance:**
 
-- One, three, and twenty-project fixtures fit without oversized cards or document overflow.
-- If a follow-up is approved, the layout produces three/two/one columns at the agreed review widths;
-  otherwise the audit documents why current #281 behavior needs no change.
-- Progress names/values, next-task deep links, claim state, and counts remain semantically identical
-  to the resolved summary.
-- Create, edit, delete, and menu keyboard behavior do not regress. Confirmation-modal focus
-  trapping, Escape, and exact restoration remain owned by open #200 and are not claimed complete by
-  this conditional layout phase.
+- One-, three-, and twenty-project evidence is linked to #422 with no separate #322 Home code.
+- #421/#422/#423 are the sole owners of their state, presentation, and discovery contracts.
+- Existing Home selectors and completed #281 summary facts remain compatibility inputs.
+- Create, edit, delete, and menu regression evidence remains available. Confirmation-modal focus
+  trapping, Escape, and exact restoration remain owned by open #200.
 
 ### Phase 3 — Project outline
 
@@ -386,7 +396,8 @@ explicitly incorporated before changing the lane structure.
 8. Make completion explicit and undoable without using container opacity.
 9. Set SortableJS animation to zero when prefers-reduced-motion is active.
 10. Keep /ideas terminal, collapsed, inert, and empty-state behavior isolated from task-board
-    styles.
+    styles. Coordinate shared component changes with #424, which owns Ideas totals/paging and may
+    add expansion callbacks without changing task-board behavior.
 11. Add a DOM-contract E2E assertion after the semantic outline refactor: direct task roots retain
     data-task-id, expanded non-task siblings may coexist, and the draggable/next-identity selectors
     still skip those siblings.
@@ -1996,7 +2007,7 @@ Recommended PR sequence:
 5. Semantic outline.
 6. Board lanes/cards and Move to.
 7. Responsive task detail and save feedback.
-8. Projects-grid follow-up only if the Phase 0 #281 audit proves a measured remaining gap.
+8. Home evidence/visual-primitives handoff to #420/#422/#423; no separate #322 Projects-grid PR.
 9. Performance/query guard, representative after-screenshots, documentation, and compatibility CSS
    cleanup.
 

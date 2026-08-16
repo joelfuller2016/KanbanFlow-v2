@@ -19,6 +19,17 @@ The screenshots document the current UI and proposed direction. They are not geo
 accessibility, performance, or pixel-diff baselines. Those baselines may be recorded only after the
 minimum trustworthy UI harness described as Phase 0A in the implementation plan is merged.
 
+**Current portfolio ownership (2026-08-16):** [#420](https://github.com/joelfuller2016/KanbanFlow-v2/issues/420)
+is the peer portfolio command-center epic. [#421](https://github.com/joelfuller2016/KanbanFlow-v2/issues/421)
+owns derived state/activity; [#422](https://github.com/joelfuller2016/KanbanFlow-v2/issues/422)
+owns Home lenses, cards, Empty disclosure, and grid behavior;
+[#423](https://github.com/joelfuller2016/KanbanFlow-v2/issues/423) owns Home discovery and views;
+[#424](https://github.com/joelfuller2016/KanbanFlow-v2/issues/424) owns Ideas totals/paging while
+coordinating changes to the shared board components; and
+[#425](https://github.com/joelfuller2016/KanbanFlow-v2/issues/425) remains decision-gated portfolio
+metadata. #322 owns the shared visual primitives, shell, task-board presentation, and accessibility
+foundation; it must not duplicate those portfolio behaviors.
+
 ## Original review evidence
 
 | View | File |
@@ -86,9 +97,9 @@ application code, these screenshots show the current UI; the proposed compositio
 6. **Completed-item fading can reduce contrast.** Completion should be expressed
    with a checkmark, quiet surface, and title treatment instead of lowering the
    opacity of every child control and label.
-7. **The Projects page needs revalidation.** The review capture appears to leave excessive empty
-   space, but completed issue #281 may already own the relevant behavior. Treat a grid change as
-   conditional until the fresh Phase 0 audit proves a remaining gap.
+7. **The Projects page needs portfolio-level treatment.** The review capture appears to leave
+   excessive empty space, but completed issue #281 already supplies the summary facts. Feed current
+   layout evidence to #422; do not create a separate #322 grid implementation.
 
 ## Recommended direction
 
@@ -146,11 +157,11 @@ application code, these screenshots show the current UI; the proposed compositio
 
 ### Projects page
 
-- Audit the current layout against completed issue #281 before changing it.
-- Only if the Phase 0 audit proves a remaining gap, keep the title and New Project action inside one
-  max-width frame and adopt the approved capped 3/2/1-column grid with a clearer primary Open
-  action.
-- Preserve the useful progress, next-task, and project-count information.
+- Preserve completed #281's progress, next-task, recency, claim, and count facts.
+- Record current one/three/twenty-project evidence for #422, which owns Home lenses, card/list
+  presentation, Empty disclosure, and any grid change.
+- Let #423 own Home search/filter/sort/group and compact/card view state. #322 supplies reusable
+  tokens, landmarks, target-size rules, and the shared accessibility harness only.
 
 ## Visual system
 
@@ -166,7 +177,7 @@ application code, these screenshots show the current UI; the proposed compositio
 
 ## Delivery sequence
 
-The redesign ships as the nine reviewable PRs defined in the detailed plan:
+The redesign follows the reviewable sequence defined in the detailed plan:
 
 1. Publish this design evidence and the compatibility/issue-ownership inventory.
 2. Make the UI harness trustworthy, deterministic, and Axe-gated.
@@ -175,7 +186,8 @@ The redesign ships as the nine reviewable PRs defined in the detailed plan:
 5. Introduce the semantic outline while preserving drag identities.
 6. Improve board lanes/cards and add the non-drag `Move to…` path.
 7. Add responsive task detail and explicit save feedback.
-8. Change the Projects grid only if the Phase 0 audit proves a remaining gap.
+8. Hand Home evidence and shared visual primitives to #420/#422/#423; do not open a separate #322
+   Projects-grid PR.
 9. Add performance/query guards, representative after-screenshots, documentation, and
    compatibility-CSS cleanup.
 
@@ -187,6 +199,8 @@ that changes each surface; regression coverage is not deferred to the end.
 - Keep the existing workflow states and information architecture.
 - Do not add new domain fields solely to make the mock look richer.
 - Preserve current REST, MCP, and service behavior while changing presentation.
+- Leave derived portfolio state to #421, Home presentation/retrieval to #422/#423, Ideas paging to
+  #424, and decision-gated portfolio metadata to #425.
 - Treat this mock as a visual target, not pixel-perfect generated production code.
 
 ## Detailed plan

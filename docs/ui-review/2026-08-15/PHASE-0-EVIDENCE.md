@@ -22,8 +22,8 @@ seventh manifest artifact. The two capture and base revisions have no difference
 
 | File | Reviewed source SHA-256 | PR file SHA-256 | Bytes | Dimensions |
 | --- | --- | --- | ---: | ---: |
-| `IMPLEMENTATION-PLAN.md` | `F1F184FB186CCD6481B7862AD7BD7830818B10F7BBB4DC0C476FF4E2D9171EFA` | `09C0D913B229AA938A15E8C76508D9900DFAA4579918174B652E64F51A3083D5` | 104,139 | — |
-| `README.md` | `AFC7C88510B9D9AE124475021DADBECCC998684D955424F8F5ACC28F1E41416D` | `F4433F1EF52D675CB18866D14089B72A4DC550633673217B46A70183123FE287` | 9,720 | — |
+| `IMPLEMENTATION-PLAN.md` | `F1F184FB186CCD6481B7862AD7BD7830818B10F7BBB4DC0C476FF4E2D9171EFA` | `4B2BAE1B00793D156629ED924F5269B00BCBDA2323820013F61420D8F7B82DBA` | 105,707 | — |
+| `README.md` | `AFC7C88510B9D9AE124475021DADBECCC998684D955424F8F5ACC28F1E41416D` | `262DD2295592360223CEC92CF398C04BC02BEEFD2BF73442427E51284ADC34A6` | 10,877 | — |
 | `SELECTOR-INVENTORY.md` | Generated from the exact base | `35EC34E14E04F38197B01D785205BA44C509170E44DE7F24E85D588100B5FDF8` | 26,728 | — |
 | `current-projects.png` | `391A17905655C5D847604D42A072A20A864C766E135928F6F2AF629BD78F03DF` | `391A17905655C5D847604D42A072A20A864C766E135928F6F2AF629BD78F03DF` | 28,865 | 1440 × 1000 |
 | `current-board.png` | `407D178944DFED1FE14A75AEC2B981BAD45E705C7561AD7821B1C6AABE584BDD` | `407D178944DFED1FE14A75AEC2B981BAD45E705C7561AD7821B1C6AABE584BDD` | 93,057 | 1440 × 1000 |
@@ -77,7 +77,7 @@ Axe, performance, or accessibility baseline. Phase 0A remains required.
 | Board height | The board work surface fills the remaining viewport. Lane card stacks remain content-height, preserving PR #335's removal of the large one-card void. Empty and short lanes retain a tested drop target. |
 | Detail breakpoint | At `1280px` and wider, task detail is a modeless complementary pane sized `clamp(32.5rem, 42vw, 35rem)`. Below `1280px` it is a modal end drawer; below `576px` it is a full-width modal sheet. |
 | Outline with detail | From `1280px` through `1599px`, opening detail auto-collapses the outline and leaves a persistent reopen control. At `1600px` and wider it remains open only when the board still keeps at least `640px` and two complete `220px` lanes. |
-| Projects grid | Conditional. Re-run completed issue #281's one- and twenty-project layout checks after Phase 0A, and add the plan's separate three-project review state. Change the grid only if measured evidence proves a remaining gap. |
+| Home portfolio | #420 is the peer portfolio epic. #421 owns derived state/activity, #422 owns Home lenses/cards/Empty disclosure/grid behavior, and #423 owns Home discovery/views. #322 records current evidence and supplies shared visual/accessibility primitives; it does not implement a competing Home grid. |
 | AI and Requirements | Proposed pending written approval linked in both #279 and #322: preserve completed issue #58's compact/collapsed default and present these as clear on-demand utilities rather than permanent vertical chrome. Approval intentionally supersedes original #322 step 10 and #279 AC3; #279 retains agent-presence semantics while #322 owns disclosure and layout. No later PR may treat this split as active before both links exist. |
 | Palette | Preserve current pixels through Phase 0A. Use issue #370's recommended Option A as the interim rule: stock Bootstrap primary with white passes AA at `4.5008:1`; do not restyle the app merely for margin. Phase 1 must add the reproducible guard or record a separately approved palette decision before tokens freeze. |
 | Spacing and radii | Use the `4, 8, 12, 16, 24, 32px` spacing scale, restrained neutral borders/shadows, and `8–12px` radii. |
@@ -97,6 +97,9 @@ Axe, performance, or accessibility baseline. Phase 0A remains required.
 | [#167](https://github.com/joelfuller2016/KanbanFlow-v2/issues/167) | Blazor detail state/identity, transient-action errors, and JS correctness | #322 owns the visible Saving/Saved/Error presentation and responsive layout; mechanics are coordinated with #167. |
 | [#328](https://github.com/joelfuller2016/KanbanFlow-v2/issues/328) | Completed task activity timeline | Reuse the shipped timeline; do not rebuild activity under #109 or #322. |
 | [#279](https://github.com/joelfuller2016/KanbanFlow-v2/issues/279) | Agent-presence language across surfaces; its live AC3 also proposes expanding AI by default | Remains a peer epic for agent semantics. The proposed compact disclosure/layout split is pending written approval in both #279 and #322 and is not active merely because this evidence PR exists. |
+| [#420](https://github.com/joelfuller2016/KanbanFlow-v2/issues/420), [#421](https://github.com/joelfuller2016/KanbanFlow-v2/issues/421), [#422](https://github.com/joelfuller2016/KanbanFlow-v2/issues/422), and [#423](https://github.com/joelfuller2016/KanbanFlow-v2/issues/423) | Portfolio epic, derived state/activity, Home lenses/cards/Empty/grid, and Home discovery/views | Peer ownership created after the original evidence draft. #322 contributes evidence, visual primitives, shell/landmark rules, and the shared accessibility foundation; it creates no competing Home implementation. |
+| [#424](https://github.com/joelfuller2016/KanbanFlow-v2/issues/424) | Truthful Ideas totals and paging beyond the current global window | Owns Ideas retrieval/paging. Any `KanbanBoard` or `KanbanColumn` extension must coordinate with #322's frozen task-board, SortableJS, selector, and `/ideas` compatibility contracts. |
+| [#425](https://github.com/joelfuller2016/KanbanFlow-v2/issues/425) | Optional persisted portfolio focus/pin/lifecycle/tags | Remains capability-by-capability decision-gated. #322 adds no duplicate metadata or lifecycle model. |
 | [#74](https://github.com/joelfuller2016/KanbanFlow-v2/issues/74) | Completed modal accessibility contract | Remains authoritative below `1280px`. Desktop intentionally uses non-modal `aside`/complementary semantics without scrim, inert board, focus trap, or `aria-modal`. |
 | [#119](https://github.com/joelfuller2016/KanbanFlow-v2/issues/119) and [#342](https://github.com/joelfuller2016/KanbanFlow-v2/issues/342) | Empty-lane affordance and remaining #342 browser-coverage gaps. Geometry, containment, and the `/ideas` add affordance are covered; placeholder-drag behavior, complete error collection, explicit empty-column drops on both boards, and complete parentage coverage remain. | Must be resolved or explicitly sequenced before Phase 5 changes empty-lane presentation or interaction. |
 | [#314](https://github.com/joelfuller2016/KanbanFlow-v2/issues/314), [#351](https://github.com/joelfuller2016/KanbanFlow-v2/issues/351), [#352](https://github.com/joelfuller2016/KanbanFlow-v2/issues/352), [#353](https://github.com/joelfuller2016/KanbanFlow-v2/issues/353) | UI harness truthfulness, process/port isolation, build isolation, and asset proof | Phase 0A closes or coordinates these before any visual baseline. |
@@ -106,8 +109,9 @@ The live #279 body still lists #109, #110, #111, #113, #114, and #116 as childre
 proposes the cross-epic split; it remains pending until written approval is linked in both #279 and
 #322 so neither issue silently retains contradictory acceptance criteria.
 
-No new child issues are created by the evidence PR. The parent and adjacent issues remain the
-canonical ownership ledger until Phase 0 review identifies a genuinely unowned implementation gap.
+No new #322 child issue is created by the evidence PR. The later #420–#425 issues are peer portfolio
+ownership, not children of this visual-language plan. Their linked boundaries are authoritative for
+Home state/presentation/discovery, Ideas paging, and decision-gated metadata.
 
 ## Compatibility contract
 
@@ -128,7 +132,8 @@ The load-bearing DOM contracts are:
   `OnTaskReordered(taskId, newFeatureId, beforeTaskId)` retain their signatures and identity-
   anchored semantics.
 - `/ideas` shares `KanbanBoard`, `KanbanColumn`, SortableJS initialization, and dialog behavior;
-  route-specific task-board styling must not leak into it.
+  route-specific task-board styling must not leak into it. #424 owns Ideas totals/paging and must
+  coordinate any shared component extension with these frozen task-board contracts.
 
 ## Phase 0A gate before visual work
 
