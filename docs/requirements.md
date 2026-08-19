@@ -244,7 +244,7 @@ The agent can author, modify, and remove every entity. Mutations preserve audit 
 | R-2.3 | Mutations through the UI go through the **same shared service layer** as REST mutations, so audit events, claim semantics, and validation are produced once and applied everywhere. | ❌ Issue #88 — UI components write directly to EF, bypassing audit. **Highest-priority refactor.** |
 | R-2.4 | All entity mutations produce an `ActivityEvent` row. **Exception:** same-status board reorders (`MoveOnBoardAsync`) and same-feature outline reorders (`MoveInOutlineAsync`) are high-frequency positional changes explicitly excluded from the audit log by the `ITaskService` contract; cross-status/cross-feature moves remain audited. | ✅ for REST (9 emission sites in `ApiEndpoints.cs`); ❌ for UI (R-2.3). |
 | R-2.5 | Project boundary integrity: a feature cannot have a parent feature in another project; a task cannot be reassigned across projects; a requirement cannot link to a feature/task in another project. | ❌ Issues #82, #83 — both still open. |
-| R-2.6 | Cycle protection on feature trees, subtask trees, and dependency graphs. | ✅ `WouldCreateFeatureCycle`, `WouldCreateSubtaskCycle`, `WouldCreateTaskDependencyCycle` (`ApiEndpoints.cs:2014-2080`). |
+| R-2.6 | Cycle protection on feature trees, subtask trees, and dependency graphs. | ✅ `WouldCreateFeatureCycle`, `WouldCreateSubtaskCycle` (`ApiEndpoints.cs`), `TaskDependencyService.WouldCreateCycle` (`Services/TaskDependencyService.cs`). |
 | R-2.7 | Enum validation rejects undefined values: `Status: "99"` returns 422. UI int-to-enum casts also validate. | ❌ Issue #89 — 14 API call sites use `Enum.TryParse` (accepts numeric strings); UI does raw `(WorkStatus)int` casts. |
 
 **Acceptance criteria:**

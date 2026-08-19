@@ -30,7 +30,24 @@ public sealed class SqliteFileTestFactory : IDbContextFactory<AppDbContext>, IDi
     /// lock, otherwise the blocked writer fails with SQLITE_BUSY instead of serializing behind it.
     /// </param>
     public SqliteFileTestFactory(IInterceptor? interceptor = null, int commandTimeoutSeconds = 30)
+        : this(
+            interceptor is null ? Array.Empty<IInterceptor>() : new[] { interceptor },
+            commandTimeoutSeconds)
     {
+    }
+
+    /// <summary>Creates a factory with multiple cooperating interceptors.</summary>
+    /// <param name="interceptors">Interceptors attached after schema creation.</param>
+    /// <param name="commandTimeoutSeconds">
+    /// Maps to SQLite's busy timeout. Must exceed however long a test deliberately holds the write
+    /// lock, otherwise the blocked writer fails with SQLITE_BUSY instead of serializing behind it.
+    /// </param>
+    public SqliteFileTestFactory(
+        IReadOnlyCollection<IInterceptor> interceptors,
+        int commandTimeoutSeconds = 30)
+    {
+        ArgumentNullException.ThrowIfNull(interceptors);
+
         _path = Path.Combine(Path.GetTempPath(), $"kanbanflow-test-{Guid.NewGuid():N}.db");
 
         var builder = new DbContextOptionsBuilder<AppDbContext>()
@@ -43,13 +60,16 @@ public sealed class SqliteFileTestFactory : IDbContextFactory<AppDbContext>, IDi
             ctx.Database.EnsureCreated();
         }
 
-        if (interceptor is not null)
-            builder = builder.AddInterceptors(interceptor);
+        if (interceptors.Count > 0)
+            builder = builder.AddInterceptors(interceptors);
 
         _options = builder.Options;
     }
 
     public AppDbContext CreateDbContext() => new(_options);
+
+    /// <summary>Connection string for raw cross-connection locking probes.</summary>
+    public string ConnectionString => $"Data Source={_path};Pooling=False";
 
     public Task<AppDbContext> CreateDbContextAsync(CancellationToken cancellationToken = default)
         => Task.FromResult(new AppDbContext(_options));
