@@ -161,7 +161,21 @@ public sealed class DefinitionOfDoneGateTests
             .ToListAsync();
         Assert.Single(verifications);
         Assert.Contains("criteria were written wrong", verifications[0].Text);
-        Assert.Contains("criterion-1", verifications[0].Text);   // the unmet ones are named
+
+        // Seeded 3 criteria with the FIRST completed, so criterion-1 and criterion-2 are unmet.
+        // Assert the exact set, not a subset: `Contains` alone would pass against an
+        // implementation that listed every criterion including the completed one — a superset
+        // that would misreport what was actually overridden. Check presence AND absence.
+        Assert.Contains("criterion-1", verifications[0].Text);
+        Assert.Contains("criterion-2", verifications[0].Text);
+        Assert.DoesNotContain("criterion-0", verifications[0].Text);   // completed → not overridden
+        Assert.Contains("Unmet acceptance criteria (2)", verifications[0].Text);
+
+        // Same exactness on the exception's own list, which is what REST and MCP surface.
+        var overrideEx = await Assert.ThrowsAsync<DefinitionOfDoneNotMetException>(
+            () => svc.ChangeStatusAsync(
+                SeedTaskWithCriteria(f, criteria: 3, completed: 1), WorkStatus.Done, "tester"));
+        Assert.Equal(["criterion-1", "criterion-2"], overrideEx.Unmet);
 
         var overrides = await db.ActivityEvents
             .Where(e => e.EntityType == "Task" && e.EntityId == id && e.EventType == "TaskDoneOverridden")
