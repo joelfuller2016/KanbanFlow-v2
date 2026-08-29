@@ -1733,6 +1733,13 @@ public static class ApiEndpoints
                     unmet = ex.Unmet
                 });
             }
+            catch (Services.ValidationException ex)
+            {
+                // The gate also rejects an over-length overrideReason. Without this the PUT
+                // endpoint (which already catches ValidationException) would answer 422 while
+                // this one answered 500 for the identical input.
+                return Results.UnprocessableEntity(new { message = ex.Message });
+            }
         });
 
         // PATCH /api/tasks/{id}/feature — reassign to different feature.

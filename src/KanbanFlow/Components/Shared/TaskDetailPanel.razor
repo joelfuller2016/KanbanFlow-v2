@@ -98,9 +98,14 @@
                         </div>
                         <div class="input-group input-group-sm" role="group"
                              aria-label="Complete this task despite unmet acceptance criteria">
+                            @* maxlength mirrors the service-side bound, so the UI cannot submit a
+                               reason the gate will reject. The catch in ApplyStatusAsync still
+                               handles it, because REST and MCP share the same gate. *@
                             <input type="text" class="form-control" placeholder="Reason to complete anyway"
                                    aria-label="Reason to complete anyway"
                                    data-testid="task-detail-dod-reason"
+                                   maxlength="@MaxOverrideReasonLength"
+                                   @ref="_dodReasonInput"
                                    @bind="_dodOverrideReason" @bind:event="oninput" />
                             <button type="button" class="btn btn-outline-secondary"
                                     data-testid="task-detail-dod-override"
@@ -114,6 +119,11 @@
                                 Cancel
                             </button>
                         </div>
+                        @if (_dodValidationError is not null)
+                        {
+                            <div class="text-danger small mt-1" role="alert"
+                                 data-testid="task-detail-dod-validation">@_dodValidationError</div>
+                        }
                         <div class="form-text small mt-1">
                             The reason is recorded as a Verification comment and an audit event.
                         </div>
@@ -613,6 +623,22 @@
             catch (ObjectDisposedException) { }
             catch (InvalidOperationException) { }
         }
+
+        // Re-keying the <select> after a refusal replaces the focused node, so browser focus
+        // falls back to the document. Move it to the reason input instead — that is both the
+        // fix for the dropped focus and the correct destination, since the reason is now the
+        // only thing standing between the user and the action they asked for.
+        if (_dodFocusPending && IsOpen)
+        {
+            _dodFocusPending = false;
+            try
+            {
+                await _dodReasonInput.FocusAsync();
+            }
+            catch (JSDisconnectedException) { }
+            catch (ObjectDisposedException) { }
+            catch (InvalidOperationException) { }
+        }
     }
 
     // ── Panel close ──
@@ -758,11 +784,31 @@
     /// single unit — clearing only some of them is what allows a stale reason to be applied to a
     /// later task — so there is exactly one place that resets them.
     /// </summary>
+    /// <summary>
+    /// The id of the task the pending refusal was raised for. `ChangeStatusAsync` is awaited, so
+    /// the parent can switch <see cref="Task"/> WHILE the call is in flight; the refusal then
+    /// lands after <see cref="OnParametersSetAsync"/> has already cleared state for the new task.
+    /// Without this the override would then apply the previous task's justification to whatever
+    /// task is now on screen. Every override re-checks it.
+    /// </summary>
+    private int? _dodPendingTaskId;
+
+    /// <summary>Bounded identically to the service-side gate so the UI cannot submit a reason
+    /// the service will reject — the input also carries a matching <c>maxlength</c>.</summary>
+    private const int MaxOverrideReasonLength = 1000;
+
+    private string? _dodValidationError;
+
+    private ElementReference _dodReasonInput;
+    private bool _dodFocusPending;
+
     private void ClearDefinitionOfDoneState()
     {
         _dodBlocked = null;
         _dodOverrideReason = null;
         _dodPendingStatus = null;
+        _dodPendingTaskId = null;
+        _dodValidationError = null;
     }
 
     private void CancelDefinitionOfDoneOverride()
@@ -779,6 +825,10 @@
     private async Task ApplyStatusAsync(WorkStatus newStatus, string? overrideReason)
     {
         if (Task is null) return;
+
+        // Captured BEFORE the await: `Task` can be swapped by the parent while the service call
+        // is in flight, and the result must be attributed to the task it was actually about.
+        var requestedTaskId = Task.Id;
 
         try
         {
@@ -801,12 +851,28 @@
         }
         catch (DefinitionOfDoneNotMetException ex)
         {
+            // Drop a refusal that arrived after the panel moved on. Showing task A's criteria
+            // over task B is how the override ends up completing the wrong task.
+            if (Task is null || Task.Id != requestedTaskId)
+                return;
+
             // Surface it — an opaque failure here would read as a broken control. The pending
-            // status is captured alongside the refusal so the override re-applies the SAME
-            // transition the user asked for, on the task it was refused for.
+            // status and task id are captured alongside the refusal so the override re-applies
+            // the SAME transition the user asked for, on the task it was refused for.
             _dodBlocked = ex;
             _dodPendingStatus = newStatus;
+            _dodPendingTaskId = requestedTaskId;
+            _dodValidationError = null;
             statusSelectToken++;   // the select is still showing Done; resync it to the real status
+            _dodFocusPending = true;
+        }
+        catch (ValidationException ex)
+        {
+            // An over-length override reason. Unhandled, this would surface as an unhandled
+            // component-event exception and can tear down the Blazor Server circuit.
+            if (Task is null || Task.Id != requestedTaskId)
+                return;
+            _dodValidationError = ex.Message;
         }
         catch (TaskNotFoundException)
         {
@@ -818,6 +884,16 @@
     private async Task OverrideDefinitionOfDone()
     {
         if (_dodPendingStatus is null || string.IsNullOrWhiteSpace(_dodOverrideReason)) return;
+
+        // Refuse to apply a refusal raised for a different task. This is the last line of defence
+        // behind the OnParametersSetAsync clear: if the panel switched after the refusal was
+        // armed, the pending id no longer matches and the stale override is discarded.
+        if (Task is null || _dodPendingTaskId != Task.Id)
+        {
+            ClearDefinitionOfDoneState();
+            return;
+        }
+
         await ApplyStatusAsync(_dodPendingStatus.Value, _dodOverrideReason);
     }
 

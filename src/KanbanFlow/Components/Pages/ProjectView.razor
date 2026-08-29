@@ -53,6 +53,7 @@ else
                         OnToggleTask="ToggleTask"
                         OnToggleTaskDone="ToggleTaskDone"
                         OnToggleOutlineSubtask="ToggleOutlineSubtask"
+                        CheckboxResetToken="checkboxResetToken"
                         OnCloseOutline="CloseOutline" />
 
         <button type="button"
@@ -311,7 +312,13 @@ else
                          DisplayName="GetStatusDisplayName"
                          Guidance="Drag cards between columns. Click a card for details.">
                 <CardTemplate Context="task">
-                    <KanbanCard @key="task.Id" Task="task" OnToggleTaskDone="ToggleTaskDone" OnOpenTaskDetail="OpenTaskDetail" />
+                    @* The key carries checkboxResetToken as well as the id. The card's done
+                       checkbox renders `checked="@IsDone"` with @onchange, so when a refused
+                       toggle leaves Status unchanged Blazor's diff emits no DOM update and the
+                       user's own click stands — a checked box on a task that is not Done.
+                       Bumping the token in ToggleTaskDone's catch rebuilds the card against the
+                       real state. Same technique as statusSelectToken in TaskDetailPanel. *@
+                    <KanbanCard @key="(task.Id, checkboxResetToken)" Task="task" OnToggleTaskDone="ToggleTaskDone" OnOpenTaskDetail="OpenTaskDetail" />
                 </CardTemplate>
                 <ColumnHeaderActions Context="status">
                     <button class="btn btn-sm btn-outline-secondary py-0 px-2 ms-auto d-flex align-items-center gap-1" style="line-height: 1;"
@@ -442,6 +449,15 @@ else
     // A refused or failed MOVE (board drag or outline drag). Separate from loadError, which
     // replaces the whole page — see Ideas.razor for the same split and why it is load-bearing.
     private string? moveError;
+
+    /// <summary>
+    /// Bumped whenever a refused done-toggle leaves a checkbox showing a state the task does not
+    /// have. Both the board card and the outline row render <c>checked="@IsDone"</c> with
+    /// <c>@onchange</c>, so an unchanged <c>Status</c> yields no DOM update and the browser keeps
+    /// the user's click. Carrying this token in their keys rebuilds those elements from truth.
+    /// Same technique as <c>statusSelectToken</c> in <c>TaskDetailPanel</c>.
+    /// </summary>
+    private int checkboxResetToken;
     private DotNetObjectReference<ProjectView>? dotNetRef;
     private bool sortablesInitialized;
     private bool hasRenderedInteractively;
@@ -813,6 +829,12 @@ else
 
     private async Task ToggleTaskDone(TaskItem task)
     {
+        // Clear the previous refusal on entry, exactly as OnCardMoved (:1072) and
+        // OnTaskReordered (:1096) do. LoadProject clears only loadError, so without this a
+        // successful toggle on task B leaves task A's refusal banner on screen — a stale message
+        // about an unrelated task next to work that just succeeded.
+        moveError = null;
+
         try
         {
             // Routed through ITaskService so the audit event + status-change comment
@@ -828,9 +850,15 @@ else
         {
             // A refused toggle must NOT take the load channel: loadError replaces the entire page
             // with "Something went wrong" and a Back to Projects button, destroying the board over
-            // a routine, recoverable refusal. Same reasoning as OnCardMoved below. Reload so the
-            // checkbox snaps back to the persisted state.
+            // a routine, recoverable refusal. Same reasoning as OnCardMoved below.
             moveError = ex.Message;
+
+            // Reloading alone does NOT snap the checkbox back. It renders `checked="@IsDone"`
+            // with @onchange, so an unchanged Status produces no DOM update and the browser keeps
+            // the user's click — leaving a checked box, labelled "mark as done", on a task that is
+            // not Done. Bumping the token re-keys the card so the element is rebuilt from truth.
+            checkboxResetToken++;
+
             await LoadProject();
             await ReinitializeSortables();
         }

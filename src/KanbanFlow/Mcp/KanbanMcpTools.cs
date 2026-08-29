@@ -214,6 +214,12 @@ public static class KanbanMcpTools
                 + "Either complete them first, or call update_task_status again with overrideReason set to a short "
                 + "explanation of why the task is done despite them.");
         }
+        catch (ValidationException ex)
+        {
+            // An over-length overrideReason. Without this the agent gets a framework-internal
+            // error instead of a message naming the limit it just exceeded.
+            throw new McpException(ex.Message);
+        }
     }
 
     [McpServerTool(Name = "create_task")]

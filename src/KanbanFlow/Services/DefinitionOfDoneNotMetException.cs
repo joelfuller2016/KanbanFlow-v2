@@ -34,7 +34,10 @@ public sealed class DefinitionOfDoneNotMetException : Exception
         : base(BuildMessage(taskId, unmet))
     {
         TaskId = taskId;
-        Unmet = unmet ?? throw new ArgumentNullException(nameof(unmet));
+        // No null check here: BuildMessage runs first (base constructor arg) and already threw.
+        // A second guard would be unreachable, and unreachable guards read as protection that
+        // is not there.
+        Unmet = unmet;
     }
 
     /// <summary>

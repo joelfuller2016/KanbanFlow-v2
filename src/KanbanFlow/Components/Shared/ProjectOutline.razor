@@ -77,6 +77,13 @@
     [Parameter] public EventCallback<int> OnToggleFeature { get; set; }
     [Parameter] public EventCallback<int> OnToggleTask { get; set; }
     [Parameter] public EventCallback<TaskItem> OnToggleTaskDone { get; set; }
+
+    /// <summary>
+    /// Bumped by the parent when a refused done-toggle has left a checkbox out of sync with the
+    /// persisted status. Carried in each task row's <c>@key</c> so the row — and with it the
+    /// plain <c>checked=</c> checkbox, which Blazor will not otherwise update — is rebuilt.
+    /// </summary>
+    [Parameter] public int CheckboxResetToken { get; set; }
     [Parameter] public EventCallback<Subtask> OnToggleOutlineSubtask { get; set; }
     [Parameter] public EventCallback OnCloseOutline { get; set; }
 
@@ -174,7 +181,11 @@
                 var taskIsExpanded = ExpandedTasks.Contains(task.Id);
                 var taskIsDone = task.Status == WorkStatus.Done;
 
-                <div class="card mb-1" @key="task.Id"
+                @* CheckboxResetToken rides in the key for the same reason it does on the board
+                   card: this row's done checkbox is `checked="@taskIsDone"` with @onchange, so a
+                   refused toggle leaves Status unchanged, Blazor emits no DOM update, and the
+                   user's click stands on a task that is not Done. *@
+                <div class="card mb-1" @key="(task.Id, CheckboxResetToken)"
                      style="border-left: 4px solid @GetDepthColor(depth + 1); @(taskIsDone ? "opacity: 0.6;" : "") cursor: pointer;"
                      data-testid="outline-task-@task.Id" data-task-id="@task.Id"
                      @onclick="() => OnOpenEditTask.InvokeAsync(task)">

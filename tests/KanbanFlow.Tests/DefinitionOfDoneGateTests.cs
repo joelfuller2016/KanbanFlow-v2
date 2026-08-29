@@ -83,15 +83,21 @@ public sealed class DefinitionOfDoneGateTests
     }
 
     /// <summary>
-    /// Asserts a refused transition left no audit residue: no status-change comment, and no
-    /// status/override activity event.
+    /// Asserts a refused transition left no audit residue at all: no status-change comment, no
+    /// <see cref="CommentType.Verification"/> comment, and no status/override activity event.
     /// </summary>
+    /// <remarks>
+    /// The Verification assertion matters most on the override-flavoured call sites: that is the
+    /// row the override path actually writes, so omitting it would leave the exact residue these
+    /// tests exist to catch unasserted.
+    /// </remarks>
     private static async Task AssertNoStatusChangeSideEffects(SqliteTestFactory f, int taskId)
     {
         await using var db = await f.CreateDbContextAsync();
 
         Assert.Empty(await db.TaskComments
-            .Where(c => c.TaskItemId == taskId && c.Type == CommentType.StatusChange)
+            .Where(c => c.TaskItemId == taskId
+                        && (c.Type == CommentType.StatusChange || c.Type == CommentType.Verification))
             .ToListAsync());
 
         Assert.Empty(await db.ActivityEvents
@@ -302,6 +308,7 @@ public sealed class DefinitionOfDoneGateTests
             () => svc.ToggleDoneAsync(id, "tester"));
 
         Assert.Equal(WorkStatus.Todo, (await Reload(f, id)).Status);
+        await AssertNoStatusChangeSideEffects(f, id);
     }
 
     [Fact]
@@ -329,6 +336,7 @@ public sealed class DefinitionOfDoneGateTests
         var reloaded = await Reload(f, id);
         Assert.Equal(WorkStatus.InProgress, reloaded.Status);
         Assert.Null(reloaded.CompletedAt);
+        await AssertNoStatusChangeSideEffects(f, id);
     }
 
     [Fact]
@@ -361,6 +369,7 @@ public sealed class DefinitionOfDoneGateTests
             () => svc.MoveOnBoardAsync(id, WorkStatus.Done, projectId, 0, "tester"));
 
         Assert.Equal(WorkStatus.InProgress, (await Reload(f, id)).Status);
+        await AssertNoStatusChangeSideEffects(f, id);
     }
 
     [Fact]
