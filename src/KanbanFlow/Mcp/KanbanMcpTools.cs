@@ -186,6 +186,7 @@ public static class KanbanMcpTools
         [Description("The task id.")] int taskId,
         [Description("New status: Backlog | Todo | InProgress | Review | Done (case-insensitive).")] string status,
         [Description("Optional actor label recorded in the audit trail (default 'mcp-agent').")] string? actor = null,
+        [Description("Optional. Only needed when moving to Done with unmet acceptance criteria: a short reason why the task is done anyway. Recorded as an audited Verification comment. Leave unset to have the Definition-of-Done gate enforce the criteria.")] string? overrideReason = null,
         CancellationToken cancellationToken = default)
     {
         if (!Enum.TryParse<WorkStatus>(status, ignoreCase: true, out var parsed) || !Enum.IsDefined(parsed))
@@ -195,7 +196,7 @@ public static class KanbanMcpTools
         try
         {
             var updated = await taskService.ChangeStatusAsync(
-                taskId, parsed, string.IsNullOrWhiteSpace(actor) ? DefaultActor : actor.Trim(), cancellationToken);
+                taskId, parsed, string.IsNullOrWhiteSpace(actor) ? DefaultActor : actor.Trim(), cancellationToken, overrideReason);
             return new TaskStatusResult(
                 updated.Id, updated.Name, updated.Status.ToString(),
                 "Status updated; audit event recorded.");
@@ -203,6 +204,15 @@ public static class KanbanMcpTools
         catch (TaskNotFoundException)
         {
             throw new McpException($"Task {taskId} not found.");
+        }
+        catch (DefinitionOfDoneNotMetException ex)
+        {
+            // mcp-builder convention: the error tells the agent exactly what to do next.
+            var list = string.Join("; ", ex.Unmet);
+            throw new McpException(
+                $"Task {taskId} cannot be marked Done: {ex.UnmetCount} acceptance criterion/criteria are not met ({list}). "
+                + "Either complete them first, or call update_task_status again with overrideReason set to a short "
+                + "explanation of why the task is done despite them.");
         }
     }
 

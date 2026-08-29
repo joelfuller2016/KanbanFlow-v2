@@ -1597,6 +1597,17 @@ public static class ApiEndpoints
             {
                 return Results.UnprocessableEntity(new { message = ex.Message });
             }
+            catch (Services.DefinitionOfDoneNotMetException ex)
+            {
+                // PUT is a gated path too — without this it would be an unguarded way to Done.
+                return Results.UnprocessableEntity(new
+                {
+                    message = ex.Message,
+                    taskId = ex.TaskId,
+                    unmetCount = ex.UnmetCount,
+                    unmet = ex.Unmet
+                });
+            }
             catch (ArgumentException ex)
             {
                 return Results.UnprocessableEntity(new { message = ex.Message });
@@ -1697,7 +1708,7 @@ public static class ApiEndpoints
 
             try
             {
-                var task = await taskSvc.ChangeStatusAsync(id, newStatus, dto.Actor, ct);
+                var task = await taskSvc.ChangeStatusAsync(id, newStatus, dto.Actor, ct, dto.OverrideReason);
                 return Results.Ok(new
                 {
                     task.Id,
@@ -1711,6 +1722,16 @@ public static class ApiEndpoints
             catch (Services.TaskNotFoundException)
             {
                 return Results.NotFound(new { message = $"Task {id} not found." });
+            }
+            catch (Services.DefinitionOfDoneNotMetException ex)
+            {
+                return Results.UnprocessableEntity(new
+                {
+                    message = ex.Message,
+                    taskId = ex.TaskId,
+                    unmetCount = ex.UnmetCount,
+                    unmet = ex.Unmet
+                });
             }
         });
 
@@ -2772,7 +2793,12 @@ public record TaskDto(
     double? SortOrder,
     string? Actor = null);
 
-public record StatusDto(string? Status, string? Actor = null);
+/// <param name="OverrideReason">
+/// Optional. When non-blank, permits a move to <c>Done</c> that the Definition-of-Done gate would
+/// otherwise refuse (422), and records why as an audited <c>Verification</c> comment plus a
+/// <c>TaskDoneOverridden</c> activity event.
+/// </param>
+public record StatusDto(string? Status, string? Actor = null, string? OverrideReason = null);
 
 public record ClaimDto(string? Actor);
 

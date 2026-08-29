@@ -26,8 +26,20 @@ public interface ITaskService
     /// </param>
     /// <param name="ct">Cancellation token.</param>
     /// <returns>The updated task entity.</returns>
+    /// <param name="overrideReason">
+    /// When non-blank, permits a transition to <see cref="WorkStatus.Done"/> that the
+    /// Definition-of-Done gate would otherwise refuse, and records why. The override is audited:
+    /// it writes a <see cref="CommentType.Verification"/> comment and a
+    /// <c>TaskDoneOverridden</c> activity event atomically with the status change. Whitespace is
+    /// treated as absent. This is the <em>only</em> path that accepts an override — board drags,
+    /// the done-toggle and field updates refuse instead, because none of them can carry a reason.
+    /// </param>
     /// <exception cref="TaskNotFoundException">The task does not exist.</exception>
-    Task<TaskItem> ChangeStatusAsync(int taskId, WorkStatus newStatus, string? actor, CancellationToken ct = default);
+    /// <exception cref="DefinitionOfDoneNotMetException">
+    /// The task is moving to <see cref="WorkStatus.Done"/> with unmet acceptance criteria and no
+    /// override reason was supplied.
+    /// </exception>
+    Task<TaskItem> ChangeStatusAsync(int taskId, WorkStatus newStatus, string? actor, CancellationToken ct = default, string? overrideReason = null);
 
     /// <summary>
     /// Atomically move a task on the project board and place it immediately before a stable
