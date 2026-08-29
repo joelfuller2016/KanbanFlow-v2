@@ -824,7 +824,16 @@ else
         }
         catch (OperationCanceledException) { }
         catch (TaskNotFoundException) { /* silently ignore — task vanished mid-action */ }
-        catch (Exception ex) { loadError = ex.Message; }
+        catch (Exception ex)
+        {
+            // A refused toggle must NOT take the load channel: loadError replaces the entire page
+            // with "Something went wrong" and a Back to Projects button, destroying the board over
+            // a routine, recoverable refusal. Same reasoning as OnCardMoved below. Reload so the
+            // checkbox snaps back to the persisted state.
+            moveError = ex.Message;
+            await LoadProject();
+            await ReinitializeSortables();
+        }
     }
 
     // ── Add Item Modal ──

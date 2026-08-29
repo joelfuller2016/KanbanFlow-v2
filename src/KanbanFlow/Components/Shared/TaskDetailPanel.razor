@@ -66,6 +66,7 @@
             <div class="mb-3">
                 <label class="form-label small text-muted mb-1" for="task-detail-status">Status</label>
                 <select id="task-detail-status" class="form-select form-select-sm" value="@((int)Task.Status)"
+                        @key="statusSelectToken"
                         @onchange="OnStatusChanged">
                     @foreach (var status in Enum.GetValues<WorkStatus>())
                     {
@@ -102,7 +103,7 @@
                             </button>
                             <button type="button" class="btn btn-outline-secondary"
                                     data-testid="task-detail-dod-cancel"
-                                    @onclick="() => _dodBlocked = null">
+                                    @onclick="CancelDefinitionOfDoneOverride">
                                 Cancel
                             </button>
                         </div>
@@ -540,6 +541,13 @@
         {
             editingDescription = Task?.Description;
             descriptionResetToken++;   // a new editing session always starts in read mode (#357)
+
+            // The panel instance is REUSED across tasks (no @key at its ProjectView call site), so
+            // a Definition-of-Done refusal left pending on one task would otherwise still be armed
+            // when a different task is opened — and "Complete anyway" would force-complete the
+            // WRONG task while attributing the previous task's justification to it. Clearing here
+            // is what keeps the override bound to the task it was actually written for.
+            ClearDefinitionOfDoneState();
         }
 
         // Every panel mutation ends in OnTaskUpdated, and ProjectView re-fetches the task — so a
@@ -711,6 +719,32 @@
     private WorkStatus? _dodPendingStatus;
 
     /// <summary>
+    /// Bumped whenever a refusal or a cancel leaves the &lt;select&gt; showing a status the task
+    /// does not actually have. The select renders <c>value="@((int)Task.Status)"</c>, so when the
+    /// model never changed Blazor's diff sees no change and leaves the user's stale DOM selection
+    /// in place. Keying the element on this token forces a fresh one, resyncing it to the truth.
+    /// </summary>
+    private int statusSelectToken;
+
+    /// <summary>
+    /// Clears every piece of pending Definition-of-Done state together. These three fields are a
+    /// single unit — clearing only some of them is what allows a stale reason to be applied to a
+    /// later task — so there is exactly one place that resets them.
+    /// </summary>
+    private void ClearDefinitionOfDoneState()
+    {
+        _dodBlocked = null;
+        _dodOverrideReason = null;
+        _dodPendingStatus = null;
+    }
+
+    private void CancelDefinitionOfDoneOverride()
+    {
+        ClearDefinitionOfDoneState();
+        statusSelectToken++;   // resync the select, which is still showing "Done"
+    }
+
+    /// <summary>
     /// Single status-application path so the plain select and the "Complete anyway" override
     /// cannot diverge. A refusal is captured into <see cref="_dodBlocked"/> and rendered inline
     /// rather than thrown away, so the human sees the same constraint an agent gets over MCP.
@@ -731,17 +765,18 @@
             Task.UpdatedAt = updated.UpdatedAt;
             Task.CompletedAt = updated.CompletedAt;
 
-            _dodBlocked = null;
-            _dodOverrideReason = null;
-            _dodPendingStatus = null;
+            ClearDefinitionOfDoneState();
 
             await OnTaskUpdated.InvokeAsync();
         }
         catch (DefinitionOfDoneNotMetException ex)
         {
-            // Surface it — an opaque failure here would read as a broken control.
+            // Surface it — an opaque failure here would read as a broken control. The pending
+            // status is captured alongside the refusal so the override re-applies the SAME
+            // transition the user asked for, on the task it was refused for.
             _dodBlocked = ex;
             _dodPendingStatus = newStatus;
+            statusSelectToken++;   // the select is still showing Done; resync it to the real status
         }
         catch (TaskNotFoundException)
         {

@@ -145,7 +145,7 @@ const tools = [
   },
   {
     name: "update_task_status",
-    description: "Move a task to a different Kanban status.",
+    description: "Move a task to a different Kanban status. Moving to Done is refused (HTTP 422) while the task has unmet acceptance criteria; pass overrideReason to record why it is done anyway.",
     inputSchema: {
       type: "object",
       properties: {
@@ -154,6 +154,14 @@ const tools = [
           type: "string",
           enum: ["Backlog", "Todo", "InProgress", "Review", "Done"],
           description: "New task status."
+        },
+        actor: {
+          type: "string",
+          description: "Optional actor label recorded in the audit trail (default 'mcp-agent')."
+        },
+        overrideReason: {
+          type: "string",
+          description: "Optional. Only needed when moving to Done with unmet acceptance criteria: a short reason why the task is done anyway. Recorded as an audited Verification comment plus a TaskDoneOverridden activity event."
         }
       },
       required: ["taskId", "status"]
@@ -1047,7 +1055,14 @@ async function callTool(toolName, args) {
       assertEnum(args, "status", ["Backlog", "Todo", "InProgress", "Review", "Done"]);
       return restJson(`/api/tasks/${requiredInt(args, "taskId")}/status`, {
         method: "PATCH",
-        body: { status: args.status }
+        // overrideReason is forwarded so a wrapper client has the SAME escape hatch as the native
+        // tool. Without it an agent on this wrapper hits the Definition-of-Done gate (#428) with
+        // no way past it — a 422 it can neither satisfy nor override.
+        body: {
+          status: args.status,
+          actor: optionalString(args, "actor") ?? "mcp-agent",
+          overrideReason: optionalString(args, "overrideReason")
+        }
       });
     case "add_task_comment":
       return restJson(`/api/tasks/${requiredInt(args, "taskId")}/comments`, {
