@@ -1059,8 +1059,11 @@ async function callTool(toolName, args) {
         // tool. Without it an agent on this wrapper hits the Definition-of-Done gate (#428) with
         // no way past it — a 422 it can neither satisfy nor override.
         body: {
+          // Trim + treat whitespace-only as absent, matching the native tool's
+          // `string.IsNullOrWhiteSpace(actor) ? DefaultActor : actor.Trim()`. Forwarding "  "
+          // verbatim would attribute audit rows to a blank actor on this path only.
+          actor: optionalString(args, "actor")?.trim() || "mcp-agent",
           status: args.status,
-          actor: optionalString(args, "actor") ?? "mcp-agent",
           overrideReason: optionalString(args, "overrideReason")
         }
       });

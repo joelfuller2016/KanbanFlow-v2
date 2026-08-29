@@ -525,6 +525,13 @@
 
     protected override async Task OnParametersSetAsync()
     {
+        // Identity is not enough. ProjectView re-fetches the selected task after a mutation and
+        // reassigns it to a NEW instance with the SAME id (ProjectView.razor:734) — e.g. after an
+        // acceptance criterion is ticked. An id-only comparison misses that, so a refusal listing
+        // criteria the user has since completed would keep rendering. Track the instance too.
+        var taskInstanceChanged = !ReferenceEquals(Task, renderedTask);
+        renderedTask = Task;
+
         var freshOpen = IsOpen && !wasOpen;
         if (freshOpen)
         {
@@ -549,11 +556,16 @@
             editingDescription = Task?.Description;
             descriptionResetToken++;   // a new editing session always starts in read mode (#357)
 
-            // The panel instance is REUSED across tasks (no @key at its ProjectView call site), so
-            // a Definition-of-Done refusal left pending on one task would otherwise still be armed
-            // when a different task is opened — and "Complete anyway" would force-complete the
-            // WRONG task while attributing the previous task's justification to it. Clearing here
-            // is what keeps the override bound to the task it was actually written for.
+        }
+
+        // Deliberately OUTSIDE the block above, and keyed on instance rather than id. The panel is
+        // REUSED across tasks (no @key at its ProjectView call site), so a refusal left pending on
+        // one task would otherwise still be armed when a different task is opened — and "Complete
+        // anyway" would force-complete the WRONG task while attributing the previous task's
+        // justification to it. The instance check additionally clears a refusal whose criteria the
+        // user has since completed, which an id comparison alone cannot see.
+        if (freshOpen || taskChanged || taskInstanceChanged)
+        {
             ClearDefinitionOfDoneState();
         }
 
@@ -732,6 +744,13 @@
     /// in place. Keying the element on this token forces a fresh one, resyncing it to the truth.
     /// </summary>
     private int statusSelectToken;
+
+    /// <summary>
+    /// The <see cref="Task"/> instance this panel last rendered. Compared by reference, not id,
+    /// because ProjectView re-fetches and reassigns the selected task after a mutation while
+    /// keeping its id — see <see cref="OnParametersSetAsync"/>.
+    /// </summary>
+    private TaskItem? renderedTask;
 
     /// <summary>
     /// Clears every piece of pending Definition-of-Done state together. These three fields are a
