@@ -130,6 +130,15 @@ public sealed class TaskService(IDbContextFactory<AppDbContext> dbFactory) : ITa
     public async Task<TaskItem> ChangeStatusAsync(int taskId, WorkStatus newStatus, string? actor, CancellationToken ct = default, string? overrideReason = null)
     {
         await using var db = await dbFactory.CreateDbContextAsync(ct);
+
+        // Serialize the Definition-of-Done read-modify-write. The gate reads AcceptanceCriteria
+        // and the status write happens at SaveChanges; without a lock spanning both, a concurrent
+        // criterion insert can commit in between and Done persists against criteria the gate never
+        // saw. Microsoft.Data.Sqlite issues BEGIN IMMEDIATE for this overload, so the write lock is
+        // taken HERE, before the reads — the same pattern MoveOnBoardAsync/CreateAsync/ClaimAsync
+        // already use in this file.
+        await using var tx = await db.Database.BeginTransactionAsync(ct);
+
         var task = await db.Tasks
             .Include(t => t.Feature)
             .FirstOrDefaultAsync(t => t.Id == taskId, ct);
@@ -177,6 +186,7 @@ public sealed class TaskService(IDbContextFactory<AppDbContext> dbFactory) : ITa
             AddDoneOverrideRecords(db, task, task.Feature.ProjectId, actor, overrideReason!, overriddenCriteria);
 
         await db.SaveChangesAsync(ct);
+        await tx.CommitAsync(ct);
         return task;
     }
 
@@ -290,6 +300,14 @@ public sealed class TaskService(IDbContextFactory<AppDbContext> dbFactory) : ITa
     public async Task<TaskItem> ToggleDoneAsync(int taskId, string? actor, CancellationToken ct = default)
     {
         await using var db = await dbFactory.CreateDbContextAsync(ct);
+
+        // Serialize the Definition-of-Done read-modify-write: the gate reads
+        // AcceptanceCriteria and the status lands at SaveChanges, so without a lock
+        // spanning both, a concurrent criterion insert can commit in between and Done
+        // persists against criteria the gate never saw. BEGIN IMMEDIATE takes the write
+        // lock here, before the reads — same pattern as MoveOnBoardAsync.
+        await using var tx = await db.Database.BeginTransactionAsync(ct);
+
         var task = await db.Tasks
             .Include(t => t.Feature)
             .Include(t => t.Subtasks)
@@ -333,6 +351,7 @@ public sealed class TaskService(IDbContextFactory<AppDbContext> dbFactory) : ITa
             $"Task '{task.Name}' status changed from {oldStatus} to {newStatus}");
 
         await db.SaveChangesAsync(ct);
+        await tx.CommitAsync(ct);
         return task;
     }
 
@@ -654,6 +673,14 @@ public sealed class TaskService(IDbContextFactory<AppDbContext> dbFactory) : ITa
     public async Task<TaskItem> UpdateAsync(int taskId, TaskUpdate dto, string? actor, CancellationToken ct = default)
     {
         await using var db = await dbFactory.CreateDbContextAsync(ct);
+
+        // Serialize the Definition-of-Done read-modify-write: the gate reads
+        // AcceptanceCriteria and the status lands at SaveChanges, so without a lock
+        // spanning both, a concurrent criterion insert can commit in between and Done
+        // persists against criteria the gate never saw. BEGIN IMMEDIATE takes the write
+        // lock here, before the reads — same pattern as MoveOnBoardAsync.
+        await using var tx = await db.Database.BeginTransactionAsync(ct);
+
         var task = await db.Tasks
             .Include(t => t.Feature)
             .FirstOrDefaultAsync(t => t.Id == taskId, ct);
@@ -795,6 +822,7 @@ public sealed class TaskService(IDbContextFactory<AppDbContext> dbFactory) : ITa
         }
 
         await db.SaveChangesAsync(ct);
+        await tx.CommitAsync(ct);
         return task;
     }
 
