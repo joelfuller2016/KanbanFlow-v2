@@ -780,11 +780,6 @@
     private TaskItem? renderedTask;
 
     /// <summary>
-    /// Clears every piece of pending Definition-of-Done state together. These three fields are a
-    /// single unit — clearing only some of them is what allows a stale reason to be applied to a
-    /// later task — so there is exactly one place that resets them.
-    /// </summary>
-    /// <summary>
     /// The id of the task the pending refusal was raised for. `ChangeStatusAsync` is awaited, so
     /// the parent can switch <see cref="Task"/> WHILE the call is in flight; the refusal then
     /// lands after <see cref="OnParametersSetAsync"/> has already cleared state for the new task.
@@ -802,6 +797,11 @@
     private ElementReference _dodReasonInput;
     private bool _dodFocusPending;
 
+    /// <summary>
+    /// Clears every piece of pending Definition-of-Done state together. These three fields are a
+    /// single unit — clearing only some of them is what allows a stale reason to be applied to a
+    /// later task — so there is exactly one place that resets them.
+    /// </summary>
     private void ClearDefinitionOfDoneState()
     {
         _dodBlocked = null;

@@ -222,6 +222,30 @@ public sealed class DefinitionOfDoneGateTests
     }
 
     [Fact]
+    public async Task OverrideReason_AtExactLengthBound_IsAccepted()
+    {
+        using var f = new SqliteTestFactory();
+        var id = SeedTaskWithCriteria(f, criteria: 1, completed: 0);
+        var svc = new TaskService(f);
+
+        await svc.ChangeStatusAsync(id, WorkStatus.Done, "tester", default, new string('x', 1000));
+
+        Assert.Equal(WorkStatus.Done, (await Reload(f, id)).Status);
+
+        await using var db = await f.CreateDbContextAsync();
+
+        var verifications = await db.TaskComments
+            .Where(c => c.TaskItemId == id && c.Type == CommentType.Verification)
+            .ToListAsync();
+        Assert.Single(verifications);
+
+        var overrides = await db.ActivityEvents
+            .Where(e => e.EntityType == "Task" && e.EntityId == id && e.EventType == "TaskDoneOverridden")
+            .ToListAsync();
+        Assert.Single(overrides);
+    }
+
+    [Fact]
     public async Task Refusal_MessageIsSingular_ForExactlyOneUnmetCriterion()
     {
         using var f = new SqliteTestFactory();
