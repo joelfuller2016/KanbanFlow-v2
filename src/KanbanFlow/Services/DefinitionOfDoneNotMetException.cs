@@ -31,10 +31,22 @@ public sealed class DefinitionOfDoneNotMetException : Exception
     public int UnmetCount => Unmet.Count;
 
     public DefinitionOfDoneNotMetException(int taskId, IReadOnlyList<string> unmet)
-        : base($"Task {taskId} cannot be marked Done: {unmet.Count} acceptance criterion/criteria are not met. "
-               + "Complete them, or supply an override reason to record why the task is done anyway.")
+        : base(BuildMessage(taskId, unmet))
     {
         TaskId = taskId;
-        Unmet = unmet;
+        Unmet = unmet ?? throw new ArgumentNullException(nameof(unmet));
+    }
+
+    /// <summary>
+    /// Built before the base constructor runs, so the null guard has to live here — dereferencing
+    /// <paramref name="unmet"/> in the interpolation would throw <see cref="NullReferenceException"/>
+    /// instead of the intended refusal.
+    /// </summary>
+    private static string BuildMessage(int taskId, IReadOnlyList<string> unmet)
+    {
+        ArgumentNullException.ThrowIfNull(unmet);
+        var noun = unmet.Count == 1 ? "acceptance criterion is" : "acceptance criteria are";
+        return $"Task {taskId} cannot be marked Done: {unmet.Count} {noun} not met. "
+               + "Complete them, or supply an override reason to record why the task is done anyway.";
     }
 }

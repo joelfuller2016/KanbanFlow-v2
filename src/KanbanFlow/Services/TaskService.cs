@@ -66,8 +66,19 @@ public sealed class TaskService(IDbContextFactory<AppDbContext> dbFactory) : ITa
         if (string.IsNullOrWhiteSpace(overrideReason))
             throw new DefinitionOfDoneNotMetException(taskId, unmet);
 
+        // The reason arrives from untrusted edges (REST body, MCP argument) and is persisted
+        // TWICE — into TaskComment.Text and into the activity event's AfterJson and Message — so
+        // an unbounded string is written to three columns. Bound it at the gate, where every
+        // caller passes through, rather than at each edge.
+        if (overrideReason.Trim().Length > MaxOverrideReasonLength)
+            throw new ValidationException(
+                $"Override reason must be {MaxOverrideReasonLength} characters or fewer.");
+
         return unmet;
     }
+
+    /// <summary>Upper bound for an audited Definition-of-Done override reason.</summary>
+    private const int MaxOverrideReasonLength = 1000;
 
     /// <summary>
     /// Records an audited Definition-of-Done override: one <see cref="CommentType.Verification"/>

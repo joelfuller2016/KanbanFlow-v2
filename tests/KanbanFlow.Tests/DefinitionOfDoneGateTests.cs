@@ -74,6 +74,30 @@ public sealed class DefinitionOfDoneGateTests
         var reloaded = await Reload(f, id);
         Assert.Equal(WorkStatus.InProgress, reloaded.Status);
         Assert.Null(reloaded.CompletedAt);
+
+        // ...and NEITHER must the side effects. Asserting status alone would pass against an
+        // implementation that appended the StatusChange comment and the TaskStatusChanged event
+        // and only then threw — leaving an audit trail describing a transition that never
+        // happened. The gate runs before those Add calls; this is what proves it.
+        await AssertNoStatusChangeSideEffects(f, id);
+    }
+
+    /// <summary>
+    /// Asserts a refused transition left no audit residue: no status-change comment, and no
+    /// status/override activity event.
+    /// </summary>
+    private static async Task AssertNoStatusChangeSideEffects(SqliteTestFactory f, int taskId)
+    {
+        await using var db = await f.CreateDbContextAsync();
+
+        Assert.Empty(await db.TaskComments
+            .Where(c => c.TaskItemId == taskId && c.Type == CommentType.StatusChange)
+            .ToListAsync());
+
+        Assert.Empty(await db.ActivityEvents
+            .Where(e => e.EntityType == "Task" && e.EntityId == taskId
+                        && (e.EventType == "TaskStatusChanged" || e.EventType == "TaskDoneOverridden"))
+            .ToListAsync());
     }
 
     [Fact]
@@ -158,6 +182,42 @@ public sealed class DefinitionOfDoneGateTests
             () => svc.ChangeStatusAsync(id, WorkStatus.Done, "tester", default, "   "));
 
         Assert.Equal(WorkStatus.InProgress, (await Reload(f, id)).Status);
+        await AssertNoStatusChangeSideEffects(f, id);
+    }
+
+    [Fact]
+    public async Task OverrideReason_ExceedingTheLengthBound_IsRejected()
+    {
+        using var f = new SqliteTestFactory();
+        var id = SeedTaskWithCriteria(f, criteria: 1, completed: 0);
+        var svc = new TaskService(f);
+
+        // The reason is persisted into three columns, so it is bounded at the gate rather than
+        // at each untrusted edge (REST body, MCP argument).
+        await Assert.ThrowsAsync<ValidationException>(
+            () => svc.ChangeStatusAsync(id, WorkStatus.Done, "tester", default, new string('x', 1001)));
+
+        Assert.Equal(WorkStatus.InProgress, (await Reload(f, id)).Status);
+        await AssertNoStatusChangeSideEffects(f, id);
+    }
+
+    [Fact]
+    public async Task Refusal_MessageIsSingular_ForExactlyOneUnmetCriterion()
+    {
+        using var f = new SqliteTestFactory();
+        var id = SeedTaskWithCriteria(f, criteria: 1, completed: 0);
+        var svc = new TaskService(f);
+
+        var ex = await Assert.ThrowsAsync<DefinitionOfDoneNotMetException>(
+            () => svc.ChangeStatusAsync(id, WorkStatus.Done, "tester"));
+
+        Assert.Contains("1 acceptance criterion is not met", ex.Message);
+    }
+
+    [Fact]
+    public void Exception_WithNullUnmetList_ThrowsArgumentNull_NotNullReference()
+    {
+        Assert.Throws<ArgumentNullException>(() => new DefinitionOfDoneNotMetException(1, null!));
     }
 
     [Fact]

@@ -78,19 +78,26 @@
                    human-readable face of the exact constraint an agent hits over MCP or REST. *@
                 @if (_dodBlocked is not null)
                 {
-                    <div class="alert alert-warning mt-2 mb-0 py-2 px-3" role="alert"
+                    @* The announcement and the controls are deliberately SEPARATE elements: an
+                       assertive live region announces its contents, but interactive controls inside
+                       one are announced unpredictably and are not exposed as a grouped, operable
+                       unit. So role="alert" wraps only the text, and the form sits outside it. *@
+                    <div class="alert alert-warning mt-2 mb-0 py-2 px-3"
                          data-testid="task-detail-dod-block">
-                        <div class="fw-semibold small mb-1">
-                            Can&rsquo;t mark Done &mdash; @_dodBlocked.UnmetCount unfinished acceptance
-                            @(_dodBlocked.UnmetCount == 1 ? "criterion" : "criteria")
+                        <div role="alert">
+                            <div class="fw-semibold small mb-1">
+                                Can&rsquo;t mark Done &mdash; @_dodBlocked.UnmetCount unfinished acceptance
+                                @(_dodBlocked.UnmetCount == 1 ? "criterion" : "criteria")
+                            </div>
+                            <ul class="small mb-2 ps-3">
+                                @foreach (var text in _dodBlocked.Unmet)
+                                {
+                                    <li>@text</li>
+                                }
+                            </ul>
                         </div>
-                        <ul class="small mb-2 ps-3">
-                            @foreach (var text in _dodBlocked.Unmet)
-                            {
-                                <li>@text</li>
-                            }
-                        </ul>
-                        <div class="input-group input-group-sm">
+                        <div class="input-group input-group-sm" role="group"
+                             aria-label="Complete this task despite unmet acceptance criteria">
                             <input type="text" class="form-control" placeholder="Reason to complete anyway"
                                    aria-label="Reason to complete anyway"
                                    data-testid="task-detail-dod-reason"
@@ -757,7 +764,10 @@
         {
             // Routed through ITaskService — produces the StatusChange comment + activity event
             // (closes UI half of #88 for the detail panel's status select).
-            var updated = await TaskSvc.ChangeStatusAsync(Task.Id, newStatus, actor: "User", default, overrideReason);
+            // Named arguments: `ct` and `overrideReason` are adjacent optionals, and swapping them
+            // positionally would compile in some shapes while silently dropping the override.
+            var updated = await TaskSvc.ChangeStatusAsync(
+                Task.Id, newStatus, actor: "User", ct: default, overrideReason: overrideReason);
 
             // Reflect the canonical service-returned values in the local entity so the panel
             // re-renders consistently without a full reload.
