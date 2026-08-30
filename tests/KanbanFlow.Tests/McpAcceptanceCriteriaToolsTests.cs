@@ -197,6 +197,36 @@ public sealed class McpAcceptanceCriteriaToolsTests
     }
 
     /// <summary>
+    /// Every argument of every new tool, checked against the wrapper's schema — not just the id
+    /// on two of the four.
+    /// </summary>
+    /// <remarks>
+    /// The narrower test above pins one past mistake. This one states the whole contract, because
+    /// a reviewer pointed out the obvious hole: that test was green while a real divergence
+    /// (<c>completed</c>'s required-ness) still existed, and it covered two of four tools.
+    /// The names here are transcribed from <c>scripts/mcp-server.mjs</c>'s inputSchema blocks.
+    /// </remarks>
+    [Theory]
+    [InlineData(nameof(KanbanMcpTools.ListAcceptanceCriteria), "taskId")]
+    [InlineData(nameof(KanbanMcpTools.CreateAcceptanceCriterion), "taskId,text,sortOrder")]
+    [InlineData(nameof(KanbanMcpTools.MarkAcceptanceCriterionDone), "acId,completed")]
+    [InlineData(nameof(KanbanMcpTools.UpdateAcceptanceCriterion), "acId,text,completed,sortOrder")]
+    public void Every_tool_argument_matches_the_node_wrapper_schema(string methodName, string expectedCsv)
+    {
+        var method = typeof(KanbanMcpTools).GetMethod(methodName);
+        Assert.NotNull(method);
+
+        // Drop the DI-injected factory and the cancellation token — neither crosses the wire.
+        var wireArgs = method!.GetParameters()
+            .Where(p => p.ParameterType != typeof(CancellationToken)
+                     && !p.ParameterType.Name.StartsWith("IDbContextFactory", StringComparison.Ordinal))
+            .Select(p => p.Name)
+            .ToArray();
+
+        Assert.Equal(expectedCsv.Split(','), wireArgs);
+    }
+
+    /// <summary>
     /// Errors must name the tool that yields a valid id — the mcp-builder convention this file's
     /// header cites, and the difference between an agent that recovers and one that gives up.
     /// </summary>

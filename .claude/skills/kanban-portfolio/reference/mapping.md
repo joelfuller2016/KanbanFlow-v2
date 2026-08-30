@@ -243,7 +243,7 @@ partial one.
 - **Does not create acceptance criteria, subtasks, or dependencies.** Those are authored by
   humans and agents doing real work (`kanban-project-ops`), not derived from an issue.
 - **Does not delete anything** — not a task, not an emptied Feature.
-- **Does not use the native MCP server.** It can't: the 24 native tools include `list_projects`
+- **Does not use the native MCP server.** It can't: the 28 native tools include `list_projects`
   and `get_project_context` but **no `create_project`** — an agent on `/mcp` cannot onboard a
   project. Tracked as a parity gap in #231. Until then the sync uses REST
   (`POST /api/projects`), which has always been able to.

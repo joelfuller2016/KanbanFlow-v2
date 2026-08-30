@@ -495,7 +495,7 @@ public static class KanbanMcpTools
     public static async Task<AcceptanceCriterionResult> MarkAcceptanceCriterionDone(
         IDbContextFactory<AppDbContext> dbFactory,
         [Description("The acceptance criterion id (from list_acceptance_criteria or get_task).")] int acId,
-        [Description("Optional. true (default) completes the criterion; false reopens it.")] bool completed = true,
+        [Description("true (default here) completes the criterion; false reopens it. NOTE: the stdio wrapper (scripts/mcp-server.mjs) requires this argument — pass it explicitly if your client may run against either transport.")] bool completed = true,
         CancellationToken cancellationToken = default)
     {
         await using var db = await dbFactory.CreateDbContextAsync(cancellationToken);
