@@ -120,14 +120,12 @@ public sealed class ClaimStalenessTests
     public async Task ClaimAsync_StaleClaim_IsTakenOver_AndAuditedAsStolen()
     {
         using var f = new SqliteTestFactory();
-        var seededAt = DateTime.UtcNow.AddHours(-9);
+        var fixedNow = new DateTime(2026, 8, 30, 12, 0, 0, DateTimeKind.Utc);
+        var seededAt = fixedNow.AddHours(-9);
         var id = SeedClaimedTask(f, "bob", seededAt);
-        var svc = new TaskService(f, Ttl);
+        var svc = new TaskService(f, Ttl, clock: () => fixedNow);
 
-        // Capture expected age before the service call — both this value and the service's
-        // internal `now` are sampled near the same instant, avoiding a false failure if the
-        // call crosses a formatting boundary (e.g. 8.99h → 9.00h).
-        var expectedAge = $"{(DateTime.UtcNow - seededAt).TotalHours:0.##}";
+        var expectedAge = $"{(fixedNow - seededAt).TotalHours:0.##}";
         await svc.ClaimAsync(id, "alice");
 
         var reloaded = await Reload(f, id);
@@ -149,7 +147,7 @@ public sealed class ClaimStalenessTests
         Assert.DoesNotContain(events, e => e.EventType == "TaskClaimed");
     }
 
-    /// <summary>A task claimed with no <c>ClaimedAt</c> (counted as stale) is takeable by another actor.</summary>
+    /// <summary>A task claimed with no <c>ClaimedAt</c> (counted as stale) is takeable by another actor, and the steal is audited as <c>TaskClaimStolen</c> with a no-timestamp message.</summary>
     [Fact]
     public async Task ClaimAsync_ClaimedButUndated_IsTakeable()
     {
@@ -162,12 +160,16 @@ public sealed class ClaimStalenessTests
         Assert.Equal("alice", (await Reload(f, id)).ClaimedBy);
 
         await using var db = await f.CreateDbContextAsync();
-        var events = await db.ActivityEvents.Where(e => e.EntityId == id).ToListAsync();
+        var events = await db.ActivityEvents
+            .Where(e => e.EntityType == "Task" && e.EntityId == id)
+            .ToListAsync();
         var stolen = Assert.Single(events, e => e.EventType == "TaskClaimStolen");
-        Assert.Contains("no timestamp", stolen.Message);   // null ClaimedAt → the "no timestamp" fallback branch
+        Assert.Contains("bob", stolen.Message);
+        Assert.Contains("alice", stolen.Message);
+        Assert.Contains("no timestamp", stolen.Message);
     }
 
-    /// <summary>Reclaiming your own stale task is idempotent: it renews the claim without emitting a steal event.</summary>
+    /// <summary>Reclaiming your own stale task is idempotent: it does not renew timestamps, does not churn <c>UpdatedAt</c>, and emits no steal event.</summary>
     [Fact]
     public async Task ClaimAsync_OwnStaleClaim_IsIdempotent_AndEmitsNoStealEvent()
     {
@@ -175,14 +177,13 @@ public sealed class ClaimStalenessTests
         var id = SeedClaimedTask(f, "alice", DateTime.UtcNow.AddHours(-9));
         var svc = new TaskService(f, Ttl);
 
-        var snapshot = await Reload(f, id);  // capture ClaimedAt and UpdatedAt before the call
+        var beforeReclaim = await Reload(f, id);
         await svc.ClaimAsync(id, "alice");
 
-        var reloaded = await Reload(f, id);
-        Assert.Equal("alice", reloaded.ClaimedBy);
-        Assert.Equal(snapshot.ClaimedAt, reloaded.ClaimedAt);  // own re-claim must NOT refresh ClaimedAt
-        Assert.Equal(snapshot.UpdatedAt, reloaded.UpdatedAt);  // own re-claim must NOT bump UpdatedAt
-
+        var afterReclaim = await Reload(f, id);
+        Assert.Equal("alice", afterReclaim.ClaimedBy);
+        Assert.Equal(beforeReclaim.ClaimedAt, afterReclaim.ClaimedAt);   // stale claim not renewed
+        Assert.Equal(beforeReclaim.UpdatedAt, afterReclaim.UpdatedAt);   // no UpdatedAt churn
         await using var db = await f.CreateDbContextAsync();
         Assert.Empty(await db.ActivityEvents
             .Where(e => e.EntityId == id && e.EventType == "TaskClaimStolen").ToListAsync());

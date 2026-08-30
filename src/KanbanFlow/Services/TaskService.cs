@@ -16,13 +16,20 @@ namespace KanbanFlow.Services;
 /// the ~850 existing <c>new TaskService(factory)</c> call sites keep compiling and keep the
 /// production default; tests inject a short TTL rather than sleeping in real time.
 /// </param>
+/// <param name="clock">
+/// Optional clock function. Defaults to <see cref="DateTime.UtcNow"/>. Injected for
+/// deterministic testing so audit-age assertions do not depend on wall-clock sampling.
+/// </param>
 public sealed class TaskService(
     IDbContextFactory<AppDbContext> dbFactory,
-    TimeSpan? claimTtl = null) : ITaskService
+    TimeSpan? claimTtl = null,
+    Func<DateTime>? clock = null) : ITaskService
 {
     private readonly TimeSpan _claimTtl = claimTtl is { } t && t <= TimeSpan.Zero
         ? throw new ArgumentOutOfRangeException(nameof(claimTtl), "Claim TTL must be positive.")
         : claimTtl ?? ClaimPolicy.DefaultTtl;
+
+    private readonly Func<DateTime> _clock = clock ?? (() => DateTime.UtcNow);
 
     private static readonly JsonSerializerOptions ActivityJsonOptions = new(JsonSerializerDefaults.Web);
 
@@ -147,8 +154,8 @@ public sealed class TaskService(
         // criterion insert can commit in between and Done persists against criteria the gate never
         // saw. Microsoft.Data.Sqlite issues BEGIN IMMEDIATE for this overload, so the write lock is
         // taken HERE, before the reads — the same pattern MoveOnBoardAsync and MoveInOutlineAsync
-        // use. (CreateAsync and ClaimAsync also open transactions, but AFTER their reads, so they
-        // are not examples of this ordering.)
+        // use. (CreateAsync opens a transaction after its read; ClaimAsync opens one BEFORE its read,
+        // following the same before-read pattern as these methods.)
         //
         // Scoped to Done-bound transitions ONLY. SQLite permits a single pending writer, so taking
         // the lock unconditionally would make every Backlog/Todo/Review move queue behind any other
@@ -1016,6 +1023,14 @@ public sealed class TaskService(
         var trimmedActor = actor.Trim();
 
         await using var db = await dbFactory.CreateDbContextAsync(ct);
+
+        // Open the write lock BEFORE reading the task row so the check-then-update is fully
+        // serialized (#156, #429). Without a transaction spanning both, a concurrent ClaimAsync
+        // that commits between our read and our UPDATE could produce two holders for the same task.
+        // Microsoft.Data.Sqlite issues BEGIN IMMEDIATE for this overload, reserving the write slot
+        // up front rather than on first write — the same pattern ChangeStatusAsync uses.
+        await using var tx = await db.Database.BeginTransactionAsync(ct);
+
         // #195: AsNoTracking — the claim is persisted via the conditional ExecuteUpdateAsync
         // below, so the loaded entity is only for validation + the audit snapshot. Not tracking
         // it stops SaveChanges from emitting a redundant Tasks UPDATE next to the event insert.
@@ -1028,7 +1043,7 @@ public sealed class TaskService(
         if (task.Feature is null)
             throw new InvalidOperationException($"Task {taskId} has no feature; cannot resolve project for audit.");
 
-        var now = DateTime.UtcNow;
+        var now = _clock();
 
         // A claim past its TTL is abandoned and may be taken over (#429). Without this a crashed
         // or rate-limited agent holds its task forever and nothing can recover it: ClaimedAt was
@@ -1051,12 +1066,6 @@ public sealed class TaskService(
             return task;
 
         var before = TaskActivitySnapshot(task);
-
-        // Atomic claim + audit (#156): wrap the conditional UPDATE and the TaskClaimed event in
-        // one transaction so a claim can never persist without its audit event. The race-safe
-        // conditional UPDATE still works inside the transaction (previously it auto-committed,
-        // leaving a window where the claim survived but the audit SaveChanges could fail).
-        await using var tx = await db.Database.BeginTransactionAsync(ct);
 
         // Race-safe claim (R4): a conditional UPDATE that only fires while the row is still
         // unclaimed. Under concurrent claimers (multiple agents), exactly one UPDATE matches
