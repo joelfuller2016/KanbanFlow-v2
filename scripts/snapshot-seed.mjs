@@ -19,7 +19,7 @@
 //   node scripts/snapshot-seed.mjs --check     # verify the tracked seed, write nothing
 
 import { createRequire } from "node:module";
-import { existsSync, mkdirSync, statSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, statSync, rmSync, renameSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { homedir } from "node:os";
@@ -122,23 +122,40 @@ if (!existsSync(dbPath)) {
 
 mkdirSync(dirname(seedPath), { recursive: true });
 
-// VACUUM INTO refuses to overwrite; clear the old seed only once the new one is about to be built.
-for (const stale of [seedPath, `${seedPath}-wal`, `${seedPath}-shm`]) {
-  if (existsSync(stale)) rmSync(stale);
-}
+// Build the replacement beside the seed, then swap. Writing straight to seedPath would mean
+// deleting the only good seed before knowing the new one is valid (VACUUM INTO refuses to
+// overwrite), so a failure halfway through would leave the repo with no starting point at all.
+// The candidate sits in the same directory so the final rename is atomic on one filesystem.
+const candidatePath = `${seedPath}.tmp-${process.pid}`;
+const sweep = (base) => {
+  for (const f of [base, `${base}-wal`, `${base}-shm`]) rmSync(f, { force: true });
+};
 
-const live = new DatabaseSync(dbPath, { readOnly: true });
+let integrity;
 try {
-  live.exec(`VACUUM INTO '${seedPath.replace(/'/g, "''")}'`);
+  sweep(candidatePath);
+
+  const live = new DatabaseSync(dbPath, { readOnly: true });
+  try {
+    live.exec(`VACUUM INTO '${candidatePath.replace(/'/g, "''")}'`);
+  } finally {
+    live.close();
+  }
+
+  integrity = report("seed candidate", candidatePath);
+  if (integrity !== "ok") {
+    console.error(`integrity_check returned "${integrity}" — leaving the existing seed in place.`);
+    process.exit(1);
+  }
+
+  // Only now is the old seed expendable.
+  sweep(seedPath);
+  renameSync(candidatePath, seedPath);
 } finally {
-  live.close();
+  sweep(candidatePath); // no-op after a successful rename
 }
 
-const integrity = report("seed written", seedPath);
-if (integrity !== "ok") {
-  console.error(`integrity_check returned "${integrity}" — refusing to call this a good seed.`);
-  process.exit(1);
-}
+console.log(`seed updated  ${seedPath}`);
 
 console.log("\nReview and commit deliberately:");
 console.log("  git add seed/kanbanflow.seed.db");

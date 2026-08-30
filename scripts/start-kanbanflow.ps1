@@ -28,13 +28,25 @@
 #>
 [CmdletBinding()]
 param(
-    [string] $DbPath,
-    [string] $Url,
+    # Validation runs only when a parameter is actually bound, so omitting these still
+    # falls through to the environment/default resolution below -- but passing '' is
+    # rejected outright rather than being silently treated as "not supplied".
+    # ValidateNotNullOrEmpty, not ValidateNotNullOrWhiteSpace: the latter is PowerShell 7+
+    # only and would break this script on the 5.1 it claims to support. Whitespace-only
+    # input is rejected explicitly below instead.
+    [ValidateNotNullOrEmpty()][string] $DbPath,
+    [ValidateNotNullOrEmpty()][string] $Url,
     [switch] $NoSeed
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+
+foreach ($p in 'DbPath', 'Url') {
+    if ($PSBoundParameters.ContainsKey($p) -and [string]::IsNullOrWhiteSpace($PSBoundParameters[$p])) {
+        throw "-$p cannot be whitespace. Omit it to use the default, or give it a real value."
+    }
+}
 
 $RepoRoot = Split-Path -Parent $PSScriptRoot
 $SeedPath = Join-Path (Join-Path $RepoRoot 'seed') 'kanbanflow.seed.db'
