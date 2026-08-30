@@ -227,10 +227,10 @@ public sealed class DefinitionOfDoneTransactionTests
         Assert.All(reads, r => Assert.Null(r.Tx));
 
         // ...and the gate never touched AcceptanceCriteria, so there was nothing to serialize.
-        Assert.Empty(probe.Observations.Where(o => o.Kind == "CriteriaRead"));
+        Assert.DoesNotContain(probe.Observations, o => o.Kind == "CriteriaRead");
 
         // The transition still happened — this is not passing because nothing ran.
-        Assert.NotEmpty(probe.Observations.Where(o => o.Kind == "TaskUpdate"));
+        Assert.Contains(probe.Observations, o => o.Kind == "TaskUpdate");
     }
 
     /// <summary>A field-only edit must not take the writer lock either — see <see cref="UpdateAsync"/>.</summary>
@@ -247,8 +247,8 @@ public sealed class DefinitionOfDoneTransactionTests
         var reads = probe.Observations.Where(o => o.Kind == "TaskRead").ToArray();
         Assert.NotEmpty(reads);
         Assert.All(reads, r => Assert.Null(r.Tx));
-        Assert.Empty(probe.Observations.Where(o => o.Kind == "CriteriaRead"));
-        Assert.NotEmpty(probe.Observations.Where(o => o.Kind == "TaskUpdate"));
+        Assert.DoesNotContain(probe.Observations, o => o.Kind == "CriteriaRead");
+        Assert.Contains(probe.Observations, o => o.Kind == "TaskUpdate");
     }
 
     [Fact]
