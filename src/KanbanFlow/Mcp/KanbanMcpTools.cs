@@ -227,7 +227,7 @@ public static class KanbanMcpTools
                 $"Task {taskId} cannot be marked Done: {ex.UnmetCount} acceptance criterion/criteria are not met ({list}). "
                 + "Call list_acceptance_criteria to get their ids, complete each with mark_acceptance_criterion_done, "
                 + "then retry this call. If a criterion genuinely will not be met, call update_task_status again with "
-                + "overrideReason set to a short explanation of why the task is done despite it.");
+                + "overrideReason set to a short explanation of why the task is done despite them.");
         }
         catch (ValidationException ex)
         {
@@ -455,11 +455,15 @@ public static class KanbanMcpTools
         IDbContextFactory<AppDbContext> dbFactory,
         [Description("The task id this criterion belongs to.")] int taskId,
         [Description("The criterion text (required, <= 1000 chars) — a checkable statement.")] string text,
-        [Description("Optional rank within the task's criteria. Defaults to appending after the last one.")] int? sortOrder = null,
+        [Description("Optional rank within the task's criteria, 0 or greater. Defaults to appending after the last one.")] int? sortOrder = null,
         CancellationToken cancellationToken = default)
     {
         if (string.IsNullOrWhiteSpace(text))
             throw new McpException("Text is required and cannot be blank.");
+        // The wrapper's schema declares `minimum: 0`, so a negative rank is rejected there and was
+        // silently persisted here — the same cross-transport split as the acId naming. (CodeRabbit.)
+        if (sortOrder is < 0)
+            throw new McpException("sortOrder must be 0 or greater.");
         if (text.Trim().Length > MaxCriterionTextLength)
             throw new McpException($"Text must be {MaxCriterionTextLength} characters or fewer.");
 
@@ -485,9 +489,19 @@ public static class KanbanMcpTools
         db.AcceptanceCriteria.Add(criterion);
         await db.SaveChangesAsync(cancellationToken);
 
+        // The Definition-of-Done gate is TRANSITION-only (GateDoneTransitionAsync returns
+        // immediately when oldStatus == Done), so a criterion added to an already-Done task
+        // changes nothing about it. Saying otherwise would be a lie in exactly that case.
+        var taskStatus = await db.Tasks.Where(t => t.Id == taskId)
+            .Select(t => t.Status).FirstAsync(cancellationToken);
+        var message = taskStatus == WorkStatus.Done
+            ? $"Criterion created, but task {taskId} is already Done — the Definition-of-Done gate "
+              + "only runs on a transition INTO Done, so this does not reopen it or block anything."
+            : "Criterion created. The task cannot move to Done until it is complete.";
+
         return new AcceptanceCriterionResult(
             criterion.Id, criterion.TaskItemId, criterion.Text, criterion.Completed, criterion.SortOrder,
-            "Criterion created. The task cannot move to Done until it is complete.");
+            message);
     }
 
     [McpServerTool(Name = "mark_acceptance_criterion_done")]
@@ -495,7 +509,7 @@ public static class KanbanMcpTools
     public static async Task<AcceptanceCriterionResult> MarkAcceptanceCriterionDone(
         IDbContextFactory<AppDbContext> dbFactory,
         [Description("The acceptance criterion id (from list_acceptance_criteria or get_task).")] int acId,
-        [Description("true (default here) completes the criterion; false reopens it. NOTE: the stdio wrapper (scripts/mcp-server.mjs) requires this argument — pass it explicitly if your client may run against either transport.")] bool completed = true,
+        [Description("Optional. true (the default) completes the criterion; false reopens it.")] bool completed = true,
         CancellationToken cancellationToken = default)
     {
         await using var db = await dbFactory.CreateDbContextAsync(cancellationToken);
@@ -528,9 +542,11 @@ public static class KanbanMcpTools
         [Description("The acceptance criterion id.")] int acId,
         [Description("Optional new text (<= 1000 chars). Omit to leave unchanged; blank is rejected.")] string? text = null,
         [Description("Optional new completion state. Omit to leave unchanged.")] bool? completed = null,
-        [Description("Optional new rank within the task's criteria. Omit to leave unchanged.")] int? sortOrder = null,
+        [Description("Optional new rank within the task's criteria, 0 or greater. Omit to leave unchanged.")] int? sortOrder = null,
         CancellationToken cancellationToken = default)
     {
+        if (sortOrder is < 0)
+            throw new McpException("sortOrder must be 0 or greater.");
         // Omitted PRESERVES, blank REJECTS — the same partial-update rule the REST endpoint applies
         // (#203/#260): a rename that omits a field must never wipe it.
         if (text is not null)

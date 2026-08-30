@@ -456,9 +456,13 @@ const tools = [
       type: "object",
       properties: {
         acId: { type: "integer", minimum: 1, description: "Acceptance criterion id to mark." },
-        completed: { type: "boolean", description: "True to mark done, false to mark not-done." }
+        completed: { type: "boolean", description: "Optional. True (the default) marks done, false marks not-done." }
       },
-      required: ["acId", "completed"]
+      // `completed` is OPTIONAL, matching the native /mcp tool of the same name (#438). It was
+      // required here while native defaulted it to true, so the identical call succeeded on one
+      // transport and failed -32602 on the other. Relaxing rather than tightening keeps every
+      // existing caller working, and the default the tool NAME implies is the useful one.
+      required: ["acId"]
     }
   },
   {
@@ -1214,7 +1218,7 @@ async function callTool(toolName, args) {
     case "mark_acceptance_criterion_done":
       return restJson(`/api/acceptance-criteria/${requiredInt(args, "acId", { min: 1 })}`, {
         method: "PUT",
-        body: { completed: requiredBool(args, "completed") }
+        body: { completed: optionalBool(args, "completed") ?? true }
       });
     case "delete_acceptance_criterion":
       return restJson(`/api/acceptance-criteria/${requiredInt(args, "acId", { min: 1 })}`, { method: "DELETE" });

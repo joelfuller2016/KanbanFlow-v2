@@ -259,7 +259,7 @@ public static class ApiEndpoints
                     .OrderBy(s => s.SortOrder)
                     .Select(subtask => MapSubtaskContext(subtask, task.Subtasks)),
                 AcceptanceCriteria = task.AcceptanceCriteria
-                    .OrderBy(c => c.SortOrder)
+                    .OrderBy(c => c.SortOrder).ThenBy(c => c.Id)
                     .Select(c => new
                     {
                         c.Id,
@@ -1226,7 +1226,7 @@ public static class ApiEndpoints
             var task = await db.Tasks
                 .Include(t => t.Feature)
                 .Include(t => t.Subtasks.OrderBy(s => s.SortOrder))
-                .Include(t => t.AcceptanceCriteria.OrderBy(c => c.SortOrder))
+                .Include(t => t.AcceptanceCriteria.OrderBy(c => c.SortOrder).ThenBy(c => c.Id))
                 .AsNoTracking()
                 .FirstOrDefaultAsync(t => t.Id == id);
 

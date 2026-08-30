@@ -227,6 +227,58 @@ public sealed class McpAcceptanceCriteriaToolsTests
     }
 
     /// <summary>
+    /// A negative rank is rejected on both write tools, matching the wrapper's <c>minimum: 0</c>.
+    /// </summary>
+    /// <remarks>
+    /// The wrapper's schema rejects it; native silently persisted it. Same cross-transport split
+    /// as the <c>acId</c> naming, found by the same review. (CodeRabbit, PR #442.)
+    /// </remarks>
+    [Fact]
+    public async Task Negative_sortOrder_is_rejected_on_both_write_tools()
+    {
+        using var h = new SqliteTestFactory();
+        var (taskId, _) = await SeedTaskAsync(h);
+        var existing = await KanbanMcpTools.CreateAcceptanceCriterion(h, taskId, "one");
+
+        var onCreate = await Assert.ThrowsAsync<McpException>(
+            () => KanbanMcpTools.CreateAcceptanceCriterion(h, taskId, "bad", sortOrder: -1));
+        Assert.Contains("0 or greater", onCreate.Message);
+
+        var onUpdate = await Assert.ThrowsAsync<McpException>(
+            () => KanbanMcpTools.UpdateAcceptanceCriterion(h, existing.Id, sortOrder: -1));
+        Assert.Contains("0 or greater", onUpdate.Message);
+
+        // Zero is the boundary and must still be accepted.
+        var atZero = await KanbanMcpTools.UpdateAcceptanceCriterion(h, existing.Id, sortOrder: 0);
+        Assert.Equal(0, atZero.SortOrder);
+    }
+
+    /// <summary>
+    /// Adding a criterion to an already-Done task does not silently claim it will block the task.
+    /// </summary>
+    /// <remarks>
+    /// The Definition-of-Done gate is TRANSITION-only — <c>GateDoneTransitionAsync</c> returns
+    /// immediately when <c>oldStatus == Done</c> — so a criterion added to a Done task changes
+    /// nothing about that task. The tool used to say "The task cannot move to Done until it is
+    /// complete", which is false in exactly that case. Rejecting the write instead would diverge
+    /// from the REST endpoint, which accepts it; the honest message is the smaller correction.
+    /// (CodeRabbit, PR #442.)
+    /// </remarks>
+    [Fact]
+    public async Task Creating_a_criterion_on_a_Done_task_says_so_rather_than_claiming_it_blocks()
+    {
+        using var h = new SqliteTestFactory();
+        var (taskId, _) = await SeedTaskAsync(h);
+        await new TaskService(h).ChangeStatusAsync(taskId, WorkStatus.Done, "tester");
+
+        var created = await KanbanMcpTools.CreateAcceptanceCriterion(h, taskId, "after the fact");
+
+        Assert.False(created.Completed);
+        Assert.Contains("already Done", created.Message);
+        Assert.DoesNotContain("cannot move to Done", created.Message);
+    }
+
+    /// <summary>
     /// Errors must name the tool that yields a valid id — the mcp-builder convention this file's
     /// header cites, and the difference between an agent that recovers and one that gives up.
     /// </summary>
