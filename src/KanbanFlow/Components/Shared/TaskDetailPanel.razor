@@ -66,12 +66,69 @@
             <div class="mb-3">
                 <label class="form-label small text-muted mb-1" for="task-detail-status">Status</label>
                 <select id="task-detail-status" class="form-select form-select-sm" value="@((int)Task.Status)"
+                        @key="statusSelectToken"
                         @onchange="OnStatusChanged">
                     @foreach (var status in Enum.GetValues<WorkStatus>())
                     {
                         <option value="@((int)status)">@GetStatusDisplayName(status)</option>
                     }
                 </select>
+
+                @* Definition-of-Done refusal (#428). The gate lives in ITaskService, so this is the
+                   human-readable face of the exact constraint an agent hits over MCP or REST. *@
+                @if (_dodBlocked is not null)
+                {
+                    @* The announcement and the controls are deliberately SEPARATE elements: an
+                       assertive live region announces its contents, but interactive controls inside
+                       one are announced unpredictably and are not exposed as a grouped, operable
+                       unit. So role="alert" wraps only the text, and the form sits outside it. *@
+                    <div class="alert alert-warning mt-2 mb-0 py-2 px-3"
+                         data-testid="task-detail-dod-block">
+                        <div role="alert">
+                            <div class="fw-semibold small mb-1">
+                                Can&rsquo;t mark Done &mdash; @_dodBlocked.UnmetCount unfinished acceptance
+                                @(_dodBlocked.UnmetCount == 1 ? "criterion" : "criteria")
+                            </div>
+                            <ul class="small mb-2 ps-3">
+                                @foreach (var text in _dodBlocked.Unmet)
+                                {
+                                    <li>@text</li>
+                                }
+                            </ul>
+                        </div>
+                        <div class="input-group input-group-sm" role="group"
+                             aria-label="Complete this task despite unmet acceptance criteria">
+                            @* maxlength mirrors the service-side bound, so the UI cannot submit a
+                               reason the gate will reject. The catch in ApplyStatusAsync still
+                               handles it, because REST and MCP share the same gate. *@
+                            <input type="text" class="form-control" placeholder="Reason to complete anyway"
+                                   aria-label="Reason to complete anyway"
+                                   data-testid="task-detail-dod-reason"
+                                   maxlength="@MaxOverrideReasonLength"
+                                   @ref="_dodReasonInput"
+                                   @bind="_dodOverrideReason" @bind:event="oninput" />
+                            <button type="button" class="btn btn-outline-secondary"
+                                    data-testid="task-detail-dod-override"
+                                    disabled="@string.IsNullOrWhiteSpace(_dodOverrideReason)"
+                                    @onclick="OverrideDefinitionOfDone">
+                                Complete anyway
+                            </button>
+                            <button type="button" class="btn btn-outline-secondary"
+                                    data-testid="task-detail-dod-cancel"
+                                    @onclick="CancelDefinitionOfDoneOverride">
+                                Cancel
+                            </button>
+                        </div>
+                        @if (_dodValidationError is not null)
+                        {
+                            <div class="text-danger small mt-1" role="alert"
+                                 data-testid="task-detail-dod-validation">@_dodValidationError</div>
+                        }
+                        <div class="form-text small mt-1">
+                            The reason is recorded as a Verification comment and an audit event.
+                        </div>
+                    </div>
+                }
             </div>
 
             @* Dependency blockers *@
@@ -478,6 +535,13 @@
 
     protected override async Task OnParametersSetAsync()
     {
+        // Identity is not enough. ProjectView re-fetches the selected task after a mutation and
+        // reassigns it to a NEW instance with the SAME id (ProjectView.razor:734) — e.g. after an
+        // acceptance criterion is ticked. An id-only comparison misses that, so a refusal listing
+        // criteria the user has since completed would keep rendering. Track the instance too.
+        var taskInstanceChanged = !ReferenceEquals(Task, renderedTask);
+        renderedTask = Task;
+
         var freshOpen = IsOpen && !wasOpen;
         if (freshOpen)
         {
@@ -501,6 +565,18 @@
         {
             editingDescription = Task?.Description;
             descriptionResetToken++;   // a new editing session always starts in read mode (#357)
+
+        }
+
+        // Deliberately OUTSIDE the block above, and keyed on instance rather than id. The panel is
+        // REUSED across tasks (no @key at its ProjectView call site), so a refusal left pending on
+        // one task would otherwise still be armed when a different task is opened — and "Complete
+        // anyway" would force-complete the WRONG task while attributing the previous task's
+        // justification to it. The instance check additionally clears a refusal whose criteria the
+        // user has since completed, which an id comparison alone cannot see.
+        if (freshOpen || taskChanged || taskInstanceChanged)
+        {
+            ClearDefinitionOfDoneState();
         }
 
         // Every panel mutation ends in OnTaskUpdated, and ProjectView re-fetches the task — so a
@@ -547,6 +623,22 @@
             catch (ObjectDisposedException) { }
             catch (InvalidOperationException) { }
         }
+
+        // Re-keying the <select> after a refusal replaces the focused node, so browser focus
+        // falls back to the document. Move it to the reason input instead — that is both the
+        // fix for the dropped focus and the correct destination, since the reason is now the
+        // only thing standing between the user and the action they asked for.
+        if (_dodFocusPending && IsOpen)
+        {
+            _dodFocusPending = false;
+            try
+            {
+                await _dodReasonInput.FocusAsync();
+            }
+            catch (JSDisconnectedException) { }
+            catch (ObjectDisposedException) { }
+            catch (InvalidOperationException) { }
+        }
     }
 
     // ── Panel close ──
@@ -556,6 +648,7 @@
         isEditingName = false;
         confirmingDelete = false;
         subtaskError = null;
+        ClearDefinitionOfDoneState();
         await OnClose.InvokeAsync();
     }
 
@@ -662,11 +755,89 @@
         var newStatus = (WorkStatus)statusInt;
         if (newStatus == Task.Status) return;
 
+        await ApplyStatusAsync(newStatus, overrideReason: null);
+    }
+
+    // ── Definition-of-Done gate (#428) ──
+
+    private DefinitionOfDoneNotMetException? _dodBlocked;
+    private string? _dodOverrideReason;
+    private WorkStatus? _dodPendingStatus;
+
+    /// <summary>
+    /// Bumped whenever a refusal or a cancel leaves the &lt;select&gt; showing a status the task
+    /// does not actually have. The select renders <c>value="@((int)Task.Status)"</c>, so when the
+    /// model never changed Blazor's diff sees no change and leaves the user's stale DOM selection
+    /// in place. Keying the element on this token forces a fresh one, resyncing it to the truth.
+    /// </summary>
+    private int statusSelectToken;
+
+    /// <summary>
+    /// The <see cref="Task"/> instance this panel last rendered. Compared by reference, not id,
+    /// because ProjectView re-fetches and reassigns the selected task after a mutation while
+    /// keeping its id — see <see cref="OnParametersSetAsync"/>.
+    /// </summary>
+    private TaskItem? renderedTask;
+
+    /// <summary>
+    /// The id of the task the pending refusal was raised for. `ChangeStatusAsync` is awaited, so
+    /// the parent can switch <see cref="Task"/> WHILE the call is in flight; the refusal then
+    /// lands after <see cref="OnParametersSetAsync"/> has already cleared state for the new task.
+    /// Without this the override would then apply the previous task's justification to whatever
+    /// task is now on screen. Every override re-checks it.
+    /// </summary>
+    private int? _dodPendingTaskId;
+
+    /// <summary>Bounded identically to the service-side gate so the UI cannot submit a reason
+    /// the service will reject — the input also carries a matching <c>maxlength</c>.</summary>
+    private const int MaxOverrideReasonLength = 1000;
+
+    private string? _dodValidationError;
+
+    private ElementReference _dodReasonInput;
+    private bool _dodFocusPending;
+
+    /// <summary>
+    /// Clears every piece of pending Definition-of-Done state together. These three fields are a
+    /// single unit — clearing only some of them is what allows a stale reason to be applied to a
+    /// later task — so there is exactly one place that resets them.
+    /// </summary>
+    private void ClearDefinitionOfDoneState()
+    {
+        _dodBlocked = null;
+        _dodOverrideReason = null;
+        _dodPendingStatus = null;
+        _dodPendingTaskId = null;
+        _dodValidationError = null;
+    }
+
+    private void CancelDefinitionOfDoneOverride()
+    {
+        ClearDefinitionOfDoneState();
+        statusSelectToken++;   // resync the select, which is still showing "Done"
+    }
+
+    /// <summary>
+    /// Single status-application path so the plain select and the "Complete anyway" override
+    /// cannot diverge. A refusal is captured into <see cref="_dodBlocked"/> and rendered inline
+    /// rather than thrown away, so the human sees the same constraint an agent gets over MCP.
+    /// </summary>
+    private async Task ApplyStatusAsync(WorkStatus newStatus, string? overrideReason)
+    {
+        if (Task is null) return;
+
+        // Captured BEFORE the await: `Task` can be swapped by the parent while the service call
+        // is in flight, and the result must be attributed to the task it was actually about.
+        var requestedTaskId = Task.Id;
+
         try
         {
             // Routed through ITaskService — produces the StatusChange comment + activity event
             // (closes UI half of #88 for the detail panel's status select).
-            var updated = await TaskSvc.ChangeStatusAsync(Task.Id, newStatus, actor: "User");
+            // Named arguments: `ct` and `overrideReason` are adjacent optionals, and swapping them
+            // positionally would compile in some shapes while silently dropping the override.
+            var updated = await TaskSvc.ChangeStatusAsync(
+                Task.Id, newStatus, actor: "User", ct: default, overrideReason: overrideReason);
 
             // Reflect the canonical service-returned values in the local entity so the panel
             // re-renders consistently without a full reload.
@@ -674,13 +845,56 @@
             Task.UpdatedAt = updated.UpdatedAt;
             Task.CompletedAt = updated.CompletedAt;
 
+            ClearDefinitionOfDoneState();
+
             await OnTaskUpdated.InvokeAsync();
+        }
+        catch (DefinitionOfDoneNotMetException ex)
+        {
+            // Drop a refusal that arrived after the panel moved on. Showing task A's criteria
+            // over task B is how the override ends up completing the wrong task.
+            if (Task is null || Task.Id != requestedTaskId)
+                return;
+
+            // Surface it — an opaque failure here would read as a broken control. The pending
+            // status and task id are captured alongside the refusal so the override re-applies
+            // the SAME transition the user asked for, on the task it was refused for.
+            _dodBlocked = ex;
+            _dodPendingStatus = newStatus;
+            _dodPendingTaskId = requestedTaskId;
+            _dodValidationError = null;
+            statusSelectToken++;   // the select is still showing Done; resync it to the real status
+            _dodFocusPending = true;
+        }
+        catch (ValidationException ex)
+        {
+            // An over-length override reason. Unhandled, this would surface as an unhandled
+            // component-event exception and can tear down the Blazor Server circuit.
+            if (Task is null || Task.Id != requestedTaskId)
+                return;
+            _dodValidationError = ex.Message;
         }
         catch (TaskNotFoundException)
         {
             // Task vanished mid-edit; let the parent reload to surface the empty state.
             await OnTaskUpdated.InvokeAsync();
         }
+    }
+
+    private async Task OverrideDefinitionOfDone()
+    {
+        if (_dodPendingStatus is null || string.IsNullOrWhiteSpace(_dodOverrideReason)) return;
+
+        // Refuse to apply a refusal raised for a different task. This is the last line of defence
+        // behind the OnParametersSetAsync clear: if the panel switched after the refusal was
+        // armed, the pending id no longer matches and the stale override is discarded.
+        if (Task is null || _dodPendingTaskId != Task.Id)
+        {
+            ClearDefinitionOfDoneState();
+            return;
+        }
+
+        await ApplyStatusAsync(_dodPendingStatus.Value, _dodOverrideReason);
     }
 
     // ── Priority change ──

@@ -30,6 +30,86 @@ public sealed class TaskService(IDbContextFactory<AppDbContext> dbFactory) : ITa
         task.CompletedAt
     };
 
+    /// <summary>
+    /// Definition-of-Done gate. Returns the unmet acceptance criteria when the caller supplied a
+    /// valid override (so the caller can audit it); returns empty when the transition is clean;
+    /// throws <see cref="DefinitionOfDoneNotMetException"/> when the transition must be refused.
+    /// </summary>
+    /// <remarks>
+    /// Shared by <em>every</em> path that can reach <see cref="WorkStatus.Done"/> —
+    /// <see cref="ChangeStatusAsync"/>, <see cref="MoveOnBoardAsync"/>, <see cref="ToggleDoneAsync"/>
+    /// and <see cref="UpdateAsync"/>. Gating only the obvious one would leave drag-to-Done, the
+    /// toggle and a plain field update as unguarded ways around it.
+    /// <para>
+    /// A task with zero acceptance criteria is never gated, and <c>Done → Done</c> never fires
+    /// (the <paramref name="oldStatus"/> check), so the gate applies strictly to a transition
+    /// <em>into</em> Done on a task that has criteria.
+    /// </para>
+    /// </remarks>
+    private static async Task<IReadOnlyList<string>> GateDoneTransitionAsync(
+        AppDbContext db, int taskId, WorkStatus oldStatus, WorkStatus newStatus,
+        string? overrideReason, CancellationToken ct)
+    {
+        if (newStatus != WorkStatus.Done || oldStatus == WorkStatus.Done)
+            return [];
+
+        var unmet = await db.AcceptanceCriteria
+            .Where(c => c.TaskItemId == taskId && !c.Completed)
+            .OrderBy(c => c.SortOrder).ThenBy(c => c.Id)
+            .Select(c => c.Text)
+            .ToListAsync(ct);
+
+        if (unmet.Count == 0)
+            return [];
+
+        // Whitespace is not an override — otherwise " " silently defeats the gate.
+        if (string.IsNullOrWhiteSpace(overrideReason))
+            throw new DefinitionOfDoneNotMetException(taskId, unmet);
+
+        // The reason arrives from untrusted edges (REST body, MCP argument) and is persisted
+        // TWICE — into TaskComment.Text and into the activity event's AfterJson and Message — so
+        // an unbounded string is written to three columns. Bound it at the gate, where every
+        // caller passes through, rather than at each edge.
+        if (overrideReason.Trim().Length > MaxOverrideReasonLength)
+            throw new ValidationException(
+                $"Override reason must be {MaxOverrideReasonLength} characters or fewer.");
+
+        return unmet;
+    }
+
+    /// <summary>Upper bound for an audited Definition-of-Done override reason.</summary>
+    private const int MaxOverrideReasonLength = 1000;
+
+    /// <summary>
+    /// Records an audited Definition-of-Done override: one <see cref="CommentType.Verification"/>
+    /// comment (giving that previously-unread comment type its first real consumer) and one
+    /// <c>TaskDoneOverridden</c> activity event. Called inside the caller's existing
+    /// <c>SaveChanges</c> so the override can never persist without its audit trail (#156).
+    /// </summary>
+    private static void AddDoneOverrideRecords(
+        AppDbContext db, TaskItem task, int projectId, string? actor,
+        string overrideReason, IReadOnlyList<string> unmet)
+    {
+        var reason = overrideReason.Trim();
+        var criteriaList = string.Join("\n", unmet.Select(t => $"- {t}"));
+
+        db.TaskComments.Add(new TaskComment
+        {
+            TaskItemId = task.Id,
+            Text = $"Definition of Done overridden: {reason}\n\n"
+                   + $"Unmet acceptance criteria ({unmet.Count}):\n{criteriaList}",
+            Author = string.IsNullOrWhiteSpace(actor) ? "System" : actor!.Trim(),
+            Type = CommentType.Verification,
+            CreatedAt = DateTime.UtcNow
+        });
+
+        AddActivityEvent(
+            db, projectId, "Task", task.Id, actor,
+            "TaskDoneOverridden", before: null,
+            after: new { unmetCount = unmet.Count, unmet, reason },
+            message: $"Task '{task.Name}' marked Done with {unmet.Count} unmet acceptance criteria: {reason}");
+    }
+
     private static void AddActivityEvent(
         AppDbContext db, int projectId, string entityType, int entityId,
         string? actor, string eventType, object? before, object? after, string? message)
@@ -47,9 +127,26 @@ public sealed class TaskService(IDbContextFactory<AppDbContext> dbFactory) : ITa
         });
     }
 
-    public async Task<TaskItem> ChangeStatusAsync(int taskId, WorkStatus newStatus, string? actor, CancellationToken ct = default)
+    public async Task<TaskItem> ChangeStatusAsync(int taskId, WorkStatus newStatus, string? actor, CancellationToken ct = default, string? overrideReason = null)
     {
         await using var db = await dbFactory.CreateDbContextAsync(ct);
+
+        // Serialize the Definition-of-Done read-modify-write. The gate reads AcceptanceCriteria
+        // and the status write happens at SaveChanges; without a lock spanning both, a concurrent
+        // criterion insert can commit in between and Done persists against criteria the gate never
+        // saw. Microsoft.Data.Sqlite issues BEGIN IMMEDIATE for this overload, so the write lock is
+        // taken HERE, before the reads — the same pattern MoveOnBoardAsync and MoveInOutlineAsync
+        // use. (CreateAsync and ClaimAsync also open transactions, but AFTER their reads, so they
+        // are not examples of this ordering.)
+        //
+        // Scoped to Done-bound transitions ONLY. SQLite permits a single pending writer, so taking
+        // the lock unconditionally would make every Backlog/Todo/Review move queue behind any other
+        // writer and risk SQLITE_BUSY on a transition the gate never even inspects. A non-Done
+        // transition cannot read criteria (the gate returns immediately), so it needs no span.
+        await using var tx = newStatus == WorkStatus.Done
+            ? await db.Database.BeginTransactionAsync(ct)
+            : null;
+
         var task = await db.Tasks
             .Include(t => t.Feature)
             .FirstOrDefaultAsync(t => t.Id == taskId, ct);
@@ -60,9 +157,14 @@ public sealed class TaskService(IDbContextFactory<AppDbContext> dbFactory) : ITa
 
         var oldStatus = task.Status;
 
-        // Idempotent: if no actual change, skip side effects entirely.
+        // Idempotent: if no actual change, skip side effects entirely. Deliberately BEFORE the
+        // Definition-of-Done gate so Done → Done stays a no-op rather than becoming a refusal.
         if (oldStatus == newStatus)
             return task;
+
+        // Definition-of-Done gate. This is the one path that accepts an override, because it is
+        // the path the task detail panel's explicit "Complete anyway" affordance calls.
+        var overriddenCriteria = await GateDoneTransitionAsync(db, taskId, oldStatus, newStatus, overrideReason, ct);
 
         var before = TaskActivitySnapshot(task);
 
@@ -87,7 +189,12 @@ public sealed class TaskService(IDbContextFactory<AppDbContext> dbFactory) : ITa
             "TaskStatusChanged", before, TaskActivitySnapshot(task),
             $"Task '{task.Name}' status changed from {oldStatus} to {newStatus}");
 
+        // Atomic with the status change: an override can never persist without its audit trail.
+        if (overriddenCriteria.Count > 0)
+            AddDoneOverrideRecords(db, task, task.Feature.ProjectId, actor, overrideReason!, overriddenCriteria);
+
         await db.SaveChangesAsync(ct);
+        if (tx is not null) await tx.CommitAsync(ct);
         return task;
     }
 
@@ -156,6 +263,11 @@ public sealed class TaskService(IDbContextFactory<AppDbContext> dbFactory) : ITa
             ? AllocateSortOrder(destinationTasks, insertIndex, taskId)
             : task.SortOrder;
 
+        // Definition-of-Done gate. A drag cannot carry a reason, so this path never overrides —
+        // the card snaps back and the human uses the detail panel's explicit override instead.
+        if (statusChanged)
+            await GateDoneTransitionAsync(db, taskId, oldStatus, newStatus, overrideReason: null, ct);
+
         var before = TaskActivitySnapshot(task);
         var now = DateTime.UtcNow;
 
@@ -196,6 +308,17 @@ public sealed class TaskService(IDbContextFactory<AppDbContext> dbFactory) : ITa
     public async Task<TaskItem> ToggleDoneAsync(int taskId, string? actor, CancellationToken ct = default)
     {
         await using var db = await dbFactory.CreateDbContextAsync(ct);
+
+        // Serialize the Definition-of-Done read-modify-write: the gate reads
+        // AcceptanceCriteria and the status lands at SaveChanges, so without a lock
+        // spanning both, a concurrent criterion insert can commit in between and Done
+        // persists against criteria the gate never saw. BEGIN IMMEDIATE takes the write
+        // lock here, before the reads — same pattern as MoveOnBoardAsync.
+        //
+        // UNCONDITIONAL here, unlike ChangeStatusAsync/UpdateAsync: this method derives its
+        // target status from the CURRENT status, so that read must already be inside the span.
+        await using var tx = await db.Database.BeginTransactionAsync(ct);
+
         var task = await db.Tasks
             .Include(t => t.Feature)
             .Include(t => t.Subtasks)
@@ -208,6 +331,10 @@ public sealed class TaskService(IDbContextFactory<AppDbContext> dbFactory) : ITa
         var oldStatus = task.Status;
         var newStatus = oldStatus == WorkStatus.Done ? WorkStatus.Todo : WorkStatus.Done;
         var markSubtasksCompleted = newStatus == WorkStatus.Done;
+
+        // Definition-of-Done gate. The toggle carries no reason, so it refuses rather than
+        // overriding; un-toggling (Done → Todo) is unaffected because the gate is Done-only.
+        await GateDoneTransitionAsync(db, taskId, oldStatus, newStatus, overrideReason: null, ct);
 
         var before = TaskActivitySnapshot(task);
 
@@ -235,6 +362,7 @@ public sealed class TaskService(IDbContextFactory<AppDbContext> dbFactory) : ITa
             $"Task '{task.Name}' status changed from {oldStatus} to {newStatus}");
 
         await db.SaveChangesAsync(ct);
+        await tx.CommitAsync(ct);
         return task;
     }
 
@@ -556,6 +684,21 @@ public sealed class TaskService(IDbContextFactory<AppDbContext> dbFactory) : ITa
     public async Task<TaskItem> UpdateAsync(int taskId, TaskUpdate dto, string? actor, CancellationToken ct = default)
     {
         await using var db = await dbFactory.CreateDbContextAsync(ct);
+
+        // Serialize the Definition-of-Done read-modify-write: the gate reads
+        // AcceptanceCriteria and the status lands at SaveChanges, so without a lock
+        // spanning both, a concurrent criterion insert can commit in between and Done
+        // persists against criteria the gate never saw. BEGIN IMMEDIATE takes the write
+        // lock here, before the reads — same pattern as MoveOnBoardAsync.
+        //
+        // Scoped to a Done-bound status change ONLY. This method is the general task editor —
+        // renames, priority and assignee changes all land here — and SQLite allows a single
+        // pending writer, so locking unconditionally would make every field edit queue behind
+        // any other writer for a gate that would not run.
+        await using var tx = dto.Status == WorkStatus.Done
+            ? await db.Database.BeginTransactionAsync(ct)
+            : null;
+
         var task = await db.Tasks
             .Include(t => t.Feature)
             .FirstOrDefaultAsync(t => t.Id == taskId, ct);
@@ -610,6 +753,11 @@ public sealed class TaskService(IDbContextFactory<AppDbContext> dbFactory) : ITa
         if (dto.Status is not null && dto.Status.Value != task.Status)
         {
             newStatus = dto.Status.Value;
+
+            // Definition-of-Done gate. A field update carries no reason, so this path refuses;
+            // without it, PUT /api/tasks/{id} would be an unguarded way around the gate.
+            await GateDoneTransitionAsync(db, taskId, oldStatus, newStatus, overrideReason: null, ct);
+
             task.Status = newStatus;
             // Mirror ChangeStatusAsync's CompletedAt invariant so audit history stays consistent.
             if (newStatus == WorkStatus.Done && oldStatus != WorkStatus.Done)
@@ -692,6 +840,7 @@ public sealed class TaskService(IDbContextFactory<AppDbContext> dbFactory) : ITa
         }
 
         await db.SaveChangesAsync(ct);
+        if (tx is not null) await tx.CommitAsync(ct);
         return task;
     }
 
