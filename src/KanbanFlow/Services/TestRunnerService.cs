@@ -181,7 +181,7 @@ public sealed class TestRunnerService(
                 }
             }));
 
-            results.Add(await RunTest("Claim then re-claim by same actor is idempotent", "API:Claim", async () =>
+            results.Add(await RunTest("Claim then re-claim by same actor renews the claim", "API:Claim", async () =>
             {
                 var (innerPid, _, taskId) = await CreateProjectFeatureTaskAsync(http, ct);
                 try
@@ -1220,7 +1220,7 @@ public sealed class TestRunnerService(
             throw new Exception("Expected TaskNotFoundException, got success");
         }));
 
-        results.Add(await RunTest("ClaimAsync idempotent for same actor; conflict for another", "Service:Task", async () =>
+        results.Add(await RunTest("ClaimAsync renews for same actor; conflicts for another", "Service:Task", async () =>
         {
             var (pid, _, taskId) = await CreateProjectFeatureTaskAsync(http, ct);
             try
@@ -1230,10 +1230,10 @@ public sealed class TestRunnerService(
                 if (first.ClaimedBy != "alice" || firstClaimedAt is null)
                     throw new Exception("First claim did not set ClaimedBy/ClaimedAt");
 
-                // Same actor re-claim is idempotent: ClaimedAt is preserved.
+                // Same actor re-claim renews the lease: ClaimedAt advances.
                 var second = await taskSvc.ClaimAsync(taskId, "alice", ct);
-                if (second.ClaimedAt != firstClaimedAt)
-                    throw new Exception("Re-claim by same actor changed ClaimedAt (not idempotent)");
+                if (second.ClaimedAt <= firstClaimedAt)
+                    throw new Exception("Re-claim by same actor did not advance ClaimedAt");
 
                 try
                 {

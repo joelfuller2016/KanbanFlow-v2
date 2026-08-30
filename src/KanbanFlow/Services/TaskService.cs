@@ -1083,7 +1083,7 @@ public sealed class TaskService(
         if (string.Equals(task.ClaimedBy, trimmedActor, StringComparison.OrdinalIgnoreCase))
         {
             var renewedFromStale = existingClaimIsStale;
-            var beforeRenew = TaskActivitySnapshot(task);
+            object? beforeRenew = renewedFromStale ? TaskActivitySnapshot(task) : null;
             var heldBy = task.ClaimedBy;   // captured for the EF Core closure
 
             // Guarded by the holder, so a concurrent release or steal matches zero rows and falls
@@ -1116,36 +1116,42 @@ public sealed class TaskService(
                     .Select(t => new { t.ClaimedBy, t.ClaimedAt, t.UpdatedAt })
                     .FirstOrDefaultAsync(ct)
                     ?? throw new TaskNotFoundException(taskId);
-                if (!string.Equals(current.ClaimedBy, trimmedActor, StringComparison.OrdinalIgnoreCase))
+                if (!string.IsNullOrWhiteSpace(current.ClaimedBy)
+                    && !string.Equals(current.ClaimedBy, trimmedActor, StringComparison.OrdinalIgnoreCase))
                     throw new TaskClaimConflictException(taskId, current.ClaimedBy, current.ClaimedAt);
                 task.ClaimedBy = current.ClaimedBy;
                 task.ClaimedAt = current.ClaimedAt;
                 task.UpdatedAt = current.UpdatedAt;
+                if (!string.IsNullOrWhiteSpace(current.ClaimedBy))
+                {
+                    await tx.CommitAsync(ct);
+                    return task;
+                }
+            }
+            else
+            {
+                task.ClaimedAt = now;
+                if (renewedFromStale)
+                {
+                    // Recovering an already-expired claim IS worth a timeline row: it explains why the
+                    // task did not get stolen. A fresh heartbeat deliberately writes no event.
+                    task.UpdatedAt = now;
+                    AddActivityEvent(
+                        db, task.Feature.ProjectId, "Task", task.Id, trimmedActor,
+                        "TaskClaimRenewed", beforeRenew, TaskActivitySnapshot(task),
+                        $"Task '{task.Name}' claim renewed by {trimmedActor} "
+                        + (previousClaimedAt is { } staleSince
+                            ? $"(claim was {(now - staleSince).TotalHours:0.##}h old; TTL {_claimTtl.TotalHours:0.##}h)"
+                            : $"(claim had no timestamp; TTL {_claimTtl.TotalHours:0.##}h)"));
+                    await db.SaveChangesAsync(ct);
+                }
+
+                // MUST commit. The early return this replaced left the BEGIN IMMEDIATE transaction to
+                // roll back on dispose -- harmless only because nothing was written. Now that this path
+                // writes, a missing commit would silently discard every single heartbeat.
                 await tx.CommitAsync(ct);
                 return task;
             }
-
-            task.ClaimedAt = now;
-            if (renewedFromStale)
-            {
-                // Recovering an already-expired claim IS worth a timeline row: it explains why the
-                // task did not get stolen. A fresh heartbeat deliberately writes no event.
-                task.UpdatedAt = now;
-                AddActivityEvent(
-                    db, task.Feature.ProjectId, "Task", task.Id, trimmedActor,
-                    "TaskClaimRenewed", beforeRenew, TaskActivitySnapshot(task),
-                    $"Task '{task.Name}' claim renewed by {trimmedActor} "
-                    + (previousClaimedAt is { } staleSince
-                        ? $"(claim was {(now - staleSince).TotalHours:0.##}h old; TTL {_claimTtl.TotalHours:0.##}h)"
-                        : $"(claim had no timestamp; TTL {_claimTtl.TotalHours:0.##}h)"));
-                await db.SaveChangesAsync(ct);
-            }
-
-            // MUST commit. The early return this replaced left the BEGIN IMMEDIATE transaction to
-            // roll back on dispose -- harmless only because nothing was written. Now that this path
-            // writes, a missing commit would silently discard every single heartbeat.
-            await tx.CommitAsync(ct);
-            return task;
         }
 
         var before = TaskActivitySnapshot(task);
