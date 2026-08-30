@@ -5,6 +5,7 @@
 @inject IDbContextFactory<AppDbContext> DbFactory
 @inject NavigationManager Nav
 @inject ITaskService TaskSvc
+@inject IConfiguration Config
 
 <PageTitle>KanbanFlow</PageTitle>
 
@@ -324,7 +325,9 @@ else
         try
         {
             await using var db = await DbFactory.CreateDbContextAsync(cts.Token);
-            var summaries = await ProjectSummaryService.LoadAsync(db, actor: null, cts.Token);
+            var rawTtl = Config["ClaimTtl"];
+            var ttl = rawTtl is not null ? TimeSpan.Parse(rawTtl) : (TimeSpan?)null;
+            var summaries = await ProjectSummaryService.LoadAsync(db, actor: null, cts.Token, ttl);
 
             // One "now" for the whole page: read per card, two cards rendered in the same pass could
             // disagree about what "2m ago" means.

@@ -114,7 +114,8 @@ public sealed class ClaimStalenessTests
     public async Task ClaimAsync_StaleClaim_IsTakenOver_AndAuditedAsStolen()
     {
         using var f = new SqliteTestFactory();
-        var id = SeedClaimedTask(f, "bob", DateTime.UtcNow.AddHours(-9));
+        var seededAt = DateTime.UtcNow.AddHours(-9);
+        var id = SeedClaimedTask(f, "bob", seededAt);
         var svc = new TaskService(f, Ttl);
 
         await svc.ClaimAsync(id, "alice");
@@ -133,7 +134,8 @@ public sealed class ClaimStalenessTests
         var stolen = Assert.Single(events.Where(e => e.EventType == "TaskClaimStolen"));
         Assert.Contains("bob", stolen.Message);       // the dispossessed holder is named
         Assert.Contains("alice", stolen.Message);
-        Assert.Contains("h old", stolen.Message);     // claim age is included, not just the TTL
+        var expectedAge = $"{(DateTime.UtcNow - seededAt).TotalHours:0.##}";
+        Assert.Contains($"{expectedAge}h old", stolen.Message);     // claim age is included, not just the TTL
         Assert.Equal("alice", stolen.Actor);
         Assert.Empty(events.Where(e => e.EventType == "TaskClaimed"));
     }

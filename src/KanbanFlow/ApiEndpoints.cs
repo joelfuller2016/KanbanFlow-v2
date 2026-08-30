@@ -29,7 +29,7 @@ public static class ApiEndpoints
     {
         // GET /api/projects — list all with feature/task counts, progress, next task,
         // last activity and active claims
-        app.MapGet("/api/projects", async (AppDbContext db, CancellationToken ct) =>
+        app.MapGet("/api/projects", async (AppDbContext db, IConfiguration config, CancellationToken ct) =>
         {
             // #281: the summary is built by Services/ProjectSummaryService, which the Home page
             // also calls — so the list endpoint and the list PAGE cannot report different counts,
@@ -37,7 +37,9 @@ public static class ApiEndpoints
             // shared engines (ProjectProgressCalculator #125, TaskRanking #151/#188) rather than
             // deriving anything itself. The nine keys this endpoint already returned are unchanged
             // in name, type and order; everything new is appended.
-            var summaries = await Services.ProjectSummaryService.LoadAsync(db, actor: null, ct);
+            var rawTtl = config["ClaimTtl"];
+            var ttl = rawTtl is not null ? TimeSpan.Parse(rawTtl) : (TimeSpan?)null;
+            var summaries = await Services.ProjectSummaryService.LoadAsync(db, actor: null, ct, ttl);
             return Results.Ok(summaries);
         });
 
@@ -365,7 +367,7 @@ public static class ApiEndpoints
         });
 
         // GET /api/projects/{id}/next-tasks — small ranked list of recommended next work
-        app.MapGet("/api/projects/{id:int}/next-tasks", async (int id, int? limit, string? actor, AppDbContext db) =>
+        app.MapGet("/api/projects/{id:int}/next-tasks", async (int id, int? limit, string? actor, AppDbContext db, IConfiguration config) =>
         {
             var projectExists = await db.Projects.AnyAsync(p => p.Id == id);
             if (!projectExists)
@@ -415,8 +417,10 @@ public static class ApiEndpoints
             var statusById = projectTasks.ToDictionary(t => t.Id, t => t.Status);
             var dependsOnByTask = dependencies.ToLookup(d => d.TaskItemId, d => d.DependsOnTaskItemId);
 
+            var rawTtl2 = config["ClaimTtl"];
+            var ttl2 = rawTtl2 is not null ? TimeSpan.Parse(rawTtl2) : (TimeSpan?)null;
             var recommendations = Services.TaskRanking
-                .RankNextTasks(openTasks, statusById, dependsOnByTask, actor, limit ?? 5)
+                .RankNextTasks(openTasks, statusById, dependsOnByTask, actor, limit ?? 5, claimTtl: ttl2)
                 .Select((ranked, index) => new
                 {
                     Rank = index + 1,

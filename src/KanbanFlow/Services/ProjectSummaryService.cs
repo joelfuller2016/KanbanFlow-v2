@@ -123,7 +123,7 @@ public static class ProjectSummaryService
     /// parameter, so the three surfaces are comparable by construction.
     /// </param>
     public static async Task<List<ProjectListSummary>> LoadAsync(
-        AppDbContext db, string? actor = null, CancellationToken ct = default)
+        AppDbContext db, string? actor = null, CancellationToken ct = default, TimeSpan? claimTtl = null)
     {
         ArgumentNullException.ThrowIfNull(db);
 
@@ -244,7 +244,7 @@ public static class ProjectSummaryService
                 .ToLookup(d => d.TaskItemId, d => d.DependsOnTaskItemId);
 
             var nextTask = TaskRanking
-                .RankNextTasks(projectOpenTasks, statusByProjectTaskId, dependsOnByTask, actor, limit: 1)
+                .RankNextTasks(projectOpenTasks, statusByProjectTaskId, dependsOnByTask, actor, limit: 1, claimTtl: claimTtl)
                 .Select(r => new NextTaskSummary(
                     r.Task.Id,
                     r.Task.FeatureId,

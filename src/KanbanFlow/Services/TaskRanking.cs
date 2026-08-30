@@ -73,6 +73,8 @@ public static class TaskRanking
 
         var effectiveNow = now ?? DateTime.UtcNow;
         var effectiveTtl = claimTtl ?? ClaimPolicy.DefaultTtl;
+        if (effectiveTtl <= TimeSpan.Zero)
+            throw new ArgumentOutOfRangeException(nameof(claimTtl), "Claim TTL must be positive.");
 
         var clampedLimit = Math.Clamp(limit, 1, 50);
         // Normalize the actor exactly as ClaimedBy is normalized on write (trim, blank→null), so an
