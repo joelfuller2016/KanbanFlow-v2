@@ -58,6 +58,7 @@
                            class="board-card-gh"
                            @onclick:stopPropagation="true"
                            title="Open @IssueLabel on GitHub"
+                           aria-label="@IssueAriaLabel"
                            data-testid="board-card-@Task.Id-github">
                             <svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true" focusable="false"><path fill="currentColor" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z" /></svg>
                             <span>@IssueLabel</span>
@@ -95,11 +96,42 @@
     // project has no bUnit, so logic left in a `.razor` @code block is unreachable from a test.
     // Same reason IdeaBadge exists. The card only asks the questions; the parsing is pinned by
     // MirroredDescriptionTests.
-    private string? IssueUrl => MirroredDescription.IssueUrl(Task.Description);
-    private string? IssueLabel => MirroredDescription.IssueLabel(Task.Description);
-    private string? Excerpt => MirroredDescription.Excerpt(Task.Description);
+    //
+    // Resolved once per description change, NOT on every render — the same treatment, and for the
+    // same reason, as EditItemModal's GitHub links. As expression-bodied properties these re-ran the
+    // whole pipeline on every `@` reference: measured at ~9 regex passes and ~50 KB of allocation
+    // per card per render, and the board holds 185 cards. `BoardFilterBar` binds `@oninput` with no
+    // debounce and there is no `Virtualize`, so a filter keystroke re-renders every card on the
+    // circuit's synchronization context — the cost multiplies by every character typed.
+    private string? issueUrl;
+    private string? issueLabel;
+    private string? issueAriaLabel;
+    private string? excerpt;
+    private bool hasReveal;
+    private string? parsedFrom;
+    private bool parsedOnce;
 
-    private bool HasReveal => IssueUrl is not null || !string.IsNullOrWhiteSpace(Excerpt);
+    protected override void OnParametersSet()
+    {
+        // Reference equality is not enough: two tasks can share a description string, and a task's
+        // description can change in place. Compare by value, and use a separate `parsedOnce` flag so
+        // a genuinely null description is not re-parsed on every render.
+        if (parsedOnce && string.Equals(parsedFrom, Task.Description, StringComparison.Ordinal)) return;
+
+        parsedFrom = Task.Description;
+        parsedOnce = true;
+        issueUrl = MirroredDescription.IssueUrl(Task.Description);
+        issueLabel = MirroredDescription.IssueLabel(Task.Description);
+        issueAriaLabel = MirroredDescription.IssueAriaLabel(Task.Description);
+        excerpt = MirroredDescription.Excerpt(Task.Description);
+        hasReveal = issueUrl is not null || !string.IsNullOrWhiteSpace(excerpt);
+    }
+
+    private string? IssueUrl => issueUrl;
+    private string? IssueLabel => issueLabel;
+    private string? IssueAriaLabel => issueAriaLabel;
+    private string? Excerpt => excerpt;
+    private bool HasReveal => hasReveal;
 
     private static string GetPriorityBadgeClass(TaskPriority priority) => priority switch
     {

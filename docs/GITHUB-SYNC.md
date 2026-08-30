@@ -34,7 +34,7 @@ node scripts/portfolio-sync.mjs --help
 | *(no milestone)* | Feature `Unsorted` | the literal name `Unsorted` |
 | issue | TaskItem | the `#<n> ` prefix on `TaskItem.Name` |
 | issue labels | TaskItem.Priority | highest severity label wins; default `Medium` |
-| issue body | TaskItem.Description | provenance block + first 1500 chars of the body |
+| issue body | TaskItem.Description | provenance block + first 30,000 chars of the body (`KANBANFLOW_BODY_EXCERPT_LIMIT`; bounded by SignalR’s 32 KB receive cap) |
 | issue comment | TaskComment | `<!-- gh:<node-id> -->` stamped into `TaskComment.Text` |
 | PR conversation comment | TaskComment (`Comment`) | same node-id marker |
 | PR review `APPROVED` | TaskComment (`Verification`) | same node-id marker |

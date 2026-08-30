@@ -112,14 +112,17 @@ public sealed class MirroredDescriptionTests
 
         Assert.NotNull(excerpt);
         // Elided to the cap plus the one-character ellipsis, never the whole string.
-        Assert.Equal(MirroredDescription.ExcerptMaxLength + 1, excerpt!.Length);
+        // The LITERAL 180, not `ExcerptMaxLength + 1`. Deriving both sides from the constant made
+        // this invariant under the constant's value - a review measured 96, 120, 400 and 3000 all
+        // leaving the suite green, so the number the card's layout depends on was pinned by nothing.
+        Assert.Equal(180, MirroredDescription.ExcerptMaxLength);
+        Assert.Equal(181, excerpt!.Length);
         Assert.EndsWith("…", excerpt);
-        Assert.NotEqual(body, excerpt);
     }
 
-    // The scan bound is a PERFORMANCE guard on a 64,000-char cap, and a bound that silently loses
-    // the header would be worse than no bound: the card would drop its GitHub link on exactly the
-    // long issues that most need one. The header is always first, so the bound must never reach it.
+    // The scan bound is a PERFORMANCE guard on a 30,000-char cap, and a bound that silently lost the
+    // header would be worse than no bound: the card would drop its GitHub link on exactly the long
+    // issues that most need one. The header is always first, so the bound must never reach it.
     [Fact]
     public void ScanBound_DoesNotCostTheHeaderOnAMaximumLengthBody()
     {
@@ -128,7 +131,17 @@ public sealed class MirroredDescriptionTests
         Assert.True(huge.Length > MirroredDescription.ScanChars,
             "fixture must exceed the scan bound or this proves nothing");
         Assert.Equal("#454", MirroredDescription.IssueLabel(huge));
-        Assert.DoesNotContain("Synced:", MirroredDescription.Excerpt(huge));
+
+        // OUTPUT-side non-vacuity. `Assert.DoesNotContain(needle, null)` PASSES in xunit, so an
+        // absence check alone is satisfied by an excerpt that is null or empty - and "return null
+        // for anything over ScanChars" is precisely the mutant that would blank the hover reveal on
+        // every real mirrored card, the median mirrored description being ~11,900 chars against a
+        // 4,096 bound. Controlling only the INPUT needle left this PR's headline defect
+        // undetectable; a positive claim about the content closes it.
+        var excerpt = MirroredDescription.Excerpt(huge);
+        Assert.NotNull(excerpt);
+        Assert.StartsWith("1. Surfaced by", excerpt);
+        Assert.DoesNotContain("Synced:", excerpt);
     }
 
     // The excerpt renders as plain text in a <p>, so markdown syntax in it is debris, not emphasis.
@@ -164,7 +177,9 @@ public sealed class MirroredDescriptionTests
 
         Assert.Contains("portfolio_sync", excerpt);
         Assert.Contains("KANBANFLOW_DB_PATH", excerpt);
-        Assert.Contains(".razor", excerpt);
+        // The STAR is the point: asserting ".razor" alone passed even under a widened emphasis rule
+        // that ate the leading `*` - the exact mangling this test claims to forbid.
+        Assert.Contains("*.razor", excerpt);
     }
 
     // The scan bound is not only a cost guard — it is where "the header" is DEFINED to be.
@@ -181,9 +196,15 @@ public sealed class MirroredDescriptionTests
     [Fact]
     public void AnIssueMarkerQuotedDeepInTheBody_IsNotMistakenForTheHeader()
     {
-        var quoted = "A hand-written task, no sync header.\n"
-            + new string('p', MirroredDescription.ScanChars)
-            + "\n**Issue:** https://github.com/someone-else/other-repo/issues/1\n";
+        // A REAL sync block, so `SyncBlockRe` is satisfied and the scan bound is the ONLY thing
+        // that can refuse the URL. The earlier fixture had no block at all, so once `IssueUrl`
+        // was hardened to require one it returned null before `ScanChars` was ever consulted,
+        // and this test silently stopped pinning the bound it exists for - while its comment
+        // kept claiming it did. A review caught it by deleting the bound: 17/17 stayed green.
+        var quoted = "<!-- kanbanflow-sync -->\n"
+            + "**Labels:** " + new string('p', MirroredDescription.ScanChars) + "\n"
+            + "**Issue:** https://github.com/someone-else/other-repo/issues/1\n"
+            + "<!-- /kanbanflow-sync -->\n\nbody";
 
         Assert.True(quoted.IndexOf("**Issue:**", StringComparison.Ordinal) > MirroredDescription.ScanChars,
             "the marker must sit beyond the bound or this proves nothing");
@@ -192,6 +213,75 @@ public sealed class MirroredDescriptionTests
         Assert.Equal("#454", MirroredDescription.IssueLabel(MirroredFixture));
 
         Assert.Null(MirroredDescription.IssueUrl(quoted));
+    }
+
+    // The card's GitHub link is target="_blank", which moves the user out of the app with no
+    // announcement, and its icon conveys the destination visually only. Added after a review found
+    // the link had a `title` and nothing else, while EditItemModal.razor already carries the
+    // "(opens in a new tab)" wording for the same affordance.
+    [Fact]
+    public void IssueAriaLabel_NamesTheDestinationAndTheNewTab()
+    {
+        var label = MirroredDescription.IssueAriaLabel(MirroredFixture);
+
+        Assert.NotNull(label);
+        Assert.Contains("#454", label);
+        Assert.Contains("opens in a new tab", label);
+        // Matches EditItemModal's wording exactly; two phrasings for one affordance is worse than one.
+        Assert.Equal("GitHub issue #454 (opens in a new tab)", label);
+    }
+
+    [Fact]
+    public void IssueAriaLabel_IsNullWithoutALink_AndUnnumberedForANonIssueUrl()
+    {
+        Assert.Null(MirroredDescription.IssueAriaLabel("a hand-written description"));
+
+        const string repoLink = "<!-- kanbanflow-sync -->\n"
+            + "**Issue:** https://github.com/joelfuller2016/KanbanFlow-v2\n"
+            + "<!-- /kanbanflow-sync -->\n\nbody";
+        Assert.Equal("View on GitHub (opens in a new tab)", MirroredDescription.IssueAriaLabel(repoLink));
+    }
+
+    // The issue URL is read ONLY from inside the sync block. Found by an independent review: with
+    // the pattern matched against the whole description, a hand-written task whose first line is
+    // "**Issue:** https://github.com/anyone/anything/issues/1" got a "#1" chip on its card linking
+    // wherever its author chose, indistinguishable from a real mirror.
+    [Fact]
+    public void IssueUrl_IsIgnoredOutsideTheSyncBlock()
+    {
+        const string spoofed = "**Issue:** https://github.com/someone-else/other-repo/issues/123\n"
+            + "This is an ordinary hand-written task.";
+
+        // Non-vacuity: the pattern DOES match this text when not confined to the block, and the
+        // same helper finds the real one — so null below is the block requirement, not a dead regex.
+        Assert.Contains("**Issue:** https://github.com/", spoofed);
+        Assert.Equal("#454", MirroredDescription.IssueLabel(MirroredFixture));
+
+        Assert.Null(MirroredDescription.IssueUrl(spoofed));
+        Assert.Null(MirroredDescription.IssueLabel(spoofed));
+        Assert.Null(MirroredDescription.IssueAriaLabel(spoofed));
+    }
+
+    // Slicing at a fixed UTF-16 index can keep a lone high surrogate when an astral character
+    // straddles the boundary — ill-formed text that renders as a replacement glyph.
+    [Fact]
+    public void Excerpt_NeverSplitsASurrogatePair()
+    {
+        var emoji = char.ConvertFromUtf32(0x1F600);            // one astral char, two UTF-16 units
+        var body = new string('a', MirroredDescription.ExcerptMaxLength - 1) + emoji + new string('z', 40);
+
+        // Non-vacuity: the naive slice at this boundary really is ill-formed.
+        Assert.True(char.IsHighSurrogate(body[MirroredDescription.ExcerptMaxLength - 1]),
+            "fixture must straddle the boundary or this proves nothing");
+
+        var excerpt = MirroredDescription.Excerpt(body);
+
+        Assert.NotNull(excerpt);
+        // The ellipsis is the last char; the char before it must not be an orphaned high surrogate.
+        var beforeEllipsis = excerpt![..^1];
+        Assert.False(beforeEllipsis.Length > 0 && char.IsHighSurrogate(beforeEllipsis[^1]),
+            "excerpt must not end in a lone high surrogate");
+        Assert.Equal(MirroredDescription.ExcerptMaxLength - 1, beforeEllipsis.Length);
     }
 
     // A URL that is not an issue link still gets an affordance, just an unnumbered one.

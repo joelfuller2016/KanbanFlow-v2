@@ -75,3 +75,54 @@ test("descriptionFor emits no truncation marker for a real-sized body", async ()
   assert.doesNotMatch(out, MARKER);
   assert.ok(out.includes("b".repeat(11900)), "the whole body must reach the board");
 });
+
+// ── The truncation footer is PERSISTED into a task description, so it must be locale-STABLE ────
+// Review catch: `toLocaleString()` yields 64,000 / 64.000 / 64 000 on en-US / de-DE / fr-FR. Two
+// machines syncing the same board would write different bytes for the same body, and any future
+// comparison of descriptions (see the follow-up issue on reconciliation) would read that as a
+// change. Deterministic here costs nothing and removes the trap before it is laid.
+test("digit grouping is deterministic, not locale-dependent", async () => {
+  const { groupDigits } = await load();
+  assert.equal(groupDigits(64000), "64,000");
+  assert.equal(groupDigits(21057), "21,057");
+  assert.equal(groupDigits(999), "999");
+  assert.equal(groupDigits(1000), "1,000");
+  assert.equal(groupDigits(1234567), "1,234,567");
+  assert.equal(groupDigits(0), "0");
+
+  // The property that actually matters: identical to what a de-DE machine produces here.
+  // toLocaleString would NOT satisfy this.
+  assert.equal(groupDigits(64000), (64000).toLocaleString("en-US"));
+  assert.notEqual((64000).toLocaleString("de-DE"), groupDigits(64000));
+});
+
+// An astral character straddling the cut used to leave a lone high surrogate - ill-formed text that
+// renders as a replacement glyph and, because the description is persisted, poisons every later
+// comparison of it. Found by an independent review pass, not by the tests above.
+test("truncation never splits a surrogate pair", async () => {
+  const { excerptFor } = await load(100);
+  const emoji = String.fromCodePoint(0x1F600);       // one astral char, two UTF-16 units
+  const body = "a".repeat(99) + emoji + "z".repeat(50);
+
+  // Non-vacuity: the naive slice at this boundary IS ill-formed, so a pass below means the guard
+  // acted rather than that the fixture was harmless.
+  assert.equal(body.slice(0, 100).isWellFormed(), false, "fixture must straddle the boundary");
+
+  const kept = excerptFor(body, "https://github.com/o/r/issues/1").split("\n\n---\n\n")[0];
+  assert.ok(kept.isWellFormed(), "excerpt must not end in a lone surrogate");
+  assert.equal(kept.length, 99, "the orphaned high surrogate is dropped, costing one unit");
+});
+
+// BODY_EXCERPT_LIMIT budgets the SOURCE BODY, not the returned string: the footer is appended after
+// the budget. Pinned so the "absolute cap" reading cannot creep back into a comment or a test name.
+test("the limit budgets the retained body, and the footer is charged on top", async () => {
+  const { excerptFor, BODY_EXCERPT_LIMIT } = await load(100);
+  assert.equal(BODY_EXCERPT_LIMIT, 100);
+
+  const out = excerptFor("x".repeat(500), "https://github.com/o/r/issues/1");
+  const kept = out.split("\n\n---\n\n")[0];
+
+  assert.equal(kept.length, 100, "retained body is exactly the budget");
+  assert.ok(out.length > BODY_EXCERPT_LIMIT, "the returned string is deliberately longer");
+  assert.ok(out.length < BODY_EXCERPT_LIMIT + 200, "and the footer is bounded, not open-ended");
+});

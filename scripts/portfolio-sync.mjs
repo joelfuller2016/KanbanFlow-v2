@@ -80,27 +80,26 @@ const DEFAULT_REPOS = [
 
 const UNSORTED_FEATURE = "Unsorted";
 
-// The HTML marker `descriptionFor` opens every mirrored description with. Its presence is the
-// sync's claim of ownership over that text: present means "the sync wrote this and may rewrite
-// it", absent means a human owns it and the sync must not touch it.
-const SYNC_MARKER = "<!-- kanbanflow-sync -->";
-
-// A mirrored description is regenerated from scratch on every run and its `**Synced:**` stamp is a
-// fresh timestamp each time, so comparing the raw text would mark all 172 tasks changed on every
-// single sync: 172 pointless PUTs, 172 audit-trail entries, and a "tasks updated" count that could
-// never reach zero and so could never mean anything. Compare with the stamp normalised out; the
-// fresh stamp still gets written, but only when something else actually differs.
-const SYNCED_LINE_RE = /^\*\*Synced:\*\*.*$/m;
-const comparableDescription = (d) => String(d || "").replace(SYNCED_LINE_RE, "").trim();
-// Was 1500 - a cap meant to be the rare exception that fired on EVERY card. Measured against all
-// 60 issues in this repo: the median body is 11,900 chars and the SMALLEST one still clears 1500, so
-// 100% of descriptions carried the truncation marker, which taught the board's reader to ignore it.
-// 64000 clears the largest body in the portfolio (21,057) with ~3x headroom. A cap still exists
-// because the description is mirrored into SQLite on every sync and re-rendered as markdown in the
-// detail panel - unbounded is a different bug, not the fix. Overridable so the truncation path stays
-// exercisable now that no real issue reaches it.
+// Was 1500 - a cap meant to be the rare exception that fired on EVERY card. Measured across all 60
+// open issues: median body 11,900 chars, and the SMALLEST still cleared 1500, so 100% of mirrored
+// descriptions carried the truncation marker and it taught the reader to ignore it.
+//
+// 30,000 is not a taste judgement - it is bounded by the TRANSPORT. The board is Blazor Server, and
+// `EditableMarkdown` sends the entire description buffer over SignalR on every keystroke
+// (`@oninput` -> `ValueChanged.InvokeAsync`). Program.cs configures no `HubOptions`, so the default
+// `MaximumReceiveMessageSize` of 32,768 BYTES applies: a description larger than that cannot be
+// edited at all - the first keystroke exceeds the frame, the hub throws, and the circuit drops with
+// the edit lost. A cap above the transport limit manufactures descriptions the app cannot open.
+//
+// Measured against all 320 issues in the repo: exactly ONE (#493, 54,236 chars) exceeds this; the
+// next largest is 22,264 and fits whole. So 30,000 keeps 319/320 intact while guaranteeing every
+// description the sync writes stays editable, with ~2.4 KB of headroom for the header (max 296
+// chars measured) and for multi-byte characters, which cost more bytes than chars.
+//
+// Raising it means raising `MaximumReceiveMessageSize` in Program.cs in the same change.
 const BODY_EXCERPT_LIMIT = Math.max(
-  1, Number.parseInt(process.env.KANBANFLOW_BODY_EXCERPT_LIMIT || "64000", 10) || 64000);
+  1, Number.parseInt(process.env.KANBANFLOW_BODY_EXCERPT_LIMIT || "30000", 10) || 30000);
+
 // High enough that no repo in the portfolio comes near it, because SATURATING it is a hard
 // failure, not a warning: a read that stopped early makes every count and every "no drift"
 // verdict downstream a lie. Overridable so the incompleteness path can actually be exercised.
@@ -487,10 +486,37 @@ function stripSyncBlock(description) {
 // fenced code block or a table left the panel rendering a half-OPEN construct - the markdown past
 // the cut is not merely missing, it is malformed, and it swallows the very marker that was supposed
 // to explain itself. The 0.8 floor keeps the hard slice when a single line is itself over the limit,
-// so the cap stays absolute rather than becoming advisory.
+// so the budget stays firm rather than becoming advisory.
+//
+// Exactly what BODY_EXCERPT_LIMIT bounds: the SOURCE BODY retained, not the length of the string
+// returned. The footer is appended AFTER the budget, so the output is limit + footer (~106 units).
+// It has to be - a footer paid for out of the budget would eat the body in order to explain itself,
+// and at a small limit would crowd it out entirely. Anything downstream sizing a buffer off this
+// constant must add the footer.
+// Deterministic thousands grouping. `toLocaleString()` was locale-DEPENDENT - 64,000 / 64.000 /
+// 64 000 on en-US / de-DE / fr-FR - and this string is PERSISTED into the task description and then
+// compared for drift on every sync. Two machines with different locales would each see the other's
+// footer as a change and rewrite every truncated task, forever. Grouping by regex rather than a
+// fixed-locale `toLocaleString("en-US")` also drops the dependency on which ICU build Node has.
+// Slicing at a fixed UTF-16 index can retain a LONE HIGH SURROGATE when an astral character (an
+// emoji, most CJK extension B) straddles the boundary. That is ill-formed text: it renders as a
+// replacement glyph, and because this string is PERSISTED it corrupts every later comparison of
+// it. Dropping the orphan costs at most one code unit and is always safe.
+// Tested by charCode rather than a regex so the surrogate range is stated once, in numbers.
+const HIGH_SURROGATE_LO = 0xD800;
+const HIGH_SURROGATE_HI = 0xDBFF;
+const sliceWholeChars = (s, n) => {
+  const cut = s.slice(0, n);
+  if (cut.length === 0) return cut;
+  const last = cut.charCodeAt(cut.length - 1);
+  return last >= HIGH_SURROGATE_LO && last <= HIGH_SURROGATE_HI ? cut.slice(0, -1) : cut;
+};
+
+const groupDigits = (n) => String(n).replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+
 function excerptFor(body, url) {
   if (body.length <= BODY_EXCERPT_LIMIT) return body;
-  const hard = body.slice(0, BODY_EXCERPT_LIMIT);
+  const hard = sliceWholeChars(body, BODY_EXCERPT_LIMIT);
   const nl = hard.lastIndexOf("\n");
   const kept = nl > BODY_EXCERPT_LIMIT * 0.8 ? hard.slice(0, nl) : hard;
   const where = url ? `[read the full issue on GitHub](${url})` : "read it on GitHub";
@@ -498,7 +524,7 @@ function excerptFor(body, url) {
 
 ---
 
-_…truncated at ${kept.length.toLocaleString()} of ${body.length.toLocaleString()} chars — ${where}_`;
+_…truncated at ${groupDigits(kept.length)} of ${groupDigits(body.length)} chars — ${where}_`;
 }
 
 function descriptionFor(issue, linkedPr) {
@@ -558,8 +584,6 @@ function plan(dryRun, verb, what) {
 // Two kinds, and only two: both describe a disagreement the sync deliberately WILL NOT fix.
 const driftDoneButOpen = (repo, issue) =>
   `${repo}#${issue.number}: board says Done, issue is still open — ${issue.url}`;
-const driftHandEditedDescription = (repo, issue) =>
-  `${repo}#${issue.number}: description was replaced by hand - the sync will not overwrite it - ${issue.url}`;
 const driftOrphanTask = (repo, taskName, issueNumber) =>
   `${repo}: task "${taskName}" has no matching issue #${issueNumber} on GitHub (deleted or transferred?)`;
 
@@ -701,35 +725,9 @@ async function syncTasks(repo, projectId, issues, closedNumbers, prByIssue, feat
       stats.drift.push(driftDoneButOpen(repo, issue));
     }
 
-    // GitHub owns the BODY of a mirrored description, and until now nothing reconciled it:
-    // `descriptionFor` had exactly one call site, the create path. Once a task existed its
-    // description was frozen at whatever the first sync wrote, so an edited issue body never
-    // reached the board (#349) — and on this board that froze a truncation marker onto 165 of 172
-    // tasks, which no amount of raising the excerpt limit would have cleared on its own.
-    //
-    // Ownership is the guard. A description the sync wrote carries SYNC_MARKER, and replacing that
-    // is the sync doing its job. One a human wrote or replaced does not carry it, and overwriting
-    // it would be the sync fighting the board's owner — the same invariant that stops it stomping a
-    // hand-set status a few lines below. That case is reported as drift, never silently skipped.
-    const desiredDescription = descriptionFor(issue, linkedPr);
-    const currentDescription = String(task.description || "");
-    if (currentDescription.trim() === "" || currentDescription.includes(SYNC_MARKER)) {
-      if (comparableDescription(currentDescription) !== comparableDescription(desiredDescription)) {
-        patch.description = desiredDescription;
-      }
-    } else {
-      stats.drift.push(driftHandEditedDescription(repo, issue));
-    }
-
     if (Object.keys(patch).length === 0) { stats.tasksUnchanged++; continue; }
 
-    // `patch` can now carry a description up to BODY_EXCERPT_LIMIT, and JSON.stringify would put
-    // every byte of it in the log once per task - 165 tasks of wall on this board alone. Log its
-    // SIZE; the content is on GitHub, which is where the line already points the reader.
-    const loggable = patch.description === undefined
-      ? patch
-      : { ...patch, description: `<${patch.description.length} chars>` };
-    plan(dryRun, "update task", `${desiredName}  ${JSON.stringify(loggable)}`);
+    plan(dryRun, "update task", `${desiredName}  ${JSON.stringify(patch)}`);
     if (dryRun) continue;
     // PUT /api/tasks/{id} rejects any payload without `name` — 422 "Name is required."
     // (ApiEndpoints.cs:1451). So `name` always goes on the wire, even when unchanged;
@@ -1308,4 +1306,4 @@ if (invokedDirectly) {
 // Exported for `portfolio-sync.test.mjs`. `excerptFor` is the truncation the board's reader sees;
 // `descriptionFor` is the whole mirrored description, exported so a test can assert the marker is
 // absent for a real-sized issue body rather than only that the helper agrees with itself.
-export { excerptFor, descriptionFor, BODY_EXCERPT_LIMIT };
+export { excerptFor, descriptionFor, BODY_EXCERPT_LIMIT, groupDigits };

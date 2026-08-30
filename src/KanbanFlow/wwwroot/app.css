@@ -1381,10 +1381,14 @@ h1:focus {
 
    ── Why :focus-within, and why the media query ──
    Hover alone is unreachable by keyboard and meaningless on touch. `:focus-within` opens the panel
-   when the title button takes focus, so tabbing the board reveals the same information, and a tap on
-   a touch device focuses the button and opens it too. The hover half is gated behind
-   `(hover: hover)` so a touch browser's emulated hover cannot leave a card stuck open with no
-   pointer to move away. */
+   when the title button takes focus, so tabbing the board reveals the same information. The hover
+   half is gated behind `(hover: hover)` so a touch browser's emulated hover cannot leave a card
+   stuck open with no pointer to move away.
+   KNOWN GAP, correcting an earlier claim in this comment that a tap opens it - on touch it does
+   NOT. The card body is not focusable, and tapping the title both opens the detail panel and moves
+   focus into it (`initTaskDetailDialog` in kanbanflow.js), so `:focus-within` dies inside the same
+   interaction. The excerpt and the GitHub link are pointer/keyboard affordances only. The detail
+   panel carries the same information, so nothing is unreachable - but it is not reachable HERE. */
 .board-card-reveal {
     display: grid;
     grid-template-rows: 0fr;
@@ -1404,9 +1408,15 @@ h1:focus {
     }
 }
 
+/* Keyboard focus opens the panel INSTANTLY - no tween. Shift+Tab from the first control of the
+   next card lands directly on this card's GitHub link while the panel is still collapsed, so with
+   the .18s transition the newly focused control is zero-height, clipped and transparent at the
+   moment it takes focus, and only fades in afterwards. A focus indicator that arrives 180ms late is
+   not a focus indicator. Hover keeps its tween: nothing is focused there, so nothing is hidden. */
 .board-card:focus-within > .card-body > .board-card-reveal {
     grid-template-rows: 1fr;
     opacity: 1;
+    transition: none;
 }
 
 /* The title: TWO lines at rest, all of them while the card is open.
@@ -1431,18 +1441,21 @@ h1:focus {
     transition: none;
 }
 
+/* `overflow` deliberately stays `hidden`. Setting it `visible` to "show everything" un-does the
+   flex-item minimum-size zeroing that CSS Sizing 3 grants only to scroll containers: `min-width`
+   reverts to `auto` = min-content = the longest unbreakable token, so a title holding something like
+   `` `README.md:20` `` widens past the column and shoves the "Blocked" badge out of the clipped
+   wrapper. `-webkit-line-clamp: unset` alone shows every line with `hidden` still in force. */
 @media (hover: hover) {
     .board-card:hover .board-card-title {
         -webkit-line-clamp: unset;
         line-clamp: unset;
-        overflow: visible;
     }
 }
 
 .board-card:focus-within .board-card-title {
     -webkit-line-clamp: unset;
     line-clamp: unset;
-    overflow: visible;
 }
 
 /* The sidebar rows, same defect and same fix. #481 measured the outline as WORSE than the board:
@@ -1469,10 +1482,26 @@ h1:focus {
    chosen element (`chosenClass` in kanbanflow.js) — no JS change is needed, and it covers a drag
    whose source and target columns differ, which a per-column selector would not. `:has()` is
    established in this stylesheet; see the ⋮-menu z-index rule. */
-body:has(.kanban-chosen) .board-card-reveal,
-.board-card.kanban-ghost .board-card-reveal {
+/* Specificity is load-bearing here, and the first version of this rule got it wrong.
+   `body:has(.kanban-chosen) .board-card-reveal` is (0,2,1); the rules it has to beat -
+   `.board-card:hover > .card-body > .board-card-reveal` and its `:focus-within` twin - are (0,4,0).
+   Source order only breaks TIES, so the suppression could never win and the whole block was dead
+   code. Both selectors below are now one unit above their targets.
+
+   Keyed on `kanban-ghost`, not `kanban-chosen`: SortableJS sets `chosenClass` synchronously on
+   TAP-START (no `delay` option is configured), so a plain mousedown to open a card would have
+   collapsed its reveal mid-click. `ghostClass` appears only once a drag genuinely begins.
+
+   The TITLE needs suppressing too, and originally did not have it. Un-clamping a title from 2 lines
+   to all of them changes a card's height by MORE than the reveal does, on essentially every card. */
+body:has(.kanban-ghost) .board-card > .card-body > .board-card-reveal {
     grid-template-rows: 0fr;
     opacity: 0;
+}
+
+body:has(.kanban-ghost) .board-card .board-card-title {
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
 }
 
 /* ── The reveal's own content ─────────────────────────────────────────────────────────────────── */
@@ -1513,18 +1542,20 @@ body:has(.kanban-chosen) .board-card-reveal,
     background-color: var(--bs-tertiary-bg, #f8f9fa);
 }
 
-/* ── Legibility of the resting card (the "I can't see it" half) ───────────────────────────────── */
-/* The title rode on Bootstrap's `.small` (0.875rem) at `fw-medium` inside a `.btn-link`, which is
-   the SMALLEST type on the card competing with a filled priority badge for attention — so the badge
-   won and the title, the only thing that identifies the task, lost. Nudging the title up and the
-   badge's neighbours down puts the emphasis back on the name.
-   The value is set here rather than by swapping the markup's `.small`, so the resting metrics stay
-   in one place next to the hover rule that undoes the truncation. */
+/* ── Resting title metrics ─────────────────────────────────────────────────────── */
+/* This block previously set `font-size: .8125rem`, `font-weight: 600` and a `color`, on the stated
+   premise that the title "rode on Bootstrap's .small (0.875rem)". That premise was FALSE, and a
+   review caught it: `.small` (bootstrap.css:325) and `.btn` (:2975) are both (0,1,0) and `.btn` is
+   later, so the button took `--bs-btn-font-size: 1rem`. The title was 16px, and the rule shrank it
+   to 13px - a 19% REDUCTION shipped in a change whose entire purpose was legibility. The other two
+   declarations were dead outright: the markup keeps `fw-medium` and `text-reset`, and Bootstrap's
+   utilities carry `!important`.
+   The font-size is therefore left alone at `.btn`'s 1rem. The extra title that now fits comes from
+   the two-line clamp, which is what the measurements should have been crediting all along.
+   `line-height` is the one real change: 1.3 rather than `.btn`'s 1.5 stops two lines costing a full
+   48px on every card. */
 .board-card-title {
-    font-size: .8125rem;
-    font-weight: 600;
     line-height: 1.3;
-    color: var(--bs-body-color, #212529);
 }
 
 /* ── prefers-reduced-motion (accessibility.md §8) ─────────────────────────────────────────────── */

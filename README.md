@@ -185,7 +185,7 @@ cannot onboard a repo. That parity gap is [#231](https://github.com/joelfuller20
 | Issue | `TaskItem` | the **`#<n>` title prefix followed by one space** — the space is part of the key (`/^#(\d+)\s/`) | GitHub → board |
 | Issue labels (`P0`…`P3`, `priority:high`, `critical`, …) | `TaskItem.Priority` | — reconciled every run | GitHub → board (GitHub always wins) |
 | Issue state + linked open PR | `TaskItem.Status` | — | GitHub → board, **advance-only** (see below) |
-| Issue body | `TaskItem.Description` | `<!-- kanbanflow-sync -->` block + first 1500 chars | GitHub → board |
+| Issue body | `TaskItem.Description` | `<!-- kanbanflow-sync -->` block + first 30,000 chars | GitHub → board |
 | Issue comment | `TaskComment` (`Comment`) | GitHub node id stamped as `<!-- gh:ID -->` | GitHub → board |
 | PR conversation comment | `TaskComment` (`Comment`) | same `<!-- gh:ID -->` marker | GitHub → board |
 | PR review, `APPROVED` | `TaskComment` (**`Verification`**) | same `<!-- gh:ID -->` marker | GitHub → board |
@@ -265,7 +265,7 @@ that assumes otherwise will be wrong.
 
 | Omission | Detail |
 |---|---|
-| **Issue body is never refreshed** | Written once at task creation, truncated at `BODY_EXCERPT_LIMIT = 1500` (`portfolio-sync.mjs`). Edit an issue body and the board keeps the original excerpt forever |
+| **Issue body is never refreshed** | Written once at task creation (`portfolio-sync.mjs`). Edit an issue body and the board keeps the original excerpt forever. The excerpt cap is `BODY_EXCERPT_LIMIT = 30000` — it was 1500, which truncated 100% of them. 30,000 is set by SignalR's 32 KB `MaximumReceiveMessageSize`, since `EditableMarkdown` sends the whole description per keystroke; a larger description could not be edited at all |
 | **Closed issues are fetched as numbers only** | Without `--include-closed` the sync pulls only issue *numbers* for closed issues (`fetchClosedIssues(repo, full)`), enough to converge a task to `Done` — their bodies and comments are not mirrored |
 | **Assignees are not synchronised** | GitHub assignees are read once, only to infer `InProgress` on create (`deriveStatus()`). `TaskItem.Assignee` is never populated from GitHub |
 | **Labels collapse to one priority** | The first matching severity label becomes `TaskItem.Priority`. Every other label survives only as text inside the description block — there is no label entity, and no filtering by label on the board |

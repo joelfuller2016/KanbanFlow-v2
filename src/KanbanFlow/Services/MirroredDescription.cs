@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text.RegularExpressions;
 
 namespace KanbanFlow.Services;
@@ -32,10 +33,11 @@ namespace KanbanFlow.Services;
 public static class MirroredDescription
 {
     /// <summary>
-    /// How much of a description is examined. The sync's body cap is 64,000 chars, so an unbounded
-    /// <see cref="RegexOptions.Singleline"/> scan would read up to 64 KB per card per render (a full
-    /// board renders ~50) hunting a header that is always within the first few hundred bytes. An
-    /// excerpt needs only the head of the body, so both jobs are satisfied by the same slice.
+    /// How much of a description is examined. The sync's body cap is 30,000 chars, so an unbounded
+    /// <see cref="RegexOptions.Singleline"/> scan would read up to 30 KB per card per render hunting
+    /// a header that is always within the first few hundred bytes (the largest measured across 320
+    /// issues is 296). The live board holds 185 cards, and a filter keystroke re-renders all of
+    /// them. An excerpt needs only the head of the body, so both jobs are satisfied by one slice.
     /// </summary>
     public const int ScanChars = 4096;
 
@@ -50,8 +52,13 @@ public static class MirroredDescription
         @"\*\*Issue:\*\*\s*(?<u>https://github\.com/[^\s)<]+)",
         RegexOptions.Compiled);
 
-    // Leading markdown furniture — heading hashes, quote carets, list bullets.
-    private static readonly Regex LeadMarkupRe = new(@"^[#>\-\*\s]+", RegexOptions.Multiline | RegexOptions.Compiled);
+    // Leading markdown furniture - heading hashes, quote carets, list bullets. The marker must be
+    // FOLLOWED BY WHITESPACE, which is what makes it markdown rather than content. The first version
+    // was the character class `^[#>\-\*\s]+`, which ate any run of those characters and corrupted
+    // real text: a line opening `-5 degrees below baseline` excerpted as `5 degrees below baseline`,
+    // inverting the sign, and `--dry-run skips the write` lost its flag. A review found both.
+    private static readonly Regex LeadMarkupRe = new(
+        @"^[ \t]*(?:\#{1,6}[ \t]+|>[ \t]*|[-*+][ \t]+)", RegexOptions.Multiline | RegexOptions.Compiled);
     private static readonly Regex WhitespaceRe = new(@"\s+", RegexOptions.Compiled);
 
     // Inline markup, stripped because the excerpt renders as PLAIN TEXT in a <p>. Leaving it raw put
@@ -68,9 +75,18 @@ public static class MirroredDescription
     // mangling `portfolio_sync` or `*.razor` to make one italic marker disappear is the worse trade.
     private static readonly Regex EmphasisRe = new(@"\*\*|__|`", RegexOptions.Compiled);
 
+    // Slicing at a fixed UTF-16 index can retain a LONE HIGH SURROGATE when an astral character
+    // (an emoji, most CJK extension B, mathematical alphanumerics) straddles the boundary. That is
+    // ill-formed text: it renders as a replacement glyph and corrupts any downstream comparison.
+    // Dropping the orphan costs at most one code unit and is always safe.
+    private static ReadOnlySpan<char> WithoutOrphanSurrogate(ReadOnlySpan<char> s) =>
+        s.Length > 0 && char.IsHighSurrogate(s[^1]) ? s[..^1] : s;
+
     private static string? Head(string? description) => string.IsNullOrEmpty(description)
         ? null
-        : description.Length > ScanChars ? description[..ScanChars] : description;
+        : description.Length > ScanChars
+            ? WithoutOrphanSurrogate(description.AsSpan(0, ScanChars)).ToString()
+            : description;
 
     /// <summary>
     /// The GitHub issue URL this description was mirrored from, or <c>null</c> for a description
@@ -81,8 +97,23 @@ public static class MirroredDescription
     {
         var head = Head(description);
         if (head is null) return null;
-        var m = IssueUrlRe.Match(head);
-        return m.Success ? m.Groups["u"].Value : null;
+
+        // The URL is read ONLY from inside the sync block, never from the description at large.
+        // Matching `**Issue:** <url>` anywhere meant a hand-written description opening with that
+        // line got a GitHub affordance pointing wherever its author chose — the card would show a
+        // "#123" chip linking to an unrelated repository, indistinguishable from a real mirror.
+        // The block is the sync's own signed envelope, so it is the only place the claim is good.
+        // A block whose closing marker falls outside the scan window simply does not match, and no
+        // link is shown: the safe direction.
+        var block = SyncBlockRe.Match(head);
+        if (!block.Success) return null;
+
+        var m = IssueUrlRe.Match(block.Value);
+        if (!m.Success) return null;
+
+        // A URL written at the end of a sentence carries the stop into the match, and the resulting
+        // href 404s on GitHub. Trailing `.`/`,`/`;`/`:` are never part of a GitHub issue URL.
+        return m.Groups["u"].Value.TrimEnd('.', ',', ';', ':');
     }
 
     /// <summary>
@@ -94,8 +125,33 @@ public static class MirroredDescription
     {
         var url = IssueUrl(description);
         if (url is null) return null;
-        var tail = url[(url.LastIndexOf('/') + 1)..];
-        return tail.Length > 0 && tail.All(char.IsDigit) ? "#" + tail : "GitHub";
+        // Strip a fragment, a query and any trailing slash before reading the number. Without this
+        // `.../issues/123#issuecomment-4`, `.../issues/123?x=y` and `.../issues/123/` all fell
+        // through to the unnumbered "GitHub" label despite naming a perfectly good issue.
+        var path = url.Split('#')[0].Split('?')[0].TrimEnd('/');
+        var tail = path[(path.LastIndexOf('/') + 1)..];
+        // ASCII digits only: char.IsDigit is Unicode-wide, so `issues/١٢٣` would
+        // otherwise yield an Arabic-Indic "#١٢٣" that matches no issue.
+        return tail.Length > 0 && tail.All(c => c is >= '0' and <= '9') ? "#" + tail : "GitHub";
+    }
+
+    /// <summary>
+    /// Accessible name for the card's GitHub link, or <c>null</c> when there is no link to name.
+    /// </summary>
+    /// <remarks>
+    /// <c>target="_blank"</c> moves the user out of the app with no announcement, and the icon
+    /// conveys the destination only visually, so the label has to say both in words. Wording and
+    /// the "(opens in a new tab)" suffix follow <c>EditItemModal.razor</c>, which already carries
+    /// this exact treatment for its issue and PR buttons — two different phrasings for the same
+    /// affordance would be worse than either one alone.
+    /// </remarks>
+    public static string? IssueAriaLabel(string? description)
+    {
+        var label = IssueLabel(description);
+        if (label is null) return null;
+        return label.StartsWith('#')
+            ? $"GitHub issue {label} (opens in a new tab)"
+            : "View on GitHub (opens in a new tab)";
     }
 
     /// <summary>
@@ -109,14 +165,32 @@ public static class MirroredDescription
         var head = Head(description);
         if (head is null) return null;
 
+        // Symmetry with IssueUrl: if the block's CLOSING marker falls outside the scan window the
+        // Replace below matches nothing and the raw header - marker, URL, milestone, labels - is
+        // excerpted straight onto the card. IssueUrl already refuses that case; this one silently
+        // rendered it. Latent today (the largest header measured across 320 issues is 296 chars
+        // against a 4,096 window) but it is the failure this class exists to prevent.
+        if (head.Contains("<!-- kanbanflow-sync", StringComparison.Ordinal) && !SyncBlockRe.IsMatch(head))
+        {
+            return null;
+        }
+
         var stripped = SyncBlockRe.Replace(head, "");
         stripped = LinkRe.Replace(stripped, "$1");
         stripped = EmphasisRe.Replace(stripped, "");
         var text = WhitespaceRe.Replace(LeadMarkupRe.Replace(stripped, " "), " ").Trim();
-        if (text.Length == 0) return null;
+        // `\s` and char.IsWhiteSpace both REJECT the Cf (format) category, so a description of only
+        // U+200B / U+FEFF / U+00AD survived as a length-1 "non-empty" string, and the card rendered
+        // a visually empty <p> with padding that also forced the reveal open. A body pasted with a
+        // leading BOM or zero-width space is the realistic source.
+        if (!text.Any(c => !char.IsWhiteSpace(c) && !char.IsControl(c)
+                           && CharUnicodeInfo.GetUnicodeCategory(c) != UnicodeCategory.Format))
+        {
+            return null;
+        }
 
         return text.Length > ExcerptMaxLength
-            ? string.Concat(text.AsSpan(0, ExcerptMaxLength).TrimEnd(), "…")
+            ? string.Concat(WithoutOrphanSurrogate(text.AsSpan(0, ExcerptMaxLength)).TrimEnd(), "…")
             : text;
     }
 }
