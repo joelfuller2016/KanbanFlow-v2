@@ -486,6 +486,31 @@ public sealed class McpKnowledgeGraphToolsTests
         Assert.Contains("query", ex.Message, StringComparison.OrdinalIgnoreCase);
     }
 
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-5)]
+    public async Task SearchNodes_NonPositiveK_ThrowsMcpException(int k)
+    {
+        using var f = new SqliteTestFactory();
+        var svc = NewService(f);
+        // #338: k was Math.Clamp(k, 1, 100), which rewrote 0 to 1 and left this catch dead.
+        // Ceiling-only clamping lets the service guard run, so MCP and REST report one message.
+        var ex = await Assert.ThrowsAsync<McpException>(
+            () => KanbanMcpTools.SearchNodes(NewSearch(f), svc, "anything", k));
+        Assert.Contains("greater than zero", ex.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task SearchNodes_KAboveCeiling_IsCapped_NotRejected()
+    {
+        using var f = new SqliteTestFactory();
+        var svc = NewService(f);
+        // The UPPER clamp is load-bearing (it bounds ranking work and payload size on an open
+        // endpoint) and must survive the #338 fix -- dropping BOTH bounds is the regression risk.
+        var result = await KanbanMcpTools.SearchNodes(NewSearch(f), svc, "anything", 500);
+        Assert.NotNull(result);
+    }
+
     // ── open_nodes ────────────────────────────────────────────────────────────────────
     [Fact]
     public async Task OpenNodes_ReturnsRequested_SkipsMissing_OnlyRelationsBetweenOpened()

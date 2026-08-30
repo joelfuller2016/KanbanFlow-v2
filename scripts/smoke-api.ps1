@@ -436,6 +436,13 @@ try {
     Assert-SmokeGetFailure "/api/memory/search?q=" @(422) "Blank recall query validation failed."
     Assert-SmokeGetFailure "/api/memory/search?q=$memToken&k=0" @(422) "Non-positive recall k validation failed."
     Assert-SmokeGetFailure "/api/memory/search?q=$memToken&scope=NotAScope" @(422) "Invalid recall scope validation failed."
+    Assert-SmokeGetFailure "/api/memory/search?q=$memToken&k=-5" @(422) "Negative recall k validation failed."
+
+    # The UPPER clamp is load-bearing and must survive the #338 lower-clamp removal: k above the
+    # ceiling is CAPPED (200, echoed k=100), not rejected. Dropping both bounds would make payload
+    # size unbounded on this open endpoint.
+    $recallCapped = Invoke-SmokeGet "/api/memory/search?q=$memToken&k=500"
+    Assert-Truthy ($recallCapped.k -eq 100) "Recall k above the ceiling should be capped to 100, not rejected."
 
     Write-Host "API smoke tests passed."
 }

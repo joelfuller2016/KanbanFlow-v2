@@ -374,6 +374,22 @@ public sealed class MemorySearchTests
     }
 
     [Fact]
+    public async Task Search_NonPositiveK_Throws()
+    {
+        using var f = new SqliteTestFactory();
+        var search = NewSearch(f, EmbeddingDown());
+
+        // #338: REST clamped k up to a minimum of 1 before this guard could ever run, so a
+        // non-positive k returned 200 instead of 422 and smoke-api.ps1 was red on master.
+        // This guard is the SINGLE source of that message for both REST and MCP -- pin it so a
+        // reintroduced lower clamp cannot silently bypass it again.
+        await Assert.ThrowsAsync<ValidationException>(
+            () => search.SearchAsync(MemoryScope.Project, "1", "q", 0, new RetrievalOptions()));
+        await Assert.ThrowsAsync<ValidationException>(
+            () => search.SearchAsync(MemoryScope.Project, "1", "q", -5, new RetrievalOptions()));
+    }
+
+    [Fact]
     public async Task Search_RecencyHalfLife_HalvesAtConfiguredAge()
     {
         // Pin the public half-life contract: a node last accessed exactly one RecencyHalfLifeHours ago
