@@ -17,6 +17,8 @@ command shown. If a number here disagrees with the code, the code wins — re-de
 - [The write path & audit boundary](#the-write-path--audit-boundary)
 - [REST surface (60 endpoints)](#rest-surface-60-endpoints)
 - [MCP surface (28 native / 50 wrapper)](#mcp-surface-28-native--50-wrapper)
+- [Who owns what](#who-owns-what)
+- [Running it locally](#running-it-locally)
 - [Optional LLM + embedding configuration](#optional-llm--embedding-configuration)
 - [Capability requirements matrix](#capability-requirements-matrix)
 - [Known gaps](#known-gaps)
@@ -301,6 +303,69 @@ surface alone with **no** `TaskDoneOverridden` event.
 ```
 
 Start the web app on the matching URL **before** the agent connects.
+
+---
+
+## Who owns what
+
+The board is not a mirror of GitHub, and reading it as one is the failure mode this section
+exists to prevent. **GitHub stays the system of record for issues and PRs** — there is no
+board→GitHub write path, and `README.md` records that absence as deliberate. What the board
+owns is the execution state GitHub structurally cannot hold:
+
+| Owned by GitHub | Owned by the board |
+|---|---|
+| Issues, PRs, review threads, labels, milestones | **Claims** — who is on it, right now |
+| The permanent public record | **Dependencies** and next-task ranking |
+| Anything another human reads | **Acceptance criteria** and the Definition-of-Done gate |
+| | **Ordering** within a column |
+| | The **memory graph** |
+
+Every board-owned row is something an issue tracker cannot represent, which is the whole
+argument for this layer: mirroring GitHub would add nothing. An agent that consults the board
+*instead of* GitHub for issue state is acting on a read replica — file issues with `gh`, always.
+
+Both agent skills (`.claude/skills/kanban-portfolio`, `.claude/skills/kanban-project-ops`)
+restate this table, because a session that never opens this file still has to get it right.
+
+---
+
+## Running it locally
+
+### The database lives outside the repo
+
+`DbPathResolver` defaults the database to a path next to the binary — under `src/`, where
+`*.db` is gitignored. That combination is a data-loss trap: `git clean -xdf` deletes ignored
+files without prompting, so a routine clean silently destroys a real board. **`KANBANFLOW_DB_PATH`
+takes precedence over that default (#354), so pin it somewhere outside the working tree.**
+`scripts/start-kanbanflow.ps1` defaults it to `~/.kanbanflow/kanbanflow.db`.
+
+### The seed is the committed starting point
+
+`seed/kanbanflow.seed.db` is a tracked SQLite file holding a populated board — this repo's own
+project, its milestones as features, and its open issues as tasks. It is the one `.db` escaped
+from `.gitignore`; every other SQLite file, including the live database restored from it, stays
+ignored.
+
+```powershell
+pwsh -File scripts/start-kanbanflow.ps1     # restores the seed if no live DB exists, then serves
+npm run seed:snapshot                       # refresh the seed from the live DB
+npm run seed:check                          # integrity-check the tracked seed, write nothing
+```
+
+The restore is guarded on the live database being **absent**, so the seed can never overwrite
+working data — a start with a live DB present touches nothing and says so.
+
+Refreshing uses SQLite's `VACUUM INTO` against the running app rather than a file copy. This is
+not a stylistic preference: the app runs in WAL mode, so the newest committed pages live in
+`kanbanflow.db-wal`, not in the `.db` file. Copying the `.db` captures a stale, torn snapshot —
+silently, with no error, and no symptom until someone restores it. Stopping the app first does
+not fix it either, because a forced kill leaves the WAL unmerged. `VACUUM INTO` reads inside a
+transaction that sees the WAL and writes one compact file with no sidecars, needing no downtime.
+
+`scripts/snapshot-seed.mjs` needs `node:sqlite` (Node ≥ 22.5). The package floor stays at 18
+because nothing at runtime needs it — only this maintainer tool does, and it says so if the
+Node version is too old.
 
 ---
 
