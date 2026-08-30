@@ -29,9 +29,16 @@ namespace KanbanFlow.Tests;
 /// assertion here while still letting another connection reserve the writer slot after the
 /// criteria read, so the subject would fail later on lock upgrade with SQLITE_BUSY. The
 /// implementation relies on <c>BeginTransactionAsync()</c> issuing BEGIN IMMEDIATE (the provider
-/// only defers when the caller passes <c>deferred: true</c>). Proving the reservation is immediate
-/// needs the rendezvous harness in <c>TaskDependencyConcurrencyTests</c>; that is deliberately not
-/// duplicated here, and this limitation is stated rather than papered over.
+/// only defers when the caller passes <c>deferred: true</c>).
+/// </para>
+/// <para>
+/// That immediacy <em>is</em> proven in this suite, just not by this file:
+/// <c>TaskDependencyConcurrencyTests</c> (added by #415) drives a <c>DefaultTimeout=1</c>
+/// SQLITE_BUSY probe against the <strong>same overload</strong>, showing the writer slot is
+/// reserved up front rather than on upgrade. So the guarantee is covered and green; duplicating
+/// that harness here would add a second copy of a hard-won rendezvous for no extra coverage.
+/// What this file adds on top is the <em>span</em> — that the criteria read and the status write
+/// sit inside one such transaction, which the sibling test does not assert.
 /// </para>
 /// <para>
 /// Uses <see cref="SqliteFileTestFactory"/>, not <see cref="SqliteTestFactory"/>: the latter holds
