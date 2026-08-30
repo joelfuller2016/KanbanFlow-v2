@@ -252,7 +252,7 @@ public static class ProjectSummaryService
                 .ToLookup(d => d.TaskItemId, d => d.DependsOnTaskItemId);
 
             var nextTask = TaskRanking
-                .RankNextTasks(projectOpenTasks, statusByProjectTaskId, dependsOnByTask, actor, limit: 1, now: now, claimTtl: claimTtl)
+                .RankNextTasks(projectOpenTasks, statusByProjectTaskId, dependsOnByTask, actor, limit: 1, now: now, claimTtl: effectiveTtl)
                 .Select(r => new NextTaskSummary(
                     r.Task.Id,
                     r.Task.FeatureId,
