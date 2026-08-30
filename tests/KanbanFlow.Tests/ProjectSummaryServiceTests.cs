@@ -56,7 +56,8 @@ public sealed class ProjectSummaryServiceTests
         string name,
         WorkStatus status = WorkStatus.Todo,
         TaskPriority priority = TaskPriority.Low,
-        string? claimedBy = null)
+        string? claimedBy = null,
+        DateTime? claimedAt = null)
     {
         var task = new TaskItem
         {
@@ -65,7 +66,7 @@ public sealed class ProjectSummaryServiceTests
             Status = status,
             Priority = priority,
             ClaimedBy = claimedBy,
-            ClaimedAt = claimedBy is null ? null : DateTime.UtcNow
+            ClaimedAt = claimedBy is null ? null : (claimedAt ?? DateTime.UtcNow)
         };
         db.Tasks.Add(task);
         db.SaveChanges();
@@ -77,10 +78,10 @@ public sealed class ProjectSummaryServiceTests
     /// existing call reads as "the parameterless call" — the shape both production callers use.
     /// </param>
     private static async Task<ProjectListSummary> LoadOneAsync(
-        SqliteTestFactory factory, int projectId, string? actor = null)
+        SqliteTestFactory factory, int projectId, string? actor = null, TimeSpan? claimTtl = null)
     {
         await using var db = await factory.CreateDbContextAsync();
-        var summaries = await ProjectSummaryService.LoadAsync(db, actor);
+        var summaries = await ProjectSummaryService.LoadAsync(db, actor, claimTtl: claimTtl);
         return Assert.Single(summaries, s => s.Id == projectId);
     }
 
@@ -411,6 +412,59 @@ public sealed class ProjectSummaryServiceTests
     }
 
     // ══ claims (AC 4) ═══════════════════════════════════════════════════════════════════════
+    /// <summary>
+    /// #444: a STALE claim is not an active claim. A crashed agent used to render as an ACTIVE chip
+    /// on Home and in GET /api/projects indefinitely, while the SAME method's NextTask offered that
+    /// very task as available -- one card contradicting itself. Both halves are asserted here.
+    /// </summary>
+    [Fact]
+    public async Task ActiveClaims_ExcludeAStaleClaim_WhileTheTaskIsStillOfferedAsNext()
+    {
+        using var factory = new SqliteTestFactory();
+        Project project;
+        await using (var db = await factory.CreateDbContextAsync())
+        {
+            project = SeedProject(db);
+            var feature = SeedFeature(db, project);
+            // Claimed 9 hours ago against a 1-minute TTL: deterministically stale, and no sleeping.
+            SeedTask(db, feature, "abandoned", WorkStatus.Todo, claimedBy: "crashed-agent",
+                claimedAt: DateTime.UtcNow.AddHours(-9));
+        }
+
+        var summary = await LoadOneAsync(factory, project.Id, claimTtl: TimeSpan.FromMinutes(1));
+
+        // Before the fix the first assertion failed: crashed-agent was listed as ACTIVE while
+        // NextTask simultaneously offered the same task as available.
+        Assert.Empty(summary.ActiveClaims);
+        Assert.NotNull(summary.NextTask);
+        Assert.Equal("abandoned", summary.NextTask!.Name);
+    }
+
+    /// <summary>
+    /// The group arithmetic must survive the filter. An actor holding one stale and one fresh claim
+    /// is genuinely working, and must read as exactly 1 -- not 2 (the bug), and not a "x 0" ghost
+    /// group, which is why the staleness filter runs BEFORE GroupBy rather than after it.
+    /// </summary>
+    [Fact]
+    public async Task ActiveClaims_CountOnlyTheFreshClaims_OfAnActorHoldingBoth()
+    {
+        using var factory = new SqliteTestFactory();
+        Project project;
+        await using (var db = await factory.CreateDbContextAsync())
+        {
+            project = SeedProject(db);
+            var feature = SeedFeature(db, project);
+            SeedTask(db, feature, "stale", WorkStatus.Todo, claimedBy: "alice",
+                claimedAt: DateTime.UtcNow.AddHours(-9));
+            SeedTask(db, feature, "fresh", WorkStatus.InProgress, claimedBy: "alice");
+        }
+
+        var summary = await LoadOneAsync(factory, project.Id, claimTtl: TimeSpan.FromMinutes(1));
+
+        var claim = Assert.Single(summary.ActiveClaims);
+        Assert.Equal("alice", claim.Actor);
+        Assert.Equal(1, claim.TaskCount);
+    }
 
     /// <summary>
     /// Completing a task does NOT clear its claim — only an explicit release does — so a finished
