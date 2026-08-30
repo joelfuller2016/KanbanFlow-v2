@@ -168,6 +168,8 @@ public static class ActivityTimelineBuilder
         "TaskUpdated" => ("Updated", TimelineCategory.Change),
         "TaskFeatureChanged" => ("Moved", TimelineCategory.Change),
         "TaskClaimed" => ("Claimed", TimelineCategory.Change),
+        "TaskClaimRenewed" => ("Renewed", TimelineCategory.Change),
+        "TaskClaimStolen" => ("Taken over", TimelineCategory.Change),
         "TaskReleased" => ("Released", TimelineCategory.Change),
         "TaskCommentAdded" => ("Comment", TimelineCategory.Comment),
         _ => (eventType, TimelineCategory.Change)
@@ -444,7 +446,7 @@ public static class ActivityTimelineBuilder
     {
         "TaskCreated" => "created",
         "TaskDeleted" => "deleted",
-        "TaskClaimed" or "TaskReleased" => "claim",
+        "TaskClaimed" or "TaskReleased" or "TaskClaimRenewed" or "TaskClaimStolen" => "claim",
         _ => category switch
         {
             TimelineCategory.Comment => "comment",
