@@ -3,7 +3,6 @@ using KanbanFlow.Mcp;
 using KanbanFlow.Models;
 using KanbanFlow.Services;
 using Microsoft.EntityFrameworkCore;
-using Microsoft.Extensions.Configuration;
 
 namespace KanbanFlow.Tests;
 
@@ -21,6 +20,7 @@ namespace KanbanFlow.Tests;
 public sealed class TaskRankingTests
 {
     // ── pure-ranker helpers ──────────────────────────────────────────────────────────
+    /// <summary>Creates a minimal <see cref="TaskItem"/> fixture for pure-ranker assertions.</summary>
     /// <param name="claimedAt">
     /// When the claim was taken. Defaults to <em>now</em> whenever <paramref name="claimedBy"/> is
     /// set, because that is what the real producer does — <c>ClaimAsync</c> always writes both
@@ -273,6 +273,8 @@ public sealed class TaskRankingTests
         }
     }
 
+    /// <summary>End-to-end #151 parity: the real MCP tool places a task claimed by Bob further down Alice's
+    /// recommendation list than Bob's own, matching the shared ranker's de-prioritisation rule.</summary>
     [Fact]
     public async Task McpGetNextTasks_RanksBobsClaimLaterForAlice_ThanForBob()
     {
@@ -280,9 +282,9 @@ public sealed class TaskRankingTests
         using var f = new SqliteTestFactory();
         var seeded = SeedRankingScenario(f);
 
-        var cfg = new ConfigurationBuilder().Build();
-        var forAlice = (await KanbanMcpTools.GetNextTasks(f, cfg, seeded.ProjectId, "alice", 50)).Select(r => r.Id).ToList();
-        var forBob = (await KanbanMcpTools.GetNextTasks(f, cfg, seeded.ProjectId, "bob", 50)).Select(r => r.Id).ToList();
+        var ttlSetting = new ClaimTtlSetting(ClaimPolicy.DefaultTtl);
+        var forAlice = (await KanbanMcpTools.GetNextTasks(f, ttlSetting, seeded.ProjectId, "alice", 50)).Select(r => r.Id).ToList();
+        var forBob = (await KanbanMcpTools.GetNextTasks(f, ttlSetting, seeded.ProjectId, "bob", 50)).Select(r => r.Id).ToList();
 
         var alicePos = forAlice.IndexOf(seeded.ClaimedByBobId);
         var bobPos = forBob.IndexOf(seeded.ClaimedByBobId);
@@ -366,9 +368,10 @@ public sealed class TaskRankingTests
             .ToList();
     }
 
+    /// <summary>Runs the real MCP <c>get_next_tasks</c> tool over a real SQLite database and returns the ranked id sequence.</summary>
     private static async Task<List<int>> McpRankedIds(SqliteTestFactory f, int projectId, string? actor, int limit)
     {
-        var results = await KanbanMcpTools.GetNextTasks(f, new ConfigurationBuilder().Build(), projectId, actor, limit);
+        var results = await KanbanMcpTools.GetNextTasks(f, new ClaimTtlSetting(ClaimPolicy.DefaultTtl), projectId, actor, limit);
         return results.Select(r => r.Id).ToList();
     }
 }
