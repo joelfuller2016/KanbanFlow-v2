@@ -167,7 +167,8 @@ public interface ITaskService
     /// <summary>
     /// Claim a task for <paramref name="actor"/>. Idempotent when the same actor
     /// re-claims (the original <see cref="TaskItem.ClaimedAt"/> is preserved). Emits
-    /// a <c>TaskClaimed</c> activity event. No comment (matches the REST endpoint).
+    /// <c>TaskClaimed</c> on a fresh claim, or <c>TaskClaimStolen</c> when taking over
+    /// an expired claim from another holder. No comment (matches the REST endpoint).
     /// </summary>
     /// <param name="taskId">Target task id.</param>
     /// <param name="actor">Claiming actor; required (non-blank).</param>

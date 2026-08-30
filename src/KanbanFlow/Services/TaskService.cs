@@ -11,8 +11,34 @@ namespace KanbanFlow.Services;
 /// short-lived <see cref="AppDbContext"/> — safe for concurrent Blazor Server
 /// circuits and Minimal API requests alike.
 /// </summary>
-public sealed class TaskService(IDbContextFactory<AppDbContext> dbFactory) : ITaskService
+/// <param name="claimTtl">
+/// How long a task claim stays fresh before another actor may take it over (#429). Optional so
+/// the ~850 existing <c>new TaskService(factory)</c> call sites keep compiling and keep the
+/// production default; tests inject a short TTL rather than sleeping in real time.
+/// </param>
+/// <param name="clock">
+/// Optional clock function. Defaults to <see cref="DateTime.UtcNow"/>. Injected for
+/// deterministic testing so audit-age assertions do not depend on wall-clock sampling.
+/// </param>
+public sealed class TaskService(
+    IDbContextFactory<AppDbContext> dbFactory,
+    TimeSpan? claimTtl = null,
+    Func<DateTime>? clock = null) : ITaskService
 {
+    // ClaimPolicy.ValidateTtl, not a local `<= Zero` check: the upper bound was missing here, so
+    // `new TaskService(factory, TimeSpan.MaxValue)` constructed fine and then threw on the next
+    // claim from inside StaleCutoff. One validator, every entry point. (codex, PR #435 round 3.)
+    private readonly TimeSpan _claimTtl = ValidatedTtl(claimTtl);
+
+    private static TimeSpan ValidatedTtl(TimeSpan? claimTtl)
+    {
+        if (claimTtl is not { } t) return ClaimPolicy.DefaultTtl;
+        ClaimPolicy.ValidateTtl(t, nameof(claimTtl));
+        return t;
+    }
+
+    private readonly Func<DateTime> _clock = clock ?? (() => DateTime.UtcNow);
+
     private static readonly JsonSerializerOptions ActivityJsonOptions = new(JsonSerializerDefaults.Web);
 
     private static object TaskActivitySnapshot(TaskItem task) => new
@@ -127,6 +153,7 @@ public sealed class TaskService(IDbContextFactory<AppDbContext> dbFactory) : ITa
         });
     }
 
+    /// <summary>Moves a task to <paramref name="newStatus"/>, enforcing the Definition-of-Done gate for Done-bound transitions, and records an audit event.</summary>
     public async Task<TaskItem> ChangeStatusAsync(int taskId, WorkStatus newStatus, string? actor, CancellationToken ct = default, string? overrideReason = null)
     {
         await using var db = await dbFactory.CreateDbContextAsync(ct);
@@ -136,8 +163,8 @@ public sealed class TaskService(IDbContextFactory<AppDbContext> dbFactory) : ITa
         // criterion insert can commit in between and Done persists against criteria the gate never
         // saw. Microsoft.Data.Sqlite issues BEGIN IMMEDIATE for this overload, so the write lock is
         // taken HERE, before the reads — the same pattern MoveOnBoardAsync and MoveInOutlineAsync
-        // use. (CreateAsync and ClaimAsync also open transactions, but AFTER their reads, so they
-        // are not examples of this ordering.)
+        // use. (CreateAsync opens a transaction after its read; ClaimAsync opens one BEFORE its read,
+        // following the same before-read pattern as these methods.)
         //
         // Scoped to Done-bound transitions ONLY. SQLite permits a single pending writer, so taking
         // the lock unconditionally would make every Backlog/Todo/Review move queue behind any other
@@ -993,6 +1020,10 @@ public sealed class TaskService(IDbContextFactory<AppDbContext> dbFactory) : ITa
         project.Goals
     };
 
+    /// <summary>
+    /// Claims <paramref name="taskId"/> for <paramref name="actor"/>, taking over stale claims
+    /// and throwing <see cref="TaskClaimConflictException"/> for fresh claims held by someone else (#429).
+    /// </summary>
     public async Task<TaskItem> ClaimAsync(int taskId, string actor, CancellationToken ct = default)
     {
         // The REST endpoint maps a blank actor to 422; surface it as a ValidationException.
@@ -1001,6 +1032,14 @@ public sealed class TaskService(IDbContextFactory<AppDbContext> dbFactory) : ITa
         var trimmedActor = actor.Trim();
 
         await using var db = await dbFactory.CreateDbContextAsync(ct);
+
+        // Open the write lock BEFORE reading the task row so the check-then-update is fully
+        // serialized (#156, #429). Without a transaction spanning both, a concurrent ClaimAsync
+        // that commits between our read and our UPDATE could produce two holders for the same task.
+        // Microsoft.Data.Sqlite issues BEGIN IMMEDIATE for this overload, reserving the write slot
+        // up front rather than on first write — the same pattern ChangeStatusAsync uses.
+        await using var tx = await db.Database.BeginTransactionAsync(ct);
+
         // #195: AsNoTracking — the claim is persisted via the conditional ExecuteUpdateAsync
         // below, so the loaded entity is only for validation + the audit snapshot. Not tracking
         // it stops SaveChanges from emitting a redundant Tasks UPDATE next to the event insert.
@@ -1013,9 +1052,20 @@ public sealed class TaskService(IDbContextFactory<AppDbContext> dbFactory) : ITa
         if (task.Feature is null)
             throw new InvalidOperationException($"Task {taskId} has no feature; cannot resolve project for audit.");
 
-        // Claimed by someone else → conflict (API → 409). Same actor is idempotent.
+        var now = _clock();
+
+        // A claim past its TTL is abandoned and may be taken over (#429). Without this a crashed
+        // or rate-limited agent holds its task forever and nothing can recover it: ClaimedAt was
+        // written and displayed but never compared to the clock anywhere in src/.
+        var existingClaimIsStale = ClaimPolicy.IsStale(
+            task.ClaimedBy, task.ClaimedAt, now, _claimTtl);
+        var previousHolder = task.ClaimedBy;
+        var previousClaimedAt = task.ClaimedAt;
+
+        // Claimed by someone else and still FRESH → conflict (API → 409). Same actor is idempotent.
         if (!string.IsNullOrWhiteSpace(task.ClaimedBy)
-            && !string.Equals(task.ClaimedBy, trimmedActor, StringComparison.OrdinalIgnoreCase))
+            && !string.Equals(task.ClaimedBy, trimmedActor, StringComparison.OrdinalIgnoreCase)
+            && !existingClaimIsStale)
         {
             throw new TaskClaimConflictException(taskId, task.ClaimedBy, task.ClaimedAt);
         }
@@ -1025,20 +1075,34 @@ public sealed class TaskService(IDbContextFactory<AppDbContext> dbFactory) : ITa
             return task;
 
         var before = TaskActivitySnapshot(task);
-        var now = DateTime.UtcNow;
-
-        // Atomic claim + audit (#156): wrap the conditional UPDATE and the TaskClaimed event in
-        // one transaction so a claim can never persist without its audit event. The race-safe
-        // conditional UPDATE still works inside the transaction (previously it auto-committed,
-        // leaving a window where the claim survived but the audit SaveChanges could fail).
-        await using var tx = await db.Database.BeginTransactionAsync(ct);
 
         // Race-safe claim (R4): a conditional UPDATE that only fires while the row is still
         // unclaimed. Under concurrent claimers (multiple agents), exactly one UPDATE matches
         // (rows == 1); the loser sees rows == 0 and is reconciled below. This closes the
         // load-check-write gap without a rowversion column (schema uses EnsureCreated, not migrations).
+        // The predicate is widened for the steal case (#429) but stays a SINGLE conditional
+        // UPDATE, so two actors racing to take over the same expired claim still cannot both win:
+        // exactly one matches while the row is unclaimed-or-expired, and the loser reconciles
+        // below. Widening it into a load-then-write would reopen the gap this closes.
+        //
+        // Whitespace holders: ClaimPolicy.IsStale treats a whitespace ClaimedBy as unclaimed
+        // (same as null), so ranking and the pre-check above let blank holders through. The
+        // UPDATE predicate must match the exact pre-read value rather than only NULL so that
+        // a legacy row with ClaimedBy=" " can be claimed without failing the race guard.
+        var isUnclaimedHolder = string.IsNullOrWhiteSpace(task.ClaimedBy);
+        var capturedClaimedBy = task.ClaimedBy;   // captured for EF Core closure
+        var staleCutoff = ClaimPolicy.StaleCutoff(now, _claimTtl);
+        // Mirrors ClaimPolicy.IsStale's future-timestamp arm. Without it the C# pre-check would
+        // call a skewed claim stale while this predicate matched zero rows, so the takeover would
+        // fall through to the reconcile path and report a conflict the pre-check had already
+        // cleared. The two notions of "stale" must agree. (codex, PR #435.)
+        var skewHorizon = now + ClaimPolicy.MaxClockSkew;
         var claimed = await db.Tasks
-            .Where(t => t.Id == taskId && t.ClaimedBy == null)
+            .Where(t => t.Id == taskId
+                        && ((isUnclaimedHolder && t.ClaimedBy == capturedClaimedBy)
+                            || (!isUnclaimedHolder && existingClaimIsStale
+                                && (t.ClaimedAt == null || t.ClaimedAt < staleCutoff
+                                    || t.ClaimedAt > skewHorizon))))
             .ExecuteUpdateAsync(s => s
                 .SetProperty(t => t.ClaimedBy, trimmedActor)
                 .SetProperty(t => t.ClaimedAt, now)
@@ -1070,10 +1134,27 @@ public sealed class TaskService(IDbContextFactory<AppDbContext> dbFactory) : ITa
         task.ClaimedAt = now;
         task.UpdatedAt = now;
 
-        AddActivityEvent(
-            db, task.Feature.ProjectId, "Task", task.Id, trimmedActor,
-            "TaskClaimed", before, TaskActivitySnapshot(task),
-            $"Task '{task.Name}' claimed by {trimmedActor}");
+        // A steal is audited as its OWN event type, not a plain TaskClaimed. Someone reading the
+        // timeline needs to see that a claim was taken from a named holder, and how old it was —
+        // a TaskClaimed row here would silently overwrite that fact.
+        var wasSteal = existingClaimIsStale && !string.IsNullOrWhiteSpace(previousHolder);
+        if (wasSteal)
+        {
+            AddActivityEvent(
+                db, task.Feature.ProjectId, "Task", task.Id, trimmedActor,
+                "TaskClaimStolen", before, TaskActivitySnapshot(task),
+                $"Task '{task.Name}' claim taken over by {trimmedActor} from {previousHolder} "
+                + (previousClaimedAt is { } heldSince
+                    ? $"(claim was {(now - heldSince).TotalHours:0.##}h old; TTL {_claimTtl.TotalHours:0.##}h)"
+                    : $"(claim had no timestamp; TTL {_claimTtl.TotalHours:0.##}h)"));
+        }
+        else
+        {
+            AddActivityEvent(
+                db, task.Feature.ProjectId, "Task", task.Id, trimmedActor,
+                "TaskClaimed", before, TaskActivitySnapshot(task),
+                $"Task '{task.Name}' claimed by {trimmedActor}");
+        }
 
         await db.SaveChangesAsync(ct);
         await tx.CommitAsync(ct);

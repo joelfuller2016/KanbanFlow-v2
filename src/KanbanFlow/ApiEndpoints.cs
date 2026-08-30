@@ -7,6 +7,7 @@ namespace KanbanFlow;
 
 public static class ApiEndpoints
 {
+    /// <summary>Registers all API endpoint groups on <paramref name="app"/>.</summary>
     public static WebApplication MapApiEndpoints(this WebApplication app)
     {
         app.MapProjectEndpoints();
@@ -25,11 +26,12 @@ public static class ApiEndpoints
 
     // ── Project Endpoints ──────────────────────────────────────────────
 
+    /// <summary>Registers project list, progress, next-task, active-claim, and detail endpoints.</summary>
     private static void MapProjectEndpoints(this WebApplication app)
     {
         // GET /api/projects — list all with feature/task counts, progress, next task,
         // last activity and active claims
-        app.MapGet("/api/projects", async (AppDbContext db, CancellationToken ct) =>
+        app.MapGet("/api/projects", async (AppDbContext db, Services.ClaimTtlSetting claimTtlSetting, CancellationToken ct) =>
         {
             // #281: the summary is built by Services/ProjectSummaryService, which the Home page
             // also calls — so the list endpoint and the list PAGE cannot report different counts,
@@ -37,7 +39,7 @@ public static class ApiEndpoints
             // shared engines (ProjectProgressCalculator #125, TaskRanking #151/#188) rather than
             // deriving anything itself. The nine keys this endpoint already returned are unchanged
             // in name, type and order; everything new is appended.
-            var summaries = await Services.ProjectSummaryService.LoadAsync(db, actor: null, ct);
+            var summaries = await Services.ProjectSummaryService.LoadAsync(db, actor: null, ct, claimTtlSetting.Value);
             return Results.Ok(summaries);
         });
 
@@ -365,7 +367,7 @@ public static class ApiEndpoints
         });
 
         // GET /api/projects/{id}/next-tasks — small ranked list of recommended next work
-        app.MapGet("/api/projects/{id:int}/next-tasks", async (int id, int? limit, string? actor, AppDbContext db) =>
+        app.MapGet("/api/projects/{id:int}/next-tasks", async (int id, int? limit, string? actor, AppDbContext db, Services.ClaimTtlSetting claimTtlSetting) =>
         {
             var projectExists = await db.Projects.AnyAsync(p => p.Id == id);
             if (!projectExists)
@@ -416,7 +418,7 @@ public static class ApiEndpoints
             var dependsOnByTask = dependencies.ToLookup(d => d.TaskItemId, d => d.DependsOnTaskItemId);
 
             var recommendations = Services.TaskRanking
-                .RankNextTasks(openTasks, statusById, dependsOnByTask, actor, limit ?? 5)
+                .RankNextTasks(openTasks, statusById, dependsOnByTask, actor, limit ?? 5, claimTtl: claimTtlSetting.Value)
                 .Select((ranked, index) => new
                 {
                     Rank = index + 1,

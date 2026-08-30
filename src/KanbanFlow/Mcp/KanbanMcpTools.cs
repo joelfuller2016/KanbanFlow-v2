@@ -152,10 +152,15 @@ public static class KanbanMcpTools
             task.Dependencies.Select(d => d.DependsOnTaskItemId).OrderBy(id => id).ToList());
     }
 
+    /// <summary>
+    /// Recommends ranked open tasks for a project; stale claims are treated as available (#429)
+    /// so a crashed agent cannot park work permanently.
+    /// </summary>
     [McpServerTool(Name = "get_next_tasks")]
     [Description("Recommend what to work on next in a project: not-done tasks, excluding any blocked by incomplete dependencies, priority-sorted (Critical first), de-prioritising tasks claimed by other actors. Each result includes a human-readable reason. This is the project's 'direction' primitive.")]
     public static async Task<IReadOnlyList<NextTask>> GetNextTasks(
         IDbContextFactory<AppDbContext> dbFactory,
+        ClaimTtlSetting claimTtlSetting,
         [Description("The project id.")] int projectId,
         [Description("Optional actor label; tasks claimed by a different actor are de-prioritised.")] string? actor = null,
         [Description("Maximum results (default 5, clamped to 1-50).")] int limit = 5,
@@ -186,7 +191,7 @@ public static class KanbanMcpTools
             .SelectMany(t => t.Dependencies)
             .ToLookup(d => d.TaskItemId, d => d.DependsOnTaskItemId);
 
-        return TaskRanking.RankNextTasks(openTasks, statusById, dependsOnByTask, actor, limit)
+        return TaskRanking.RankNextTasks(openTasks, statusById, dependsOnByTask, actor, limit, claimTtl: claimTtlSetting.Value)
             .Select(r => new NextTask(
                 r.Task.Id, r.Task.Name, r.Task.Status.ToString(), r.Task.Priority.ToString(),
                 r.Task.ClaimedBy, r.Reason))

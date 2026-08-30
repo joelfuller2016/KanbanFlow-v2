@@ -57,6 +57,7 @@ public sealed class DefinitionOfDoneTransactionTests
         private readonly Lock _lock = new();
         private readonly List<(string Kind, DbTransaction? Tx)> _observations = [];
 
+        /// <summary>All SQL statements observed since the last <see cref="Reset"/>, in observation order.</summary>
         public IReadOnlyList<(string Kind, DbTransaction? Tx)> Observations
         {
             get { lock (_lock) return _observations.ToArray(); }
@@ -98,6 +99,7 @@ public sealed class DefinitionOfDoneTransactionTests
                 lock (_lock) _observations.Add(("TaskRead", command.Transaction));
         }
 
+        /// <summary>Intercepts SELECT statements so the probe can classify and record the observed SQL.</summary>
         public override ValueTask<InterceptionResult<DbDataReader>> ReaderExecutingAsync(
             DbCommand command, CommandEventData eventData,
             InterceptionResult<DbDataReader> result, CancellationToken cancellationToken = default)
@@ -106,6 +108,7 @@ public sealed class DefinitionOfDoneTransactionTests
             return new ValueTask<InterceptionResult<DbDataReader>>(result);
         }
 
+        /// <summary>Intercepts UPDATE/INSERT/DELETE statements so the probe can classify and record the observed SQL.</summary>
         public override ValueTask<InterceptionResult<int>> NonQueryExecutingAsync(
             DbCommand command, CommandEventData eventData,
             InterceptionResult<int> result, CancellationToken cancellationToken = default)
@@ -167,6 +170,7 @@ public sealed class DefinitionOfDoneTransactionTests
         Assert.All(taskReads, r => Assert.Same(tx, r.Tx));
     }
 
+    /// <summary>The DoD gate reads AcceptanceCriteria and writes status atomically; a concurrent criterion insert cannot slip past the gate.</summary>
     [Fact]
     public async Task ChangeStatusAsync_ReadsCriteriaAndWritesStatus_InOneTransaction()
     {
@@ -180,6 +184,7 @@ public sealed class DefinitionOfDoneTransactionTests
         AssertGateAndWriteShareOneTransaction(probe);
     }
 
+    /// <summary>ToggleDoneAsync spans the same read-modify-write transaction as ChangeStatusAsync; the DoD gate cannot be defeated by a concurrent criterion insert here either.</summary>
     [Fact]
     public async Task ToggleDoneAsync_ReadsCriteriaAndWritesStatus_InOneTransaction()
     {
@@ -193,6 +198,7 @@ public sealed class DefinitionOfDoneTransactionTests
         AssertGateAndWriteShareOneTransaction(probe);
     }
 
+    /// <summary>UpdateAsync's status-change path runs the DoD gate inside the same transaction, closing the otherwise-unguarded bulk-update route to Done.</summary>
     [Fact]
     public async Task UpdateAsync_ReadsCriteriaAndWritesStatus_InOneTransaction()
     {
@@ -251,6 +257,7 @@ public sealed class DefinitionOfDoneTransactionTests
         Assert.Contains(probe.Observations, o => o.Kind == "TaskUpdate");
     }
 
+    /// <summary>Drag-to-Done through MoveOnBoardAsync also runs the DoD gate inside the same transaction, so the board path cannot bypass it either.</summary>
     [Fact]
     public async Task MoveOnBoardAsync_ReadsCriteriaAndWritesStatus_InOneTransaction()
     {

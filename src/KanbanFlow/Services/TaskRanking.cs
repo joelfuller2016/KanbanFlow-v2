@@ -48,16 +48,33 @@ public static class TaskRanking
     /// null, any claimed task therefore counts as claimed-by-other and sinks — matching the historic
     /// MCP behaviour. Unclaimed tasks are never de-prioritised.
     /// </remarks>
+    /// <param name="now">
+    /// Current time, used only to decide whether another actor's claim has gone stale (#429).
+    /// Injected rather than read from the clock so the boundary is testable without sleeping.
+    /// Defaults to <see cref="DateTime.UtcNow"/>.
+    /// </param>
+    /// <param name="claimTtl">
+    /// How long a claim stays fresh. A claim older than this stops de-prioritising its task, so a
+    /// crashed agent can no longer park work permanently. Defaults to
+    /// <see cref="ClaimPolicy.DefaultTtl"/>.
+    /// </param>
     public static IReadOnlyList<RankedTask> RankNextTasks(
         IReadOnlyCollection<TaskItem> openTasks,
         IReadOnlyDictionary<int, WorkStatus> statusById,
         ILookup<int, int> dependsOnByTask,
         string? actor,
-        int limit)
+        int limit,
+        DateTime? now = null,
+        TimeSpan? claimTtl = null)
     {
         ArgumentNullException.ThrowIfNull(openTasks);
         ArgumentNullException.ThrowIfNull(statusById);
         ArgumentNullException.ThrowIfNull(dependsOnByTask);
+
+        var effectiveNow = now ?? DateTime.UtcNow;
+        var effectiveTtl = claimTtl ?? ClaimPolicy.DefaultTtl;
+        if (effectiveTtl <= TimeSpan.Zero)
+            throw new ArgumentOutOfRangeException(nameof(claimTtl), "Claim TTL must be positive.");
 
         var clampedLimit = Math.Clamp(limit, 1, 50);
         // Normalize the actor exactly as ClaimedBy is normalized on write (trim, blank→null), so an
@@ -71,9 +88,14 @@ public static class TaskRanking
                 // (e.g. a cross-project or dangling edge) — either way the task is not ready.
                 var hasOpenBlocker = dependsOnByTask[task.Id].Any(dependsOnId =>
                     !statusById.TryGetValue(dependsOnId, out var status) || status != WorkStatus.Done);
+                // A STALE claim no longer de-prioritises the task (#429). Without this, one
+                // crashed agent parks a task at the bottom of every other actor's list forever —
+                // ClaimedByOther is the primary sort key, so the penalty is maximal and permanent.
+                var claimIsStale = ClaimPolicy.IsStale(task.ClaimedBy, task.ClaimedAt, effectiveNow, effectiveTtl);
                 var claimedByOther = !string.IsNullOrWhiteSpace(task.ClaimedBy)
-                    && !string.Equals(task.ClaimedBy, normalizedActor, StringComparison.OrdinalIgnoreCase);
-                return (Task: task, HasOpenBlocker: hasOpenBlocker, ClaimedByOther: claimedByOther);
+                    && !string.Equals(task.ClaimedBy, normalizedActor, StringComparison.OrdinalIgnoreCase)
+                    && !claimIsStale;
+                return (Task: task, HasOpenBlocker: hasOpenBlocker, ClaimedByOther: claimedByOther, ClaimIsStale: claimIsStale);
             })
             .Where(x => !x.HasOpenBlocker)
             .OrderBy(x => x.ClaimedByOther)                              // unclaimed / own first
@@ -82,7 +104,7 @@ public static class TaskRanking
             .ThenBy(x => x.Task.Id)                                     // stable, oldest first
             .Take(clampedLimit)
             .Select(x => new RankedTask(x.Task, x.ClaimedByOther, IsBlocked: false,
-                BuildReason(x.Task, x.ClaimedByOther)))
+                BuildReason(x.Task, x.ClaimedByOther, x.ClaimIsStale)))
             .ToList();
     }
 
@@ -92,12 +114,14 @@ public static class TaskRanking
     /// it names the priority, flags in-progress work, confirms there are no open blockers, and
     /// notes when a task is claimed by another actor (or unclaimed).
     /// </summary>
-    private static string BuildReason(TaskItem task, bool claimedByOther)
+    private static string BuildReason(TaskItem task, bool claimedByOther, bool claimIsStale)
     {
         var parts = new List<string> { $"{task.Priority} priority" };
         if (task.Status == WorkStatus.InProgress) parts.Add("already in progress");
         parts.Add("no open blockers");
         if (claimedByOther) parts.Add($"claimed by {task.ClaimedBy} (deprioritised)");
+        else if (claimIsStale && !string.IsNullOrWhiteSpace(task.ClaimedBy))
+            parts.Add($"claim by {task.ClaimedBy} is stale (available)");
         else if (string.IsNullOrWhiteSpace(task.ClaimedBy)) parts.Add("unclaimed");
         return "Top because: " + string.Join(", ", parts) + ".";
     }

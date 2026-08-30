@@ -20,12 +20,29 @@ namespace KanbanFlow.Tests;
 public sealed class TaskRankingTests
 {
     // ── pure-ranker helpers ──────────────────────────────────────────────────────────
+    /// <summary>Creates a minimal <see cref="TaskItem"/> fixture for pure-ranker assertions.</summary>
+    /// <param name="claimedAt">
+    /// When the claim was taken. Defaults to <em>now</em> whenever <paramref name="claimedBy"/> is
+    /// set, because that is what the real producer does — <c>ClaimAsync</c> always writes both
+    /// fields together. Leaving it null here would seed a claim shape the application never
+    /// creates, and since #429 treats a claimed-but-undated row as STALE, such a fixture would
+    /// quietly stop exercising the de-prioritisation these tests are about.
+    /// </param>
     private static TaskItem Task(
         int id,
         TaskPriority priority = TaskPriority.Medium,
         WorkStatus status = WorkStatus.Todo,
-        string? claimedBy = null) =>
-        new() { Id = id, Name = $"T{id}", Priority = priority, Status = status, ClaimedBy = claimedBy };
+        string? claimedBy = null,
+        DateTime? claimedAt = null) =>
+        new()
+        {
+            Id = id,
+            Name = $"T{id}",
+            Priority = priority,
+            Status = status,
+            ClaimedBy = claimedBy,
+            ClaimedAt = claimedBy is null ? null : (claimedAt ?? DateTime.UtcNow)
+        };
 
     private static Dictionary<int, WorkStatus> StatusById(params (int id, WorkStatus status)[] rows) =>
         rows.ToDictionary(r => r.id, r => r.status);
@@ -256,6 +273,8 @@ public sealed class TaskRankingTests
         }
     }
 
+    /// <summary>End-to-end #151 parity: the real MCP tool places a task claimed by Bob further down Alice's
+    /// recommendation list than Bob's own, matching the shared ranker's de-prioritisation rule.</summary>
     [Fact]
     public async Task McpGetNextTasks_RanksBobsClaimLaterForAlice_ThanForBob()
     {
@@ -263,8 +282,9 @@ public sealed class TaskRankingTests
         using var f = new SqliteTestFactory();
         var seeded = SeedRankingScenario(f);
 
-        var forAlice = (await KanbanMcpTools.GetNextTasks(f, seeded.ProjectId, "alice", 50)).Select(r => r.Id).ToList();
-        var forBob = (await KanbanMcpTools.GetNextTasks(f, seeded.ProjectId, "bob", 50)).Select(r => r.Id).ToList();
+        var ttlSetting = new ClaimTtlSetting(ClaimPolicy.DefaultTtl);
+        var forAlice = (await KanbanMcpTools.GetNextTasks(f, ttlSetting, seeded.ProjectId, "alice", 50)).Select(r => r.Id).ToList();
+        var forBob = (await KanbanMcpTools.GetNextTasks(f, ttlSetting, seeded.ProjectId, "bob", 50)).Select(r => r.Id).ToList();
 
         var alicePos = forAlice.IndexOf(seeded.ClaimedByBobId);
         var bobPos = forBob.IndexOf(seeded.ClaimedByBobId);
@@ -348,9 +368,10 @@ public sealed class TaskRankingTests
             .ToList();
     }
 
+    /// <summary>Runs the real MCP <c>get_next_tasks</c> tool over a real SQLite database and returns the ranked id sequence.</summary>
     private static async Task<List<int>> McpRankedIds(SqliteTestFactory f, int projectId, string? actor, int limit)
     {
-        var results = await KanbanMcpTools.GetNextTasks(f, projectId, actor, limit);
+        var results = await KanbanMcpTools.GetNextTasks(f, new ClaimTtlSetting(ClaimPolicy.DefaultTtl), projectId, actor, limit);
         return results.Select(r => r.Id).ToList();
     }
 }

@@ -28,8 +28,22 @@ builder.Services.AddSingleton(dbResolution);
 builder.Services.AddDbContextFactory<AppDbContext>(
     options => options.UseSqlite(DbPathResolver.ToConnectionString(dbResolution.Path)));
 
+// Claim TTL: parse and validate once at startup so a malformed or non-positive value is rejected
+// before the first request, not on it. All consumers inject ClaimTtlSetting — never re-parse from
+// IConfiguration at request time (#429).
+// ClaimPolicy.ResolveTtl owns the parse + both bounds, so the boot contract is testable — it
+// previously lived here as top-level statements with no seam, which is why a 24-day value shipped
+// with a green suite (#429 round-2 review). Do not re-inline it.
+var resolvedClaimTtl = ClaimPolicy.ResolveTtl(builder.Configuration["ClaimTtl"]);
+builder.Services.AddSingleton(new ClaimTtlSetting(resolvedClaimTtl));
+
 // Audit-aware service layer (issue #88: route REST + UI mutations through one place)
-builder.Services.AddScoped<ITaskService, TaskService>();
+builder.Services.AddScoped<ITaskService>(sp =>
+{
+    var factory = sp.GetRequiredService<IDbContextFactory<AppDbContext>>();
+    var ttlSetting = sp.GetRequiredService<ClaimTtlSetting>();
+    return new TaskService(factory, ttlSetting.Value);
+});
 // Dependency graph mutations (#414): cycle validation and insertion share one transaction.
 builder.Services.AddScoped<ITaskDependencyService, TaskDependencyService>();
 // Ideas inbox service (#180) — same single-audit-boundary rule as ITaskService.

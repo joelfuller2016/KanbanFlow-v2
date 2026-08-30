@@ -279,7 +279,7 @@ public sealed class ProjectSummaryServiceTests
 
         // The MCP tool with no actor — the same `actor: null` the summary uses, so the two are
         // being asked the identical question.
-        var viaMcp = await KanbanMcpTools.GetNextTasks(factory, project.Id, actor: null, limit: 5);
+        var viaMcp = await KanbanMcpTools.GetNextTasks(factory, new ClaimTtlSetting(ClaimPolicy.DefaultTtl), project.Id, actor: null, limit: 5);
 
         Assert.NotEmpty(viaMcp);
         Assert.NotNull(summary.NextTask);
