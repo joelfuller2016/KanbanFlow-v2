@@ -190,10 +190,28 @@ public sealed class TestRunnerService(
                         new { actor = "alice" }, Json, ct);
                     if (!first.IsSuccessStatusCode)
                         throw new Exception($"First claim failed: {(int)first.StatusCode}");
+                    var firstClaimedAt = (await first.Content.ReadFromJsonAsync<JsonElement>(Json, ct))
+                        .GetProperty("claimedAt").GetDateTime();
+
+                    // The API uses the real clock, whose resolution can be coarser than an HTTP
+                    // round-trip on some hosts. Keep the claims in distinct ticks so strict >
+                    // proves lease renewal instead of occasionally measuring clock granularity.
+                    await Task.Delay(20, ct);
+
                     var second = await http.PostAsJsonAsync($"/api/tasks/{taskId}/claim",
                         new { actor = "alice" }, Json, ct);
                     if (!second.IsSuccessStatusCode)
                         throw new Exception($"Re-claim by same actor should succeed, got {(int)second.StatusCode}");
+                    var secondClaimedAt = (await second.Content.ReadFromJsonAsync<JsonElement>(Json, ct))
+                        .GetProperty("claimedAt").GetDateTime();
+                    if (secondClaimedAt <= firstClaimedAt)
+                        throw new Exception("Re-claim by same actor did not advance ClaimedAt");
+
+                    var activity = await http.GetFromJsonAsync<JsonElement>($"/api/tasks/{taskId}/activity", Json, ct);
+                    var renewedEvents = activity.EnumerateArray().Count(
+                        ev => ev.GetProperty("eventType").GetString() == "TaskClaimRenewed");
+                    if (renewedEvents != 0)
+                        throw new Exception($"Fresh same-actor renewal wrote {renewedEvents} TaskClaimRenewed event(s)");
                 }
                 finally
                 {
