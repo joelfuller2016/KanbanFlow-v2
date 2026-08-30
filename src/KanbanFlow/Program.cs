@@ -49,6 +49,18 @@ else
 
 if (resolvedClaimTtl <= TimeSpan.Zero)
     throw new InvalidOperationException($"ClaimTtl must be positive; got '{claimTtlRaw}'.");
+
+// Upper bound, and it is not theoretical. ClaimPolicy.StaleCutoff computes `now - ttl`, which
+// throws ArgumentOutOfRangeException once the result underflows DateTime.MinValue — and it runs on
+// EVERY claim. Without this check a TTL that merely parses (e.g. "10675199") boots cleanly and then
+// 500s every single claim, including claims of unclaimed tasks: precisely the "rejected before the
+// first request, not on it" promise this block opens with. A year is far past any real claim.
+if (resolvedClaimTtl > ClaimPolicy.MaxTtl)
+    throw new InvalidOperationException(
+        $"ClaimTtl must be {ClaimPolicy.MaxTtl} or less; got '{claimTtlRaw}' (parsed as {resolvedClaimTtl}). "
+        + "TimeSpan reads a bare number as DAYS, and treats a first field above 23 as days too, so "
+        + "\"24:00:00\" is 24 DAYS — write \"1.00:00:00\" for one day.");
+
 builder.Services.AddSingleton(new ClaimTtlSetting(resolvedClaimTtl));
 
 // Audit-aware service layer (issue #88: route REST + UI mutations through one place)

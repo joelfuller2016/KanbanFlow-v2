@@ -40,6 +40,16 @@ public static class ClaimPolicy
     /// </remarks>
     public static readonly TimeSpan DefaultTtl = TimeSpan.FromHours(24);
 
+    /// <summary>Upper bound on a configured claim TTL.</summary>
+    /// <remarks>
+    /// <see cref="StaleCutoff"/> computes <c>now - ttl</c>, which throws
+    /// <see cref="ArgumentOutOfRangeException"/> once the result underflows
+    /// <see cref="DateTime.MinValue"/> (about 740,000 days) — and it runs on every claim, so an
+    /// unbounded TTL turns a config typo into a 500 on every claim rather than a boot failure.
+    /// One year is far beyond any legitimate claim lifetime.
+    /// </remarks>
+    public static readonly TimeSpan MaxTtl = TimeSpan.FromDays(365);
+
     /// <summary>
     /// True when a claim should be treated as abandoned.
     /// </summary>
