@@ -31,10 +31,22 @@ builder.Services.AddDbContextFactory<AppDbContext>(
 // Claim TTL: parse and validate once at startup so a malformed or non-positive value is rejected
 // before the first request, not on it. All consumers inject ClaimTtlSetting — never re-parse from
 // IConfiguration at request time (#429).
+// TryParse, not Parse: a malformed value must be reported by the same InvalidOperationException
+// as a non-positive one. Parse threw a raw FormatException naming neither the setting nor the
+// expected shape, so only half of "malformed or non-positive" was actually covered.
 var claimTtlRaw = builder.Configuration["ClaimTtl"];
-var resolvedClaimTtl = claimTtlRaw is { Length: > 0 }
-    ? TimeSpan.Parse(claimTtlRaw)
-    : ClaimPolicy.DefaultTtl;
+TimeSpan resolvedClaimTtl;
+if (claimTtlRaw is { Length: > 0 })
+{
+    if (!TimeSpan.TryParse(claimTtlRaw, out resolvedClaimTtl))
+        throw new InvalidOperationException(
+            $"ClaimTtl must be a TimeSpan such as '1.00:00:00' or '00:30:00'; got '{claimTtlRaw}'.");
+}
+else
+{
+    resolvedClaimTtl = ClaimPolicy.DefaultTtl;
+}
+
 if (resolvedClaimTtl <= TimeSpan.Zero)
     throw new InvalidOperationException($"ClaimTtl must be positive; got '{claimTtlRaw}'.");
 builder.Services.AddSingleton(new ClaimTtlSetting(resolvedClaimTtl));

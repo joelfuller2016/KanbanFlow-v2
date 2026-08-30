@@ -31,7 +31,7 @@ public static class ApiEndpoints
     {
         // GET /api/projects — list all with feature/task counts, progress, next task,
         // last activity and active claims
-        app.MapGet("/api/projects", async (AppDbContext db, ClaimTtlSetting claimTtlSetting, CancellationToken ct) =>
+        app.MapGet("/api/projects", async (AppDbContext db, Services.ClaimTtlSetting claimTtlSetting, CancellationToken ct) =>
         {
             // #281: the summary is built by Services/ProjectSummaryService, which the Home page
             // also calls — so the list endpoint and the list PAGE cannot report different counts,
@@ -367,7 +367,7 @@ public static class ApiEndpoints
         });
 
         // GET /api/projects/{id}/next-tasks — small ranked list of recommended next work
-        app.MapGet("/api/projects/{id:int}/next-tasks", async (int id, int? limit, string? actor, AppDbContext db, ClaimTtlSetting claimTtlSetting) =>
+        app.MapGet("/api/projects/{id:int}/next-tasks", async (int id, int? limit, string? actor, AppDbContext db, Services.ClaimTtlSetting claimTtlSetting) =>
         {
             var projectExists = await db.Projects.AnyAsync(p => p.Id == id);
             if (!projectExists)
