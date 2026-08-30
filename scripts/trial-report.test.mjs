@@ -11,7 +11,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { parseRows, isOutsideRepo, statusAfter, summarize, renderReport, WRITE_TOOLS } from "./trial-report.mjs";
+import { parseRows, isOutsideRepo, statusAfter, summarize, renderReport, parseArgs, pathFlavor, WRITE_TOOLS } from "./trial-report.mjs";
 
 const REPO = "C:\\Users\\Owner\\Documents\\Claude\\KanbanFlow-v2";
 const row = (over = {}) => ({
@@ -241,6 +241,52 @@ test("the rendered report carries the table, the verdict and the truncation warn
   assert.match(text, /OVERALL: MIXED/);
   assert.match(text, /3 unparseable log line/);
   assert.match(text, /LOWER BOUND/);
+});
+
+// --- 11. Findings from the PR #485 review -------------------------------------------------
+
+test("path semantics follow the INPUTS, not the host the report happens to run on", () => {
+  // Reported by Copilot on PR #485. The rows are written on Windows; the report is a Node script
+  // that may run anywhere. Under POSIX semantics `path.relative` does not know that `\` separates
+  // or that a drive letter is case-insensitive, so a session that never left the repo would count
+  // as evidence the board was consulted from outside it — inflating signal 4.
+  assert.equal(pathFlavor("C:\\Repo"), path.win32);
+  assert.equal(pathFlavor("\\\\srv\\share"), path.win32);
+  assert.equal(pathFlavor("/home/owner/repo"), path.posix);
+
+  assert.equal(isOutsideRepo("C:\\Repo\\scripts", "C:\\repo"), false, "case-differing drive path is inside");
+  assert.equal(isOutsideRepo("\\\\srv\\share\\repo\\a", "\\\\srv\\share\\repo"), false, "UNC path is inside");
+  assert.equal(isOutsideRepo("C:\\Repo-scratch", "C:\\Repo"), true, "sibling prefix is still outside");
+
+  // THE HOST-INDEPENDENCE ASSERTION, and the reason it is written this way: this suite runs on
+  // Windows, where `path === path.win32`, so any test that merely exercises Windows paths passes
+  // whether the code picks the flavor deliberately or just inherits the host's. It cannot tell a
+  // fix from the bug. Posix paths that differ only in CASE are the case where the two flavors
+  // genuinely disagree — win32 folds case and calls this inside, posix does not — so this line
+  // goes red on Windows the moment the flavor stops being chosen from the inputs.
+  assert.equal(isOutsideRepo("/home/owner/Repo/src", "/home/owner/repo"), true,
+    "posix paths are case-SENSITIVE; picking the flavor from the host would wrongly call this inside");
+  assert.equal(isOutsideRepo("/home/owner/repo/src", "/home/owner/repo"), false);
+});
+
+test("--since is validated, never silently swallowed or silently NaN", () => {
+  // Reported by Copilot on PR #485. Same shape as #468 (portfolio-sync consuming --dry-run as an
+  // option value): all three failures end in a confident table computed from nothing.
+  assert.deepEqual(parseArgs(["--since", "2026-08-30"]), { since: "2026-08-30", json: false });
+  assert.deepEqual(parseArgs(["--json"]), { since: null, json: true });
+  assert.deepEqual(parseArgs([]), { since: null, json: false });
+
+  assert.throws(() => parseArgs(["--since"]), /last argument/, "trailing --since must not be ignored");
+  assert.throws(() => parseArgs(["--since", "--json"]), /the option --json/, "must not eat the next flag");
+  assert.throws(() => parseArgs(["--since", "yesterday"]), /not a date/);
+  assert.throws(() => parseArgs(["--sicne", "2026-08-30"]), /Unknown option/, "a typo'd flag is not silently dropped");
+});
+
+test("summarize refuses an unparseable cutoff rather than excluding everything", () => {
+  // The dangerous degradation: NaN comparisons are all false, so every row drops out and four
+  // empty signals render as a REVERT-shaped verdict for a trial nobody actually read.
+  assert.throws(() => summarize({ rows: [row()], repoRoot: REPO, since: "not-a-date" }), /not a parseable date/);
+  assert.doesNotThrow(() => summarize({ rows: [row()], repoRoot: REPO, since: null }));
 });
 
 test("every WRITE_TOOLS name still exists in the wrapper — a rename must go red here", () => {

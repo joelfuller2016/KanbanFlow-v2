@@ -171,6 +171,65 @@ test("the production cap is 5 MB", () => {
   assert.equal(DEFAULT_MAX_BYTES, 5 * 1024 * 1024);
 });
 
+test("the cap counts BYTES, so a non-ASCII cwd cannot overshoot it", () => {
+  // Reported by Copilot on PR #485. The check used line.length (UTF-16 code units) while the
+  // accounting added Buffer.byteLength, so every row holding a multi-byte character let the live
+  // file drift further past the cap, permanently and without limit.
+  //
+  // The exact invariant matters here, and getting it wrong makes the test a decoration. Because
+  // rotation happens BEFORE the append that would breach the cap, a correct implementation never
+  // lets the live file exceed maxBytes AT ALL. The mixed-unit version appends when
+  // `bytesOnDisk + line.length` still fits but `bytesOnDisk + bytes` does not, overshooting by up
+  // to the row's own undercount.
+  //
+  // So the assertion is `size <= cap`, flat. A first version allowed `cap + oneRow` of slack and
+  // stayed green with the bug reinstated — the slack was larger than the entire defect.
+  //
+  // (This also corrects the severity in the review that raised it: the drift does NOT accumulate.
+  // The accounting side was already in bytes, so the overshoot is bounded by one row's undercount
+  // rather than growing without bound. Still wrong, still worth one unit — just not unbounded.)
+  //
+  // Each CJK character below is 1 UTF-16 unit but 3 UTF-8 bytes, so the undercount is ~120 bytes
+  // per row — far more than enough to breach a flat cap.
+  const dir = tmp();
+  const logPath = path.join(dir, "usage.jsonl");
+  const cap = 600;
+  const cwd = `C:\\${"項目".repeat(30)}`;
+  const logger = createUsageLogger({ logPath, sessionId: "s", cwd, maxBytes: cap });
+
+  for (let i = 0; i < 30; i++) logger.record({ tool: "list_projects", args: { projectId: i }, outcome: "ok", ms: 1 });
+
+  const size = fs.statSync(logPath).size;
+  assert.ok(size <= cap,
+    `live log is ${size} bytes against a ${cap}-byte cap; rotation happens before the breaching ` +
+    "append, so the check and the accounting must use the same unit");
+});
+
+test("a rotation that cannot happen does not retry on every single call", () => {
+  // Windows throws EPERM renaming over a destination another session holds open — the normal
+  // case for a shared log, not an exotic one. Recording must continue, and must not attempt a
+  // rename per row for the rest of the session.
+  const dir = tmp();
+  const logPath = path.join(dir, "usage.jsonl");
+  fs.mkdirSync(`${logPath}.1`);   // a DIRECTORY at the rotation target: rename can never succeed
+  // Cap chosen so 40 rows (~60 bytes each, ~2.5 KB) span a handful of caps: a correct backoff
+  // retries about once per cap, a broken one retries on all 40 rows.
+  const logger = createUsageLogger({ logPath, sessionId: "s", cwd: "C:\\w", maxBytes: 1000 });
+
+  let renames = 0;
+  const realRename = fs.renameSync;
+  fs.renameSync = (...a) => { renames++; return realRename.apply(fs, a); };
+  try {
+    for (let i = 0; i < 40; i++) logger.record({ tool: "list_projects", args: { projectId: i }, outcome: "ok", ms: 1 });
+  } finally {
+    fs.renameSync = realRename;
+  }
+
+  assert.ok(readRows(logPath).length === 40, "every call is still recorded despite the failed rotation");
+  assert.ok(renames <= 6, `expected periodic retries (about one per cap), got ${renames} rename attempts for 40 rows`);
+  assert.ok(renames < 40, "a per-call retry would attempt one rename per row");
+});
+
 // --- 5. Test harnesses must not contaminate the trial -------------------------------------
 
 test("the MCP test harnesses spawn the wrapper with recording OFF", () => {

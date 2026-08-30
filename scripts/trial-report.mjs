@@ -72,13 +72,36 @@ export function parseRows(text) {
   return { rows, malformed };
 }
 
-/** True when `cwd` is not inside `repoRoot`. Case-insensitive: these are Windows paths. */
+// A drive-letter root (C:\...) or a UNC root (\\server\share).
+const WINDOWS_PATH = /^(?:[A-Za-z]:[\\/]|\\\\)/;
+
+/**
+ * Pick the path semantics the INPUTS are written in, not the ones the host happens to run.
+ *
+ * The rows in this log are written on Windows, but the report is a Node script that may be run
+ * anywhere — and POSIX semantics applied to a Windows path get signal 4 WRONG, not merely
+ * imprecise. `path.posix.relative` treats `C:\Repo` and `C:\repo\scripts` as unrelated (it is
+ * case-sensitive and does not know `\` is a separator), and does the same for a UNC path, so a
+ * session that never left the repo would be counted as evidence the board was consulted from
+ * outside it — the exact claim signal 4 exists to establish.
+ */
+// Returns win32 or posix EXPLICITLY — never the host default. Falling back to `path` would make
+// this function's behavior depend on where it runs, which is the whole defect being fixed, and it
+// would also be untestable on Windows (there `path === path.win32`, so a host-default bug and a
+// correct win32 choice are indistinguishable).
+export function pathFlavor(...candidates) {
+  return candidates.some(value => typeof value === "string" && WINDOWS_PATH.test(value)) ? path.win32 : path.posix;
+}
+
+/** True when `cwd` is not inside `repoRoot`. */
 export function isOutsideRepo(cwd, repoRoot) {
   if (typeof cwd !== "string" || cwd.length === 0) return false;
-  const rel = path.relative(path.resolve(repoRoot), path.resolve(cwd));
+  // Mixed flavors (a Windows cwd against a POSIX repo root) resolve as OUTSIDE, which is the
+  // honest answer: those two paths are on different machines.
+  const p = pathFlavor(cwd, repoRoot);
+  const rel = p.relative(p.resolve(repoRoot), p.resolve(cwd));
   if (rel === "") return false;
-  const inside = !rel.startsWith("..") && !path.isAbsolute(rel);
-  return !inside;
+  return rel.startsWith("..") || p.isAbsolute(rel);
 }
 
 /** The work status a TaskStatusChanged event landed on, or null when it cannot be read. */
@@ -98,7 +121,14 @@ export function statusAfter(event) {
  * unit-testable against fixtures with no app, no clock and no filesystem.
  */
 export function summarize({ rows = [], events = [], repoRoot, since = null, truncated = [] } = {}) {
-  const cutoff = since ? new Date(since).getTime() : null;
+  // An unparseable cutoff must NOT degrade to "exclude everything". NaN comparisons are all false,
+  // so a typo'd date would silently drop every row and every event, and the report would then
+  // score four empty signals and hand back a REVERT-shaped verdict for a trial it never read.
+  // A wrong answer delivered confidently is the one outcome this whole report exists to prevent.
+  const cutoff = since === null || since === undefined ? null : Date.parse(since);
+  if (cutoff !== null && !Number.isFinite(cutoff)) {
+    throw new Error(`summarize: since=${JSON.stringify(since)} is not a parseable date.`);
+  }
   const inWindow = ts => cutoff === null || (Number.isFinite(Date.parse(ts)) && Date.parse(ts) >= cutoff);
 
   const windowRows = rows.filter(r => inWindow(r.ts));
@@ -308,10 +338,49 @@ async function fetchActivity(apiBase) {
   return { events, truncated };
 }
 
+/**
+ * Parse the CLI options strictly.
+ *
+ * `--since` takes a value, and an option that consumes its value with an unchecked `argv[++i]`
+ * is a defect this repo has already been bitten by once: #468 is `portfolio-sync` swallowing
+ * `--dry-run` as another option's value and then performing the real sync. The same shape here is
+ * quieter and worse — `--since --json` would take "--json" as the cutoff, `--since` at the end of
+ * the line would be ignored entirely, and a typo'd date would exclude every row. All three end in
+ * a confidently rendered table that adjudicates a two-week trial on nothing.
+ */
+export function parseArgs(args) {
+  const parsed = { since: null, json: false };
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (arg === "--json") {
+      parsed.json = true;
+      continue;
+    }
+    if (arg === "--since") {
+      const value = args[i + 1];
+      if (value === undefined) {
+        throw new Error("--since needs a date, e.g. --since 2026-08-30 (it was the last argument).");
+      }
+      if (value.startsWith("--")) {
+        throw new Error(`--since needs a date, but the next argument was the option ${value}.`);
+      }
+      if (!Number.isFinite(Date.parse(value))) {
+        throw new Error(
+          `--since got ${JSON.stringify(value)}, which is not a date. Refusing rather than ` +
+          "excluding every row and reporting an empty trial."
+        );
+      }
+      parsed.since = value;
+      i++;
+      continue;
+    }
+    throw new Error(`Unknown option ${JSON.stringify(arg)}. Usage: trial-report [--since <date>] [--json]`);
+  }
+  return parsed;
+}
+
 async function main(argv) {
-  const args = argv.slice(2);
-  const since = args.includes("--since") ? args[args.indexOf("--since") + 1] : null;
-  const asJson = args.includes("--json");
+  const { since, json: asJson } = parseArgs(argv.slice(2));
   const apiBase = (process.env.KANBANFLOW_API_URL || DEFAULT_API).replace(/\/$/, "");
 
   const { resolveUsageLogPath } = await import("./usage-log.mjs");
@@ -340,7 +409,9 @@ async function main(argv) {
 // Only run when invoked directly, so the pure functions above can be imported by tests.
 if (process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1])) {
   main(process.argv).catch(error => {
-    console.error(error);
-    process.exit(1);
+    // Message, not stack: every error this can throw is a usage error the operator must read and
+    // act on, and a stack trace buries it. Exit 2 matches the launcher's convention.
+    console.error(error?.message ?? error);
+    process.exit(2);
   });
 }

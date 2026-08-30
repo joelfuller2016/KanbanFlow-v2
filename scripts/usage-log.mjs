@@ -138,14 +138,25 @@ export function createUsageLogger({
     }
   }
 
+  // The size at which the next rotation is attempted. Normally just maxBytes, but it is pushed out
+  // after a FAILED rotation so a permanently unrenameable log does not attempt a rename on every
+  // single call for the rest of the session.
+  let rotateAt = maxBytes;
+
   function rotate() {
     try {
+      // rename over an existing destination is fine — Node uses MOVEFILE_REPLACE_EXISTING on
+      // Windows, verified: a second rotation overwrites `.1` rather than failing EEXIST. What it
+      // genuinely cannot do is replace a destination another process holds OPEN, which throws
+      // EPERM — and concurrent sessions sharing this log is the normal case, not an exotic one.
       fs.renameSync(logPath, `${logPath}.1`);
       bytesOnDisk = 0;
+      rotateAt = maxBytes;
     } catch {
-      // Windows refuses a rename while another session holds the file open. Keep appending: an
-      // oversized log is a far smaller problem than a failed measurement, and the report reads
-      // whatever length it finds.
+      // Keep appending. An oversized log is a far smaller problem than a failed measurement, and
+      // the report reads whatever length it finds. Back the threshold off by another full cap so
+      // the retry is periodic rather than per-call.
+      rotateAt = bytesOnDisk + maxBytes;
     }
   }
 
@@ -164,9 +175,14 @@ export function createUsageLogger({
         // grew to several KB would make that guarantee much weaker. The report tolerates a torn
         // line regardless and counts it rather than dying on it.
         const line = `${JSON.stringify(row)}\n`;
-        if (bytesOnDisk + line.length > maxBytes) rotate();
+        // BYTES, not string length, and the same figure for both the check and the accounting.
+        // `line.length` counts UTF-16 code units, so a cwd or actor holding any non-ASCII
+        // character makes the check undercount what the accounting then adds — the cap drifts
+        // upward a little on every such row and the file quietly overshoots it.
+        const bytes = Buffer.byteLength(line);
+        if (bytesOnDisk + bytes > rotateAt) rotate();
         fs.appendFileSync(logPath, line);
-        bytesOnDisk += Buffer.byteLength(line);
+        bytesOnDisk += bytes;
       } catch {
         // Deliberately silent, and deliberately not stderr either: this wrapper speaks JSON-RPC
         // over stdio and its stderr is the client's log. A per-call warning about a broken log
