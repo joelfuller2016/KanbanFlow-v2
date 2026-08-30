@@ -12,7 +12,7 @@
 
     2. A brand-new machine still gets a populated board. If the live DB is missing, it is
        restored from the tracked seed at seed/kanbanflow.seed.db -- the committed starting
-       point. Refresh that seed deliberately with scripts/snapshot-seed.ps1; nothing here
+       point. Refresh that seed deliberately with `npm run seed:snapshot`; nothing here
        ever writes back to it.
 
     Windows PowerShell 5.1 compatible -- no ternary, no null-coalescing.
@@ -37,10 +37,10 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
 $RepoRoot = Split-Path -Parent $PSScriptRoot
-$SeedPath = Join-Path $RepoRoot 'seed\kanbanflow.seed.db'
+$SeedPath = Join-Path (Join-Path $RepoRoot 'seed') 'kanbanflow.seed.db'
 
 if (-not $DbPath) { $DbPath = $env:KANBANFLOW_DB_PATH }
-if (-not $DbPath) { $DbPath = Join-Path $HOME '.kanbanflow\kanbanflow.db' }
+if (-not $DbPath) { $DbPath = Join-Path (Join-Path $HOME '.kanbanflow') 'kanbanflow.db' }
 
 if (-not $Url) { $Url = $env:ASPNETCORE_URLS }
 if (-not $Url) { $Url = 'http://127.0.0.1:5123' }
@@ -67,7 +67,10 @@ if (-not (Test-Path -LiteralPath $DbPath)) {
 $env:KANBANFLOW_DB_PATH = $DbPath
 $env:ASPNETCORE_URLS    = $Url
 
-$Dll = Join-Path $RepoRoot 'src\KanbanFlow\bin\Release\net10.0\KanbanFlow.dll'
+$Dll = $RepoRoot
+foreach ($part in 'src', 'KanbanFlow', 'bin', 'Release', 'net10.0', 'KanbanFlow.dll') {
+    $Dll = Join-Path $Dll $part
+}
 if (-not (Test-Path -LiteralPath $Dll)) {
     throw "Release build not found at $Dll. Run: dotnet build src/KanbanFlow/KanbanFlow.csproj -c Release"
 }

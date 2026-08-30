@@ -40,9 +40,17 @@ try {
 }
 
 const argv = process.argv.slice(2);
+// A missing value must not swallow the next flag: `--db --check` should complain about
+// --db, not silently try to open a database called "--check".
 const flag = (name) => {
   const i = argv.indexOf(name);
-  return i === -1 ? null : argv[i + 1] || null;
+  if (i === -1) return null;
+  const value = argv[i + 1];
+  if (!value || value.startsWith("--")) {
+    console.error(`${name} needs a value.`);
+    process.exit(2);
+  }
+  return value;
 };
 const check = argv.includes("--check");
 
