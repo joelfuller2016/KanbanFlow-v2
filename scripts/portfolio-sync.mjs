@@ -50,6 +50,9 @@
 
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import { realpathSync } from "node:fs";
+import { resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 // BOTH imports are used. `derivePriority` sets TaskItem.Priority in `syncTasks()` and backs the
 // priority-drift check in `statusRepo()`; `priorityFromLabel` is called by `labelForPriority()`
 // below, which picks the label a pushed issue should carry so the priority survives the round trip.
@@ -76,7 +79,28 @@ const DEFAULT_REPOS = [
 ];
 
 const UNSORTED_FEATURE = "Unsorted";
-const BODY_EXCERPT_LIMIT = 1500;
+
+// The HTML marker `descriptionFor` opens every mirrored description with. Its presence is the
+// sync's claim of ownership over that text: present means "the sync wrote this and may rewrite
+// it", absent means a human owns it and the sync must not touch it.
+const SYNC_MARKER = "<!-- kanbanflow-sync -->";
+
+// A mirrored description is regenerated from scratch on every run and its `**Synced:**` stamp is a
+// fresh timestamp each time, so comparing the raw text would mark all 172 tasks changed on every
+// single sync: 172 pointless PUTs, 172 audit-trail entries, and a "tasks updated" count that could
+// never reach zero and so could never mean anything. Compare with the stamp normalised out; the
+// fresh stamp still gets written, but only when something else actually differs.
+const SYNCED_LINE_RE = /^\*\*Synced:\*\*.*$/m;
+const comparableDescription = (d) => String(d || "").replace(SYNCED_LINE_RE, "").trim();
+// Was 1500 - a cap meant to be the rare exception that fired on EVERY card. Measured against all
+// 60 issues in this repo: the median body is 11,900 chars and the SMALLEST one still clears 1500, so
+// 100% of descriptions carried the truncation marker, which taught the board's reader to ignore it.
+// 64000 clears the largest body in the portfolio (21,057) with ~3x headroom. A cap still exists
+// because the description is mirrored into SQLite on every sync and re-rendered as markdown in the
+// detail panel - unbounded is a different bug, not the fix. Overridable so the truncation path stays
+// exercisable now that no real issue reaches it.
+const BODY_EXCERPT_LIMIT = Math.max(
+  1, Number.parseInt(process.env.KANBANFLOW_BODY_EXCERPT_LIMIT || "64000", 10) || 64000);
 // High enough that no repo in the portfolio comes near it, because SATURATING it is a hard
 // failure, not a warning: a read that stopped early makes every count and every "no drift"
 // verdict downstream a lie. Overridable so the incompleteness path can actually be exercised.
@@ -459,6 +483,24 @@ function stripSyncBlock(description) {
     .trim();
 }
 
+// Cut at a LINE boundary, and name where the rest is. The old slice cut mid-line, which inside a
+// fenced code block or a table left the panel rendering a half-OPEN construct - the markdown past
+// the cut is not merely missing, it is malformed, and it swallows the very marker that was supposed
+// to explain itself. The 0.8 floor keeps the hard slice when a single line is itself over the limit,
+// so the cap stays absolute rather than becoming advisory.
+function excerptFor(body, url) {
+  if (body.length <= BODY_EXCERPT_LIMIT) return body;
+  const hard = body.slice(0, BODY_EXCERPT_LIMIT);
+  const nl = hard.lastIndexOf("\n");
+  const kept = nl > BODY_EXCERPT_LIMIT * 0.8 ? hard.slice(0, nl) : hard;
+  const where = url ? `[read the full issue on GitHub](${url})` : "read it on GitHub";
+  return `${kept}
+
+---
+
+_…truncated at ${kept.length.toLocaleString()} of ${body.length.toLocaleString()} chars — ${where}_`;
+}
+
 function descriptionFor(issue, linkedPr) {
   const labels = (issue.labels || []).map((l) => l.name).join(", ") || "none";
   const milestone = issue.milestone?.title || "none";
@@ -473,7 +515,7 @@ function descriptionFor(issue, linkedPr) {
   ];
   const body = String(issue.body || "").trim();
   if (body) {
-    lines.push(body.length > BODY_EXCERPT_LIMIT ? `${body.slice(0, BODY_EXCERPT_LIMIT)}\n\n…(truncated — see the issue)` : body);
+    lines.push(excerptFor(body, issue.url));
   }
   return lines.join("\n");
 }
@@ -516,6 +558,8 @@ function plan(dryRun, verb, what) {
 // Two kinds, and only two: both describe a disagreement the sync deliberately WILL NOT fix.
 const driftDoneButOpen = (repo, issue) =>
   `${repo}#${issue.number}: board says Done, issue is still open — ${issue.url}`;
+const driftHandEditedDescription = (repo, issue) =>
+  `${repo}#${issue.number}: description was replaced by hand - the sync will not overwrite it - ${issue.url}`;
 const driftOrphanTask = (repo, taskName, issueNumber) =>
   `${repo}: task "${taskName}" has no matching issue #${issueNumber} on GitHub (deleted or transferred?)`;
 
@@ -657,9 +701,35 @@ async function syncTasks(repo, projectId, issues, closedNumbers, prByIssue, feat
       stats.drift.push(driftDoneButOpen(repo, issue));
     }
 
+    // GitHub owns the BODY of a mirrored description, and until now nothing reconciled it:
+    // `descriptionFor` had exactly one call site, the create path. Once a task existed its
+    // description was frozen at whatever the first sync wrote, so an edited issue body never
+    // reached the board (#349) — and on this board that froze a truncation marker onto 165 of 172
+    // tasks, which no amount of raising the excerpt limit would have cleared on its own.
+    //
+    // Ownership is the guard. A description the sync wrote carries SYNC_MARKER, and replacing that
+    // is the sync doing its job. One a human wrote or replaced does not carry it, and overwriting
+    // it would be the sync fighting the board's owner — the same invariant that stops it stomping a
+    // hand-set status a few lines below. That case is reported as drift, never silently skipped.
+    const desiredDescription = descriptionFor(issue, linkedPr);
+    const currentDescription = String(task.description || "");
+    if (currentDescription.trim() === "" || currentDescription.includes(SYNC_MARKER)) {
+      if (comparableDescription(currentDescription) !== comparableDescription(desiredDescription)) {
+        patch.description = desiredDescription;
+      }
+    } else {
+      stats.drift.push(driftHandEditedDescription(repo, issue));
+    }
+
     if (Object.keys(patch).length === 0) { stats.tasksUnchanged++; continue; }
 
-    plan(dryRun, "update task", `${desiredName}  ${JSON.stringify(patch)}`);
+    // `patch` can now carry a description up to BODY_EXCERPT_LIMIT, and JSON.stringify would put
+    // every byte of it in the log once per task - 165 tasks of wall on this board alone. Log its
+    // SIZE; the content is on GitHub, which is where the line already points the reader.
+    const loggable = patch.description === undefined
+      ? patch
+      : { ...patch, description: `<${patch.description.length} chars>` };
+    plan(dryRun, "update task", `${desiredName}  ${JSON.stringify(loggable)}`);
     if (dryRun) continue;
     // PUT /api/tasks/{id} rejects any payload without `name` — 422 "Name is required."
     // (ApiEndpoints.cs:1451). So `name` always goes on the wire, even when unchanged;
@@ -1209,7 +1279,33 @@ async function main() {
   }
 }
 
-main().catch((err) => {
-  console.error(err);
-  process.exit(1);
-});
+// Run only when invoked as the script, not when imported. Without this guard, importing anything
+// from this file to TEST it would fire a live `gh` fetch and mutate the board as a side effect of
+// `node --test`. Every existing CLI invocation still runs main() exactly as before.
+//
+// Lifted verbatim from backlog-sync.mjs, whose comment there explains the two traps this avoids:
+// URL-string comparison is fragile on Windows (drive-letter case, percent-encoding), and the ESM
+// loader resolves `import.meta.url` through a symlink while `process.argv[1]` does not — so a
+// raw-only comparison exits 0 having done nothing, the quietest possible failure.
+function resolvedEntry(p) {
+  try {
+    return realpathSync(resolve(p));
+  } catch {
+    return resolve(p); // argv[1] need not exist on disk; fall back to the raw resolution.
+  }
+}
+const selfPath = fileURLToPath(import.meta.url);
+const invokedDirectly = Boolean(process.argv[1])
+  && (resolve(process.argv[1]) === selfPath || resolvedEntry(process.argv[1]) === selfPath);
+
+if (invokedDirectly) {
+  main().catch((err) => {
+    console.error(err);
+    process.exit(1);
+  });
+}
+
+// Exported for `portfolio-sync.test.mjs`. `excerptFor` is the truncation the board's reader sees;
+// `descriptionFor` is the whole mirrored description, exported so a test can assert the marker is
+// absent for a real-sized issue body rather than only that the helper agrees with itself.
+export { excerptFor, descriptionFor, BODY_EXCERPT_LIMIT };

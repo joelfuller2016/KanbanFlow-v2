@@ -217,7 +217,7 @@
                                    aria-label="Mark @task.Name as @(taskIsDone ? "not done" : "done")"
                                    data-testid="outline-task-@task.Id-done-checkbox" />
                             <button type="button"
-                                    class="btn btn-link text-reset text-decoration-none text-start p-0 flex-grow-1 text-truncate small @(taskIsDone ? "text-decoration-line-through text-muted" : "")"
+                                    class="btn btn-link text-reset text-decoration-none text-start p-0 flex-grow-1 small outline-task-title @(taskIsDone ? "text-decoration-line-through text-muted" : "")"
                                     @onclick="() => OnOpenEditTask.InvokeAsync(task)"
                                     @onclick:stopPropagation="true"
                                     aria-label="Open task details for @task.Name"

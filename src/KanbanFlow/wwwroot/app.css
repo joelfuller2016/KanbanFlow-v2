@@ -1354,6 +1354,179 @@ h1:focus {
     color: var(--bs-body-color);
 }
 
+/* ── Hover / focus reveal: the card answers "is this worth opening?" without being opened ─────── */
+/* A resting task card carries a truncated title, a priority word and a feature label. That is not
+   enough to tell two tasks apart when their names share a prefix — which, on a board mirrored from
+   GitHub issues, is the common case, not the edge one. The reader's only recourse was to open the
+   detail panel, read, and close it again, for every candidate.
+
+   The reveal shows the description's first line and the issue number, and it costs vertical space
+   only while the pointer or keyboard focus is actually on the card.
+
+   ── Why grid-template-rows and not max-height ──
+   `max-height` cannot animate to `auto`, so a collapsible built on it has to GUESS a ceiling. Guess
+   low and a long excerpt is clipped with no indication; guess high and the transition spends most of
+   its duration on empty space, because the tween is linear in the declared height, not the rendered
+   one. `grid-template-rows: 0fr -> 1fr` animates to the content's real height with no magic number.
+   `min-height: 0` on the inner track is load-bearing: a grid item's automatic minimum size is
+   `auto`, so without it the row floors at the content height and the card never collapses at all.
+
+   ── Why the card is allowed to push its neighbours ──
+   The reveal grows DOWNWARD from under the cursor, which is on the title row at the top of the card.
+   The hovered card therefore stays under the pointer while it opens, and the hover cannot
+   self-cancel. (The alternative — overlaying neighbours via absolute positioning — breaks inside a
+   scrolling column, and a `transform` would create a stacking context, which is exactly the
+   mechanism that buried the ⋮ dropdown a few rules below.) Cards below shift; the one being read
+   does not.
+
+   ── Why :focus-within, and why the media query ──
+   Hover alone is unreachable by keyboard and meaningless on touch. `:focus-within` opens the panel
+   when the title button takes focus, so tabbing the board reveals the same information, and a tap on
+   a touch device focuses the button and opens it too. The hover half is gated behind
+   `(hover: hover)` so a touch browser's emulated hover cannot leave a card stuck open with no
+   pointer to move away. */
+.board-card-reveal {
+    display: grid;
+    grid-template-rows: 0fr;
+    opacity: 0;
+    transition: grid-template-rows .18s ease, opacity .18s ease;
+}
+
+.board-card-reveal-inner {
+    overflow: hidden;
+    min-height: 0;   /* see above — without this the row never reaches 0fr */
+}
+
+@media (hover: hover) {
+    .board-card:hover > .card-body > .board-card-reveal {
+        grid-template-rows: 1fr;
+        opacity: 1;
+    }
+}
+
+.board-card:focus-within > .card-body > .board-card-reveal {
+    grid-template-rows: 1fr;
+    opacity: 1;
+}
+
+/* The title: TWO lines at rest, all of them while the card is open.
+   #481 measured this on the real 168-task board: every card was clipped at both 1440px and 1920px,
+   with a mean of 22% of the title visible and worst cases at 9%. Two cards reading "#453 [P2][bug]
+   Dev UR" and "#454 [P2][docs] `REA" are different issues and identical on screen.
+   That is a SCANNING failure, and #481 is right that revealing on hover does not fix it: hover is
+   confirmation, one card at a time, and a person scanning a column is not hovering. So the resting
+   state has to carry more title, and the reveal becomes the confirmation on top of it.
+   Two lines rather than three: #481 costs the trade honestly (columns grow ~40% taller), and two is
+   where the measured worst cases stop being ambiguous without doubling the column height.
+   `-webkit-line-clamp` is the clamp with universal support; the unprefixed `line-clamp` is written
+   alongside for browsers that have shipped it. Both need `display: -webkit-box`, which is why
+   `text-truncate` had to come OFF the markup: its `white-space: nowrap` pins the box to one line
+   and would defeat the clamp entirely. */
+.board-card-title {
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
+    overflow: hidden;
+    transition: none;
+}
+
+@media (hover: hover) {
+    .board-card:hover .board-card-title {
+        -webkit-line-clamp: unset;
+        line-clamp: unset;
+        overflow: visible;
+    }
+}
+
+.board-card:focus-within .board-card-title {
+    -webkit-line-clamp: unset;
+    line-clamp: unset;
+    overflow: visible;
+}
+
+/* The sidebar rows, same defect and same fix. #481 measured the outline as WORSE than the board:
+   it clips at a narrower width and repeats the same titles, so "#468 P1: portfolio..." and
+   "#464 P1: Idea "N..." are the whole of what a reader gets. Two lines here as well, and the row
+   already carries `title="@task.Name"` for the full string on hover.
+   No reveal on these rows: the outline is a dense navigation list, and a hover panel in a list this
+   tight would obscure the rows around the one being read. */
+.outline-task-title {
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
+    overflow: hidden;
+}
+
+/* ── Never while a drag is in flight ──────────────────────────────────────────────────────────── */
+/* SortableJS computes drop targets from the LIVE geometry of the list. A card that grows under the
+   pointer mid-drag moves every sibling below it, so the index the drop resolves to is not the one
+   the user aimed at. Suppressing the reveal for the duration of any drag keeps the geometry the drag
+   started with.
+
+   `body:has(.kanban-chosen)` is a global switch driven by the class SortableJS already sets on the
+   chosen element (`chosenClass` in kanbanflow.js) — no JS change is needed, and it covers a drag
+   whose source and target columns differ, which a per-column selector would not. `:has()` is
+   established in this stylesheet; see the ⋮-menu z-index rule. */
+body:has(.kanban-chosen) .board-card-reveal,
+.board-card.kanban-ghost .board-card-reveal {
+    grid-template-rows: 0fr;
+    opacity: 0;
+}
+
+/* ── The reveal's own content ─────────────────────────────────────────────────────────────────── */
+/* `pt-` on the inner rather than margin on the children: a margin would collapse through the zero
+   height row and leave a few pixels of the panel visible while it is supposed to be shut. */
+.board-card-reveal-inner {
+    padding-top: .35rem;
+}
+
+.board-card-excerpt {
+    font-size: .75rem;
+    line-height: 1.35;
+    color: var(--bs-secondary-color, #6c757d);
+    margin-bottom: .25rem;
+}
+
+/* The GitHub affordance. The board is a MIRROR of GitHub — "KanbanFlow IS GitHub, visualised" — and
+   until now nothing on a card said so: the issue URL was buried in the description behind a sync
+   header the reader had to open the panel and scroll past. */
+.board-card-gh {
+    display: inline-flex;
+    align-items: center;
+    gap: .25rem;
+    font-size: .7rem;
+    font-weight: 600;
+    text-decoration: none;
+    color: var(--bs-secondary-color, #6c757d);
+    border: 1px solid var(--bs-border-color, #dee2e6);
+    border-radius: .25rem;
+    padding: .05rem .3rem;
+    line-height: 1.4;
+}
+
+.board-card-gh:hover,
+.board-card-gh:focus-visible {
+    color: var(--bs-body-color, #212529);
+    border-color: var(--bs-secondary-color, #6c757d);
+    background-color: var(--bs-tertiary-bg, #f8f9fa);
+}
+
+/* ── Legibility of the resting card (the "I can't see it" half) ───────────────────────────────── */
+/* The title rode on Bootstrap's `.small` (0.875rem) at `fw-medium` inside a `.btn-link`, which is
+   the SMALLEST type on the card competing with a filled priority badge for attention — so the badge
+   won and the title, the only thing that identifies the task, lost. Nudging the title up and the
+   badge's neighbours down puts the emphasis back on the name.
+   The value is set here rather than by swapping the markup's `.small`, so the resting metrics stay
+   in one place next to the hover rule that undoes the truncation. */
+.board-card-title {
+    font-size: .8125rem;
+    font-weight: 600;
+    line-height: 1.3;
+    color: var(--bs-body-color, #212529);
+}
+
 /* ── prefers-reduced-motion (accessibility.md §8) ─────────────────────────────────────────────── */
 /* Neither board honoured this. The hover-lift is a transform and the cards transition on hover.
    (SortableJS's own `animation: 150` is a JS option in kanbanflow.js, which is frozen for this PR —
@@ -1366,6 +1539,12 @@ h1:focus {
 
     .board-card:hover {
         transform: none;
+    }
+
+    /* The reveal still OPENS - reduced motion asks for no animation, not for less information.
+       Only the tween is dropped, so the panel appears at its final height in a single frame. */
+    .board-card-reveal {
+        transition: none;
     }
 }
 
