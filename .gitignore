@@ -3,6 +3,9 @@ obj/
 *.db
 *.db-shm
 *.db-wal
+# The committed starting point for the board is versioned on purpose; every other
+# SQLite file — including the live DB it is restored into — stays ignored.
+!seed/kanbanflow.seed.db
 .vs/
 *.user
 .gsd-*/

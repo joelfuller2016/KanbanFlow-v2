@@ -28,6 +28,25 @@ sacred: never bypass it.
 > when the board is empty and needs reconciling from GitHub, use the **`kanban-portfolio`**
 > skill instead. It gets you to the right project; this one gets the work done.
 
+## Who owns what (do not blur this)
+
+**GitHub is the system of record for issues and PRs.** The board does not mirror them and
+must never be read as a replacement for `gh`. The board owns the execution state that
+GitHub structurally cannot hold:
+
+| Owned by GitHub | Owned by the board |
+|---|---|
+| Issues, PRs, review threads, labels, milestones | **Claims** — who is on it, right now |
+| The permanent public record | **Dependencies** and next-task ranking |
+| Anything another human reads | **Acceptance criteria** and the Definition-of-Done gate |
+| | **Ordering** within a column |
+| | The **memory graph** |
+
+If you need issue state, ask GitHub. If you need to know what to pick up and whether it is
+already taken, ask the board. Filing an issue is always `gh`, never a board write.
+
+See `docs/ARCHITECTURE.md` § "Who owns what" in the KanbanFlow-v2 repo.
+
 ## Two interfaces (same graph)
 
 | Interface | Where | Best for |
