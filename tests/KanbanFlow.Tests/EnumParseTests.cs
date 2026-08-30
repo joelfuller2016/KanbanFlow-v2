@@ -12,7 +12,7 @@ namespace KanbanFlow.Tests;
 /// directly (no fakes) across the three enums that flow through it: <see cref="RequirementPriority"/>,
 /// <see cref="RequirementStatus"/>, and <see cref="TaskDependencyType"/>.
 /// </summary>
-public sealed class TryParseDefinedEnumTests
+public sealed class EnumParseTests
 {
     // ── Out-of-range numeric strings must be REJECTED — this is the #205 bug: Enum.TryParse alone
     //    accepts any in-range int, so "99" parsed and silently persisted before the IsDefined pairing. ──
@@ -23,10 +23,11 @@ public sealed class TryParseDefinedEnumTests
     [InlineData("-1")]
     public void Rejects_OutOfRangeNumericString_RequirementPriority(string raw)
     {
-        // Standard TryX contract: on a false return the out value is unspecified (for the
-        // in-range-but-undefined numeric path it holds the parsed value, not default), so callers
-        // MUST ignore it — every requirement/dependency call site 422s without reading it. We assert
-        // only the load-bearing guarantee: an undefined value is rejected.
+        // The out value IS specified on a false return: EnumParse.TryParseDefined resets it to
+        // default, because Enum.TryParse assigns the undefined value before Enum.IsDefined can
+        // reject it. That guarantee is pinned by
+        // ParsePriorityTests.TryParseDefined_leaves_value_at_default_when_it_returns_false; here we
+        // assert only the load-bearing half — an undefined value is rejected.
         Assert.False(EnumParse.TryParseDefined<RequirementPriority>(raw, out _));
     }
 

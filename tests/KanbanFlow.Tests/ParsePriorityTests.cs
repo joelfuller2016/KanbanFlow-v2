@@ -81,6 +81,57 @@ public sealed class ParsePriorityTests
     }
 
     /// <summary>
+    /// The fallback must be the CALLER'S value, not <c>default</c>.
+    /// </summary>
+    /// <remarks>
+    /// Every other invalid-input assertion here happens to use a zero-valued fallback
+    /// (<c>TaskPriority.Low</c> and <c>WorkStatus.Backlog</c> are both <c>0</c>), so an
+    /// implementation that wrongly returned <c>default(TEnum)</c> instead of the supplied fallback
+    /// would satisfy all of them. This is the one case that can tell those two apart. (Raised by
+    /// codex in review of PR #441.)
+    /// </remarks>
+    [Theory]
+    [InlineData("99")]
+    [InlineData("garbage")]
+    [InlineData("")]
+    [InlineData(null)]
+    public void ParseOr_returns_the_supplied_fallback_not_default(string? input)
+    {
+        Assert.NotEqual(default, TaskPriority.Critical);  // guards the premise of this test
+        Assert.Equal(TaskPriority.Critical, EnumParse.ParseOr(input, TaskPriority.Critical));
+        Assert.Equal(WorkStatus.Done, EnumParse.ParseOr(input, WorkStatus.Done));
+    }
+
+    /// <summary>
+    /// Whitespace-padded valid input still parses — behaviour inherited from
+    /// <c>Enum.TryParse</c> and worth pinning, since a future "tidy up" that trimmed or rejected
+    /// padding would silently change what the REST endpoints accept.
+    /// </summary>
+    [Theory]
+    [InlineData(" Critical ", TaskPriority.Critical)]
+    [InlineData(" 3 ", TaskPriority.Critical)]
+    public void ParsePriority_accepts_padded_input(string input, TaskPriority expected)
+        => Assert.Equal(expected, ProjectView.ParsePriority(input));
+
+    /// <summary>
+    /// A comma-separated list of NAMES is accepted by <c>Enum.TryParse</c> and OR-ed, and the
+    /// result can be a defined value that passes <c>Enum.IsDefined</c>. Pinned because the doc on
+    /// <see cref="EnumParse.TryParseDefined{TEnum}"/> now states it explicitly: no UNDEFINED value
+    /// escapes, but "exactly one name" is not a guarantee this helper makes. Measured, not assumed.
+    /// (Raised by codex and the review subagent on PR #441.)
+    /// </summary>
+    [Fact]
+    public void TryParseDefined_accepts_a_comma_separated_name_list_and_the_doc_says_so()
+    {
+        Assert.True(EnumParse.TryParseDefined<TaskPriority>("Low,Critical", out var ored));
+        Assert.Equal(TaskPriority.Critical, ored);
+
+        // A NUMERIC list is a different story — it does not resolve, so it is correctly rejected.
+        Assert.False(EnumParse.TryParseDefined<TaskPriority>("1,2", out var numeric));
+        Assert.Equal(default, numeric);
+    }
+
+    /// <summary>
     /// The delegation itself: for every input, <c>ParsePriority</c> must agree with the shared
     /// helper it is supposed to call. Reimplementing the guard locally would drift from
     /// <see cref="EnumParse"/> silently; this is what catches that.

@@ -1,7 +1,8 @@
 namespace KanbanFlow;
 
 /// <summary>
-/// The one guarded enum parse this codebase uses at every trust boundary (#89 → #205 → #305).
+/// The shared guarded enum parse (#89 → #205 → #305): used by the requirement and task-dependency
+/// endpoints and by <c>ProjectView</c>.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -15,8 +16,15 @@ namespace KanbanFlow;
 /// This lives here rather than inside <see cref="ApiEndpoints"/> because it is not an API concern.
 /// It was private to that class until #305, which is why
 /// <c>ProjectView.ParsePriority</c> — a Razor component, unable to reach it — grew its own
-/// unguarded copy and became the last unguarded parse in <c>src/</c>. A rule enforced in one
-/// class is a rule the rest of the codebase cannot follow.
+/// unguarded copy and became the last unguarded string parse in <c>src/</c>. A rule enforced in
+/// one class is a rule the rest of the codebase cannot follow.
+/// </para>
+/// <para>
+/// NOT yet the only copy, and this doc will not pretend otherwise. Roughly seventeen call sites
+/// still hand-roll the same <c>TryParse</c> + <c>IsDefined</c> pair — including a same-named
+/// <c>ParsePriority</c> in <c>Mcp/KanbanMcpTools.cs</c> whose own comment calls itself "one DRY
+/// enum-parse". #305 scoped itself to the one site that was actually WRONG; consolidating the rest
+/// is mechanical and tracked separately. Prefer this helper in new code.
 /// </para>
 /// </remarks>
 internal static class EnumParse
@@ -26,8 +34,12 @@ internal static class EnumParse
     /// null/blank AND undefined values.
     /// </summary>
     /// <returns>
-    /// <see langword="true"/> only when <paramref name="raw"/> names a value actually declared by
-    /// <typeparamref name="TEnum"/>. On <see langword="false"/>, <paramref name="value"/> is
+    /// <see langword="true"/> when <paramref name="raw"/> resolves to a value declared by
+    /// <typeparamref name="TEnum"/>. Note the inherited breadth of <c>Enum.TryParse</c>: a
+    /// comma-separated list of NAMES is accepted and OR-ed, so <c>"Low,Critical"</c> resolves to
+    /// <c>Critical</c> and passes (measured; a numeric list such as <c>"1,2"</c> does not). No
+    /// UNDEFINED value can escape — that is the guarantee this method exists for — but a caller
+    /// needing exactly-one-name must say so itself. On <see langword="false"/>, <paramref name="value"/> is
     /// <c>default(TEnum)</c> — guaranteed by an explicit reset, NOT by <c>Enum.TryParse</c>, which
     /// assigns the undefined value before <c>Enum.IsDefined</c> can reject it. Callers may rely on
     /// this; a test pins it.
