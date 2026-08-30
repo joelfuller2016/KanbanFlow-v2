@@ -1220,8 +1220,13 @@ else
         _ => "text-secondary"
     };
 
-    private static TaskPriority ParsePriority(string? priority) =>
-        Enum.TryParse<TaskPriority>(priority, ignoreCase: true, out var parsed) ? parsed : TaskPriority.Low;
+    // #305: Enum.TryParse alone accepts any in-range numeric string, so "99" parsed to
+    // (TaskPriority)99 and the `: TaskPriority.Low` fallback below was unreachable for numeric
+    // junk — the fallback was a lie. EnumParse.ParseOr pairs the parse with Enum.IsDefined, and
+    // is shared with the REST layer so the rule cannot drift between the two again.
+    // internal, not private, so the fallback is directly testable (InternalsVisibleTo is set).
+    internal static TaskPriority ParsePriority(string? priority) =>
+        EnumParse.ParseOr(priority, TaskPriority.Low);
 
     private List<Requirement> GetOrderedRequirements() => project?.Requirements
         .OrderBy(r => r.SortOrder)

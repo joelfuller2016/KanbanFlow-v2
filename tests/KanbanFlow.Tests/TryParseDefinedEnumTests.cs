@@ -4,7 +4,7 @@ using KanbanFlow.Models;
 namespace KanbanFlow.Tests;
 
 /// <summary>
-/// Unit regression tests for <see cref="ApiEndpoints.TryParseDefinedEnum{TEnum}"/> — the single-sourced
+/// Unit regression tests for <see cref="EnumParse.TryParseDefined{TEnum}"/> — the single-sourced
 /// enum-input guard the requirement (create + PUT) and task-dependency (create) endpoints route through
 /// (#205, #153). <c>Enum.TryParse</c> alone accepts ANY in-range numeric string (e.g. "99"), which the
 /// old endpoints then persisted as a bogus enum value; the helper pairs it with <c>Enum.IsDefined</c> so
@@ -27,7 +27,7 @@ public sealed class TryParseDefinedEnumTests
         // in-range-but-undefined numeric path it holds the parsed value, not default), so callers
         // MUST ignore it — every requirement/dependency call site 422s without reading it. We assert
         // only the load-bearing guarantee: an undefined value is rejected.
-        Assert.False(ApiEndpoints.TryParseDefinedEnum<RequirementPriority>(raw, out _));
+        Assert.False(EnumParse.TryParseDefined<RequirementPriority>(raw, out _));
     }
 
     [Theory]
@@ -36,7 +36,7 @@ public sealed class TryParseDefinedEnumTests
     [InlineData("-1")]
     public void Rejects_OutOfRangeNumericString_RequirementStatus(string raw)
     {
-        Assert.False(ApiEndpoints.TryParseDefinedEnum<RequirementStatus>(raw, out _));
+        Assert.False(EnumParse.TryParseDefined<RequirementStatus>(raw, out _));
     }
 
     [Theory]
@@ -45,7 +45,7 @@ public sealed class TryParseDefinedEnumTests
     [InlineData("-1")]
     public void Rejects_OutOfRangeNumericString_TaskDependencyType(string raw)
     {
-        Assert.False(ApiEndpoints.TryParseDefinedEnum<TaskDependencyType>(raw, out _));
+        Assert.False(EnumParse.TryParseDefined<TaskDependencyType>(raw, out _));
     }
 
     // ── Unknown NAMES must be rejected too. ──
@@ -56,7 +56,7 @@ public sealed class TryParseDefinedEnumTests
     [InlineData("Openish")]
     public void Rejects_UnknownName(string raw)
     {
-        Assert.False(ApiEndpoints.TryParseDefinedEnum<RequirementPriority>(raw, out _));
+        Assert.False(EnumParse.TryParseDefined<RequirementPriority>(raw, out _));
     }
 
     // ── Valid NAMES parse case-insensitively → true + the correct value. ──
@@ -68,7 +68,7 @@ public sealed class TryParseDefinedEnumTests
     [InlineData("p2", RequirementPriority.P2)]
     public void Accepts_ValidPriorityName_CaseInsensitive(string raw, RequirementPriority expected)
     {
-        Assert.True(ApiEndpoints.TryParseDefinedEnum<RequirementPriority>(raw, out var value));
+        Assert.True(EnumParse.TryParseDefined<RequirementPriority>(raw, out var value));
         Assert.Equal(expected, value);
     }
 
@@ -80,7 +80,7 @@ public sealed class TryParseDefinedEnumTests
     [InlineData("DONE", RequirementStatus.Done)]
     public void Accepts_ValidStatusName_CaseInsensitive(string raw, RequirementStatus expected)
     {
-        Assert.True(ApiEndpoints.TryParseDefinedEnum<RequirementStatus>(raw, out var value));
+        Assert.True(EnumParse.TryParseDefined<RequirementStatus>(raw, out var value));
         Assert.Equal(expected, value);
     }
 
@@ -91,7 +91,7 @@ public sealed class TryParseDefinedEnumTests
     [InlineData("dependson", TaskDependencyType.DependsOn)]
     public void Accepts_ValidDependencyTypeName_CaseInsensitive(string raw, TaskDependencyType expected)
     {
-        Assert.True(ApiEndpoints.TryParseDefinedEnum<TaskDependencyType>(raw, out var value));
+        Assert.True(EnumParse.TryParseDefined<TaskDependencyType>(raw, out var value));
         Assert.Equal(expected, value);
     }
 
@@ -103,7 +103,7 @@ public sealed class TryParseDefinedEnumTests
     [InlineData("2", RequirementPriority.P2)]
     public void Accepts_DefinedNumericId_RequirementPriority(string raw, RequirementPriority expected)
     {
-        Assert.True(ApiEndpoints.TryParseDefinedEnum<RequirementPriority>(raw, out var value));
+        Assert.True(EnumParse.TryParseDefined<RequirementPriority>(raw, out var value));
         Assert.Equal(expected, value);
     }
 
@@ -113,7 +113,7 @@ public sealed class TryParseDefinedEnumTests
     [InlineData("2", RequirementStatus.Done)]
     public void Accepts_DefinedNumericId_RequirementStatus(string raw, RequirementStatus expected)
     {
-        Assert.True(ApiEndpoints.TryParseDefinedEnum<RequirementStatus>(raw, out var value));
+        Assert.True(EnumParse.TryParseDefined<RequirementStatus>(raw, out var value));
         Assert.Equal(expected, value);
     }
 
@@ -122,7 +122,7 @@ public sealed class TryParseDefinedEnumTests
     [InlineData("1", TaskDependencyType.DependsOn)]
     public void Accepts_DefinedNumericId_TaskDependencyType(string raw, TaskDependencyType expected)
     {
-        Assert.True(ApiEndpoints.TryParseDefinedEnum<TaskDependencyType>(raw, out var value));
+        Assert.True(EnumParse.TryParseDefined<TaskDependencyType>(raw, out var value));
         Assert.Equal(expected, value);
     }
 
@@ -136,7 +136,7 @@ public sealed class TryParseDefinedEnumTests
     [InlineData(" 2 ", RequirementPriority.P2)]
     public void Accepts_WhitespacePaddedValidInput_RequirementPriority(string raw, RequirementPriority expected)
     {
-        Assert.True(ApiEndpoints.TryParseDefinedEnum<RequirementPriority>(raw, out var value));
+        Assert.True(EnumParse.TryParseDefined<RequirementPriority>(raw, out var value));
         Assert.Equal(expected, value);
     }
 
@@ -145,7 +145,7 @@ public sealed class TryParseDefinedEnumTests
     [InlineData(" 1 ", RequirementStatus.InProgress)]
     public void Accepts_WhitespacePaddedValidInput_RequirementStatus(string raw, RequirementStatus expected)
     {
-        Assert.True(ApiEndpoints.TryParseDefinedEnum<RequirementStatus>(raw, out var value));
+        Assert.True(EnumParse.TryParseDefined<RequirementStatus>(raw, out var value));
         Assert.Equal(expected, value);
     }
 
@@ -157,7 +157,7 @@ public sealed class TryParseDefinedEnumTests
     [InlineData("   ")]
     public void Rejects_NullOrBlank_RequirementPriority(string? raw)
     {
-        Assert.False(ApiEndpoints.TryParseDefinedEnum<RequirementPriority>(raw, out _));
+        Assert.False(EnumParse.TryParseDefined<RequirementPriority>(raw, out _));
     }
 
     [Theory]
@@ -166,7 +166,7 @@ public sealed class TryParseDefinedEnumTests
     [InlineData("   ")]
     public void Rejects_NullOrBlank_RequirementStatus(string? raw)
     {
-        Assert.False(ApiEndpoints.TryParseDefinedEnum<RequirementStatus>(raw, out _));
+        Assert.False(EnumParse.TryParseDefined<RequirementStatus>(raw, out _));
     }
 
     [Theory]
@@ -175,6 +175,6 @@ public sealed class TryParseDefinedEnumTests
     [InlineData("   ")]
     public void Rejects_NullOrBlank_TaskDependencyType(string? raw)
     {
-        Assert.False(ApiEndpoints.TryParseDefinedEnum<TaskDependencyType>(raw, out _));
+        Assert.False(EnumParse.TryParseDefined<TaskDependencyType>(raw, out _));
     }
 }

@@ -1,4 +1,4 @@
-using System.Text.Json;
+﻿using System.Text.Json;
 using KanbanFlow.Data;
 using KanbanFlow.Models;
 using Microsoft.EntityFrameworkCore;
@@ -1824,7 +1824,7 @@ public static class ApiEndpoints
             Services.ITaskDependencyService dependencyService,
             CancellationToken ct) =>
         {
-            if (!TryParseDefinedEnum<TaskDependencyType>(dto.Type ?? nameof(TaskDependencyType.DependsOn), out var type))
+            if (!EnumParse.TryParseDefined<TaskDependencyType>(dto.Type ?? nameof(TaskDependencyType.DependsOn), out var type))
                 return Results.UnprocessableEntity(new { message = $"Invalid dependency type: {dto.Type}. Valid values: {string.Join(", ", Enum.GetNames<TaskDependencyType>())}" });
 
             var (blockedTaskId, blockingTaskId, missingTaskMessage) = ResolveDependencyTaskIds(taskId, dto, type);
@@ -2185,11 +2185,11 @@ public static class ApiEndpoints
                 return Results.UnprocessableEntity(new { message = "Text is required." });
 
             RequirementPriority priority = RequirementPriority.P1;
-            if (dto.Priority is not null && !TryParseDefinedEnum<RequirementPriority>(dto.Priority, out priority))
+            if (dto.Priority is not null && !EnumParse.TryParseDefined<RequirementPriority>(dto.Priority, out priority))
                 return Results.UnprocessableEntity(new { message = $"Invalid priority: {dto.Priority}. Valid values: {string.Join(", ", Enum.GetNames<RequirementPriority>())}" });
 
             RequirementStatus status = RequirementStatus.Open;
-            if (dto.Status is not null && !TryParseDefinedEnum<RequirementStatus>(dto.Status, out status))
+            if (dto.Status is not null && !EnumParse.TryParseDefined<RequirementStatus>(dto.Status, out status))
                 return Results.UnprocessableEntity(new { message = $"Invalid status: {dto.Status}. Valid values: {string.Join(", ", Enum.GetNames<RequirementStatus>())}" });
 
             // Validate feature/task links exist AND belong to this project (#82). Missing → 404,
@@ -2247,13 +2247,13 @@ public static class ApiEndpoints
                 return Results.UnprocessableEntity(new { message = "Text is required." });
 
             // Parse each enum ONCE at validation time and reuse the captured value below (#153 — the
-            // handler previously validated with `out _` then RE-PARSED via Enum.Parse). TryParseDefinedEnum
+            // handler previously validated with `out _` then RE-PARSED via Enum.Parse). EnumParse.TryParseDefined
             // pairs Enum.TryParse with Enum.IsDefined so numeric strings like "99" are rejected (#205),
             // matching the create path and the task endpoints.
             RequirementPriority? newPriority = null;
             if (dto.Priority is not null)
             {
-                if (!TryParseDefinedEnum<RequirementPriority>(dto.Priority, out var parsedPriority))
+                if (!EnumParse.TryParseDefined<RequirementPriority>(dto.Priority, out var parsedPriority))
                     return Results.UnprocessableEntity(new { message = $"Invalid priority: {dto.Priority}. Valid values: {string.Join(", ", Enum.GetNames<RequirementPriority>())}" });
                 newPriority = parsedPriority;
             }
@@ -2261,7 +2261,7 @@ public static class ApiEndpoints
             RequirementStatus? newStatus = null;
             if (dto.Status is not null)
             {
-                if (!TryParseDefinedEnum<RequirementStatus>(dto.Status, out var parsedStatus))
+                if (!EnumParse.TryParseDefined<RequirementStatus>(dto.Status, out var parsedStatus))
                     return Results.UnprocessableEntity(new { message = $"Invalid status: {dto.Status}. Valid values: {string.Join(", ", Enum.GetNames<RequirementStatus>())}" });
                 newStatus = parsedStatus;
             }
@@ -2578,18 +2578,6 @@ public static class ApiEndpoints
     /// surface as a 500 (#82 regression).
     /// </summary>
     internal static int? NormalizeLink(int? id) => id is null or 0 ? null : id;
-
-    /// <summary>
-    /// Parses <paramref name="raw"/> to <typeparamref name="TEnum"/> case-insensitively, rejecting
-    /// null/blank AND undefined values. Enum.TryParse alone accepts any in-range numeric string
-    /// (e.g. "99"), so it is paired with Enum.IsDefined — mirroring the task-endpoint validation (#89/#205).
-    /// </summary>
-    internal static bool TryParseDefinedEnum<TEnum>(string? raw, out TEnum value) where TEnum : struct, Enum
-    {
-        value = default;
-        if (string.IsNullOrWhiteSpace(raw)) return false;
-        return Enum.TryParse(raw, ignoreCase: true, out value) && Enum.IsDefined(value);
-    }
 
     /// <summary>
     /// Applies a partial-update string field: an omitted value (<paramref name="incoming"/> is null)
