@@ -95,16 +95,49 @@ try {
     $env:KANBANFLOW_DB_PATH = $dbFile
     $env:ASPNETCORE_URLS    = $listenUrl
 
-    $Dll = $RepoRoot
-    foreach ($part in 'src', 'KanbanFlow', 'bin', 'Release', 'net10.0', 'KanbanFlow.dll') {
-        $Dll = Join-Path $Dll $part
+    $ProjectDir = Join-Path (Join-Path $RepoRoot 'src') 'KanbanFlow'
+    $ProjectPath = Join-Path $ProjectDir 'KanbanFlow.csproj'
+    $BinDir = Join-Path $ProjectDir 'bin'
+    $ObjDir = Join-Path $ProjectDir 'obj'
+    $ArtifactsDir = Join-Path $BinDir 'launcher-artifacts'
+    $PublishDir = Join-Path (Join-Path (Join-Path $BinDir 'Release') 'net10.0') 'publish'
+    $Dll = Join-Path $PublishDir 'KanbanFlow.dll'
+
+    # A build output relies on the Development-only static-web-assets manifest to find
+    # source files. A publish output contains wwwroot itself, so Production can serve the
+    # complete UI. Avoid publishing on every launch by comparing the published DLL with
+    # the newest project source file; generated bin/obj files are deliberately excluded.
+    $publishNeeded = -not (Test-Path -LiteralPath $Dll)
+    if (-not $publishNeeded) {
+        $publishedAt = (Get-Item -LiteralPath $Dll).LastWriteTimeUtc
+        $newestSource = Get-ChildItem -LiteralPath $ProjectDir -Recurse -File |
+            Where-Object {
+                -not $_.FullName.StartsWith($BinDir + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase) -and
+                -not $_.FullName.StartsWith($ObjDir + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)
+            } |
+            Sort-Object LastWriteTimeUtc -Descending |
+            Select-Object -First 1
+        if ($newestSource -and $newestSource.LastWriteTimeUtc -gt $publishedAt) {
+            $publishNeeded = $true
+        }
     }
+
+    if ($publishNeeded) {
+        Write-Host "[publish] refreshing Release output: $PublishDir"
+        # Isolated artifacts avoid colliding with an older build DLL that may already
+        # be held open by a running local instance.
+        & dotnet publish $ProjectPath -c Release -o $PublishDir --artifacts-path $ArtifactsDir
+        if ($LASTEXITCODE -ne 0) {
+            throw "dotnet publish failed with exit code $LASTEXITCODE"
+        }
+    }
+
     if (-not (Test-Path -LiteralPath $Dll)) {
-        throw "Release build not found at $Dll. Run: dotnet build src/KanbanFlow/KanbanFlow.csproj -c Release"
+        throw "Published application not found at $Dll"
     }
 
     Write-Host "[start] $listenUrl  (db: $dbFile)"
-    Set-Location $RepoRoot
+    Set-Location $PublishDir
     & dotnet $Dll
 
     # Without this the script exits 0 even when the app crashed, so a scheduled task or
