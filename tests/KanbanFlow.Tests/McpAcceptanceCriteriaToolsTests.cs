@@ -171,6 +171,32 @@ public sealed class McpAcceptanceCriteriaToolsTests
     }
 
     /// <summary>
+    /// The native tools and the Node wrapper expose the SAME tool names, so they must take the
+    /// SAME argument names — an agent that moves between transports must not have to rewrite its
+    /// calls.
+    /// </summary>
+    /// <remarks>
+    /// This is the defect class <c>McpCreateTaskSortOrderTests</c> was written to prevent
+    /// ("the same logical call produced different data depending on which transport the agent
+    /// happened to be using"). The native tools first shipped with <c>criterionId</c> while
+    /// <c>scripts/mcp-server.mjs</c> has always used <c>acId</c>, which would have failed with a
+    /// JSON-RPC -32602 naming an argument the agent had never heard of. Caught in review of
+    /// PR #442; this test is the guard so it cannot come back.
+    /// </remarks>
+    [Theory]
+    [InlineData(nameof(KanbanMcpTools.MarkAcceptanceCriterionDone))]
+    [InlineData(nameof(KanbanMcpTools.UpdateAcceptanceCriterion))]
+    public void Criterion_id_parameter_is_named_acId_to_match_the_node_wrapper(string methodName)
+    {
+        var method = typeof(KanbanMcpTools).GetMethod(methodName);
+        Assert.NotNull(method);
+
+        var names = method!.GetParameters().Select(p => p.Name).ToArray();
+        Assert.Contains("acId", names);
+        Assert.DoesNotContain("criterionId", names);
+    }
+
+    /// <summary>
     /// Errors must name the tool that yields a valid id — the mcp-builder convention this file's
     /// header cites, and the difference between an agent that recovers and one that gives up.
     /// </summary>

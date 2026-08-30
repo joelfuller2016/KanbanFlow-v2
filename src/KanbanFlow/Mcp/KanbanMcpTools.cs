@@ -31,7 +31,17 @@ public static class KanbanMcpTools
 {
     private const string DefaultActor = "mcp-agent";
 
-    /// <summary>Upper bound on acceptance-criterion text (#438), matching the REST surface.</summary>
+    /// <summary>Upper bound on acceptance-criterion text (#438).</summary>
+    /// <remarks>
+    /// An MCP-side guard, NOT a REST parity: REST validates only <c>IsNullOrWhiteSpace</c>, the
+    /// model has no <c>[MaxLength]</c>, and the DbContext no <c>HasMaxLength</c>. So a criterion
+    /// created through REST or the Blazor panel CAN exceed this, and
+    /// <see cref="UpdateAcceptanceCriterion"/> would then refuse to save a corrected version of
+    /// text the system already holds. <see cref="MarkAcceptanceCriterionDone"/> does no text
+    /// validation, so such a criterion always remains completable and the Definition-of-Done gate
+    /// stays satisfiable. Pushing the cap into REST and the model would make all three write
+    /// surfaces agree; that is a separate change.
+    /// </remarks>
     private const int MaxCriterionTextLength = 1000;
 
     [McpServerTool(Name = "list_projects")]
@@ -484,15 +494,15 @@ public static class KanbanMcpTools
     [Description("Mark one acceptance criterion complete (or, with completed=false, reopen it). This is the FIRST remedy when update_task_status refuses a move to Done: complete the criteria it names, then retry the move. Use overrideReason only when a criterion genuinely will not be met.")]
     public static async Task<AcceptanceCriterionResult> MarkAcceptanceCriterionDone(
         IDbContextFactory<AppDbContext> dbFactory,
-        [Description("The acceptance criterion id (from list_acceptance_criteria or get_task).")] int criterionId,
+        [Description("The acceptance criterion id (from list_acceptance_criteria or get_task).")] int acId,
         [Description("Optional. true (default) completes the criterion; false reopens it.")] bool completed = true,
         CancellationToken cancellationToken = default)
     {
         await using var db = await dbFactory.CreateDbContextAsync(cancellationToken);
 
-        var criterion = await db.AcceptanceCriteria.FirstOrDefaultAsync(c => c.Id == criterionId, cancellationToken)
+        var criterion = await db.AcceptanceCriteria.FirstOrDefaultAsync(c => c.Id == acId, cancellationToken)
             ?? throw new McpException(
-                $"Acceptance criterion {criterionId} not found. Call list_acceptance_criteria for a task to see valid ids.");
+                $"Acceptance criterion {acId} not found. Call list_acceptance_criteria for a task to see valid ids.");
 
         criterion.Completed = completed;
         criterion.UpdatedAt = DateTime.UtcNow;
@@ -515,7 +525,7 @@ public static class KanbanMcpTools
     [Description("Update an acceptance criterion's text, completion, or rank. Omitted arguments are left unchanged. To only tick a criterion off, prefer mark_acceptance_criterion_done.")]
     public static async Task<AcceptanceCriterionResult> UpdateAcceptanceCriterion(
         IDbContextFactory<AppDbContext> dbFactory,
-        [Description("The acceptance criterion id.")] int criterionId,
+        [Description("The acceptance criterion id.")] int acId,
         [Description("Optional new text (<= 1000 chars). Omit to leave unchanged; blank is rejected.")] string? text = null,
         [Description("Optional new completion state. Omit to leave unchanged.")] bool? completed = null,
         [Description("Optional new rank within the task's criteria. Omit to leave unchanged.")] int? sortOrder = null,
@@ -533,9 +543,9 @@ public static class KanbanMcpTools
 
         await using var db = await dbFactory.CreateDbContextAsync(cancellationToken);
 
-        var criterion = await db.AcceptanceCriteria.FirstOrDefaultAsync(c => c.Id == criterionId, cancellationToken)
+        var criterion = await db.AcceptanceCriteria.FirstOrDefaultAsync(c => c.Id == acId, cancellationToken)
             ?? throw new McpException(
-                $"Acceptance criterion {criterionId} not found. Call list_acceptance_criteria for a task to see valid ids.");
+                $"Acceptance criterion {acId} not found. Call list_acceptance_criteria for a task to see valid ids.");
 
         if (text is not null) criterion.Text = text.Trim();
         if (completed.HasValue) criterion.Completed = completed.Value;

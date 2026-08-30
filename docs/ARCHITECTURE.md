@@ -32,7 +32,7 @@ service mesh, no message bus, no container, and no build pipeline to reason abou
 flowchart TD
     H["Human"] -->|"kanban board, outline, ideas"| UI["Blazor Server<br/>Components/ (22 .razor, 5 routes)"]
     A["AI agent"] -->|"JSON-RPC over stdio"| NODE["Node MCP wrapper<br/>scripts/mcp-server.mjs (50 tools)"]
-    A -->|"JSON-RPC over HTTP"| NATIVE["Native in-process MCP<br/>POST /mcp (24 tools)"]
+    A -->|"JSON-RPC over HTTP"| NATIVE["Native in-process MCP<br/>POST /mcp (28 tools)"]
     A -->|"HTTP / JSON"| REST["REST minimal API<br/>ApiEndpoints.cs + AdminEndpoints.cs (60)"]
     NODE -->|"HTTP"| REST
 
@@ -374,7 +374,7 @@ reachable from both REST and MCP.
 | # | Requirement | Status |
 |---|---|---|
 | R-2.1 | Full REST CRUD for every entity. | ⚠️ 60 endpoints, but not *full* CRUD everywhere: `TaskComment` has create/list/delete and **no update route**, and `ActivityEvent` is read-only by design (append-only, R-7.3) |
-| R-2.2 | Every REST capability has at least one MCP tool. | ❌ native 24, wrapper 50 — neither covers requirements (#231) |
+| R-2.2 | Every REST capability has at least one MCP tool. | ❌ native 28, wrapper 50 — neither covers requirements (#231) |
 | R-2.3 | UI mutations go through the same service layer as REST. | ✅ #88 closed; components call `ITaskService`/`IIdeaService` |
 | R-2.4 | All entity mutations produce an `ActivityEvent`. | ❌ tasks + ideas only (#149) |
 | R-2.5 | Project-boundary integrity across features, tasks, requirements. | ✅ #82 and #83 both closed — `CrossProjectReassignmentException` (`TaskService.cs:166`) plus 422 on cross-project requirement links |

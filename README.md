@@ -14,7 +14,7 @@
 | | |
 |---|---|
 | **Stack** | .NET 10 · Blazor Server · SQLite (EF Core 10) · Minimal APIs · Node 18+ for the MCP wrapper |
-| **Surfaces** | 5 UI routes · 60 REST endpoints · 24 native MCP tools · 50 Node-wrapper MCP tools |
+| **Surfaces** | 5 UI routes · 60 REST endpoints · 28 native MCP tools · 50 Node-wrapper MCP tools |
 | **Sync** | **One-way**, GitHub → board. It **never writes to GitHub**. GitHub owns title, priority, milestone; the board owns dependencies, criteria, subtasks, claims, ordering, memory — see [Who owns what](#who-owns-what) |
 | **Tests** | 624 xUnit · 56 in-app integration · 35 Playwright e2e · 19 script unit · 2 smoke suites — [all local, no CI](#deliberate-non-features) |
 | **Runs at** | `http://127.0.0.1:5123` — localhost only, no auth, no Docker, no cloud |
@@ -134,7 +134,7 @@ flowchart LR
         direction TB
         UI["Blazor board<br/>/ · /project/{id} · /ideas"]
         REST["REST · 60 endpoints"]
-        MCP["MCP · 24 native / 50 wrapper"]
+        MCP["MCP · 28 native / 50 wrapper"]
     end
 
     REPO --> READ
@@ -170,7 +170,7 @@ The right-hand box is the part that makes this a projection rather than a mirror
 entities are created by you and by agents doing real work, live only on the board, and are
 invisible to GitHub.
 
-The sync also **cannot** run over the native MCP server: the 24 native tools include
+The sync also **cannot** run over the native MCP server: the 28 native tools include
 `list_projects` and `get_project_context` but **no `create_project`**, so an agent on `/mcp`
 cannot onboard a repo. That parity gap is [#231](https://github.com/joelfuller2016/KanbanFlow-v2/issues/231).
 
