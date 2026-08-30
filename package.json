@@ -18,7 +18,9 @@
     "gh:status": "node scripts/portfolio-sync.mjs status",
     "gh:onboard": "node scripts/portfolio-sync.mjs onboard",
     "gh:push:preview": "node scripts/portfolio-sync.mjs push-issue",
-    "gh:standup": "node scripts/portfolio-standup.mjs"
+    "gh:standup": "node scripts/portfolio-standup.mjs",
+    "seed:snapshot": "node scripts/snapshot-seed.mjs",
+    "seed:check": "node scripts/snapshot-seed.mjs --check"
   },
   "devDependencies": {
     "playwright": "^1.49.0"

@@ -374,6 +374,29 @@ public sealed class MemorySearchTests
     }
 
     [Fact]
+    public async Task Search_NonPositiveK_Throws()
+    {
+        using var f = new SqliteTestFactory();
+        var search = NewSearch(f, EmbeddingDown());
+
+        // #338: REST clamped k up to a minimum of 1 before this guard could ever run, so a
+        // non-positive k returned 200 instead of 422 and smoke-api.ps1 was red on master.
+        // This guard is the SINGLE source of that message for both REST and MCP -- pin it so a
+        // reintroduced lower clamp cannot silently bypass it again.
+        // The EXACT text is pinned here and again in
+        // McpKnowledgeGraphToolsTests.SearchNodes_NonPositiveK_ThrowsMcpException, because this
+        // single throw site is what makes the REST 422 body and the MCP error identical. If this
+        // string changes, both tests must change together -- which is the point.
+        const string expected = "k (result count) must be greater than zero.";
+        var zero = await Assert.ThrowsAsync<ValidationException>(
+            () => search.SearchAsync(MemoryScope.Project, "1", "q", 0, new RetrievalOptions()));
+        Assert.Equal(expected, zero.Message);
+        var negative = await Assert.ThrowsAsync<ValidationException>(
+            () => search.SearchAsync(MemoryScope.Project, "1", "q", -5, new RetrievalOptions()));
+        Assert.Equal(expected, negative.Message);
+    }
+
+    [Fact]
     public async Task Search_RecencyHalfLife_HalvesAtConfiguredAge()
     {
         // Pin the public half-life contract: a node last accessed exactly one RecencyHalfLifeHours ago

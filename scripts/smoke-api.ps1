@@ -40,14 +40,51 @@ function Assert-SmokePostFailure([string]$Path, $Body, [int[]]$ExpectedStatusCod
     throw "$Message Expected HTTP failure but request succeeded."
 }
 
-function Assert-SmokeGetFailure([string]$Path, [int[]]$ExpectedStatusCodes, [string]$Message) {
+function Assert-SmokeGetFailure(
+    [ValidateNotNullOrEmpty()][string]$Path,
+    [ValidateNotNullOrEmpty()][int[]]$ExpectedStatusCodes,
+    [ValidateNotNullOrEmpty()][string]$Message,
+    [ValidateNotNullOrEmpty()][string]$ExpectedMessage
+) {
     Write-Host "GET $Path (expecting failure)"
     try {
         Invoke-WebRequest -Method Get -Uri "$BaseUrl$Path" -TimeoutSec 5 -UseBasicParsing -ErrorAction Stop | Out-Null
     }
     catch {
         $statusCode = [int]$_.Exception.Response.StatusCode
-        if ($ExpectedStatusCodes -contains $statusCode) { return }
+        if ($ExpectedStatusCodes -contains $statusCode) {
+            if ($PSBoundParameters.ContainsKey("ExpectedMessage")) {
+                $errorBody = $_.ErrorDetails.Message
+                if ([string]::IsNullOrWhiteSpace($errorBody)) {
+                    $response = $_.Exception.Response
+                    if ($null -ne $response) {
+                        if ($response.PSObject.Methods.Name -contains "GetResponseStream") {
+                            $reader = New-Object System.IO.StreamReader($response.GetResponseStream())
+                            try {
+                                $errorBody = $reader.ReadToEnd()
+                            }
+                            finally {
+                                $reader.Dispose()
+                            }
+                        }
+                        elseif ($null -ne $response.Content) {
+                            $errorBody = $response.Content.ReadAsStringAsync().GetAwaiter().GetResult()
+                        }
+                    }
+                }
+
+                try {
+                    $actualMessage = ($errorBody | ConvertFrom-Json).message
+                }
+                catch {
+                    throw "$Message Response body was not valid JSON: $errorBody"
+                }
+                if ($actualMessage -cne $ExpectedMessage) {
+                    throw "$Message Expected error message '$ExpectedMessage', got '$actualMessage'."
+                }
+            }
+            return
+        }
         throw "$Message Expected HTTP $($ExpectedStatusCodes -join '/') but got $statusCode. $($_.Exception.Message)"
     }
 
@@ -434,8 +471,15 @@ try {
     Assert-Truthy ($recall.hits[0].id -eq $memNode.id) "The keyword-matching node should outrank the unrelated one."
 
     Assert-SmokeGetFailure "/api/memory/search?q=" @(422) "Blank recall query validation failed."
-    Assert-SmokeGetFailure "/api/memory/search?q=$memToken&k=0" @(422) "Non-positive recall k validation failed."
+    Assert-SmokeGetFailure "/api/memory/search?q=$memToken&k=0" @(422) "Non-positive recall k validation failed." "k (result count) must be greater than zero."
     Assert-SmokeGetFailure "/api/memory/search?q=$memToken&scope=NotAScope" @(422) "Invalid recall scope validation failed."
+    Assert-SmokeGetFailure "/api/memory/search?q=$memToken&k=-5" @(422) "Negative recall k validation failed." "k (result count) must be greater than zero."
+
+    # The UPPER clamp is load-bearing and must survive the #338 lower-clamp removal: k above the
+    # ceiling is CAPPED (200, echoed k=100), not rejected. Dropping both bounds would make payload
+    # size unbounded on this open endpoint.
+    $recallCapped = Invoke-SmokeGet "/api/memory/search?q=$memToken&k=500"
+    Assert-Truthy ($recallCapped.k -eq 100) "Recall k above the ceiling should be capped to 100, not rejected."
 
     Write-Host "API smoke tests passed."
 }

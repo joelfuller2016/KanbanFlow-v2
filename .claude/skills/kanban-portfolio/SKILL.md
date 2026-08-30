@@ -18,6 +18,25 @@ It exists because a board with nothing on it cannot answer that. KanbanFlow is a
 graph, but it is not self-populating — the work actually lives in GitHub issues and PRs. So
 the portfolio loop is **reconcile first, then report**.
 
+## Who owns what (do not blur this)
+
+**GitHub is the system of record for issues and PRs.** The board does not mirror them and
+must never be read as a replacement for `gh`. The board owns the execution state that
+GitHub structurally cannot hold:
+
+| Owned by GitHub | Owned by the board |
+|---|---|
+| Issues, PRs, review threads, labels, milestones | **Claims** — who is on it, right now |
+| The permanent public record | **Dependencies** and next-task ranking |
+| Anything another human reads | **Acceptance criteria** and the Definition-of-Done gate |
+| | **Ordering** within a column |
+| | The **memory graph** |
+
+If you need issue state, ask GitHub. If you need to know what to pick up and whether it is
+already taken, ask the board. Filing an issue is always `gh`, never a board write.
+
+See `docs/ARCHITECTURE.md` § "Who owns what" in the KanbanFlow-v2 repo.
+
 ## The loop
 
 ```text

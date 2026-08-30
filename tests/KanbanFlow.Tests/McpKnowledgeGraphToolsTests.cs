@@ -486,6 +486,43 @@ public sealed class McpKnowledgeGraphToolsTests
         Assert.Contains("query", ex.Message, StringComparison.OrdinalIgnoreCase);
     }
 
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-5)]
+    public async Task SearchNodes_NonPositiveK_ThrowsMcpException(int k)
+    {
+        using var f = new SqliteTestFactory();
+        var svc = NewService(f);
+        // #338: k was Math.Clamp(k, 1, 100), which rewrote 0 to 1 and left this catch dead.
+        // Ceiling-only clamping lets the service guard run, so MCP and REST report one message.
+        var ex = await Assert.ThrowsAsync<McpException>(
+            () => KanbanMcpTools.SearchNodes(NewSearch(f), svc, "anything", k));
+        // The EXACT message, not a substring: the whole point of routing both surfaces through the
+        // one guard in MemorySearch is that an agent and an HTTP client see identical text. A
+        // substring assertion would let the two drift apart and still pass. Pinned in
+        // MemorySearchTests.Search_NonPositiveK_Throws too -- both must name the same string.
+        Assert.Equal("k (result count) must be greater than zero.", ex.Message);
+    }
+
+    [Fact]
+    public async Task SearchNodes_KAboveCeiling_IsCappedTo100_NotRejected()
+    {
+        using var f = new SqliteTestFactory();
+        var svc = NewService(f);
+        // 105 matching entities so the ceiling is OBSERVABLE. Asserting only "result is not null"
+        // would pass even with the upper clamp deleted -- and that clamp is the load-bearing half
+        // of #338 (it bounds ranking work and payload size on an open endpoint), so the regression
+        // this test exists to catch is exactly the one a null-check cannot see.
+        var entities = Enumerable.Range(0, 105)
+            .Select(i => new MemoryEntityInput($"quokka {i}", "t", ["quokka"]))
+            .ToArray();
+        await KanbanMcpTools.CreateEntities(svc, entities);
+
+        var result = await KanbanMcpTools.SearchNodes(NewSearch(f), svc, "quokka", k: 500);
+
+        Assert.Equal(100, result.Entities.Count);
+    }
+
     // ── open_nodes ────────────────────────────────────────────────────────────────────
     [Fact]
     public async Task OpenNodes_ReturnsRequested_SkipsMissing_OnlyRelationsBetweenOpened()
