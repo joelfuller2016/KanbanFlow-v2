@@ -28,14 +28,23 @@ builder.Services.AddSingleton(dbResolution);
 builder.Services.AddDbContextFactory<AppDbContext>(
     options => options.UseSqlite(DbPathResolver.ToConnectionString(dbResolution.Path)));
 
+// Claim TTL: parse and validate once at startup so a malformed or non-positive value is rejected
+// before the first request, not on it. All consumers inject ClaimTtlSetting — never re-parse from
+// IConfiguration at request time (#429).
+var claimTtlRaw = builder.Configuration["ClaimTtl"];
+var resolvedClaimTtl = claimTtlRaw is { Length: > 0 }
+    ? TimeSpan.Parse(claimTtlRaw)
+    : ClaimPolicy.DefaultTtl;
+if (resolvedClaimTtl <= TimeSpan.Zero)
+    throw new InvalidOperationException($"ClaimTtl must be positive; got '{claimTtlRaw}'.");
+builder.Services.AddSingleton(new ClaimTtlSetting(resolvedClaimTtl));
+
 // Audit-aware service layer (issue #88: route REST + UI mutations through one place)
-// claimTtl is optional; omit from config to keep the 24 h default (#429).
 builder.Services.AddScoped<ITaskService>(sp =>
 {
     var factory = sp.GetRequiredService<IDbContextFactory<AppDbContext>>();
-    var raw = builder.Configuration["ClaimTtl"];
-    var ttl = raw is not null ? TimeSpan.Parse(raw) : (TimeSpan?)null;
-    return new TaskService(factory, ttl);
+    var ttlSetting = sp.GetRequiredService<ClaimTtlSetting>();
+    return new TaskService(factory, ttlSetting.Value);
 });
 // Dependency graph mutations (#414): cycle validation and insertion share one transaction.
 builder.Services.AddScoped<ITaskDependencyService, TaskDependencyService>();

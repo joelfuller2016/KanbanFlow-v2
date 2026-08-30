@@ -1,5 +1,13 @@
 namespace KanbanFlow.Services;
 
+/// <summary>Resolved claim TTL, validated once at startup and injected everywhere it is needed.</summary>
+/// <remarks>
+/// Consumers must never parse <c>ClaimTtl</c> from <c>IConfiguration</c> independently — do that
+/// once in <c>Program.cs</c> and inject this record instead so a malformed or non-positive value
+/// is rejected before the first request, not on it.
+/// </remarks>
+public sealed record ClaimTtlSetting(TimeSpan Value);
+
 /// <summary>
 /// Decides whether a task claim has gone stale (#429).
 /// </summary>

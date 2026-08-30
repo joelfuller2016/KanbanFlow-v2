@@ -124,6 +124,10 @@ public sealed class ClaimStalenessTests
         var id = SeedClaimedTask(f, "bob", seededAt);
         var svc = new TaskService(f, Ttl);
 
+        // Capture expected age before the service call — both this value and the service's
+        // internal `now` are sampled near the same instant, avoiding a false failure if the
+        // call crosses a formatting boundary (e.g. 8.99h → 9.00h).
+        var expectedAge = $"{(DateTime.UtcNow - seededAt).TotalHours:0.##}";
         await svc.ClaimAsync(id, "alice");
 
         var reloaded = await Reload(f, id);
@@ -140,7 +144,6 @@ public sealed class ClaimStalenessTests
         var stolen = Assert.Single(events, e => e.EventType == "TaskClaimStolen");
         Assert.Contains("bob", stolen.Message);       // the dispossessed holder is named
         Assert.Contains("alice", stolen.Message);
-        var expectedAge = $"{(DateTime.UtcNow - seededAt).TotalHours:0.##}";
         Assert.Contains($"{expectedAge}h old", stolen.Message);     // claim age is included, not just the TTL
         Assert.Equal("alice", stolen.Actor);
         Assert.DoesNotContain(events, e => e.EventType == "TaskClaimed");
