@@ -48,45 +48,63 @@ foreach ($p in 'DbPath', 'Url') {
     }
 }
 
-$RepoRoot = Split-Path -Parent $PSScriptRoot
-$SeedPath = Join-Path (Join-Path $RepoRoot 'seed') 'kanbanflow.seed.db'
+try {
+    $RepoRoot = Split-Path -Parent $PSScriptRoot
+    $SeedPath = Join-Path (Join-Path $RepoRoot 'seed') 'kanbanflow.seed.db'
 
-if (-not $DbPath) { $DbPath = $env:KANBANFLOW_DB_PATH }
-if (-not $DbPath) { $DbPath = Join-Path (Join-Path $HOME '.kanbanflow') 'kanbanflow.db' }
+    if (-not $DbPath) { $DbPath = $env:KANBANFLOW_DB_PATH }
+    if (-not $DbPath) { $DbPath = Join-Path (Join-Path $HOME '.kanbanflow') 'kanbanflow.db' }
 
-if (-not $Url) { $Url = $env:ASPNETCORE_URLS }
-if (-not $Url) { $Url = 'http://127.0.0.1:5123' }
+    if (-not $Url) { $Url = $env:ASPNETCORE_URLS }
+    if (-not $Url) { $Url = 'http://127.0.0.1:5123' }
 
-$DbDir = Split-Path -Parent $DbPath
-if (-not (Test-Path -LiteralPath $DbDir)) {
-    New-Item -ItemType Directory -Path $DbDir -Force | Out-Null
-}
+    # Canonicalize before touching the filesystem. A relative path would otherwise be resolved
+    # twice against different roots: here against the caller's directory, and later by
+    # DbPathResolver against $RepoRoot (we Set-Location there before launching). The seed would
+    # land in one file and the app would open another. GetUnresolvedProviderPathFromPSPath is
+    # used rather than [Path]::GetFullPath because it honours PowerShell's location, which can
+    # differ from the process working directory.
+    $DbPath = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($DbPath)
 
-# Restore the starting point. Guarded on absence, so this can never overwrite live data.
-if (-not (Test-Path -LiteralPath $DbPath)) {
-    if ($NoSeed) {
-        Write-Host "[seed] no live DB; -NoSeed given, starting empty"
+    $DbDir = Split-Path -Parent $DbPath
+    if (-not (Test-Path -LiteralPath $DbDir)) {
+        New-Item -ItemType Directory -Path $DbDir -Force | Out-Null
     }
-    elseif (Test-Path -LiteralPath $SeedPath) {
-        Copy-Item -LiteralPath $SeedPath -Destination $DbPath
-        Write-Host "[seed] restored starting point: $SeedPath -> $DbPath"
+
+    # Restore the starting point. Guarded on absence, so this can never overwrite live data.
+    if (-not (Test-Path -LiteralPath $DbPath)) {
+        if ($NoSeed) {
+            Write-Host "[seed] no live DB; -NoSeed given, starting empty"
+        }
+        elseif (Test-Path -LiteralPath $SeedPath) {
+            Copy-Item -LiteralPath $SeedPath -Destination $DbPath
+            Write-Host "[seed] restored starting point: $SeedPath -> $DbPath"
+        }
+        else {
+            Write-Host "[seed] no live DB and no seed at $SeedPath; starting empty"
+        }
     }
-    else {
-        Write-Host "[seed] no live DB and no seed at $SeedPath; starting empty"
+
+    $env:KANBANFLOW_DB_PATH = $DbPath
+    $env:ASPNETCORE_URLS    = $Url
+
+    $Dll = $RepoRoot
+    foreach ($part in 'src', 'KanbanFlow', 'bin', 'Release', 'net10.0', 'KanbanFlow.dll') {
+        $Dll = Join-Path $Dll $part
     }
-}
+    if (-not (Test-Path -LiteralPath $Dll)) {
+        throw "Release build not found at $Dll. Run: dotnet build src/KanbanFlow/KanbanFlow.csproj -c Release"
+    }
 
-$env:KANBANFLOW_DB_PATH = $DbPath
-$env:ASPNETCORE_URLS    = $Url
+    Write-Host "[start] $Url  (db: $DbPath)"
+    Set-Location $RepoRoot
+    & dotnet $Dll
 
-$Dll = $RepoRoot
-foreach ($part in 'src', 'KanbanFlow', 'bin', 'Release', 'net10.0', 'KanbanFlow.dll') {
-    $Dll = Join-Path $Dll $part
+    # Without this the script exits 0 even when the app crashed, so a scheduled task or
+    # supervisor sees a clean run and never reports the failure.
+    exit $LASTEXITCODE
 }
-if (-not (Test-Path -LiteralPath $Dll)) {
-    throw "Release build not found at $Dll. Run: dotnet build src/KanbanFlow/KanbanFlow.csproj -c Release"
+catch {
+    Write-Host "`nstart-kanbanflow ERROR: $($_.Exception.Message)" -ForegroundColor Red
+    exit 2
 }
-
-Write-Host "[start] $Url  (db: $DbPath)"
-Set-Location $RepoRoot
-& dotnet $Dll
