@@ -27,13 +27,26 @@ internal static class EnumParse
     /// </summary>
     /// <returns>
     /// <see langword="true"/> only when <paramref name="raw"/> names a value actually declared by
-    /// <typeparamref name="TEnum"/>; <paramref name="value"/> is <c>default</c> otherwise.
+    /// <typeparamref name="TEnum"/>. On <see langword="false"/>, <paramref name="value"/> is
+    /// <c>default(TEnum)</c> — guaranteed by an explicit reset, NOT by <c>Enum.TryParse</c>, which
+    /// assigns the undefined value before <c>Enum.IsDefined</c> can reject it. Callers may rely on
+    /// this; a test pins it.
     /// </returns>
     internal static bool TryParseDefined<TEnum>(string? raw, out TEnum value) where TEnum : struct, Enum
     {
         value = default;
         if (string.IsNullOrWhiteSpace(raw)) return false;
-        return Enum.TryParse(raw, ignoreCase: true, out value) && Enum.IsDefined(value);
+
+        // Enum.TryParse ASSIGNS before we can reject: for "99" it stores (TEnum)99 and returns
+        // true, and only Enum.IsDefined then says no. Left as-is, `value` would hold 99 on a
+        // false return — the exact undefined value this method exists to keep out, handed to the
+        // caller through the out parameter. Reset it so the documented contract is true rather
+        // than merely intended. (CodeRabbit, PR #441; measured at 99 before fixing.)
+        if (Enum.TryParse(raw, ignoreCase: true, out value) && Enum.IsDefined(value))
+            return true;
+
+        value = default;
+        return false;
     }
 
     /// <summary>

@@ -67,11 +67,53 @@ public sealed class ParsePriorityTests
     public void ParsePriority_accepts_in_range_ordinal_strings()
         => Assert.Equal(TaskPriority.Critical, ProjectView.ParsePriority("3"));
 
+    /// <summary>
+    /// <see cref="EnumParse.ParseOr{TEnum}"/> on its own — this asserts the shared helper's
+    /// behaviour directly, and says nothing about who calls it. (Renamed after review: the old
+    /// name claimed to prove delegation, which the assertions below never touched.)
+    /// </summary>
     [Fact]
-    public void ParseOr_is_the_shared_guard_behind_ParsePriority()
+    public void ParseOr_rejects_undefined_values_for_any_enum()
     {
         Assert.Equal(TaskPriority.Low, EnumParse.ParseOr("99", TaskPriority.Low));
         Assert.Equal(WorkStatus.Backlog, EnumParse.ParseOr("99", WorkStatus.Backlog));
         Assert.Equal(WorkStatus.Done, EnumParse.ParseOr("done", WorkStatus.Backlog));
+    }
+
+    /// <summary>
+    /// The delegation itself: for every input, <c>ParsePriority</c> must agree with the shared
+    /// helper it is supposed to call. Reimplementing the guard locally would drift from
+    /// <see cref="EnumParse"/> silently; this is what catches that.
+    /// </summary>
+    [Theory]
+    [InlineData("99")]
+    [InlineData("4")]
+    [InlineData("-1")]
+    [InlineData("garbage")]
+    [InlineData("")]
+    [InlineData(null)]
+    [InlineData("critical")]
+    [InlineData("Low")]
+    [InlineData("3")]
+    public void ParsePriority_agrees_with_the_shared_helper_it_delegates_to(string? input)
+        => Assert.Equal(EnumParse.ParseOr(input, TaskPriority.Low), ProjectView.ParsePriority(input));
+
+    /// <summary>
+    /// The rejected out-value must not escape. <c>Enum.TryParse</c> assigns <c>(TEnum)99</c>
+    /// before <c>Enum.IsDefined</c> rejects it, so without an explicit reset the caller receives
+    /// the very undefined value the guard exists to keep out. (CodeRabbit, PR #441 — measured at
+    /// 99 before the fix.)
+    /// </summary>
+    [Theory]
+    [InlineData("99")]
+    [InlineData("4")]
+    [InlineData("-1")]
+    [InlineData("garbage")]
+    [InlineData("")]
+    [InlineData(null)]
+    public void TryParseDefined_leaves_value_at_default_when_it_returns_false(string? input)
+    {
+        Assert.False(EnumParse.TryParseDefined<TaskPriority>(input, out var value));
+        Assert.Equal(default, value);
     }
 }

@@ -1,4 +1,4 @@
-﻿using System.Text.Json;
+using System.Text.Json;
 using KanbanFlow.Data;
 using KanbanFlow.Models;
 using Microsoft.EntityFrameworkCore;
