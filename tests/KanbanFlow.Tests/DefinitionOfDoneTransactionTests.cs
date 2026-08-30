@@ -108,6 +108,7 @@ public sealed class DefinitionOfDoneTransactionTests
             return new ValueTask<InterceptionResult<DbDataReader>>(result);
         }
 
+        /// <summary>Intercepts UPDATE/INSERT/DELETE statements so the probe can classify and record the observed SQL.</summary>
         public override ValueTask<InterceptionResult<int>> NonQueryExecutingAsync(
             DbCommand command, CommandEventData eventData,
             InterceptionResult<int> result, CancellationToken cancellationToken = default)

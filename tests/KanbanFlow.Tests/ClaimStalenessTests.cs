@@ -205,6 +205,27 @@ public sealed class ClaimStalenessTests
         Assert.DoesNotContain(events, e => e.EventType == "TaskClaimStolen");
     }
 
+    /// <summary>A task with a whitespace-only <c>ClaimedBy</c> (legacy/direct-DB row) is treated as unclaimed: another actor can claim it and the event is <c>TaskClaimed</c>, not <c>TaskClaimStolen</c>.</summary>
+    [Fact]
+    public async Task ClaimAsync_WhitespaceHolder_IsTreatedAsUnclaimed()
+    {
+        // ClaimPolicy.IsStale returns false for IsNullOrWhiteSpace holders, so such a task
+        // ranks and behaves as unclaimed. The conditional UPDATE predicate must match the
+        // exact pre-read value (t.ClaimedBy == " "), not only NULL, or the UPDATE matches
+        // zero rows and throws TaskClaimConflictException on a task that should be claimable.
+        using var f = new SqliteTestFactory();
+        var id = SeedClaimedTask(f, " ", claimedAt: null);
+        var svc = new TaskService(f, Ttl);
+
+        await svc.ClaimAsync(id, "alice");
+
+        Assert.Equal("alice", (await Reload(f, id)).ClaimedBy);
+        await using var db = await f.CreateDbContextAsync();
+        var events = await db.ActivityEvents.Where(e => e.EntityId == id).ToListAsync();
+        Assert.Single(events, e => e.EventType == "TaskClaimed");
+        Assert.DoesNotContain(events, e => e.EventType == "TaskClaimStolen");
+    }
+
     // ── the race ───────────────────────────────────────────────────────────────
 
     /// <summary>

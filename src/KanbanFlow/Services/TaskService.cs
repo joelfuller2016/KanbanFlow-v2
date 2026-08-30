@@ -1076,11 +1076,19 @@ public sealed class TaskService(
         // UPDATE, so two actors racing to take over the same expired claim still cannot both win:
         // exactly one matches while the row is unclaimed-or-expired, and the loser reconciles
         // below. Widening it into a load-then-write would reopen the gap this closes.
+        //
+        // Whitespace holders: ClaimPolicy.IsStale treats a whitespace ClaimedBy as unclaimed
+        // (same as null), so ranking and the pre-check above let blank holders through. The
+        // UPDATE predicate must match the exact pre-read value rather than only NULL so that
+        // a legacy row with ClaimedBy=" " can be claimed without failing the race guard.
+        var isUnclaimedHolder = string.IsNullOrWhiteSpace(task.ClaimedBy);
+        var capturedClaimedBy = task.ClaimedBy;   // captured for EF Core closure
         var staleCutoff = ClaimPolicy.StaleCutoff(now, _claimTtl);
         var claimed = await db.Tasks
             .Where(t => t.Id == taskId
-                        && (t.ClaimedBy == null
-                            || (existingClaimIsStale && (t.ClaimedAt == null || t.ClaimedAt < staleCutoff))))
+                        && ((isUnclaimedHolder && t.ClaimedBy == capturedClaimedBy)
+                            || (!isUnclaimedHolder && existingClaimIsStale
+                                && (t.ClaimedAt == null || t.ClaimedAt < staleCutoff))))
             .ExecuteUpdateAsync(s => s
                 .SetProperty(t => t.ClaimedBy, trimmedActor)
                 .SetProperty(t => t.ClaimedAt, now)
