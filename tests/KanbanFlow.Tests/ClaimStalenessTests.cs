@@ -160,6 +160,11 @@ public sealed class ClaimStalenessTests
         await svc.ClaimAsync(id, "alice");
 
         Assert.Equal("alice", (await Reload(f, id)).ClaimedBy);
+
+        await using var db = await f.CreateDbContextAsync();
+        var events = await db.ActivityEvents.Where(e => e.EntityId == id).ToListAsync();
+        var stolen = Assert.Single(events, e => e.EventType == "TaskClaimStolen");
+        Assert.Contains("no timestamp", stolen.Message);   // null ClaimedAt → the "no timestamp" fallback branch
     }
 
     /// <summary>Reclaiming your own stale task is idempotent: it renews the claim without emitting a steal event.</summary>
@@ -170,9 +175,14 @@ public sealed class ClaimStalenessTests
         var id = SeedClaimedTask(f, "alice", DateTime.UtcNow.AddHours(-9));
         var svc = new TaskService(f, Ttl);
 
+        var snapshot = await Reload(f, id);  // capture ClaimedAt and UpdatedAt before the call
         await svc.ClaimAsync(id, "alice");
 
-        Assert.Equal("alice", (await Reload(f, id)).ClaimedBy);
+        var reloaded = await Reload(f, id);
+        Assert.Equal("alice", reloaded.ClaimedBy);
+        Assert.Equal(snapshot.ClaimedAt, reloaded.ClaimedAt);  // own re-claim must NOT refresh ClaimedAt
+        Assert.Equal(snapshot.UpdatedAt, reloaded.UpdatedAt);  // own re-claim must NOT bump UpdatedAt
+
         await using var db = await f.CreateDbContextAsync();
         Assert.Empty(await db.ActivityEvents
             .Where(e => e.EntityId == id && e.EventType == "TaskClaimStolen").ToListAsync());
