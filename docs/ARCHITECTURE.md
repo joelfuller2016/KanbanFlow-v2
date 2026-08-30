@@ -19,6 +19,8 @@ command shown. If a number here disagrees with the code, the code wins — re-de
 - [MCP surface (28 native / 50 wrapper)](#mcp-surface-28-native--50-wrapper)
 - [Who owns what](#who-owns-what)
 - [Running it locally](#running-it-locally)
+  - [Keeping it running: the scheduled task](#keeping-it-running-the-scheduled-task)
+  - [The adoption trial’s instrument](#the-adoption-trials-instrument)
 - [Optional LLM + embedding configuration](#optional-llm--embedding-configuration)
 - [Capability requirements matrix](#capability-requirements-matrix)
 - [Known gaps](#known-gaps)
@@ -366,6 +368,74 @@ transaction that sees the WAL and writes one compact file with no sidecars, need
 `scripts/snapshot-seed.mjs` needs `node:sqlite` (Node ≥ 22.5). The package floor stays at 18
 because nothing at runtime needs it — only this maintainer tool does, and it says so if the
 Node version is too old.
+
+### Keeping it running: the scheduled task
+
+An agent's tool call cannot start the app, so a board that is down is a board that does not exist.
+`scripts/register-kanbanflow-task.ps1` registers the Windows scheduled task that keeps it up, and
+is the only supported way to create it — a task made by hand at a console is machine state nobody
+can review, reproduce on another box, or restore after a mistake, which is exactly the state #477
+found.
+
+```powershell
+powershell.exe -ExecutionPolicy Bypass -File scripts/register-kanbanflow-task.ps1   # register + start
+pwsh -File scripts/register-kanbanflow-task.ps1 -WhatIf                             # dry run
+pwsh -File scripts/register-kanbanflow-task.ps1 -Unregister                         # remove
+```
+
+Two triggers, and both are load-bearing:
+
+| Trigger | Job |
+|---|---|
+| **AtLogOn** | Brings the app back after a reboot with nothing started by hand. |
+| **Once + `PT10M`** | Keepalive. Revives the app within ten minutes if it ever exits cleanly. |
+
+With `-MultipleInstances IgnoreNew`, a repeat that finds the app already running is refused by Task
+Scheduler with **`0x800710E0`** — "the operator or administrator has refused the request." That code
+in the task history is the design working, **not a fault**; it is what makes a ten-minute repeat free
+while the app is healthy. Restart-on-failure covers the other half: the launcher exits with the app's
+own exit code, so a crash is a task failure and is retried three times, a minute apart.
+
+`-ExecutionTimeLimit PT0S` is not decoration either. The Task Scheduler default stops a task after
+three days, and a server killed mid-week presents as "the board stopped answering" with nothing in
+the app's own logs to explain it.
+
+The script is idempotent (`-Force` replaces), verifies afterwards that both triggers actually landed,
+and **refuses to register the real task from a git worktree** — the task stores an absolute launcher
+path, and a path under `.worktrees/` disappears the moment the worktree is removed.
+
+### The adoption trial's instrument
+
+#477 commits to adopting or reverting this whole integration on four measured signals. Three of them
+are invisible to the audit trail: `get_next_tasks` is a read and emits no `ActivityEvent`, and a
+caller's working directory was never recorded anywhere at all.
+
+`scripts/usage-log.mjs` closes that gap. Every `tools/call` through the stdio wrapper appends one
+JSONL row — tool, timestamp, per-process session id, caller cwd, outcome, duration — to
+`~/.kanbanflow/mcp-usage.jsonl` (outside the repo, for the same `git clean -xdf` reason as the
+database). Set `KANBANFLOW_USAGE_LOG` to move it, or to `off` to disable it.
+
+Two properties are deliberate and tested:
+
+- **Arguments go through an allowlist** (`projectId`, `taskId`, `actor`, plus the target status and
+  a boolean DoD-override flag) — never the whole argument object. Task descriptions, comment bodies
+  and search queries are arguments somewhere in this wrapper, and none belong in a usage log. An
+  allowlist means a tool added later cannot leak a new field by default.
+- **A logging failure can never break a tool call.** An instrument that can break the thing it
+  measures is worse than no instrument, so every filesystem call is individually swallowed.
+
+```powershell
+npm run trial:report                      # render §11's table from the log + the audit trail
+npm run trial:report -- --since 2026-08-30
+npm run trial:report -- --json
+```
+
+The report takes each signal from whichever source can actually answer it — the log for who called
+what from where, the board's `ActivityEvent` rows for what changed — and it says what it could not
+measure rather than scoring it as a pass. Two refusals matter most: it will not treat "unprompted"
+as measured, because nothing here knows whether the user asked; and it will not read zero collisions
+as a pass when fewer than two sessions ever wrote, because that measures absence of *use*, not
+absence of collision.
 
 ---
 

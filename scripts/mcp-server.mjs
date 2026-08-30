@@ -1,5 +1,7 @@
 #!/usr/bin/env node
 
+import { createUsageLogger } from "./usage-log.mjs";
+
 const apiBaseUrl = (process.env.KANBANFLOW_API_URL || "http://127.0.0.1:5123").replace(/\/$/, "");
 const defaultRestTimeoutMs = 10000;
 const minRestTimeoutMs = 1;
@@ -42,6 +44,11 @@ let inputBuffer = Buffer.alloc(0);
 // a client isn't left hanging; a request's id is cleared the moment it is answered so the
 // fault path and the request's own completion can never both emit a frame for the same id.
 const inFlightRequestIds = new Set();
+
+// One recorder per wrapper process, which is one client session — the identity #477 §11 signal 1
+// actually counts. Constructed here rather than lazily so the session id is stable from the first
+// call, and it never throws: see the contract in usage-log.mjs.
+const usageLogger = createUsageLogger();
 
 const tools = [
   {
@@ -964,7 +971,19 @@ async function handleMessage(message) {
     if (!isPlainObject(args)) {
       throw new McpError(-32602, "tools/call arguments must be an object.");
     }
-    const result = await callTool(toolName, args);
+    // Record EVERY tool call, both outcomes (#477 §11). This is the only choke point every call
+    // passes through, and the error path matters as much as the happy one: a refused claim (409)
+    // is the collision signal, and a Definition-of-Done refusal (422) is the gate doing its job.
+    // Logging a failure as if it never happened would erase exactly the evidence the trial needs.
+    const startedAt = Date.now();
+    let result;
+    try {
+      result = await callTool(toolName, args);
+    } catch (error) {
+      usageLogger.record({ tool: toolName, args, outcome: "error", ms: Date.now() - startedAt, error });
+      throw error;
+    }
+    usageLogger.record({ tool: toolName, args, outcome: "ok", ms: Date.now() - startedAt });
     writeResult(id, {
       content: [
         {

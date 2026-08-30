@@ -74,6 +74,9 @@ function probe(payload) {
         ...process.env,
         KANBANFLOW_API_URL: process.env.KANBANFLOW_API_URL ?? "http://127.0.0.1:5148",
         KANBANFLOW_MCP_TIMEOUT_MS: "5000",
+        // Off for the same reason as scripts/smoke-mcp.mjs (#477 §11): a test harness that
+        // drives the wrapper must not leave rows the adoption trial would read as real use.
+        KANBANFLOW_USAGE_LOG: "off",
       },
     });
     let out = "";
