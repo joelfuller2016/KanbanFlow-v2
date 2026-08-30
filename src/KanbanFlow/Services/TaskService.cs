@@ -135,9 +135,17 @@ public sealed class TaskService(IDbContextFactory<AppDbContext> dbFactory) : ITa
         // and the status write happens at SaveChanges; without a lock spanning both, a concurrent
         // criterion insert can commit in between and Done persists against criteria the gate never
         // saw. Microsoft.Data.Sqlite issues BEGIN IMMEDIATE for this overload, so the write lock is
-        // taken HERE, before the reads — the same pattern MoveOnBoardAsync/CreateAsync/ClaimAsync
-        // already use in this file.
-        await using var tx = await db.Database.BeginTransactionAsync(ct);
+        // taken HERE, before the reads — the same pattern MoveOnBoardAsync and MoveInOutlineAsync
+        // use. (CreateAsync and ClaimAsync also open transactions, but AFTER their reads, so they
+        // are not examples of this ordering.)
+        //
+        // Scoped to Done-bound transitions ONLY. SQLite permits a single pending writer, so taking
+        // the lock unconditionally would make every Backlog/Todo/Review move queue behind any other
+        // writer and risk SQLITE_BUSY on a transition the gate never even inspects. A non-Done
+        // transition cannot read criteria (the gate returns immediately), so it needs no span.
+        await using var tx = newStatus == WorkStatus.Done
+            ? await db.Database.BeginTransactionAsync(ct)
+            : null;
 
         var task = await db.Tasks
             .Include(t => t.Feature)
@@ -186,7 +194,7 @@ public sealed class TaskService(IDbContextFactory<AppDbContext> dbFactory) : ITa
             AddDoneOverrideRecords(db, task, task.Feature.ProjectId, actor, overrideReason!, overriddenCriteria);
 
         await db.SaveChangesAsync(ct);
-        await tx.CommitAsync(ct);
+        if (tx is not null) await tx.CommitAsync(ct);
         return task;
     }
 
@@ -306,6 +314,9 @@ public sealed class TaskService(IDbContextFactory<AppDbContext> dbFactory) : ITa
         // spanning both, a concurrent criterion insert can commit in between and Done
         // persists against criteria the gate never saw. BEGIN IMMEDIATE takes the write
         // lock here, before the reads — same pattern as MoveOnBoardAsync.
+        //
+        // UNCONDITIONAL here, unlike ChangeStatusAsync/UpdateAsync: this method derives its
+        // target status from the CURRENT status, so that read must already be inside the span.
         await using var tx = await db.Database.BeginTransactionAsync(ct);
 
         var task = await db.Tasks
@@ -679,7 +690,14 @@ public sealed class TaskService(IDbContextFactory<AppDbContext> dbFactory) : ITa
         // spanning both, a concurrent criterion insert can commit in between and Done
         // persists against criteria the gate never saw. BEGIN IMMEDIATE takes the write
         // lock here, before the reads — same pattern as MoveOnBoardAsync.
-        await using var tx = await db.Database.BeginTransactionAsync(ct);
+        //
+        // Scoped to a Done-bound status change ONLY. This method is the general task editor —
+        // renames, priority and assignee changes all land here — and SQLite allows a single
+        // pending writer, so locking unconditionally would make every field edit queue behind
+        // any other writer for a gate that would not run.
+        await using var tx = dto.Status == WorkStatus.Done
+            ? await db.Database.BeginTransactionAsync(ct)
+            : null;
 
         var task = await db.Tasks
             .Include(t => t.Feature)
@@ -822,7 +840,7 @@ public sealed class TaskService(IDbContextFactory<AppDbContext> dbFactory) : ITa
         }
 
         await db.SaveChangesAsync(ct);
-        await tx.CommitAsync(ct);
+        if (tx is not null) await tx.CommitAsync(ct);
         return task;
     }
 
