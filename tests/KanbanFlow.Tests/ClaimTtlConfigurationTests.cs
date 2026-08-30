@@ -161,8 +161,15 @@ public sealed class ClaimTtlConfigurationTests
         Assert.Throws<ArgumentOutOfRangeException>(() => new ClaimTtlSetting(TimeSpan.Zero));
         Assert.Throws<ArgumentOutOfRangeException>(() => new ClaimTtlSetting(TimeSpan.FromDays(-1)));
 
+        // Both ends on BOTH constructors — codex noted the TaskService arm only checked the upper
+        // one, which would not catch a validator wired up for half the range.
         Assert.Throws<ArgumentOutOfRangeException>(() => new TaskService(factory, TimeSpan.MaxValue));
         Assert.Throws<ArgumentOutOfRangeException>(() => new TaskService(factory, TimeSpan.FromDays(366)));
+        Assert.Throws<ArgumentOutOfRangeException>(() => new TaskService(factory, TimeSpan.Zero));
+        Assert.Throws<ArgumentOutOfRangeException>(() => new TaskService(factory, TimeSpan.FromDays(-1)));
+
+        // A null TTL must still fall back rather than throw — the DI path relies on it.
+        _ = new TaskService(factory, null);
 
         // The boundary itself must still construct — the bound is inclusive.
         Assert.Equal(ClaimPolicy.MaxTtl, new ClaimTtlSetting(ClaimPolicy.MaxTtl).Value);
