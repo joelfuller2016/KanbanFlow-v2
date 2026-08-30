@@ -52,11 +52,18 @@ try {
     $RepoRoot = Split-Path -Parent $PSScriptRoot
     $SeedPath = Join-Path (Join-Path $RepoRoot 'seed') 'kanbanflow.seed.db'
 
-    if (-not $DbPath) { $DbPath = $env:KANBANFLOW_DB_PATH }
-    if (-not $DbPath) { $DbPath = Join-Path (Join-Path $HOME '.kanbanflow') 'kanbanflow.db' }
+    # Resolve into fresh variables rather than reassigning the parameters. A validation
+    # attribute stays attached to the *variable*, so PowerShell re-runs it on every later
+    # assignment -- `$DbPath = $env:KANBANFLOW_DB_PATH` with that variable unset would trip
+    # ValidateNotNullOrEmpty and kill the script on its most common invocation: no arguments
+    # at all, which is exactly how the scheduled task runs it.
+    $dbFile = $DbPath
+    if (-not $dbFile) { $dbFile = $env:KANBANFLOW_DB_PATH }
+    if (-not $dbFile) { $dbFile = Join-Path (Join-Path $HOME '.kanbanflow') 'kanbanflow.db' }
 
-    if (-not $Url) { $Url = $env:ASPNETCORE_URLS }
-    if (-not $Url) { $Url = 'http://127.0.0.1:5123' }
+    $listenUrl = $Url
+    if (-not $listenUrl) { $listenUrl = $env:ASPNETCORE_URLS }
+    if (-not $listenUrl) { $listenUrl = 'http://127.0.0.1:5123' }
 
     # Canonicalize before touching the filesystem. A relative path would otherwise be resolved
     # twice against different roots: here against the caller's directory, and later by
@@ -64,29 +71,29 @@ try {
     # land in one file and the app would open another. GetUnresolvedProviderPathFromPSPath is
     # used rather than [Path]::GetFullPath because it honours PowerShell's location, which can
     # differ from the process working directory.
-    $DbPath = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($DbPath)
+    $dbFile = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($dbFile)
 
-    $DbDir = Split-Path -Parent $DbPath
+    $DbDir = Split-Path -Parent $dbFile
     if (-not (Test-Path -LiteralPath $DbDir)) {
         New-Item -ItemType Directory -Path $DbDir -Force | Out-Null
     }
 
     # Restore the starting point. Guarded on absence, so this can never overwrite live data.
-    if (-not (Test-Path -LiteralPath $DbPath)) {
+    if (-not (Test-Path -LiteralPath $dbFile)) {
         if ($NoSeed) {
             Write-Host "[seed] no live DB; -NoSeed given, starting empty"
         }
         elseif (Test-Path -LiteralPath $SeedPath) {
-            Copy-Item -LiteralPath $SeedPath -Destination $DbPath
-            Write-Host "[seed] restored starting point: $SeedPath -> $DbPath"
+            Copy-Item -LiteralPath $SeedPath -Destination $dbFile
+            Write-Host "[seed] restored starting point: $SeedPath -> $dbFile"
         }
         else {
             Write-Host "[seed] no live DB and no seed at $SeedPath; starting empty"
         }
     }
 
-    $env:KANBANFLOW_DB_PATH = $DbPath
-    $env:ASPNETCORE_URLS    = $Url
+    $env:KANBANFLOW_DB_PATH = $dbFile
+    $env:ASPNETCORE_URLS    = $listenUrl
 
     $Dll = $RepoRoot
     foreach ($part in 'src', 'KanbanFlow', 'bin', 'Release', 'net10.0', 'KanbanFlow.dll') {
@@ -96,7 +103,7 @@ try {
         throw "Release build not found at $Dll. Run: dotnet build src/KanbanFlow/KanbanFlow.csproj -c Release"
     }
 
-    Write-Host "[start] $Url  (db: $DbPath)"
+    Write-Host "[start] $listenUrl  (db: $dbFile)"
     Set-Location $RepoRoot
     & dotnet $Dll
 
