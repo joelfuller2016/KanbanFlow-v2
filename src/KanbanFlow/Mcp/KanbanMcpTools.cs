@@ -153,6 +153,10 @@ public static class KanbanMcpTools
             task.Dependencies.Select(d => d.DependsOnTaskItemId).OrderBy(id => id).ToList());
     }
 
+    /// <summary>
+    /// Recommends ranked open tasks for a project; stale claims are treated as available (#429)
+    /// so a crashed agent cannot park work permanently.
+    /// </summary>
     [McpServerTool(Name = "get_next_tasks")]
     [Description("Recommend what to work on next in a project: not-done tasks, excluding any blocked by incomplete dependencies, priority-sorted (Critical first), de-prioritising tasks claimed by other actors. Each result includes a human-readable reason. This is the project's 'direction' primitive.")]
     public static async Task<IReadOnlyList<NextTask>> GetNextTasks(

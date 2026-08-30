@@ -7,6 +7,7 @@ namespace KanbanFlow;
 
 public static class ApiEndpoints
 {
+    /// <summary>Registers all API endpoint groups on <paramref name="app"/>.</summary>
     public static WebApplication MapApiEndpoints(this WebApplication app)
     {
         app.MapProjectEndpoints();
@@ -25,6 +26,7 @@ public static class ApiEndpoints
 
     // ── Project Endpoints ──────────────────────────────────────────────
 
+    /// <summary>Registers project list, progress, next-task, active-claim, and detail endpoints.</summary>
     private static void MapProjectEndpoints(this WebApplication app)
     {
         // GET /api/projects — list all with feature/task counts, progress, next task,

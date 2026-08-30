@@ -43,6 +43,7 @@ public sealed class ClaimStalenessTests
 
     // ── ClaimPolicy: the boundary, asserted on BOTH sides ──────────────────────
 
+    /// <summary>The staleness boundary is exact: strictly past the TTL is stale; at or before is fresh.</summary>
     [Theory]
     // age relative to a 1h TTL          expected stale?
     [InlineData(-3599, false)]   // 59m59s old — fresh
@@ -59,6 +60,7 @@ public sealed class ClaimStalenessTests
         Assert.Equal(expected, ClaimPolicy.IsStale("alice", claimedAt, now, Ttl));
     }
 
+    /// <summary>An unclaimed task is never stale regardless of age.</summary>
     [Fact]
     public void IsStale_UnclaimedTask_IsNeverStale()
     {
@@ -67,6 +69,7 @@ public sealed class ClaimStalenessTests
         Assert.False(ClaimPolicy.IsStale("   ", now.AddYears(-1), now, Ttl));
     }
 
+    /// <summary>A claimed task with no ClaimedAt timestamp is treated as stale, not as a permanent claim.</summary>
     [Fact]
     public void IsStale_ClaimedButUndated_IsStale_NotPermanent()
     {
@@ -77,6 +80,7 @@ public sealed class ClaimStalenessTests
 
     // ── ranking: a stale claim stops sinking the task ──────────────────────────
 
+    /// <summary>A stale claim by another actor does not de-prioritise the task in ranking; the stale task rises above the fresh-claimed one.</summary>
     [Fact]
     public void Ranking_StaleClaimByAnother_IsNotDeprioritised()
     {
@@ -99,6 +103,7 @@ public sealed class ClaimStalenessTests
 
     // ── takeover ───────────────────────────────────────────────────────────────
 
+    /// <summary>A fresh claim held by another actor still throws <see cref="TaskClaimConflictException"/>.</summary>
     [Fact]
     public async Task ClaimAsync_FreshClaimByAnother_StillConflicts()
     {
@@ -110,6 +115,7 @@ public sealed class ClaimStalenessTests
         Assert.Equal("bob", (await Reload(f, id)).ClaimedBy);
     }
 
+    /// <summary>A stale claim is silently taken over, the new holder is persisted, and a <c>TaskClaimStolen</c> event is audited with the prior holder's name and claim age.</summary>
     [Fact]
     public async Task ClaimAsync_StaleClaim_IsTakenOver_AndAuditedAsStolen()
     {
@@ -140,6 +146,7 @@ public sealed class ClaimStalenessTests
         Assert.DoesNotContain(events, e => e.EventType == "TaskClaimed");
     }
 
+    /// <summary>A task claimed with no <c>ClaimedAt</c> (counted as stale) is takeable by another actor.</summary>
     [Fact]
     public async Task ClaimAsync_ClaimedButUndated_IsTakeable()
     {
@@ -152,6 +159,7 @@ public sealed class ClaimStalenessTests
         Assert.Equal("alice", (await Reload(f, id)).ClaimedBy);
     }
 
+    /// <summary>Reclaiming your own stale task is idempotent: it renews the claim without emitting a steal event.</summary>
     [Fact]
     public async Task ClaimAsync_OwnStaleClaim_IsIdempotent_AndEmitsNoStealEvent()
     {
@@ -167,6 +175,7 @@ public sealed class ClaimStalenessTests
             .Where(e => e.EntityId == id && e.EventType == "TaskClaimStolen").ToListAsync());
     }
 
+    /// <summary>Claiming an unclaimed task still emits <c>TaskClaimed</c>, not <c>TaskClaimStolen</c>.</summary>
     [Fact]
     public async Task ClaimAsync_UnclaimedTask_StillEmitsTaskClaimed_NotStolen()
     {

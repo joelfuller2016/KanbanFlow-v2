@@ -1004,6 +1004,10 @@ public sealed class TaskService(
         project.Goals
     };
 
+    /// <summary>
+    /// Claims <paramref name="taskId"/> for <paramref name="actor"/>, taking over stale claims
+    /// and throwing <see cref="TaskClaimConflictException"/> for fresh claims held by someone else (#429).
+    /// </summary>
     public async Task<TaskItem> ClaimAsync(int taskId, string actor, CancellationToken ct = default)
     {
         // The REST endpoint maps a blank actor to 422; surface it as a ValidationException.
