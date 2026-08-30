@@ -209,7 +209,7 @@ The machine-readable source of truth is the OpenAPI document at `/openapi/v1.jso
 | Route | Methods |
 |---|---|
 | `/api/memory` | `POST` — remember |
-| `/api/memory/search` | `GET` — recall; hybrid FTS + vector RRF, `k` clamped 1–100 |
+| `/api/memory/search` | `GET` — recall; hybrid FTS + vector RRF, `k` must be greater than zero (422 otherwise) and is capped at 100 |
 
 ### Admin
 
