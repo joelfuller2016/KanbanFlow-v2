@@ -357,7 +357,7 @@ public static class KanbanMcpTools
     }
 
     [McpServerTool(Name = "claim_task")]
-    [Description("Claim a task for an actor through the audit-aware service layer (writes a TaskClaimed activity event; no HTTP hop). Claim before starting work so other agents skip it. Re-claiming by the same actor is idempotent.")]
+    [Description("Claim a task for an actor through the audit-aware service layer (writes a TaskClaimed activity event; no HTTP hop). Claim before starting work so other agents skip it. Re-claiming by the same actor RENEWS the claim: call it periodically during long work to keep the lease alive, or the claim expires at the TTL and another agent may take the task over.")]
     public static async Task<TaskClaimResult> ClaimTask(
         ITaskService taskService,
         [Description("The task id to claim.")] int taskId,

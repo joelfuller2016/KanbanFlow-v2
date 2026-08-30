@@ -295,21 +295,36 @@ public sealed class TaskServiceMutationTests
             => throw new InvalidOperationException("simulated audit-write failure");
     }
 
+    /// <summary>
+    /// A same-actor re-claim inside the TTL is the heartbeat (#443): it RENEWS ClaimedAt, because a
+    /// holder that cannot move its own lease expires while still working. "Idempotent" survives
+    /// where it was actually load-bearing -- no second activity event, and no UpdatedAt churn -- so
+    /// a 5-minute cadence cannot flood the timeline or fake task activity on Home.
+    /// </summary>
     [Fact]
-    public async Task Claim_SameActorReclaim_IsIdempotent_PreservesClaimedAt_NoSecondEvent()
+    public async Task Claim_SameActorReclaim_RenewsClaimedAt_ButWritesNoSecondEvent()
     {
         using var f = new SqliteTestFactory();
         var (_, taskId) = SeedFeatureWithTask(f);
-        var svc = new TaskService(f);
+        var t0 = new DateTime(2026, 8, 30, 12, 0, 0, DateTimeKind.Utc);
+        var now = t0;
+        var svc = new TaskService(f, clock: () => now);
 
         var first = await svc.ClaimAsync(taskId, "alice");
         var firstClaimedAt = first.ClaimedAt;
+        var firstUpdatedAt = first.UpdatedAt;
 
+        now = t0.AddMinutes(5);                 // a heartbeat, well inside the default TTL
         var second = await svc.ClaimAsync(taskId, "alice");
 
-        Assert.Equal(firstClaimedAt, second.ClaimedAt);
+        // The fix: the lease moves.
+        Assert.Equal(now, second.ClaimedAt);
+        Assert.NotEqual(firstClaimedAt, second.ClaimedAt);
+        // The part of "idempotent" that must NOT change: no churn, no extra audit row.
+        Assert.Equal(firstUpdatedAt, second.UpdatedAt);
         using var db = f.CreateDbContext();
         Assert.Equal(1, await db.ActivityEvents.CountAsync(e => e.EventType == "TaskClaimed"));
+        Assert.Equal(0, await db.ActivityEvents.CountAsync(e => e.EventType == "TaskClaimRenewed"));
     }
 
     [Fact]
