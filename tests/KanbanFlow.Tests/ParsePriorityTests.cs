@@ -110,6 +110,8 @@ public sealed class ParsePriorityTests
     [Theory]
     [InlineData(" Critical ", TaskPriority.Critical)]
     [InlineData(" 3 ", TaskPriority.Critical)]
+    [InlineData("+3", TaskPriority.Critical)]   // a signed decimal IS accepted
+    [InlineData("0x3", TaskPriority.Low)]       // hex is NOT — falls back
     public void ParsePriority_accepts_padded_input(string input, TaskPriority expected)
         => Assert.Equal(expected, ProjectView.ParsePriority(input));
 
@@ -123,7 +125,10 @@ public sealed class ParsePriorityTests
     [Fact]
     public void TryParseDefined_accepts_a_comma_separated_name_list_and_the_doc_says_so()
     {
-        Assert.True(EnumParse.TryParseDefined<TaskPriority>("Low,Critical", out var ored));
+        // Medium|High == 1|2 == 3 == Critical. Deliberately NOT "Low,Critical": Low is 0, so
+        // 0|3 == 3 either way and that pair cannot tell OR apart from a "last token wins"
+        // implementation. This pair can — last-wins would yield High. (codex, round 2 of PR #441.)
+        Assert.True(EnumParse.TryParseDefined<TaskPriority>("Medium,High", out var ored));
         Assert.Equal(TaskPriority.Critical, ored);
 
         // A NUMERIC list is a different story — it does not resolve, so it is correctly rejected.
@@ -132,10 +137,15 @@ public sealed class ParsePriorityTests
     }
 
     /// <summary>
-    /// The delegation itself: for every input, <c>ParsePriority</c> must agree with the shared
-    /// helper it is supposed to call. Reimplementing the guard locally would drift from
-    /// <see cref="EnumParse"/> silently; this is what catches that.
+    /// A drift tripwire, NOT a proof of delegation.
     /// </summary>
+    /// <remarks>
+    /// <c>ParsePriority</c> currently IS <c>ParseOr(input, Low)</c>, so this asserts
+    /// <c>f(x) == f(x)</c> and cannot fail today — including against a broken
+    /// <see cref="EnumParse"/>, where both sides break identically. Its value is forward-looking:
+    /// if someone later reimplements the guard locally, sampled disagreement on these inputs is
+    /// what catches it. Do not count it as coverage of the fix. (codex, PR #441.)
+    /// </remarks>
     [Theory]
     [InlineData("99")]
     [InlineData("4")]

@@ -20,11 +20,16 @@ namespace KanbanFlow;
 /// one class is a rule the rest of the codebase cannot follow.
 /// </para>
 /// <para>
-/// NOT yet the only copy, and this doc will not pretend otherwise. Roughly seventeen call sites
-/// still hand-roll the same <c>TryParse</c> + <c>IsDefined</c> pair — including a same-named
+/// NOT yet the only copy, and this doc will not pretend otherwise. Many call sites still
+/// hand-roll the same <c>TryParse</c> + <c>IsDefined</c> pair — including a same-named
 /// <c>ParsePriority</c> in <c>Mcp/KanbanMcpTools.cs</c> whose own comment calls itself "one DRY
 /// enum-parse". #305 scoped itself to the one site that was actually WRONG; consolidating the rest
 /// is mechanical and tracked separately. Prefer this helper in new code.
+/// <para>
+/// Deliberately not a number: an exact count is stale the moment anyone adds a parse, and this
+/// doc has already been wrong once — it said "roughly seventeen" when the real figure was twenty
+/// (codex, PR #441). <c>git grep -n "Enum.TryParse" -- src/</c> is the answer that cannot rot.
+/// </para>
 /// </para>
 /// </remarks>
 internal static class EnumParse
