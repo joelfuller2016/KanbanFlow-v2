@@ -259,7 +259,7 @@ public static class ApiEndpoints
                     .OrderBy(s => s.SortOrder)
                     .Select(subtask => MapSubtaskContext(subtask, task.Subtasks)),
                 AcceptanceCriteria = task.AcceptanceCriteria
-                    .OrderBy(c => c.SortOrder)
+                    .OrderBy(c => c.SortOrder).ThenBy(c => c.Id)
                     .Select(c => new
                     {
                         c.Id,
@@ -1226,7 +1226,7 @@ public static class ApiEndpoints
             var task = await db.Tasks
                 .Include(t => t.Feature)
                 .Include(t => t.Subtasks.OrderBy(s => s.SortOrder))
-                .Include(t => t.AcceptanceCriteria.OrderBy(c => c.SortOrder))
+                .Include(t => t.AcceptanceCriteria.OrderBy(c => c.SortOrder).ThenBy(c => c.Id))
                 .AsNoTracking()
                 .FirstOrDefaultAsync(t => t.Id == id);
 
@@ -2035,7 +2035,12 @@ public static class ApiEndpoints
             var criteria = await db.AcceptanceCriteria
                 .Where(c => c.TaskItemId == taskId)
                 .AsNoTracking()
-                .OrderBy(c => c.SortOrder)
+                // ThenBy(Id) matches get_task, the MCP list tool, and the task-detail panel.
+                // Without it this endpoint alone was non-deterministic for tied SortOrders — and
+                // ties are reachable: the panel appends with SortOrder = Count, which duplicates
+                // after any delete, and every surface accepts an explicit duplicate rank. Two
+                // surfaces returning different orders for the same task is the drift this fixes.
+                .OrderBy(c => c.SortOrder).ThenBy(c => c.Id)
                 .Select(c => new
                 {
                     c.Id,
