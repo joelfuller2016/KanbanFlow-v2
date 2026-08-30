@@ -36,9 +36,17 @@ public sealed class ClaimTtlConfigurationTests
             "Could not locate src/KanbanFlow/appsettings.json by walking up from " + AppContext.BaseDirectory);
     }
 
+    /// <summary>
+    /// Matches what the ASP.NET Core JSON configuration provider tolerates. Without this, adding
+    /// a <c>// why 1.00:00:00 and not 24:00:00</c> comment to appsettings.json — precisely the
+    /// comment this bug invites — would red these guards.
+    /// </summary>
+    private static readonly JsonDocumentOptions JsonOptions =
+        new() { CommentHandling = JsonCommentHandling.Skip, AllowTrailingCommas = true };
+
     private static string? ClaimTtlRaw()
     {
-        using var doc = JsonDocument.Parse(File.ReadAllText(AppSettingsPath()));
+        using var doc = JsonDocument.Parse(File.ReadAllText(AppSettingsPath()), JsonOptions);
         return doc.RootElement.TryGetProperty("ClaimTtl", out var v) ? v.GetString() : null;
     }
 
@@ -72,15 +80,88 @@ public sealed class ClaimTtlConfigurationTests
         => Assert.Equal(TimeSpan.FromHours(24), ClaimPolicy.DefaultTtl);
 
     /// <summary>
-    /// The shipped value must also satisfy the startup upper bound, so the app cannot ship a
-    /// configuration its own boot validation rejects.
+    /// The shipped value must survive the REAL boot validation — invoked, not re-implemented.
+    /// </summary>
+    /// <remarks>
+    /// The first version of this test asserted <c>parsed &gt; Zero &amp;&amp; parsed &lt;= MaxTtl</c> itself.
+    /// That reads like coverage of the startup guard but stays green if the guard is deleted
+    /// outright — the same anti-pattern that let the 24-day value ship, applied to the bound
+    /// instead of the value. It now calls <see cref="ClaimPolicy.ResolveTtl"/>, which is what
+    /// <c>Program.cs</c> calls. (Round-2 review, PR #435.)
+    /// </remarks>
+    [Fact]
+    public void Shipped_ClaimTtl_survives_the_real_startup_validation()
+        => Assert.Equal(TimeSpan.FromHours(24), ClaimPolicy.ResolveTtl(ClaimTtlRaw()));
+
+    /// <summary>
+    /// Every appsettings*.json is checked, not just the base file: a <c>ClaimTtl</c> added to the
+    /// Development overlay would ship the identical bug in the environment agents actually run in,
+    /// and a base-file-only guard would stay green.
     /// </summary>
     [Fact]
-    public void Shipped_ClaimTtl_is_within_the_startup_bounds()
+    public void Every_appsettings_overlay_declares_a_valid_ClaimTtl()
     {
-        Assert.True(TimeSpan.TryParse(ClaimTtlRaw(), out var parsed));
-        Assert.True(parsed > TimeSpan.Zero, "ClaimTtl must be positive.");
-        Assert.True(parsed <= ClaimPolicy.MaxTtl, $"ClaimTtl {parsed} exceeds ClaimPolicy.MaxTtl {ClaimPolicy.MaxTtl}.");
+        var baseDir = Path.GetDirectoryName(AppSettingsPath())!;
+        foreach (var file in Directory.GetFiles(baseDir, "appsettings*.json"))
+        {
+            using var doc = JsonDocument.Parse(File.ReadAllText(file), JsonOptions);
+            if (!doc.RootElement.TryGetProperty("ClaimTtl", out var v)) continue;
+
+            var ex = Record.Exception(() => ClaimPolicy.ResolveTtl(v.GetString()));
+            Assert.True(ex is null, $"{Path.GetFileName(file)} declares an invalid ClaimTtl: {ex?.Message}");
+        }
+    }
+
+    /// <summary>
+    /// The boot contract itself, exercised through the seam <c>Program.cs</c> uses.
+    /// </summary>
+    [Theory]
+    [InlineData(null)]              // absent -> DefaultTtl
+    [InlineData("")]
+    [InlineData("   ")]
+    public void ResolveTtl_falls_back_to_the_default_when_unset(string? raw)
+        => Assert.Equal(ClaimPolicy.DefaultTtl, ClaimPolicy.ResolveTtl(raw));
+
+    [Theory]
+    [InlineData("garbage")]         // malformed
+    [InlineData("-1.00:00:00")]     // negative
+    [InlineData("00:00:00")]        // zero
+    [InlineData("10675199")]        // parses, but underflows StaleCutoff on every claim
+    [InlineData("366")]             // 366 days — just past MaxTtl
+    public void ResolveTtl_rejects_values_the_app_cannot_run_with(string raw)
+        => Assert.Throws<InvalidOperationException>(() => ClaimPolicy.ResolveTtl(raw));
+
+    /// <summary>
+    /// The rejection message must name the trap, because the trap is the whole story: the value
+    /// that shipped was a plausible-looking "24:00:00".
+    /// </summary>
+    [Fact]
+    public void ResolveTtl_rejection_message_explains_the_days_vs_hours_trap()
+    {
+        var ex = Assert.Throws<InvalidOperationException>(() => ClaimPolicy.ResolveTtl("400"));
+        Assert.Contains("24 DAYS", ex.Message);
+        Assert.Contains("1.00:00:00", ex.Message);
+    }
+
+    /// <summary>
+    /// A claim timestamped in the FUTURE must be stale, not eternally fresh.
+    /// </summary>
+    /// <remarks>
+    /// <c>now - claimedAt</c> is negative for a future claim, so it can never exceed the TTL. Left
+    /// unhandled, a host with a fast clock writes a permanent, unstealable claim — issue #429
+    /// reintroduced by the very code meant to close it. (codex, PR #435.)
+    /// </remarks>
+    [Fact]
+    public void A_future_claim_timestamp_is_stale_not_permanent()
+    {
+        var now = new DateTime(2026, 8, 30, 12, 0, 0, DateTimeKind.Utc);
+
+        // Inside the skew allowance: ordinary jitter, still the holder's claim.
+        Assert.False(ClaimPolicy.IsStale("alice", now.AddMinutes(1), now, TimeSpan.FromHours(1)));
+
+        // Beyond it: a corrupt or skewed write, and therefore stealable.
+        Assert.True(ClaimPolicy.IsStale("alice", now.AddHours(1), now, TimeSpan.FromHours(1)));
+        Assert.True(ClaimPolicy.IsStale("alice", now.AddYears(10), now, TimeSpan.FromHours(1)));
     }
 
     /// <summary>

@@ -51,6 +51,16 @@ public static class ClaimPolicy
     public static readonly TimeSpan MaxTtl = TimeSpan.FromDays(365);
 
     /// <summary>
+    /// How far ahead of "now" a claim timestamp may sit before it is treated as corrupt.
+    /// </summary>
+    /// <remarks>
+    /// Small deliberately: this is an allowance for ordinary clock jitter between the app and a
+    /// database round-trip, not for a genuinely wrong clock. Anything further ahead cannot be a
+    /// legitimate claim, and treating it as fresh would make it permanent.
+    /// </remarks>
+    public static readonly TimeSpan MaxClockSkew = TimeSpan.FromMinutes(5);
+
+    /// <summary>
     /// True when a claim should be treated as abandoned.
     /// </summary>
     /// <param name="claimedBy">The current holder, or null/blank when unclaimed.</param>
@@ -67,6 +77,42 @@ public static class ClaimPolicy
     /// a direct database edit could produce it, and the alternative — treating it as fresh — would
     /// make such a claim permanent, which is the exact failure this policy exists to remove.
     /// </remarks>
+    /// <summary>
+    /// Resolves and validates a configured claim TTL, or throws with a message naming the trap.
+    /// </summary>
+    /// <remarks>
+    /// Extracted from <c>Program.cs</c> so the boot contract is TESTABLE. It previously lived in
+    /// top-level statements with no seam, so nothing could fail if the validation were deleted —
+    /// and the guard test re-implemented the bound rather than invoking it, which is the very
+    /// anti-pattern that let the 24-day value ship. (Round-2 review, PR #435.)
+    /// </remarks>
+    /// <param name="raw">The configured value; null or empty selects <see cref="DefaultTtl"/>.</param>
+    /// <exception cref="InvalidOperationException">Malformed, non-positive, or above <see cref="MaxTtl"/>.</exception>
+    public static TimeSpan ResolveTtl(string? raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw))
+            return DefaultTtl;
+
+        // TryParse, not Parse: a malformed value must be reported by the same exception as a
+        // non-positive one, naming the setting and the expected shape.
+        if (!TimeSpan.TryParse(raw, out var parsed))
+            throw new InvalidOperationException(
+                $"ClaimTtl must be a TimeSpan such as '1.00:00:00' or '00:30:00'; got '{raw}'.");
+
+        if (parsed <= TimeSpan.Zero)
+            throw new InvalidOperationException($"ClaimTtl must be positive; got '{raw}'.");
+
+        // StaleCutoff computes `now - ttl`, which throws once it underflows DateTime.MinValue —
+        // and it runs on EVERY claim, so an unbounded value boots clean and then 500s every claim.
+        if (parsed > MaxTtl)
+            throw new InvalidOperationException(
+                $"ClaimTtl must be {MaxTtl} or less; got '{raw}' (parsed as {parsed}). "
+                + "TimeSpan reads a bare number as DAYS, and treats a first field above 23 as days "
+                + "too, so \"24:00:00\" is 24 DAYS — write \"1.00:00:00\" for one day.");
+
+        return parsed;
+    }
+
     public static bool IsStale(string? claimedBy, DateTime? claimedAt, DateTime now, TimeSpan ttl)
     {
         if (string.IsNullOrWhiteSpace(claimedBy))
@@ -74,6 +120,15 @@ public static class ClaimPolicy
 
         if (claimedAt is null)
             return true;    // claimed but undated — see remarks
+
+        // A timestamp in the FUTURE beyond the skew allowance is stale, not eternally fresh.
+        // `now - claimedAt` is negative for a future claim, so without this it can never exceed
+        // ttl and the claim is permanent and unstealable — issue #429 reintroduced for any host
+        // whose clock runs fast. A claim cannot legitimately be made after now, so a value past
+        // the allowance is a corrupt or skewed write, and the safe reading of a corrupt claim is
+        // the same as an undated one: stealable. (codex, PR #435.)
+        if (claimedAt.Value > now + MaxClockSkew)
+            return true;
 
         // Strictly greater-than, so a claim exactly at the TTL boundary is still FRESH. The
         // boundary has to fall on one side deliberately; favouring the holder means a claim is

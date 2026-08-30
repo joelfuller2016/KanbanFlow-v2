@@ -31,36 +31,10 @@ builder.Services.AddDbContextFactory<AppDbContext>(
 // Claim TTL: parse and validate once at startup so a malformed or non-positive value is rejected
 // before the first request, not on it. All consumers inject ClaimTtlSetting — never re-parse from
 // IConfiguration at request time (#429).
-// TryParse, not Parse: a malformed value must be reported by the same InvalidOperationException
-// as a non-positive one. Parse threw a raw FormatException naming neither the setting nor the
-// expected shape, so only half of "malformed or non-positive" was actually covered.
-var claimTtlRaw = builder.Configuration["ClaimTtl"];
-TimeSpan resolvedClaimTtl;
-if (claimTtlRaw is { Length: > 0 })
-{
-    if (!TimeSpan.TryParse(claimTtlRaw, out resolvedClaimTtl))
-        throw new InvalidOperationException(
-            $"ClaimTtl must be a TimeSpan such as '1.00:00:00' or '00:30:00'; got '{claimTtlRaw}'.");
-}
-else
-{
-    resolvedClaimTtl = ClaimPolicy.DefaultTtl;
-}
-
-if (resolvedClaimTtl <= TimeSpan.Zero)
-    throw new InvalidOperationException($"ClaimTtl must be positive; got '{claimTtlRaw}'.");
-
-// Upper bound, and it is not theoretical. ClaimPolicy.StaleCutoff computes `now - ttl`, which
-// throws ArgumentOutOfRangeException once the result underflows DateTime.MinValue — and it runs on
-// EVERY claim. Without this check a TTL that merely parses (e.g. "10675199") boots cleanly and then
-// 500s every single claim, including claims of unclaimed tasks: precisely the "rejected before the
-// first request, not on it" promise this block opens with. A year is far past any real claim.
-if (resolvedClaimTtl > ClaimPolicy.MaxTtl)
-    throw new InvalidOperationException(
-        $"ClaimTtl must be {ClaimPolicy.MaxTtl} or less; got '{claimTtlRaw}' (parsed as {resolvedClaimTtl}). "
-        + "TimeSpan reads a bare number as DAYS, and treats a first field above 23 as days too, so "
-        + "\"24:00:00\" is 24 DAYS — write \"1.00:00:00\" for one day.");
-
+// ClaimPolicy.ResolveTtl owns the parse + both bounds, so the boot contract is testable — it
+// previously lived here as top-level statements with no seam, which is why a 24-day value shipped
+// with a green suite (#429 round-2 review). Do not re-inline it.
+var resolvedClaimTtl = ClaimPolicy.ResolveTtl(builder.Configuration["ClaimTtl"]);
 builder.Services.AddSingleton(new ClaimTtlSetting(resolvedClaimTtl));
 
 // Audit-aware service layer (issue #88: route REST + UI mutations through one place)

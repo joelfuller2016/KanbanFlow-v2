@@ -1084,11 +1084,17 @@ public sealed class TaskService(
         var isUnclaimedHolder = string.IsNullOrWhiteSpace(task.ClaimedBy);
         var capturedClaimedBy = task.ClaimedBy;   // captured for EF Core closure
         var staleCutoff = ClaimPolicy.StaleCutoff(now, _claimTtl);
+        // Mirrors ClaimPolicy.IsStale's future-timestamp arm. Without it the C# pre-check would
+        // call a skewed claim stale while this predicate matched zero rows, so the takeover would
+        // fall through to the reconcile path and report a conflict the pre-check had already
+        // cleared. The two notions of "stale" must agree. (codex, PR #435.)
+        var skewHorizon = now + ClaimPolicy.MaxClockSkew;
         var claimed = await db.Tasks
             .Where(t => t.Id == taskId
                         && ((isUnclaimedHolder && t.ClaimedBy == capturedClaimedBy)
                             || (!isUnclaimedHolder && existingClaimIsStale
-                                && (t.ClaimedAt == null || t.ClaimedAt < staleCutoff))))
+                                && (t.ClaimedAt == null || t.ClaimedAt < staleCutoff
+                                    || t.ClaimedAt > skewHorizon))))
             .ExecuteUpdateAsync(s => s
                 .SetProperty(t => t.ClaimedBy, trimmedActor)
                 .SetProperty(t => t.ClaimedAt, now)
