@@ -145,6 +145,7 @@ public sealed class TaskService(
         });
     }
 
+    /// <summary>Moves a task to <paramref name="newStatus"/>, enforcing the Definition-of-Done gate for Done-bound transitions, and records an audit event.</summary>
     public async Task<TaskItem> ChangeStatusAsync(int taskId, WorkStatus newStatus, string? actor, CancellationToken ct = default, string? overrideReason = null)
     {
         await using var db = await dbFactory.CreateDbContextAsync(ct);

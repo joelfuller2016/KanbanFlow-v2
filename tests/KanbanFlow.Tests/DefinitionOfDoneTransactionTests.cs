@@ -57,6 +57,7 @@ public sealed class DefinitionOfDoneTransactionTests
         private readonly Lock _lock = new();
         private readonly List<(string Kind, DbTransaction? Tx)> _observations = [];
 
+        /// <summary>All SQL statements observed since the last <see cref="Reset"/>, in observation order.</summary>
         public IReadOnlyList<(string Kind, DbTransaction? Tx)> Observations
         {
             get { lock (_lock) return _observations.ToArray(); }
@@ -98,6 +99,7 @@ public sealed class DefinitionOfDoneTransactionTests
                 lock (_lock) _observations.Add(("TaskRead", command.Transaction));
         }
 
+        /// <summary>Intercepts SELECT statements so the probe can classify and record the observed SQL.</summary>
         public override ValueTask<InterceptionResult<DbDataReader>> ReaderExecutingAsync(
             DbCommand command, CommandEventData eventData,
             InterceptionResult<DbDataReader> result, CancellationToken cancellationToken = default)
