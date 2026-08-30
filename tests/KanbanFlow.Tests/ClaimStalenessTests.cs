@@ -133,6 +133,7 @@ public sealed class ClaimStalenessTests
         var stolen = Assert.Single(events.Where(e => e.EventType == "TaskClaimStolen"));
         Assert.Contains("bob", stolen.Message);       // the dispossessed holder is named
         Assert.Contains("alice", stolen.Message);
+        Assert.Contains("h old", stolen.Message);     // claim age is included, not just the TTL
         Assert.Equal("alice", stolen.Actor);
         Assert.Empty(events.Where(e => e.EventType == "TaskClaimed"));
     }

@@ -20,7 +20,9 @@ public sealed class TaskService(
     IDbContextFactory<AppDbContext> dbFactory,
     TimeSpan? claimTtl = null) : ITaskService
 {
-    private readonly TimeSpan _claimTtl = claimTtl ?? ClaimPolicy.DefaultTtl;
+    private readonly TimeSpan _claimTtl = claimTtl is { } t && t <= TimeSpan.Zero
+        ? throw new ArgumentOutOfRangeException(nameof(claimTtl), "Claim TTL must be positive.")
+        : claimTtl ?? ClaimPolicy.DefaultTtl;
 
     private static readonly JsonSerializerOptions ActivityJsonOptions = new(JsonSerializerDefaults.Web);
 
@@ -1022,14 +1024,15 @@ public sealed class TaskService(
         if (task.Feature is null)
             throw new InvalidOperationException($"Task {taskId} has no feature; cannot resolve project for audit.");
 
-        var claimCheckedAt = DateTime.UtcNow;
+        var now = DateTime.UtcNow;
 
         // A claim past its TTL is abandoned and may be taken over (#429). Without this a crashed
         // or rate-limited agent holds its task forever and nothing can recover it: ClaimedAt was
         // written and displayed but never compared to the clock anywhere in src/.
         var existingClaimIsStale = ClaimPolicy.IsStale(
-            task.ClaimedBy, task.ClaimedAt, claimCheckedAt, _claimTtl);
+            task.ClaimedBy, task.ClaimedAt, now, _claimTtl);
         var previousHolder = task.ClaimedBy;
+        var previousClaimedAt = task.ClaimedAt;
 
         // Claimed by someone else and still FRESH → conflict (API → 409). Same actor is idempotent.
         if (!string.IsNullOrWhiteSpace(task.ClaimedBy)
@@ -1044,7 +1047,6 @@ public sealed class TaskService(
             return task;
 
         var before = TaskActivitySnapshot(task);
-        var now = DateTime.UtcNow;
 
         // Atomic claim + audit (#156): wrap the conditional UPDATE and the TaskClaimed event in
         // one transaction so a claim can never persist without its audit event. The race-safe
@@ -1106,7 +1108,9 @@ public sealed class TaskService(
                 db, task.Feature.ProjectId, "Task", task.Id, trimmedActor,
                 "TaskClaimStolen", before, TaskActivitySnapshot(task),
                 $"Task '{task.Name}' claim taken over by {trimmedActor} from {previousHolder} "
-                + $"(claim was stale; TTL {_claimTtl.TotalHours:0.##}h)");
+                + (previousClaimedAt is { } heldSince
+                    ? $"(claim was {(now - heldSince).TotalHours:0.##}h old; TTL {_claimTtl.TotalHours:0.##}h)"
+                    : $"(claim had no timestamp; TTL {_claimTtl.TotalHours:0.##}h)"));
         }
         else
         {

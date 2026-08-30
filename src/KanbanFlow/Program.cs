@@ -29,7 +29,14 @@ builder.Services.AddDbContextFactory<AppDbContext>(
     options => options.UseSqlite(DbPathResolver.ToConnectionString(dbResolution.Path)));
 
 // Audit-aware service layer (issue #88: route REST + UI mutations through one place)
-builder.Services.AddScoped<ITaskService, TaskService>();
+// claimTtl is optional; omit from config to keep the 24 h default (#429).
+builder.Services.AddScoped<ITaskService>(sp =>
+{
+    var factory = sp.GetRequiredService<IDbContextFactory<AppDbContext>>();
+    var raw = builder.Configuration["ClaimTtl"];
+    var ttl = raw is not null ? TimeSpan.Parse(raw) : (TimeSpan?)null;
+    return new TaskService(factory, ttl);
+});
 // Dependency graph mutations (#414): cycle validation and insertion share one transaction.
 builder.Services.AddScoped<ITaskDependencyService, TaskDependencyService>();
 // Ideas inbox service (#180) — same single-audit-boundary rule as ITaskService.

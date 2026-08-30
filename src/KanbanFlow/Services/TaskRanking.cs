@@ -89,10 +89,11 @@ public static class TaskRanking
                 // A STALE claim no longer de-prioritises the task (#429). Without this, one
                 // crashed agent parks a task at the bottom of every other actor's list forever —
                 // ClaimedByOther is the primary sort key, so the penalty is maximal and permanent.
+                var claimIsStale = ClaimPolicy.IsStale(task.ClaimedBy, task.ClaimedAt, effectiveNow, effectiveTtl);
                 var claimedByOther = !string.IsNullOrWhiteSpace(task.ClaimedBy)
                     && !string.Equals(task.ClaimedBy, normalizedActor, StringComparison.OrdinalIgnoreCase)
-                    && !ClaimPolicy.IsStale(task.ClaimedBy, task.ClaimedAt, effectiveNow, effectiveTtl);
-                return (Task: task, HasOpenBlocker: hasOpenBlocker, ClaimedByOther: claimedByOther);
+                    && !claimIsStale;
+                return (Task: task, HasOpenBlocker: hasOpenBlocker, ClaimedByOther: claimedByOther, ClaimIsStale: claimIsStale);
             })
             .Where(x => !x.HasOpenBlocker)
             .OrderBy(x => x.ClaimedByOther)                              // unclaimed / own first
@@ -101,7 +102,7 @@ public static class TaskRanking
             .ThenBy(x => x.Task.Id)                                     // stable, oldest first
             .Take(clampedLimit)
             .Select(x => new RankedTask(x.Task, x.ClaimedByOther, IsBlocked: false,
-                BuildReason(x.Task, x.ClaimedByOther)))
+                BuildReason(x.Task, x.ClaimedByOther, x.ClaimIsStale)))
             .ToList();
     }
 
@@ -111,12 +112,14 @@ public static class TaskRanking
     /// it names the priority, flags in-progress work, confirms there are no open blockers, and
     /// notes when a task is claimed by another actor (or unclaimed).
     /// </summary>
-    private static string BuildReason(TaskItem task, bool claimedByOther)
+    private static string BuildReason(TaskItem task, bool claimedByOther, bool claimIsStale)
     {
         var parts = new List<string> { $"{task.Priority} priority" };
         if (task.Status == WorkStatus.InProgress) parts.Add("already in progress");
         parts.Add("no open blockers");
         if (claimedByOther) parts.Add($"claimed by {task.ClaimedBy} (deprioritised)");
+        else if (claimIsStale && !string.IsNullOrWhiteSpace(task.ClaimedBy))
+            parts.Add($"claim by {task.ClaimedBy} is stale (available)");
         else if (string.IsNullOrWhiteSpace(task.ClaimedBy)) parts.Add("unclaimed");
         return "Top because: " + string.Join(", ", parts) + ".";
     }
