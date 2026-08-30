@@ -67,8 +67,9 @@ try {
 
     # Canonicalize before touching the filesystem. A relative path would otherwise be resolved
     # twice against different roots: here against the caller's directory, and later by
-    # DbPathResolver against $RepoRoot (we Set-Location there before launching). The seed would
-    # land in one file and the app would open another. GetUnresolvedProviderPathFromPSPath is
+    # DbPathResolver against the publish directory (we Set-Location there before launching).
+    # The seed would land in one file and the app would open another.
+    # GetUnresolvedProviderPathFromPSPath is
     # used rather than [Path]::GetFullPath because it honours PowerShell's location, which can
     # differ from the process working directory.
     $dbFile = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($dbFile)
@@ -95,16 +96,74 @@ try {
     $env:KANBANFLOW_DB_PATH = $dbFile
     $env:ASPNETCORE_URLS    = $listenUrl
 
-    $Dll = $RepoRoot
-    foreach ($part in 'src', 'KanbanFlow', 'bin', 'Release', 'net10.0', 'KanbanFlow.dll') {
-        $Dll = Join-Path $Dll $part
+    $ProjectDir = Join-Path (Join-Path $RepoRoot 'src') 'KanbanFlow'
+    $ProjectPath = Join-Path $ProjectDir 'KanbanFlow.csproj'
+    $BinDir = Join-Path $ProjectDir 'bin'
+    $ObjDir = Join-Path $ProjectDir 'obj'
+    $ArtifactsDir = Join-Path $BinDir 'launcher-artifacts'
+    $PublishDir = Join-Path (Join-Path (Join-Path $BinDir 'Release') 'net10.0') 'publish'
+    $Dll = Join-Path $PublishDir 'KanbanFlow.dll'
+    $PublishStamp = Join-Path $PublishDir '.publish-stamp.json'
+
+    # A build output relies on the Development-only static-web-assets manifest to find
+    # source files. A publish output contains wwwroot itself, so Production can serve the
+    # complete UI. Avoid publishing on every launch by fingerprinting project source files;
+    # generated bin/obj files are deliberately excluded. Count + maximum mtime catches
+    # additions, deletions, and ordinary modifications, but not a same-count swap that also
+    # preserves mtimes. That residual case is acceptable for a local launcher, and running
+    # dotnet publish directly remains the escape hatch.
+    $sourceCount = 0
+    $newestSourceTimeUtc = [DateTime]::MinValue
+    Get-ChildItem -LiteralPath $ProjectDir -Recurse -File | ForEach-Object {
+        if (-not $_.FullName.StartsWith($BinDir + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase) -and
+            -not $_.FullName.StartsWith($ObjDir + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) {
+            $sourceCount++
+            if ($_.LastWriteTimeUtc -gt $newestSourceTimeUtc) {
+                $newestSourceTimeUtc = $_.LastWriteTimeUtc
+            }
+        }
     }
+
+    $publishNeeded = -not (Test-Path -LiteralPath $Dll)
+    if (-not $publishNeeded) {
+        try {
+            $recordedStamp = Get-Content -LiteralPath $PublishStamp -Raw | ConvertFrom-Json
+            $recordedSourceCount = [int]$recordedStamp.SourceCount
+            $recordedNewestSourceTimeUtc = [DateTime]::Parse(
+                [string]$recordedStamp.NewestSourceTimeUtc,
+                [Globalization.CultureInfo]::InvariantCulture,
+                [Globalization.DateTimeStyles]::RoundtripKind
+            )
+            if ($sourceCount -ne $recordedSourceCount -or
+                $newestSourceTimeUtc -gt $recordedNewestSourceTimeUtc) {
+                $publishNeeded = $true
+            }
+        }
+        catch {
+            $publishNeeded = $true
+        }
+    }
+
+    if ($publishNeeded) {
+        Write-Host "[publish] refreshing Release output: $PublishDir"
+        # Isolated artifacts avoid colliding with an older build DLL that may already
+        # be held open by a running local instance.
+        & dotnet publish $ProjectPath -c Release -o $PublishDir --artifacts-path $ArtifactsDir
+        if ($LASTEXITCODE -ne 0) {
+            throw "dotnet publish failed with exit code $LASTEXITCODE"
+        }
+        @{
+            SourceCount = $sourceCount
+            NewestSourceTimeUtc = $newestSourceTimeUtc.ToString('o')
+        } | ConvertTo-Json | Set-Content -LiteralPath $PublishStamp -Encoding UTF8
+    }
+
     if (-not (Test-Path -LiteralPath $Dll)) {
-        throw "Release build not found at $Dll. Run: dotnet build src/KanbanFlow/KanbanFlow.csproj -c Release"
+        throw "Published application not found at $Dll"
     }
 
     Write-Host "[start] $listenUrl  (db: $dbFile)"
-    Set-Location $RepoRoot
+    Set-Location $PublishDir
     & dotnet $Dll
 
     # Without this the script exits 0 even when the app crashed, so a scheduled task or
