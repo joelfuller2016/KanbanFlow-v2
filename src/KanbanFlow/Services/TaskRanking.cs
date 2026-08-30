@@ -48,16 +48,31 @@ public static class TaskRanking
     /// null, any claimed task therefore counts as claimed-by-other and sinks — matching the historic
     /// MCP behaviour. Unclaimed tasks are never de-prioritised.
     /// </remarks>
+    /// <param name="now">
+    /// Current time, used only to decide whether another actor's claim has gone stale (#429).
+    /// Injected rather than read from the clock so the boundary is testable without sleeping.
+    /// Defaults to <see cref="DateTime.UtcNow"/>.
+    /// </param>
+    /// <param name="claimTtl">
+    /// How long a claim stays fresh. A claim older than this stops de-prioritising its task, so a
+    /// crashed agent can no longer park work permanently. Defaults to
+    /// <see cref="ClaimPolicy.DefaultTtl"/>.
+    /// </param>
     public static IReadOnlyList<RankedTask> RankNextTasks(
         IReadOnlyCollection<TaskItem> openTasks,
         IReadOnlyDictionary<int, WorkStatus> statusById,
         ILookup<int, int> dependsOnByTask,
         string? actor,
-        int limit)
+        int limit,
+        DateTime? now = null,
+        TimeSpan? claimTtl = null)
     {
         ArgumentNullException.ThrowIfNull(openTasks);
         ArgumentNullException.ThrowIfNull(statusById);
         ArgumentNullException.ThrowIfNull(dependsOnByTask);
+
+        var effectiveNow = now ?? DateTime.UtcNow;
+        var effectiveTtl = claimTtl ?? ClaimPolicy.DefaultTtl;
 
         var clampedLimit = Math.Clamp(limit, 1, 50);
         // Normalize the actor exactly as ClaimedBy is normalized on write (trim, blank→null), so an
@@ -71,8 +86,12 @@ public static class TaskRanking
                 // (e.g. a cross-project or dangling edge) — either way the task is not ready.
                 var hasOpenBlocker = dependsOnByTask[task.Id].Any(dependsOnId =>
                     !statusById.TryGetValue(dependsOnId, out var status) || status != WorkStatus.Done);
+                // A STALE claim no longer de-prioritises the task (#429). Without this, one
+                // crashed agent parks a task at the bottom of every other actor's list forever —
+                // ClaimedByOther is the primary sort key, so the penalty is maximal and permanent.
                 var claimedByOther = !string.IsNullOrWhiteSpace(task.ClaimedBy)
-                    && !string.Equals(task.ClaimedBy, normalizedActor, StringComparison.OrdinalIgnoreCase);
+                    && !string.Equals(task.ClaimedBy, normalizedActor, StringComparison.OrdinalIgnoreCase)
+                    && !ClaimPolicy.IsStale(task.ClaimedBy, task.ClaimedAt, effectiveNow, effectiveTtl);
                 return (Task: task, HasOpenBlocker: hasOpenBlocker, ClaimedByOther: claimedByOther);
             })
             .Where(x => !x.HasOpenBlocker)

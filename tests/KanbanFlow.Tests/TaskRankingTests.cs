@@ -20,12 +20,28 @@ namespace KanbanFlow.Tests;
 public sealed class TaskRankingTests
 {
     // ── pure-ranker helpers ──────────────────────────────────────────────────────────
+    /// <param name="claimedAt">
+    /// When the claim was taken. Defaults to <em>now</em> whenever <paramref name="claimedBy"/> is
+    /// set, because that is what the real producer does — <c>ClaimAsync</c> always writes both
+    /// fields together. Leaving it null here would seed a claim shape the application never
+    /// creates, and since #429 treats a claimed-but-undated row as STALE, such a fixture would
+    /// quietly stop exercising the de-prioritisation these tests are about.
+    /// </param>
     private static TaskItem Task(
         int id,
         TaskPriority priority = TaskPriority.Medium,
         WorkStatus status = WorkStatus.Todo,
-        string? claimedBy = null) =>
-        new() { Id = id, Name = $"T{id}", Priority = priority, Status = status, ClaimedBy = claimedBy };
+        string? claimedBy = null,
+        DateTime? claimedAt = null) =>
+        new()
+        {
+            Id = id,
+            Name = $"T{id}",
+            Priority = priority,
+            Status = status,
+            ClaimedBy = claimedBy,
+            ClaimedAt = claimedBy is null ? null : (claimedAt ?? DateTime.UtcNow)
+        };
 
     private static Dictionary<int, WorkStatus> StatusById(params (int id, WorkStatus status)[] rows) =>
         rows.ToDictionary(r => r.id, r => r.status);

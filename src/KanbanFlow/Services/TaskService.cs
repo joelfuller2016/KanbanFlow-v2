@@ -11,8 +11,17 @@ namespace KanbanFlow.Services;
 /// short-lived <see cref="AppDbContext"/> — safe for concurrent Blazor Server
 /// circuits and Minimal API requests alike.
 /// </summary>
-public sealed class TaskService(IDbContextFactory<AppDbContext> dbFactory) : ITaskService
+/// <param name="claimTtl">
+/// How long a task claim stays fresh before another actor may take it over (#429). Optional so
+/// the ~850 existing <c>new TaskService(factory)</c> call sites keep compiling and keep the
+/// production default; tests inject a short TTL rather than sleeping in real time.
+/// </param>
+public sealed class TaskService(
+    IDbContextFactory<AppDbContext> dbFactory,
+    TimeSpan? claimTtl = null) : ITaskService
 {
+    private readonly TimeSpan _claimTtl = claimTtl ?? ClaimPolicy.DefaultTtl;
+
     private static readonly JsonSerializerOptions ActivityJsonOptions = new(JsonSerializerDefaults.Web);
 
     private static object TaskActivitySnapshot(TaskItem task) => new
@@ -1013,9 +1022,19 @@ public sealed class TaskService(IDbContextFactory<AppDbContext> dbFactory) : ITa
         if (task.Feature is null)
             throw new InvalidOperationException($"Task {taskId} has no feature; cannot resolve project for audit.");
 
-        // Claimed by someone else → conflict (API → 409). Same actor is idempotent.
+        var claimCheckedAt = DateTime.UtcNow;
+
+        // A claim past its TTL is abandoned and may be taken over (#429). Without this a crashed
+        // or rate-limited agent holds its task forever and nothing can recover it: ClaimedAt was
+        // written and displayed but never compared to the clock anywhere in src/.
+        var existingClaimIsStale = ClaimPolicy.IsStale(
+            task.ClaimedBy, task.ClaimedAt, claimCheckedAt, _claimTtl);
+        var previousHolder = task.ClaimedBy;
+
+        // Claimed by someone else and still FRESH → conflict (API → 409). Same actor is idempotent.
         if (!string.IsNullOrWhiteSpace(task.ClaimedBy)
-            && !string.Equals(task.ClaimedBy, trimmedActor, StringComparison.OrdinalIgnoreCase))
+            && !string.Equals(task.ClaimedBy, trimmedActor, StringComparison.OrdinalIgnoreCase)
+            && !existingClaimIsStale)
         {
             throw new TaskClaimConflictException(taskId, task.ClaimedBy, task.ClaimedAt);
         }
@@ -1037,8 +1056,15 @@ public sealed class TaskService(IDbContextFactory<AppDbContext> dbFactory) : ITa
         // unclaimed. Under concurrent claimers (multiple agents), exactly one UPDATE matches
         // (rows == 1); the loser sees rows == 0 and is reconciled below. This closes the
         // load-check-write gap without a rowversion column (schema uses EnsureCreated, not migrations).
+        // The predicate is widened for the steal case (#429) but stays a SINGLE conditional
+        // UPDATE, so two actors racing to take over the same expired claim still cannot both win:
+        // exactly one matches while the row is unclaimed-or-expired, and the loser reconciles
+        // below. Widening it into a load-then-write would reopen the gap this closes.
+        var staleCutoff = ClaimPolicy.StaleCutoff(now, _claimTtl);
         var claimed = await db.Tasks
-            .Where(t => t.Id == taskId && t.ClaimedBy == null)
+            .Where(t => t.Id == taskId
+                        && (t.ClaimedBy == null
+                            || (existingClaimIsStale && (t.ClaimedAt == null || t.ClaimedAt < staleCutoff))))
             .ExecuteUpdateAsync(s => s
                 .SetProperty(t => t.ClaimedBy, trimmedActor)
                 .SetProperty(t => t.ClaimedAt, now)
@@ -1070,10 +1096,25 @@ public sealed class TaskService(IDbContextFactory<AppDbContext> dbFactory) : ITa
         task.ClaimedAt = now;
         task.UpdatedAt = now;
 
-        AddActivityEvent(
-            db, task.Feature.ProjectId, "Task", task.Id, trimmedActor,
-            "TaskClaimed", before, TaskActivitySnapshot(task),
-            $"Task '{task.Name}' claimed by {trimmedActor}");
+        // A steal is audited as its OWN event type, not a plain TaskClaimed. Someone reading the
+        // timeline needs to see that a claim was taken from a named holder, and how old it was —
+        // a TaskClaimed row here would silently overwrite that fact.
+        var wasSteal = existingClaimIsStale && !string.IsNullOrWhiteSpace(previousHolder);
+        if (wasSteal)
+        {
+            AddActivityEvent(
+                db, task.Feature.ProjectId, "Task", task.Id, trimmedActor,
+                "TaskClaimStolen", before, TaskActivitySnapshot(task),
+                $"Task '{task.Name}' claim taken over by {trimmedActor} from {previousHolder} "
+                + $"(claim was stale; TTL {_claimTtl.TotalHours:0.##}h)");
+        }
+        else
+        {
+            AddActivityEvent(
+                db, task.Feature.ProjectId, "Task", task.Id, trimmedActor,
+                "TaskClaimed", before, TaskActivitySnapshot(task),
+                $"Task '{task.Name}' claimed by {trimmedActor}");
+        }
 
         await db.SaveChangesAsync(ct);
         await tx.CommitAsync(ct);
