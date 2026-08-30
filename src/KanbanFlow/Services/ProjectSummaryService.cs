@@ -214,6 +214,14 @@ public static class ProjectSummaryService
             .ToLookup(t => projectIdByFeature[t.FeatureId]);
 
         var summaries = new List<ProjectListSummary>(projects.Count);
+
+        // ONE instant and ONE ttl for the whole batch. Resolved before the loop so a
+        // multi-project projection cannot straddle a TTL boundary mid-iteration and emit two
+        // cards that disagree about the same claim. Mirrors TaskRanking.cs:74-75 rather than
+        // hard-coding 24h -- ClaimTtlSetting already validates the configured value at boot.
+        var now = DateTime.UtcNow;
+        var effectiveTtl = claimTtl ?? ClaimPolicy.DefaultTtl;
+
         foreach (var p in projects)
         {
             var projectTaskRows = taskRowsByProject[p.Id].ToList();
@@ -244,7 +252,7 @@ public static class ProjectSummaryService
                 .ToLookup(d => d.TaskItemId, d => d.DependsOnTaskItemId);
 
             var nextTask = TaskRanking
-                .RankNextTasks(projectOpenTasks, statusByProjectTaskId, dependsOnByTask, actor, limit: 1, claimTtl: claimTtl)
+                .RankNextTasks(projectOpenTasks, statusByProjectTaskId, dependsOnByTask, actor, limit: 1, now: now, claimTtl: claimTtl)
                 .Select(r => new NextTaskSummary(
                     r.Task.Id,
                     r.Task.FeatureId,
@@ -259,8 +267,16 @@ public static class ProjectSummaryService
             // task invisible — see ActiveClaim.TaskCount. Grouping is case-insensitive because
             // claiming is (TaskService.cs:868-875); the label rendered is the stored casing of the
             // group's first task, so the display never invents a spelling the data does not have.
+            //
+            // A STALE claim is NOT an active claim (#444). Without the staleness filter this
+            // projection contradicted itself inside one method: NextTask above runs through
+            // RankNextTasks, which calls ClaimPolicy.IsStale and offers the task as available,
+            // while this chip counted the dead holder as working on it -- same card, same 20
+            // lines. Filtering BEFORE GroupBy is deliberate: an actor whose claims are all
+            // stale produces no group and disappears, rather than rendering as "actor x 0".
             var activeClaims = projectOpenTasks
-                .Where(t => !string.IsNullOrWhiteSpace(t.ClaimedBy))
+                .Where(t => !string.IsNullOrWhiteSpace(t.ClaimedBy)
+                            && !ClaimPolicy.IsStale(t.ClaimedBy, t.ClaimedAt, now, effectiveTtl))
                 .GroupBy(t => t.ClaimedBy!.Trim(), StringComparer.OrdinalIgnoreCase)
                 .Select(g => new ActiveClaim(g.First().ClaimedBy!.Trim(), g.Count()))
                 .OrderByDescending(c => c.TaskCount)
