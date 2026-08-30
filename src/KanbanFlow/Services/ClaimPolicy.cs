@@ -6,7 +6,19 @@ namespace KanbanFlow.Services;
 /// once in <c>Program.cs</c> and inject this record instead so a malformed or non-positive value
 /// is rejected before the first request, not on it.
 /// </remarks>
-public sealed record ClaimTtlSetting(TimeSpan Value);
+public sealed record ClaimTtlSetting
+{
+    /// <summary>The validated TTL. Construction throws rather than deferring the failure to a request.</summary>
+    public TimeSpan Value { get; }
+
+    /// <param name="value">Must be positive and at most <see cref="ClaimPolicy.MaxTtl"/>.</param>
+    /// <exception cref="ArgumentOutOfRangeException">The value is outside those bounds.</exception>
+    public ClaimTtlSetting(TimeSpan value)
+    {
+        ClaimPolicy.ValidateTtl(value, nameof(value));
+        Value = value;
+    }
+}
 
 /// <summary>
 /// Decides whether a task claim has gone stale (#429).
@@ -86,7 +98,11 @@ public static class ClaimPolicy
     /// and the guard test re-implemented the bound rather than invoking it, which is the very
     /// anti-pattern that let the 24-day value ship. (Round-2 review, PR #435.)
     /// </remarks>
-    /// <param name="raw">The configured value; null or empty selects <see cref="DefaultTtl"/>.</param>
+    /// <param name="raw">
+    /// The configured value. Null, empty, OR WHITESPACE-ONLY selects <see cref="DefaultTtl"/> — a
+    /// blank config entry means "unset", not "malformed". (The doc previously said "null or empty"
+    /// while the code tested whitespace too; codex caught the mismatch in PR #435 round 3.)
+    /// </param>
     /// <exception cref="InvalidOperationException">Malformed, non-positive, or above <see cref="MaxTtl"/>.</exception>
     public static TimeSpan ResolveTtl(string? raw)
     {
@@ -99,11 +115,11 @@ public static class ClaimPolicy
             throw new InvalidOperationException(
                 $"ClaimTtl must be a TimeSpan such as '1.00:00:00' or '00:30:00'; got '{raw}'.");
 
+        // The bounds live in ValidateTtl so config, ClaimTtlSetting and TaskService cannot drift
+        // apart; only the MESSAGE differs here, because a config error deserves the trap spelled out.
         if (parsed <= TimeSpan.Zero)
             throw new InvalidOperationException($"ClaimTtl must be positive; got '{raw}'.");
 
-        // StaleCutoff computes `now - ttl`, which throws once it underflows DateTime.MinValue —
-        // and it runs on EVERY claim, so an unbounded value boots clean and then 500s every claim.
         if (parsed > MaxTtl)
             throw new InvalidOperationException(
                 $"ClaimTtl must be {MaxTtl} or less; got '{raw}' (parsed as {parsed}). "
@@ -111,6 +127,28 @@ public static class ClaimPolicy
                 + "too, so \"24:00:00\" is 24 DAYS — write \"1.00:00:00\" for one day.");
 
         return parsed;
+    }
+
+    /// <summary>
+    /// The single bounds check for a claim TTL, whatever produced it.
+    /// </summary>
+    /// <remarks>
+    /// <see cref="ResolveTtl"/> guards the CONFIG path, but a TTL can also arrive by direct
+    /// construction — <c>new ClaimTtlSetting(...)</c> or <c>new TaskService(factory, ttl)</c> —
+    /// and those bypassed the upper bound entirely: <c>TimeSpan.MaxValue</c> constructed fine and
+    /// then threw on the next claim, from inside <see cref="StaleCutoff"/>, which is exactly the
+    /// deferred-failure mode the config guard exists to prevent. Every entry point now lands here.
+    /// (codex, PR #435 round 3.)
+    /// </remarks>
+    /// <exception cref="ArgumentOutOfRangeException">Non-positive, or above <see cref="MaxTtl"/>.</exception>
+    public static void ValidateTtl(TimeSpan ttl, string paramName)
+    {
+        if (ttl <= TimeSpan.Zero)
+            throw new ArgumentOutOfRangeException(paramName, ttl, "Claim TTL must be positive.");
+
+        if (ttl > MaxTtl)
+            throw new ArgumentOutOfRangeException(
+                paramName, ttl, $"Claim TTL must be {MaxTtl} or less; StaleCutoff underflows beyond it.");
     }
 
     public static bool IsStale(string? claimedBy, DateTime? claimedAt, DateTime now, TimeSpan ttl)

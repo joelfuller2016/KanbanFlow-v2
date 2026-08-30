@@ -25,9 +25,17 @@ public sealed class TaskService(
     TimeSpan? claimTtl = null,
     Func<DateTime>? clock = null) : ITaskService
 {
-    private readonly TimeSpan _claimTtl = claimTtl is { } t && t <= TimeSpan.Zero
-        ? throw new ArgumentOutOfRangeException(nameof(claimTtl), "Claim TTL must be positive.")
-        : claimTtl ?? ClaimPolicy.DefaultTtl;
+    // ClaimPolicy.ValidateTtl, not a local `<= Zero` check: the upper bound was missing here, so
+    // `new TaskService(factory, TimeSpan.MaxValue)` constructed fine and then threw on the next
+    // claim from inside StaleCutoff. One validator, every entry point. (codex, PR #435 round 3.)
+    private readonly TimeSpan _claimTtl = ValidatedTtl(claimTtl);
+
+    private static TimeSpan ValidatedTtl(TimeSpan? claimTtl)
+    {
+        if (claimTtl is not { } t) return ClaimPolicy.DefaultTtl;
+        ClaimPolicy.ValidateTtl(t, nameof(claimTtl));
+        return t;
+    }
 
     private readonly Func<DateTime> _clock = clock ?? (() => DateTime.UtcNow);
 

@@ -144,6 +144,44 @@ public sealed class ClaimTtlConfigurationTests
     }
 
     /// <summary>
+    /// The bound must hold for a TTL that arrives by DIRECT CONSTRUCTION, not only from config.
+    /// </summary>
+    /// <remarks>
+    /// <c>ResolveTtl</c> guarded the config path, but <c>new ClaimTtlSetting(TimeSpan.MaxValue)</c>
+    /// and <c>new TaskService(factory, TimeSpan.MaxValue)</c> both constructed cleanly and then
+    /// threw on the next claim from inside <c>StaleCutoff</c> — the exact deferred failure the
+    /// config guard exists to prevent, reachable by another door. (codex, PR #435 round 3.)
+    /// </remarks>
+    [Fact]
+    public void An_out_of_range_ttl_is_rejected_at_construction_not_at_the_next_claim()
+    {
+        using var factory = new SqliteTestFactory();
+
+        Assert.Throws<ArgumentOutOfRangeException>(() => new ClaimTtlSetting(TimeSpan.MaxValue));
+        Assert.Throws<ArgumentOutOfRangeException>(() => new ClaimTtlSetting(TimeSpan.Zero));
+        Assert.Throws<ArgumentOutOfRangeException>(() => new ClaimTtlSetting(TimeSpan.FromDays(-1)));
+
+        Assert.Throws<ArgumentOutOfRangeException>(() => new TaskService(factory, TimeSpan.MaxValue));
+        Assert.Throws<ArgumentOutOfRangeException>(() => new TaskService(factory, TimeSpan.FromDays(366)));
+
+        // The boundary itself must still construct — the bound is inclusive.
+        Assert.Equal(ClaimPolicy.MaxTtl, new ClaimTtlSetting(ClaimPolicy.MaxTtl).Value);
+        _ = new TaskService(factory, ClaimPolicy.MaxTtl);
+
+        // And a TTL that passes construction can never underflow the arithmetic it feeds.
+        Assert.True(ClaimPolicy.StaleCutoff(DateTime.UtcNow, ClaimPolicy.MaxTtl) > DateTime.MinValue);
+    }
+
+    /// <summary>
+    /// Whitespace-only config means "unset", and the docstring now says so.
+    /// </summary>
+    [Theory]
+    [InlineData("   ")]
+    [InlineData("	")]
+    public void Whitespace_only_config_is_treated_as_unset(string raw)
+        => Assert.Equal(ClaimPolicy.DefaultTtl, ClaimPolicy.ResolveTtl(raw));
+
+    /// <summary>
     /// A claim timestamped in the FUTURE must be stale, not eternally fresh.
     /// </summary>
     /// <remarks>
