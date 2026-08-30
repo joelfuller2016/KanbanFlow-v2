@@ -3,6 +3,7 @@ using KanbanFlow.Mcp;
 using KanbanFlow.Models;
 using KanbanFlow.Services;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
 
 namespace KanbanFlow.Tests;
 
@@ -279,8 +280,9 @@ public sealed class TaskRankingTests
         using var f = new SqliteTestFactory();
         var seeded = SeedRankingScenario(f);
 
-        var forAlice = (await KanbanMcpTools.GetNextTasks(f, seeded.ProjectId, "alice", 50)).Select(r => r.Id).ToList();
-        var forBob = (await KanbanMcpTools.GetNextTasks(f, seeded.ProjectId, "bob", 50)).Select(r => r.Id).ToList();
+        var cfg = new ConfigurationBuilder().Build();
+        var forAlice = (await KanbanMcpTools.GetNextTasks(f, cfg, seeded.ProjectId, "alice", 50)).Select(r => r.Id).ToList();
+        var forBob = (await KanbanMcpTools.GetNextTasks(f, cfg, seeded.ProjectId, "bob", 50)).Select(r => r.Id).ToList();
 
         var alicePos = forAlice.IndexOf(seeded.ClaimedByBobId);
         var bobPos = forBob.IndexOf(seeded.ClaimedByBobId);
@@ -366,7 +368,7 @@ public sealed class TaskRankingTests
 
     private static async Task<List<int>> McpRankedIds(SqliteTestFactory f, int projectId, string? actor, int limit)
     {
-        var results = await KanbanMcpTools.GetNextTasks(f, projectId, actor, limit);
+        var results = await KanbanMcpTools.GetNextTasks(f, new ConfigurationBuilder().Build(), projectId, actor, limit);
         return results.Select(r => r.Id).ToList();
     }
 }

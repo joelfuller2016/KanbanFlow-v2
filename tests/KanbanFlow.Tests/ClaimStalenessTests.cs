@@ -131,13 +131,13 @@ public sealed class ClaimStalenessTests
 
         // A steal must be its OWN event type — a plain TaskClaimed here would erase the fact
         // that the claim was taken from a named holder.
-        var stolen = Assert.Single(events.Where(e => e.EventType == "TaskClaimStolen"));
+        var stolen = Assert.Single(events, e => e.EventType == "TaskClaimStolen");
         Assert.Contains("bob", stolen.Message);       // the dispossessed holder is named
         Assert.Contains("alice", stolen.Message);
         var expectedAge = $"{(DateTime.UtcNow - seededAt).TotalHours:0.##}";
         Assert.Contains($"{expectedAge}h old", stolen.Message);     // claim age is included, not just the TTL
         Assert.Equal("alice", stolen.Actor);
-        Assert.Empty(events.Where(e => e.EventType == "TaskClaimed"));
+        Assert.DoesNotContain(events, e => e.EventType == "TaskClaimed");
     }
 
     [Fact]
@@ -178,8 +178,8 @@ public sealed class ClaimStalenessTests
 
         await using var db = await f.CreateDbContextAsync();
         var events = await db.ActivityEvents.Where(e => e.EntityId == id).ToListAsync();
-        Assert.Single(events.Where(e => e.EventType == "TaskClaimed"));
-        Assert.Empty(events.Where(e => e.EventType == "TaskClaimStolen"));
+        Assert.Single(events, e => e.EventType == "TaskClaimed");
+        Assert.DoesNotContain(events, e => e.EventType == "TaskClaimStolen");
     }
 
     // ── the race ───────────────────────────────────────────────────────────────
