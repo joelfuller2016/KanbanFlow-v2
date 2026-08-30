@@ -179,41 +179,6 @@ window.KanbanFlow = {
         this._navSortables = [];
     },
 
-    initTaskDetailDialog: function (panel) {
-        if (!panel) {
-            return;
-        }
-
-        if (panel._kanbanFlowTaskDetailKeydown) {
-            panel.removeEventListener('keydown', panel._kanbanFlowTaskDetailKeydown);
-        }
-
-        panel._kanbanFlowTaskDetailKeydown = function (event) {
-            if (event.key !== 'Escape') {
-                return;
-            }
-
-            var target = event.target;
-            var isTextEntry = target && (
-                target.isContentEditable ||
-                target.matches('input, textarea, select')
-            );
-
-            if (isTextEntry) {
-                return;
-            }
-
-            var closeButton = panel.querySelector('[data-testid="task-detail-close-button"]');
-            if (closeButton) {
-                event.preventDefault();
-                closeButton.click();
-            }
-        };
-
-        panel.addEventListener('keydown', panel._kanbanFlowTaskDetailKeydown);
-        panel.focus({ preventScroll: true });
-    },
-
     focusTaskCard: function (taskId) {
         var selector = '[data-testid="board-card-' + taskId + '-title"]';
         var taskButton = document.querySelector(selector);
@@ -280,10 +245,11 @@ window.KanbanFlow = {
         )).filter(function (el) { return el.getClientRects().length > 0; });
     },
 
-    initDialog: function (dialog, dotNetRef) {
+    initDialog: function (dialog, dotNetRef, options) {
         if (!dialog) {
             return;
         }
+        options = options || {};
         // Remember the opener so focus can be restored when the dialog closes. Capture only
         // once per open (cleared in destroyDialog) so a re-init can't overwrite it with an
         // element inside the dialog.
@@ -291,12 +257,12 @@ window.KanbanFlow = {
             dialog._kfOpener = document.activeElement;
         }
 
-        var preferred = dialog.querySelector('[data-dialog-autofocus]');
+        var preferred = options.focusContainer ? dialog : dialog.querySelector('[data-dialog-autofocus]');
         var focusables = this._dialogFocusables(dialog);
         (preferred || focusables[0] || dialog).focus({ preventScroll: true });
 
         if (dialog._kfKeydown) {
-            dialog.removeEventListener('keydown', dialog._kfKeydown);
+            (dialog._kfKeydownTarget || dialog).removeEventListener('keydown', dialog._kfKeydown);
         }
         dialog._kfKeydown = function (event) {
             if (event.key === 'Escape') {
@@ -321,11 +287,18 @@ window.KanbanFlow = {
             var f = window.KanbanFlow._dialogFocusables(dialog);
             if (f.length === 0) {
                 event.preventDefault();
+                dialog.focus({ preventScroll: true });
                 return;
             }
             var first = f[0];
             var last = f[f.length - 1];
-            if (event.shiftKey && document.activeElement === first) {
+            if (document.activeElement === dialog) {
+                event.preventDefault();
+                (event.shiftKey ? last : first).focus();
+            } else if (!dialog.contains(document.activeElement)) {
+                event.preventDefault();
+                (event.shiftKey ? last : first).focus();
+            } else if (event.shiftKey && document.activeElement === first) {
                 event.preventDefault();
                 last.focus();
             } else if (!event.shiftKey && document.activeElement === last) {
@@ -333,7 +306,8 @@ window.KanbanFlow = {
                 first.focus();
             }
         };
-        dialog.addEventListener('keydown', dialog._kfKeydown);
+        dialog._kfKeydownTarget = options.documentKeydown ? document : dialog;
+        dialog._kfKeydownTarget.addEventListener('keydown', dialog._kfKeydown);
     },
 
     destroyDialog: function (dialog) {
@@ -341,8 +315,9 @@ window.KanbanFlow = {
             return;
         }
         if (dialog._kfKeydown) {
-            dialog.removeEventListener('keydown', dialog._kfKeydown);
+            (dialog._kfKeydownTarget || dialog).removeEventListener('keydown', dialog._kfKeydown);
             dialog._kfKeydown = null;
+            dialog._kfKeydownTarget = null;
         }
         var opener = dialog._kfOpener;
         dialog._kfOpener = null;
