@@ -1065,7 +1065,7 @@ public static class KanbanMcpTools
         IMemorySearch memorySearch,
         IMemoryService memoryService,
         [Description("Free-text query; matches entity names, types (tags), and observations.")] string query,
-        [Description("Maximum entities to return (default 10, clamped to 1-100).")] int k = 10,
+        [Description("Maximum entities to return (default 10; must be greater than zero; capped at 100).")] int k = 10,
         [Description("Optional memory namespace key (default 'knowledge-graph').")] string? scopeKey = null,
         CancellationToken cancellationToken = default)
     {
@@ -1074,7 +1074,9 @@ public static class KanbanMcpTools
         if (string.IsNullOrWhiteSpace(query))
             throw new McpException("query must be non-empty. Pass the text to search for (e.g. a name, tag, or observed fact).");
 
-        k = Math.Clamp(k, 1, 100);
+        // Ceiling only -- a non-positive k must reach the service guard so the catch below
+        // rethrows the same message REST returns. See #338.
+        k = Math.Min(k, 100);
         var key = NormalizeScopeKey(scopeKey);
 
         IReadOnlyList<MemoryHit> hits;

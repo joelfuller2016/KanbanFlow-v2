@@ -865,9 +865,13 @@ public static class ApiEndpoints
             }
 
             var key = string.IsNullOrWhiteSpace(scopeKey) ? "knowledge-graph" : scopeKey.Trim();
-            // Clamp like the search_nodes MCP tool (1-100): keeps ranking work and payload size
-            // bounded on this open endpoint (Copilot review, PR #259).
-            var take = Math.Clamp(k ?? 10, 1, 100);
+            // CEILING ONLY. The upper bound keeps ranking work and payload size bounded on
+            // this open endpoint (Copilot review, PR #259) and must stay.
+            // The lower bound must NOT come back: Math.Clamp(.., 1, ..) rewrote k=0 to 1, so a
+            // non-positive k returned 200 while the service guard and the catch below were both
+            // structurally unreachable -- the contract comment above was a lie, and
+            // scripts/smoke-api.ps1 was red on master. See #338.
+            var take = Math.Min(k ?? 10, 100);
 
             try
             {
