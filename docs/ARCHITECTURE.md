@@ -16,7 +16,7 @@ command shown. If a number here disagrees with the code, the code wins — re-de
 - [Entity model](#entity-model)
 - [The write path & audit boundary](#the-write-path--audit-boundary)
 - [REST surface (60 endpoints)](#rest-surface-60-endpoints)
-- [MCP surface (24 native / 50 wrapper)](#mcp-surface-24-native--50-wrapper)
+- [MCP surface (28 native / 50 wrapper)](#mcp-surface-28-native--50-wrapper)
 - [Optional LLM + embedding configuration](#optional-llm--embedding-configuration)
 - [Capability requirements matrix](#capability-requirements-matrix)
 - [Known gaps](#known-gaps)
@@ -225,13 +225,13 @@ Plus `GET /openapi.json` in `Program.cs`, which 302s to `/openapi/v1.json`.
 
 ---
 
-## MCP surface (24 native / 50 wrapper)
+## MCP surface (28 native / 50 wrapper)
 
 Two MCP servers ship, and they are **not** at parity. Tracked in
 [#231](https://github.com/joelfuller2016/KanbanFlow-v2/issues/231).
 
 ```bash
-grep -c '\[McpServerTool(' src/KanbanFlow/Mcp/KanbanMcpTools.cs   # 24 (native, in-process)
+grep -c '\[McpServerTool(' src/KanbanFlow/Mcp/KanbanMcpTools.cs   # 28 (native, in-process)
 ```
 
 ```bash
@@ -243,12 +243,13 @@ printf '%s\n' \
   | node -e 'let b="";process.stdin.on("data",d=>b+=d).on("end",()=>{for(const l of b.split("\n").filter(Boolean)){try{const m=JSON.parse(l);if(m.id===2)console.log(m.result.tools.length)}catch{}}})'
 ```
 
-### Native (24) — `POST /mcp`, in-process, no HTTP hop
+### Native (28) — `POST /mcp`, in-process, no HTTP hop
 
 | Group | Tools |
 |---|---|
 | Projects (2) | `list_projects`, `get_project_context` |
 | Tasks (8) | `get_task`, `get_next_tasks`, `create_task`, `update_task_status`, `delete_task`, `add_task_comment`, `claim_task`, `release_task` |
+| Acceptance criteria (4) | `list_acceptance_criteria`, `create_acceptance_criterion`, `mark_acceptance_criterion_done`, `update_acceptance_criterion` |
 | Ideas (5) | `create_idea`, `list_ideas`, `get_idea`, `update_idea`, `promote_idea` |
 | Knowledge graph (9) | `create_entities`, `create_relations`, `add_observations`, `delete_entities`, `delete_observations`, `delete_relations`, `read_graph`, `search_nodes`, `open_nodes` |
 
@@ -256,8 +257,8 @@ printf '%s\n' \
 
 Everything native has, **plus**: `get_project`, `list_project_tasks`, `get_project_board`,
 `create_project`, `update_project`, `create_feature`, `update_feature`, `delete_feature`,
-`update_task`, `reassign_task`, `get_step_context`, the five subtask tools, the five
-acceptance-criterion tools, the three dependency tools, and `list_project_activity` /
+`update_task`, `reassign_task`, `get_step_context`, the five subtask tools, `delete_acceptance_criterion`,
+the three dependency tools, and `list_project_activity` /
 `list_task_activity`.
 
 ### The parity gap that bites
@@ -265,6 +266,14 @@ acceptance-criterion tools, the three dependency tools, and `list_project_activi
 The native server has **no `create_project`**. An agent connected only to `/mcp` cannot onboard
 a repo — which is exactly why `scripts/portfolio-sync.mjs` uses REST (`POST /api/projects`)
 rather than MCP.
+
+**Closed in #438:** the native server also had no acceptance-criteria tools, which stopped being
+cosmetic the moment #428 gated `Done` on unmet criteria. An agent on `/mcp` could be refused the
+move and had nothing to satisfy the gate with — only `overrideReason`. The gate's escape hatch was
+its *only* exit, so the audit trail filled with overrides meaning "the tool was missing" rather
+than "a human judged this done anyway". Four tools now close it, and
+`McpAcceptanceCriteriaToolsTests` asserts a task with criteria reaches `Done` through the tool
+surface alone with **no** `TaskDoneOverridden` event.
 
 ### Still missing from both
 

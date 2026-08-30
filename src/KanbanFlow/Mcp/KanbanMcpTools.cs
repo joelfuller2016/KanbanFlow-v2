@@ -16,7 +16,8 @@ namespace KanbanFlow.Mcp;
 /// JSON-RPC to the REST API over HTTP, these methods call the EF Core data layer and
 /// the audit-aware <see cref="ITaskService"/> DIRECTLY via DI — no extra network hop.
 ///
-/// This is a curated slice (24 tools: 7 read + 8 audit-aware write + the 9-tool knowledge-graph
+/// This is a curated slice (28 tools: 7 read + 8 audit-aware write + 4 acceptance-criteria (#438)
+/// + the 9-tool knowledge-graph
 /// memory surface, #224) proving parity with the Node wrapper, not yet the full 41-tool surface.
 /// See <c>docs/native-mcp-notes.md</c> for the rationale, the path to full coverage, and the
 /// Kebechet.Api.ToMcp evaluation.
@@ -29,6 +30,9 @@ namespace KanbanFlow.Mcp;
 public static class KanbanMcpTools
 {
     private const string DefaultActor = "mcp-agent";
+
+    /// <summary>Upper bound on acceptance-criterion text (#438), matching the REST surface.</summary>
+    private const int MaxCriterionTextLength = 1000;
 
     [McpServerTool(Name = "list_projects")]
     [Description("List all projects with id, name, description, goals, and counts of features and tasks. Start here to discover which project to work in.")]
@@ -211,8 +215,9 @@ public static class KanbanMcpTools
             var list = string.Join("; ", ex.Unmet);
             throw new McpException(
                 $"Task {taskId} cannot be marked Done: {ex.UnmetCount} acceptance criterion/criteria are not met ({list}). "
-                + "Either complete them first, or call update_task_status again with overrideReason set to a short "
-                + "explanation of why the task is done despite them.");
+                + "Call list_acceptance_criteria to get their ids, complete each with mark_acceptance_criterion_done, "
+                + "then retry this call. If a criterion genuinely will not be met, call update_task_status again with "
+                + "overrideReason set to a short explanation of why the task is done despite it.");
         }
         catch (ValidationException ex)
         {
@@ -395,6 +400,151 @@ public static class KanbanMcpTools
         {
             throw new McpException(ex.Message);
         }
+    }
+
+    // ── Acceptance-criteria tools (#438) — the tools the Definition-of-Done gate needs ──
+    // #428 gated Done on unmet acceptance criteria across all four transition paths. Until this
+    // block existed the native server had NO acceptance-criteria tools at all, so an agent on
+    // POST /mcp that hit the gate could not list the criteria blocking it, let alone complete one:
+    // its only exit was update_task_status's overrideReason. The gate's escape hatch became the
+    // DEFAULT path for native-MCP agents because it was the only path, which inverts the intent of
+    // #428 — the audit trail fills with overrides meaning "the tool was missing" rather than
+    // "a human judged this done anyway".
+    //
+    // These touch EF directly rather than a service because acceptance criteria have no audit
+    // boundary to route through: the REST surface writes them the same way (see
+    // MapAcceptanceCriterionEndpoints) and records no ActivityEvent for them. Matching REST
+    // exactly is the point — a tool that audited differently from the endpoint it mirrors would be
+    // a second source of truth. If criteria ever gain audit events, both surfaces move together.
+
+    [McpServerTool(Name = "list_acceptance_criteria")]
+    [Description("List a task's acceptance criteria with their completion state, ordered as they appear on the card. Call this when update_task_status refuses a move to Done, to see exactly which criteria are unmet and get the ids to pass to mark_acceptance_criterion_done.")]
+    public static async Task<IReadOnlyList<AcceptanceCriterionResult>> ListAcceptanceCriteria(
+        IDbContextFactory<AppDbContext> dbFactory,
+        [Description("The task id.")] int taskId,
+        CancellationToken cancellationToken = default)
+    {
+        await using var db = await dbFactory.CreateDbContextAsync(cancellationToken);
+
+        if (!await db.Tasks.AnyAsync(t => t.Id == taskId, cancellationToken))
+            throw new McpException($"Task {taskId} not found. Call get_project_context to see valid task ids.");
+
+        // Same ordering as get_task and the REST endpoint: SortOrder, then Id as a tie-break, so
+        // the list an agent reads matches the card a human sees.
+        return await db.AcceptanceCriteria.AsNoTracking()
+            .Where(c => c.TaskItemId == taskId)
+            .OrderBy(c => c.SortOrder).ThenBy(c => c.Id)
+            .Select(c => new AcceptanceCriterionResult(
+                c.Id, c.TaskItemId, c.Text, c.Completed, c.SortOrder, "Listed."))
+            .ToListAsync(cancellationToken);
+    }
+
+    [McpServerTool(Name = "create_acceptance_criterion")]
+    [Description("Add an acceptance criterion to a task. Criteria are the task's Definition of Done: once a task has any, update_task_status refuses to move it to Done until they are all complete (or an overrideReason is given). Returns the new criterion.")]
+    public static async Task<AcceptanceCriterionResult> CreateAcceptanceCriterion(
+        IDbContextFactory<AppDbContext> dbFactory,
+        [Description("The task id this criterion belongs to.")] int taskId,
+        [Description("The criterion text (required, <= 1000 chars) — a checkable statement.")] string text,
+        [Description("Optional rank within the task's criteria. Defaults to appending after the last one.")] int? sortOrder = null,
+        CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+            throw new McpException("Text is required and cannot be blank.");
+        if (text.Trim().Length > MaxCriterionTextLength)
+            throw new McpException($"Text must be {MaxCriterionTextLength} characters or fewer.");
+
+        await using var db = await dbFactory.CreateDbContextAsync(cancellationToken);
+
+        if (!await db.Tasks.AnyAsync(t => t.Id == taskId, cancellationToken))
+            throw new McpException($"Task {taskId} not found. Call get_project_context to see valid task ids.");
+
+        // Append after the current last criterion when no rank is given. MaxAsync over an empty
+        // set throws, so the projection is nullable — it yields null for a task with none yet.
+        var resolvedSortOrder = sortOrder ?? ((await db.AcceptanceCriteria
+            .Where(c => c.TaskItemId == taskId)
+            .Select(c => (int?)c.SortOrder)
+            .MaxAsync(cancellationToken)) ?? -1) + 1;
+
+        var criterion = new AcceptanceCriterion
+        {
+            TaskItemId = taskId,
+            Text = text.Trim(),
+            Completed = false,
+            SortOrder = resolvedSortOrder
+        };
+        db.AcceptanceCriteria.Add(criterion);
+        await db.SaveChangesAsync(cancellationToken);
+
+        return new AcceptanceCriterionResult(
+            criterion.Id, criterion.TaskItemId, criterion.Text, criterion.Completed, criterion.SortOrder,
+            "Criterion created. The task cannot move to Done until it is complete.");
+    }
+
+    [McpServerTool(Name = "mark_acceptance_criterion_done")]
+    [Description("Mark one acceptance criterion complete (or, with completed=false, reopen it). This is the FIRST remedy when update_task_status refuses a move to Done: complete the criteria it names, then retry the move. Use overrideReason only when a criterion genuinely will not be met.")]
+    public static async Task<AcceptanceCriterionResult> MarkAcceptanceCriterionDone(
+        IDbContextFactory<AppDbContext> dbFactory,
+        [Description("The acceptance criterion id (from list_acceptance_criteria or get_task).")] int criterionId,
+        [Description("Optional. true (default) completes the criterion; false reopens it.")] bool completed = true,
+        CancellationToken cancellationToken = default)
+    {
+        await using var db = await dbFactory.CreateDbContextAsync(cancellationToken);
+
+        var criterion = await db.AcceptanceCriteria.FirstOrDefaultAsync(c => c.Id == criterionId, cancellationToken)
+            ?? throw new McpException(
+                $"Acceptance criterion {criterionId} not found. Call list_acceptance_criteria for a task to see valid ids.");
+
+        criterion.Completed = completed;
+        criterion.UpdatedAt = DateTime.UtcNow;
+        await db.SaveChangesAsync(cancellationToken);
+
+        // Tell the agent whether the task is now clear to move, so it does not have to call
+        // list_acceptance_criteria again just to find out.
+        var remaining = await db.AcceptanceCriteria
+            .CountAsync(c => c.TaskItemId == criterion.TaskItemId && !c.Completed, cancellationToken);
+        var verb = completed ? "completed" : "reopened";
+        var message = remaining == 0
+            ? $"Criterion {verb}. No unmet criteria remain on task {criterion.TaskItemId} — update_task_status can now move it to Done."
+            : $"Criterion {verb}. {remaining} criterion/criteria still unmet on task {criterion.TaskItemId}.";
+
+        return new AcceptanceCriterionResult(
+            criterion.Id, criterion.TaskItemId, criterion.Text, criterion.Completed, criterion.SortOrder, message);
+    }
+
+    [McpServerTool(Name = "update_acceptance_criterion")]
+    [Description("Update an acceptance criterion's text, completion, or rank. Omitted arguments are left unchanged. To only tick a criterion off, prefer mark_acceptance_criterion_done.")]
+    public static async Task<AcceptanceCriterionResult> UpdateAcceptanceCriterion(
+        IDbContextFactory<AppDbContext> dbFactory,
+        [Description("The acceptance criterion id.")] int criterionId,
+        [Description("Optional new text (<= 1000 chars). Omit to leave unchanged; blank is rejected.")] string? text = null,
+        [Description("Optional new completion state. Omit to leave unchanged.")] bool? completed = null,
+        [Description("Optional new rank within the task's criteria. Omit to leave unchanged.")] int? sortOrder = null,
+        CancellationToken cancellationToken = default)
+    {
+        // Omitted PRESERVES, blank REJECTS — the same partial-update rule the REST endpoint applies
+        // (#203/#260): a rename that omits a field must never wipe it.
+        if (text is not null)
+        {
+            if (string.IsNullOrWhiteSpace(text))
+                throw new McpException("Text cannot be blank. Omit the argument to leave it unchanged.");
+            if (text.Trim().Length > MaxCriterionTextLength)
+                throw new McpException($"Text must be {MaxCriterionTextLength} characters or fewer.");
+        }
+
+        await using var db = await dbFactory.CreateDbContextAsync(cancellationToken);
+
+        var criterion = await db.AcceptanceCriteria.FirstOrDefaultAsync(c => c.Id == criterionId, cancellationToken)
+            ?? throw new McpException(
+                $"Acceptance criterion {criterionId} not found. Call list_acceptance_criteria for a task to see valid ids.");
+
+        if (text is not null) criterion.Text = text.Trim();
+        if (completed.HasValue) criterion.Completed = completed.Value;
+        if (sortOrder.HasValue) criterion.SortOrder = sortOrder.Value;
+        criterion.UpdatedAt = DateTime.UtcNow;
+        await db.SaveChangesAsync(cancellationToken);
+
+        return new AcceptanceCriterionResult(
+            criterion.Id, criterion.TaskItemId, criterion.Text, criterion.Completed, criterion.SortOrder, "Criterion updated.");
     }
 
     // ── Ideas inbox tools (#180 Phase 3) — native parity with the /api/ideas REST surface ──
@@ -1070,6 +1220,7 @@ public sealed record NextTask(int Id, string Name, string Status, string Priorit
 public sealed record TaskStatusResult(int Id, string Name, string Status, string Message);
 public sealed record TaskDetailResult(int Id, int FeatureId, string Name, string? Description, string Status, string Priority, string? Assignee, double SortOrder, string Message);
 public sealed record TaskDeleteResult(int Id, bool Deleted, string Message);
+public sealed record AcceptanceCriterionResult(int Id, int TaskItemId, string Text, bool Completed, int SortOrder, string Message);
 public sealed record TaskCommentResult(int Id, int TaskItemId, string Text, string? Author, string Type, DateTime CreatedAt);
 public sealed record TaskClaimResult(int Id, string Name, string? ClaimedBy, DateTime? ClaimedAt, string Message);
 
