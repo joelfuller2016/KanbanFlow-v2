@@ -40,7 +40,12 @@ function Assert-SmokePostFailure([string]$Path, $Body, [int[]]$ExpectedStatusCod
     throw "$Message Expected HTTP failure but request succeeded."
 }
 
-function Assert-SmokeGetFailure([string]$Path, [int[]]$ExpectedStatusCodes, [string]$Message, [string]$ExpectedMessage) {
+function Assert-SmokeGetFailure(
+    [ValidateNotNullOrEmpty()][string]$Path,
+    [ValidateNotNullOrEmpty()][int[]]$ExpectedStatusCodes,
+    [ValidateNotNullOrEmpty()][string]$Message,
+    [ValidateNotNullOrEmpty()][string]$ExpectedMessage
+) {
     Write-Host "GET $Path (expecting failure)"
     try {
         Invoke-WebRequest -Method Get -Uri "$BaseUrl$Path" -TimeoutSec 5 -UseBasicParsing -ErrorAction Stop | Out-Null
