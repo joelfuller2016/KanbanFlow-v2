@@ -333,8 +333,20 @@ function ConvertTo-ProbeUrl {
 
         Returns $null when the input is not a URL at all, so the caller can say so rather than
         building a nonsense address out of it.
+
+        -PreservePath keeps the path the caller supplied instead of dropping it. A BIND
+        specification has no meaningful path, so the default discards it and the caller appends
+        the probe path itself. An operator's -HealthUrl DOES carry one, and it must survive the
+        same wildcard-host rewrite -- otherwise `-HealthUrl http://+:5199/api/admin/health` keeps a
+        host Invoke-WebRequest cannot parse, Test-KanbanFlowHealthy is false forever, and the
+        script polls out the whole -StartTimeoutSeconds and exits 2 against a healthy app. That is
+        precisely the failure the first paragraph says this function exists to prevent, so the
+        -HealthUrl path must not be the one branch that skips it.
     #>
-    param([string] $Url)
+    param(
+        [string] $Url,
+        [switch] $PreservePath
+    )
 
     if ([string]::IsNullOrWhiteSpace($Url)) { return $null }
     $match = [regex]::Match($Url.Trim(), '^(?<scheme>https?)://(?<host>\[[^\]]+\]|[^/:]+)(?<port>:\d+)?(?<rest>/.*)?$')
@@ -342,7 +354,8 @@ function ConvertTo-ProbeUrl {
 
     $hostPart = $match.Groups['host'].Value
     if (@('+', '*', '0.0.0.0', '[::]', '[::0]') -contains $hostPart) { $hostPart = '127.0.0.1' }
-    return ('{0}://{1}{2}' -f $match.Groups['scheme'].Value, $hostPart, $match.Groups['port'].Value)
+    $path = if ($PreservePath) { $match.Groups['rest'].Value } else { '' }
+    return ('{0}://{1}{2}{3}' -f $match.Groups['scheme'].Value, $hostPart, $match.Groups['port'].Value, $path)
 }
 
 function Test-KanbanFlowHealthy {
@@ -553,11 +566,19 @@ try {
     # so hardcoding port 5123 probes an address the app may not be listening on -- and that false
     # negative lands in the same "claimed to start it, started nothing" branch as the proxy bug.
     if (-not [string]::IsNullOrWhiteSpace($HealthUrl)) {
-        $healthUri = $HealthUrl.Trim()
-        $listenUrl = ConvertTo-ProbeUrl -Url $healthUri
+        # NORMALIZED, not taken verbatim. The old code assigned $HealthUrl.Trim() straight to
+        # $healthUri, so this was the one branch that bypassed ConvertTo-ProbeUrl's wildcard-host
+        # rewrite: `-HealthUrl http://+:5199/api/admin/health` stayed a `+` host, which
+        # Invoke-WebRequest cannot parse, so Test-KanbanFlowHealthy was false forever -- the script
+        # then started the task, polled for the whole -StartTimeoutSeconds and threw, exiting 2
+        # against a perfectly healthy app.
+        $listenUrl = ConvertTo-ProbeUrl -Url $HealthUrl
         if ($null -eq $listenUrl) {
             throw "-HealthUrl '$HealthUrl' is not an http(s) URL."
         }
+        # -PreservePath because an operator's health URL carries one and it is the whole point of
+        # the argument; the host and port still go through the same rewrite as every other branch.
+        $healthUri = ConvertTo-ProbeUrl -Url $HealthUrl -PreservePath
     }
     else {
         $listenCandidates = @()

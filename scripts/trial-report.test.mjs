@@ -21,8 +21,8 @@ import { fileURLToPath } from "node:url";
 import {
   parseRows, isOutsideRepo, isOutsideAllRoots, statusAfter, summarize, renderReport, parseArgs,
   pathFlavor, asUtcIso, normalizeEvent, normalizeTaskId, readLogGenerations, resolveRepoRoots,
-  fetchActivity, ActivityHttpError, dedupeRows, buildIdentityBridge, normalizeActor, WRITE_TOOLS,
-  MUTATING_TOOLS
+  fetchActivity, ActivityHttpError, dedupeRows, buildIdentityBridge, aliasesOf, normalizeActor,
+  WRITE_TOOLS, MUTATING_TOOLS
 } from "./trial-report.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -230,6 +230,75 @@ test("a copy-truncate rotation must not double-count the same call in two genera
   assert.equal(dedupeRows([row({ ts: "2026-09-01T01:00:00.000Z" }), row({ ts: "2026-09-01T01:00:00.001Z" })]).length, 2);
   // Nor is the same instant and tool from a DIFFERENT session.
   assert.equal(dedupeRows([row({ session: "a" }), row({ session: "b" })]).length, 2);
+});
+
+test("dedupeRows keys a CALL, not a bucket — same millisecond, different task, both survive", () => {
+  // Reported on PR #504, finding 2. The key was `ts + session + tool` — no taskId, and no
+  // delimiter — on the premise that every recorded call is an HTTP round trip so one session
+  // cannot produce two rows in one millisecond. The wrapper's LOCAL validation (requiredInt,
+  // assertEnum) throws before any HTTP hop, so it can and does. Two writes on two tasks then
+  // collapsed into one and a task silently lost a writer, which erases a real collision — the one
+  // error signal 2 cannot afford.
+  const at = "2026-09-01T01:00:00.000Z";
+  const sameMs = [
+    row({ session: "a", tool: "update_task_status", taskId: 1, ts: at, outcome: "error", http: 422 }),
+    row({ session: "a", tool: "update_task_status", taskId: 2, ts: at, outcome: "error", http: 422 })
+  ];
+  assert.equal(dedupeRows(sameMs).length, 2, "two tasks are two calls, however close together");
+  assert.equal(find(summarize({ rows: dedupeRows(sameMs), repoRoot: REPO }), 3).detail.gateRefusals, 2,
+    "gateRefusals must not under-count because two refusals shared a millisecond");
+
+  // The consequence that actually decides a verdict: the dropped row was another session's write
+  // on a DIFFERENT task, so the collision on that task disappeared entirely.
+  const collision = [
+    row({ session: "a", tool: "update_task", taskId: 1, ts: at }),
+    row({ session: "a", tool: "update_task", taskId: 2, ts: at }),
+    row({ session: "b", tool: "update_task", taskId: 2, ts: "2026-09-01T01:00:05.000Z" })
+  ];
+  const s2 = find(summarize({ rows: dedupeRows(collision), repoRoot: REPO }), 2);
+  assert.equal(s2.value, 1, "task 2 still has two writers");
+  assert.equal(s2.detail.uncoordinatedOverlaps[0].taskId, 2);
+
+  // projectId is in the key too, for tools that carry no taskId at all.
+  assert.equal(dedupeRows([
+    row({ tool: "create_task", projectId: 1, ts: at }),
+    row({ tool: "create_task", projectId: 2, ts: at })
+  ]).length, 2);
+
+  // And the key is ENCODED, not concatenated: `session:"a" + tool:"bc"` and `session:"ab" +
+  // tool:"c"` produced the same string when the fields were simply glued together.
+  assert.equal(dedupeRows([row({ session: "a", tool: "bc", ts: at }), row({ session: "ab", tool: "c", ts: at })]).length, 2);
+  // A byte-identical duplicate — the copy-truncate case this function exists for — is still dropped.
+  assert.equal(dedupeRows([row({ session: "a", tool: "update_task", taskId: 1, ts: at }), row({ session: "a", tool: "update_task", taskId: 1, ts: at })]).length, 1);
+});
+
+test("a COMMENT on a task somebody else holds is coordination, not a collision", () => {
+  // Reported on PR #504, finding 3. `add_task_comment` sat in WRITE_TOOLS, so "A claims task 7 and
+  // works it, B leaves a handoff note on it" scored 1 uncoordinated overlap / REVERT — and §11's
+  // consequence for REVERT is closing #477 as not-planned. §4.1's incident is an UNDETECTED
+  // collision; a comment is the opposite of undetected, and it changes neither the task nor any of
+  // its structural children. Every other name in the set does.
+  const rows = [
+    row({ session: "a", tool: "claim_task", taskId: 7, actor: "agent-a" }),
+    row({ session: "a", tool: "update_task_status", taskId: 7, to: "InProgress" }),
+    row({ session: "b", tool: "add_task_comment", taskId: 7, ts: "2026-09-01T11:00:00.000Z" })
+  ];
+  const s2 = find(summarize({ rows, repoRoot: REPO }), 2);
+  assert.equal(s2.value, 0, "leaving a note on somebody else's claimed task is not §4.1's collision");
+  assert.deepEqual(s2.detail.uncoordinatedOverlaps, []);
+  assert.notEqual(s2.verdict, "REVERT");
+
+  // But commenting IS board activity, so it still counts towards the vacuity guard — the guard asks
+  // whether the wrapper was used enough for a collision to have been possible, and it plainly was.
+  assert.equal(s2.detail.writingSessions, 2);
+  assert.equal(s2.verdict, "ADOPT");
+  assert.equal(WRITE_TOOLS.has("add_task_comment"), false, "the collision set");
+  assert.equal(MUTATING_TOOLS.has("add_task_comment"), true, "the board-activity set");
+
+  // And the same session commenting alongside a REAL write still collides, so removing the name
+  // from the collision set did not make a genuine overlap invisible.
+  const alsoWrote = [...rows, row({ session: "b", tool: "update_task", taskId: 7, ts: "2026-09-01T11:01:00.000Z" })];
+  assert.equal(find(summarize({ rows: alsoWrote, repoRoot: REPO }), 2).value, 1);
 });
 
 test("a generation whose last line is torn does not corrupt the first line of the next", () => {
@@ -583,7 +652,7 @@ test("signal 2 measures UNCOORDINATED overlap: two sessions writing one task wit
   // aware of the other. This scored a clean ADOPT before, because nothing had been refused.
   const rows = [
     row({ session: "a", tool: "update_task_status", taskId: 7, to: "InProgress" }),
-    row({ session: "b", tool: "add_task_comment", taskId: 7 })
+    row({ session: "b", tool: "update_task", taskId: 7 })
   ];
   const s2 = find(summarize({ rows, repoRoot: REPO }), 2);
   assert.equal(s2.value, 1);
@@ -617,7 +686,7 @@ test("a claim by an UNRELATED session cannot excuse a collision between two othe
   // claim — before, after, or nowhere near the collision — score it 0 / ADOPT.
   const rows = [
     row({ session: "a", tool: "update_task", taskId: 7 }),
-    row({ session: "b", tool: "add_task_comment", taskId: 7 }),
+    row({ session: "b", tool: "update_task_status", taskId: 7, to: "Review" }),
     row({ session: "c", tool: "claim_task", taskId: 7, ts: "2026-09-01T23:00:00.000Z", actor: "agent-c" })
   ];
   const s2 = find(summarize({ rows, repoRoot: REPO }), 2);
@@ -647,7 +716,7 @@ test("a REFUSED claim followed by a write to that same task is a collision the s
     row({ session: "a", tool: "claim_task", taskId: 7, actor: "agent-a" }),
     row({ session: "a", tool: "update_task", taskId: 7 }),
     row({ session: "b", tool: "claim_task", taskId: 7, actor: "agent-b", outcome: "error", http: 409 }),
-    row({ session: "b", tool: "add_task_comment", taskId: 7 })
+    row({ session: "b", tool: "update_task", taskId: 7 })
   ];
   const s2 = find(summarize({ rows, repoRoot: REPO }), 2);
   assert.equal(s2.value, 1);
@@ -690,7 +759,7 @@ test("signal 2 keys tasks by VALUE, so 7 and \"7\" collide", () => {
   // separate buckets and the collision was never seen.
   const rows = [
     row({ session: "a", tool: "update_task", taskId: 7 }),
-    row({ session: "b", tool: "add_task_comment", taskId: "7" })
+    row({ session: "b", tool: "update_task", taskId: "7" })
   ];
   const s2 = find(summarize({ rows, repoRoot: REPO }), 2);
   assert.equal(s2.value, 1);
@@ -762,18 +831,25 @@ test("a claim taken through the UI counts — bridged to its session by the acto
   // REVERT. But the two sources name their participants in DIFFERENT NAMESPACES: the log has a
   // `session` (a per-process id), the event has an `actor` (free text the caller sent). The bridge
   // is the log row that carries both, because `actor` is a recorded argument.
+  //
+  // B's identity as `agent-b` is corroborated by a claim B made THROUGH THE WRAPPER, on a
+  // different task — that is what the alias rule requires, and it is what separates a genuine
+  // named actor from a label anyone might send. B's claim on task 7 itself exists only as an event.
   const rows = [
     row({ session: "a", tool: "claim_task", taskId: 7, actor: "agent-a" }),
     row({ session: "a", tool: "update_task_status", taskId: 7, to: "InProgress" }),
-    row({ session: "b", tool: "add_task_comment", taskId: 7, actor: "agent-b" })
+    row({ session: "b", tool: "claim_task", taskId: 3, actor: "agent-b" }),
+    row({ session: "b", tool: "update_task", taskId: 7 })
   ];
-  // B's claim exists only as an event, under B's ACTOR name.
+  // B's claim ON TASK 7 exists only as an event, under B's ACTOR name.
   const events = [{ id: 5, projectId: 2, entityId: 7, entityType: "Task", eventType: "TaskClaimed", actor: "Agent-B", createdAt: "2026-09-01T09:00:00" }];
   const s2 = find(summarize({ rows, events, repoRoot: REPO }), 2);
   assert.equal(s2.value, 0, "both writers held the task, one of them out of band");
-  assert.deepEqual(s2.detail.coordinatedOverlaps[0].writers, ["session:a", "session:b"]);
-  assert.deepEqual(s2.detail.coordinatedOverlaps[0].unheld, []);
-  assert.ok(s2.detail.claimHolders[0].holders.includes("actor:agent-b"), "actor identity is case-insensitive, as the server treats it");
+  const overlap7 = s2.detail.coordinatedOverlaps.find(c => c.taskId === 7);
+  assert.deepEqual(overlap7.writers, ["session:a", "session:b"]);
+  assert.deepEqual(overlap7.unheld, []);
+  assert.ok(s2.detail.claimHolders.find(h => h.taskId === 7).holders.includes("actor:agent-b"),
+    "actor identity is case-insensitive, as the server treats it");
 
   // Without the bridging row, the same event names an actor nobody can be shown to be, and the
   // overlap stands. This is the assertion that keeps the bridge from degrading into "assume equal".
@@ -783,22 +859,105 @@ test("a claim taken through the UI counts — bridged to its session by the acto
     "B's UI claim can no longer be tied to B, so B is not a holder — A still is, from its own claim row");
 });
 
-test("the identity bridge is built from rows that carry BOTH names, and never invents one", () => {
+test("an actor is only an IDENTITY when it maps to one session AND that session claimed under it", () => {
+  // Reported on PR #504, finding 1. The bridge used to alias a session to EVERY actor string it had
+  // ever sent, so the wrapper's DEFAULT label fused unrelated sessions into one participant. Two
+  // rules now gate an alias, and this pins both of them plus the raw maps they are computed from.
   const bridge = buildIdentityBridge([
-    { session: "s1", actor: "Agent-A" },
-    { session: "s1", actor: "agent-a" },        // same actor, different case
-    { session: "s2", actor: "agent-b" },
-    { session: "s3" },                          // no actor: contributes nothing
-    { actor: "orphan" },                        // no session: contributes nothing
-    { session: "s4", actor: "   " }             // whitespace is not an actor
+    { session: "s1", actor: "Agent-A", tool: "claim_task", outcome: "ok" },
+    { session: "s1", actor: "agent-a", tool: "update_task" },   // same actor, different case
+    { session: "s2", actor: "agent-b", tool: "update_task" },   // never claimed under the name
+    { session: "s3", actor: "shared", tool: "claim_task", outcome: "ok" },
+    { session: "s4", actor: "shared", tool: "claim_task", outcome: "ok" },
+    { session: "s5", actor: "agent-e", tool: "claim_task", outcome: "error", http: 409 },
+    { session: "s6" },                                          // no actor: contributes nothing
+    { actor: "orphan" },                                        // no session: contributes nothing
+    { session: "s7", actor: "   ", tool: "claim_task", outcome: "ok" }  // whitespace is not an actor
   ]);
-  assert.deepEqual([...bridge.sessionToActors.keys()], ["s1", "s2"]);
+  // The RAW evidence: every (session, actor) co-occurrence, which is what rule 1 is computed from.
+  assert.deepEqual([...bridge.sessionToActors.keys()], ["s1", "s2", "s3", "s4", "s5"]);
   assert.deepEqual([...bridge.sessionToActors.get("s1")], ["agent-a"], "case-folded to one identity");
   assert.deepEqual([...bridge.actorToSessions.get("agent-b")], ["s2"]);
+  assert.deepEqual([...bridge.actorToSessions.get("shared")], ["s3", "s4"]);
   assert.equal(bridge.actorToSessions.has("orphan"), false);
+
+  // And the IDENTIFYING subset, which is the only thing `aliasesOf` reads.
+  assert.deepEqual([...bridge.identifyingActors.get("s1")], ["agent-a"], "unique AND claimed under");
+  assert.deepEqual([...bridge.identifyingSessions.get("agent-a")], ["s1"]);
+  assert.equal(bridge.identifyingActors.has("s2"), false, "rule 2: s2 never CLAIMED as agent-b");
+  assert.equal(bridge.identifyingActors.has("s3"), false, "rule 1: `shared` names two sessions, so it names neither");
+  assert.equal(bridge.identifyingActors.has("s4"), false);
+  assert.equal(bridge.identifyingSessions.has("shared"), false);
+  assert.equal(bridge.identifyingActors.has("s5"), false, "a REFUSED claim is not the board accepting the name");
+
   assert.equal(normalizeActor("  Mcp-Agent "), "mcp-agent");
   assert.equal(normalizeActor(""), null);
   assert.equal(normalizeActor(undefined), null);
+
+  // BOTH DIRECTIONS of the alias obey both rules. Only session -> actor has a production caller
+  // (isHeldBy is always handed a `session:` key, because writers come from the log alone), so the
+  // actor -> session direction is pinned here rather than left as untested symmetry: it goes live
+  // the moment anyone revisits seeding writers from ActivityEvent.Actor, and it must not be the
+  // place where "an actor label is an identity" quietly comes back.
+  assert.deepEqual([...aliasesOf("session:s1", bridge)].sort(), ["actor:agent-a", "session:s1"]);
+  assert.deepEqual([...aliasesOf("actor:agent-a", bridge)].sort(), ["actor:agent-a", "session:s1"]);
+  assert.deepEqual([...aliasesOf("session:s2", bridge)], ["session:s2"], "rule 2: never claimed under the name");
+  assert.deepEqual([...aliasesOf("actor:agent-b", bridge)], ["actor:agent-b"]);
+  assert.deepEqual([...aliasesOf("actor:shared", bridge)], ["actor:shared"], "rule 1: a label shared by two sessions names neither");
+  assert.deepEqual([...aliasesOf("session:s3", bridge)], ["session:s3"]);
+  assert.deepEqual([...aliasesOf("actor:agent-e", bridge)], ["actor:agent-e"], "a refused claim is not the board accepting the name");
+  assert.deepEqual([...aliasesOf("session:unknown", bridge)], ["session:unknown"]);
+});
+
+test("two sessions on the wrapper's DEFAULT actor label are TWO participants — #477 §4.1's incident", () => {
+  // THE BLOCKER on PR #504, reproduced exactly. `mcp-agent` is the wrapper's default actor: the
+  // schema advertises it and update_task_status/release_task substitute it when `actor` is omitted,
+  // so it is what a caller sends when it has nothing to say about who it is. The bridge aliased a
+  // session to every actor it had ever sent and `isHeldBy` credited every alias, so A's claim under
+  // the default vouched for B — a session that never claimed anything — and §4.1's own incident
+  // (A holds the claim, B writes anyway) scored 0 / ADOPT. One call carrying the default label was
+  // enough.
+  const rows = [
+    row({ session: "AAAA", tool: "claim_task", taskId: 7, actor: "mcp-agent", ts: "2026-09-01T10:00:00.000Z" }),
+    row({ session: "AAAA", tool: "update_task_status", taskId: 7, to: "InProgress", actor: "mcp-agent", ts: "2026-09-01T10:01:00.000Z" }),
+    row({ session: "BBBB", tool: "update_task_status", taskId: 7, to: "Review", actor: "mcp-agent", ts: "2026-09-01T10:02:00.000Z" })
+  ];
+  const s2 = find(summarize({ rows, repoRoot: REPO }), 2);
+  assert.equal(s2.value, 1, "B never claimed task 7; sharing A's default label is not holding it");
+  assert.equal(s2.verdict, "REVERT");
+  assert.deepEqual(s2.detail.uncoordinatedOverlaps[0].unheld, ["session:BBBB"]);
+  assert.equal(s2.detail.writingSessions, 2, "and the vacuity guard cannot be what produced the 1");
+  // The label is still reported as a holder KEY — that is honest evidence — it simply vouches for
+  // nobody, which is the distinction the fix turns on.
+  assert.ok(s2.detail.uncoordinatedOverlaps[0].holders.includes("actor:mcp-agent"));
+  assert.match(s2.caveat, /ONLY WHEN IT IDENTIFIES ONE/);
+
+  // The same shape with B silent about its actor: the default then maps to ONE session, so rule 1
+  // passes — and B is STILL not a holder, because nothing ever tied B to the label at all.
+  const bSilent = [...rows.slice(0, 2), row({ session: "BBBB", tool: "update_task_status", taskId: 7, to: "Review", ts: "2026-09-01T10:02:00.000Z" })];
+  assert.equal(find(summarize({ rows: bSilent, repoRoot: REPO }), 2).value, 1);
+});
+
+test("a UI claim under the default label cannot vouch for a session that merely SENT the label", () => {
+  // Rule 1 alone is not enough. Here exactly one session ever sends `mcp-agent`, so the label is
+  // "unique" — but it sent it on a WRITE, never on a claim, and the claim under that name was
+  // somebody else's, taken through the UI. Aliasing on uniqueness alone would hand that session a
+  // claim it never made, which is the ADOPT-manufacturing direction again.
+  const rows = [
+    row({ session: "a", tool: "update_task", taskId: 7, actor: "mcp-agent" }),
+    row({ session: "b", tool: "update_task_status", taskId: 7, to: "Review" })
+  ];
+  const events = [{ id: 5, projectId: 2, entityId: 7, entityType: "Task", eventType: "TaskClaimed", actor: "mcp-agent", createdAt: "2026-09-01T09:00:00" }];
+  const s2 = find(summarize({ rows, events, repoRoot: REPO }), 2);
+  assert.equal(s2.value, 1);
+  assert.deepEqual(s2.detail.uncoordinatedOverlaps[0].unheld, ["session:a", "session:b"],
+    "neither writer is shown to be the mcp-agent that took the UI claim");
+
+  // Corroborate it — session `a` claims something under the same name — and the alias is allowed,
+  // because now the board has accepted `a` under that label and nobody else uses it.
+  const corroborated = [row({ session: "a", tool: "claim_task", taskId: 9, actor: "mcp-agent" }), ...rows];
+  const s2b = find(summarize({ rows: corroborated, events, repoRoot: REPO }), 2);
+  assert.deepEqual(s2b.detail.uncoordinatedOverlaps[0].unheld, ["session:b"], "a is now a holder of 7; b still is not");
 });
 
 test("a claim event with NO actor vouches for nobody — it is counted, not credited", () => {
@@ -806,7 +965,7 @@ test("a claim event with NO actor vouches for nobody — it is counted, not cred
   // mark the task "claimed" and excuse every writer on it.
   const rows = [
     row({ session: "a", tool: "update_task", taskId: 7 }),
-    row({ session: "b", tool: "add_task_comment", taskId: 7 })
+    row({ session: "b", tool: "update_task_status", taskId: 7, to: "Review" })
   ];
   const events = [{ id: 5, projectId: 2, entityId: 7, entityType: "Task", eventType: "TaskClaimed", actor: null, createdAt: "2026-09-01T09:00:00" }];
   const s2 = find(summarize({ rows, events, repoRoot: REPO }), 2);
@@ -1303,7 +1462,7 @@ test("with both sources down, the report is INCOMPLETE — never the all-REVERT 
   assert.deepEqual(summary.signals.map(s => s.verdict), ["UNMEASURED", "UNMEASURED", "UNMEASURED", "UNMEASURED"]);
   assert.equal(summary.overall.verdict, "INCOMPLETE");
   assert.notEqual(summary.overall.verdict, "REVERT");
-  assert.deepEqual(summary.sources, { log: false, activity: false, activityTruncated: false, repoRootTrusted: true });
+  assert.deepEqual(summary.sources, { log: false, activity: false, activityTruncated: false, activityCapped: false, repoRootTrusted: true });
 });
 
 test("fetchActivity treats an HTTP error as UNAVAILABLE rather than as no events", async () => {
@@ -1329,16 +1488,41 @@ test("fetchActivity treats a non-array body as UNAVAILABLE rather than silently 
     "the old code skipped a non-array page and reported the rest as the whole trail");
 });
 
-test("fetchActivity reports a full page as truncated, and a short page as complete", async () => {
+test("a page of EXACTLY 500 is capped, not truncated — 501 is what proves events were dropped", async () => {
+  // Reported on PR #504, finding 5. `page.length !== ACTIVITY_PAGE` could not tell "the endpoint
+  // capped this" from "this project has exactly 500 lifetime events", and with no --since the
+  // `oldest <= cutoff` escape is skipped — so a board where nothing had been dropped scored
+  // signals 2 and 3 UNMEASURED and exited 1. The report now asks for 501, so a longer page PROVES
+  // truncation; a page of exactly 500 is reported as CAPPED and deliberately not gated.
   const page = n => Array.from({ length: n }, (_, i) => statusEvent(i + 1, "Done"));
-  const full = await fetchActivity("http://x", {
-    fetchImpl: routed({ "/activity": { ok: true, status: 200, json: async () => page(500) }, "/api/projects": { ok: true, status: 200, json: async () => [{ id: 7 }] } })
+  const call = n => fetchActivity("http://x", {
+    fetchImpl: routed({ "/activity": { ok: true, status: 200, json: async () => page(n) }, "/api/projects": { ok: true, status: 200, json: async () => [{ id: 7 }] } })
   });
-  assert.deepEqual(full.truncated, [7]);
-  const short = await fetchActivity("http://x", {
-    fetchImpl: routed({ "/activity": { ok: true, status: 200, json: async () => page(499) }, "/api/projects": { ok: true, status: 200, json: async () => [{ id: 7 }] } })
-  });
+
+  const exactly = await call(500);
+  assert.deepEqual(exactly.truncated, [], "exactly 500 events is NOT evidence anything was dropped");
+  assert.deepEqual(exactly.capped, [7], "but the doubt is disclosed rather than swallowed");
+
+  const over = await call(501);
+  assert.deepEqual(over.truncated, [7], "more than a full window came back, so more exist than it holds");
+  assert.deepEqual(over.capped, []);
+
+  const short = await call(499);
   assert.deepEqual(short.truncated, []);
+  assert.deepEqual(short.capped, [], "a trail that ended on its own is complete, with no caveat at all");
+
+  // And the consequence at the report level: a 500-event project is SCORED, not gated out.
+  const summary = summarize({ rows: [row()], events: page(500), repoRoot: REPO, truncated: exactly.truncated, capped: exactly.capped });
+  assert.notEqual(find(summary, 3).verdict, "UNMEASURED", "nothing is known to have been dropped, so nothing may be UNMEASURED");
+  assert.notEqual(summary.overall.verdict, "INCOMPLETE");
+  assert.match(find(summary, 3).caveat, /ACTIVITY PAGE CAPPED for project\(s\) 7/, "and the reader is told the endpoint could not rule it out");
+  assert.match(find(summary, 2).caveat, /ACTIVITY PAGE CAPPED for project\(s\) 7/);
+  assert.match(renderReport(summary, { logPath: "x" }), /NOTE:     activity page CAPPED at exactly 500 events for project\(s\) 7/);
+
+  // A PROVEN truncation still gates, so the fix did not simply switch the detector off.
+  const gated = summarize({ rows: [row()], events: page(501), repoRoot: REPO, truncated: over.truncated, capped: over.capped });
+  assert.equal(find(gated, 3).verdict, "UNMEASURED");
+  assert.equal(gated.overall.verdict, "INCOMPLETE");
 });
 
 test("a full page that reaches back PAST --since is covered, not harmful — the gate is not a one-way door", async () => {
@@ -1354,16 +1538,24 @@ test("a full page that reaches back PAST --since is covered, not harmful — the
     fetchImpl: routed({ "/activity": { ok: true, status: 200, json: async () => events }, "/api/projects": { ok: true, status: 200, json: async () => [{ id: 7 }] } })
   });
 
-  const covered = await call(page(500, "2026-08-01T00:00:00"), "2026-09-01");
+  // 501 events, so the page is PROVEN to have been cut short rather than merely capped — the
+  // coverage question this test is about is then the only thing left deciding the outcome.
+  const covered = await call(page(501, "2026-08-01T00:00:00"), "2026-09-01");
   assert.deepEqual(covered.truncated, [], "the oldest event returned predates the window, so nothing in the window was dropped");
   assert.deepEqual(covered.truncatedCovered, [7], "and it is still reported");
 
-  const harmful = await call(page(500, "2026-09-05T00:00:00"), "2026-09-01");
+  const harmful = await call(page(501, "2026-09-05T00:00:00"), "2026-09-01");
   assert.deepEqual(harmful.truncated, [7], "the whole page sits inside the window, so older in-window events fell off");
   assert.deepEqual(harmful.truncatedCovered, []);
 
-  const noWindow = await call(page(500, "2026-08-01T00:00:00"), null);
+  const noWindow = await call(page(501, "2026-08-01T00:00:00"), null);
   assert.deepEqual(noWindow.truncated, [7], "with no --since there is no floor to compare against");
+
+  // The coverage escape applies to a merely-CAPPED page too: whether or not the endpoint cut the
+  // page short, everything it could have dropped is older than the cutoff.
+  const cappedButCovered = await call(page(500, "2026-08-01T00:00:00"), "2026-09-01");
+  assert.deepEqual(cappedButCovered.truncatedCovered, [7]);
+  assert.deepEqual(cappedButCovered.capped, [], "no doubt is left to disclose once the page demonstrably spans the window");
 
   // And the consequence: the covered case is SCORED rather than gated, so a busy board can still
   // be adjudicated by narrowing the window.
@@ -1386,7 +1578,7 @@ test("a full page that reaches back PAST --since is covered, not harmful — the
 });
 
 test("two projects, one busy: only the harmful one gates, and both are named correctly", async () => {
-  const busy = Array.from({ length: 500 }, (_, i) => statusEvent(i + 1, "Done", { projectId: 2, createdAt: "2026-09-05T00:00:00" }));
+  const busy = Array.from({ length: 501 }, (_, i) => statusEvent(i + 1, "Done", { projectId: 2, createdAt: "2026-09-05T00:00:00" }));
   const quiet = [statusEvent(1, "Done", { projectId: 3, createdAt: "2026-09-05T00:00:00" })];
   const { truncated, truncatedCovered } = await fetchActivity("http://x", {
     since: "2026-09-01",
@@ -1425,7 +1617,9 @@ test("EVERY fetch carries the deadline, including the per-project activity pages
     if (url.includes("/activity")) return new Promise((_, reject) => options.signal.addEventListener("abort", () => reject(options.signal.reason)));
     return { ok: true, status: 200, json: async () => [{ id: 1 }] };
   };
-  await assert.rejects(() => fetchActivity("http://x", { fetchImpl, timeoutMs: 25 }), /activity\?limit=500 did not answer within 25 ms/);
+  // limit=501, not 500: the report asks for one MORE than a full page so a longer answer proves
+  // truncation. Pinned here because it is the request that makes finding 5's fix possible at all.
+  await assert.rejects(() => fetchActivity("http://x", { fetchImpl, timeoutMs: 25 }), /activity\?limit=501 did not answer within 25 ms/);
   assert.equal(signals.length, 2);
   assert.ok(signals.every(s => s.signal instanceof AbortSignal));
 });
@@ -1483,7 +1677,7 @@ test("an all-revert run reports REVERT and names §11's consequence", () => {
   //   4: every session ran inside the repo                  -> no
   const rows = [
     row({ session: "a", tool: "update_task", taskId: 7, cwd: `${REPO}\\src` }),
-    row({ session: "b", tool: "add_task_comment", taskId: 7, cwd: `${REPO}\\scripts` })
+    row({ session: "b", tool: "update_task_status", taskId: 7, to: "Review", cwd: `${REPO}\\scripts` })
   ];
   const summary = summarize({ rows, events: [], repoRoot: REPO });
   assert.deepEqual(summary.signals.map(s => s.verdict), ["REVERT", "REVERT", "REVERT", "REVERT"]);

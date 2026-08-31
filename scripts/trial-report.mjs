@@ -30,6 +30,18 @@ import { fileURLToPath } from "node:url";
 const DEFAULT_API = "http://127.0.0.1:5123";
 const ACTIVITY_PAGE = 500; // server-side maximum (ApiEndpoints.cs Math.Clamp(limit ?? 100, 1, 500))
 
+// What the report ASKS for: one more than a full window, so a page longer than `ACTIVITY_PAGE`
+// PROVES more events exist than the window holds. `page.length !== ACTIVITY_PAGE` could never make
+// that distinction — it cannot tell "the page was capped" from "this project has exactly 500
+// events" — and with no `--since` there is no `oldest <= cutoff` escape either, so a project
+// sitting on exactly 500 lifetime events scored signals 2 and 3 UNMEASURED and exited 1 on a board
+// where nothing had been dropped.
+//
+// Against THIS server the probe cannot fire, because the endpoint clamps `limit` to 500: a page of
+// exactly 500 stays ambiguous, and that case is reported as `capped` — disclosed, and deliberately
+// NOT gated. See the note in `fetchActivity` for why that is the right way round.
+const ACTIVITY_PROBE = ACTIVITY_PAGE + 1;
+
 // Node's `fetch` has NO default timeout, and neither does `execFileSync` without one. A server that
 // accepts the TCP connection and then never answers — the app paged out but still LISTENing, which
 // is what actually happened — hangs this process forever: no verdict, no exit code, and every
@@ -45,6 +57,15 @@ const GIT_TIMEOUT_MS = 5_000;
 // to collide on. Curated deliberately: the log records tool names, not HTTP verbs, so write-ness
 // cannot be derived from a row. A drift test asserts every name here still exists in the wrapper,
 // so a rename goes red instead of silent.
+//
+// `add_task_comment` is DELIBERATELY ABSENT, and it is the one name whose absence needs saying.
+// Every other name here changes the task or one of its structural children; a comment changes
+// neither. Leaving a handoff note on a task somebody else holds is a COORDINATION ACT — the very
+// thing #477 §5 asks agents to do — and counting it made "A claims task 7 and works it, B leaves a
+// comment on it" score `1 uncoordinated overlap / REVERT`, whose §11 consequence is closing #477
+// as not-planned. §4.1's incident is an UNDETECTED collision: two participants changing the same
+// work without knowing about each other. A comment is the opposite of undetected. It stays in
+// MUTATING_TOOLS below, because commenting IS board activity for the vacuity guard's purposes.
 export const WRITE_TOOLS = new Set([
   "claim_task",
   "release_task",
@@ -52,7 +73,6 @@ export const WRITE_TOOLS = new Set([
   "update_task",
   "update_task_status",
   "delete_task",
-  "add_task_comment",
   "create_subtask",
   "update_subtask",
   "mark_subtask_done",
@@ -78,6 +98,10 @@ export const WRITE_TOOLS = new Set([
 // produce the collision signal 2 is measuring.
 export const MUTATING_TOOLS = new Set([
   ...WRITE_TOOLS,
+  // Not a WRITE_TOOL (see above — a comment is coordination, not a silent collision), but plainly
+  // board activity: a session that commented used the wrapper, so it counts towards the guard's
+  // "could a collision have happened at all?".
+  "add_task_comment",
   "create_task",
   "create_project",
   "update_project",
@@ -295,16 +319,33 @@ export function readLogGenerations(logPath, { fs: fsImpl = fs } = {}) {
  * counts those calls twice: `calls` per session, `refusedClaims` and `gateRefusals` all inflate,
  * and every one of those numbers is read as evidence.
  *
- * Keyed on (ts, session, tool). `ts` is millisecond-resolution and every recorded call is an HTTP
- * round trip, so one session cannot legitimately produce two rows with all three equal; a
- * byte-identical duplicate from a copy-truncate always does. First occurrence wins, so the
- * oldest-first ordering of the concatenation is preserved.
+ * THE KEY MUST IDENTIFY A CALL, NOT A COARSE BUCKET. It used to be `ts + session + tool` — no
+ * `taskId`, and concatenated with no delimiter — on the premise that "every recorded call is an
+ * HTTP round trip, so one session cannot produce two rows with all three equal". That premise is
+ * false: the wrapper's local-validation failures (`requiredInt`, `assertEnum`) throw BEFORE any
+ * HTTP hop, so a session can emit several rows inside one millisecond. Two `update_task_status`
+ * rows from one session in the same millisecond on tasks 1 and 2 then collapsed into one, and the
+ * survivor kept only one task: `gateRefusals` under-counted, and when the dropped row was a
+ * `WRITE_TOOLS` call on another task, that task silently lost a writer — a real collision made
+ * invisible, which is the one error signal 2 cannot afford. The missing delimiter was a second,
+ * independent collision: `session:"a" + tool:"bc"` and `session:"ab" + tool:"c"` produced the
+ * same string.
+ *
+ * So the key now carries `projectId` and `taskId` as well, and is built with `JSON.stringify` over
+ * an ARRAY rather than by concatenation — that escapes every field's own quotes and backslashes,
+ * so no combination of field values can produce another combination's key. The RAW values are used
+ * (not `normalizeTaskId`): a copy-truncate duplicate is byte-identical, so raw comparison catches
+ * exactly the duplicates this exists for, and keeping `7` and `"7"` apart errs towards KEEPING a
+ * row — the safe direction, since a kept duplicate inflates a count while a dropped row can erase
+ * a collision.
+ *
+ * First occurrence wins, so the oldest-first ordering of the concatenation is preserved.
  */
 export function dedupeRows(rows) {
   const seen = new Set();
   const out = [];
   for (const row of rows) {
-    const key = `${row?.ts}${row?.session}${row?.tool}`;
+    const key = JSON.stringify([row?.ts, row?.session, row?.tool, row?.projectId, row?.taskId]);
     if (seen.has(key)) continue;
     seen.add(key);
     out.push(row);
@@ -539,31 +580,95 @@ export function normalizeActor(value) {
   return trimmed.length === 0 ? null : trimmed.toLowerCase();
 }
 
+/**
+ * Build the seam — and, crucially, decide which halves of it are IDENTITIES rather than LABELS.
+ *
+ * AN ACTOR STRING IS NOT AN IDENTITY BY DEFAULT. `mcp-agent` is the wrapper's own default: the
+ * schema advertises it, `release_task` and `update_task_status` substitute it when `actor` is
+ * omitted, and the native tools do the same. So the label is what a caller sends when it has
+ * nothing to say about who it is. The first version of this bridge aliased a session to EVERY
+ * actor it had ever sent, and `isHeldBy` then treated every alias as a holder — which fused every
+ * session carrying the default into ONE participant, and scored #477 §4.1's own incident (A holds
+ * the claim, B writes anyway, both defaulting to `mcp-agent`) as `0 uncoordinated / ADOPT`. One
+ * call carrying the default label was enough to excuse a session that never claimed anything.
+ * That is the ADOPT-manufacturing direction this file's header forbids, and disclosing it in the
+ * caveat did not make the verdict right.
+ *
+ * So an actor may vouch for a session only when it actually IDENTIFIES one. Two rules, and both
+ * must hold — stated in signal 2's caveat, not just here:
+ *
+ *   1. UNIQUENESS. The actor maps to exactly ONE session across the whole window. Seen with two or
+ *      more sessions it is a label, not an identity, and it vouches for nobody. This is what makes
+ *      the default non-identifying BY CONSTRUCTION rather than by hardcoding the string: the moment
+ *      a second session uses it, it stops identifying anyone.
+ *   2. CORROBORATION. That session itself made a SUCCESSFUL `claim_task` call under the label —
+ *      i.e. it put that name to a claim the board accepted, not merely to a write. Uniqueness alone
+ *      is not enough: a single session sending `actor: "mcp-agent"` on one `update_task_status`
+ *      would otherwise be the unique bearer of the default, and an unrelated UI claim recorded
+ *      under `mcp-agent` would vouch for it. A refused (409) claim does not corroborate, for the
+ *      same reason it does not make anyone a holder — the board did not accept it.
+ *
+ * `sessionToActors` / `actorToSessions` stay as the RAW evidence (they are what rule 1 is computed
+ * from, and what the caveat describes); `identifyingActors` / `identifyingSessions` are the subset
+ * that survived both rules, and they are the only maps `aliasesOf` reads.
+ */
 export function buildIdentityBridge(rows = []) {
   const sessionToActors = new Map();
   const actorToSessions = new Map();
+  // Actors a session put its name to on a claim the BOARD ACCEPTED — rule 2's evidence.
+  const claimedActorsBySession = new Map();
+  const addTo = (map, key, value) => {
+    if (!map.has(key)) map.set(key, new Set());
+    map.get(key).add(value);
+  };
   for (const row of rows) {
     const actor = normalizeActor(row?.actor);
     if (actor === null) continue;
     const session = typeof row?.session === "string" && row.session.length > 0 ? row.session : null;
     if (session === null) continue;
-    if (!sessionToActors.has(session)) sessionToActors.set(session, new Set());
-    sessionToActors.get(session).add(actor);
-    if (!actorToSessions.has(actor)) actorToSessions.set(actor, new Set());
-    actorToSessions.get(actor).add(session);
+    addTo(sessionToActors, session, actor);
+    addTo(actorToSessions, actor, session);
+    if (row.tool === "claim_task" && row.outcome === "ok") addTo(claimedActorsBySession, session, actor);
   }
-  return { sessionToActors, actorToSessions };
+
+  const identifyingActors = new Map();
+  const identifyingSessions = new Map();
+  for (const [session, actors] of claimedActorsBySession) {
+    for (const actor of actors) {
+      // Rule 1. `!== 1` and not `> 1`: a zero here would mean the maps disagree, and an actor no
+      // session is known to have used cannot identify one either.
+      if ((actorToSessions.get(actor)?.size ?? 0) !== 1) continue;
+      addTo(identifyingActors, session, actor);
+      addTo(identifyingSessions, actor, session);
+    }
+  }
+  return { sessionToActors, actorToSessions, identifyingActors, identifyingSessions };
 }
 
-/** Every identity key that is known to be the SAME participant as `key`. */
-function aliasesOf(key, bridge) {
+/**
+ * Every identity key that is known to be the SAME participant as `key`.
+ *
+ * Reads the IDENTIFYING maps only. An actor that failed either rule above is absent from them, so
+ * it aliases to nobody — which is the whole point: it still appears in `detail.claimHolders` as a
+ * holder key, where it is honest evidence, but it can no longer excuse a session that shares the
+ * label with somebody else or never claimed under it.
+ *
+ * EXPORTED, and both directions are pinned by tests, although only the SESSION -> actor direction
+ * has a production caller today: `isHeldBy` is always handed a `session:` key, because writers come
+ * from the usage log alone. The `actor:` direction is therefore unreachable from `summarize` — and
+ * that is exactly why it is exported rather than left as untested symmetry. Seeding writers from
+ * `ActivityEvent.Actor` is the change this file's header discusses at length and rejects; if it is
+ * ever revisited, that branch becomes live, and it must already obey the same two rules rather than
+ * quietly reintroducing "an actor label is an identity".
+ */
+export function aliasesOf(key, bridge) {
   const all = new Set([key]);
   if (key.startsWith(SESSION_PREFIX)) {
-    for (const actor of bridge.sessionToActors.get(key.slice(SESSION_PREFIX.length)) ?? []) {
+    for (const actor of bridge.identifyingActors.get(key.slice(SESSION_PREFIX.length)) ?? []) {
       all.add(ACTOR_PREFIX + actor);
     }
   } else if (key.startsWith(ACTOR_PREFIX)) {
-    for (const session of bridge.actorToSessions.get(key.slice(ACTOR_PREFIX.length)) ?? []) {
+    for (const session of bridge.identifyingSessions.get(key.slice(ACTOR_PREFIX.length)) ?? []) {
       all.add(SESSION_PREFIX + session);
     }
   }
@@ -592,6 +697,10 @@ export function summarize({
   // as a page. See the note there for why gating on truncation alone was a one-way door.
   truncated = [],
   truncatedCovered = [],
+  // A page that came back exactly `ACTIVITY_PAGE` long against a server that clamps the probe
+  // there: either the project has exactly that many events, or older ones were dropped, and the
+  // endpoint cannot say which. DISCLOSED, NEVER GATED — see `fetchActivity`.
+  capped = [],
   sources = {}
 } = {}) {
   // An unparseable cutoff must NOT degrade to "exclude everything". NaN comparisons are all false,
@@ -651,6 +760,19 @@ export function summarize({
           : "the repo root came from a FALLBACK (git could not be run, or this is not a git repository), so it is the parent of this script's own directory rather than the repository git would name. Run from a linked worktree, that root is the WORKTREE and every ordinary session in the main checkout reads as outside it — fabricating this signal's adopt condition out of where the script was launched. Pass --repo-root to measure it"
     }
   };
+
+  // Appended to every activity-derived caveat. Not a gate: an exactly-full page is not evidence
+  // that anything was dropped, and the report must not retract a verdict it can still stand behind.
+  // But the reader has to be told the endpoint could not rule it out, and told the remedy.
+  const cappedNote = capped.length === 0
+    ? ""
+    : ` ACTIVITY PAGE CAPPED for project(s) ${capped.join(", ")}: the trail came back exactly ` +
+      `${ACTIVITY_PAGE} events long, which is both this endpoint's maximum page AND what a project ` +
+      "with exactly that many events returns — asking for one more does not separate them, because " +
+      "the server clamps the limit. So this is NOT scored as truncation (gating on it would make " +
+      "any board past that count permanently unadjudicable, on a board working exactly as " +
+      "intended), and it is NOT a guarantee either. Narrow the window with --since to remove the " +
+      "doubt: a page whose oldest event predates the cutoff demonstrably covers the trial.";
 
   /** Replace a signal's verdict with UNMEASURED when a source it depends on was not available. */
   const gate = (signal, requires) => {
@@ -897,9 +1019,15 @@ export function summarize({
       "rows are the bridge, and an actor with no such row is left as an actor rather than guessed " +
       "at. An event with NO actor names nobody: it is counted under " +
       "detail.unattributedClaimEvents and vouches for no one, so an anonymously recorded UI claim " +
-      "cannot make an overlap read as coordinated. TWO SESSIONS SHARING ONE ACTOR LABEL are " +
-      "indistinguishable here — as they are to the board itself, which treats a same-actor claim as " +
-      "a renewal — so an actor-keyed holder excuses every session known to have used that label. " +
+      "cannot make an overlap read as coordinated. AN ACTOR VOUCHES FOR A SESSION ONLY WHEN IT " +
+      "IDENTIFIES ONE, which takes both: (1) the actor maps to exactly ONE session across the " +
+      "window — seen with two or more it is a label, not an identity, and it excuses nobody; and " +
+      "(2) that session itself made a SUCCESSFUL claim_task call under the label, so it put the " +
+      "name to a claim the board accepted rather than merely to a write. Together those make the " +
+      "wrapper's default \"mcp-agent\" non-identifying BY CONSTRUCTION — the moment a second " +
+      "session sends it, it stops standing for anyone — instead of by hardcoding the string. A " +
+      "session's own successful claim_task ROW always makes it a holder of that task regardless; " +
+      "the rules above govern only what an ACTOR-derived holder may be aliased to. " +
       "KNOWN LIMITATION, stated rather than papered over: WRITERS ARE COUNTED FROM THE USAGE LOG " +
       "ONLY. Claims come from both sources and can only REMOVE an overlap; a writer that left an " +
       "ActivityEvent and no log row — the UI, REST, or a native MCP server — can never ADD one, so " +
@@ -912,7 +1040,7 @@ export function summarize({
       "TTL takeover are the coordination primitive WORKING, and they are reported under " +
       "detail.prevented. A refusal followed by a write to that same task by the refused participant " +
       "is the exception — the write was demonstrably not prevented, so it is reported under " +
-      "detail.refusedThenWrote and it DOES drive the verdict."
+      "detail.refusedThenWrote and it DOES drive the verdict." + cappedNote
   }, ["log", "activity", "activityComplete"]);
 
   // ── Signal 3: tasks reaching Done through the DoD gate ────────────────────────────────────
@@ -995,7 +1123,8 @@ export function summarize({
       `fallback is an explicit ±${OVERRIDE_TIME_WINDOW_MS} ms tolerance window — stated as a ` +
       "tolerance, not as exactness. An override with no Done to pair with is reported under " +
       "detail.unpairedOverrides rather than silently disqualifying nothing." +
-      (availability.log.ok ? "" : " detail.gateRefusals reads 0 because the usage log was unavailable, not because the gate never refused.")
+      (availability.log.ok ? "" : " detail.gateRefusals reads 0 because the usage log was unavailable, not because the gate never refused.") +
+      cappedNote
   }, ["activity", "activityComplete"]);
 
   // ── Signal 4: board consulted from outside KanbanFlow-v2/ ─────────────────────────────────
@@ -1077,12 +1206,16 @@ export function summarize({
       truncatedProjects: truncated,
       // Split out, because "a page was full" and "the measurement is threatened" are different
       // facts and only the second one may stop the trial being adjudicated.
-      truncatedCovered
+      truncatedCovered,
+      // And the third: full to the endpoint's maximum, which cannot be told from a project that
+      // has exactly that many events. Reported, not gated.
+      capped
     },
     sources: {
       log: logAvailable,
       activity: activityAvailable,
       activityTruncated: truncated.length > 0,
+      activityCapped: capped.length > 0,
       repoRootTrusted: availability.repoRoot.ok
     },
     repoRoots: roots,
@@ -1130,6 +1263,19 @@ export function renderReport(summary, { logPath, malformed = 0, generations = nu
       "inside the window are missing. This is NOT a lower bound: a TaskDoneOverridden can be lost while " +
       "its Done survives, scoring an overridden task as having passed the gate. Signals 2 and 3 are " +
       "UNMEASURED rather than scored. Narrow the window with --since to clear this."
+    );
+  }
+  const cappedProjects = summary.window.capped ?? [];
+  if (cappedProjects.length > 0) {
+    // Deliberately a NOTE and not a WARNING: nothing is known to have been lost. The distinction
+    // this line exists to draw is that the endpoint could not RULE IT OUT — a page exactly at the
+    // maximum is what both a capped trail and a project with exactly that many events return.
+    out.push(
+      `NOTE:     activity page CAPPED at exactly ${ACTIVITY_PAGE} events for project(s) ${cappedProjects.join(", ")} — ` +
+      `the report asks for ${ACTIVITY_PROBE} so a longer page would PROVE truncation, but the endpoint clamps the ` +
+      `limit at ${ACTIVITY_PAGE}, so a project holding exactly that many events is indistinguishable from a capped ` +
+      "one. NOT gated: gating here would make any board past that count permanently unadjudicable. Pass --since to " +
+      "remove the doubt."
     );
   }
   if (covered.length > 0) {
@@ -1232,8 +1378,9 @@ export async function fetchActivity(apiBase, { fetchImpl = fetch, timeoutMs = FE
   const events = [];
   const truncated = [];
   const truncatedCovered = [];
+  const capped = [];
   for (const project of projects) {
-    const url = `${apiBase}/api/projects/${project.id}/activity?limit=${ACTIVITY_PAGE}`;
+    const url = `${apiBase}/api/projects/${project.id}/activity?limit=${ACTIVITY_PROBE}`;
     const page = await getJson(fetchImpl, url, timeoutMs);
     if (!Array.isArray(page)) {
       throw new Error(`GET ${url} did not return a list of events.`);
@@ -1242,8 +1389,8 @@ export async function fetchActivity(apiBase, { fetchImpl = fetch, timeoutMs = FE
     // otherwise read as local time, shifting every event by the host's UTC offset.
     const normalized = page.map(normalizeEvent);
     for (const event of normalized) events.push(event);
-    // The endpoint caps at 500 with no continuation token or offset parameter, so a full page means
-    // events were dropped and there is no clean way to fetch the rest.
+    // The endpoint has no continuation token or offset parameter, so a page that hit its limit
+    // means events were dropped and there is no clean way to fetch the rest.
     //
     // BUT A FULL PAGE IS NOT AUTOMATICALLY A PROBLEM, and treating it as one is a ONE-WAY DOOR: a
     // project's lifetime event count only grows, so the moment any single project crosses 500 the
@@ -1251,18 +1398,38 @@ export async function fetchActivity(apiBase, { fetchImpl = fetch, timeoutMs = FE
     // returns NEWEST FIRST, so what a full page drops is the OLDEST events, and those can only cost
     // the measurement anything if they fell INSIDE the window. The page reaches back to its own
     // oldest returned event: if that already predates `--since`, the page covers the whole window
-    // and everything dropped is out of scope. With no `--since` there is no floor to compare
-    // against, so a full page stays harmful. Narrowing the window is then a real remedy rather than
-    // a flag that waves the gate through.
-    if (page.length !== ACTIVITY_PAGE) continue;
+    // and everything dropped is out of scope.
+    //
+    // AND "FULL" IS NOW THREE STATES, NOT TWO, because `page.length !== ACTIVITY_PAGE` could not
+    // tell a capped page from a project that simply has exactly `ACTIVITY_PAGE` events. Asking for
+    // ACTIVITY_PROBE (= ACTIVITY_PAGE + 1) separates them wherever the server will answer:
+    //
+    //   < ACTIVITY_PAGE   the trail ended on its own                        -> complete
+    //   > ACTIVITY_PAGE   strictly more events exist than a window holds    -> TRUNCATED, gated
+    //   = ACTIVITY_PAGE   either exactly that many events, or the server    -> CAPPED, disclosed
+    //                     clamped the probe. THIS ENDPOINT CANNOT TELL.
+    //
+    // The clamp (`Math.Clamp(limit ?? 100, 1, 500)`) means the middle case cannot arise against
+    // today's server, so in practice every full page lands in `capped`. That is a deliberate
+    // trade and the honest one: `capped` is NOT evidence that anything was dropped, and gating on
+    // it is what made a 500-event board unadjudicable forever. It is reported on every run — in
+    // the header and in signals 2 and 3's caveats — with `--since` named as the remedy, and the
+    // probe starts distinguishing the two the moment the server's clamp rises above it. What is
+    // NOT acceptable is scoring UNMEASURED and exiting 1 on a board where nothing was lost.
+    if (page.length < ACTIVITY_PAGE) continue;
     const instants = normalized.map(e => Date.parse(e?.createdAt)).filter(Number.isFinite);
     const oldest = instants.length > 0 ? Math.min(...instants) : null;
-    // No cutoff, or nothing datable to compare: assume harmful. Assuming coverage that cannot be
-    // demonstrated is the direction that scores a signal the report never measured.
-    if (cutoff === null || !Number.isFinite(cutoff) || oldest === null || oldest > cutoff) truncated.push(project.id);
-    else truncatedCovered.push(project.id);
+    // The page reaches back past the cutoff, so whatever it may have dropped is older than the
+    // trial. True whether the page was proven truncated or merely capped.
+    if (cutoff !== null && Number.isFinite(cutoff) && oldest !== null && oldest <= cutoff) {
+      truncatedCovered.push(project.id);
+    } else if (page.length > ACTIVITY_PAGE) {
+      truncated.push(project.id);
+    } else {
+      capped.push(project.id);
+    }
   }
-  return { events, truncated, truncatedCovered };
+  return { events, truncated, truncatedCovered, capped };
 }
 
 /**
@@ -1362,9 +1529,10 @@ async function main(argv) {
   let events = [];
   let truncated = [];
   let truncatedCovered = [];
+  let capped = [];
   let activityAvailable = true;
   try {
-    ({ events, truncated, truncatedCovered } = await fetchActivity(apiBase, { since }));
+    ({ events, truncated, truncatedCovered, capped } = await fetchActivity(apiBase, { since }));
   } catch (error) {
     activityAvailable = false;
     // Deliberately NOT "KanbanFlow is not answering": an ActivityHttpError means it answered and
@@ -1374,7 +1542,7 @@ async function main(argv) {
   }
 
   const summary = summarize({
-    rows, events, repoRoots, repoRootSource, since, truncated, truncatedCovered,
+    rows, events, repoRoots, repoRootSource, since, truncated, truncatedCovered, capped,
     sources: { log: logAvailable && !nothingParsed, activity: activityAvailable }
   });
   console.log(asJson
