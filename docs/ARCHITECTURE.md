@@ -406,7 +406,7 @@ path, and a path under `.worktrees/` disappears the moment the worktree is remov
 
 ### The adoption trial's instrument
 
-#477 commits to adopting or reverting this whole integration on four measured signals. Three of them
+Issue #477 commits to adopting or reverting this whole integration on four measured signals. Three of them
 are invisible to the audit trail: `get_next_tasks` is a read and emits no `ActivityEvent`, and a
 caller's working directory was never recorded anywhere at all.
 

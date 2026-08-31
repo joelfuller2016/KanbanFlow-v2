@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     Register (or re-register) the scheduled task that keeps KanbanFlow running. See #477.
 
@@ -130,7 +130,14 @@ try {
     # .Repetition onto a logon trigger, which is the fragile idiom this could otherwise have used.
     # Omitting -RepetitionDuration is what yields an indefinite repeat (verified on 5.1: Duration
     # comes back empty, matching the hand-registered task's PT10M-with-no-end).
-    $logonTrigger = New-ScheduledTaskTrigger -AtLogOn -User "$env:USERDOMAIN\$env:USERNAME"
+    # Resolve the account from the real Windows identity: $env:USERDOMAIN can be empty or
+    # overridden, which would hand both cmdlets an invalid or unintended account.
+    $taskIdentity = [Security.Principal.WindowsIdentity]::GetCurrent().Name
+    if ([string]::IsNullOrWhiteSpace($taskIdentity)) {
+        throw "Could not resolve the current Windows identity for the scheduled task."
+    }
+
+    $logonTrigger = New-ScheduledTaskTrigger -AtLogOn -User $taskIdentity
     $keepaliveTrigger = New-ScheduledTaskTrigger -Once -At (Get-Date) `
         -RepetitionInterval (New-TimeSpan -Minutes $KeepaliveMinutes)
 
@@ -147,7 +154,7 @@ try {
     # look nothing like its cause.
 
     $principal = New-ScheduledTaskPrincipal `
-        -UserId "$env:USERDOMAIN\$env:USERNAME" `
+        -UserId $taskIdentity `
         -LogonType Interactive `
         -RunLevel Limited
 
@@ -183,8 +190,14 @@ try {
         # task history, and a clean history is worth more than one saved condition.
         $healthy = $false
         try {
-            $response = Invoke-WebRequest -Uri 'http://127.0.0.1:5123/api/admin/health' -UseBasicParsing -TimeoutSec 3
-            if ($response.StatusCode -eq 200) { $healthy = $true }
+            # A -WhatIf preview must stay side-effect free, so the probe itself is skipped.
+            # The StatusCode test lives INSIDE the gate too: $response is otherwise never
+            # assigned, and Set-StrictMode would throw on reading it — caught below, but
+            # relying on an exception for control flow is not the same as not doing it.
+            if (-not $WhatIfPreference) {
+                $response = Invoke-WebRequest -Uri 'http://127.0.0.1:5123/api/admin/health' -UseBasicParsing -TimeoutSec 3
+                if ($response.StatusCode -eq 200) { $healthy = $true }
+            }
         }
         catch {
             $healthy = $false
