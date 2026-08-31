@@ -159,9 +159,18 @@ export function normalizeEvent(event) {
  */
 export function normalizeTaskId(value) {
   if (typeof value === "number") return Number.isSafeInteger(value) ? value : null;
-  // `Number("")`, `Number(null)` and `Number(true)` are all real numbers, so a bare `Number()`
-  // would invent ids 0 and 1 out of empty and boolean values.
-  if (typeof value !== "string" || value.trim().length === 0) return null;
+  if (typeof value !== "string") return null;
+  // The SAME shape check the wrapper applies (`coerceInt`, mcp-server.mjs) and the recorder
+  // applies (`buildRow`, usage-log.mjs) — a base-10 integer string and nothing else.
+  //
+  // A bare `Number()` was wrong in both directions. It invents ids out of values that are not
+  // ids at all (`Number("")` and `Number(null)` are 0, `Number(true)` is 1), and it ACCEPTS
+  // three shapes the wrapper explicitly rejects before coercion: `"0x10"` became 16, `"1e3"`
+  // became 1000, and `" 3 "` became 3. Bucketing on those means this report can resolve a task
+  // id that the board never accepted, so two rows could be merged into a collision that never
+  // happened — or a real one split apart. Mirroring the producer's grammar exactly is the whole
+  // point of the function; approximating it reintroduces the bug it exists to prevent.
+  if (!/^[+-]?\d+$/.test(value)) return null;
   const parsed = Number(value);
   return Number.isSafeInteger(parsed) ? parsed : null;
 }

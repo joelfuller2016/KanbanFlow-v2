@@ -695,3 +695,24 @@ test("the MCP test harnesses spawn the wrapper with recording OFF", () => {
       `${harness} drives the wrapper for real and must spawn it with usage recording off`);
   }
 });
+
+// --- Review findings on PR #504 ------------------------------------------------------------
+
+test("rotation takes a FREE archive slot instead of destroying the oldest", () => {
+  // Reported on PR #504. shiftArchives() unlinked the last generation unconditionally, so with a
+  // gap left by an earlier failed rename, `.5` was deleted while `.3` sat empty and would have
+  // taken the archive without displacing anything. Bounded history is the goal; gratuitous loss
+  // is not.
+  const dir = tmp();
+  const logPath = path.join(dir, "usage.jsonl");
+  fs.writeFileSync(logPath, `${JSON.stringify({ ts: "2026-09-01T10:00:00.000Z", session: "live", tool: "list_projects", cwd: "C:\w", outcome: "ok", ms: 1 })}\n`);
+  fs.writeFileSync(`${logPath}.1`, "gen1\n");
+  fs.writeFileSync(`${logPath}.2`, "gen2\n");
+  fs.writeFileSync(`${logPath}.5`, "OLDEST-MUST-SURVIVE\n");   // gap: .3 and .4 are free
+
+  const logger = createUsageLogger({ logPath, sessionId: "s", cwd: "C:\w", maxBytes: 1 });
+  logger.record({ tool: "list_projects", args: {}, outcome: "ok", ms: 1 });
+
+  assert.ok(fs.existsSync(`${logPath}.5`), "the oldest generation must not be dropped while a slot is free");
+  assert.equal(fs.readFileSync(`${logPath}.5`, "utf8").trim(), "OLDEST-MUST-SURVIVE");
+});

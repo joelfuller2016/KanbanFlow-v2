@@ -384,10 +384,20 @@ export function createUsageLogger(options = {}) {
    * the end of the bound, which is the price of keeping the history bounded at all. Anything that
    * cannot be moved is left where it is and firstFreeArchive() routes around it.
    */
+  // Shifting is what keeps `.1` the NEWEST archive and higher numbers older — the ordering the
+  // report reads generations in. So the shift itself is not optional: filling the first FREE slot
+  // instead would land a new archive at `.3` while `.1` held a newer one, silently inverting the
+  // sequence for every later read.
+  //
+  // What IS optional is destroying the last generation. It only has to go when the shift genuinely
+  // needs its slot — i.e. when the generation below it exists and is about to move up. Unlinking
+  // it unconditionally loses history for nothing whenever a gap has opened below (gaps arise when
+  // an earlier rename failed), which is what a review of PR #504 caught.
   function shiftArchives() {
     const oldest = `${logPath}.${MAX_ARCHIVE_GENERATIONS}`;
+    const displacing = `${logPath}.${MAX_ARCHIVE_GENERATIONS - 1}`;
     try {
-      if (fs.existsSync(oldest)) fs.unlinkSync(oldest);
+      if (fs.existsSync(displacing) && fs.existsSync(oldest)) fs.unlinkSync(oldest);
     } catch { /* leave it; the loop below will refuse to overwrite it */ }
 
     for (let i = MAX_ARCHIVE_GENERATIONS - 1; i >= 1; i--) {

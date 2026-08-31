@@ -1822,3 +1822,22 @@ test("every WRITE_TOOLS and MUTATING_TOOLS name still exists in the wrapper — 
     assert.ok(MUTATING_TOOLS.has(tool), `${tool} must count as a board mutation`);
   }
 });
+
+// --- Review findings on PR #504 ------------------------------------------------------------
+
+test("normalizeTaskId mirrors the wrapper's grammar exactly, not Number()'s", () => {
+  // Reported on PR #504. `coerceInt` (mcp-server.mjs) accepts a base-10 integer string and
+  // NOTHING else — it rejects hex, exponent and whitespace-padded forms BEFORE coercing. A bare
+  // Number() accepted all three, so this report could resolve a task id the board never took,
+  // merging rows into a collision that never happened or splitting a real one apart.
+  assert.equal(normalizeTaskId("0x10"), null, "hex is rejected by coerceInt, so it must be here");
+  assert.equal(normalizeTaskId("1e3"), null, "exponent likewise");
+  assert.equal(normalizeTaskId(" 3 "), null, "whitespace-padded likewise");
+  assert.equal(normalizeTaskId("7.5"), null);
+  assert.equal(normalizeTaskId("7abc"), null);
+  // ...while everything the wrapper DOES accept still resolves to one bucket.
+  assert.equal(normalizeTaskId("42"), 42);
+  assert.equal(normalizeTaskId("007"), 7);
+  assert.equal(normalizeTaskId("+42"), 42);
+  assert.equal(normalizeTaskId(42), 42);
+});
