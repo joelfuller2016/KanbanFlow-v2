@@ -2057,3 +2057,24 @@ test("a misconfigured log path degrades to UNMEASURED instead of aborting the ru
   assert.match(out, /^OVERALL/m, "a verdict line is still produced");
   assert.ok(code !== 0, "and the run still exits non-zero");
 });
+
+test("a row with no session is malformed, and cannot become a participant", () => {
+  // Reported on PR #504. parseRows validated only tool and ts, so a session-less row reached
+  // summarize and keyed every participant map on `undefined`. Every such row collapses to that
+  // one key, so the log gains exactly one session no recorder ever minted — and signal 1's adopt
+  // threshold is >= 3, so two genuine sessions plus one session-less row scored ADOPT. That is
+  // the fabricated-adopt direction this file exists to prevent.
+  const noSession = { ts: "2026-09-01T10:00:02.000Z", tool: "get_next_tasks", cwd: "C:\\other", outcome: "ok", ms: 1 };
+  const parsed = parseRows(JSON.stringify(noSession));
+  assert.equal(parsed.rows.length, 0, "a session-less row is not usable");
+  assert.equal(parsed.malformed, 1, "and it is COUNTED, not silently dropped");
+
+  // summarize is exported and documented as the pure adjudication entry point, so it must not
+  // rely on the caller having sanitised its rows.
+  const real = n => ({ ts: "2026-09-01T10:00:0" + n + ".000Z", session: "s" + n,
+    tool: "get_next_tasks", cwd: "C:\\other", outcome: "ok", ms: 1 });
+  const s1 = summarize({ rows: [real(0), real(1), noSession], events: [], repoRoots: ["C:\\repo"],
+    repoRootSource: "git", sources: { log: true, activity: true } }).signals.find(s => s.id === 1);
+  assert.equal(s1.value, 2, "two real sessions, not three");
+  assert.notEqual(s1.verdict, "ADOPT", "a phantom session must not carry the >= 3 threshold");
+});

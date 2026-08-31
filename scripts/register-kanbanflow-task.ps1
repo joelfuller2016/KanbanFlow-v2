@@ -154,8 +154,8 @@
 param(
     [ValidateNotNullOrEmpty()][string] $TaskName = 'kanbanflow-app',
     [ValidateRange(1, 1440)][int] $KeepaliveMinutes = 5,
-    [string] $HealthUrl,
-    [string] $DbPath,
+    [ValidateNotNullOrEmpty()][string] $HealthUrl,
+    [ValidateNotNullOrEmpty()][string] $DbPath,
     [ValidateRange(5, 3600)][int] $StartTimeoutSeconds = 180,
     [switch] $RequireStartupTrigger,
     [switch] $NoStart,
@@ -608,6 +608,19 @@ try {
     # GetUnresolvedProviderPathFromPSPath, not [Path]::GetFullPath: it honours PowerShell's own
     # location, which can differ from the process working directory.
     $resolvedDb = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($resolvedDb)
+
+    # The path is interpolated INSIDE a double-quoted argument in the task action below, so a quote
+    # character would close that argument and append whatever follows as further launcher
+    # arguments -- persisted into the registered task, where it runs unattended at every boot.
+    # The value does not have to be typed by the operator: it falls back to $env:KANBANFLOW_DB_PATH
+    # above. Canonicalisation does not help, because GetUnresolvedProviderPathFromPSPath normalises
+    # separators and leaves a quote intact. The post-registration check does not catch it either --
+    # it looks for the resolved path as a SUBSTRING of the argument string, which a longer injected
+    # string still satisfies. So refuse the value rather than trying to escape it: a legitimate
+    # Windows path cannot contain a quote at all ('"' is not a valid NTFS filename character).
+    if ($resolvedDb -match '"') {
+        throw "The database path contains a double-quote character and cannot be pinned into the task action: $resolvedDb"
+    }
 
     # -ExecutionPolicy Bypass so the task does not die on a machine whose user policy is Restricted
     # -- a scheduled task has no console to prompt at, so a policy block there is a silent failure.

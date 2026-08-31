@@ -391,7 +391,7 @@ Three triggers, and each covers a case the others cannot:
 |---|---|
 | **AtStartup** | The only one that survives an **unattended** reboot. Needs elevation to register. |
 | **AtLogOn** | Covers a reboot that ends at a logon. |
-| **Once + `PT5M`** | Keepalive. Revives the app within five minutes if it ever exits cleanly (`-KeepaliveMinutes`, default 5). |
+| **Once + `PT5M`** | Keepalive. Revives the app within five minutes of any exit, crash included (`-KeepaliveMinutes`, default 5). |
 
 **Reboot survival requires one elevated run, and this is not a preference.** Windows refuses both
 the boot trigger and the `S4U` principal to a non-elevated shell — measured three ways, all

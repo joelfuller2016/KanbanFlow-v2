@@ -224,9 +224,17 @@ export function parseRows(text) {
       // a string comparison and the row is counted, while with a `--since` the NaN comparison drops
       // it silently — and it can become the reported window start either way. Tolerating a malformed
       // line means COUNTING it, not passing it on, so both shapes land in `malformed`.
+      // `session` is required for the same reason. Every signal that counts PARTICIPANTS keys on
+      // it, so a row without one becomes a session keyed `undefined` — and because every such row
+      // collapses to that single key, the log gains exactly one participant no recorder ever
+      // minted. Signal 1's adopt threshold is `>= 3`, so two genuine sessions plus one session-less
+      // row scores ADOPT. That is the fabricated-adopt direction this file exists to prevent, and
+      // it also keeps `session:undefined` out of `writersByTask` and out of signal 2's vacuity
+      // guard, both of which count distinct sessions.
       const usable =
         row && typeof row === "object" &&
         typeof row.tool === "string" &&
+        typeof row.session === "string" && row.session.length > 0 &&
         typeof row.ts === "string" &&
         Number.isFinite(Date.parse(row.ts));
       if (usable) rows.push(row);
@@ -795,7 +803,14 @@ export function summarize({
   // having sanitized the input: handed a ts-less row, signal 1's `a.first.localeCompare(b.first)`
   // threw a TypeError in five of the six possible orderings, surviving only when the bad row
   // happened to sort first — a crash that a single-ordering test would pass by luck.
-  const windowRows = rows.filter(r => typeof r?.ts === "string" && Number.isFinite(Date.parse(r.ts)) && inWindow(r.ts));
+  // `session` is required here as well as in parseRows, not only there: summarize is exported and
+  // documented as the pure adjudication entry point, so it must not depend on its caller having
+  // sanitised the rows. A session-less row would key every participant map on `undefined` and add
+  // one participant nothing ever recorded — enough on its own to carry signal 1 to its `>= 3`
+  // adopt threshold.
+  const windowRows = rows.filter(r =>
+    typeof r?.session === "string" && r.session.length > 0 &&
+    typeof r?.ts === "string" && Number.isFinite(Date.parse(r.ts)) && inWindow(r.ts));
   // Normalized HERE TOO, at this function's own input boundary — not inside `inWindow`.
   //
   // `fetchActivity` already normalizes what IT fetches, and that remains the primary fix. But

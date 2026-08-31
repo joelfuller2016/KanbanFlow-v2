@@ -638,11 +638,14 @@ test("four REAL concurrent processes lose nothing", { timeout: 60_000 }, async (
   const childPath = path.join(dir, "child.mjs");
   const processes = 4;
   const perProcess = 150;
-  // Same sizing rule as the two-recorder case: four interleaved writers archive about 4*cap per
-  // rotation, so this cap buys two to four real rotations and still leaves a spare generation.
-  // Measured over a dozen runs: 2–4 generations used, never 5, and never a lost row. Overwriting
-  // `.1` the way the old code did would retain only the live file plus one archive — under half.
-  const cap = 8000;
+  // The cap is chosen so the TOTAL volume cannot span the generation bound, rather than from a
+  // measured rotation count. 4 writers x 150 rows at roughly 150 bytes is about 90 KB, and there
+  // are six files to hold it (the live log plus MAX_ARCHIVE_GENERATIONS archives), so a cap of
+  // 20 KB leaves 120 KB of capacity. The previous 8 KB relied on the interleaving producing 2-4
+  // rotations; a slower or faster machine could produce a fifth, legitimately evict the oldest
+  // archive, and fail this test for a reason that is not the defect under test. Rotation is still
+  // genuinely exercised -- 90 KB against a 20 KB cap forces several.
+  const cap = 20000;
   const spinNs = 50_000n;   // a beat between rows, so the four really do overlap rather than queue
 
   fs.writeFileSync(childPath, `
