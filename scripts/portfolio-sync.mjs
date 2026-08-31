@@ -50,6 +50,9 @@
 
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import { realpathSync } from "node:fs";
+import { resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 // BOTH imports are used. `derivePriority` sets TaskItem.Priority in `syncTasks()` and backs the
 // priority-drift check in `statusRepo()`; `priorityFromLabel` is called by `labelForPriority()`
 // below, which picks the label a pushed issue should carry so the priority survives the round trip.
@@ -76,7 +79,22 @@ const DEFAULT_REPOS = [
 ];
 
 const UNSORTED_FEATURE = "Unsorted";
-const BODY_EXCERPT_LIMIT = 1500;
+const SYNC_DESCRIPTION_PREFIX = "<!-- kanbanflow-sync -->\n**Issue:** ";
+const TRUNCATION_FOOTER = "…(truncated — see the issue)";
+const SIGNALR_MAX_RECEIVE_BYTES = 32_768;
+// Assume a 32,768-byte receive limit and reserve exactly 10% for any protocol envelope and fields
+// other than the markdown: ceil(32,768 / 10) = 3,277 bytes. This repo does not configure or prove
+// that transport limit, so it is a conservative compatibility assumption, not a protocol guarantee.
+// The enforced 29,491-byte description limit measures JSON.stringify(description), including the
+// expansion of newlines, quotes and backslashes plus the JSON string's surrounding quotes.
+const SIGNALR_ENVELOPE_HEADROOM_BYTES = Math.ceil(SIGNALR_MAX_RECEIVE_BYTES / 10);
+const MAX_DESCRIPTION_BYTES = SIGNALR_MAX_RECEIVE_BYTES - SIGNALR_ENVELOPE_HEADROOM_BYTES;
+const MIN_BODY_EXCERPT_BYTES = 1_024;
+const requestedBodyLimit = Number.parseInt(process.env.KANBANFLOW_BODY_EXCERPT_LIMIT || "", 10);
+const BODY_EXCERPT_LIMIT = Math.min(
+  MAX_DESCRIPTION_BYTES,
+  Math.max(MIN_BODY_EXCERPT_BYTES, Number.isFinite(requestedBodyLimit) ? requestedBodyLimit : MAX_DESCRIPTION_BYTES),
+);
 // High enough that no repo in the portfolio comes near it, because SATURATING it is a hard
 // failure, not a warning: a read that stopped early makes every count and every "no drift"
 // verdict downstream a lie. Overridable so the incompleteness path can actually be exercised.
@@ -339,8 +357,8 @@ function collectComments(issue, linkedPr) {
 
 function commentTextFor(c, maxChars) {
   let body = c.body;
-  if (maxChars > 0 && body.length > maxChars) {
-    body = `${body.slice(0, maxChars)}\n\n…(truncated at ${maxChars} chars — read it on GitHub)`;
+  if (maxChars > 0) {
+    body = excerptFor(body, maxChars, "…(truncated — read it on GitHub)");
   }
   return `<!-- gh:${c.ghId} -->\n${c.header}\n\n${body}`;
 }
@@ -459,7 +477,54 @@ function stripSyncBlock(description) {
     .trim();
 }
 
+const utf8Bytes = (value) => Buffer.byteLength(value, "utf8");
+const serializedUtf8Bytes = (value) => utf8Bytes(JSON.stringify(String(value)));
+const OPEN_FENCE_LINE = /^ {0,3}(`{3,}|~{3,})(.*)$/;
+const CLOSE_FENCE_LINE = /^ {0,3}(`{3,}|~{3,})[ \t]*$/;
+
+function unclosedFence(text) {
+  let open = null;
+  for (const line of text.split("\n")) {
+    if (open) {
+      const close = CLOSE_FENCE_LINE.exec(line);
+      const marker = close?.[1];
+      if (marker && marker[0] === open[0] && marker.length >= open.length) open = null;
+      continue;
+    }
+    const opener = OPEN_FENCE_LINE.exec(line);
+    if (!opener) continue;
+    const marker = opener[1];
+    const info = opener[2];
+    if (marker[0] === "`" && info.includes("`")) continue;
+    open = marker;
+  }
+  return open;
+}
+
+// Return the longest line-boundary excerpt whose complete rendered value fits maxBytes. Both
+// backtick and tilde fences are recognised; an open retained fence is closed before the prose
+// footer. Recomputing the footer and fence for each candidate charges the caller's exact size.
+function excerptFor(body, maxBytes, footer = TRUNCATION_FOOTER, sizeOf = utf8Bytes) {
+  const source = String(body || "");
+  if (sizeOf(source) <= maxBytes) return source;
+
+  const render = (kept) => {
+    const fence = unclosedFence(kept);
+    return `${kept}${fence ? `\n${fence}` : ""}\n\n${footer}`;
+  };
+  let kept = "";
+  let newline = source.indexOf("\n");
+  while (newline !== -1) {
+    const candidate = source.slice(0, newline);
+    if (sizeOf(render(candidate)) > maxBytes) break;
+    kept = candidate;
+    newline = source.indexOf("\n", newline + 1);
+  }
+  return render(kept);
+}
+
 function descriptionFor(issue, linkedPr) {
+  const oversizedHeaderStub = "<!-- kanbanflow-sync -->\n**Issue:** (provenance omitted: header exceeded description budget)\n<!-- /kanbanflow-sync -->";
   const labels = (issue.labels || []).map((l) => l.name).join(", ") || "none";
   const milestone = issue.milestone?.title || "none";
   const lines = [
@@ -471,11 +536,34 @@ function descriptionFor(issue, linkedPr) {
     "<!-- /kanbanflow-sync -->",
     "",
   ];
+  let prefix = `${lines.join("\n")}\n`;
+  if (serializedUtf8Bytes(`${prefix}\n\n${TRUNCATION_FOOTER}`) > BODY_EXCERPT_LIMIT) {
+    return oversizedHeaderStub;
+  }
   const body = String(issue.body || "").trim();
   if (body) {
-    lines.push(body.length > BODY_EXCERPT_LIMIT ? `${body.slice(0, BODY_EXCERPT_LIMIT)}\n\n…(truncated — see the issue)` : body);
+    // Charge the complete JSON-serialized description for every candidate. This accounts for
+    // escaping in both the generated prefix and markdown body, rather than treating raw bytes as
+    // though they were the wire representation.
+    const descriptionSize = (candidateBody) => serializedUtf8Bytes(`${prefix}${candidateBody}`);
+    lines.push(excerptFor(body, BODY_EXCERPT_LIMIT, TRUNCATION_FOOTER, descriptionSize));
   }
   return lines.join("\n");
+}
+
+// Issue #495 tracks general description reconciliation. This is intentionally only its narrow,
+// conservative slice: refresh descriptions that still have both our exact generated header shape
+// and our truncation footer. Anything else may contain a human edit and must be left untouched.
+function descriptionRefreshFor(storedDescription, regeneratedDescription) {
+  const stored = String(storedDescription || "");
+  if (!stored.startsWith(SYNC_DESCRIPTION_PREFIX)) return null;
+  if (!stored.trimEnd().endsWith(TRUNCATION_FOOTER)) return null;
+  // `descriptionFor()` stamps the current time. Ignore that one generated field when deciding
+  // whether the body is stale, or a still-truncated large issue would be rewritten on every run.
+  const withoutSyncTime = (value) => value.replace(/^\*\*Synced:\*\* .*$/m, "**Synced:**");
+  return withoutSyncTime(stored) === withoutSyncTime(regeneratedDescription)
+    ? null
+    : regeneratedDescription;
 }
 
 // --- KanbanFlow REST --------------------------------------------------------------------
@@ -500,7 +588,7 @@ async function api(method, path, body) {
 
 const stats = {
   projectsCreated: 0, featuresCreated: 0, tasksCreated: 0,
-  tasksUpdated: 0, tasksMoved: 0, tasksUnchanged: 0,
+  tasksUpdated: 0, tasksMoved: 0, tasksUnchanged: 0, descriptionsRefreshed: 0,
   commentsCreated: 0, commentsUnchanged: 0, commentFetchFailures: 0,
   projectsLinked: 0, issuesPreviewed: 0,
   biggestComment: { chars: 0, author: null, issue: null },
@@ -647,6 +735,8 @@ async function syncTasks(repo, projectId, issues, closedNumbers, prByIssue, feat
     const patch = {};
     if (task.name !== desiredName) patch.name = desiredName;
     if (task.priority !== desiredPriority) patch.priority = desiredPriority;
+    const refreshedDescription = descriptionRefreshFor(task.description, descriptionFor(issue, linkedPr));
+    if (refreshedDescription !== null) patch.description = refreshedDescription;
 
     const closed = issue.state && issue.state.toUpperCase() === "CLOSED";
     if (closed && task.status !== "Done") {
@@ -660,12 +750,16 @@ async function syncTasks(repo, projectId, issues, closedNumbers, prByIssue, feat
     if (Object.keys(patch).length === 0) { stats.tasksUnchanged++; continue; }
 
     plan(dryRun, "update task", `${desiredName}  ${JSON.stringify(patch)}`);
-    if (dryRun) continue;
+    if (dryRun) {
+      if (patch.description !== undefined) stats.descriptionsRefreshed++;
+      continue;
+    }
     // PUT /api/tasks/{id} rejects any payload without `name` — 422 "Name is required."
     // (ApiEndpoints.cs:1451). So `name` always goes on the wire, even when unchanged;
     // `patch` exists only to detect *whether* anything differs and to log what.
     await api("PUT", `/api/tasks/${task.id}`, { ...patch, name: desiredName, actor });
     stats.tasksUpdated++;
+    if (patch.description !== undefined) stats.descriptionsRefreshed++;
   }
 
   // Board tasks whose issue was not in the set we just processed. Two very different cases —
@@ -1181,6 +1275,7 @@ async function main() {
   console.log(`features created: ${stats.featuresCreated}`);
   console.log(`tasks created:    ${stats.tasksCreated}`);
   console.log(`tasks updated:    ${stats.tasksUpdated}`);
+  console.log(`descriptions refreshed: ${stats.descriptionsRefreshed}`);
   console.log(`tasks moved:      ${stats.tasksMoved}`);
   console.log(`tasks unchanged:  ${stats.tasksUnchanged}`);
   if (args.comments) {
@@ -1209,7 +1304,24 @@ async function main() {
   }
 }
 
-main().catch((err) => {
-  console.error(err);
-  process.exit(1);
-});
+function resolvedEntry(p) {
+  try { return realpathSync(resolve(p)); } catch { return resolve(p); }
+}
+const selfPath = fileURLToPath(import.meta.url);
+const invokedDirectly = Boolean(process.argv[1])
+  && (resolve(process.argv[1]) === selfPath || resolvedEntry(process.argv[1]) === selfPath);
+
+if (invokedDirectly) {
+  main().catch((err) => {
+    console.error(err);
+    process.exit(1);
+  });
+}
+
+export {
+  BODY_EXCERPT_LIMIT,
+  MAX_DESCRIPTION_BYTES,
+  descriptionRefreshFor,
+  descriptionFor,
+  excerptFor,
+};
