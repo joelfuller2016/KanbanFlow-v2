@@ -19,6 +19,23 @@ test("a multi-byte body is capped by UTF-8 bytes", async () => {
   assert.match(output, /truncated/);
 });
 
+test("--max-comment-chars truncates multi-byte comments by characters, not UTF-8 bytes", async () => {
+  const { commentTextFor } = await load(undefined, "multibyte-comment-chars");
+  const firstLine = "漢字漢字漢字漢字漢字";
+  const comment = {
+    ghId: "IC_multibyte",
+    header: "**octocat** commented:",
+    body: `${firstLine}\n${"続".repeat(60)}`,
+  };
+  const output = commentTextFor(comment, 50);
+  const mirroredBody = output.slice(output.indexOf("\n\n") + 2);
+
+  assert.equal(mirroredBody, `${firstLine}\n\n…(truncated — read it on GitHub)`);
+  assert.ok(mirroredBody.length <= 50);
+  assert.ok(Buffer.byteLength(mirroredBody, "utf8") > 50,
+    "fixture must exceed the byte budget so reverting the call site to byte counting fails");
+});
+
 test("an ASCII body near the byte boundary is not truncated unnecessarily", async () => {
   const { excerptFor } = await load(undefined, "ascii");
   const body = "a".repeat(200);

@@ -82,7 +82,7 @@ const UNSORTED_FEATURE = "Unsorted";
 const SYNC_DESCRIPTION_PREFIX = "<!-- kanbanflow-sync -->\n**Issue:** ";
 const TRUNCATION_FOOTER = "…(truncated — see the issue)";
 const SIGNALR_MAX_RECEIVE_BYTES = 32_768;
-// Assume a 32,768-byte receive limit and reserve exactly 10% for any protocol envelope and fields
+// Assume a 32,768-byte receive limit and reserve at least 10% for any protocol envelope and fields
 // other than the markdown: ceil(32,768 / 10) = 3,277 bytes. This repo does not configure or prove
 // that transport limit, so it is a conservative compatibility assumption, not a protocol guarantee.
 // The enforced 29,491-byte description limit measures JSON.stringify(description), including the
@@ -358,7 +358,7 @@ function collectComments(issue, linkedPr) {
 function commentTextFor(c, maxChars) {
   let body = c.body;
   if (maxChars > 0) {
-    body = excerptFor(body, maxChars, "…(truncated — read it on GitHub)");
+    body = excerptFor(body, maxChars, "…(truncated — read it on GitHub)", (value) => value.length);
   }
   return `<!-- gh:${c.ghId} -->\n${c.header}\n\n${body}`;
 }
@@ -1321,6 +1321,7 @@ if (invokedDirectly) {
 export {
   BODY_EXCERPT_LIMIT,
   MAX_DESCRIPTION_BYTES,
+  commentTextFor,
   descriptionRefreshFor,
   descriptionFor,
   excerptFor,
