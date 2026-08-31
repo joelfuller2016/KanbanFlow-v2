@@ -2338,6 +2338,55 @@ async function main() {
         `Esc on the PROMOTE confirm must cancel it — the idea is now ${notPromoted.status}`);
     });
 
+    // TaskDetailPanel makes the same aria-modal promise as the confirms above and deliberately
+    // shares their initDialog/destroyDialog wiring. Keep it in this harness: a separate test with
+    // a different definition of focus containment could let the shared behavior silently diverge.
+    await test("Task detail panel traps Tab, Escape closes it, and focus returns to its card (#483)", async () => {
+      const trapTask = await api("POST", `/api/features/${feature.id}/tasks`, {
+        name: `E2E task detail trap ${stamp}`, status: "Todo",
+      });
+      const panel = '[data-testid="task-detail-panel"]';
+      const card = `[data-testid="board-card-${trapTask.id}"]`;
+      const openerTestid = `board-card-${trapTask.id}-title`;
+
+      await page.goto(`${baseUrl}/project/${proj.id}`);
+      await page.locator(card).waitFor({ state: "visible" });
+      await page.locator(`[data-testid="${openerTestid}"]`).click();
+      await page.locator(panel).waitFor({ state: "visible" });
+
+      const opened = await probeDialogFocus(page, panel);
+      assert(opened.count >= 2,
+        `the task detail panel exposes only ${opened.count} focusable control(s), so the Tab cycle is vacuous`);
+      assert(opened.escapes > 0,
+        "PRECONDITION: no focusable controls exist outside the task detail panel, so an untrapped " +
+        "aria-modal panel would pass this guard by accident");
+      assert(opened.inside,
+        `the task detail panel opened without taking focus — focus is on ${opened.active}`);
+
+      let escapedStops = 0;
+      const escapedOnto = [];
+      const presses = 30;
+      for (let i = 1; i <= presses; i++) {
+        await page.keyboard.press("Tab");
+        const p = await probeDialogFocus(page, panel);
+        if (!p.inside) {
+          escapedStops++;
+          escapedOnto.push(`Tab #${i}: ${p.active}`);
+        }
+      }
+      assert(escapedStops === 0,
+        `${escapedStops} of ${presses} Tab stops escaped the aria-modal task detail panel: ` +
+        escapedOnto.join("; "));
+
+      await page.keyboard.press("Escape");
+      await page.locator(panel).waitFor({ state: "hidden" });
+      const restored = await probeDialogFocus(page, panel);
+      assert(restored.activeTestid === openerTestid,
+        `closing the task detail panel did not return focus to ${card}; focus is on ${restored.active}`);
+
+      await api("DELETE", `/api/tasks/${trapTask.id}`).catch(() => {});
+    });
+
     // ── Scenario: the activity timeline's fold survives a refresh of the SAME task (#328) ──
     //
     // ActivityTimeline re-reads its audit events when TaskId OR RefreshToken changes, and it used

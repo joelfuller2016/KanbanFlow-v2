@@ -169,24 +169,76 @@ public sealed class ClaimStalenessTests
         Assert.Contains("no timestamp", stolen.Message);
     }
 
-    /// <summary>Reclaiming your own stale task is idempotent: it does not renew timestamps, does not churn <c>UpdatedAt</c>, and emits no steal event.</summary>
+    /// <summary>
+    /// Reclaiming your OWN already-expired claim recovers it (#443): the lease is renewed rather
+    /// than left to be stolen by the next caller. It is audited as <c>TaskClaimRenewed</c> -- never
+    /// as <c>TaskClaimStolen</c>, because nothing was taken from anybody.
+    /// </summary>
     [Fact]
-    public async Task ClaimAsync_OwnStaleClaim_IsIdempotent_AndEmitsNoStealEvent()
+    public async Task ClaimAsync_OwnStaleClaim_IsRenewed_AndAuditedAsRenewed_NotStolen()
     {
         using var f = new SqliteTestFactory();
-        var id = SeedClaimedTask(f, "alice", DateTime.UtcNow.AddHours(-9));
-        var svc = new TaskService(f, Ttl);
+        var fixedNow = new DateTime(2026, 8, 30, 12, 0, 0, DateTimeKind.Utc);
+        var seededAt = fixedNow.AddHours(-9);            // 9h old against a 1h TTL: stale
+        var id = SeedClaimedTask(f, "alice", seededAt);
+        var svc = new TaskService(f, Ttl, clock: () => fixedNow);
 
         var beforeReclaim = await Reload(f, id);
         await svc.ClaimAsync(id, "alice");
 
         var afterReclaim = await Reload(f, id);
         Assert.Equal("alice", afterReclaim.ClaimedBy);
-        Assert.Equal(beforeReclaim.ClaimedAt, afterReclaim.ClaimedAt);   // stale claim not renewed
-        Assert.Equal(beforeReclaim.UpdatedAt, afterReclaim.UpdatedAt);   // no UpdatedAt churn
+        // Before #443 both of these asserted equality -- the holder could not renew its own lease.
+        Assert.Equal(fixedNow, afterReclaim.ClaimedAt);
+        Assert.NotEqual(beforeReclaim.ClaimedAt, afterReclaim.ClaimedAt);
+        // Recovering an EXPIRED claim is a real state change, so UpdatedAt does move here.
+        Assert.Equal(fixedNow, afterReclaim.UpdatedAt);
+
         await using var db = await f.CreateDbContextAsync();
         Assert.Empty(await db.ActivityEvents
             .Where(e => e.EntityId == id && e.EventType == "TaskClaimStolen").ToListAsync());
+        var renewed = Assert.Single(await db.ActivityEvents
+            .Where(e => e.EntityId == id && e.EventType == "TaskClaimRenewed").ToListAsync());
+        Assert.Contains("alice", renewed.Message);
+    }
+
+    /// <summary>
+    /// THE #443 HEADLINE. An agent that heartbeats inside the TTL is never stolen from, however long
+    /// it works. This is the test the issue's own plan would NOT have made pass: under a stale-only
+    /// renewal every heartbeat lands in the fresh no-op branch, ClaimedAt never moves, and bob wins
+    /// the moment the original claim ages past the TTL.
+    /// </summary>
+    [Fact]
+    public async Task ClaimAsync_HeartbeatInsideTtl_KeepsTheLeaseAlive_FarBeyondTheTtl()
+    {
+        using var f = new SqliteTestFactory();
+        var now = new DateTime(2026, 8, 30, 12, 0, 0, DateTimeKind.Utc);
+        var id = SeedClaimedTask(f, claimedBy: null, claimedAt: null);
+        var svc = new TaskService(f, Ttl, clock: () => now);
+
+        await svc.ClaimAsync(id, "alice");
+
+        // Beat at half the TTL until FOUR TTLs of wall time have passed.
+        var beat = Ttl / 2;
+        for (var elapsed = TimeSpan.Zero; elapsed < Ttl * 4; elapsed += beat)
+        {
+            now += beat;
+            await svc.ClaimAsync(id, "alice");
+        }
+
+        // alice is demonstrably alive, so bob must still be refused.
+        await Assert.ThrowsAsync<TaskClaimConflictException>(() => svc.ClaimAsync(id, "bob"));
+        Assert.Equal("alice", (await Reload(f, id)).ClaimedBy);
+
+        // And the heartbeat must not have flooded the timeline: one TaskClaimed, no renewals
+        // (every beat was fresh), no steals.
+        await using var db = await f.CreateDbContextAsync();
+        Assert.Equal(1, await db.ActivityEvents
+            .CountAsync(e => e.EntityId == id && e.EventType == "TaskClaimed"));
+        Assert.Equal(0, await db.ActivityEvents
+            .CountAsync(e => e.EntityId == id && e.EventType == "TaskClaimRenewed"));
+        Assert.Equal(0, await db.ActivityEvents
+            .CountAsync(e => e.EntityId == id && e.EventType == "TaskClaimStolen"));
     }
 
     /// <summary>Claiming an unclaimed task still emits <c>TaskClaimed</c>, not <c>TaskClaimStolen</c>.</summary>

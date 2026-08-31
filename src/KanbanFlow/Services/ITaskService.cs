@@ -165,8 +165,11 @@ public interface ITaskService
     Task DeleteProjectAsync(int projectId, string? actor, CancellationToken ct = default);
 
     /// <summary>
-    /// Claim a task for <paramref name="actor"/>. Idempotent when the same actor
-    /// re-claims (the original <see cref="TaskItem.ClaimedAt"/> is preserved). Emits
+    /// Claim a task for <paramref name="actor"/>. A re-claim by the SAME actor is the
+    /// heartbeat: it renews <see cref="TaskItem.ClaimedAt"/> so a live holder keeps its lease
+    /// (#443). A fresh renewal writes ClaimedAt only -- no activity event and no UpdatedAt
+    /// bump -- so a frequent heartbeat cannot flood the timeline; renewing an already-EXPIRED
+    /// claim additionally bumps UpdatedAt and emits <c>TaskClaimRenewed</c>. Emits
     /// <c>TaskClaimed</c> on a fresh claim, or <c>TaskClaimStolen</c> when taking over
     /// an expired claim from another holder. No comment (matches the REST endpoint).
     /// </summary>

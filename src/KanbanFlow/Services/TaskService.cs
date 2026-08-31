@@ -1070,9 +1070,89 @@ public sealed class TaskService(
             throw new TaskClaimConflictException(taskId, task.ClaimedBy, task.ClaimedAt);
         }
 
-        // Idempotent re-claim by the same actor: no audit/UpdatedAt churn.
+        // Same-actor re-claim IS the heartbeat (#443). It must refresh ClaimedAt on BOTH the fresh
+        // and the stale path. #429/#435 turned ClaimedAt into a lease expiry but left this early
+        // return in place from when it was decorative -- so the holder was the one party that could
+        // not move it. A live agent calling claim_task every 5 minutes had every one of those calls
+        // land here and return without a write, and lost its task at exactly the TTL anyway.
+        //
+        // Renewing ONLY a stale claim (as #443's ACs literally read) does not fix that: a heartbeat
+        // inside the TTL is by definition not stale, so it takes the no-op branch and ClaimedAt
+        // never moves. That reading satisfies AC2 while defeating AC4. This implements AC2's own
+        // parenthetical instead: "no-op" means no audit churn and no UpdatedAt bump, not no write.
         if (string.Equals(task.ClaimedBy, trimmedActor, StringComparison.OrdinalIgnoreCase))
-            return task;
+        {
+            var renewedFromStale = existingClaimIsStale;
+            object? beforeRenew = renewedFromStale ? TaskActivitySnapshot(task) : null;
+            var heldBy = task.ClaimedBy;   // captured for the EF Core closure
+
+            // Guarded by the holder, so a concurrent release or steal matches zero rows and falls
+            // through to the same reconcile the claim path uses, rather than faking success.
+            // Two ExecuteUpdateAsync calls rather than one ternary: the setter is an expression
+            // tree EF must translate, so the branch has to sit in C#, not inside it.
+            int renewed;
+            if (renewedFromStale)
+            {
+                renewed = await db.Tasks
+                    .Where(t => t.Id == taskId && t.ClaimedBy == heldBy)
+                    .ExecuteUpdateAsync(s => s
+                        .SetProperty(t => t.ClaimedAt, now)
+                        .SetProperty(t => t.UpdatedAt, now), ct);
+            }
+            else
+            {
+                // Fresh heartbeat: ClaimedAt ONLY. UpdatedAt stays put so a 5-minute cadence cannot
+                // fake task activity on Home or flood the timeline (AC2).
+                renewed = await db.Tasks
+                    .Where(t => t.Id == taskId && t.ClaimedBy == heldBy)
+                    .ExecuteUpdateAsync(s => s
+                        .SetProperty(t => t.ClaimedAt, now), ct);
+            }
+
+            if (renewed == 0)
+            {
+                var current = await db.Tasks.AsNoTracking()
+                    .Where(t => t.Id == taskId)
+                    .Select(t => new { t.ClaimedBy, t.ClaimedAt, t.UpdatedAt })
+                    .FirstOrDefaultAsync(ct)
+                    ?? throw new TaskNotFoundException(taskId);
+                if (!string.IsNullOrWhiteSpace(current.ClaimedBy)
+                    && !string.Equals(current.ClaimedBy, trimmedActor, StringComparison.OrdinalIgnoreCase))
+                    throw new TaskClaimConflictException(taskId, current.ClaimedBy, current.ClaimedAt);
+                task.ClaimedBy = current.ClaimedBy;
+                task.ClaimedAt = current.ClaimedAt;
+                task.UpdatedAt = current.UpdatedAt;
+                if (!string.IsNullOrWhiteSpace(current.ClaimedBy))
+                {
+                    await tx.CommitAsync(ct);
+                    return task;
+                }
+            }
+            else
+            {
+                task.ClaimedAt = now;
+                if (renewedFromStale)
+                {
+                    // Recovering an already-expired claim IS worth a timeline row: it explains why the
+                    // task did not get stolen. A fresh heartbeat deliberately writes no event.
+                    task.UpdatedAt = now;
+                    AddActivityEvent(
+                        db, task.Feature.ProjectId, "Task", task.Id, trimmedActor,
+                        "TaskClaimRenewed", beforeRenew, TaskActivitySnapshot(task),
+                        $"Task '{task.Name}' claim renewed by {trimmedActor} "
+                        + (previousClaimedAt is { } staleSince
+                            ? $"(claim was {(now - staleSince).TotalHours:0.##}h old; TTL {_claimTtl.TotalHours:0.##}h)"
+                            : $"(claim had no timestamp; TTL {_claimTtl.TotalHours:0.##}h)"));
+                    await db.SaveChangesAsync(ct);
+                }
+
+                // MUST commit. The early return this replaced left the BEGIN IMMEDIATE transaction to
+                // roll back on dispose -- harmless only because nothing was written. Now that this path
+                // writes, a missing commit would silently discard every single heartbeat.
+                await tx.CommitAsync(ct);
+                return task;
+            }
+        }
 
         var before = TaskActivitySnapshot(task);
 
