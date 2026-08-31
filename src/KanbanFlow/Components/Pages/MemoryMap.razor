@@ -36,7 +36,13 @@
    Blazor's prerender/hydration window, the browser still loads the requested namespace instead of
    silently submitting the component's default state. Once the circuit is live, @onsubmit handles
    the same form without a full navigation. *@
-<form class="card card-body mb-3" method="get" action="/memory" @onsubmit="SubmitGraphAsync" @onsubmit:preventDefault data-testid="memory-map-filters">
+<form class="card card-body mb-3"
+      method="get"
+      action="/memory"
+      @onsubmit="SubmitGraphAsync"
+      @onsubmit:preventDefault
+      data-interactive="@(isInteractive ? "true" : "false")"
+      data-testid="memory-map-filters">
     <div class="row g-3 align-items-end">
         <div class="col-12 col-md-3">
             <label class="form-label" for="memory-scope">Scope</label>
@@ -53,6 +59,7 @@
                    class="form-control @(namespaceError is null ? null : "is-invalid")"
                    name="scopeKey"
                    @bind="scopeKeyInput"
+                   @bind:event="oninput"
                    maxlength="200"
                    autocomplete="off"
                    disabled="@isLoading"
@@ -117,7 +124,7 @@ else if (isLoading && graph is null)
 }
 else if (graph is not null && graph.Nodes.Count == 0)
 {
-    <div class="border rounded bg-light text-center p-5" role="status" aria-live="polite" data-testid="memory-map-empty">
+    <div class="border rounded bg-body-tertiary text-center p-5" role="status" aria-live="polite" data-testid="memory-map-empty">
         <h2 class="h5">This namespace has no current records</h2>
         <p class="text-muted mb-0">Create explicit entities through the existing MCP memory tools, then refresh this map.</p>
     </div>
@@ -126,7 +133,7 @@ else if (projection is not null)
 {
     <div class="d-flex flex-wrap align-items-center gap-2 mb-3 small text-muted" data-testid="memory-map-summary">
         <span class="badge text-bg-light border">@loadedScope</span>
-        <code>@loadedScopeKey</code>
+        <code class="text-break">@loadedScopeKey</code>
         <span>·</span>
         <span>@graph!.Nodes.Count current records</span>
         <span>·</span>
@@ -189,6 +196,18 @@ else if (projection is not null)
     private string? loadError;
     private string? namespaceError;
     private bool isLoading;
+    private bool isInteractive;
+
+    protected override void OnAfterRender(bool firstRender)
+    {
+        if (!firstRender)
+            return;
+
+        // OnAfterRender is not called during static prerendering. Exposing the transition gives the
+        // browser suite a deterministic point after which input events are owned by this circuit.
+        isInteractive = true;
+        StateHasChanged();
+    }
 
     protected override Task OnParametersSetAsync()
     {

@@ -8,7 +8,7 @@
 | Requirement | [Issue #496 — Render the existing MCP memory graph as a read-only Decision & Memory Map](https://github.com/joelfuller2016/KanbanFlow-v2/issues/496) |
 | Implementation | [PR #497](https://github.com/joelfuller2016/KanbanFlow-v2/pull/497) |
 | Delivery slice | Phase 0 contract/safety and Phase 1 read-only visualization |
-| Status | Active; latest recorded run passed; PR remains open |
+| Status | Active; latest recorded run passed; see PR #497 for current delivery state |
 | Implementation evidence | [`d7be7da5d98d850607d955fe7cdb64522503f45f`](https://github.com/joelfuller2016/KanbanFlow-v2/commit/d7be7da5d98d850607d955fe7cdb64522503f45f) |
 | Latest run | [2026-08-30 · `d7be7da5d98d`](runs/2026-08-30-d7be7da5d98d.md) |
 | Canonical automation | [`DecisionGraphProjectionTests.cs`](../../../tests/KanbanFlow.Tests/DecisionGraphProjectionTests.cs) and the `#496` scenario in [`ui-e2e.mjs`](../../../scripts/ui-e2e.mjs) |
@@ -143,6 +143,7 @@ The browser scenario creates a unique Agent-scope namespace named
 | Context | `POST /api/memory` | `Semantic` / `context` | Proves a normal semantic record and incoming context relation. |
 | Decision | `POST /api/memory` | `Decision` / `OPEN_QUESTION, chosen` | Proves explicit Decision precedence over a conflicting question tag and renders confidence `0.9`. |
 | Evidence | `POST /api/memory` | `Semantic` / uppercase `EVIDENCE` | Proves case-insensitive tag classification and text filtering. |
+| Evidence observation | native MCP `add_observations` | Explicit observation text | Proves an MCP-written observation reaches the selected-record details. |
 | Context -> Decision | native MCP `create_relations` | `frames` | Proves one directed relationship. |
 | Evidence -> Decision | native MCP `create_relations` | `supports` | Proves a second directed relationship and readable detail text. |
 
@@ -250,7 +251,7 @@ when the MCP/API surface changes or a reviewer makes it a merge condition.
 | TC-496-13 | Whitespace namespace validation preserves the loaded graph and URL | Same browser scenario |
 | TC-496-14 | `q`/`kind` deep links, reload, clear, and replacement history work | Same browser scenario |
 | TC-496-15 | Sequential input and unsubmitted scope/namespace drafts survive URL re-entry | Same browser scenario |
-| TC-496-16 | Pointer/keyboard selection produces concise status and readable incoming relations | Same browser scenario |
+| TC-496-16 | Pointer/keyboard selection produces concise status and readable incoming/outgoing relations | Same browser scenario |
 | TC-496-17 | List focus is visible and Enter selects the focused record | Same browser scenario |
 | TC-496-18 | A 390 x 844 viewport scrolls horizontally and retains a bounded vertical container | Same browser scenario |
 | TC-496-19 | Graph navigation and the explicit-record privacy notice render | Same browser scenario |
@@ -325,9 +326,8 @@ state, inaccessible record, unreported truncation, graph write-back, or producti
 
 - The browser scenario proves a representative Context/Decision/Evidence graph; the focused unit
   suite covers the remaining lanes and pathological sizes.
-- The browser fixture creates no observations and does not directly assert the rendered tags,
-  source, or Created field. It asserts incoming relation details; outgoing details remain covered by
-  projection tests, source review, and dogfood inspection.
+- The browser fixture asserts one representative observation plus incoming and outgoing relation
+  details. It does not directly assert the rendered tags, source, or Created field.
 - The 900-record service cap bounds nodes only. `ReadGraphAsync` still materializes every observation
   and relation attached to those returned nodes before the UI applies its 50/320 display caps. A
   relation- or observation-heavy namespace can therefore remain expensive.

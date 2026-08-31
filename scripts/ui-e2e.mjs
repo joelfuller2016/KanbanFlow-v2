@@ -564,7 +564,8 @@ async function main() {
     // remain usable as a keyboard-native list, and stay reachable in a narrow viewport. The database
     // is the disposable DB created by startApp, so these records need no production cleanup.
     await test("Decision map renders explicit agent records with filters and list fallback (#496)", async () => {
-      const scopeKey = `ui-decision-map-${stamp}`;
+      const scopeKey = `ui-decision-map-${stamp}-${"n".repeat(140)}`;
+      const evidenceObservation = `Observation ${stamp}: the existing graph read is reusable`;
       const context = await api("POST", "/api/memory", {
         content: `Context ${stamp}: the graph backend already exists`,
         type: "Semantic",
@@ -590,6 +591,11 @@ async function main() {
         tags: "EVIDENCE",
         source: "ui-e2e",
       });
+      await nativeMcpTool("add_observations", {
+        scopeKey,
+        actor: "ui-e2e",
+        observations: [{ entityName: evidence.content, contents: [evidenceObservation] }],
+      });
       await nativeMcpTool("create_relations", {
         scopeKey,
         actor: "ui-e2e",
@@ -600,7 +606,8 @@ async function main() {
       });
 
       await page.goto(`${baseUrl}/memory`);
-      await page.locator('[data-testid="memory-map-namespace"]').waitFor({ state: "visible" });
+      await page.locator('[data-testid="memory-map-filters"][data-interactive="true"]')
+        .waitFor({ state: "visible" });
       await page.locator('[data-testid="memory-map-namespace"]').fill(scopeKey);
       await clickUntil(
         () => page.getByRole("button", { name: "Load namespace" }).click(),
@@ -682,6 +689,8 @@ async function main() {
       await page.goto(`${baseUrl}/`);
       await page.goto(filteredUrl);
       await page.locator(`[data-testid="decision-map-node-${evidence.id}"]`).waitFor({ state: "visible" });
+      await page.locator('[data-testid="decision-node-detail"]').getByText(evidenceObservation, { exact: true })
+        .waitFor({ state: "visible" });
       assert(await search.inputValue() === "ReadGraphAsync" && await kind.inputValue() === "Evidence",
         `deep-linked filter controls were not restored: q=${await search.inputValue()}, kind=${await kind.inputValue()}`);
       assert(await page.locator(`[data-testid="decision-map-node-${decision.id}"]`).count() === 0,
@@ -711,6 +720,14 @@ async function main() {
       assert(new URL(page.url()).searchParams.get("scopeKey") === scopeKey,
         `clearing filters removed the loaded namespace from the URL: ${page.url()}`);
 
+      await search.fill(`no-match-${stamp}`);
+      const noMatches = page.locator('[data-testid="decision-graph-no-matches"]');
+      await noMatches.waitFor({ state: "visible" });
+      assert((await noMatches.getAttribute("class"))?.includes("bg-body-tertiary"),
+        "the no-match state does not use a theme-aware background");
+      await search.fill("");
+      await page.locator(`[data-testid="decision-map-node-${context.id}"]`).waitFor({ state: "visible" });
+
       await page.locator('[data-testid="decision-graph-list-toggle"]').click();
       await page.locator('[data-testid="decision-graph-list"]').waitFor({ state: "visible" });
       const listToggle = page.locator('[data-testid="decision-graph-list-toggle"]');
@@ -732,6 +749,11 @@ async function main() {
         `keyboard focus had no visible treatment: ${JSON.stringify(keyboardFocus)}`);
       await contextListNode.press("Enter");
       await page.locator('[data-testid="decision-node-detail"] .lead').getByText(context.content, { exact: true }).waitFor({ state: "visible" });
+      const outgoingRelationshipText = await page.locator('[data-testid="decision-node-detail"] .relationship-list').innerText();
+      assert(outgoingRelationshipText.includes("This record")
+        && outgoingRelationshipText.includes("frames")
+        && outgoingRelationshipText.includes(decision.content),
+        `outgoing context relationship was not readable: ${outgoingRelationshipText}`);
       assert((await selectionStatus.innerText()).trim() === `Selected Context record ${context.id}.`,
         "the concise live selection status did not update after keyboard selection");
       assert((await contextListNode.getAttribute("aria-pressed"))?.toLowerCase() === "true",
@@ -757,6 +779,12 @@ async function main() {
           `narrow map is clipped without a scroll region: ${JSON.stringify(overflow)}`);
         assert(overflow.maxHeight !== "none",
           `map has no viewport-bounded vertical scroll region: ${JSON.stringify(overflow)}`);
+        const pageWidth = await page.evaluate(() => ({
+          client: document.documentElement.clientWidth,
+          scroll: document.documentElement.scrollWidth,
+        }));
+        assert(pageWidth.scroll <= pageWidth.client + 1,
+          `long namespace caused page-level horizontal overflow: ${JSON.stringify(pageWidth)}`);
       } finally {
         if (savedViewport) await page.setViewportSize(savedViewport);
       }
