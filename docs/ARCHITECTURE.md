@@ -391,7 +391,7 @@ Three triggers, and each covers a case the others cannot:
 |---|---|
 | **AtStartup** | The only one that survives an **unattended** reboot. Needs elevation to register. |
 | **AtLogOn** | Covers a reboot that ends at a logon. |
-| **Once + `PT10M`** | Keepalive. Revives the app within ten minutes if it ever exits cleanly. |
+| **Once + `PT5M`** | Keepalive. Revives the app within five minutes if it ever exits cleanly (`-KeepaliveMinutes`, default 5). |
 
 **Reboot survival requires one elevated run, and this is not a preference.** Windows refuses both
 the boot trigger and the `S4U` principal to a non-elevated shell — measured three ways, all
@@ -410,7 +410,7 @@ run **refuses to downgrade it**: it restores the stronger task and fails rather 
 
 With `-MultipleInstances IgnoreNew`, a repeat that finds the app already running is refused by Task
 Scheduler with **`0x800710E0`** — "the operator or administrator has refused the request." That code
-in the task history is the design working, **not a fault**; it is what makes a ten-minute repeat free
+in the task history is the design working, **not a fault**; it is what makes a five-minute repeat free
 while the app is healthy.
 
 `RestartCount`/`RestartInterval` are set but **do not fire**: measured with these exact settings, a
