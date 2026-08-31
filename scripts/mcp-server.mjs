@@ -47,7 +47,7 @@ const inFlightRequestIds = new Set();
 
 // One recorder per wrapper process, which is one client session — the identity #477 §11 signal 1
 // actually counts. Constructed here rather than lazily so the session id is stable from the first
-// call, and it never throws: see the contract in usage-log.mjs.
+// call. Construction and record() are both non-throwing by contract in usage-log.mjs.
 const usageLogger = createUsageLogger();
 
 const tools = [

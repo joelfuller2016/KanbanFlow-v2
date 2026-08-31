@@ -11,7 +11,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { parseRows, isOutsideRepo, statusAfter, summarize, renderReport, parseArgs, pathFlavor, WRITE_TOOLS } from "./trial-report.mjs";
+import { parseRows, isOutsideRepo, statusAfter, summarize, renderReport, parseArgs, pathFlavor, WRITE_TOOLS, fetchActivity, ActivityHttpError } from "./trial-report.mjs";
 
 const REPO = "C:\\Users\\Owner\\Documents\\Claude\\KanbanFlow-v2";
 const row = (over = {}) => ({
@@ -43,6 +43,13 @@ test("valid JSON that is not a usage row still counts as malformed", () => {
   const { rows, malformed } = parseRows('{"unrelated":true}\n[1,2,3]\n');
   assert.equal(rows.length, 0);
   assert.equal(malformed, 2);
+});
+
+test("a ts-less usage row is malformed and cannot crash summarize", () => {
+  const parsed = parseRows([JSON.stringify(row()), JSON.stringify({ tool: "get_next_tasks", session: "broken" })].join("\n"));
+  assert.equal(parsed.malformed, 1);
+  assert.doesNotThrow(() => summarize({ rows: parsed.rows, repoRoot: REPO }));
+  assert.equal(find(summarize({ rows: parsed.rows, repoRoot: REPO }), 1).value, 1);
 });
 
 // --- 2. Inside vs outside the repo --------------------------------------------------------
@@ -167,12 +174,20 @@ test("gate refusals are surfaced — a gate that never refuses is not being exer
   assert.equal(s3.detail.gateRefusals, 1);
 });
 
-test("signal 3 crosses its threshold at five tasks", () => {
+test("signal 3 crosses its threshold at five tasks once the gate has been exercised", () => {
+  const refusal = row({ tool: "update_task_status", taskId: 9, outcome: "error", http: 422 });
   const four = [1, 2, 3, 4].map(id => statusEvent(id, "Done"));
-  assert.equal(find(summarize({ rows: [], events: four, repoRoot: REPO }), 3).verdict, "PENDING");
+  assert.equal(find(summarize({ rows: [refusal], events: four, repoRoot: REPO }), 3).verdict, "PENDING");
   const five = [1, 2, 3, 4, 5].map(id => statusEvent(id, "Done"));
-  assert.equal(find(summarize({ rows: [], events: five, repoRoot: REPO }), 3).verdict, "ADOPT");
+  assert.equal(find(summarize({ rows: [refusal], events: five, repoRoot: REPO }), 3).verdict, "ADOPT");
   assert.equal(find(summarize({ rows: [], events: [], repoRoot: REPO }), 3).verdict, "REVERT");
+});
+
+test("signal 3 does not adopt on five Dones when the gate evidence is vacuous", () => {
+  const five = [1, 2, 3, 4, 5].map(id => statusEvent(id, "Done"));
+  const s3 = find(summarize({ rows: [], events: five, repoRoot: REPO }), 3);
+  assert.equal(s3.verdict, "PENDING");
+  assert.match(s3.caveat, /VACUOUS/);
 });
 
 // --- 7. Signal 4: used from outside the repo ----------------------------------------------
@@ -197,6 +212,28 @@ test("--since excludes everything before the trial started, in both sources", ()
   assert.equal(summary.window.rows, 1);
   assert.equal(find(summary, 1).value, 1);
   assert.deepEqual(find(summary, 3).detail.throughGate, [2]);
+});
+
+test("timezone-less ActivityEvent timestamps are interpreted as UTC", () => {
+  const events = [statusEvent(1, "Done", { createdAt: "2026-09-01T00:30:00" })];
+  const summary = summarize({ rows: [], events, repoRoot: REPO, since: "2026-09-01T02:00:00Z" });
+  assert.equal(summary.window.events, 0,
+    "00:30 without a designator is 00:30 UTC, not local time after the 02:00Z cutoff");
+});
+
+test("fetchActivity distinguishes an HTTP error and applies a bounded timeout without network access", async () => {
+  let signal;
+  const fakeFetch = async (_url, options) => {
+    signal = options.signal;
+    return { ok: false, status: 500, statusText: "Internal Server Error", json: async () => ({}) };
+  };
+  await assert.rejects(() => fetchActivity("http://example.invalid", fakeFetch, 25), error => {
+    assert.ok(error instanceof ActivityHttpError);
+    assert.match(error.message, /returned HTTP 500 Internal Server Error/);
+    assert.doesNotMatch(error.message, /not answering/);
+    return true;
+  });
+  assert.ok(signal instanceof AbortSignal);
 });
 
 // --- 9. Aggregation -----------------------------------------------------------------------
@@ -225,7 +262,8 @@ test("all four adopting reports ADOPT", () => {
   const rows = [
     row({ session: "a", cwd: "C:\\other" }), row({ session: "b", cwd: "C:\\other" }), row({ session: "c", cwd: "C:\\other" }),
     row({ session: "a", tool: "claim_task", taskId: 1, cwd: "C:\\other" }),
-    row({ session: "b", tool: "claim_task", taskId: 2, cwd: "C:\\other" })
+    row({ session: "b", tool: "claim_task", taskId: 2, cwd: "C:\\other" }),
+    row({ session: "a", tool: "update_task_status", taskId: 9, cwd: "C:\\other", outcome: "error", http: 422 })
   ];
   const events = [1, 2, 3, 4, 5].map(id => statusEvent(id, "Done"));
   const summary = summarize({ rows, events, repoRoot: REPO });

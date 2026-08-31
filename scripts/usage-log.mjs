@@ -109,13 +109,22 @@ export function buildRow({ tool, sessionId, cwd, args = {}, outcome, ms, error, 
  * read-only home directory must degrade to "no measurement" and never to "the board stopped
  * answering". Every filesystem call below is individually guarded.
  */
-export function createUsageLogger({
-  logPath = resolveUsageLogPath(),
-  sessionId = crypto.randomBytes(4).toString("hex"),
-  cwd = process.cwd(),
-  maxBytes = DEFAULT_MAX_BYTES,
-  now = () => new Date()
-} = {}) {
+export function createUsageLogger(options = {}) {
+  let logPath;
+  let sessionId;
+  let cwd;
+  let maxBytes;
+  let now;
+  try {
+    logPath = options.logPath === undefined ? resolveUsageLogPath() : options.logPath;
+    sessionId = options.sessionId === undefined ? crypto.randomBytes(4).toString("hex") : options.sessionId;
+    cwd = options.cwd === undefined ? process.cwd() : options.cwd;
+    maxBytes = options.maxBytes === undefined ? DEFAULT_MAX_BYTES : options.maxBytes;
+    now = options.now === undefined ? () => new Date() : options.now;
+  } catch {
+    // Construction obeys the same contract as record(): logging failure cannot break a tool call.
+    return { enabled: false, sessionId: null, logPath: null, record() {} };
+  }
   const enabled = Boolean(logPath);
   let bytesOnDisk = 0;
   let ready = false;

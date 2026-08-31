@@ -63,7 +63,7 @@ export function parseRows(text) {
     if (trimmed.length === 0) continue;
     try {
       const row = JSON.parse(trimmed);
-      if (row && typeof row === "object" && typeof row.tool === "string") rows.push(row);
+      if (row && typeof row === "object" && typeof row.tool === "string" && typeof row.ts === "string") rows.push(row);
       else malformed++;
     } catch {
       malformed++;
@@ -129,7 +129,12 @@ export function summarize({ rows = [], events = [], repoRoot, since = null, trun
   if (cutoff !== null && !Number.isFinite(cutoff)) {
     throw new Error(`summarize: since=${JSON.stringify(since)} is not a parseable date.`);
   }
-  const inWindow = ts => cutoff === null || (Number.isFinite(Date.parse(ts)) && Date.parse(ts) >= cutoff);
+  const parseTimestamp = ts => {
+    if (typeof ts !== "string") return NaN;
+    const normalized = /(?:Z|[+-]\d{2}:\d{2})$/i.test(ts) ? ts : `${ts}Z`;
+    return Date.parse(normalized);
+  };
+  const inWindow = ts => cutoff === null || (Number.isFinite(parseTimestamp(ts)) && parseTimestamp(ts) >= cutoff);
 
   const windowRows = rows.filter(r => inWindow(r.ts));
   const windowEvents = events.filter(e => inWindow(e.createdAt));
@@ -226,16 +231,20 @@ export function summarize({ rows = [], events = [], repoRoot, since = null, trun
     adopt: ">= 5",
     revert: "0",
     value: throughGate.length,
-    verdict: throughGate.length >= 5 ? "ADOPT" : throughGate.length === 0 ? "REVERT" : "PENDING",
+    // VACUITY GUARD. Dones with no refusal evidence may all have had zero acceptance criteria,
+    // so they do not establish that the Definition-of-Done gate had anything to check.
+    verdict: throughGate.length === 0 ? "REVERT" : throughGate.length >= 5 && gateRefusals.length > 0 ? "ADOPT" : "PENDING",
     detail: {
       throughGate,
       doneWithOverride: [...overriddenTasks],
       gateRefusals: gateRefusals.length
     },
     caveat:
-      "Counted from the board's own ActivityEvent rows, not from this log, so a Done reached " +
-      "through the UI or REST counts too. A Done that OVERRODE the gate is excluded — it did not " +
-      "pass it."
+      gateRefusals.length > 0
+        ? "Counted from the board's own ActivityEvent rows, not from this log, so a Done reached " +
+          "through the UI or REST counts too. A Done that OVERRODE the gate is excluded — it did not pass it."
+        : "VACUOUS: the gate never refused a Done transition. Completed tasks may have had zero " +
+          "acceptance criteria, so this is PENDING rather than ADOPT."
   };
 
   // ── Signal 4: board consulted from outside KanbanFlow-v2/ ─────────────────────────────────
@@ -322,12 +331,21 @@ export function renderReport(summary, { logPath, malformed = 0 } = {}) {
   return out.join("\n");
 }
 
-async function fetchActivity(apiBase) {
+export class ActivityHttpError extends Error {}
+
+export async function fetchActivity(apiBase, fetchImpl = fetch, timeoutMs = 10000) {
   const events = [];
   const truncated = [];
-  const projects = await fetch(`${apiBase}/api/projects`).then(r => r.json());
+  const fetchJson = async url => {
+    const response = await fetchImpl(url, { signal: AbortSignal.timeout(timeoutMs) });
+    if (!response.ok) {
+      throw new ActivityHttpError(`KanbanFlow returned HTTP ${response.status} ${response.statusText}`.trim());
+    }
+    return response.json();
+  };
+  const projects = await fetchJson(`${apiBase}/api/projects`);
   for (const project of projects) {
-    const page = await fetch(`${apiBase}/api/projects/${project.id}/activity?limit=${ACTIVITY_PAGE}`).then(r => r.json());
+    const page = await fetchJson(`${apiBase}/api/projects/${project.id}/activity?limit=${ACTIVITY_PAGE}`);
     if (Array.isArray(page)) {
       events.push(...page);
       // The endpoint caps at 500 with no continuation token, so a full page means events were
@@ -399,7 +417,10 @@ async function main(argv) {
   try {
     ({ events, truncated } = await fetchActivity(apiBase));
   } catch (error) {
-    console.error(`NOTE: KanbanFlow is not answering at ${apiBase} (${error.message}) — signal 3 cannot be measured.\n`);
+    const problem = error instanceof ActivityHttpError
+      ? error.message
+      : `KanbanFlow is not answering at ${apiBase} (${error.message})`;
+    console.error(`NOTE: ${problem} — signal 3 cannot be measured.\n`);
   }
 
   const summary = summarize({ rows, events, repoRoot, since, truncated });

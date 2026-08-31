@@ -148,6 +148,17 @@ test("a logging failure NEVER propagates — the tool call must survive a broken
   assert.equal(fs.existsSync(logPath), false);
 });
 
+test("logger construction NEVER propagates a failure while resolving its defaults", () => {
+  const options = {};
+  Object.defineProperty(options, "logPath", {
+    get() { throw new Error("simulated homedir failure"); }
+  });
+  let logger;
+  assert.doesNotThrow(() => { logger = createUsageLogger(options); });
+  assert.equal(logger.enabled, false);
+  assert.doesNotThrow(() => logger.record({ tool: "list_projects", args: {}, outcome: "ok", ms: 1 }));
+});
+
 test("a null path disables recording without touching the filesystem", () => {
   const logger = createUsageLogger({ logPath: null });
   assert.equal(logger.enabled, false);
