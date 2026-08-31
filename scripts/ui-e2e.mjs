@@ -651,8 +651,13 @@ async function main() {
 
       const search = page.locator('[data-testid="memory-map-search"]');
       const kind = page.locator('[data-testid="memory-map-kind"]');
+      const scope = page.locator('#memory-scope');
+      const draftNamespace = `${scopeKey}-draft`;
+      await namespaceInput.fill(draftNamespace);
+      await scope.selectOption("Project");
       const historyBeforeFilters = await page.evaluate(() => history.length);
-      await search.fill("ReadGraphAsync");
+      await search.fill("Read");
+      await search.pressSequentially("GraphAsync", { delay: 35 });
       await page.locator(`[data-testid="decision-map-node-${evidence.id}"]`).waitFor({ state: "visible" });
       await page.locator(`[data-testid="decision-map-node-${decision.id}"]`).waitFor({ state: "detached" });
       assert(await page.locator(`[data-testid="decision-map-node-${decision.id}"]`).count() === 0,
@@ -668,6 +673,10 @@ async function main() {
         { timeout: 10000 });
       assert(await page.evaluate(() => history.length) === historyBeforeFilters,
         "filter URL synchronization added history entries instead of replacing the current one");
+      assert(await namespaceInput.inputValue() === draftNamespace && await scope.inputValue() === "Project",
+        `filter URL synchronization overwrote the unsubmitted namespace/scope draft: ${await namespaceInput.inputValue()}/${await scope.inputValue()}`);
+      assert(await search.inputValue() === "ReadGraphAsync",
+        `sequential filter input was overwritten by URL parameter re-entry: ${await search.inputValue()}`);
 
       const filteredUrl = page.url();
       await page.goto(`${baseUrl}/`);
@@ -681,6 +690,12 @@ async function main() {
       await page.locator(`[data-testid="decision-map-node-${evidence.id}"]`).waitFor({ state: "visible" });
       assert(await search.inputValue() === "ReadGraphAsync" && await kind.inputValue() === "Evidence",
         "reloading the decision map lost its text or kind filter");
+      await clickUntil(
+        () => page.locator('[data-testid="decision-graph-list-toggle"]').click(),
+        page.locator('[data-testid="decision-graph-list"]'),
+      );
+      await page.locator('[data-testid="decision-graph-map-toggle"]').click();
+      await page.locator(`[data-testid="decision-map-node-${evidence.id}"]`).waitFor({ state: "visible" });
 
       await search.fill("");
       await page.waitForFunction(

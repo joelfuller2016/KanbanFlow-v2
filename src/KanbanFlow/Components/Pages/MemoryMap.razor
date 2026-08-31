@@ -175,6 +175,7 @@ else if (projection is not null)
     private static readonly TimeSpan FilterUrlSyncDebounce = TimeSpan.FromMilliseconds(250);
     private CancellationTokenSource? loadCts;
     private CancellationTokenSource? filterUrlSyncCts;
+    private string? pendingFilterNavigationUri;
     private KanbanFlow.Services.MemoryGraph? graph;
     private DecisionGraphView? projection;
     private MemoryScope scopeInput = MemoryScope.Agent;
@@ -200,20 +201,37 @@ else if (projection is not null)
             : ScopeKeyQuery.Trim();
         var namespaceChanged = routeScope != queryScope
             || !string.Equals(routeScopeKey, queryKey, StringComparison.Ordinal);
+        var isSelfAuthoredFilterNavigation = string.Equals(
+            pendingFilterNavigationUri,
+            Navigation.Uri,
+            StringComparison.Ordinal);
+        pendingFilterNavigationUri = null;
 
-        scopeInput = queryScope;
-        scopeKeyInput = queryKey;
         routeScope = queryScope;
         routeScopeKey = queryKey;
-        searchQuery = QueryText ?? string.Empty;
-        laneFilter = NormalizeLaneFilter(KindQuery);
-        namespaceError = null;
 
         // Query parameters can change without recreating this component (links, browser back/forward,
         // or another in-app navigation). Reload only when the namespace changes; q/kind navigation
         // rebuilds the already-loaded projection and must not turn each filter edit into a DB read.
         if (graph is null || namespaceChanged)
+        {
+            scopeInput = queryScope;
+            scopeKeyInput = queryKey;
+            searchQuery = QueryText ?? string.Empty;
+            laneFilter = NormalizeLaneFilter(KindQuery);
+            namespaceError = null;
             return LoadGraphAsync(queryScope, queryKey);
+        }
+
+        // NavigateTo re-enters this method for our debounced filter URL replacement. The live
+        // controls already contain the newest values, so re-reading that navigation's query would
+        // race typing and overwrite an unsubmitted scope/namespace draft. External same-namespace
+        // navigation still restores its q/kind values without resetting that draft.
+        if (!isSelfAuthoredFilterNavigation)
+        {
+            searchQuery = QueryText ?? string.Empty;
+            laneFilter = NormalizeLaneFilter(KindQuery);
+        }
 
         RebuildProjection();
         return Task.CompletedTask;
@@ -324,18 +342,21 @@ else if (projection is not null)
             if (debounce)
                 await Task.Delay(FilterUrlSyncDebounce, thisSync.Token);
 
-            thisSync.Token.ThrowIfCancellationRequested();
-            var targetUri = Navigation.GetUriWithQueryParameters(
-                new Dictionary<string, object?>
-                {
-                    ["q"] = QueryValue(searchQuery),
-                    ["kind"] = QueryValue(NormalizeLaneFilter(laneFilter))
-                });
             // A debounced continuation resumes off the renderer dispatcher. Marshal the URL write
-            // back onto it instead of swallowing the resulting dispatcher InvalidOperationException.
+            // and its state snapshot back onto it instead of racing a newer input event.
             await InvokeAsync(() =>
             {
                 thisSync.Token.ThrowIfCancellationRequested();
+                var targetUri = Navigation.GetUriWithQueryParameters(
+                    new Dictionary<string, object?>
+                    {
+                        ["q"] = QueryValue(searchQuery),
+                        ["kind"] = QueryValue(NormalizeLaneFilter(laneFilter))
+                    });
+                if (string.Equals(Navigation.Uri, targetUri, StringComparison.Ordinal))
+                    return;
+
+                pendingFilterNavigationUri = targetUri;
                 Navigation.NavigateTo(targetUri, forceLoad: false, replace: true);
             });
         }
