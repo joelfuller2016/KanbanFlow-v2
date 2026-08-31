@@ -24,10 +24,10 @@ import {
 } from "./usage-log.mjs";
 
 // fileURLToPath, never `new URL(...).pathname`: the pathname is PERCENT-ENCODED, so a checkout
-// under "C:\My Repos\..." yields "/C:/My%20Repos/..." and every fs call built from it throws
+// under "C:\\My Repos\\..." yields "/C:/My%20Repos/..." and every fs call built from it throws
 // ENOENT. The sibling test file already got this right; this one did not.
 const here = path.dirname(fileURLToPath(import.meta.url));
-// A file:// URL, not a bare path: an ESM import of "C:\..." fails with ERR_UNSUPPORTED_ESM_URL_SCHEME.
+// A file:// URL, not a bare path: an ESM import of "C:\\..." fails with ERR_UNSUPPORTED_ESM_URL_SCHEME.
 const usageLogModuleUrl = pathToFileURL(path.join(here, "usage-log.mjs")).href;
 
 const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), "kbf-usage-"));
@@ -649,7 +649,7 @@ test("four REAL concurrent processes lose nothing", { timeout: 60_000 }, async (
 import { createUsageLogger } from ${JSON.stringify(usageLogModuleUrl)};
 const [logPath, sessionId, count, maxBytes, startAt, spinNs] = process.argv.slice(2);
 const logger = createUsageLogger({
-  logPath, sessionId, cwd: "C:\\\\w", maxBytes: Number(maxBytes), warn: () => {}
+  logPath, sessionId, cwd: "C:\\w", maxBytes: Number(maxBytes), warn: () => {}
 });
 while (Date.now() < Number(startAt)) { /* line the processes up so they really overlap */ }
 for (let i = 0; i < Number(count); i++) {
@@ -705,12 +705,12 @@ test("rotation takes a FREE archive slot instead of destroying the oldest", () =
   // is not.
   const dir = tmp();
   const logPath = path.join(dir, "usage.jsonl");
-  fs.writeFileSync(logPath, `${JSON.stringify({ ts: "2026-09-01T10:00:00.000Z", session: "live", tool: "list_projects", cwd: "C:\w", outcome: "ok", ms: 1 })}\n`);
+  fs.writeFileSync(logPath, `${JSON.stringify({ ts: "2026-09-01T10:00:00.000Z", session: "live", tool: "list_projects", cwd: "C:\\w", outcome: "ok", ms: 1 })}\n`);
   fs.writeFileSync(`${logPath}.1`, "gen1\n");
   fs.writeFileSync(`${logPath}.2`, "gen2\n");
   fs.writeFileSync(`${logPath}.5`, "OLDEST-MUST-SURVIVE\n");   // gap: .3 and .4 are free
 
-  const logger = createUsageLogger({ logPath, sessionId: "s", cwd: "C:\w", maxBytes: 1 });
+  const logger = createUsageLogger({ logPath, sessionId: "s", cwd: "C:\\w", maxBytes: 1 });
   logger.record({ tool: "list_projects", args: {}, outcome: "ok", ms: 1 });
 
   assert.ok(fs.existsSync(`${logPath}.5`), "the oldest generation must not be dropped while a slot is free");
