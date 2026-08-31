@@ -16,7 +16,12 @@ const apiBaseUrl = (process.env.KANBANFLOW_API_URL || "http://127.0.0.1:5123").r
 const restTimeoutMs = Number.parseInt(process.env.KANBANFLOW_MCP_SMOKE_TIMEOUT_MS || "10000", 10);
 const server = spawn(process.execPath, [serverPath], {
   stdio: ["pipe", "pipe", "inherit"],
-  env: { ...process.env }
+  // Usage recording OFF for the smoke run (#477 §11). This harness calls get_next_tasks,
+  // claim_task and update_task_status for real, so a recorded smoke run would present as a
+  // session that consulted the board — inflating the very adoption signals the trial is
+  // measuring with the project's own test traffic. An instrument that counts its own test
+  // suite as evidence of adoption is worse than no instrument.
+  env: { ...process.env, KANBANFLOW_USAGE_LOG: "off" }
 });
 
 let nextId = 1;
