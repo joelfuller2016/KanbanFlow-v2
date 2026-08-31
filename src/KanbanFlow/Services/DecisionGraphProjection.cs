@@ -92,9 +92,14 @@ internal static class DecisionGraphProjection
             .Where(candidate => candidate.Lane == DecisionGraphLane.Decision)
             .Select(candidate => candidate.Node.Id)
             .ToHashSet();
+        // Relation verbs are free-form MCP input. Treat case-only variants as the same logical edge
+        // so "supports" and "SUPPORTS" cannot consume two render-cap slots.
         var matchingRelations = graphRelations
             .Where(relation => selectedIds.Contains(relation.FromId) && selectedIds.Contains(relation.ToId))
-            .GroupBy(relation => new EdgeIdentity(relation.FromId, relation.RelationType, relation.ToId))
+            .GroupBy(relation => new EdgeIdentity(
+                relation.FromId,
+                relation.RelationType.Trim().ToUpperInvariant(),
+                relation.ToId))
             .Select(group => group.OrderBy(relation => relation.Id).First())
             .OrderByDescending(relation => decisionIds.Contains(relation.FromId) || decisionIds.Contains(relation.ToId))
             .ThenByDescending(relation => relation.CreatedAt)

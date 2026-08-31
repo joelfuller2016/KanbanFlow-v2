@@ -160,14 +160,15 @@ public class DecisionGraphProjectionTests
                 .Where(to => to.Id != decisionId && to.Id != from.Id)
                 .Select(to => Relation(nextRelationId++, from.Id, to.Id, "relates_to")))
             .Take(DecisionGraphProjection.DefaultEdgeLimit + 50));
-        relations.Add(Relation(nextRelationId, decisionId, nodes[0].Id, "considers")); // exact duplicate
+        relations.Add(Relation(nextRelationId++, decisionId, nodes[0].Id, "considers")); // exact duplicate
+        relations.Add(Relation(nextRelationId, decisionId, nodes[0].Id, "CONSIDERS")); // logical duplicate
         var graph = new MemoryGraph(nodes, [], relations);
 
         var first = DecisionGraphProjection.Build(graph);
         var second = DecisionGraphProjection.Build(graph);
 
         Assert.Equal(DecisionGraphProjection.DefaultEdgeLimit, first.Edges.Count);
-        Assert.Equal(relations.Count - 1, first.MatchingEdgeCount);
+        Assert.Equal(relations.Count - 2, first.MatchingEdgeCount);
         Assert.True(first.IsEdgeRenderTruncated);
         Assert.All(first.Edges, edge =>
         {
@@ -178,6 +179,7 @@ public class DecisionGraphProjectionTests
             nodes.Where(node => node.Id != decisionId),
             node => Assert.Contains(first.Edges, edge =>
                 edge.Relation.FromId == decisionId && edge.Relation.ToId == node.Id));
+        Assert.DoesNotContain(first.Edges, edge => edge.Relation.RelationType == "CONSIDERS");
         Assert.Equal(
             first.Edges.Select(edge => edge.Relation.Id),
             second.Edges.Select(edge => edge.Relation.Id));

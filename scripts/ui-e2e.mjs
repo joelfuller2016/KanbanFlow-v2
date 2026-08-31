@@ -1445,7 +1445,12 @@ async function main() {
           await page.locator('[data-testid="board-column-Todo-cards"] .board-card-meta-label').first()
             .waitFor({ state: "visible" });
 
-          const labels = await page.$$eval(".board-card-meta-label", (els) => els.map((el) => {
+          // Query and measure in one browser task. `$$eval` first materialises an Element[] handle
+          // over the Playwright protocol and evaluates its callback afterward; InteractiveServer
+          // hydration can replace the prerendered card nodes in that gap, leaving detached elements
+          // whose computed styles are empty and whose geometry serialises as NaN. (PR #497.)
+          const labels = await page.evaluate(() =>
+            [...document.querySelectorAll(".board-card-meta-label")].map((el) => {
             // Locate the text node EXPLICITLY rather than assuming `firstChild` is one. If the label's
             // markup ever gains a wrapper (e.g. the text moves inside a <span> when CardMeta is
             // extracted in a later phase), `firstChild` becomes an Element and `Range#setStart` throws
