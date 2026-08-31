@@ -126,7 +126,10 @@
 
     @if (SelectedNode is { } selected)
     {
-        <section class="node-detail card mt-3" aria-live="polite" data-testid="decision-node-detail">
+        <section class="node-detail card mt-3" data-testid="decision-node-detail">
+            <p class="visually-hidden" role="status" aria-atomic="true" data-testid="decision-node-selection-status">
+                Selected @LaneLabel(selected.Lane) record @selected.Node.Id.
+            </p>
             <div class="card-header d-flex flex-wrap align-items-center gap-2">
                 <span class="lane-chip @LaneCss(selected.Lane)">@LaneLabel(selected.Lane)</span>
                 <h2 class="h5 mb-0">Selected record</h2>

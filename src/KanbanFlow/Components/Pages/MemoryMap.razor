@@ -2,6 +2,7 @@
 @rendermode InteractiveServer
 @inject IMemoryService MemorySvc
 @inject NavigationManager Navigation
+@inject ILogger<MemoryMap> Logger
 @implements IAsyncDisposable
 
 <PageTitle>Decision &amp; Memory Map - KanbanFlow</PageTitle>
@@ -49,13 +50,21 @@
         <div class="col-12 col-md-5">
             <label class="form-label" for="memory-namespace">Namespace</label>
             <input id="memory-namespace"
-                   class="form-control"
+                   class="form-control @(namespaceError is null ? null : "is-invalid")"
                    name="scopeKey"
                    @bind="scopeKeyInput"
                    maxlength="200"
                    autocomplete="off"
                    disabled="@isLoading"
+                   aria-invalid="@(namespaceError is null ? null : "true")"
+                   aria-describedby="@(namespaceError is null ? null : "memory-namespace-error")"
                    data-testid="memory-map-namespace" />
+            @if (namespaceError is not null)
+            {
+                <div id="memory-namespace-error" class="invalid-feedback d-block" role="alert" data-testid="memory-map-namespace-error">
+                    @namespaceError
+                </div>
+            }
         </div>
         <div class="col-12 col-md-4">
             <button type="submit" class="btn btn-primary w-100" disabled="@isLoading">
@@ -67,6 +76,7 @@
             <input id="memory-search"
                    type="search"
                    class="form-control"
+                   name="q"
                    placeholder="Content, tags, source, or observations…"
                    value="@searchQuery"
                    @oninput="OnSearchChanged"
@@ -77,6 +87,7 @@
             <label class="form-label" for="memory-kind">Kind</label>
             <select id="memory-kind"
                     class="form-select"
+                    name="kind"
                     value="@laneFilter"
                     @onchange="OnLaneChanged"
                     disabled="@(graph is null)"
@@ -155,8 +166,15 @@ else if (projection is not null)
     [SupplyParameterFromQuery(Name = "scopeKey")]
     public string? ScopeKeyQuery { get; set; }
 
-    private readonly CancellationTokenSource disposeCts = new();
+    [SupplyParameterFromQuery(Name = "q")]
+    public string? QueryText { get; set; }
+
+    [SupplyParameterFromQuery(Name = "kind")]
+    public string? KindQuery { get; set; }
+
+    private static readonly TimeSpan FilterUrlSyncDebounce = TimeSpan.FromMilliseconds(250);
     private CancellationTokenSource? loadCts;
+    private CancellationTokenSource? filterUrlSyncCts;
     private KanbanFlow.Services.MemoryGraph? graph;
     private DecisionGraphView? projection;
     private MemoryScope scopeInput = MemoryScope.Agent;
@@ -168,6 +186,7 @@ else if (projection is not null)
     private string searchQuery = string.Empty;
     private string laneFilter = string.Empty;
     private string? loadError;
+    private string? namespaceError;
     private bool isLoading;
 
     protected override Task OnParametersSetAsync()
@@ -179,32 +198,50 @@ else if (projection is not null)
         var queryKey = string.IsNullOrWhiteSpace(ScopeKeyQuery)
             ? "knowledge-graph"
             : ScopeKeyQuery.Trim();
+        var namespaceChanged = routeScope != queryScope
+            || !string.Equals(routeScopeKey, queryKey, StringComparison.Ordinal);
 
         scopeInput = queryScope;
         scopeKeyInput = queryKey;
         routeScope = queryScope;
         routeScopeKey = queryKey;
+        searchQuery = QueryText ?? string.Empty;
+        laneFilter = NormalizeLaneFilter(KindQuery);
+        namespaceError = null;
 
         // Query parameters can change without recreating this component (links, browser back/forward,
-        // or another in-app navigation). Always start the requested load so it also cancels any
-        // slower request for the namespace the user just left.
-        return LoadGraphAsync(queryScope, queryKey);
+        // or another in-app navigation). Reload only when the namespace changes; q/kind navigation
+        // rebuilds the already-loaded projection and must not turn each filter edit into a DB read.
+        if (graph is null || namespaceChanged)
+            return LoadGraphAsync(queryScope, queryKey);
+
+        RebuildProjection();
+        return Task.CompletedTask;
     }
 
     private Task SubmitGraphAsync()
     {
         var key = scopeKeyInput.Trim();
+        namespaceError = null;
         if (key.Length == 0)
         {
-            loadError = "Namespace cannot be empty or whitespace.";
+            namespaceError = "Namespace cannot be empty or whitespace.";
             return Task.CompletedTask;
         }
 
-        var relativeUri = $"/memory?scope={Uri.EscapeDataString(scopeInput.ToString())}&scopeKey={Uri.EscapeDataString(key)}";
-        if (string.Equals(Navigation.Uri, Navigation.ToAbsoluteUri(relativeUri).AbsoluteUri, StringComparison.Ordinal))
+        var targetUri = Navigation.GetUriWithQueryParameters(
+            Navigation.ToAbsoluteUri("/memory").AbsoluteUri,
+            new Dictionary<string, object?>
+            {
+                ["scope"] = scopeInput.ToString(),
+                ["scopeKey"] = key,
+                ["q"] = QueryValue(searchQuery),
+                ["kind"] = QueryValue(NormalizeLaneFilter(laneFilter))
+            });
+        if (string.Equals(Navigation.Uri, targetUri, StringComparison.Ordinal))
             return LoadGraphAsync(scopeInput, key);
 
-        Navigation.NavigateTo(relativeUri);
+        Navigation.NavigateTo(targetUri);
         return Task.CompletedTask;
     }
 
@@ -215,14 +252,15 @@ else if (projection is not null)
         var key = requestedKey.Trim();
         if (key.Length == 0)
         {
-            loadError = "Namespace cannot be empty or whitespace.";
+            namespaceError = "Namespace cannot be empty or whitespace.";
             return;
         }
 
-        loadCts?.Cancel();
-        loadCts?.Dispose();
-        var thisLoad = CancellationTokenSource.CreateLinkedTokenSource(disposeCts.Token);
+        namespaceError = null;
+        var previousLoad = loadCts;
+        var thisLoad = new CancellationTokenSource();
         loadCts = thisLoad;
+        TryCancel(previousLoad);
         isLoading = true;
         loadError = null;
 
@@ -244,12 +282,19 @@ else if (projection is not null)
         catch (Exception ex)
         {
             if (!thisLoad.IsCancellationRequested)
-                loadError = ex.Message;
+            {
+                Logger.LogError(ex, "Failed to read memory graph for {Scope}/{ScopeKey}.", requestedScope, key);
+                loadError = "The memory graph could not be read. Try refreshing.";
+            }
         }
         finally
         {
             if (ReferenceEquals(loadCts, thisLoad))
+            {
+                loadCts = null;
                 isLoading = false;
+            }
+            thisLoad.Dispose();
         }
     }
 
@@ -257,12 +302,61 @@ else if (projection is not null)
     {
         searchQuery = args.Value?.ToString() ?? string.Empty;
         RebuildProjection();
+        _ = SyncFiltersToUrlAsync(debounce: true);
     }
 
     private void OnLaneChanged(ChangeEventArgs args)
     {
         laneFilter = args.Value?.ToString() ?? string.Empty;
         RebuildProjection();
+        _ = SyncFiltersToUrlAsync(debounce: false);
+    }
+
+    private async Task SyncFiltersToUrlAsync(bool debounce)
+    {
+        var previousSync = filterUrlSyncCts;
+        var thisSync = new CancellationTokenSource();
+        filterUrlSyncCts = thisSync;
+        TryCancel(previousSync);
+
+        try
+        {
+            if (debounce)
+                await Task.Delay(FilterUrlSyncDebounce, thisSync.Token);
+
+            thisSync.Token.ThrowIfCancellationRequested();
+            var targetUri = Navigation.GetUriWithQueryParameters(
+                new Dictionary<string, object?>
+                {
+                    ["q"] = QueryValue(searchQuery),
+                    ["kind"] = QueryValue(NormalizeLaneFilter(laneFilter))
+                });
+            // A debounced continuation resumes off the renderer dispatcher. Marshal the URL write
+            // back onto it instead of swallowing the resulting dispatcher InvalidOperationException.
+            await InvokeAsync(() =>
+            {
+                thisSync.Token.ThrowIfCancellationRequested();
+                Navigation.NavigateTo(targetUri, forceLoad: false, replace: true);
+            });
+        }
+        catch (OperationCanceledException) when (thisSync.IsCancellationRequested)
+        {
+            // A newer filter edit owns the URL.
+        }
+        catch (ObjectDisposedException)
+        {
+            // The circuit was torn down while a debounced URL write was pending.
+        }
+        catch (InvalidOperationException)
+        {
+            // The renderer/navigation manager was already disposed.
+        }
+        finally
+        {
+            if (ReferenceEquals(filterUrlSyncCts, thisSync))
+                filterUrlSyncCts = null;
+            thisSync.Dispose();
+        }
     }
 
     private void RebuildProjection()
@@ -273,11 +367,30 @@ else if (projection is not null)
             return;
         }
 
-        DecisionGraphLane? lane = Enum.TryParse<DecisionGraphLane>(laneFilter, ignoreCase: true, out var parsed)
-            && Enum.IsDefined(parsed)
+        DecisionGraphLane? lane = Enum.TryParse<DecisionGraphLane>(NormalizeLaneFilter(laneFilter), out var parsed)
                 ? parsed
                 : null;
         projection = DecisionGraphProjection.Build(graph, new DecisionGraphFilter(searchQuery, lane));
+    }
+
+    private static string NormalizeLaneFilter(string? value) =>
+        Enum.TryParse<DecisionGraphLane>(value, ignoreCase: true, out var parsed) && Enum.IsDefined(parsed)
+            ? parsed.ToString()
+            : string.Empty;
+
+    private static string? QueryValue(string value) =>
+        string.IsNullOrWhiteSpace(value) ? null : value;
+
+    private static void TryCancel(CancellationTokenSource? source)
+    {
+        try
+        {
+            source?.Cancel();
+        }
+        catch (ObjectDisposedException)
+        {
+            // The operation completed and disposed its own source between capture and cancellation.
+        }
     }
 
     private static string LaneLabel(DecisionGraphLane lane) => lane switch
@@ -294,10 +407,12 @@ else if (projection is not null)
 
     public ValueTask DisposeAsync()
     {
-        disposeCts.Cancel();
-        loadCts?.Cancel();
-        loadCts?.Dispose();
-        disposeCts.Dispose();
+        var activeLoad = loadCts;
+        loadCts = null;
+        var activeUrlSync = filterUrlSyncCts;
+        filterUrlSyncCts = null;
+        TryCancel(activeLoad);
+        TryCancel(activeUrlSync);
         return ValueTask.CompletedTask;
     }
 }

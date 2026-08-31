@@ -71,7 +71,7 @@
     justify-content: space-between;
     min-height: 32px;
     padding: .35rem .55rem;
-    border-top: 4px solid currentColor;
+    border-top: 4px solid currentcolor;
     border-radius: .25rem;
     color: var(--lane-color);
     background: var(--bs-tertiary-bg);
@@ -147,7 +147,7 @@
     align-items: center;
     min-height: 24px;
     padding: .15rem .45rem;
-    border: 1px solid currentColor;
+    border: 1px solid currentcolor;
     border-radius: 999px;
     color: var(--lane-color);
     background: var(--bs-body-bg);

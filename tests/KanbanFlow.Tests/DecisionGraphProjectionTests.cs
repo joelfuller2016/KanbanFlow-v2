@@ -15,6 +15,7 @@ public class DecisionGraphProjectionTests
     [InlineData(MemoryType.Semantic, "project", DecisionGraphLane.Context)]
     [InlineData(MemoryType.Episodic, null, DecisionGraphLane.Evidence)]
     [InlineData(MemoryType.Procedural, null, DecisionGraphLane.Action)]
+    [InlineData((MemoryType)99, "", DecisionGraphLane.Other)]
     public void Classify_UsesMemoryTypeAndNormalizedEntityTags(
         MemoryType type,
         string? tags,
@@ -130,12 +131,35 @@ public class DecisionGraphProjectionTests
     }
 
     [Fact]
-    public void Build_RejectsNonPositiveRenderCap()
+    public void Build_RejectsNullGraphOrNonPositiveRenderCap()
     {
         var graph = new MemoryGraph([], [], []);
 
+        Assert.Throws<ArgumentNullException>(() => DecisionGraphProjection.Build(null!));
         Assert.Throws<ArgumentOutOfRangeException>(() => DecisionGraphProjection.Build(graph, nodeLimit: 0));
         Assert.Throws<ArgumentOutOfRangeException>(() => DecisionGraphProjection.Build(graph, edgeLimit: 0));
+    }
+
+    [Fact]
+    public void Build_LaneFilterKeepsOnlyTheRequestedLaneAndDropsCrossLaneEdges()
+    {
+        var context = Node(1, MemoryType.Semantic, "runtime context", "context");
+        var decision = Node(2, MemoryType.Decision, "use the existing graph", "decision");
+        var graph = new MemoryGraph(
+            [context, decision],
+            [],
+            [Relation(1, context.Id, decision.Id, "supports")]);
+
+        var result = DecisionGraphProjection.Build(
+            graph,
+            new DecisionGraphFilter(Lane: DecisionGraphLane.Decision));
+
+        var visible = Assert.Single(result.Nodes);
+        Assert.Equal(decision.Id, visible.Node.Id);
+        Assert.Equal(1, result.MatchingNodeCount);
+        Assert.Empty(result.Edges);
+        Assert.Equal(0, result.MatchingEdgeCount);
+        Assert.Single(result.Lanes);
     }
 
     [Fact]

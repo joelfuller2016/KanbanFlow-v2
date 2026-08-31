@@ -621,19 +621,80 @@ async function main() {
         "case-insensitive EVIDENCE tag did not render in the Evidence lane");
       await page.locator(`[data-testid="decision-map-node-${decision.id}"]`).click();
       await page.locator('[data-testid="decision-node-detail"]').getByText("0.9", { exact: true }).waitFor({ state: "visible" });
+      assert(await page.locator('[data-testid="decision-node-detail"]').getAttribute("aria-live") === null,
+        "the complete decision detail panel must not be an aria-live region");
+      const selectionStatus = page.locator('[data-testid="decision-node-selection-status"]');
+      assert((await selectionStatus.innerText()).trim() === `Selected Decisions record ${decision.id}.`,
+        `selection status was not concise and specific: ${await selectionStatus.innerText()}`);
       const relationshipText = await page.locator('[data-testid="decision-node-detail"] .relationship-list').innerText();
       assert(relationshipText.includes(context.content) && relationshipText.includes("frames"),
         `incoming context relationship was not readable: ${relationshipText}`);
       assert(relationshipText.includes(evidence.content) && relationshipText.includes("supports"),
         `incoming evidence relationship was not readable: ${relationshipText}`);
 
+      const namespaceInput = page.locator('[data-testid="memory-map-namespace"]');
+      const loadedUrl = page.url();
+      await namespaceInput.fill("   ");
+      await page.getByRole("button", { name: "Load namespace" }).click();
+      await page.locator('[data-testid="memory-map-namespace-error"]').waitFor({ state: "visible" });
+      assert(await page.locator(`[data-testid="decision-map-node-${decision.id}"]`).isVisible(),
+        "invalid namespace validation erased the already-loaded graph");
+      assert(await page.locator('[data-testid="memory-map-summary"]').isVisible(),
+        "invalid namespace validation hid the loaded graph summary");
+      assert(page.url() === loadedUrl, `invalid namespace submission changed the URL: ${page.url()}`);
+      assert(await namespaceInput.getAttribute("aria-describedby") === "memory-namespace-error"
+        && await namespaceInput.getAttribute("aria-invalid") === "true",
+        "namespace validation was not associated with its field");
+      await namespaceInput.fill(scopeKey);
+      await page.getByRole("button", { name: "Load namespace" }).click();
+      await page.locator('[data-testid="memory-map-namespace-error"]').waitFor({ state: "detached" });
+
       const search = page.locator('[data-testid="memory-map-search"]');
+      const kind = page.locator('[data-testid="memory-map-kind"]');
+      const historyBeforeFilters = await page.evaluate(() => history.length);
       await search.fill("ReadGraphAsync");
       await page.locator(`[data-testid="decision-map-node-${evidence.id}"]`).waitFor({ state: "visible" });
       await page.locator(`[data-testid="decision-map-node-${decision.id}"]`).waitFor({ state: "detached" });
       assert(await page.locator(`[data-testid="decision-map-node-${decision.id}"]`).count() === 0,
         "search filter left a non-matching decision node visible");
+      await page.waitForFunction(
+        (expected) => new URL(window.location.href).searchParams.get("q") === expected,
+        "ReadGraphAsync",
+        { timeout: 10000 });
+      await kind.selectOption("Evidence");
+      await page.waitForFunction(
+        (expected) => new URL(window.location.href).searchParams.get("kind") === expected,
+        "Evidence",
+        { timeout: 10000 });
+      assert(await page.evaluate(() => history.length) === historyBeforeFilters,
+        "filter URL synchronization added history entries instead of replacing the current one");
+
+      const filteredUrl = page.url();
+      await page.goto(`${baseUrl}/`);
+      await page.goto(filteredUrl);
+      await page.locator(`[data-testid="decision-map-node-${evidence.id}"]`).waitFor({ state: "visible" });
+      assert(await search.inputValue() === "ReadGraphAsync" && await kind.inputValue() === "Evidence",
+        `deep-linked filter controls were not restored: q=${await search.inputValue()}, kind=${await kind.inputValue()}`);
+      assert(await page.locator(`[data-testid="decision-map-node-${decision.id}"]`).count() === 0,
+        "deep-linked text/kind filters did not restore the filtered projection");
+      await page.reload();
+      await page.locator(`[data-testid="decision-map-node-${evidence.id}"]`).waitFor({ state: "visible" });
+      assert(await search.inputValue() === "ReadGraphAsync" && await kind.inputValue() === "Evidence",
+        "reloading the decision map lost its text or kind filter");
+
       await search.fill("");
+      await page.waitForFunction(
+        () => !new URL(window.location.href).searchParams.has("q"),
+        null,
+        { timeout: 10000 });
+      await kind.selectOption("");
+      await page.waitForFunction(
+        () => !new URL(window.location.href).searchParams.has("kind"),
+        null,
+        { timeout: 10000 });
+      await page.locator(`[data-testid="decision-map-node-${context.id}"]`).waitFor({ state: "visible" });
+      assert(new URL(page.url()).searchParams.get("scopeKey") === scopeKey,
+        `clearing filters removed the loaded namespace from the URL: ${page.url()}`);
 
       await page.locator('[data-testid="decision-graph-list-toggle"]').click();
       await page.locator('[data-testid="decision-graph-list"]').waitFor({ state: "visible" });
@@ -656,6 +717,8 @@ async function main() {
         `keyboard focus had no visible treatment: ${JSON.stringify(keyboardFocus)}`);
       await contextListNode.press("Enter");
       await page.locator('[data-testid="decision-node-detail"] .lead').getByText(context.content, { exact: true }).waitFor({ state: "visible" });
+      assert((await selectionStatus.innerText()).trim() === `Selected Context record ${context.id}.`,
+        "the concise live selection status did not update after keyboard selection");
       assert((await contextListNode.getAttribute("aria-pressed"))?.toLowerCase() === "true",
         "Enter did not select the focused list record");
 
