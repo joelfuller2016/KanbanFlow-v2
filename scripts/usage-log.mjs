@@ -488,7 +488,18 @@ export function createUsageLogger(options = {}) {
         if (bytesOnDisk + bytes > rotateAt) rotate(bytes);
         fs.appendFileSync(logPath, line);
         bytesOnDisk += bytes;
+        // `broken` tracks whether recording is working RIGHT NOW, so a write that succeeds after
+        // a bad patch clears it. It is deliberately separate from `ready`: `ready` gates the
+        // one-time init and must not be reset, or every later call would re-run the probe.
+        broken = false;
       } catch (error) {
+        // Set it HERE as well as in init(). Previously only an init failure marked the logger
+        // broken, so a path that resolved cleanly and then stopped being writable — a full disk,
+        // a permission change, a deleted directory — left `enabled` reporting true while every
+        // append failed. That is exactly the silent-instrument state the getter exists to expose:
+        // a broken recorder and an unused board are indistinguishable to the trial report, and
+        // the difference decides whether a REVERT means "nobody used it" or "we never looked".
+        broken = true;
         noteFailure(error);
       }
     }

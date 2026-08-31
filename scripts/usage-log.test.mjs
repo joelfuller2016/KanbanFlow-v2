@@ -716,3 +716,30 @@ test("rotation takes a FREE archive slot instead of destroying the oldest", () =
   assert.ok(fs.existsSync(`${logPath}.5`), "the oldest generation must not be dropped while a slot is free");
   assert.equal(fs.readFileSync(`${logPath}.5`, "utf8").trim(), "OLDEST-MUST-SURVIVE");
 });
+
+
+test("enabled goes FALSE when writes start failing, and TRUE again when they recover", () => {
+  // Reported on PR #504. record()'s catch called noteFailure() but never set `broken`, so only an
+  // INIT failure could flip `enabled`. A path that resolved cleanly and then stopped being
+  // writable left the getter reporting true while every append failed — the silent-instrument
+  // state the getter exists to expose. A broken recorder and an unused board are indistinguishable
+  // to the trial report, and that difference decides whether a REVERT means "nobody used it" or
+  // "we never looked".
+  const dir = tmp();
+  const logPath = path.join(dir, "usage.jsonl");
+  const logger = createUsageLogger({ logPath, sessionId: "s", cwd: "C:\\w" });
+
+  logger.record({ tool: "list_projects", args: {}, outcome: "ok", ms: 1 });
+  assert.equal(logger.enabled, true, "a working recorder reports enabled");
+  assert.equal(logger.failures, 0);
+
+  fs.rmSync(dir, { recursive: true, force: true });          // every later append now fails
+  for (let i = 0; i < 3; i++) logger.record({ tool: "list_projects", args: {}, outcome: "ok", ms: 1 });
+  assert.equal(logger.enabled, false, "a recorder whose writes all fail must NOT report enabled");
+  assert.ok(logger.failures >= 1);
+
+  fs.mkdirSync(dir, { recursive: true });                    // obstruction clears
+  logger.record({ tool: "list_projects", args: {}, outcome: "ok", ms: 1 });
+  assert.equal(logger.enabled, true,
+    "recording must resume once writes work again — a transient fault does not disable the session");
+});

@@ -1490,7 +1490,20 @@ async function main(argv) {
   const apiBase = (process.env.KANBANFLOW_API_URL || DEFAULT_API).replace(/\/$/, "");
 
   const { resolveUsageLogPath } = await import("./usage-log.mjs");
-  const logPath = resolveUsageLogPath();
+  // A misconfigured KANBANFLOW_USAGE_LOG makes the LOG unusable — it says nothing about the
+  // activity API, which is a separate source and still answers. Letting the throw escape aborted
+  // the whole run at exit 2, discarding signal 3 (measured entirely from ActivityEvent rows)
+  // because a different source was misconfigured. That is the failure this file's own header
+  // forbids: a source that could not be read must degrade to UNMEASURED, never prevent the run.
+  // The operator still gets the message loudly, and the exit code is still non-zero.
+  let logPath = null;
+  let logConfigError = null;
+  try {
+    logPath = resolveUsageLogPath();
+  } catch (error) {
+    logConfigError = error?.message ?? String(error);
+    console.error(`NOTE: the usage log is misconfigured, so signals derived from it CANNOT BE MEASURED.\n      ${logConfigError}\n`);
+  }
   const here = path.dirname(fileURLToPath(import.meta.url));
   const { roots: repoRoots, source: repoRootSource } = resolveRepoRoots(repoRootOverride, {
     cwd: here,

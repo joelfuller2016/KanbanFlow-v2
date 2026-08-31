@@ -2035,3 +2035,25 @@ test("normalizeTaskId mirrors the wrapper's grammar exactly, not Number()'s", ()
   assert.equal(normalizeTaskId("+42"), 42);
   assert.equal(normalizeTaskId(42), 42);
 });
+
+
+test("a misconfigured log path degrades to UNMEASURED instead of aborting the run", async () => {
+  // Reported on PR #504. resolveUsageLogPath() throws for a relative KANBANFLOW_USAGE_LOG, and
+  // main() called it unguarded — so the whole run aborted at exit 2 and signal 3 was discarded,
+  // even though signal 3 is measured entirely from ActivityEvent rows and does not touch the log.
+  // A source that cannot be read must degrade, never prevent adjudication.
+  const { execFileSync } = await import("node:child_process");
+  const here = path.dirname(fileURLToPath(import.meta.url));
+  let out = "", code = 0;
+  try {
+    out = execFileSync(process.execPath, [path.join(here, "trial-report.mjs")], {
+      env: { ...process.env, KANBANFLOW_USAGE_LOG: "relative/path.jsonl", KANBANFLOW_API_URL: "http://127.0.0.1:1" },
+      encoding: "utf8", stdio: ["ignore", "pipe", "pipe"]
+    });
+  } catch (e) { out = (e.stdout || "") + (e.stderr || ""); code = e.status ?? 1; }
+
+  assert.match(out, /misconfigured/i, "the operator is told why the log could not be used");
+  assert.match(out, /^\| # \| Signal/m, "the table is still rendered");
+  assert.match(out, /^OVERALL/m, "a verdict line is still produced");
+  assert.ok(code !== 0, "and the run still exits non-zero");
+});
