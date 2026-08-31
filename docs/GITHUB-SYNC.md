@@ -14,14 +14,16 @@ node scripts/portfolio-sync.mjs --help
 |---|---|---|---|
 | `sync` (default) | GitHub → board | **No** | Mirror issues, milestones, labels and comments onto the board. |
 | `onboard <owner/repo>` | GitHub → board | **No** | Register a new repo: create/link its Project durably, then backfill everything. |
-| `push-issue <owner/repo>` | board → GitHub | **No** — *preview only* | Print the exact issue each unsynced task **would** become. Refuses to write; see [Why `push-issue` does not write](#why-push-issue-does-not-write). |
+| `push-issue <owner/repo>` | board → GitHub | Preview: **No**. Explicit live mode: **one issue** | Preview by default. `--allow-write --task <id>` enables one additive create through the durable journal; `--resume <uuid>` reconciles an interrupted operation. |
+| `backfill-links <owner/repo>` | GitHub → board identity | **No** | Verify authoritative URLs already stored in sync blocks, persist durable links, and quarantine ambiguous legacy candidates. |
 | `status` | both | **No** | Health check. Exit `0` clean · `1` drift · `2` incomplete/error. |
 
-> **This script never writes to GitHub.** Not "writes carefully" — *never*. `gh` invocations are
-> checked against a whitelist of four read verbs (`issue list`, `pr list`, `label list`, `api`
-> without any write flag) before they run, so a future edit that adds `gh issue create` fails
-> immediately rather than at review time. Every write this tool performs goes to the KanbanFlow
-> REST API. See [Write surface](#write-surface).
+> **The GitHub write surface is one additive primitive.** Generic `gh()` remains checked against
+> the closed read-only whitelist (`issue list`, `pr list`, `label list`, `api` without write
+> flags). A separate wrapper can run only `gh issue create --repo … --title … --body-file -`,
+> optionally attaching the frozen milestone/label, and only after `--allow-write --task <id>`
+> plus a durable board-side prepare/dispatch. There is no edit, close, delete, comment, or
+> post-create relabel path. See [Write surface](#write-surface).
 
 ---
 
@@ -29,10 +31,10 @@ node scripts/portfolio-sync.mjs --help
 
 | GitHub | KanbanFlow | Identity key (how a re-run recognises it) |
 |---|---|---|
-| repo | Project | `<!-- github: owner/repo -->` in `Project.Description`; falls back to the repo's short name |
+| repo | Project | immutable `<!-- github-node: R_… -->` in `Project.Description`; legacy `<!-- github: owner/repo -->`, then short name, are upgrade-only fallbacks |
 | milestone | Feature | the milestone title, matched by Feature name within the project |
 | *(no milestone)* | Feature `Unsorted` | the literal name `Unsorted` |
-| issue | TaskItem | the `#<n> ` prefix on `TaskItem.Name` |
+| issue | TaskItem | Active `ExternalWorkItemLink`: immutable repository node id + issue node id; legacy `#<n> ` prefix only when no structured link exists |
 | issue labels | TaskItem.Priority | highest severity label wins; default `Medium` |
 | issue body | TaskItem.Description | provenance block + first 1500 chars of the body |
 | issue comment | TaskComment | `<!-- gh:<node-id> -->` stamped into `TaskComment.Text` |
@@ -41,8 +43,13 @@ node scripts/portfolio-sync.mjs --help
 | PR review `CHANGES_REQUESTED` | TaskComment (`Blocked`) | same node-id marker |
 | inline `file:line` review comment | TaskComment (`Comment`) | same node-id marker |
 
-Nothing above needs a schema change — every identity key is a marker embedded in a field the
-board already has. That is why the sync can be added to an existing board without a migration.
+Newly mirrored and board-originated issues receive structured links. Existing boards keep
+working during migration because prefix matching remains a fallback; `backfill-links` promotes
+only a verified sync-block URL and persists every ambiguous candidate as `Quarantined`.
+An explicit verified link PUT is the human-resolution path that promotes a quarantine to Active;
+backfill reruns deliberately leave the quarantine untouched. If malformed provenance cannot be
+correlated to one issue number, unmatched issue projection fails closed across that project until
+the quarantine is resolved.
 
 ### Label → priority
 
@@ -68,7 +75,7 @@ This table describes the code, not the aspiration. Read the status row carefully
 
 | Field | Owner | Behaviour on every `sync` |
 |---|---|---|
-| Task **name** | GitHub | Always reconciled to `#<n> <issue title>`. A board-side rename is overwritten. |
+| Task **name** | GitHub | Active linked tasks use the plain issue title; legacy fallback tasks retain `#<n> <issue title>` until backfill. Identity never depends on a linked task's editable name. |
 | Task **priority** | GitHub | Always reconciled from the issue's labels. A board-side change is overwritten. |
 | Task **description** | GitHub | Written **once, at creation**. Later issue-body edits are *not* re-mirrored. |
 | Task **feature** | GitHub | Follows the issue's milestone. A milestone change **moves** the task. |
@@ -104,7 +111,7 @@ Conflating these is how a sync earns a reputation for fighting its owner.
 | Term | Meaning | Does `sync` fix it? |
 |---|---|---|
 | **pending** | The board is simply behind GitHub — a new issue, a closed issue, a changed title or label. | **Yes**, on the next run. Not a problem. |
-| **unsynced** | A board task with no `#<n> ` prefix: work drafted on the board that has no GitHub issue. | No — it is a `push-issue` candidate. Not a problem. |
+| **unsynced** | A board task with neither an Active GitHub link nor a legacy `#<n> ` fallback. | No — it is a `push-issue` candidate. Not a problem. |
 | **drift** | A disagreement the sync deliberately **will not** resolve. | **No.** A human decides. |
 
 There are exactly two kinds of drift, and `sync` and `status` report them with identical
@@ -161,7 +168,8 @@ repo ever legitimately exceeds it.
 
 ## Write surface
 
-**On GitHub: nothing.** Enforced structurally, not by convention.
+**On GitHub:** one additive issue create, and only after the explicit live gate and durable
+journal transition. The generic GitHub helper remains read-only. There is no update/delete path.
 
 **On the KanbanFlow board**, every mutation goes through the REST API — never SQLite or EF
 directly — so the `ActivityEvent` audit trail stays complete and the sync's writes are
@@ -169,7 +177,7 @@ indistinguishable from a human's in the history.
 
 | Endpoint | When | Notes |
 |---|---|---|
-| `POST /api/projects` | a repo has no project | description carries the `<!-- github: … -->` marker |
+| `POST /api/projects` | a repo has no project | description carries immutable `<!-- github-node: … -->` plus the refreshable `<!-- github: … -->` display marker |
 | `PUT /api/projects/{id}` | `onboard` adopting a name-matched project | sends **only** `name` + `description`. This PUT is a true partial update (#203), so `Goals` and `Readme` are preserved *by omission* — sending every field back would be the riskier move |
 | `POST /api/projects/{id}/features` | a milestone has no feature | |
 | `POST /api/features/{id}/tasks` | an issue has no task | |
@@ -177,42 +185,103 @@ indistinguishable from a human's in the history.
 | `PATCH /api/tasks/{id}/status` | an issue closed since the last sync | |
 | `PATCH /api/tasks/{id}/feature` | an issue's milestone changed | feature is not settable through the task PUT; reassignment is its own verb |
 | `POST /api/tasks/{id}/comments` | a GitHub comment is not mirrored yet | deduped by node id |
+| `POST /api/tasks/{id}/external-write-operations` | before a live GitHub create | freezes the exact request and server-generated `kanbanflow-push` marker |
+| `POST /api/external-write-operations/{uuid}/dispatch` | immediately before GitHub contact | closes the unsafe pre-call window |
+| `POST /api/external-write-operations/{uuid}/finalize` | after an exact issue result or marker recovery | sends current repository node/owner/name with the issue result; the service pins the immutable node, validates the URL against the current path, then atomically completes the operation and inserts the Active link |
+| `POST /api/external-write-operations/{uuid}/authorize-ambiguous-retry` | operator accepts residual risk after an exhaustive raw zero-marker scan | records actor/reason and `ManualRetryAuthorized`; exits without a GitHub write and requires a separate resume |
+| `PUT /api/tasks/{id}/external-work-item-links/github` | verified sync/backfill identity | idempotent registration; database uniqueness is authoritative |
+| `GET /api/external-work-item-links/github/by-node?externalNodeId=…` | before fallback matching/task creation | global immutable-node owner lookup; 404 means unlinked |
+| `POST /api/tasks/{id}/external-work-item-quarantines/github` | ambiguous legacy candidate | persists the reason instead of guessing |
 
 **Never, on either side:** delete anything. Not a task, not a feature, not a project, not a
 comment, not an issue.
 
 ---
 
-## Why `push-issue` does not write
+## Safe `push-issue`: preview, live create, and recovery
 
-`push-issue` computes the complete issue — title, milestone, labels, body — and prints it. Then
-it stops. `--allow-write` / `--push` are recognised only so that asking for the write gets this
-explanation instead of "unknown option".
+Preview remains the default and performs **zero writes on either side**:
 
-Creating the issue and recording its number on the board are **two operations that cannot be
-made one**. The board's only identity for a mirrored issue is the `#<n> ` title prefix, and
-that prefix cannot exist until the GitHub create has already succeeded. Everything that can
-happen inside that window produces a duplicate issue — and under additive-only rules, nothing
-here is permitted to close it:
+```bash
+node scripts/portfolio-sync.mjs push-issue owner/repo --task 123
+node scripts/portfolio-sync.mjs push-issue owner/repo --all
+```
 
-- **Crash between the two.** The retry sees an unprefixed task and creates a second issue.
-- **Two concurrent runs.** Both read the same unprefixed task; both create. `PUT /api/tasks/{id}`
-  has no ETag or version check, so there is nothing to lose the race on.
-- **A `sync` landing mid-window.** It sees an issue with no task and creates a *second* board
-  task for the issue that was just pushed.
-- **Stamping the title races a human** editing that same title in the UI. Last writer wins,
-  silently.
-- **A title that already contains `#123`** is ambiguous — legacy link, literal text, or a
-  cross-repo reference. The prefix parser cannot tell them apart.
+Live mode is deliberately single-task and explicit:
 
-Doing this safely needs a pending-operation id persisted through REST **before** the GitHub
-call and matched back from the issue body on restart, plus a durable link field that is not
-`Name`. That is schema work, tracked separately.
+```bash
+node scripts/portfolio-sync.mjs push-issue owner/repo --allow-write --task 123
+```
 
-Until then the preview is genuinely useful: it is the exact issue body to paste, and it tells
-you what would be lost. In particular it warns when **no label in the target repo maps to the
-task's priority**, because a `High` task pushed to a repo with no priority labels comes back
-from the very next `sync` as `Medium`.
+The sequence is `prepare → dispatch → gh issue create → verify → finalize`. `prepare` freezes
+the title/body/milestone/label and appends exactly
+`<!-- kanbanflow-push:<operation-uuid> -->`; `dispatch` is persisted before GitHub contact;
+`finalize` sends the current repository node id, owner, and name with the issue result. The service
+requires the immutable node to match the frozen operation, validates the URL against the supplied
+current path (so a rename survives but a different-repository URL is rejected), then atomically
+stores the issue node id, number, URL, and immutable repository identity.
+
+GitHub does **not** offer an idempotency key for issue creation. The body marker is therefore a
+recovery anchor, not a provider-side exactly-once guarantee. If a process dies after dispatch,
+resume it explicitly:
+
+```bash
+node scripts/portfolio-sync.mjs push-issue owner/repo \
+  --allow-write --task 123 --resume 00000000-0000-4000-8000-000000000000
+```
+
+For `Dispatched` or `NeedsReview`, resume never creates automatically. Indexed GitHub search is
+used only as a hint; the script then performs a complete paginated REST scan. One clean issue
+record containing one target marker and no other operation marker finalizes. The stronger raw
+counter scans every REST record including PRs and recognises the target token even when its HTML
+comment/whitespace is malformed. A raw target marker copied twice, mixed with another operation
+marker, or present across records is ambiguous even when the clean-match filter returns zero. Zero raw occurrences, ambiguity, or an incomplete read
+stay `NeedsReview` and fail closed. A normal `sync` applies the same rule before it may create any
+board task, so a sync landing between GitHub create and finalize maps the issue back to the
+intended task.
+
+GitHub supplies no atomic negative-read/idempotency primitive. When an operator has investigated
+a persistent zero-result `NeedsReview`, the only liveness escape hatch is deliberately two-step:
+
+```bash
+# Step 1: fresh exhaustive scan, then record the operator decision and EXIT. No GitHub create.
+node scripts/portfolio-sync.mjs push-issue owner/repo \
+  --allow-write --task 123 --resume 00000000-0000-4000-8000-000000000000 \
+  --authorize-ambiguous-retry 00000000-0000-4000-8000-000000000000 \
+  --actor operator-name --resolution-reason "Reviewed remote audit and accepted retry risk"
+
+# Step 2: a separate invocation claims the attempt, then scans before evidence-bound dispatch/create.
+node scripts/portfolio-sync.mjs push-issue owner/repo \
+  --allow-write --task 123 --resume 00000000-0000-4000-8000-000000000000
+```
+
+The repeated UUID, explicit actor, reason, attempt count, scan time, and zero raw occurrence count
+are checked and audited. The second invocation calls Resume first; Resume preserves
+`ManualRetryAuthorized`, claims the lease, increments the attempt, and records `LastAttemptAt`.
+Only then does the script scan. One late issue finalizes without creating and any
+ambiguous/incomplete result blocks. After a post-Resume zero scan, dispatch accepts the operation
+only with the same UUID, post-Resume attempt count, a scan timestamp at or after `LastAttemptAt`,
+clean count zero, and raw count zero. It then sends the same frozen
+body/marker. There is still an unavoidable residual race between that negative read and GitHub
+create; manual authorization records acceptance of that risk rather than claiming exactly-once
+proof. A crash after Resume and scan but before dispatch cannot erase the gate—the next invocation
+must claim a new attempt and scan again. `Prepared` with prior `DispatchedAt` is only a defensive compatibility state: a late
+marker may proof-finalize it, but it is not the normal manual-retry path and it cannot dispatch a
+replacement. A first-ever Prepared operation cannot use that exception.
+
+A second concurrent prepare loses at the database boundary before GitHub is contacted. Every
+post-dispatch process/CLI/transport failure remains ambiguous; the script never classifies one as
+definitively pre-create and never compensates by closing or deleting an issue.
+
+Issue transfers use the issue node ID as canonical identity. Before fallback matching or task
+creation, sync checks the global node lookup. If the linked task already belongs to the current
+project, the verified PUT refreshes repository node/owner/name, number, and URL and audits
+`ExternalWorkItemTransferred`. If it belongs to another project, sync reports the source project
+and task, then makes zero mutations and creates nothing; moving a task across projects is an
+explicit human decision. Nonterminal write operations remain pinned to their frozen repository.
+
+Milestones and priority labels are attached during the create when their exact names already
+exist. They are never created by this command.
 
 Milestones are **attached, never created**. A task under a feature with no matching milestone
 on the repo is previewed unfiled, and says so.
@@ -277,6 +346,7 @@ project, or check the existing feature names first.
 | `KANBANFLOW_PORTFOLIO_REPOS` | the six focus repos | comma-separated rotation for `sync` / `status` |
 | `KANBANFLOW_MCP_TIMEOUT_MS` | `15000` | REST timeout |
 | `KANBANFLOW_GH_PAGE_LIMIT` | `2000` | per-fetch item bound; saturating it is exit `2` |
+| `KANBANFLOW_EXTERNAL_WRITE_LEASE_SECONDS` | `300` | durable write lease; must be a positive integer. The real-GitHub harness sets `15` on its scratch instance so the post-Resume paginated scan has headroom, and polls the recorded expiry after intentional crashes |
 
 Requires `gh` authenticated with read access to the repos in the rotation.
 
@@ -288,7 +358,39 @@ npm run gh:sync:dry    # …preview it
 npm run gh:status      # health check (exit 0/1/2)
 npm run gh:onboard -- joelfuller2016/new-repo
 npm run gh:push:preview -- joelfuller2016/new-repo --all   # preview only — never writes to GitHub
+npm run gh:backfill -- joelfuller2016/new-repo --dry-run
 ```
+
+---
+
+## Opt-in real-GitHub failure harness
+
+[`scripts/verify-336-github.ps1`](../scripts/verify-336-github.ps1) is pinned to the private
+`joelfuller2016/test-mcp-github-repo-20250527` fixture repository and its immutable node id. It
+refuses to run without `-AllowGitHubWrites`, rechecks privacy/issues/admin access, starts a fresh
+scratch SQLite database on a random port, and exercises:
+
+- a command-level preview that leaves operation, activity, link, task, and GitHub issue state unchanged;
+- post-dispatch/pre-create process death, fail-closed normal recovery, audited manual authorization,
+  a malformed raw-token denial fixture, an evidence-bearing post-Resume scan/create, and a
+  crash-after-Resume-and-scan delayed-marker subcase that proves the next invocation claims a new
+  attempt and rescans/finalizes without duplication (PR-token denial is deterministic Node coverage;
+  the harness intentionally does not create retained branches/commits merely to manufacture a PR);
+
+1. process death after GitHub create and before finalize;
+2. two live pushes released together from a pre-prepare barrier for one task;
+3. `sync` inside the create/finalize window, including an unchanged project task-id set;
+4. task-only, issue-only, and both-side renames;
+5. duplicate-link rejection plus focused real-SQLite tests;
+6. title-only legacy quarantine, idempotent rerun, and suppression of later sync/live-push writes.
+
+```powershell
+pwsh ./scripts/verify-336-github.ps1 -AllowGitHubWrites
+```
+
+This command creates and renames real fixture issues and adds one audit-summary comment. It
+**never closes or deletes them**. The scratch database, process logs, barrier signals, and
+`result.json` are preserved in the printed temporary run directory, even on failure.
 
 ---
 

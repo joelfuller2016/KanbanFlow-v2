@@ -3284,11 +3284,12 @@ async function main() {
     // real board starts with these six lines, and the whole point of the issue is what a HUMAN sees
     // when they do.
     const syncIssueUrl = "https://github.com/joelfuller2016/KanbanFlow-v2/issues/357";
+    const syncPullRequestUrl = "https://github.com/joelfuller2016/KanbanFlow-v2/pull/506";
     const syncBlock = [
       "<!-- kanbanflow-sync -->",
       `**Issue:** ${syncIssueUrl}`,
       "**State:** OPEN · **Milestone:** M4: UI / UX Polish · **Labels:** bug, ui",
-      "**Open PR:** none",
+      `**Open PR:** ${syncPullRequestUrl}`,
       "**Synced:** 2026-08-02T21:14:07.482Z",
       "<!-- /kanbanflow-sync -->",
       "",
@@ -3330,6 +3331,106 @@ async function main() {
       name: `E2E synced description ${stamp}`,
       status: "Todo",
       description: `${syncBlock}\n## Summary\n\nA real **body** with a [named link](https://example.com/docs).`,
+    });
+    // Deliberately differs from the #357 URL embedded in mutable Markdown above. If a future
+    // regression starts scraping prose again, this browser assertion must fail instead of passing
+    // because the text and durable row happened to agree.
+    const durableIssueUrl = "https://github.com/joelfuller2016/KanbanFlow-v2/issues/336";
+    await api("PUT", `/api/tasks/${syncedTask.id}/external-work-item-links/github`, {
+      provider: "GitHub",
+      repositoryExternalId: `R_e2e_${stamp}`,
+      repositoryOwner: "joelfuller2016",
+      repositoryName: "KanbanFlow-v2",
+      externalNodeId: `I_e2e_${stamp}`,
+      externalNumber: 336,
+      url: durableIssueUrl,
+      actor: "ui-e2e",
+    });
+
+    const nonTaskSyncBlock = [
+      "<!-- kanbanflow-sync -->",
+      "**Issue:** https://github.com/joelfuller2016/KanbanFlow-v2/issues/336",
+      "**State:** OPEN · **Milestone:** M1 · **Labels:** ui",
+      "**Open PR:** https://github.com/joelfuller2016/KanbanFlow-v2/pull/506",
+      "**Synced:** 2026-08-30T23:00:00.000Z",
+      "<!-- /kanbanflow-sync -->",
+    ].join("\n");
+    const nonTaskProject = await api("POST", "/api/projects", {
+      name: `E2E non-task GitHub controls ${stamp}`,
+      description: nonTaskSyncBlock,
+    });
+    const nonTaskFeature = await api("POST", `/api/projects/${nonTaskProject.id}/features`, {
+      name: `E2E non-task feature ${stamp}`,
+      description: nonTaskSyncBlock,
+    });
+
+    await test("GitHub controls stay hidden for Project and Feature edit modes (#336 review)", async () => {
+      await page.goto(`${baseUrl}/project/${nonTaskProject.id}`);
+      await clickUntil(
+        () => page.locator('[data-testid="edit-project-button"]').click(),
+        page.locator('[data-testid="edit-item-modal"]'),
+      );
+      assert(await page.locator('[data-testid="edit-item-github-link"]').count() === 0,
+        "Project edit rendered a GitHub issue control");
+      assert(await page.locator('[data-testid="edit-item-github-pr-link"]').count() === 0,
+        "Project description produced a GitHub PR control");
+      // Navigate between modes instead of relying on modal-close animation timing; the next
+      // assertion is about a freshly opened Feature modal, not retained component state.
+      await page.goto(`${baseUrl}/project/${nonTaskProject.id}`);
+
+      await clickUntil(
+        () => page.locator(`[data-testid="outline-feature-${nonTaskFeature.id}"]`).click(),
+        page.locator('[data-testid="edit-item-modal"]'),
+      );
+      assert(await page.locator('[data-testid="edit-item-github-link"]').count() === 0,
+        "Feature edit rendered a GitHub issue control");
+      assert(await page.locator('[data-testid="edit-item-github-pr-link"]').count() === 0,
+        "Feature description produced a GitHub PR control");
+      await page.goto(`${baseUrl}/project/${proj.id}`);
+    });
+
+    await test("Durable GitHub issue identity renders on card, detail, and edit surfaces (#336)", async () => {
+      await page.goto(`${baseUrl}/project/${proj.id}`);
+      const expectedLabel = "Open GitHub issue #336 for joelfuller2016/KanbanFlow-v2 in a new tab";
+      const assertIssueControl = async (locator, surface) => {
+        await locator.waitFor({ state: "visible" });
+        assert((await locator.innerText()).trim() === "#336", `${surface} badge did not render #336`);
+        assert(await locator.getAttribute("href") === durableIssueUrl, `${surface} badge href is not canonical`);
+        assert(await locator.getAttribute("target") === "_blank", `${surface} badge must open a new tab`);
+        assert(await locator.getAttribute("rel") === "noopener noreferrer", `${surface} badge lacks opener isolation`);
+        assert(await locator.getAttribute("aria-label") === expectedLabel, `${surface} badge lacks repository context`);
+      };
+
+      await assertIssueControl(
+        page.locator(`[data-testid="board-card-${syncedTask.id}-github-link"]`),
+        "board card",
+      );
+      await clickUntil(
+        () => page.locator(`[data-testid="board-card-${syncedTask.id}-title"]`).click(),
+        page.locator('[data-testid="task-detail-panel"]'),
+      );
+      await assertIssueControl(page.locator('[data-testid="task-detail-github-link"]'), "task detail");
+
+      await page.goto(`${baseUrl}/project/${proj.id}`);
+      await clickUntil(
+        () => page.locator(`[data-testid="outline-task-${syncedTask.id}"]`).click(),
+        page.locator('[data-testid="edit-item-modal"]'),
+      );
+      await assertIssueControl(page.locator('[data-testid="edit-item-github-link"]'), "edit modal");
+      const pullRequestControl = page.locator('[data-testid="edit-item-github-pr-link"]');
+      await pullRequestControl.waitFor({ state: "visible" });
+      assert((await pullRequestControl.innerText()).trim() === "PR #506 ↗",
+        "edit modal pull request control did not render PR #506");
+      assert(await pullRequestControl.getAttribute("href") === syncPullRequestUrl,
+        "edit modal pull request control href is not canonical");
+      assert(await pullRequestControl.getAttribute("target") === "_blank",
+        "edit modal pull request control must open a new tab");
+      assert(await pullRequestControl.getAttribute("rel") === "noopener noreferrer",
+        "edit modal pull request control lacks opener isolation");
+      assert(await pullRequestControl.getAttribute("aria-label")
+        === "Open GitHub pull request #506 for joelfuller2016/KanbanFlow-v2 in a new tab",
+      "edit modal pull request control lacks repository context");
+      await page.locator('[data-testid="edit-item-cancel-button"]').click();
     });
 
     await test("Task description renders markdown in read mode, one click opens the raw source (#357)", async () => {

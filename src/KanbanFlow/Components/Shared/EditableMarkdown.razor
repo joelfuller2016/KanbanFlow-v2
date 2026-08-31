@@ -157,8 +157,7 @@ else
     private bool _commitInProgress;
 
     // Resolved once per parameter change, never in the render path. Computed properties re-run
-    // on EVERY render, and this component re-renders on every keystroke while editing — the same
-    // trap EditItemModal's RefreshGitHubLinks comment already documents.
+    // on EVERY render, and this component re-renders on every keystroke while editing.
     private string readTestId = string.Empty;
     private string readControlTestId = string.Empty;
     private string editTestId = string.Empty;

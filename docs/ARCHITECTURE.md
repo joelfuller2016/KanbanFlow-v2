@@ -15,7 +15,7 @@ command shown. If a number here disagrees with the code, the code wins — re-de
 - [Runtime shape](#runtime-shape)
 - [Entity model](#entity-model)
 - [The write path & audit boundary](#the-write-path--audit-boundary)
-- [REST surface (60 endpoints)](#rest-surface-60-endpoints)
+- [REST surface (71 endpoints)](#rest-surface-71-endpoints)
 - [MCP surface (28 native / 50 wrapper)](#mcp-surface-28-native--50-wrapper)
 - [Who owns what](#who-owns-what)
 - [Running it locally](#running-it-locally)
@@ -34,10 +34,10 @@ service mesh, no message bus, no container, and no build pipeline to reason abou
 
 ```mermaid
 flowchart TD
-    H["Human"] -->|"kanban board, outline, ideas, memory map"| UI["Blazor Server<br/>Components/ (27 .razor, 6 routes)"]
+    H["Human"] -->|"kanban board, outline, ideas, memory map"| UI["Blazor Server<br/>Components/ (28 .razor, 6 routes)"]
     A["AI agent"] -->|"JSON-RPC over stdio"| NODE["Node MCP wrapper<br/>scripts/mcp-server.mjs (50 tools)"]
     A -->|"JSON-RPC over HTTP"| NATIVE["Native in-process MCP<br/>POST /mcp (28 tools)"]
-    A -->|"HTTP / JSON"| REST["REST minimal API<br/>ApiEndpoints.cs + AdminEndpoints.cs (60)"]
+    A -->|"HTTP / JSON"| REST["REST minimal API<br/>ApiEndpoints.cs + AdminEndpoints.cs (71)"]
     NODE -->|"HTTP"| REST
 
     UI --> EF
@@ -143,10 +143,10 @@ grep -rln 'ITaskService\|IIdeaService' src/KanbanFlow/Components/
 
 ---
 
-## REST surface (60 endpoints)
+## REST surface (71 endpoints)
 
 ```bash
-grep -cE '\.Map(Get|Post|Put|Patch|Delete)\(' src/KanbanFlow/ApiEndpoints.cs    # 55
+grep -cE '\.Map(Get|Post|Put|Patch|Delete)\(' src/KanbanFlow/ApiEndpoints.cs    # 66
 grep -cE '\.Map(Get|Post|Put|Patch|Delete)\(' src/KanbanFlow/AdminEndpoints.cs  #  5
 ```
 
@@ -225,6 +225,22 @@ model-hidden reasoning; capture clients must not write private scratchpads or se
 `ReadGraphAsync` caps the source at 900 nodes. The UI projection separately caps a rendered view at
 80 nodes, 320 unique directed edges, and 50 observations per selected record; source and render
 truncation are reported rather than silently presented as complete.
+
+### GitHub external identity & write journal (#336)
+
+| Route | Methods |
+|---|---|
+| `/api/external-work-item-links/github/by-node` | `GET` — global Active-link lookup by immutable issue node (`?externalNodeId=`) |
+| `/api/projects/{id}/external-work-item-links` | `GET` — Active and Quarantined project rows |
+| `/api/tasks/{id}/external-work-item-links/github` | `PUT` — verified idempotent registration/metadata transfer |
+| `/api/tasks/{id}/external-work-item-quarantines/github` | `POST` — persist ambiguous legacy evidence |
+| `/api/tasks/{id}/external-write-operations` | `POST` — prepare/freeze one outbound create |
+| `/api/external-write-operations/{uuid}` | `GET` — read durable operation state |
+| `/api/external-write-operations/{uuid}/resume` | `POST` — explicit lease/recovery step |
+| `/api/external-write-operations/{uuid}/dispatch` | `POST` — persist pre-contact dispatch (manual retry requires fresh scan evidence) |
+| `/api/external-write-operations/{uuid}/finalize` | `POST` — proof-finalize immutable issue result/link |
+| `/api/external-write-operations/{uuid}/failure` | `POST` — persist fail-closed outcome |
+| `/api/external-write-operations/{uuid}/authorize-ambiguous-retry` | `POST` — audited operator authorization after exhaustive raw zero-marker scan |
 
 ### Admin
 
@@ -549,7 +565,7 @@ reachable from both REST and MCP.
 
 | # | Requirement | Status |
 |---|---|---|
-| R-2.1 | Full REST CRUD for every entity. | ⚠️ 60 endpoints, but not *full* CRUD everywhere: `TaskComment` has create/list/delete and **no update route**, and `ActivityEvent` is read-only by design (append-only, R-7.3) |
+| R-2.1 | Full REST CRUD for every entity. | ⚠️ 71 endpoints, but not *full* CRUD everywhere: `TaskComment` has create/list/delete and **no update route**, and `ActivityEvent` is read-only by design (append-only, R-7.3) |
 | R-2.2 | Every REST capability has at least one MCP tool. | ❌ native 28, wrapper 50 — neither covers requirements (#231) |
 | R-2.3 | UI mutations go through the same service layer as REST. | ✅ #88 closed; components call `ITaskService`/`IIdeaService` |
 | R-2.4 | All entity mutations produce an `ActivityEvent`. | ❌ tasks + ideas only (#149) |
@@ -619,7 +635,7 @@ Ranked by how much they hurt an agent consuming this system.
 | Audit covers only tasks + ideas | [#149](https://github.com/joelfuller2016/KanbanFlow-v2/issues/149) | A feature rename or a deleted acceptance criterion leaves no trace; agents reading history see a partial past |
 | Native/wrapper MCP divergence | [#231](https://github.com/joelfuller2016/KanbanFlow-v2/issues/231) | The same agent gets a different tool set depending on transport; `/mcp` cannot create a project |
 | REST edge re-declares service-layer policy | [#302](https://github.com/joelfuller2016/KanbanFlow-v2/issues/302) | Comment-type policy, dead `isBlocked` fields, and actor/author collapse differ between surfaces |
-| No repo link *column* on `Project` | [#237](https://github.com/joelfuller2016/KanbanFlow-v2/issues/237) | Largely mitigated: the sync's primary identity key is a `<!-- github: owner/repo -->` marker in `Project.Description`, so a marker-linked project **survives a rename**. Case-insensitive short-name matching remains only as a legacy fallback, and a name-only link *does* still detach on rename until `onboard` stamps it (safe to re-run). A real column would remove the marker parsing, not restore a lost capability |
+| No repo link *column* on `Project` | [#237](https://github.com/joelfuller2016/KanbanFlow-v2/issues/237) | Largely mitigated: the immutable `<!-- github-node: R_… -->` marker is the primary identity key, so a linked project survives a rename and transfer. The mutable `<!-- github: owner/repo -->` marker is refreshed display/compatibility metadata. Case-insensitive short-name matching remains an upgrade-only fallback, and a name-only link still detaches on rename until `onboard` stamps both markers (safe to re-run). A real column would remove marker parsing, not restore a lost capability |
 | Unbounded list endpoints | R-1.4 | A several-hundred-task board returns everything, every time |
 | No search endpoint | R-1.5 | Agents must pull whole-project context to find anything |
 | Anonymous response shapes | R-5.2 | The OpenAPI document under-describes responses |

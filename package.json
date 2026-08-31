@@ -18,6 +18,7 @@
     "gh:status": "node scripts/portfolio-sync.mjs status",
     "gh:onboard": "node scripts/portfolio-sync.mjs onboard",
     "gh:push:preview": "node scripts/portfolio-sync.mjs push-issue",
+    "gh:backfill": "node scripts/portfolio-sync.mjs backfill-links",
     "gh:standup": "node scripts/portfolio-standup.mjs",
     "trial:report": "node scripts/trial-report.mjs",
     "seed:snapshot": "node scripts/snapshot-seed.mjs",

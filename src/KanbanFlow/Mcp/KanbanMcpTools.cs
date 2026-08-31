@@ -314,6 +314,10 @@ public static class KanbanMcpTools
         {
             throw new McpException($"Task {taskId} not found.");
         }
+        catch (ExternalWorkItemConflictException ex)
+        {
+            throw new McpException(ex.Message);
+        }
     }
 
     [McpServerTool(Name = "add_task_comment")]

@@ -1,5 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { EventEmitter } from "node:events";
+import { PassThrough } from "node:stream";
 
 const FOOTER = "…(truncated — see the issue)";
 
@@ -236,4 +238,696 @@ test("--repos still accepts a comma-separated list and still leaves --dry-run vi
   assert.equal(args.error, null);
   assert.deepEqual(args.repos, ["owner/a", "owner/b"]);
   assert.equal(args.dryRun, true);
+});
+
+import {
+  assertGhIssueCreateAllowed,
+  assertFreshPrecreateScan,
+  assertLivePushProjectLink,
+  assertReadOnly,
+  analyzeMarkerRecords,
+  buildGhIssueCreateArgs,
+  buildExternalDispatchRequest,
+  buildTaskIdentityIndex,
+  classifyBackfillCandidate,
+  completedOperationMatchesIssue,
+  commandValidationError,
+  exactMarkerCount,
+  exactMarkerMatches,
+  exhaustiveMarkerDisposition,
+  ghIssueCreate,
+  globalNodeLinkDisposition,
+  githubLinksOf,
+  issueBodyFor,
+  issueHasOneCleanOperationMarker,
+  linkMetadataNeedsRefresh,
+  issuePushMarkerDisposition,
+  markerOperationCanFinalize,
+  operationTaskDisposition,
+  operationRequiresFreshPrecreateScan,
+  operationMarkerRepositoryDisposition,
+  parseArgs,
+  parseGitHubIssueUrl,
+  planBackfill,
+  pushMarker,
+  pushOperationIds,
+  rawPushOperationIds,
+  recoveryDisposition,
+  refreshedProjectDescription,
+  resolveProjectLink,
+  stripLegacyIssuePrefix,
+  taskMatchForIssue,
+  verifiedFinalizeRequest,
+} from "./portfolio-sync.mjs";
+
+const OP = "11111111-2222-4333-8444-555555555555";
+const REPO_ID = "R_fixture";
+const REPO = { externalId: REPO_ID, owner: "octo", name: "board", fullName: "octo/board" };
+
+function task(id, name, description = "", externalLinks = []) {
+  return { id, name, description, status: "Todo", priority: "High", externalLinks };
+}
+
+function link(taskId, number, nodeId, state = "Active") {
+  return {
+    id: taskId + 100,
+    taskId,
+    provider: "GitHub",
+    state,
+    repositoryExternalId: REPO_ID,
+    externalNumber: number,
+    externalNodeId: nodeId,
+  };
+}
+
+test("generic gh guard remains a closed read-only allow-list", () => {
+  assert.doesNotThrow(() => assertReadOnly(["issue", "list", "-R", "octo/board"]));
+  assert.doesNotThrow(() => assertReadOnly(["api", "repos/octo/board"]));
+  assert.throws(() => assertReadOnly(["issue", "create"]), /READ-ONLY/);
+  assert.throws(() => assertReadOnly(["issue", "edit"]), /READ-ONLY/);
+  assert.throws(() => assertReadOnly(["api", "repos/octo/board/issues", "--method", "POST"]), /READ-ONLY/);
+  assert.throws(() => assertReadOnly(["api", "repos/octo/board/issues", "-f", "title=x"]), /READ-ONLY/);
+  for (const compact of [
+    "-XPOST", "-ftitle=x", "-Fbody=@file",
+    "--method=POST", "--field=title=x", "--raw-field=title=x", "--input=file.json",
+  ]) {
+    assert.throws(() => assertReadOnly(["api", "repos/octo/board/issues", compact]), /READ-ONLY/, compact);
+  }
+});
+
+test("dedicated create guard requires allow-write, one task, and non-preview mode", () => {
+  assert.throws(() => assertGhIssueCreateAllowed({ allowWrite: false, task: 7 }), /both --allow-write and --task/);
+  assert.throws(() => assertGhIssueCreateAllowed({ allowWrite: true, task: null }), /both --allow-write and --task/);
+  for (const task of [0, -1, 1.5, Number.NaN, "7"]) {
+    assert.throws(
+      () => assertGhIssueCreateAllowed({ allowWrite: true, task }),
+      /both --allow-write and --task/,
+      `task=${String(task)} must not authorize a GitHub create`,
+    );
+  }
+  assert.throws(() => assertGhIssueCreateAllowed({ allowWrite: true, task: 7, dryRun: true }), /disabled during/);
+  assert.doesNotThrow(() => assertGhIssueCreateAllowed({ allowWrite: true, task: 7, dryRun: false }));
+});
+
+test("create argv is fixed and the Markdown body is never placed on argv", () => {
+  const request = {
+    title: "quotes ' and \" plus $() stay data",
+    body: "# body\n\n`code`\n",
+    milestoneTitle: "M1",
+    label: "priority:high",
+  };
+  assert.deepEqual(buildGhIssueCreateArgs("octo/board", request), [
+    "issue", "create", "--repo", "octo/board",
+    "--title", request.title, "--body-file", "-",
+    "--milestone", "M1", "--label", "priority:high",
+  ]);
+  assert.equal(buildGhIssueCreateArgs("octo/board", request).includes(request.body), false);
+});
+
+test("dedicated create wrapper passes the body byte-for-byte over stdin", async () => {
+  let invocation;
+  let stdin = "";
+  const fakeSpawn = (command, args, options) => {
+    invocation = { command, args, options };
+    const child = new EventEmitter();
+    child.stdin = new PassThrough();
+    child.stdout = new PassThrough();
+    child.stderr = new PassThrough();
+    child.stdin.setEncoding("utf8");
+    child.stdin.on("data", (chunk) => { stdin += chunk; });
+    child.stdin.on("finish", () => {
+      child.stdout.end("https://github.com/octo/board/issues/42\n");
+      child.stderr.end();
+      queueMicrotask(() => child.emit("close", 0));
+    });
+    return child;
+  };
+  const body = "line one\r\nline two with `code` and $()\n";
+  const url = await ghIssueCreate(
+    "octo/board",
+    { title: "safe title", body, milestoneTitle: null, label: null },
+    { allowWrite: true, task: 9, dryRun: false },
+    fakeSpawn,
+  );
+  assert.equal(url, "https://github.com/octo/board/issues/42");
+  assert.equal(invocation.command, "gh");
+  assert.deepEqual(invocation.args, ["issue", "create", "--repo", "octo/board", "--title", "safe title", "--body-file", "-"]);
+  assert.equal(invocation.options.stdio[0], "pipe");
+  assert.equal(stdin, body);
+});
+
+test("dedicated wrapper surfaces a child-process pre-spawn error", async () => {
+  const fakeMissingGh = () => {
+    const child = new EventEmitter();
+    child.stdin = new PassThrough();
+    child.stdout = new PassThrough();
+    child.stderr = new PassThrough();
+    queueMicrotask(() => {
+      const error = Object.assign(new Error("spawn gh ENOENT"), { code: "ENOENT" });
+      child.emit("error", error);
+    });
+    return child;
+  };
+  await assert.rejects(
+    ghIssueCreate(
+      "octo/board",
+      { title: "x", body: "body", milestoneTitle: null, label: null },
+      { allowWrite: true, task: 9, dryRun: false },
+      fakeMissingGh,
+    ),
+    /ENOENT/,
+  );
+});
+
+test("CLI makes preview the default and rejects every broad or implicit write", () => {
+  const preview = parseArgs(["push-issue", "octo/board", "--task", "7"]);
+  assert.equal(preview.allowWrite, false);
+  assert.equal(commandValidationError(preview), null);
+
+  const noTask = parseArgs(["push-issue", "octo/board", "--allow-write"]);
+  assert.match(commandValidationError(noTask), /requires --task/);
+  const bulk = parseArgs(["push-issue", "octo/board", "--allow-write", "--task", "7", "--all"]);
+  assert.match(commandValidationError(bulk), /--all is preview-only/);
+  const implicitResume = parseArgs(["push-issue", "octo/board", "--task", "7", "--resume", OP]);
+  assert.match(commandValidationError(implicitResume), /--resume requires/);
+  const explicitResume = parseArgs(["push-issue", "octo/board", "--allow-write", "--task", "7", "--resume", OP]);
+  assert.equal(commandValidationError(explicitResume), null);
+  const dryResume = parseArgs(["push-issue", "octo/board", "--allow-write", "--task", "7", "--resume", OP, "--dry-run"]);
+  assert.match(commandValidationError(dryResume), /cannot be combined/);
+});
+
+test("manual ambiguous retry authorization is explicit, UUID-bound, reasoned, and separate", () => {
+  const valid = parseArgs([
+    "push-issue", "octo/board", "--allow-write", "--task", "7", "--resume", OP,
+    "--authorize-ambiguous-retry", OP, "--actor", "operator-a",
+    "--resolution-reason", "Reviewed the exhaustive zero-marker scan",
+  ]);
+  assert.equal(valid.actorExplicit, true);
+  assert.equal(valid.authorizeAmbiguousRetry, OP);
+  assert.equal(commandValidationError(valid), null);
+
+  const other = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
+  const mismatch = { ...valid, authorizeAmbiguousRetry: other };
+  assert.match(commandValidationError(mismatch), /exactly repeat/);
+  assert.match(commandValidationError({ ...valid, actorExplicit: false }), /explicit non-blank --actor/);
+  assert.match(commandValidationError({ ...valid, resolutionReason: "" }), /resolution-reason/);
+  assert.match(commandValidationError({ ...valid, authorizeAmbiguousRetry: null }), /valid only/);
+
+  const noResume = parseArgs([
+    "push-issue", "octo/board", "--allow-write", "--task", "7",
+    "--authorize-ambiguous-retry", OP, "--actor", "operator-a", "--resolution-reason", "reviewed",
+  ]);
+  assert.match(commandValidationError(noResume), /repeat the UUID supplied to --resume/);
+});
+
+test("push markers are exact UUID protocol data and duplicate exact markers are visible", () => {
+  const marker = pushMarker(OP);
+  const body = `${marker}\ntext\n${marker}`;
+  assert.deepEqual(pushOperationIds(body), [OP]);
+  assert.equal(exactMarkerCount(body, OP), 2);
+  assert.equal(exactMarkerCount(`<!-- kanbanflow-push:${OP.slice(0, -1)}6 -->`, OP), 0);
+  assert.deepEqual(rawPushOperationIds(`prefix kanbanflow-push : ${OP} suffix`), [OP]);
+  assert.deepEqual(issuePushMarkerDisposition(pushMarker(OP)), {
+    kind: "one",
+    operationId: OP,
+    rawOperationIds: [OP],
+  });
+  assert.equal(issuePushMarkerDisposition(`kanbanflow-push : ${OP}`).kind, "ambiguous");
+  assert.equal(issuePushMarkerDisposition(`${pushMarker(OP)}\nkanbanflow-push : ${OP}`).kind, "ambiguous");
+  assert.equal(issuePushMarkerDisposition(body).kind, "ambiguous");
+});
+
+test("authoritative marker filtering excludes PRs and requires exactly one marker in an issue", () => {
+  const marker = pushMarker(OP);
+  const issue = { number: 1, body: marker, node_id: "I_1" };
+  const duplicate = { number: 2, body: `${marker}\n${marker}`, node_id: "I_2" };
+  const pr = { number: 3, body: marker, node_id: "P_3", pull_request: {} };
+  const otherOp = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
+  const mixed = { number: 4, body: `${marker}\n${pushMarker(otherOp)}`, node_id: "I_4" };
+  assert.deepEqual(exactMarkerMatches([[issue, duplicate], [pr, mixed]], OP), [issue]);
+  assert.equal(issueHasOneCleanOperationMarker(issue, OP), true);
+  assert.equal(issueHasOneCleanOperationMarker(duplicate, OP), false);
+  assert.equal(issueHasOneCleanOperationMarker(mixed, OP), false);
+  assert.equal(issueHasOneCleanOperationMarker({ body: `${marker}\nkanbanflow-push : ${OP}` }, OP), false);
+});
+
+test("manual retry zero means no raw target occurrence, not merely no clean match", () => {
+  const marker = pushMarker(OP);
+  const other = pushMarker("aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee");
+  const cases = [
+    [{ number: 1, body: `${marker}\n${marker}` }],
+    [{ number: 1, body: `${marker}\n${other}` }],
+    [{ number: 1, body: marker }, { number: 2, body: marker }],
+    [{ number: 1, body: `kanbanflow-push : ${OP}` }],
+    [{ number: 1, body: marker, pull_request: {} }],
+  ];
+  for (const records of cases) {
+    const scan = analyzeMarkerRecords([records], OP);
+    assert.notEqual(scan.rawTargetOccurrenceCount, 0);
+    assert.equal(
+      exhaustiveMarkerDisposition(true, scan.matches.length, scan.rawTargetOccurrenceCount),
+      "ambiguous",
+    );
+  }
+  const clean = analyzeMarkerRecords([[{ number: 3, body: marker }]], OP);
+  assert.equal(clean.rawTargetOccurrenceCount, 1);
+  assert.equal(exhaustiveMarkerDisposition(true, clean.matches.length, clean.rawTargetOccurrenceCount), "one");
+  const absent = analyzeMarkerRecords([[{ number: 4, body: "none" }]], OP);
+  assert.equal(exhaustiveMarkerDisposition(true, absent.matches.length, absent.rawTargetOccurrenceCount), "zero");
+});
+
+test("recovery planning never creates from Dispatched or NeedsReview", () => {
+  assert.equal(recoveryDisposition("Dispatched", true, true, 0), "needs-review");
+  assert.equal(recoveryDisposition("Dispatched", true, true, 1), "finalize");
+  assert.equal(recoveryDisposition("Dispatched", true, true, 2), "needs-review");
+  assert.equal(recoveryDisposition("NeedsReview", true, true, 0), "needs-review");
+  assert.equal(recoveryDisposition("NeedsReview", true, true, 1), "finalize");
+  assert.equal(recoveryDisposition("NeedsReview", true, false, 1), "needs-review");
+  assert.equal(recoveryDisposition("Prepared", true, true, 0), "create");
+  assert.equal(recoveryDisposition("Prepared", false, true, 0), "needs-review");
+  assert.equal(recoveryDisposition("DefinitiveFailure", true, true, 0), "create");
+  assert.equal(recoveryDisposition("ManualRetryAuthorized", false, true, 0), "needs-review");
+  assert.equal(recoveryDisposition("ManualRetryAuthorized", true, true, 0), "create");
+  assert.equal(recoveryDisposition("Completed", false, false, 99), "completed");
+  assert.equal(exhaustiveMarkerDisposition(true, 0), "zero");
+  assert.equal(exhaustiveMarkerDisposition(true, 1), "one");
+  assert.equal(exhaustiveMarkerDisposition(true, 2), "ambiguous");
+  assert.equal(exhaustiveMarkerDisposition(false, 0), "incomplete");
+});
+
+test("only Prepared operations with evidence of a prior dispatch may proof-finalize a late marker", () => {
+  assert.equal(markerOperationCanFinalize("Prepared", null), false);
+  assert.equal(markerOperationCanFinalize("Prepared", "2026-08-30T12:00:00Z"), true);
+  assert.equal(markerOperationCanFinalize("ManualRetryAuthorized", null), true);
+  assert.equal(markerOperationCanFinalize("NeedsReview", null), true);
+});
+
+test("every create from prior-dispatch lineage requires this invocation's fresh zero scan", () => {
+  const prior = { operationId: OP, state: "Prepared", dispatchedAt: "2026-08-30T12:00:00Z" };
+  const fresh = { operationId: OP, state: "Prepared", dispatchedAt: null };
+  const manual = {
+    operationId: OP,
+    state: "ManualRetryAuthorized",
+    dispatchedAt: "2026-08-30T12:00:00Z",
+    lastAttemptAt: "2026-08-30T12:00:00Z",
+  };
+  assert.equal(operationRequiresFreshPrecreateScan(prior), true);
+  assert.equal(operationRequiresFreshPrecreateScan(fresh), false);
+  assert.equal(operationRequiresFreshPrecreateScan(manual), true);
+  assert.throws(() => assertFreshPrecreateScan(prior, {}), /fresh exhaustive zero-marker scan/);
+  assert.throws(() => assertFreshPrecreateScan(prior, {
+    freshZeroScanEvidence: {
+      confirmationOperationId: "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee",
+      scanComplete: true,
+      observedMatchCount: 0,
+      observedRawTargetOccurrenceCount: 0,
+      scanCompletedAt: "2026-08-30T12:00:01Z",
+    },
+  }), /fresh exhaustive/);
+  assert.doesNotThrow(() => assertFreshPrecreateScan(prior, {
+    freshZeroScanEvidence: {
+      confirmationOperationId: OP.toUpperCase(),
+      scanComplete: true,
+      observedMatchCount: 0,
+      observedRawTargetOccurrenceCount: 0,
+      scanCompletedAt: "2026-08-30T12:00:01Z",
+    },
+  }));
+  assert.throws(() => buildExternalDispatchRequest(
+    { ...prior, attemptCount: 2 },
+    "prior-dispatch-lease",
+    {
+      freshZeroScanEvidence: {
+        confirmationOperationId: OP,
+        scanComplete: true,
+        observedMatchCount: 0,
+        observedRawTargetOccurrenceCount: 0,
+        scanCompletedAt: "2026-08-30T12:00:01Z",
+      },
+    },
+  ), /cannot dispatch a replacement without ManualRetryAuthorized/,
+  "Prepared operations with dispatch history must never dispatch a duplicate create");
+  assert.throws(() => assertFreshPrecreateScan(manual, {
+    freshZeroScanEvidence: {
+      confirmationOperationId: OP,
+      scanComplete: true,
+      observedMatchCount: 0,
+      observedRawTargetOccurrenceCount: 1,
+      scanCompletedAt: "2026-08-30T12:00:01Z",
+    },
+  }), /fresh exhaustive/);
+  assert.throws(() => assertFreshPrecreateScan(
+    { ...manual, lastAttemptAt: "2026-08-30T12:00:02Z" },
+    {
+      freshZeroScanEvidence: {
+        confirmationOperationId: OP,
+        scanComplete: true,
+        observedMatchCount: 0,
+        observedRawTargetOccurrenceCount: 0,
+        scanCompletedAt: "2026-08-30T12:00:01Z",
+      },
+    },
+  ), /fresh exhaustive/, "a negative scan captured before Resume/LastAttemptAt is never replayable");
+  assert.doesNotThrow(() => assertFreshPrecreateScan(fresh, {}));
+
+  const evidence = {
+    confirmationOperationId: OP,
+    scanComplete: true,
+    observedMatchCount: 0,
+    observedRawTargetOccurrenceCount: 0,
+    scanCompletedAt: "2026-08-30T12:00:01Z",
+  };
+  assert.deepEqual(buildExternalDispatchRequest(
+    { ...manual, attemptCount: 3 },
+    "lease-token",
+    { freshZeroScanEvidence: evidence },
+  ), {
+    operationId: OP,
+    leaseToken: "lease-token",
+    ...evidence,
+    expectedAttemptCount: 3,
+  });
+  assert.deepEqual(buildExternalDispatchRequest(fresh, "fresh-lease", {}), {
+    operationId: OP,
+    leaseToken: "fresh-lease",
+  });
+});
+
+test("structured Active identity wins; legacy prefix is fallback only", () => {
+  const durable = task(1, "plain linked title", "", [link(1, 41, "I_41")]);
+  const legacy = task(2, "#42 legacy title");
+  const misleading = task(3, "#77 misleading fallback", "", [link(3, 99, "I_99")]);
+  const index = buildTaskIdentityIndex([durable, legacy, misleading], REPO);
+  assert.deepEqual(taskMatchForIssue(index, { id: "I_41", number: 41 }).task, durable);
+  assert.equal(taskMatchForIssue(index, { id: "I_41", number: 41 }).kind, "durable");
+  assert.deepEqual(taskMatchForIssue(index, { id: "I_42", number: 42 }).task, legacy);
+  assert.equal(taskMatchForIssue(index, { id: "I_42", number: 42 }).kind, "legacy");
+  assert.equal(taskMatchForIssue(index, { id: "I_other", number: 77 }).task, null, "active link suppresses its misleading #77 prefix");
+});
+
+test("immutable issue node is canonical while number-only fallback rejects a different node", () => {
+  const linked = task(1, "plain linked title", "", [link(1, 41, "I_original")]);
+  const index = buildTaskIdentityIndex([linked], REPO);
+
+  const reusedNumber = taskMatchForIssue(index, { id: "I_different", number: 41 });
+  assert.equal(reusedNumber.kind, "identity-mismatch");
+  assert.equal(reusedNumber.task, null);
+  assert.match(reusedNumber.reason, /I_original/);
+
+  const changedNumber = taskMatchForIssue(index, { id: "I_original", number: 42 });
+  assert.equal(changedNumber.kind, "durable");
+  assert.equal(changedNumber.task, linked);
+});
+
+test("global issue-node lookup refreshes only in-project transfers and blocks cross-project moves", () => {
+  const linkedTask = task(7, "transferred issue");
+  const index = buildTaskIdentityIndex([linkedTask], REPO);
+  const transferredLink = {
+    ...link(7, 12, "I_transfer"),
+    repositoryExternalId: "R_old_repo",
+  };
+  assert.deepEqual(globalNodeLinkDisposition({ projectId: 4, link: transferredLink }, 4, index), {
+    kind: "local-transfer",
+    task: linkedTask,
+    link: transferredLink,
+    projectId: 4,
+  });
+  assert.deepEqual(globalNodeLinkDisposition({ projectId: 9, link: transferredLink }, 4, index), {
+    kind: "cross-project",
+    link: transferredLink,
+    projectId: 9,
+  });
+  assert.equal(globalNodeLinkDisposition(null, 4, index).kind, "none");
+  assert.equal(globalNodeLinkDisposition({ projectId: 4, link: { ...transferredLink, taskId: 999 } }, 4, index).kind, "invalid");
+});
+
+test("refreshed project link snapshot wins over stale embedded link with the same row id", () => {
+  const stale = { ...link(7, 12, "I_transfer"), repositoryExternalId: "R_old_repo" };
+  const refreshed = {
+    ...stale,
+    repositoryExternalId: REPO_ID,
+    repositoryOwner: "octo",
+    repositoryName: "board",
+    externalNumber: 77,
+  };
+  const linkedTask = task(7, "transferred", "", [stale]);
+  assert.deepEqual(githubLinksOf(linkedTask, [refreshed]), [refreshed]);
+});
+
+test("only Completed marker with matching immutable result node crosses repository identity", () => {
+  const issue = { id: "I_transferred", number: 77 };
+  assert.equal(operationMarkerRepositoryDisposition({ repositoryExternalId: REPO_ID }, REPO, issue), "same-repository");
+  assert.equal(operationMarkerRepositoryDisposition({
+    state: "Completed",
+    repositoryExternalId: "R_old",
+    resultingExternalNodeId: issue.id,
+    resultingExternalNumber: 12,
+  }, REPO, issue), "completed-node-transfer");
+  assert.equal(operationMarkerRepositoryDisposition({
+    state: "Completed",
+    repositoryExternalId: "R_old",
+    resultingExternalNodeId: "I_other",
+    resultingExternalNumber: issue.number,
+  }, REPO, issue), "block");
+  assert.equal(operationMarkerRepositoryDisposition({
+    state: "Dispatched",
+    repositoryExternalId: "R_old",
+    resultingExternalNodeId: issue.id,
+  }, REPO, issue), "block");
+});
+
+test("project resolution upgrades an old mutable path marker without a flag day", () => {
+  const project = { id: 4, name: "board", description: "<!-- github: octo/board -->\nnotes" };
+  const result = resolveProjectLink("octo/board", [project], REPO);
+  assert.equal(result.project, project);
+  assert.equal(result.linkedBy, "marker");
+  assert.equal(result.needsRefresh, true);
+});
+
+test("immutable repository node survives a repo rename and refreshes display metadata", () => {
+  const renamedIdentity = { ...REPO, owner: "new-owner", name: "renamed", fullName: "new-owner/renamed" };
+  const project = {
+    id: 4,
+    name: "human board name",
+    description: `<!-- github-node: ${REPO_ID} -->\n<!-- github: octo/board -->\nSynced from https://github.com/octo/board — GitHub issues are the source of truth.\nnotes`,
+  };
+  const result = resolveProjectLink(renamedIdentity.fullName, [project], renamedIdentity);
+  assert.equal(result.project, project);
+  assert.equal(result.linkedBy, "node");
+  assert.equal(result.needsRefresh, true);
+  const refreshed = refreshedProjectDescription(project, renamedIdentity.fullName, renamedIdentity);
+  assert.match(refreshed, /<!-- github-node: R_fixture -->/);
+  assert.match(refreshed, /<!-- github: new-owner\/renamed -->/);
+  assert.match(refreshed, /github\.com\/new-owner\/renamed/);
+  assert.doesNotMatch(refreshed, /github: octo\/board/);
+});
+
+test("immutable project conflicts never fall through to path/name adoption or live create", () => {
+  const nameClaimed = {
+    id: 7,
+    name: "board",
+    description: "<!-- github-node: R_other -->\nclaimed elsewhere",
+  };
+  const byName = resolveProjectLink("octo/board", [nameClaimed], REPO);
+  assert.equal(byName.project, null);
+  assert.match(byName.conflict, /repository node R_other/);
+
+  const contradictory = {
+    id: 8,
+    name: "anything",
+    description: "<!-- github-node: R_other -->\n<!-- github: octo/board -->",
+  };
+  const byPath = resolveProjectLink("octo/board", [contradictory], REPO);
+  assert.equal(byPath.project, contradictory);
+  assert.match(byPath.conflict, /conflicting immutable repository node/);
+  assert.doesNotThrow(() => assertLivePushProjectLink(byPath, false), "preview may report the conflict");
+  assert.throws(() => assertLivePushProjectLink(byPath, true), /Live push refuses/);
+});
+
+test("a finalized link with frozen pre-rename display metadata requires immediate refresh", () => {
+  const renamedIdentity = { ...REPO, owner: "new-owner", name: "renamed", fullName: "new-owner/renamed" };
+  const issue = { node_id: "I_41", number: 41, html_url: "https://github.com/new-owner/renamed/issues/41" };
+  const stale = {
+    repositoryExternalId: REPO_ID,
+    repositoryOwner: "octo",
+    repositoryName: "board",
+    externalNodeId: "I_41",
+    externalNumber: 41,
+    url: "https://github.com/octo/board/issues/41",
+  };
+  assert.equal(linkMetadataNeedsRefresh(stale, renamedIdentity, issue), true);
+  assert.equal(linkMetadataNeedsRefresh({
+    ...stale,
+    repositoryOwner: renamedIdentity.owner,
+    repositoryName: renamedIdentity.name,
+    url: issue.html_url,
+  }, renamedIdentity, issue), false);
+  assert.deepEqual(
+    verifiedFinalizeRequest({ operationId: OP }, "lease", renamedIdentity, issue, "tester"),
+    {
+      operationId: OP,
+      leaseToken: "lease",
+      repositoryExternalId: REPO_ID,
+      repositoryOwner: "new-owner",
+      repositoryName: "renamed",
+      externalNodeId: "I_41",
+      externalNumber: 41,
+      url: issue.html_url,
+      actor: "tester",
+    },
+    "finalize validates the issue URL against the current repository path while immutable repo id stays authoritative",
+  );
+});
+
+test("operation identity maps a create-window issue to its intended existing task", () => {
+  const intended = task(7, "plain task");
+  const operationTasks = new Map([["I_new", 7], [88, 7]]);
+  const index = buildTaskIdentityIndex([intended], REPO, [], operationTasks);
+  assert.deepEqual(taskMatchForIssue(index, { id: "I_new", number: 88 }), { task: intended, kind: "operation" });
+});
+
+test("completed operation with deleted task permits one normal reprojection; nonterminal does not", () => {
+  assert.equal(operationTaskDisposition("Completed", false, true), "project-new-task");
+  assert.equal(operationTaskDisposition("Completed", true, true), "map");
+  assert.equal(operationTaskDisposition("Completed", false, false), "block");
+  assert.equal(operationTaskDisposition("Dispatched", false), "block");
+  assert.equal(operationTaskDisposition("NeedsReview", false), "block");
+  assert.equal(operationTaskDisposition("Dispatched", true), "continue");
+});
+
+test("completed operation result uses immutable node first and number only for old node-less rows", () => {
+  const issue = { id: "I_result", number: 88 };
+  assert.equal(completedOperationMatchesIssue({
+    resultingExternalNodeId: "I_result",
+    resultingExternalNumber: 88,
+  }, issue), true);
+  assert.equal(completedOperationMatchesIssue({
+    resultingExternalNodeId: "I_other",
+    resultingExternalNumber: 88,
+  }, issue), false, "a matching repo-local number cannot override a different immutable node");
+  assert.equal(completedOperationMatchesIssue({
+    resultingExternalNodeId: "I_result",
+    resultingExternalNumber: 89,
+  }, issue), true, "repository-local number drift is refreshable when the immutable node matches");
+  assert.equal(completedOperationMatchesIssue({ resultingExternalNumber: 88 }, issue), true, "old number-only journals remain readable");
+});
+
+test("a Quarantined row blocks legacy fallback even when CandidateNumber is null", () => {
+  const quarantined = task(8, "#77 suspicious literal", "", [link(8, null, null, "Quarantined")]);
+  const index = buildTaskIdentityIndex([quarantined], REPO);
+  assert.equal(index.legacyByNumber.has(77), false);
+  assert.equal(index.quarantinedTaskIds.has(8), true);
+  assert.deepEqual(taskMatchForIssue(index, { id: "I_77", number: 77 }), {
+    task: quarantined,
+    kind: "quarantine",
+    quarantinedTasks: [quarantined],
+  });
+});
+
+test("a structured GitHub link for another repository blocks legacy fallback", () => {
+  const foreign = task(9, "#55 must not be adopted", "", [{
+    ...link(9, 55, "I_foreign"),
+    repositoryExternalId: "R_other",
+  }]);
+  const index = buildTaskIdentityIndex([foreign], REPO);
+  assert.equal(index.legacyByNumber.has(55), false);
+  assert.equal(index.foreignLinkedTaskIds.has(9), true);
+  assert.equal(taskMatchForIssue(index, { id: "I_current", number: 55 }).kind, "foreign-link");
+});
+
+test("outbound board body has no caller marker and strips inbound sync protocol", () => {
+  const body = issueBodyFor(
+    { name: "Board" },
+    task(5, "Draft", "<!-- kanbanflow-sync -->\n**Issue:** https://github.com/octo/board/issues/1\n<!-- /kanbanflow-sync -->\nUser content"),
+    "Feature",
+  );
+  assert.doesNotMatch(body, /kanbanflow-sync/);
+  assert.doesNotMatch(body, /kanbanflow-push/);
+  assert.match(body, /User content/);
+});
+
+test("backfill accepts only one canonical issue URL inside one sync block", () => {
+  const valid = task(1, "#12 old", "<!-- kanbanflow-sync -->\n**Issue:** https://github.com/octo/board/issues/12\n<!-- /kanbanflow-sync -->");
+  assert.deepEqual(classifyBackfillCandidate(valid), {
+    kind: "verify", owner: "octo", repo: "board", number: 12,
+    candidateNumber: 12, candidateUrl: "https://github.com/octo/board/issues/12",
+  });
+  assert.equal(parseGitHubIssueUrl("https://github.com/octo/board/pull/12"), null);
+  assert.equal(stripLegacyIssuePrefix("#12 preserve my words"), "preserve my words");
+});
+
+test("backfill quarantines title-only, duplicate, and malformed candidates; path drift awaits node verification", () => {
+  const titleOnly = task(1, "#12 literal text");
+  const duplicateA = task(2, "#13 first", "<!-- kanbanflow-sync -->\n**Issue:** https://github.com/octo/board/issues/13\n<!-- /kanbanflow-sync -->");
+  const duplicateB = task(3, "#13 second", duplicateA.description);
+  const malformed = task(4, "#14 malformed", "<!-- kanbanflow-sync -->\n**Issue:** not-a-url\n<!-- /kanbanflow-sync -->");
+  const crossRepo = task(5, "#15 cross", "<!-- kanbanflow-sync -->\n**Issue:** https://github.com/elsewhere/other/issues/15\n<!-- /kanbanflow-sync -->");
+  const plans = planBackfill([titleOnly, duplicateA, duplicateB, malformed, crossRepo], [], REPO);
+  assert.deepEqual(plans.map((item) => item.kind), ["quarantine", "quarantine", "quarantine", "quarantine", "verify"]);
+  assert.match(plans[0].reason, /title-only/);
+  assert.match(plans[1].reason, /duplicate/);
+  assert.match(plans[2].reason, /duplicate/);
+  assert.match(plans[3].reason, /malformed/);
+  assert.equal(plans[4].pathDrift, true);
+});
+
+test("backfill rerun treats persisted active and quarantine rows as existing", () => {
+  const activeTask = task(1, "#12 old linked title", "", [link(1, 12, "I_12", "Active")]);
+  const quarantinedTask = task(2, "#99 literal", "", [link(2, 99, null, "Quarantined")]);
+  const plans = planBackfill([activeTask, quarantinedTask], [], REPO);
+  assert.deepEqual(plans.map((item) => item.kind), ["existing", "existing"]);
+  assert.equal(plans[0].plainName, "old linked title", "rerun converges a crash between link registration and prefix stripping");
+  assert.equal(plans[1].plainName, null, "quarantine never authorizes a title mutation");
+});
+
+test("malformed provenance preserves one safe URL identity and null identity fails closed for unmatched issues", () => {
+  const sameUrlTwice = task(1, "no prefix", [
+    "<!-- kanbanflow-sync -->",
+    "**Issue:** https://github.com/octo/board/issues/12",
+    "<!-- /kanbanflow-sync -->",
+    "<!-- kanbanflow-sync -->",
+    "**Issue:** https://github.com/octo/board/issues/12",
+    "<!-- /kanbanflow-sync -->",
+  ].join("\n"));
+  const classified = classifyBackfillCandidate(sameUrlTwice);
+  assert.equal(classified.kind, "quarantine");
+  assert.equal(classified.candidateNumber, 12);
+  assert.equal(classified.candidateUrl, "https://github.com/octo/board/issues/12");
+
+  const outsideBlock = classifyBackfillCandidate(task(
+    3,
+    "no prefix",
+    "**Issue:** https://github.com/octo/board/issues/13",
+  ));
+  assert.equal(outsideBlock.kind, "quarantine");
+  assert.equal(outsideBlock.candidateNumber, 13);
+
+  const conflictingUrls = classifyBackfillCandidate(task(4, "no prefix", [
+    "**Issue:** https://github.com/octo/board/issues/14",
+    "**Issue:** https://github.com/octo/board/issues/15",
+  ].join("\n")));
+  assert.equal(conflictingUrls.kind, "quarantine");
+  assert.equal(conflictingUrls.candidateNumber, null);
+
+  const unknown = task(2, "no correlatable prefix", "", [link(2, null, null, "Quarantined")]);
+  const index = buildTaskIdentityIndex([unknown], REPO);
+  const match = taskMatchForIssue(index, { id: "I_any", number: 999 });
+  assert.equal(match.kind, "quarantine");
+  assert.equal(match.projectWide, true);
+  assert.deepEqual(match.quarantinedTasks, [unknown]);
+});
+
+test("backfill quarantines a new candidate colliding with persisted Active or Quarantined identity", () => {
+  const description = "<!-- kanbanflow-sync -->\n**Issue:** https://github.com/octo/board/issues/12\n<!-- /kanbanflow-sync -->";
+  for (const state of ["Active", "Quarantined"]) {
+    const persisted = { ...link(1, 12, state === "Active" ? "I_12" : null, state), repositoryExternalId: REPO_ID };
+    const plans = planBackfill(
+      [task(1, "existing"), task(2, "#12 new claimant", description)],
+      [persisted],
+      REPO,
+    );
+    assert.equal(plans[0].kind, "existing");
+    assert.equal(plans[1].kind, "quarantine");
+    assert.match(plans[1].reason, new RegExp(`persisted ${state} task 1`));
+  }
 });
