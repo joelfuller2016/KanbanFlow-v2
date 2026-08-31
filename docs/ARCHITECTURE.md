@@ -32,7 +32,7 @@ service mesh, no message bus, no container, and no build pipeline to reason abou
 
 ```mermaid
 flowchart TD
-    H["Human"] -->|"kanban board, outline, ideas"| UI["Blazor Server<br/>Components/ (22 .razor, 5 routes)"]
+    H["Human"] -->|"kanban board, outline, ideas, memory map"| UI["Blazor Server<br/>Components/ (27 .razor, 6 routes)"]
     A["AI agent"] -->|"JSON-RPC over stdio"| NODE["Node MCP wrapper<br/>scripts/mcp-server.mjs (50 tools)"]
     A -->|"JSON-RPC over HTTP"| NATIVE["Native in-process MCP<br/>POST /mcp (28 tools)"]
     A -->|"HTTP / JSON"| REST["REST minimal API<br/>ApiEndpoints.cs + AdminEndpoints.cs (60)"]
@@ -212,6 +212,17 @@ The machine-readable source of truth is the OpenAPI document at `/openapi/v1.jso
 |---|---|
 | `/api/memory` | `POST` — remember |
 | `/api/memory/search` | `GET` — recall; hybrid FTS + vector RRF, `k` must be greater than zero (422 otherwise) and is capped at 100 |
+
+The UI route `/memory` reads the same store directly through `IMemoryService.ReadGraphAsync`; it
+does not introduce a duplicate REST contract. The page defaults to Agent scope / `knowledge-graph`,
+the native MCP tools' shared namespace, and projects explicit records into semantic lanes with a
+bounded deterministic layout. Because MCP `entityType` is stored in `MemoryNode.Tags`, the projection
+classifies both `MemoryType.Decision` and normalized tags. The page is a read-only view of deliberately
+recorded summaries, observations, and relations. It does not request, infer, or reconstruct
+model-hidden reasoning; capture clients must not write private scratchpads or secrets into the graph.
+`ReadGraphAsync` caps the source at 900 nodes. The UI projection separately caps a rendered view at
+80 nodes, 320 unique directed edges, and 50 observations per selected record; source and render
+truncation are reported rather than silently presented as complete.
 
 ### Admin
 

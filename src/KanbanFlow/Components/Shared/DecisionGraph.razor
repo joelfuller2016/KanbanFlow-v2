@@ -1,0 +1,313 @@
+@* Read-only visual projection of explicit durable memory (#496). Agent-authored text is rendered
+   only through normal Razor encoding; do not introduce MarkupString/raw HTML here. *@
+
+<div class="decision-graph" data-testid="decision-graph">
+    <div class="d-flex flex-wrap align-items-center gap-2 mb-3">
+        <div class="small text-muted me-auto" aria-live="polite">
+            Showing <strong>@Graph.Nodes.Count</strong> of <strong>@Graph.MatchingNodeCount</strong> matching records
+            and <strong>@Graph.Edges.Count</strong> of <strong>@Graph.MatchingEdgeCount</strong> visible-endpoint relationships.
+        </div>
+        <div class="btn-group btn-group-sm" role="group" aria-label="Decision graph view">
+            <button type="button"
+                    class="btn @(showList ? "btn-outline-secondary" : "btn-secondary")"
+                    aria-pressed="@BoolToken(!showList)"
+                    @onclick="ShowMap"
+                    data-testid="decision-graph-map-toggle">
+                Map
+            </button>
+            <button type="button"
+                    class="btn @(showList ? "btn-secondary" : "btn-outline-secondary")"
+                    aria-pressed="@BoolToken(showList)"
+                    @onclick="ShowList"
+                    data-testid="decision-graph-list-toggle">
+                List
+            </button>
+        </div>
+    </div>
+
+    @if (Graph.Nodes.Count == 0)
+    {
+        <div class="border rounded bg-light text-center text-muted p-5" data-testid="decision-graph-no-matches">
+            No records match these filters.
+        </div>
+    }
+    else if (showList)
+    {
+        <div class="table-responsive border rounded" data-testid="decision-graph-list">
+            <table class="table table-sm align-middle mb-0">
+                <caption class="visually-hidden">Decision and memory records matching the current filters</caption>
+                <thead class="table-light">
+                    <tr>
+                        <th scope="col">Kind</th>
+                        <th scope="col">Record</th>
+                        <th scope="col" class="text-nowrap">Details</th>
+                        <th scope="col" class="text-nowrap">Links</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var node in Graph.Nodes)
+                    {
+                        <tr class="@(node.Node.Id == selectedNodeId ? "table-active" : null)" @key="node.Node.Id">
+                            <td><span class="lane-chip @LaneCss(node.Lane)">@LaneLabel(node.Lane)</span></td>
+                            <td>
+                                <button type="button"
+                                        class="btn btn-link text-start p-0"
+                                        @onclick="() => SelectNode(node.Node.Id)"
+                                        aria-pressed="@BoolToken(node.Node.Id == selectedNodeId)"
+                                        data-testid="@($"decision-list-node-{node.Node.Id}")">
+                                    @node.Node.Content
+                                </button>
+                            </td>
+                            <td class="text-nowrap">@node.ObservationCount observation@(node.ObservationCount == 1 ? string.Empty : "s")</td>
+                            <td class="text-nowrap">@ConnectionCount(node.Node.Id)</td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    }
+    else
+    {
+        <div class="map-scroll border rounded"
+             role="region"
+             aria-label="Scrollable decision and memory relationship map"
+             tabindex="0"
+             data-testid="decision-graph-map">
+            <div class="map-canvas" style="width:@(Graph.Width)px;height:@(Graph.Height)px">
+                <svg class="edge-layer"
+                     viewBox="0 0 @Graph.Width @Graph.Height"
+                     width="@Graph.Width"
+                     height="@Graph.Height"
+                     aria-hidden="true">
+                    <defs>
+                        <marker id="decision-map-arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto" markerUnits="strokeWidth">
+                            <path d="M0,0 L8,4 L0,8 z" />
+                        </marker>
+                    </defs>
+                    @foreach (var edge in Graph.Edges)
+                    {
+                        <path d="@EdgePath(edge)"
+                              class="graph-edge @(IsSelected(edge) ? "is-selected" : null)"
+                              marker-end="url(#decision-map-arrow)"
+                              data-testid="@($"decision-edge-{edge.Relation.Id}")" />
+                    }
+                </svg>
+
+                @foreach (var lane in Graph.Lanes)
+                {
+                    <div class="lane-heading @LaneCss(lane.Lane)"
+                         style="left:@(lane.X)px;width:@(DecisionGraphProjection.NodeWidth)px"
+                         @key="lane.Lane">
+                        <span>@LaneLabel(lane.Lane)</span>
+                        <span class="badge rounded-pill text-bg-light">@lane.NodeCount</span>
+                    </div>
+                }
+
+                @foreach (var node in Graph.Nodes)
+                {
+                    <button type="button"
+                            class="graph-node @LaneCss(node.Lane) @(node.Node.Id == selectedNodeId ? "is-selected" : null)"
+                            style="left:@(node.X)px;top:@(node.Y)px;width:@(DecisionGraphProjection.NodeWidth)px;height:@(DecisionGraphProjection.NodeHeight)px"
+                            @onclick="() => SelectNode(node.Node.Id)"
+                            aria-pressed="@BoolToken(node.Node.Id == selectedNodeId)"
+                            aria-label="@($"{LaneLabel(node.Lane)}: {node.Node.Content}")"
+                            data-testid="@($"decision-map-node-{node.Node.Id}")"
+                            @key="node.Node.Id">
+                        <span class="node-kind">@LaneLabel(node.Lane)</span>
+                        <span class="node-content">@node.Node.Content</span>
+                        <span class="node-meta">
+                            @node.ObservationCount observation@(node.ObservationCount == 1 ? string.Empty : "s") · @ConnectionCount(node.Node.Id) visible link@(ConnectionCount(node.Node.Id) == 1 ? string.Empty : "s")
+                        </span>
+                    </button>
+                }
+            </div>
+        </div>
+    }
+
+    @if (SelectedNode is { } selected)
+    {
+        <section class="node-detail card mt-3" aria-live="polite" data-testid="decision-node-detail">
+            <div class="card-header d-flex flex-wrap align-items-center gap-2">
+                <span class="lane-chip @LaneCss(selected.Lane)">@LaneLabel(selected.Lane)</span>
+                <h2 class="h5 mb-0">Selected record</h2>
+                <span class="text-muted small ms-auto">#@selected.Node.Id</span>
+            </div>
+            <div class="card-body">
+                <p class="lead fs-6">@selected.Node.Content</p>
+
+                <dl class="row small mb-3">
+                    <dt class="col-sm-3">Entity type / tags</dt>
+                    <dd class="col-sm-9">@(string.IsNullOrWhiteSpace(selected.Node.Tags) ? "Not recorded" : selected.Node.Tags)</dd>
+                    <dt class="col-sm-3">Source</dt>
+                    <dd class="col-sm-9">@(string.IsNullOrWhiteSpace(selected.Node.Source) ? "Not recorded" : selected.Node.Source)</dd>
+                    <dt class="col-sm-3">Confidence</dt>
+                    <dd class="col-sm-9">@(selected.Node.Confidence?.ToString("0.##") ?? "Not recorded")</dd>
+                    <dt class="col-sm-3">Created</dt>
+                    <dd class="col-sm-9">@FormatStoredUtc(selected.Node.CreatedAt)</dd>
+                </dl>
+
+                <div class="row g-3">
+                    <div class="col-12 col-lg-6">
+                        <h3 class="h6">Observations</h3>
+                        @if (selected.Observations.Count == 0)
+                        {
+                            <p class="small text-muted mb-0">No observations recorded.</p>
+                        }
+                        else
+                        {
+                            <ul class="small mb-0">
+                                @foreach (var observation in selected.Observations)
+                                {
+                                    <li @key="observation.Id">
+                                        @observation.Content
+                                        @if (!string.IsNullOrWhiteSpace(observation.Source))
+                                        {
+                                            <span class="text-muted"> — @observation.Source</span>
+                                        }
+                                    </li>
+                                }
+                            </ul>
+                            @if (selected.ObservationsTruncated)
+                            {
+                                <p class="small text-muted mt-2 mb-0">
+                                    Showing @selected.Observations.Count of @selected.ObservationCount observations. When filtered, matching observations stay in this bounded set.
+                                </p>
+                            }
+                        }
+                    </div>
+                    <div class="col-12 col-lg-6">
+                        <h3 class="h6">Relationships</h3>
+                        @if (SelectedEdges.Count == 0)
+                        {
+                            <p class="small text-muted mb-0">No visible relationships.</p>
+                        }
+                        else
+                        {
+                            <ul class="small relationship-list mb-0">
+                                @foreach (var edge in SelectedEdges)
+                                {
+                                    <li @key="edge.Relation.Id">
+                                        @if (edge.Relation.FromId == selected.Node.Id)
+                                        {
+                                            <span><strong>This record</strong> — @edge.Label → @NodeName(edge.Relation.ToId)</span>
+                                        }
+                                        else
+                                        {
+                                            <span>@NodeName(edge.Relation.FromId) — @edge.Label → <strong>this record</strong></span>
+                                        }
+                                    </li>
+                                }
+                            </ul>
+                        }
+                    </div>
+                </div>
+            </div>
+        </section>
+    }
+</div>
+
+@code {
+    [Parameter, EditorRequired]
+    public required DecisionGraphView Graph { get; set; }
+
+    private bool showList;
+    private int? selectedNodeId;
+    private IReadOnlyDictionary<int, DecisionGraphNodeView> nodesById = new Dictionary<int, DecisionGraphNodeView>();
+    private IReadOnlyDictionary<int, int> connectionCounts = new Dictionary<int, int>();
+
+    private DecisionGraphNodeView? SelectedNode =>
+        selectedNodeId is int id && nodesById.TryGetValue(id, out var node) ? node : null;
+
+    private IReadOnlyList<DecisionGraphEdgeView> SelectedEdges => selectedNodeId is int id
+        ? Graph.Edges.Where(edge => edge.Relation.FromId == id || edge.Relation.ToId == id).ToList()
+        : [];
+
+    protected override void OnParametersSet()
+    {
+        nodesById = Graph.Nodes.ToDictionary(node => node.Node.Id);
+        connectionCounts = Graph.Edges
+            .SelectMany(edge => edge.Relation.FromId == edge.Relation.ToId
+                ? new[] { edge.Relation.FromId }
+                : new[] { edge.Relation.FromId, edge.Relation.ToId })
+            .GroupBy(id => id)
+            .ToDictionary(group => group.Key, group => group.Count());
+        if (selectedNodeId is not int selected || !nodesById.ContainsKey(selected))
+        {
+            selectedNodeId = Graph.Nodes
+                .FirstOrDefault(node => node.Lane == DecisionGraphLane.Decision)?.Node.Id
+                ?? Graph.Nodes.FirstOrDefault()?.Node.Id;
+        }
+    }
+
+    private void SelectNode(int nodeId) => selectedNodeId = nodeId;
+    private void ShowMap() => showList = false;
+    private void ShowList() => showList = true;
+
+    private int ConnectionCount(int nodeId) => connectionCounts.GetValueOrDefault(nodeId);
+
+    private bool IsSelected(DecisionGraphEdgeView edge) => selectedNodeId is int id
+        && (edge.Relation.FromId == id || edge.Relation.ToId == id);
+
+    private string NodeName(int nodeId) => nodesById.TryGetValue(nodeId, out var node)
+        ? node.Node.Content
+        : $"Record #{nodeId}";
+
+    private string EdgePath(DecisionGraphEdgeView edge)
+    {
+        if (!nodesById.TryGetValue(edge.Relation.FromId, out var from)
+            || !nodesById.TryGetValue(edge.Relation.ToId, out var to))
+            return string.Empty;
+
+        var halfWidth = DecisionGraphProjection.NodeWidth / 2;
+        var halfHeight = DecisionGraphProjection.NodeHeight / 2;
+
+        if (from.Node.Id == to.Node.Id)
+        {
+            var startX = from.X + DecisionGraphProjection.NodeWidth;
+            var startY = from.Y + halfHeight;
+            return $"M {startX} {startY} C {startX + 48} {startY - 48}, {startX + 48} {startY + 48}, {startX} {startY + 8}";
+        }
+
+        if (from.X == to.X)
+        {
+            var downward = to.Y > from.Y;
+            var startX = from.X + halfWidth;
+            var startY = downward ? from.Y + DecisionGraphProjection.NodeHeight : from.Y;
+            var endX = to.X + halfWidth;
+            var endY = downward ? to.Y : to.Y + DecisionGraphProjection.NodeHeight;
+            var bendX = startX + 42;
+            var middleY = (startY + endY) / 2;
+            return $"M {startX} {startY} C {bendX} {middleY}, {bendX} {middleY}, {endX} {endY}";
+        }
+
+        var rightward = to.X > from.X;
+        var fromX = rightward ? from.X + DecisionGraphProjection.NodeWidth : from.X;
+        var toX = rightward ? to.X : to.X + DecisionGraphProjection.NodeWidth;
+        var fromY = from.Y + halfHeight;
+        var toY = to.Y + halfHeight;
+        var middleX = (fromX + toX) / 2;
+        return $"M {fromX} {fromY} C {middleX} {fromY}, {middleX} {toY}, {toX} {toY}";
+    }
+
+    private static string LaneLabel(DecisionGraphLane lane) => lane switch
+    {
+        DecisionGraphLane.Question => "Questions",
+        DecisionGraphLane.Option => "Options",
+        DecisionGraphLane.Decision => "Decisions",
+        DecisionGraphLane.Evidence => "Evidence",
+        DecisionGraphLane.Outcome => "Outcomes",
+        DecisionGraphLane.Action => "Actions",
+        DecisionGraphLane.Context => "Context",
+        _ => "Other"
+    };
+
+    private static string LaneCss(DecisionGraphLane lane) => $"lane-{lane.ToString().ToLowerInvariant()}";
+
+    // ARIA state values are lowercase tokens, not HTML boolean attributes.
+    private static string BoolToken(bool value) => value ? "true" : "false";
+
+    // SQLite materializes these UTC values with DateTimeKind.Unspecified (#337). Calling
+    // ToUniversalTime would reinterpret them as local and shift the clock a second time.
+    private static string FormatStoredUtc(DateTime value) =>
+        DateTime.SpecifyKind(value, DateTimeKind.Utc).ToString("u");
+}

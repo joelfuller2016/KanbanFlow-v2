@@ -1,0 +1,190 @@
+.decision-graph {
+    --graph-context: var(--bs-primary-text-emphasis);
+    --graph-question: #5f3a9f;
+    --graph-option: var(--bs-warning-text-emphasis);
+    --graph-decision: var(--bs-success-text-emphasis);
+    --graph-evidence: var(--bs-info-text-emphasis);
+    --graph-outcome: #0f766e;
+    --graph-action: #9a4d00;
+    --graph-other: var(--bs-secondary-text-emphasis);
+    --graph-edge: var(--bs-secondary-color);
+}
+
+[data-bs-theme="dark"] .decision-graph {
+    --graph-question: #c6a7f8;
+    --graph-outcome: #63e6be;
+    --graph-action: #ffb86b;
+}
+
+.map-scroll {
+    max-width: 100%;
+    max-height: min(72vh, 760px);
+    overflow: auto;
+    background:
+        linear-gradient(var(--bs-tertiary-bg) 1px, transparent 1px),
+        linear-gradient(90deg, var(--bs-tertiary-bg) 1px, transparent 1px),
+        var(--bs-body-bg);
+    background-size: 24px 24px;
+    overscroll-behavior: contain;
+}
+
+.map-scroll:focus-visible {
+    outline: 3px solid var(--bs-primary);
+    outline-offset: 2px;
+}
+
+.map-canvas {
+    position: relative;
+    min-width: 100%;
+}
+
+.edge-layer {
+    position: absolute;
+    inset: 0;
+    overflow: visible;
+    pointer-events: none;
+}
+
+.edge-layer marker path {
+    fill: var(--graph-edge);
+}
+
+.graph-edge {
+    fill: none;
+    stroke: var(--graph-edge);
+    stroke-width: 1.75;
+    opacity: 1;
+    transition: opacity .12s ease, stroke-width .12s ease;
+}
+
+.graph-edge.is-selected {
+    stroke: var(--bs-primary);
+    stroke-width: 3;
+    opacity: 1;
+}
+
+.lane-heading {
+    position: absolute;
+    top: 16px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    min-height: 32px;
+    padding: .35rem .55rem;
+    border-top: 4px solid currentColor;
+    border-radius: .25rem;
+    color: var(--lane-color);
+    background: var(--bs-tertiary-bg);
+    font-size: .76rem;
+    font-weight: 700;
+    letter-spacing: .04em;
+    text-transform: uppercase;
+}
+
+.graph-node {
+    position: absolute;
+    z-index: 1;
+    display: flex;
+    flex-direction: column;
+    gap: .35rem;
+    overflow: hidden;
+    padding: .65rem .75rem;
+    border: 1px solid var(--bs-border-color);
+    border-left: 6px solid var(--lane-color);
+    border-radius: .45rem;
+    color: var(--bs-body-color);
+    background: var(--bs-body-bg);
+    box-shadow: 0 .125rem .25rem rgba(0, 0, 0, .075);
+    text-align: left;
+}
+
+.graph-node:hover {
+    border-color: var(--lane-color);
+    box-shadow: 0 .25rem .65rem rgba(0, 0, 0, .14);
+}
+
+.graph-node:focus-visible {
+    z-index: 2;
+    outline: 3px solid var(--bs-primary);
+    outline-offset: 3px;
+}
+
+.graph-node.is-selected {
+    border-color: var(--lane-color);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--lane-color) 30%, transparent);
+}
+
+.node-kind {
+    color: var(--lane-color);
+    font-size: .67rem;
+    font-weight: 800;
+    letter-spacing: .045em;
+    line-height: 1;
+    text-transform: uppercase;
+}
+
+.node-content {
+    display: -webkit-box;
+    overflow: hidden;
+    font-size: .88rem;
+    font-weight: 600;
+    line-height: 1.25;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 3;
+}
+
+.node-meta {
+    margin-top: auto;
+    overflow: hidden;
+    color: var(--bs-secondary-color);
+    font-size: .7rem;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.lane-chip {
+    display: inline-flex;
+    align-items: center;
+    min-height: 24px;
+    padding: .15rem .45rem;
+    border: 1px solid currentColor;
+    border-radius: 999px;
+    color: var(--lane-color);
+    background: var(--bs-body-bg);
+    font-size: .72rem;
+    font-weight: 700;
+    white-space: nowrap;
+}
+
+.lane-context { --lane-color: var(--graph-context); }
+.lane-question { --lane-color: var(--graph-question); }
+.lane-option { --lane-color: var(--graph-option); }
+.lane-decision { --lane-color: var(--graph-decision); }
+.lane-evidence { --lane-color: var(--graph-evidence); }
+.lane-outcome { --lane-color: var(--graph-outcome); }
+.lane-action { --lane-color: var(--graph-action); }
+.lane-other { --lane-color: var(--graph-other); }
+
+.node-detail dd {
+    overflow-wrap: anywhere;
+}
+
+.relationship-list li + li {
+    margin-top: .45rem;
+}
+
+@media (max-width: 575.98px) {
+    .map-scroll {
+        max-height: 62vh;
+    }
+
+    .node-detail .card-body {
+        padding: .85rem;
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .graph-edge {
+        transition: none;
+    }
+}
