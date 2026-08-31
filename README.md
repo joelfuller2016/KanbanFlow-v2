@@ -16,7 +16,7 @@
 | **Stack** | .NET 10 · Blazor Server · SQLite (EF Core 10) · Minimal APIs · Node 18+ for the MCP wrapper |
 | **Surfaces** | 6 UI routes · 60 REST endpoints · 28 native MCP tools · 50 Node-wrapper MCP tools |
 | **Sync** | **One-way**, GitHub → board. It **never writes to GitHub**. GitHub owns title, priority, milestone; the board owns dependencies, criteria, subtasks, claims, ordering, memory — see [Who owns what](#who-owns-what) |
-| **Tests** | 978 xUnit · 56 in-app integration · 50 Playwright e2e · 33 script unit · 2 smoke suites — [all local, no CI](#deliberate-non-features) |
+| **Tests** | 980 xUnit · 56 in-app integration · 50 Playwright e2e · 33 script unit · 2 smoke suites — [all local, no CI](#deliberate-non-features) |
 | **Runs at** | `http://127.0.0.1:5123` — localhost only, no auth, no Docker, no cloud |
 | **Log book** | [`docs/BACKLOG.md`](docs/BACKLOG.md) — the authoritative record of what happened |
 | **Deep detail** | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) |
@@ -611,7 +611,7 @@ the command beside it — not copied from the previous README, and not copied fr
 | Node-wrapper MCP tools | 50 | `tools/list` over stdio against `scripts/mcp-server.mjs` — [exact invocation](docs/ARCHITECTURE.md#mcp-surface-28-native--50-wrapper) |
 | Blazor routes | 6 | `grep -rn '@page' src/KanbanFlow/Components/ \| sort -u` → `/`, `/Error`, `/ideas`, `/memory`, `/project/{Id:int}`, `/settings` |
 | Razor components | 27 | `find src/KanbanFlow/Components -name '*.razor' \| wc -l` |
-| xUnit tests | 978 | `dotnet test tests/KanbanFlow.Tests` |
+| xUnit tests | 980 | `dotnet test tests/KanbanFlow.Tests` |
 | In-app integration tests | 56 | `grep -c 'results.Add(await RunTest' src/KanbanFlow/Services/TestRunnerService.cs` (28 API + 22 service + 6 UI) |
 | Playwright e2e scenarios | 50 | `npm run test:ui` |
 | Script unit tests (`scripts/*.mjs`) | 33 | `npm run test:scripts` |
@@ -734,7 +734,7 @@ All local. There is no CI — [on purpose](#deliberate-non-features).
 ```
 
 ```bash
-dotnet test tests/KanbanFlow.Tests      # 978 xUnit tests
+dotnet test tests/KanbanFlow.Tests      # 980 xUnit tests
 ```
 
 ```powershell
@@ -767,11 +767,13 @@ Build and tests are the hard gates in `verify.ps1`. The **format check is adviso
 prints a warning and lets the run continue, pending a one-time `dotnet format` cleanup of the
 existing tree.
 
-> **Read `verify.ps1`'s last printed line, not its exit code.** On a clean build + test run
-> with only formatting drift it prints `Build + tests passed. Safe to push.` and still exits
-> **2** — the script has no explicit success `exit`, so the advisory `dotnet format` result
-> becomes the process exit code (`scripts/verify.ps1:44-51`). Anything gating on `$LASTEXITCODE`
-> will read a green run as a failure.
+On a clean build + test run, `verify.ps1` exits **0** even when the formatter prints its advisory
+warning. It exits **1** on a hard restore/build/test failure. Keep the advisory in the run record;
+do not misreport it as a product-test failure or ignore it as nonexistent drift.
+
+Feature-level test contracts and immutable execution records live in
+[`docs/test-cases/`](docs/test-cases/). They complement the executable tests; they do not replace
+them.
 
 ---
 
@@ -782,16 +784,17 @@ existing tree.
 | [`docs/BACKLOG.md`](docs/BACKLOG.md) | **The log book.** Authoritative record of what happened and why. Start here. |
 | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | Entity model, write path, full REST route map, MCP inventory, capability matrix, known gaps |
 | [`docs/GITHUB-SYNC.md`](docs/GITHUB-SYNC.md) | Full sync semantics, drift cases, comment mirroring |
-
-> `docs/BACKLOG.md` and `docs/GITHUB-SYNC.md` are authored on sibling branches and land with
-> them; on a branch that has only this README the two links will 404 until those merge.
 | [`.claude/skills/kanban-portfolio/reference/mapping.md`](.claude/skills/kanban-portfolio/reference/mapping.md) | GitHub → board mapping in full, with the reasoning |
 | [`docs/ci-without-actions.md`](docs/ci-without-actions.md) | How the quality gate runs with no workflow file |
 | [`docs/issue-quality-checklist.md`](docs/issue-quality-checklist.md) | What a well-formed issue contains |
+| [`docs/test-cases/`](docs/test-cases/) | Feature-level test contracts, traceability, and commit-pinned execution records |
 | [`docs/native-mcp-notes.md`](docs/native-mcp-notes.md) | Native in-process MCP implementation notes |
 | [`docs/ai-briefing-schema.md`](docs/ai-briefing-schema.md) | The agent briefing payload shape |
 | [`docs/requirements.md`](docs/requirements.md) | Original v1 requirements — partly superseded by `ARCHITECTURE.md` |
 | [`docs/reviews/`](docs/reviews) | Historical review notes |
+
+> `docs/BACKLOG.md` and `docs/GITHUB-SYNC.md` are authored on sibling branches and land with
+> them; on a branch that has only this README the two links will 404 until those merge.
 
 ---
 

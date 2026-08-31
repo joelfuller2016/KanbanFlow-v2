@@ -537,4 +537,5 @@ Ranked by how much they hurt an agent consuming this system.
 - [`docs/ci-without-actions.md`](ci-without-actions.md) — how the gate runs without GitHub Actions
 - [`docs/ai-briefing-schema.md`](ai-briefing-schema.md) — the agent briefing payload shape
 - [`docs/issue-quality-checklist.md`](issue-quality-checklist.md) — what a well-formed issue contains
+- [`docs/test-cases/`](test-cases/) — feature-level test contracts and commit-pinned execution evidence
 - [`.claude/skills/kanban-portfolio/reference/mapping.md`](../.claude/skills/kanban-portfolio/reference/mapping.md) — GitHub → board mapping, in full
