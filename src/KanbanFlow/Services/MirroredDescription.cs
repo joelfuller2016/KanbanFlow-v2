@@ -155,10 +155,11 @@ public static class MirroredDescription
     }
 
     /// <summary>
-    /// The description's first readable line as plain text: sync header removed, leading markdown
-    /// furniture stripped, whitespace collapsed, elided at <see cref="ExcerptMaxLength"/>. Returns
-    /// <c>null</c> when nothing readable survives — a description that is only a sync header, or
-    /// empty to begin with.
+    /// The description's opening text as a single plain-text line: sync header removed, leading
+    /// markdown furniture stripped, ALL whitespace (newlines included) collapsed to single spaces
+    /// so the excerpt runs across paragraph boundaries, elided at <see cref="ExcerptMaxLength"/>.
+    /// Returns <c>null</c> when nothing readable survives — a description that is only a sync
+    /// header, or empty to begin with.
     /// </summary>
     public static string? Excerpt(string? description)
     {
