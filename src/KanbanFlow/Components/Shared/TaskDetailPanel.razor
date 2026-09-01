@@ -1,6 +1,7 @@
 @inject IDbContextFactory<AppDbContext> DbFactory
 @inject IJSRuntime JS
 @inject ITaskService TaskSvc
+@implements IAsyncDisposable
 
 <div class="offcanvas offcanvas-end @(IsOpen ? "show" : "")"
      tabindex="-1" role="dialog" aria-modal="true" aria-labelledby="task-detail-title"
@@ -489,7 +490,8 @@
 
     private ElementReference panelRoot;
     private bool wasOpen;
-    private bool shouldInitializeDialogFocus;
+    private DotNetObjectReference<TaskDetailPanel>? _selfRef;
+    private bool _dialogInited;
 
     // Inline name editing
     private bool isEditingName;
@@ -543,10 +545,6 @@
         renderedTask = Task;
 
         var freshOpen = IsOpen && !wasOpen;
-        if (freshOpen)
-        {
-            shouldInitializeDialogFocus = true;
-        }
 
         wasOpen = IsOpen;
 
@@ -612,16 +610,23 @@
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
-        if (shouldInitializeDialogFocus && IsOpen)
+        if (IsOpen && !_dialogInited)
         {
-            shouldInitializeDialogFocus = false;
+            _dialogInited = true;
+            _selfRef ??= DotNetObjectReference.Create(this);
             try
             {
-                await JS.InvokeVoidAsync("KanbanFlow.initTaskDetailDialog", panelRoot);
+                await JS.InvokeVoidAsync("KanbanFlow.initDialog", panelRoot, _selfRef,
+                    new { focusContainer = true, documentKeydown = true });
             }
             catch (JSDisconnectedException) { }
             catch (ObjectDisposedException) { }
             catch (InvalidOperationException) { }
+        }
+        else if (!IsOpen && _dialogInited)
+        {
+            _dialogInited = false;
+            await SafeDestroyDialogAsync();
         }
 
         // Re-keying the <select> after a refusal replaces the focused node, so browser focus
@@ -650,6 +655,24 @@
         subtaskError = null;
         ClearDefinitionOfDoneState();
         await OnClose.InvokeAsync();
+    }
+
+    [JSInvokable]
+    public Task CloseFromJs() => ClosePanel();
+
+    private async Task SafeDestroyDialogAsync()
+    {
+        try { await JS.InvokeVoidAsync("KanbanFlow.destroyDialog", panelRoot); }
+        catch (JSDisconnectedException) { }
+        catch (ObjectDisposedException) { }
+        catch (InvalidOperationException) { }
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        if (_dialogInited)
+            await SafeDestroyDialogAsync();
+        _selfRef?.Dispose();
     }
 
     // ── Name editing ──

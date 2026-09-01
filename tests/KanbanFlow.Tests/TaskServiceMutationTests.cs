@@ -33,7 +33,7 @@ public sealed class TaskServiceMutationTests
 
     /// <summary>Seeds Project → Feature → Task and returns both ids.</summary>
     private static (int featureId, int taskId) SeedFeatureWithTask(
-        SqliteTestFactory f, string? claimedBy = null)
+        SqliteTestFactory f, string? claimedBy = null, DateTime? claimedAt = null)
     {
         using var db = f.CreateDbContext();
         var feature = new Feature { Name = "Feat", Project = new Project { Name = "Proj" } };
@@ -41,7 +41,7 @@ public sealed class TaskServiceMutationTests
         if (claimedBy is not null)
         {
             task.ClaimedBy = claimedBy;
-            task.ClaimedAt = DateTime.UtcNow;
+            task.ClaimedAt = claimedAt ?? DateTime.UtcNow;
         }
         db.Add(task);
         db.SaveChanges();
@@ -280,6 +280,27 @@ public sealed class TaskServiceMutationTests
         Assert.Equal(0, await db.ActivityEvents.CountAsync(e => e.EventType == "TaskReleased"));
     }
 
+    [Fact]
+    public async Task Claim_StaleSameActorRenewal_AuditWriteFailure_RollsBackBothTimestamps()
+    {
+        using var f = new SqliteTestFactory();
+        var originalClaimedAt = new DateTime(2026, 8, 30, 8, 0, 0, DateTimeKind.Utc);
+        var (_, taskId) = SeedFeatureWithTask(f, claimedBy: "alice", claimedAt: originalClaimedAt);
+        DateTime originalUpdatedAt;
+        using (var before = f.CreateDbContext())
+            originalUpdatedAt = (await before.Tasks.FindAsync(taskId))!.UpdatedAt;
+        var now = originalClaimedAt.AddHours(25);
+        var svc = new TaskService(new ThrowOnSaveFactory(f), clock: () => now);
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => svc.ClaimAsync(taskId, "alice"));
+
+        using var db = f.CreateDbContext();
+        var task = await db.Tasks.FindAsync(taskId);
+        Assert.Equal(originalClaimedAt, task!.ClaimedAt);
+        Assert.Equal(originalUpdatedAt, task.UpdatedAt);
+        Assert.Equal(0, await db.ActivityEvents.CountAsync(e => e.EventType == "TaskClaimRenewed"));
+    }
+
     // A factory whose contexts share the test DB but throw on SaveChangesAsync — simulating an
     // audit-write failure so the surrounding transaction (claim/release + event) must roll back (#156).
     private sealed class ThrowOnSaveFactory(SqliteTestFactory inner) : IDbContextFactory<AppDbContext>
@@ -295,21 +316,36 @@ public sealed class TaskServiceMutationTests
             => throw new InvalidOperationException("simulated audit-write failure");
     }
 
+    /// <summary>
+    /// A same-actor re-claim inside the TTL is the heartbeat (#443): it RENEWS ClaimedAt, because a
+    /// holder that cannot move its own lease expires while still working. "Idempotent" survives
+    /// where it was actually load-bearing -- no second activity event, and no UpdatedAt churn -- so
+    /// a 5-minute cadence cannot flood the timeline or fake task activity on Home.
+    /// </summary>
     [Fact]
-    public async Task Claim_SameActorReclaim_IsIdempotent_PreservesClaimedAt_NoSecondEvent()
+    public async Task Claim_SameActorReclaim_RenewsClaimedAt_ButWritesNoSecondEvent()
     {
         using var f = new SqliteTestFactory();
         var (_, taskId) = SeedFeatureWithTask(f);
-        var svc = new TaskService(f);
+        var t0 = new DateTime(2026, 8, 30, 12, 0, 0, DateTimeKind.Utc);
+        var now = t0;
+        var svc = new TaskService(f, clock: () => now);
 
         var first = await svc.ClaimAsync(taskId, "alice");
         var firstClaimedAt = first.ClaimedAt;
+        var firstUpdatedAt = first.UpdatedAt;
 
+        now = t0.AddMinutes(5);                 // a heartbeat, well inside the default TTL
         var second = await svc.ClaimAsync(taskId, "alice");
 
-        Assert.Equal(firstClaimedAt, second.ClaimedAt);
+        // The fix: the lease moves.
+        Assert.Equal(now, second.ClaimedAt);
+        Assert.NotEqual(firstClaimedAt, second.ClaimedAt);
+        // The part of "idempotent" that must NOT change: no churn, no extra audit row.
+        Assert.Equal(firstUpdatedAt, second.UpdatedAt);
         using var db = f.CreateDbContext();
         Assert.Equal(1, await db.ActivityEvents.CountAsync(e => e.EventType == "TaskClaimed"));
+        Assert.Equal(0, await db.ActivityEvents.CountAsync(e => e.EventType == "TaskClaimRenewed"));
     }
 
     [Fact]

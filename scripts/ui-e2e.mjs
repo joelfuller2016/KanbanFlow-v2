@@ -47,6 +47,44 @@ async function api(method, p, body) {
   return text ? JSON.parse(text) : null;
 }
 
+let mcpRequestId = 1000;
+async function nativeMcpTool(name, args) {
+  const requestId = ++mcpRequestId;
+  const res = await fetch(`${baseUrl}/mcp`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      accept: "application/json, text/event-stream",
+      "mcp-protocol-version": "2025-06-18",
+    },
+    body: JSON.stringify({
+      jsonrpc: "2.0",
+      id: requestId,
+      method: "tools/call",
+      params: { name, arguments: args },
+    }),
+  });
+  const text = await res.text();
+  if (!res.ok) throw new Error(`MCP ${name} -> ${res.status}: ${text.slice(0, 300)}`);
+  const contentType = res.headers.get("content-type") || "";
+  let messages;
+  if (contentType.includes("application/json")) {
+    messages = [JSON.parse(text)];
+  } else if (contentType.includes("text/event-stream")) {
+    messages = text.split(/\r?\n/)
+      .filter((line) => line.startsWith("data:"))
+      .map((line) => JSON.parse(line.slice(5).trim()));
+  } else {
+    throw new Error(`MCP ${name} returned unsupported content type '${contentType}': ${text.slice(0, 300)}`);
+  }
+  const message = messages.find((candidate) => candidate.id === requestId);
+  if (!message) throw new Error(`MCP ${name} returned no response for id ${requestId}: ${text.slice(0, 300)}`);
+  if (message.error) throw new Error(`MCP ${name} failed: ${JSON.stringify(message.error)}`);
+  const toolError = message.result?.content?.find((item) => item.type === "text" && item.text)?.text;
+  if (message.result?.isError) throw new Error(`MCP ${name} failed: ${toolError || "unknown tool error"}`);
+  return message.result;
+}
+
 // Status persistence after a drag is async (SortableJS moves the DOM immediately,
 // then OnCardMoved round-trips to the server), so poll the API rather than read once.
 async function waitForApiStatus(taskId, expected, timeoutMs = 6000) {
@@ -517,6 +555,243 @@ async function main() {
         `"locator.click: Timeout 15000ms exceeded". Check the expected element BEFORE re-clicking.`);
       assert(isOpen,
         "clickUntil returned with the menu CLOSED — the caller is about to click into nothing.");
+    });
+
+    // ── Decision & Memory Map (#496): real REST writes -> real Blazor projection ──
+    // The graph service and MCP relation path have real-SQLite coverage in MemoryServiceTests and
+    // McpKnowledgeGraphToolsTests. This scenario owns the missing UI boundary: records written through
+    // the public API must appear in the interactive map, classify by both enum and free-form tags,
+    // remain usable as a keyboard-native list, and stay reachable in a narrow viewport. The database
+    // is the disposable DB created by startApp, so these records need no production cleanup.
+    await test("Decision map renders explicit agent records with filters and list fallback (#496)", async () => {
+      const scopeKey = `ui-decision-map-${stamp}-${"n".repeat(140)}`;
+      const evidenceObservation = `Observation ${stamp}: the existing graph read is reusable`;
+      const context = await api("POST", "/api/memory", {
+        content: `Context ${stamp}: the graph backend already exists`,
+        type: "Semantic",
+        scope: "Agent",
+        scopeKey,
+        tags: "context",
+        source: "ui-e2e",
+      });
+      const decision = await api("POST", "/api/memory", {
+        content: `Decision ${stamp}: reuse the existing MCP graph`,
+        type: "Decision",
+        scope: "Agent",
+        scopeKey,
+        tags: "OPEN_QUESTION, chosen",
+        source: "ui-e2e",
+        confidence: 0.9,
+      });
+      const evidence = await api("POST", "/api/memory", {
+        content: `Evidence ${stamp}: ReadGraphAsync is already shipped`,
+        type: "Semantic",
+        scope: "Agent",
+        scopeKey,
+        tags: "EVIDENCE",
+        source: "ui-e2e",
+      });
+      await nativeMcpTool("add_observations", {
+        scopeKey,
+        actor: "ui-e2e",
+        observations: [{ entityName: evidence.content, contents: [evidenceObservation] }],
+      });
+      await nativeMcpTool("create_relations", {
+        scopeKey,
+        actor: "ui-e2e",
+        relations: [
+          { from: context.content, to: decision.content, relationType: "frames" },
+          { from: evidence.content, to: decision.content, relationType: "supports" },
+        ],
+      });
+
+      await page.goto(`${baseUrl}/memory`);
+      await page.locator('[data-testid="memory-map-filters"][data-interactive="true"]')
+        .waitFor({ state: "visible" });
+      await page.locator('[data-testid="memory-map-namespace"]').fill(scopeKey);
+      await clickUntil(
+        () => page.getByRole("button", { name: "Load namespace" }).click(),
+        page.locator(`[data-testid="decision-map-node-${decision.id}"]`),
+      );
+      assert(new URL(page.url()).searchParams.get("scopeKey") === scopeKey,
+        `loaded namespace was not preserved in the navigable URL: ${page.url()}`);
+
+      await page.locator(`[data-testid="decision-map-node-${context.id}"]`).waitFor({ state: "visible" });
+      await page.locator(`[data-testid="decision-map-node-${evidence.id}"]`).waitFor({ state: "visible" });
+      assert(await page.locator('[data-testid^="decision-edge-"]').count() === 2,
+        "real MCP relations did not render as two directed map edges");
+      assert(await page.locator('[data-testid^="decision-edge-"][marker-end="url(#decision-map-arrow)"]').count() === 2,
+        "decision map relationships did not retain their directed arrow markers");
+      assert(await page.locator(".lane-decision .node-kind").filter({ hasText: "Decisions" }).count() >= 1,
+        "MemoryType.Decision did not render in the Decisions lane");
+      assert(await page.locator(".lane-evidence .node-kind").filter({ hasText: "Evidence" }).count() >= 1,
+        "case-insensitive EVIDENCE tag did not render in the Evidence lane");
+      await page.locator(`[data-testid="decision-map-node-${decision.id}"]`).click();
+      await page.locator('[data-testid="decision-node-detail"]').getByText("0.9", { exact: true }).waitFor({ state: "visible" });
+      assert(await page.locator('[data-testid="decision-node-detail"]').getAttribute("aria-live") === null,
+        "the complete decision detail panel must not be an aria-live region");
+      const selectionStatus = page.locator('[data-testid="decision-node-selection-status"]');
+      assert((await selectionStatus.innerText()).trim() === `Selected Decisions record ${decision.id}.`,
+        `selection status was not concise and specific: ${await selectionStatus.innerText()}`);
+      const relationshipText = await page.locator('[data-testid="decision-node-detail"] .relationship-list').innerText();
+      assert(relationshipText.includes(context.content) && relationshipText.includes("frames"),
+        `incoming context relationship was not readable: ${relationshipText}`);
+      assert(relationshipText.includes(evidence.content) && relationshipText.includes("supports"),
+        `incoming evidence relationship was not readable: ${relationshipText}`);
+
+      const namespaceInput = page.locator('[data-testid="memory-map-namespace"]');
+      const loadedUrl = page.url();
+      await namespaceInput.fill("   ");
+      await page.getByRole("button", { name: "Load namespace" }).click();
+      await page.locator('[data-testid="memory-map-namespace-error"]').waitFor({ state: "visible" });
+      assert(await page.locator(`[data-testid="decision-map-node-${decision.id}"]`).isVisible(),
+        "invalid namespace validation erased the already-loaded graph");
+      assert(await page.locator('[data-testid="memory-map-summary"]').isVisible(),
+        "invalid namespace validation hid the loaded graph summary");
+      assert(page.url() === loadedUrl, `invalid namespace submission changed the URL: ${page.url()}`);
+      assert(await namespaceInput.getAttribute("aria-describedby") === "memory-namespace-error"
+        && await namespaceInput.getAttribute("aria-invalid") === "true",
+        "namespace validation was not associated with its field");
+      await namespaceInput.fill(scopeKey);
+      await page.getByRole("button", { name: "Load namespace" }).click();
+      await page.locator('[data-testid="memory-map-namespace-error"]').waitFor({ state: "detached" });
+
+      const search = page.locator('[data-testid="memory-map-search"]');
+      const kind = page.locator('[data-testid="memory-map-kind"]');
+      const scope = page.locator('#memory-scope');
+      const draftNamespace = `${scopeKey}-draft`;
+      await namespaceInput.fill(draftNamespace);
+      await scope.selectOption("Project");
+      const historyBeforeFilters = await page.evaluate(() => history.length);
+      await search.fill("Read");
+      await search.pressSequentially("GraphAsync", { delay: 35 });
+      await page.locator(`[data-testid="decision-map-node-${evidence.id}"]`).waitFor({ state: "visible" });
+      await page.locator(`[data-testid="decision-map-node-${decision.id}"]`).waitFor({ state: "detached" });
+      assert(await page.locator(`[data-testid="decision-map-node-${decision.id}"]`).count() === 0,
+        "search filter left a non-matching decision node visible");
+      await page.waitForFunction(
+        (expected) => new URL(window.location.href).searchParams.get("q") === expected,
+        "ReadGraphAsync",
+        { timeout: 10000 });
+      await kind.selectOption("Evidence");
+      await page.waitForFunction(
+        (expected) => new URL(window.location.href).searchParams.get("kind") === expected,
+        "Evidence",
+        { timeout: 10000 });
+      assert(await page.evaluate(() => history.length) === historyBeforeFilters,
+        "filter URL synchronization added history entries instead of replacing the current one");
+      assert(await namespaceInput.inputValue() === draftNamespace && await scope.inputValue() === "Project",
+        `filter URL synchronization overwrote the unsubmitted namespace/scope draft: ${await namespaceInput.inputValue()}/${await scope.inputValue()}`);
+      assert(await search.inputValue() === "ReadGraphAsync",
+        `sequential filter input was overwritten by URL parameter re-entry: ${await search.inputValue()}`);
+
+      const filteredUrl = page.url();
+      await page.goto(`${baseUrl}/`);
+      await page.goto(filteredUrl);
+      await page.locator(`[data-testid="decision-map-node-${evidence.id}"]`).waitFor({ state: "visible" });
+      await page.locator('[data-testid="decision-node-detail"]').getByText(evidenceObservation, { exact: true })
+        .waitFor({ state: "visible" });
+      assert(await search.inputValue() === "ReadGraphAsync" && await kind.inputValue() === "Evidence",
+        `deep-linked filter controls were not restored: q=${await search.inputValue()}, kind=${await kind.inputValue()}`);
+      assert(await page.locator(`[data-testid="decision-map-node-${decision.id}"]`).count() === 0,
+        "deep-linked text/kind filters did not restore the filtered projection");
+      await page.reload();
+      await page.locator(`[data-testid="decision-map-node-${evidence.id}"]`).waitFor({ state: "visible" });
+      assert(await search.inputValue() === "ReadGraphAsync" && await kind.inputValue() === "Evidence",
+        "reloading the decision map lost its text or kind filter");
+      await clickUntil(
+        () => page.locator('[data-testid="decision-graph-list-toggle"]').click(),
+        page.locator('[data-testid="decision-graph-list"]'),
+      );
+      await page.locator('[data-testid="decision-graph-map-toggle"]').click();
+      await page.locator(`[data-testid="decision-map-node-${evidence.id}"]`).waitFor({ state: "visible" });
+
+      await search.fill("");
+      await page.waitForFunction(
+        () => !new URL(window.location.href).searchParams.has("q"),
+        null,
+        { timeout: 10000 });
+      await kind.selectOption("");
+      await page.waitForFunction(
+        () => !new URL(window.location.href).searchParams.has("kind"),
+        null,
+        { timeout: 10000 });
+      await page.locator(`[data-testid="decision-map-node-${context.id}"]`).waitFor({ state: "visible" });
+      assert(new URL(page.url()).searchParams.get("scopeKey") === scopeKey,
+        `clearing filters removed the loaded namespace from the URL: ${page.url()}`);
+
+      await search.fill(`no-match-${stamp}`);
+      const noMatches = page.locator('[data-testid="decision-graph-no-matches"]');
+      await noMatches.waitFor({ state: "visible" });
+      assert((await noMatches.getAttribute("class"))?.includes("bg-body-tertiary"),
+        "the no-match state does not use a theme-aware background");
+      await search.fill("");
+      await page.locator(`[data-testid="decision-map-node-${context.id}"]`).waitFor({ state: "visible" });
+
+      await page.locator('[data-testid="decision-graph-list-toggle"]').click();
+      await page.locator('[data-testid="decision-graph-list"]').waitFor({ state: "visible" });
+      const listToggle = page.locator('[data-testid="decision-graph-list-toggle"]');
+      const contextListNode = page.locator(`[data-testid="decision-list-node-${context.id}"]`);
+      await listToggle.focus();
+      await page.keyboard.press("Tab");
+      const keyboardFocus = await contextListNode.evaluate((el) => {
+        const style = getComputedStyle(el);
+        return {
+          active: el === document.activeElement,
+          boxShadow: style.boxShadow,
+          outlineStyle: style.outlineStyle,
+          outlineWidth: style.outlineWidth,
+        };
+      });
+      assert(keyboardFocus.active,
+        `Tab did not reach the first list record: ${JSON.stringify(keyboardFocus)}`);
+      assert(keyboardFocus.boxShadow !== "none" || (keyboardFocus.outlineStyle !== "none" && keyboardFocus.outlineWidth !== "0px"),
+        `keyboard focus had no visible treatment: ${JSON.stringify(keyboardFocus)}`);
+      await contextListNode.press("Enter");
+      await page.locator('[data-testid="decision-node-detail"] .lead').getByText(context.content, { exact: true }).waitFor({ state: "visible" });
+      const outgoingRelationshipText = await page.locator('[data-testid="decision-node-detail"] .relationship-list').innerText();
+      assert(outgoingRelationshipText.includes("This record")
+        && outgoingRelationshipText.includes("frames")
+        && outgoingRelationshipText.includes(decision.content),
+        `outgoing context relationship was not readable: ${outgoingRelationshipText}`);
+      assert((await selectionStatus.innerText()).trim() === `Selected Context record ${context.id}.`,
+        "the concise live selection status did not update after keyboard selection");
+      assert((await contextListNode.getAttribute("aria-pressed"))?.toLowerCase() === "true",
+        "Enter did not select the focused list record");
+
+      await page.locator('[data-testid="decision-graph-map-toggle"]').click();
+      const savedViewport = page.viewportSize();
+      try {
+        await page.setViewportSize({ width: 390, height: 844 });
+        const overflow = await page.locator('[data-testid="decision-graph-map"]').evaluate((el) => {
+          el.scrollLeft = 100;
+          return {
+            client: el.clientWidth,
+            clientHeight: el.clientHeight,
+            scroll: el.scrollWidth,
+            scrollHeight: el.scrollHeight,
+            maxHeight: getComputedStyle(el).maxHeight,
+            moved: el.scrollLeft,
+            visible: el.getBoundingClientRect().width > 0,
+          };
+        });
+        assert(overflow.visible && overflow.scroll > overflow.client && overflow.moved > 0,
+          `narrow map is clipped without a scroll region: ${JSON.stringify(overflow)}`);
+        assert(overflow.maxHeight !== "none",
+          `map has no viewport-bounded vertical scroll region: ${JSON.stringify(overflow)}`);
+        const pageWidth = await page.evaluate(() => ({
+          client: document.documentElement.clientWidth,
+          scroll: document.documentElement.scrollWidth,
+        }));
+        assert(pageWidth.scroll <= pageWidth.client + 1,
+          `long namespace caused page-level horizontal overflow: ${JSON.stringify(pageWidth)}`);
+      } finally {
+        if (savedViewport) await page.setViewportSize(savedViewport);
+      }
+
+      await page.locator('[data-testid="nav-memory"]').waitFor({ state: "visible" });
+      await page.locator('[data-testid="memory-map-privacy-note"]').getByText("Explicit records only.", { exact: true })
+        .waitFor({ state: "visible" });
     });
 
     // ── Scenario A: create a project through the Home "New Project" modal ──
@@ -1276,7 +1551,12 @@ async function main() {
           await page.locator('[data-testid="board-column-Todo-cards"] .board-card-meta-label').first()
             .waitFor({ state: "visible" });
 
-          const labels = await page.$$eval(".board-card-meta-label", (els) => els.map((el) => {
+          // Query and measure in one browser task. `$$eval` first materialises an Element[] handle
+          // over the Playwright protocol and evaluates its callback afterward; InteractiveServer
+          // hydration can replace the prerendered card nodes in that gap, leaving detached elements
+          // whose computed styles are empty and whose geometry serialises as NaN. (PR #497.)
+          const labels = await page.evaluate(() =>
+            [...document.querySelectorAll(".board-card-meta-label")].map((el) => {
             // Locate the text node EXPLICITLY rather than assuming `firstChild` is one. If the label's
             // markup ever gains a wrapper (e.g. the text moves inside a <span> when CardMeta is
             // extracted in a later phase), `firstChild` becomes an Element and `Range#setStart` throws
@@ -2336,6 +2616,55 @@ async function main() {
       const notPromoted = await api("GET", `/api/ideas/${idea.id}`);
       assert(notPromoted.status === "New",
         `Esc on the PROMOTE confirm must cancel it — the idea is now ${notPromoted.status}`);
+    });
+
+    // TaskDetailPanel makes the same aria-modal promise as the confirms above and deliberately
+    // shares their initDialog/destroyDialog wiring. Keep it in this harness: a separate test with
+    // a different definition of focus containment could let the shared behavior silently diverge.
+    await test("Task detail panel traps Tab, Escape closes it, and focus returns to its card (#483)", async () => {
+      const trapTask = await api("POST", `/api/features/${feature.id}/tasks`, {
+        name: `E2E task detail trap ${stamp}`, status: "Todo",
+      });
+      const panel = '[data-testid="task-detail-panel"]';
+      const card = `[data-testid="board-card-${trapTask.id}"]`;
+      const openerTestid = `board-card-${trapTask.id}-title`;
+
+      await page.goto(`${baseUrl}/project/${proj.id}`);
+      await page.locator(card).waitFor({ state: "visible" });
+      await page.locator(`[data-testid="${openerTestid}"]`).click();
+      await page.locator(panel).waitFor({ state: "visible" });
+
+      const opened = await probeDialogFocus(page, panel);
+      assert(opened.count >= 2,
+        `the task detail panel exposes only ${opened.count} focusable control(s), so the Tab cycle is vacuous`);
+      assert(opened.escapes > 0,
+        "PRECONDITION: no focusable controls exist outside the task detail panel, so an untrapped " +
+        "aria-modal panel would pass this guard by accident");
+      assert(opened.inside,
+        `the task detail panel opened without taking focus — focus is on ${opened.active}`);
+
+      let escapedStops = 0;
+      const escapedOnto = [];
+      const presses = 30;
+      for (let i = 1; i <= presses; i++) {
+        await page.keyboard.press("Tab");
+        const p = await probeDialogFocus(page, panel);
+        if (!p.inside) {
+          escapedStops++;
+          escapedOnto.push(`Tab #${i}: ${p.active}`);
+        }
+      }
+      assert(escapedStops === 0,
+        `${escapedStops} of ${presses} Tab stops escaped the aria-modal task detail panel: ` +
+        escapedOnto.join("; "));
+
+      await page.keyboard.press("Escape");
+      await page.locator(panel).waitFor({ state: "hidden" });
+      const restored = await probeDialogFocus(page, panel);
+      assert(restored.activeTestid === openerTestid,
+        `closing the task detail panel did not return focus to ${card}; focus is on ${restored.active}`);
+
+      await api("DELETE", `/api/tasks/${trapTask.id}`).catch(() => {});
     });
 
     // ── Scenario: the activity timeline's fold survives a refresh of the SAME task (#328) ──

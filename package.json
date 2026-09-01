@@ -19,6 +19,7 @@
     "gh:onboard": "node scripts/portfolio-sync.mjs onboard",
     "gh:push:preview": "node scripts/portfolio-sync.mjs push-issue",
     "gh:standup": "node scripts/portfolio-standup.mjs",
+    "trial:report": "node scripts/trial-report.mjs",
     "seed:snapshot": "node scripts/snapshot-seed.mjs",
     "seed:check": "node scripts/snapshot-seed.mjs --check"
   },

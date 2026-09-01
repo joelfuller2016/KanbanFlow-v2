@@ -79,27 +79,22 @@ const DEFAULT_REPOS = [
 ];
 
 const UNSORTED_FEATURE = "Unsorted";
-
-// Was 1500 - a cap meant to be the rare exception that fired on EVERY card. Measured across all 60
-// open issues: median body 11,900 chars, and the SMALLEST still cleared 1500, so 100% of mirrored
-// descriptions carried the truncation marker and it taught the reader to ignore it.
-//
-// 30,000 is not a taste judgement - it is bounded by the TRANSPORT. The board is Blazor Server, and
-// `EditableMarkdown` sends the entire description buffer over SignalR on every keystroke
-// (`@oninput` -> `ValueChanged.InvokeAsync`). Program.cs configures no `HubOptions`, so the default
-// `MaximumReceiveMessageSize` of 32,768 BYTES applies: a description larger than that cannot be
-// edited at all - the first keystroke exceeds the frame, the hub throws, and the circuit drops with
-// the edit lost. A cap above the transport limit manufactures descriptions the app cannot open.
-//
-// Measured against all 320 issues in the repo: exactly ONE (#493, 54,236 chars) exceeds this; the
-// next largest is 22,264 and fits whole. So 30,000 keeps 319/320 intact while guaranteeing every
-// description the sync writes stays editable, with ~2.4 KB of headroom for the header (max 296
-// chars measured) and for multi-byte characters, which cost more bytes than chars.
-//
-// Raising it means raising `MaximumReceiveMessageSize` in Program.cs in the same change.
-const BODY_EXCERPT_LIMIT = Math.max(
-  1, Number.parseInt(process.env.KANBANFLOW_BODY_EXCERPT_LIMIT || "30000", 10) || 30000);
-
+const SYNC_DESCRIPTION_PREFIX = "<!-- kanbanflow-sync -->\n**Issue:** ";
+const TRUNCATION_FOOTER = "…(truncated — see the issue)";
+const SIGNALR_MAX_RECEIVE_BYTES = 32_768;
+// Assume a 32,768-byte receive limit and reserve at least 10% for any protocol envelope and fields
+// other than the markdown: ceil(32,768 / 10) = 3,277 bytes. This repo does not configure or prove
+// that transport limit, so it is a conservative compatibility assumption, not a protocol guarantee.
+// The enforced 29,491-byte description limit measures JSON.stringify(description), including the
+// expansion of newlines, quotes and backslashes plus the JSON string's surrounding quotes.
+const SIGNALR_ENVELOPE_HEADROOM_BYTES = Math.ceil(SIGNALR_MAX_RECEIVE_BYTES / 10);
+const MAX_DESCRIPTION_BYTES = SIGNALR_MAX_RECEIVE_BYTES - SIGNALR_ENVELOPE_HEADROOM_BYTES;
+const MIN_BODY_EXCERPT_BYTES = 1_024;
+const requestedBodyLimit = Number.parseInt(process.env.KANBANFLOW_BODY_EXCERPT_LIMIT || "", 10);
+const BODY_EXCERPT_LIMIT = Math.min(
+  MAX_DESCRIPTION_BYTES,
+  Math.max(MIN_BODY_EXCERPT_BYTES, Number.isFinite(requestedBodyLimit) ? requestedBodyLimit : MAX_DESCRIPTION_BYTES),
+);
 // High enough that no repo in the portfolio comes near it, because SATURATING it is a hard
 // failure, not a warning: a read that stopped early makes every count and every "no drift"
 // verdict downstream a lie. Overridable so the incompleteness path can actually be exercised.
@@ -362,8 +357,8 @@ function collectComments(issue, linkedPr) {
 
 function commentTextFor(c, maxChars) {
   let body = c.body;
-  if (maxChars > 0 && body.length > maxChars) {
-    body = `${body.slice(0, maxChars)}\n\n…(truncated at ${maxChars} chars — read it on GitHub)`;
+  if (maxChars > 0) {
+    body = excerptFor(body, maxChars, "…(truncated — read it on GitHub)", (value) => value.length);
   }
   return `<!-- gh:${c.ghId} -->\n${c.header}\n\n${body}`;
 }
@@ -482,52 +477,54 @@ function stripSyncBlock(description) {
     .trim();
 }
 
-// Cut at a LINE boundary, and name where the rest is. The old slice cut mid-line, which inside a
-// fenced code block or a table left the panel rendering a half-OPEN construct - the markdown past
-// the cut is not merely missing, it is malformed, and it swallows the very marker that was supposed
-// to explain itself. The 0.8 floor keeps the hard slice when a single line is itself over the limit,
-// so the budget stays firm rather than becoming advisory.
-//
-// Exactly what BODY_EXCERPT_LIMIT bounds: the SOURCE BODY retained, not the length of the string
-// returned. The footer is appended AFTER the budget, so the output is limit + footer (~106 units).
-// It has to be - a footer paid for out of the budget would eat the body in order to explain itself,
-// and at a small limit would crowd it out entirely. Anything downstream sizing a buffer off this
-// constant must add the footer.
-// Deterministic thousands grouping. `toLocaleString()` was locale-DEPENDENT - 64,000 / 64.000 /
-// 64 000 on en-US / de-DE / fr-FR - and this string is PERSISTED into the task description and then
-// compared for drift on every sync. Two machines with different locales would each see the other's
-// footer as a change and rewrite every truncated task, forever. Grouping by regex rather than a
-// fixed-locale `toLocaleString("en-US")` also drops the dependency on which ICU build Node has.
-// Slicing at a fixed UTF-16 index can retain a LONE HIGH SURROGATE when an astral character (an
-// emoji, most CJK extension B) straddles the boundary. That is ill-formed text: it renders as a
-// replacement glyph, and because this string is PERSISTED it corrupts every later comparison of
-// it. Dropping the orphan costs at most one code unit and is always safe.
-// Tested by charCode rather than a regex so the surrogate range is stated once, in numbers.
-const HIGH_SURROGATE_LO = 0xD800;
-const HIGH_SURROGATE_HI = 0xDBFF;
-const sliceWholeChars = (s, n) => {
-  const cut = s.slice(0, n);
-  if (cut.length === 0) return cut;
-  const last = cut.charCodeAt(cut.length - 1);
-  return last >= HIGH_SURROGATE_LO && last <= HIGH_SURROGATE_HI ? cut.slice(0, -1) : cut;
-};
+const utf8Bytes = (value) => Buffer.byteLength(value, "utf8");
+const serializedUtf8Bytes = (value) => utf8Bytes(JSON.stringify(String(value)));
+const OPEN_FENCE_LINE = /^ {0,3}(`{3,}|~{3,})(.*)$/;
+const CLOSE_FENCE_LINE = /^ {0,3}(`{3,}|~{3,})[ \t]*$/;
 
-const groupDigits = (n) => String(n).replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+function unclosedFence(text) {
+  let open = null;
+  for (const line of text.split("\n")) {
+    if (open) {
+      const close = CLOSE_FENCE_LINE.exec(line);
+      const marker = close?.[1];
+      if (marker && marker[0] === open[0] && marker.length >= open.length) open = null;
+      continue;
+    }
+    const opener = OPEN_FENCE_LINE.exec(line);
+    if (!opener) continue;
+    const marker = opener[1];
+    const info = opener[2];
+    if (marker[0] === "`" && info.includes("`")) continue;
+    open = marker;
+  }
+  return open;
+}
 
-function excerptFor(body, url) {
-  if (body.length <= BODY_EXCERPT_LIMIT) return body;
-  const hard = sliceWholeChars(body, BODY_EXCERPT_LIMIT);
-  const nl = hard.lastIndexOf("\n");
-  const kept = nl > BODY_EXCERPT_LIMIT * 0.8 ? hard.slice(0, nl) : hard;
-  const where = url ? `[read the full issue on GitHub](${url})` : "read it on GitHub";
-  return `${kept}
+// Return the longest line-boundary excerpt whose complete rendered value fits maxBytes. Both
+// backtick and tilde fences are recognised; an open retained fence is closed before the prose
+// footer. Recomputing the footer and fence for each candidate charges the caller's exact size.
+function excerptFor(body, maxBytes, footer = TRUNCATION_FOOTER, sizeOf = utf8Bytes) {
+  const source = String(body || "");
+  if (sizeOf(source) <= maxBytes) return source;
 
----
-
-_…truncated at ${groupDigits(kept.length)} of ${groupDigits(body.length)} chars — ${where}_`;
+  const render = (kept) => {
+    const fence = unclosedFence(kept);
+    return `${kept}${fence ? `\n${fence}` : ""}\n\n${footer}`;
+  };
+  let kept = "";
+  let newline = source.indexOf("\n");
+  while (newline !== -1) {
+    const candidate = source.slice(0, newline);
+    if (sizeOf(render(candidate)) > maxBytes) break;
+    kept = candidate;
+    newline = source.indexOf("\n", newline + 1);
+  }
+  return render(kept);
 }
 
 function descriptionFor(issue, linkedPr) {
+  const oversizedHeaderStub = "<!-- kanbanflow-sync -->\n**Issue:** (provenance omitted: header exceeded description budget)\n<!-- /kanbanflow-sync -->";
   const labels = (issue.labels || []).map((l) => l.name).join(", ") || "none";
   const milestone = issue.milestone?.title || "none";
   const lines = [
@@ -539,11 +536,34 @@ function descriptionFor(issue, linkedPr) {
     "<!-- /kanbanflow-sync -->",
     "",
   ];
+  let prefix = `${lines.join("\n")}\n`;
+  if (serializedUtf8Bytes(`${prefix}\n\n${TRUNCATION_FOOTER}`) > BODY_EXCERPT_LIMIT) {
+    return oversizedHeaderStub;
+  }
   const body = String(issue.body || "").trim();
   if (body) {
-    lines.push(excerptFor(body, issue.url));
+    // Charge the complete JSON-serialized description for every candidate. This accounts for
+    // escaping in both the generated prefix and markdown body, rather than treating raw bytes as
+    // though they were the wire representation.
+    const descriptionSize = (candidateBody) => serializedUtf8Bytes(`${prefix}${candidateBody}`);
+    lines.push(excerptFor(body, BODY_EXCERPT_LIMIT, TRUNCATION_FOOTER, descriptionSize));
   }
   return lines.join("\n");
+}
+
+// Issue #495 tracks general description reconciliation. This is intentionally only its narrow,
+// conservative slice: refresh descriptions that still have both our exact generated header shape
+// and our truncation footer. Anything else may contain a human edit and must be left untouched.
+function descriptionRefreshFor(storedDescription, regeneratedDescription) {
+  const stored = String(storedDescription || "");
+  if (!stored.startsWith(SYNC_DESCRIPTION_PREFIX)) return null;
+  if (!stored.trimEnd().endsWith(TRUNCATION_FOOTER)) return null;
+  // `descriptionFor()` stamps the current time. Ignore that one generated field when deciding
+  // whether the body is stale, or a still-truncated large issue would be rewritten on every run.
+  const withoutSyncTime = (value) => value.replace(/^\*\*Synced:\*\* .*$/m, "**Synced:**");
+  return withoutSyncTime(stored) === withoutSyncTime(regeneratedDescription)
+    ? null
+    : regeneratedDescription;
 }
 
 // --- KanbanFlow REST --------------------------------------------------------------------
@@ -568,7 +588,7 @@ async function api(method, path, body) {
 
 const stats = {
   projectsCreated: 0, featuresCreated: 0, tasksCreated: 0,
-  tasksUpdated: 0, tasksMoved: 0, tasksUnchanged: 0,
+  tasksUpdated: 0, tasksMoved: 0, tasksUnchanged: 0, descriptionsRefreshed: 0,
   commentsCreated: 0, commentsUnchanged: 0, commentFetchFailures: 0,
   projectsLinked: 0, issuesPreviewed: 0,
   biggestComment: { chars: 0, author: null, issue: null },
@@ -715,6 +735,8 @@ async function syncTasks(repo, projectId, issues, closedNumbers, prByIssue, feat
     const patch = {};
     if (task.name !== desiredName) patch.name = desiredName;
     if (task.priority !== desiredPriority) patch.priority = desiredPriority;
+    const refreshedDescription = descriptionRefreshFor(task.description, descriptionFor(issue, linkedPr));
+    if (refreshedDescription !== null) patch.description = refreshedDescription;
 
     const closed = issue.state && issue.state.toUpperCase() === "CLOSED";
     if (closed && task.status !== "Done") {
@@ -728,12 +750,16 @@ async function syncTasks(repo, projectId, issues, closedNumbers, prByIssue, feat
     if (Object.keys(patch).length === 0) { stats.tasksUnchanged++; continue; }
 
     plan(dryRun, "update task", `${desiredName}  ${JSON.stringify(patch)}`);
-    if (dryRun) continue;
+    if (dryRun) {
+      if (patch.description !== undefined) stats.descriptionsRefreshed++;
+      continue;
+    }
     // PUT /api/tasks/{id} rejects any payload without `name` — 422 "Name is required."
     // (ApiEndpoints.cs:1451). So `name` always goes on the wire, even when unchanged;
     // `patch` exists only to detect *whether* anything differs and to log what.
     await api("PUT", `/api/tasks/${task.id}`, { ...patch, name: desiredName, actor });
     stats.tasksUpdated++;
+    if (patch.description !== undefined) stats.descriptionsRefreshed++;
   }
 
   // Board tasks whose issue was not in the set we just processed. Two very different cases —
@@ -1249,6 +1275,7 @@ async function main() {
   console.log(`features created: ${stats.featuresCreated}`);
   console.log(`tasks created:    ${stats.tasksCreated}`);
   console.log(`tasks updated:    ${stats.tasksUpdated}`);
+  console.log(`descriptions refreshed: ${stats.descriptionsRefreshed}`);
   console.log(`tasks moved:      ${stats.tasksMoved}`);
   console.log(`tasks unchanged:  ${stats.tasksUnchanged}`);
   if (args.comments) {
@@ -1277,20 +1304,8 @@ async function main() {
   }
 }
 
-// Run only when invoked as the script, not when imported. Without this guard, importing anything
-// from this file to TEST it would fire a live `gh` fetch and mutate the board as a side effect of
-// `node --test`. Every existing CLI invocation still runs main() exactly as before.
-//
-// Lifted verbatim from backlog-sync.mjs, whose comment there explains the two traps this avoids:
-// URL-string comparison is fragile on Windows (drive-letter case, percent-encoding), and the ESM
-// loader resolves `import.meta.url` through a symlink while `process.argv[1]` does not — so a
-// raw-only comparison exits 0 having done nothing, the quietest possible failure.
 function resolvedEntry(p) {
-  try {
-    return realpathSync(resolve(p));
-  } catch {
-    return resolve(p); // argv[1] need not exist on disk; fall back to the raw resolution.
-  }
+  try { return realpathSync(resolve(p)); } catch { return resolve(p); }
 }
 const selfPath = fileURLToPath(import.meta.url);
 const invokedDirectly = Boolean(process.argv[1])
@@ -1303,7 +1318,11 @@ if (invokedDirectly) {
   });
 }
 
-// Exported for `portfolio-sync.test.mjs`. `excerptFor` is the truncation the board's reader sees;
-// `descriptionFor` is the whole mirrored description, exported so a test can assert the marker is
-// absent for a real-sized issue body rather than only that the helper agrees with itself.
-export { excerptFor, descriptionFor, BODY_EXCERPT_LIMIT, groupDigits };
+export {
+  BODY_EXCERPT_LIMIT,
+  MAX_DESCRIPTION_BYTES,
+  commentTextFor,
+  descriptionRefreshFor,
+  descriptionFor,
+  excerptFor,
+};

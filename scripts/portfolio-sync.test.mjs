@@ -1,128 +1,174 @@
-// Pins the description excerpt the board's reader actually sees.
-//
-// The defect these pin: BODY_EXCERPT_LIMIT was 1500. Measured against all 60 issues in this repo
-// the median body is 11,900 chars and the SMALLEST clears 1500 — so 100% of synced cards carried
-// "…(truncated — see the issue)", and the marker meant nothing because it was never absent. The
-// board reported every description as incomplete while being, in the only sense that matters to a
-// reader, complete-able.
-//
-// Run: node --test scripts/
-//
-// Each case loads the module with a cache-busting query so a per-test env limit is actually read
-// at module scope; without the query, Node's ESM cache would hand back the first instance and
-// every limit-dependent assertion would silently test the default.
-
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-const MARKER = /truncated at/;
-const URL_ = "https://github.com/joelfuller2016/KanbanFlow-v2/issues/454";
+const FOOTER = "…(truncated — see the issue)";
 
-async function load(limit) {
+async function load(limit, tag = "test") {
   if (limit === undefined) delete process.env.KANBANFLOW_BODY_EXCERPT_LIMIT;
   else process.env.KANBANFLOW_BODY_EXCERPT_LIMIT = String(limit);
-  return import(`./portfolio-sync.mjs?limit=${limit ?? "default"}`);
+  return import(`./portfolio-sync.mjs?${tag}-${limit ?? "default"}`);
 }
 
-test("a real median-sized issue body is NOT truncated (the #user-visible bug)", async () => {
-  const { excerptFor, BODY_EXCERPT_LIMIT } = await load();
-  // 11,900 = the measured median body across all 60 issues in this repo.
-  const body = "x".repeat(11900);
-  assert.ok(BODY_EXCERPT_LIMIT > 11900, `limit ${BODY_EXCERPT_LIMIT} must clear the median body`);
-  const out = excerptFor(body, URL_);
-  assert.equal(out, body);
-  assert.doesNotMatch(out, MARKER);
+test("a multi-byte body is capped by UTF-8 bytes", async () => {
+  const { excerptFor } = await load(undefined, "multibyte");
+  const budget = 160;
+  const body = Array.from({ length: 12 }, (_, i) => `第${i}行：漢字漢字漢字`).join("\n");
+  assert.ok(body.length < budget, "fixture must fit by UTF-16 units so .length would fail this test");
+  const output = excerptFor(body, budget);
+  assert.ok(Buffer.byteLength(output, "utf8") <= budget);
+  assert.match(output, /truncated/);
 });
 
-test("the largest body in the portfolio (21,057) is NOT truncated", async () => {
-  const { excerptFor } = await load();
-  const body = "y".repeat(21057);
-  assert.equal(excerptFor(body, URL_), body);
+test("--max-comment-chars truncates multi-byte comments by characters, not UTF-8 bytes", async () => {
+  const { commentTextFor } = await load(undefined, "multibyte-comment-chars");
+  const firstLine = "漢字漢字漢字漢字漢字";
+  const comment = {
+    ghId: "IC_multibyte",
+    header: "**octocat** commented:",
+    body: `${firstLine}\n${"続".repeat(60)}`,
+  };
+  const output = commentTextFor(comment, 50);
+  const mirroredBody = output.slice(output.indexOf("\n\n") + 2);
+
+  assert.equal(mirroredBody, `${firstLine}\n\n…(truncated — read it on GitHub)`);
+  assert.ok(mirroredBody.length <= 50);
+  assert.ok(Buffer.byteLength(mirroredBody, "utf8") > 50,
+    "fixture must exceed the byte budget so reverting the call site to byte counting fails");
 });
 
-// NON-VACUITY CONTROL. Every assertion above is an ABSENCE check, and an absence check passes
-// against a function that returns "" — or against a marker regex that matches nothing. This case
-// proves the same regex DOES fire on the same helper, so the absences above are informative.
-test("control: the marker still fires when the body genuinely exceeds the limit", async () => {
-  const { excerptFor } = await load(100);
-  const out = excerptFor("z".repeat(500), URL_);
-  assert.match(out, MARKER);
-  assert.match(out, /read the full issue on GitHub/);
-  assert.ok(out.includes(URL_), "the marker must name where the rest is");
-  assert.ok(out.length > 0);
+test("an ASCII body near the byte boundary is not truncated unnecessarily", async () => {
+  const { excerptFor } = await load(undefined, "ascii");
+  const body = "a".repeat(200);
+  assert.equal(excerptFor(body, 200), body);
 });
 
-test("the cut lands on a line boundary, not mid-line", async () => {
-  const { excerptFor } = await load(100);
-  const body = Array.from({ length: 40 }, (_, i) => `line ${i} ${"-".repeat(10)}`).join("\n");
-  const kept = excerptFor(body, URL_).split("\n\n---\n\n")[0];
-  // Every retained line is a WHOLE line of the original: no half-open fence, no split table row.
-  const originals = new Set(body.split("\n"));
-  for (const l of kept.split("\n")) assert.ok(originals.has(l), `partial line: ${JSON.stringify(l)}`);
+test("truncation inside a fenced code block closes the fence before the prose footer", async () => {
+  const { excerptFor } = await load(undefined, "fence");
+  const body = `intro\n\`\`\`js\n${"const value = 1;\n".repeat(30)}\`\`\``;
+  const output = excerptFor(body, 180);
+  const fences = output.match(/^```/gm) || [];
+  assert.equal(fences.length % 2, 0, "backtick fences must be balanced");
+  assert.ok(output.lastIndexOf("```") < output.lastIndexOf(FOOTER), "footer must follow the closing fence");
 });
 
-test("the cap stays absolute when a single line exceeds it", async () => {
-  const { excerptFor } = await load(100);
-  const body = "q".repeat(500); // one line, no boundary to cut on
-  const kept = excerptFor(body, URL_).split("\n\n---\n\n")[0];
-  assert.equal(kept.length, 100, "must fall back to the hard slice rather than keep the whole line");
+test("truncation inside a tilde-fenced code block closes the fence before the prose footer", async () => {
+  const { excerptFor } = await load(undefined, "tilde-fence");
+  const body = `intro\n~~~~js\n${"const value = 1;\n".repeat(30)}~~~~`;
+  const output = excerptFor(body, 180);
+  const fences = output.match(/^~~~~(?:js)?$/gm) || [];
+  assert.equal(fences.length, 2, "tilde fence opener and generated closer must both be present");
+  assert.ok(output.lastIndexOf("~~~~") < output.lastIndexOf(FOOTER), "footer must follow the tilde closer");
 });
 
-test("descriptionFor emits no truncation marker for a real-sized body", async () => {
-  const { descriptionFor } = await load();
-  const issue = { url: URL_, state: "OPEN", body: "b".repeat(11900), labels: [], milestone: null };
-  const out = descriptionFor(issue, null);
-  assert.doesNotMatch(out, MARKER);
-  assert.ok(out.includes("b".repeat(11900)), "the whole body must reach the board");
+test("a closing fence cannot carry an info string", async () => {
+  const { excerptFor } = await load(undefined, "invalid-fence-close");
+  const body = `intro\n\`\`\`js\nkept\n\`\`\`not-a-close\n${"more code\n".repeat(30)}`;
+  const output = excerptFor(body, 160);
+  assert.match(output, /^```not-a-close$/m, "the invalid closer must be retained in the fixture excerpt");
+  assert.match(output, /\n```\n\n…\(truncated — see the issue\)$/, "an actual closing fence must be added before the footer");
 });
 
-// ── The truncation footer is PERSISTED into a task description, so it must be locale-STABLE ────
-// Review catch: `toLocaleString()` yields 64,000 / 64.000 / 64 000 on en-US / de-DE / fr-FR. Two
-// machines syncing the same board would write different bytes for the same body, and any future
-// comparison of descriptions (see the follow-up issue on reconciliation) would read that as a
-// change. Deterministic here costs nothing and removes the trap before it is laid.
-test("digit grouping is deterministic, not locale-dependent", async () => {
-  const { groupDigits } = await load();
-  assert.equal(groupDigits(64000), "64,000");
-  assert.equal(groupDigits(21057), "21,057");
-  assert.equal(groupDigits(999), "999");
-  assert.equal(groupDigits(1000), "1,000");
-  assert.equal(groupDigits(1234567), "1,234,567");
-  assert.equal(groupDigits(0), "0");
-
-  // The property that actually matters: identical to what a de-DE machine produces here.
-  // toLocaleString would NOT satisfy this.
-  assert.equal(groupDigits(64000), (64000).toLocaleString("en-US"));
-  assert.notEqual((64000).toLocaleString("de-DE"), groupDigits(64000));
+test("truncation outside a fence still cuts on a line boundary", async () => {
+  const { excerptFor } = await load(undefined, "line");
+  const body = Array.from({ length: 30 }, (_, i) => `whole line ${i}`).join("\n");
+  const output = excerptFor(body, 150);
+  const kept = output.slice(0, output.indexOf(`\n\n${FOOTER}`));
+  assert.ok(body.split("\n").includes(kept.split("\n").at(-1)), "last retained line must be whole");
+  assert.ok(!kept.endsWith("\n"));
 });
 
-// An astral character straddling the cut used to leave a lone high surrogate - ill-formed text that
-// renders as a replacement glyph and, because the description is persisted, poisons every later
-// comparison of it. Found by an independent review pass, not by the tests above.
-test("truncation never splits a surrogate pair", async () => {
-  const { excerptFor } = await load(100);
-  const emoji = String.fromCodePoint(0x1F600);       // one astral char, two UTF-16 units
-  const body = "a".repeat(99) + emoji + "z".repeat(50);
-
-  // Non-vacuity: the naive slice at this boundary IS ill-formed, so a pass below means the guard
-  // acted rather than that the fixture was harmless.
-  assert.equal(body.slice(0, 100).isWellFormed(), false, "fixture must straddle the boundary");
-
-  const kept = excerptFor(body, "https://github.com/o/r/issues/1").split("\n\n---\n\n")[0];
-  assert.ok(kept.isWellFormed(), "excerpt must not end in a lone surrogate");
-  assert.equal(kept.length, 99, "the orphaned high surrogate is dropped, costing one unit");
+test("the environment override is clamped at both ends and cannot exceed the safe maximum", async () => {
+  const high = await load(Number.MAX_SAFE_INTEGER, "high-clamp");
+  const low = await load(-100, "low-clamp");
+  assert.equal(high.BODY_EXCERPT_LIMIT, high.MAX_DESCRIPTION_BYTES);
+  assert.equal(low.BODY_EXCERPT_LIMIT, 1_024);
+  assert.ok(high.BODY_EXCERPT_LIMIT < 32_768);
 });
 
-// BODY_EXCERPT_LIMIT budgets the SOURCE BODY, not the returned string: the footer is appended after
-// the budget. Pinned so the "absolute cap" reading cannot creep back into a comment or a test name.
-test("the limit budgets the retained body, and the footer is charged on top", async () => {
-  const { excerptFor, BODY_EXCERPT_LIMIT } = await load(100);
-  assert.equal(BODY_EXCERPT_LIMIT, 100);
+test("the complete mirrored description, including header and footer, stays within its frame budget", async () => {
+  const { descriptionFor, BODY_EXCERPT_LIMIT } = await load(undefined, "description");
+  const issue = {
+    url: "https://github.com/owner/repository/issues/488",
+    state: "OPEN",
+    milestone: { title: "M1" },
+    labels: [{ name: "bug" }],
+    body: Array.from({ length: 4000 }, (_, i) => `line ${i} plain ASCII`).join("\n"),
+  };
+  const output = descriptionFor(issue, null);
+  assert.ok(Buffer.byteLength(JSON.stringify(output), "utf8") <= BODY_EXCERPT_LIMIT);
+  assert.match(output, /truncated/);
+});
 
-  const out = excerptFor("x".repeat(500), "https://github.com/o/r/issues/1");
-  const kept = out.split("\n\n---\n\n")[0];
+test("a newline-dense body is capped by its JSON-serialized size, not its raw size", async () => {
+  const { descriptionFor, BODY_EXCERPT_LIMIT } = await load(undefined, "serialized-description");
+  const issue = {
+    url: "https://github.com/owner/repository/issues/489",
+    state: "OPEN",
+    labels: [],
+    body: Array.from({ length: 14_000 }, () => "x").join("\n"),
+  };
+  assert.ok(Buffer.byteLength(issue.body, "utf8") < BODY_EXCERPT_LIMIT, "raw fixture must fit the old budget");
+  assert.ok(Buffer.byteLength(JSON.stringify(issue.body), "utf8") > BODY_EXCERPT_LIMIT, "serialized fixture must exceed it");
+  const output = descriptionFor(issue, null);
+  assert.ok(Buffer.byteLength(JSON.stringify(output), "utf8") <= BODY_EXCERPT_LIMIT);
+  assert.match(output, /truncated/);
+});
 
-  assert.equal(kept.length, 100, "retained body is exactly the budget");
-  assert.ok(out.length > BODY_EXCERPT_LIMIT, "the returned string is deliberately longer");
-  assert.ok(out.length < BODY_EXCERPT_LIMIT + 200, "and the footer is bounded, not open-ended");
+test("an oversized provenance header is replaced by a bounded sync stub", async () => {
+  const { descriptionFor, BODY_EXCERPT_LIMIT } = await load(undefined, "oversized-header");
+  const issue = {
+    url: "https://github.com/owner/repository/issues/490",
+    state: "OPEN",
+    labels: [{ name: "x".repeat(BODY_EXCERPT_LIMIT + 1_000) }],
+    body: "",
+  };
+  const output = descriptionFor(issue, null);
+  assert.ok(Buffer.byteLength(JSON.stringify(output), "utf8") <= BODY_EXCERPT_LIMIT);
+  assert.match(output, /^<!-- kanbanflow-sync -->/);
+  assert.match(output, /provenance omitted/);
+});
+
+const syncDescription = (body) => `<!-- kanbanflow-sync -->
+**Issue:** https://github.com/owner/repository/issues/488
+**State:** OPEN · **Milestone:** M1 · **Labels:** bug
+**Open PR:** none
+**Synced:** 2026-08-30T12:00:00.000Z
+<!-- /kanbanflow-sync -->
+
+${body}`;
+
+test("a sync-shaped, still-truncated description is selected for refresh", async () => {
+  const { descriptionRefreshFor } = await load(undefined, "refresh-truncated");
+  const stored = syncDescription(`old excerpt\n\n${FOOTER}`);
+  const regenerated = syncDescription("complete current body");
+  assert.equal(descriptionRefreshFor(stored, regenerated), regenerated);
+});
+
+test("a sync-shaped description without the truncation marker is not refreshed", async () => {
+  const { descriptionRefreshFor } = await load(undefined, "refresh-untruncated");
+  assert.equal(descriptionRefreshFor(syncDescription("complete old body"), syncDescription("complete new body")), null);
+});
+
+test("a human-edited description with the sync header but no marker is never overwritten", async () => {
+  const { descriptionRefreshFor } = await load(undefined, "refresh-human-edit");
+  const humanEdit = syncDescription("Human rewrite: preserve this decision and its rationale.");
+  assert.equal(descriptionRefreshFor(humanEdit, syncDescription("GitHub's current issue body")), null);
+});
+
+test("a truncated description that regenerates identically produces no write", async () => {
+  const { descriptionRefreshFor } = await load(undefined, "refresh-identical");
+  const identical = syncDescription(`same excerpt\n\n${FOOTER}`);
+  assert.equal(descriptionRefreshFor(identical, identical), null);
+});
+
+test("a sync timestamp change alone does not rewrite a still-truncated description", async () => {
+  const { descriptionRefreshFor } = await load(undefined, "refresh-timestamp-only");
+  const stored = syncDescription(`same excerpt\n\n${FOOTER}`);
+  const regenerated = stored.replace("2026-08-30T12:00:00.000Z", "2026-08-30T12:01:00.000Z");
+  assert.equal(descriptionRefreshFor(stored, regenerated), null);
+});
+
+test("a non-sync description with copied truncation text is not refreshed", async () => {
+  const { descriptionRefreshFor } = await load(undefined, "refresh-nonsync");
+  assert.equal(descriptionRefreshFor(`human notes\n\n${FOOTER}`, syncDescription("new body")), null);
 });

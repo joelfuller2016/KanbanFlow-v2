@@ -76,7 +76,7 @@ public static class ClaimPolicy
     /// True when a claim should be treated as abandoned.
     /// </summary>
     /// <param name="claimedBy">The current holder, or null/blank when unclaimed.</param>
-    /// <param name="claimedAt">When the claim was taken. UTC.</param>
+    /// <param name="claimedAt">When the claim was last ASSERTED -- taken or renewed (#443). UTC.</param>
     /// <param name="now">The current time. UTC. Injected so tests need not sleep.</param>
     /// <param name="ttl">How long a claim remains fresh.</param>
     /// <returns>
