@@ -353,4 +353,24 @@ public sealed class MirroredDescriptionTests
         Assert.Equal("#454", MirroredDescription.IssueLabel(body));
         Assert.Equal("GitHub issue #454 (opens in a new tab)", MirroredDescription.IssueAriaLabel(body));
     }
+
+    // `SyncBlockRe` accepts `<!--\s*kanbanflow-sync\s*-->`, which covers no-space and tab variants
+    // that the old literal Contains check missed. A variant opener whose closing marker falls outside
+    // the scan window must still return null — the guard must match the regex, not a hand-picked literal.
+    [Theory]
+    [InlineData("<!--kanbanflow-sync-->")]
+    [InlineData("<!--\tkanbanflow-sync -->")]
+    public void Excerpt_RefusesWhitespaceVariantOpenersWhoseCloseFallsBeyondTheScanBound(string opener)
+    {
+        var unterminated = opener + "\n"
+            + "**Issue:** https://github.com/joelfuller2016/KanbanFlow-v2/issues/454\n"
+            + "**Labels:** " + new string('p', MirroredDescription.ScanChars) + "\n"
+            + "<!-- /kanbanflow-sync -->\n\nbody";
+
+        Assert.True(
+            unterminated.IndexOf("<!-- /kanbanflow-sync -->", StringComparison.Ordinal)
+                > MirroredDescription.ScanChars,
+            "the closing marker must sit beyond the bound or this proves nothing");
+        Assert.Null(MirroredDescription.Excerpt(unterminated));
+    }
 }
