@@ -48,6 +48,14 @@ public static class MirroredDescription
         @"<!--\s*kanbanflow-sync\s*-->.*?<!--\s*/kanbanflow-sync\s*-->",
         RegexOptions.Singleline | RegexOptions.Compiled);
 
+    // Must stay the OPENING half of SyncBlockRe verbatim. The guard in Excerpt() previously used
+    // the literal "<!-- kanbanflow-sync", which misses "<!--kanbanflow-sync-->" (no spaces) — any
+    // form SyncBlockRe accepts but the literal string does not, meaning Excerpt() could proceed to
+    // SyncBlockRe.Replace on a block it thought was absent.
+    private static readonly Regex SyncOpenRe = new(
+        @"<!--\s*kanbanflow-sync\s*-->",
+        RegexOptions.Compiled);
+
     private static readonly Regex IssueUrlRe = new(
         @"\*\*Issue:\*\*\s*(?<u>https://github\.com/[^\s)<]+)",
         RegexOptions.Compiled);
@@ -121,9 +129,11 @@ public static class MirroredDescription
     /// number the reader can quote; <c>"GitHub"</c> when the URL points at something else (a repo,
     /// a discussion), and <c>null</c> when the description is not a mirror at all.
     /// </summary>
-    public static string? IssueLabel(string? description)
+    public static string? IssueLabel(string? description) => LabelForUrl(IssueUrl(description));
+
+    /// <summary>The label for an already-resolved issue URL. See <see cref="IssueLabel"/>.</summary>
+    public static string? LabelForUrl(string? url)
     {
-        var url = IssueUrl(description);
         if (url is null) return null;
         // Strip a fragment, a query and any trailing slash before reading the number. Without this
         // `.../issues/123#issuecomment-4`, `.../issues/123?x=y` and `.../issues/123/` all fell
@@ -145,14 +155,14 @@ public static class MirroredDescription
     /// this exact treatment for its issue and PR buttons — two different phrasings for the same
     /// affordance would be worse than either one alone.
     /// </remarks>
-    public static string? IssueAriaLabel(string? description)
-    {
-        var label = IssueLabel(description);
-        if (label is null) return null;
-        return label.StartsWith('#')
+    public static string? IssueAriaLabel(string? description) => AriaLabelForLabel(IssueLabel(description));
+
+    /// <summary>The aria label for an already-resolved label. See <see cref="IssueAriaLabel"/>.</summary>
+    public static string? AriaLabelForLabel(string? label) => label is null
+        ? null
+        : label.StartsWith('#')
             ? $"GitHub issue {label} (opens in a new tab)"
             : "View on GitHub (opens in a new tab)";
-    }
 
     /// <summary>
     /// The description's opening text as a single plain-text line: sync header removed, leading
@@ -171,7 +181,7 @@ public static class MirroredDescription
         // excerpted straight onto the card. IssueUrl already refuses that case; this one silently
         // rendered it. Latent today (the largest header measured across 320 issues is 296 chars
         // against a 4,096 window) but it is the failure this class exists to prevent.
-        if (head.Contains("<!-- kanbanflow-sync", StringComparison.Ordinal) && !SyncBlockRe.IsMatch(head))
+        if (SyncOpenRe.IsMatch(head) && !SyncBlockRe.IsMatch(head))
         {
             return null;
         }

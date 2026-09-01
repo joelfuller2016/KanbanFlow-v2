@@ -103,11 +103,11 @@
     // per card per render, and the board holds 185 cards. `BoardFilterBar` binds `@oninput` with no
     // debounce and there is no `Virtualize`, so a filter keystroke re-renders every card on the
     // circuit's synchronization context — the cost multiplies by every character typed.
-    private string? issueUrl;
-    private string? issueLabel;
-    private string? issueAriaLabel;
-    private string? excerpt;
-    private bool hasReveal;
+    private string? IssueUrl;
+    private string? IssueLabel;
+    private string? IssueAriaLabel;
+    private string? Excerpt;
+    private bool HasReveal;
     private string? parsedFrom;
     private bool parsedOnce;
 
@@ -120,18 +120,12 @@
 
         parsedFrom = Task.Description;
         parsedOnce = true;
-        issueUrl = MirroredDescription.IssueUrl(Task.Description);
-        issueLabel = MirroredDescription.IssueLabel(Task.Description);
-        issueAriaLabel = MirroredDescription.IssueAriaLabel(Task.Description);
-        excerpt = MirroredDescription.Excerpt(Task.Description);
-        hasReveal = issueUrl is not null || !string.IsNullOrWhiteSpace(excerpt);
+        IssueUrl = MirroredDescription.IssueUrl(Task.Description);
+        IssueLabel = MirroredDescription.LabelForUrl(IssueUrl);
+        IssueAriaLabel = MirroredDescription.AriaLabelForLabel(IssueLabel);
+        Excerpt = MirroredDescription.Excerpt(Task.Description);
+        HasReveal = IssueUrl is not null || !string.IsNullOrWhiteSpace(Excerpt);
     }
-
-    private string? IssueUrl => issueUrl;
-    private string? IssueLabel => issueLabel;
-    private string? IssueAriaLabel => issueAriaLabel;
-    private string? Excerpt => excerpt;
-    private bool HasReveal => hasReveal;
 
     private static string GetPriorityBadgeClass(TaskPriority priority) => priority switch
     {

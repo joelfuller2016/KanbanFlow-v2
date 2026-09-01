@@ -294,4 +294,63 @@ public sealed class MirroredDescriptionTests
 
         Assert.Equal("GitHub", MirroredDescription.IssueLabel(repoLink));
     }
+
+    // The guard in Excerpt() exists to catch an opening marker whose CLOSING marker falls outside
+    // the scan window. Without it, SyncBlockRe.Replace matches nothing and the raw header —
+    // marker, URL, milestone, labels, timestamp — leaks into the excerpt. Deleting the guard left
+    // the suite green before this test was added.
+    [Fact]
+    public void Excerpt_RefusesASyncBlockWhoseCloseFallsBeyondTheScanBound()
+    {
+        var unterminated = "<!-- kanbanflow-sync -->\n"
+            + "**Issue:** https://github.com/joelfuller2016/KanbanFlow-v2/issues/454\n"
+            + "**Labels:** " + new string('p', MirroredDescription.ScanChars) + "\n"
+            + "<!-- /kanbanflow-sync -->\n\nbody";
+
+        // Non-vacuity: the closing marker really is beyond the bound, and a terminated block does excerpt.
+        Assert.True(
+            unterminated.IndexOf("<!-- /kanbanflow-sync -->", StringComparison.Ordinal)
+                > MirroredDescription.ScanChars,
+            "the closing marker must sit beyond the bound or this proves nothing");
+        Assert.StartsWith("1. Surfaced by", MirroredDescription.Excerpt(MirroredFixture));
+
+        Assert.Null(MirroredDescription.Excerpt(unterminated));
+    }
+
+    // A URL written at the end of a sentence carries the stop into the match, and the href 404s on
+    // GitHub. The TrimEnd in IssueUrl strips it before the link is used.
+    [Theory]
+    [InlineData(".")]
+    [InlineData(",")]
+    [InlineData(";")]
+    [InlineData(":")]
+    public void IssueUrl_DropsATrailingSentenceStop(string stop)
+    {
+        var body = "<!-- kanbanflow-sync -->\n"
+            + "**Issue:** https://github.com/joelfuller2016/KanbanFlow-v2/issues/454" + stop + "\n"
+            + "**State:** OPEN\n"
+            + "<!-- /kanbanflow-sync -->\n\nbody text";
+
+        Assert.Equal(
+            "https://github.com/joelfuller2016/KanbanFlow-v2/issues/454",
+            MirroredDescription.IssueUrl(body));
+        Assert.Equal("#454", MirroredDescription.IssueLabel(body));
+    }
+
+    // Without fragment/query/trailing-slash normalisation these all fell through to the unnumbered
+    // "GitHub" label despite naming a perfectly good issue.
+    [Theory]
+    [InlineData("#issuecomment-4")]
+    [InlineData("?utm_source=x")]
+    [InlineData("/")]
+    public void IssueLabel_ReadsTheNumberThroughFragmentsQueriesAndTrailingSlashes(string suffix)
+    {
+        var body = "<!-- kanbanflow-sync -->\n"
+            + "**Issue:** https://github.com/joelfuller2016/KanbanFlow-v2/issues/454" + suffix + "\n"
+            + "**State:** OPEN\n"
+            + "<!-- /kanbanflow-sync -->\n\nbody text";
+
+        Assert.Equal("#454", MirroredDescription.IssueLabel(body));
+        Assert.Equal("GitHub issue #454 (opens in a new tab)", MirroredDescription.IssueAriaLabel(body));
+    }
 }
