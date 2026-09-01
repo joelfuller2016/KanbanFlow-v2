@@ -1580,3 +1580,25 @@ body:has(.kanban-ghost) .board-card .board-card-title {
     }
 }
 
+/* ── Touch / no-hover devices ─────────────────────────────────────────────────────────────────── */
+/* On (hover: none) browsers the reveal is permanently open: hover is unavailable and a tap on the
+   title both opens the detail panel and kills :focus-within in the same interaction, so the user
+   has no pointer path to the excerpt or GitHub link. Keeping the reveal at rest shows the same
+   information without requiring an interaction that cannot be performed.
+   The `body:has(.kanban-ghost)` drag-suppression rules above have (0,4,1) specificity and still
+   win when a drag begins, so the excerpt and link correctly hide during drags here too. */
+@media (hover: none) {
+    .board-card-reveal {
+        grid-template-rows: 1fr;
+        opacity: 1;
+        transition: none;
+    }
+
+    /* 24px minimum touch target (WCAG 2.5.5). The resting card now always shows this link, so
+       its tap area must be reachable. Current computed height without this rule is ~17px. */
+    .board-card-gh {
+        min-height: 24px;
+        padding: .2rem .4rem;
+    }
+}
+

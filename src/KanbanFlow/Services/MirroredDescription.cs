@@ -44,16 +44,20 @@ public static class MirroredDescription
     /// <summary>Longest excerpt <see cref="Excerpt"/> emits before eliding.</summary>
     public const int ExcerptMaxLength = 180;
 
+    // \A\s* anchors both patterns to the start of the description, allowing only intended leading
+    // whitespace. Without the anchor, any balanced <!-- kanbanflow-sync --> block quoted anywhere
+    // in the first ScanChars of a hand-written description would be treated as owned metadata —
+    // IssueUrl() would return the quoted URL and Excerpt() would strip the quoted text.
     private static readonly Regex SyncBlockRe = new(
-        @"<!--\s*kanbanflow-sync\s*-->.*?<!--\s*/kanbanflow-sync\s*-->",
+        @"\A\s*<!--\s*kanbanflow-sync\s*-->.*?<!--\s*/kanbanflow-sync\s*-->",
         RegexOptions.Singleline | RegexOptions.Compiled);
 
-    // Must stay the OPENING half of SyncBlockRe verbatim. The guard in Excerpt() previously used
-    // the literal "<!-- kanbanflow-sync", which misses "<!--kanbanflow-sync-->" (no spaces) — any
-    // form SyncBlockRe accepts but the literal string does not, meaning Excerpt() could proceed to
-    // SyncBlockRe.Replace on a block it thought was absent.
+    // Must stay the OPENING half of SyncBlockRe verbatim (same anchor, same whitespace class).
+    // The guard in Excerpt() previously used the literal "<!-- kanbanflow-sync", which missed
+    // "<!--kanbanflow-sync-->" (no spaces). Derived from the shared pattern so the guard cannot
+    // drift from what SyncBlockRe accepts.
     private static readonly Regex SyncOpenRe = new(
-        @"<!--\s*kanbanflow-sync\s*-->",
+        @"\A\s*<!--\s*kanbanflow-sync\s*-->",
         RegexOptions.Compiled);
 
     private static readonly Regex IssueUrlRe = new(

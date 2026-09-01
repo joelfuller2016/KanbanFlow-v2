@@ -15,6 +15,7 @@
                         class="btn btn-link fw-medium small text-start p-0 text-decoration-none text-reset flex-grow-1 board-card-title @(IsDone ? "text-decoration-line-through text-muted" : "")"
                         @onclick="() => OnOpenTaskDetail.InvokeAsync(Task)"
                         @onclick:stopPropagation="true"
+                        title="@Task.Name"
                         aria-label="Open task details for @Task.Name"
                         data-testid="board-card-@Task.Id-title">@Task.Name</button>
                 @if (HasIncompleteBlockers)

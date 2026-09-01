@@ -354,6 +354,30 @@ public sealed class MirroredDescriptionTests
         Assert.Equal("GitHub issue #454 (opens in a new tab)", MirroredDescription.IssueAriaLabel(body));
     }
 
+    // Both SyncBlockRe and SyncOpenRe are anchored with \A\s*, so a balanced <!-- kanbanflow-sync -->
+    // block quoted anywhere in the body of a hand-written task is NOT treated as owned metadata.
+    // Without anchoring, IssueUrl() would return the quoted URL and Excerpt() would strip the quoted
+    // text — contradicting the comments that call the block an ownership envelope.
+    [Fact]
+    public void IssueUrl_RejectsAQuotedSyncBlockInBodyText()
+    {
+        const string quotedBlock =
+            "<!-- kanbanflow-sync -->\n"
+            + "**Issue:** https://github.com/joelfuller2016/KanbanFlow-v2/issues/999\n"
+            + "**State:** OPEN\n"
+            + "<!-- /kanbanflow-sync -->";
+        var body = "This task documents the sync format.\n\n" + quotedBlock + "\n\nThe block above is an example only.";
+
+        Assert.Null(MirroredDescription.IssueUrl(body));
+        Assert.Null(MirroredDescription.IssueLabel(body));
+        // Excerpt should open with the preamble text rather than be null. The raw block text
+        // (comment markers, URL) is not stripped from the excerpt — Excerpt() only removes
+        // the owned block at the START; the key guarantee is that no GitHub link is shown.
+        var excerpt = MirroredDescription.Excerpt(body);
+        Assert.NotNull(excerpt);
+        Assert.StartsWith("This task documents the sync format", excerpt);
+    }
+
     // `SyncBlockRe` accepts `<!--\s*kanbanflow-sync\s*-->`, which covers no-space and tab variants
     // that the old literal Contains check missed. A variant opener whose closing marker falls outside
     // the scan window must still return null — the guard must match the regex, not a hand-picked literal.
