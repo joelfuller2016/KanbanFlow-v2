@@ -52,6 +52,7 @@ async function nativeMcpTool(name, args) {
   const requestId = ++mcpRequestId;
   const res = await fetch(`${baseUrl}/mcp`, {
     method: "POST",
+    signal: AbortSignal.timeout(10_000),
     headers: {
       "content-type": "application/json",
       accept: "application/json, text/event-stream",
@@ -2631,8 +2632,10 @@ async function main() {
 
       await page.goto(`${baseUrl}/project/${proj.id}`);
       await page.locator(card).waitFor({ state: "visible" });
-      await page.locator(`[data-testid="${openerTestid}"]`).click();
-      await page.locator(panel).waitFor({ state: "visible" });
+      await clickUntil(
+        () => page.locator(`[data-testid="${openerTestid}"]`).click(),
+        page.locator(panel)
+      );
 
       const opened = await probeDialogFocus(page, panel);
       assert(opened.count >= 2,
