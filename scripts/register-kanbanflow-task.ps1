@@ -621,6 +621,9 @@ try {
     if ($resolvedDb -match '"') {
         throw "The database path contains a double-quote character and cannot be pinned into the task action: $resolvedDb"
     }
+    if ($listenUrl -match '"') {
+        throw "The resolved health URL contains a double-quote character and cannot be pinned into the task action: $listenUrl"
+    }
 
     # -ExecutionPolicy Bypass so the task does not die on a machine whose user policy is Restricted
     # -- a scheduled task has no console to prompt at, so a policy block there is a silent failure.
