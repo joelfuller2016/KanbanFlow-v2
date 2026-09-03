@@ -1512,13 +1512,16 @@ body:has(.kanban-ghost) .board-card .board-card-title {
 }
 
 /* ── The reveal's own content ─────────────────────────────────────────────────────────────────── */
-/* `pt-` on the inner rather than margin on the children: a margin would collapse through the zero
-   height row and leave a few pixels of the panel visible while it is supposed to be shut. */
-.board-card-reveal-inner {
-    /* overflow:hidden above clips descendants' outlines. The GitHub link is the one keyboard-only
-       affordance on the card: without padding on all sides its :focus-visible ring is shaved on the
-       left and bottom. 3px clears the widest default ring. The inward outline on .board-card-gh
-       works in concert with this to keep the ring inside the clipping boundary. */
+/* Padding belongs on the content wrapper, not the grid item (.board-card-reveal-inner). The grid
+   item is the direct child of the 0fr/1fr track: padding on the grid item contributes to its
+   block-axis minimum, so the collapsed track retains ~8-9px even when grid-template-rows is 0fr.
+   Moving padding to the child (.board-card-reveal-content) lets the item's content box reach 0
+   while keeping the visible padding when the panel is open. */
+.board-card-reveal-content {
+    /* overflow:hidden on the parent clips descendants' outlines. The GitHub link is the one
+       keyboard-only affordance on the card: without padding on all sides its :focus-visible ring is
+       shaved on the left and bottom. 3px clears the widest default ring. The inward outline on
+       .board-card-gh works in concert with this to keep the ring inside the clipping boundary. */
     padding: .35rem 3px 3px;
 }
 

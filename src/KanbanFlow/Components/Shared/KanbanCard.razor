@@ -49,6 +49,7 @@
         {
             <div class="board-card-reveal">
                 <div class="board-card-reveal-inner">
+                    <div class="board-card-reveal-content">
                     @if (!string.IsNullOrWhiteSpace(Excerpt))
                     {
                         <p class="board-card-excerpt mb-1" data-testid="board-card-@Task.Id-excerpt">@Excerpt</p>
@@ -65,6 +66,7 @@
                             <span>@IssueLabel</span>
                         </a>
                     }
+                    </div>
                 </div>
             </div>
         }
