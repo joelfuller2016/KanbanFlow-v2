@@ -423,6 +423,13 @@ function New-BarrierRelease($Run) {
     New-Item -ItemType File -Path $Run.ReleasePath -ErrorAction Stop | Out-Null
 }
 
+function Stop-BarrierProcess($Run, [int]$TimeoutSeconds = 10) {
+    Stop-Process -Id $Run.Process.Id -Force
+    if (-not $Run.Process.WaitForExit($TimeoutSeconds * 1000)) {
+        throw "Killed Node creator $($Run.Process.Id) did not exit within $TimeoutSeconds second(s); refusing to assert against a live writer."
+    }
+}
+
 function Wait-ProcessResult($Run, [int]$TimeoutSeconds = 120) {
     if (-not $Run.Process.WaitForExit($TimeoutSeconds * 1000)) {
         throw "Timed out waiting for Node creator $($Run.Process.Id)."
@@ -604,8 +611,7 @@ function New-NeedsReviewWithoutGitHubCreate([int]$TaskId, [string]$Scenario) {
     $run = Start-BarrierPush $TaskId $Scenario "AfterDispatch"
     $signal = Wait-BarrierSignal $run
     Assert-Condition ($signal.phase -eq "after-dispatch-before-github-create") "$Scenario did not stop after dispatch and before GitHub create."
-    Stop-Process -Id $run.Process.Id -Force
-    Wait-Process -Id $run.Process.Id -Timeout 10 -ErrorAction SilentlyContinue
+    Stop-BarrierProcess $run
     $operation = Invoke-KfJson "GET" "/api/external-write-operations/$($signal.operationId)"
     Assert-Condition ($operation.state -eq "Dispatched") "$Scenario expected Dispatched after kill, got $($operation.state)."
     Assert-Condition ((Get-RawMarkerOccurrenceCount $signal.operationId) -eq 0) "$Scenario unexpectedly reached GitHub before the post-dispatch kill."
@@ -856,8 +862,7 @@ kanbanflow-push : $($malformedNeedsReview.operationId)
         -AdditionalArguments @("--resume", "$($lateAuthorized.operationId)")
     $lateResumeSignal = Wait-BarrierSignal $lateResumeRun
     Assert-Condition ($lateResumeSignal.phase -eq "after-manual-retry-resume-and-scan-before-dispatch") "Late-marker subcase did not stop after authorized Resume plus exhaustive zero scan and before dispatch."
-    Stop-Process -Id $lateResumeRun.Process.Id -Force
-    Wait-Process -Id $lateResumeRun.Process.Id -Timeout 10 -ErrorAction SilentlyContinue
+    Stop-BarrierProcess $lateResumeRun
     $lateAfterResume = Invoke-KfJson "GET" "/api/external-write-operations/$($lateAuthorized.operationId)"
     Assert-Condition ($lateAfterResume.state -eq "ManualRetryAuthorized") "Authorized Resume should preserve ManualRetryAuthorized until evidence-bound dispatch; got $($lateAfterResume.state)."
     Assert-Condition ($lateAfterResume.attemptCount -gt $lateAuthorized.attemptCount) "Authorized Resume did not advance the attempt count."
@@ -889,8 +894,7 @@ kanbanflow-push : $($malformedNeedsReview.operationId)
     $s1Run = Start-BarrierPush $s1Task.id "s1"
     $s1Signal = Wait-BarrierSignal $s1Run
     Assert-Condition ($s1Signal.phase -eq "after-github-create-before-finalize") "S1 barrier did not land at the requested phase."
-    Stop-Process -Id $s1Run.Process.Id -Force
-    Wait-Process -Id $s1Run.Process.Id -Timeout 10 -ErrorAction SilentlyContinue
+    Stop-BarrierProcess $s1Run
     $s1Issue = Assert-OneExactMarker $s1Signal.operationId
     $fixtureUrls.Add($s1Issue.html_url)
     $s1Before = Invoke-KfJson "GET" "/api/external-write-operations/$($s1Signal.operationId)"
