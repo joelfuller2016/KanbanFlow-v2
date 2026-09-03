@@ -389,31 +389,61 @@ can review, reproduce on another box, or restore after a mistake, which is exact
 found.
 
 ```powershell
-powershell.exe -ExecutionPolicy Bypass -File scripts/register-kanbanflow-task.ps1   # register + start
+# ONE elevated run is required for reboot survival - see below
+pwsh -File scripts/register-kanbanflow-task.ps1 -RequireStartupTrigger   # elevated: the real thing
+powershell.exe -ExecutionPolicy Bypass -File scripts/register-kanbanflow-task.ps1   # unelevated: exits 3
 pwsh -File scripts/register-kanbanflow-task.ps1 -WhatIf                             # dry run
 pwsh -File scripts/register-kanbanflow-task.ps1 -Unregister                         # remove
 ```
 
-Two triggers, and both are load-bearing:
+Three triggers, and each covers a case the others cannot:
 
 | Trigger | Job |
 |---|---|
-| **AtLogOn** | Brings the app back after a reboot with nothing started by hand. |
-| **Once + `PT10M`** | Keepalive. Revives the app within ten minutes if it ever exits cleanly. |
+| **AtStartup** | The only one that survives an **unattended** reboot. Needs elevation to register. |
+| **AtLogOn** | Covers a reboot that ends at a logon. |
+| **Once + `PT5M`** | Keepalive. Revives the app within the configured interval after any exit, crash included (`-KeepaliveMinutes`, default 5). |
+
+**Reboot survival requires one elevated run, and this is not a preference.** Windows refuses both
+the boot trigger and the `S4U` principal to a non-elevated shell — measured three ways, all
+`Access is denied`: `AtStartup`, `S4U`, and `Password`. An unelevated run therefore attempts the
+correct definition, is refused, falls back to a logon-only task, quotes the refusal, prints the
+elevated command, and **exits 3** — a distinct code, so a script reading the exit status is never
+told a logon-only task succeeded. `-RequireStartupTrigger` turns that fallback into a hard failure
+(exit 2) with the previous definition restored. Once the good definition exists, a later unelevated
+run **refuses to downgrade it**: it restores the stronger task and fails rather than replacing it.
+
+| Exit | Meaning |
+|---|---|
+| `0` | Registered as intended. |
+| `2` | Failed; any previous definition was restored, or its absence is stated explicitly. |
+| `3` | Registered, but **logon-only** — it will not survive an unattended reboot. |
 
 With `-MultipleInstances IgnoreNew`, a repeat that finds the app already running is refused by Task
 Scheduler with **`0x800710E0`** — "the operator or administrator has refused the request." That code
-in the task history is the design working, **not a fault**; it is what makes a ten-minute repeat free
-while the app is healthy. Restart-on-failure covers the other half: the launcher exits with the app's
-own exit code, so a crash is a task failure and is retried three times, a minute apart.
+in the task history is the design working, **not a fault**; it is what makes a five-minute repeat free
+while the app is healthy.
+
+`RestartCount`/`RestartInterval` are set but **do not fire**: measured with these exact settings, a
+task whose action exits non-zero ran once in 175 s (`LastTaskResult=0x00000001`). The keepalive is
+the real crash-recovery path, so a crash costs up to `KeepaliveMinutes`, not a minute.
 
 `-ExecutionTimeLimit PT0S` is not decoration either. The Task Scheduler default stops a task after
 three days, and a server killed mid-week presents as "the board stopped answering" with nothing in
 the app's own logs to explain it.
 
-The script is idempotent (`-Force` replaces), verifies afterwards that both triggers actually landed,
-and **refuses to register the real task from a git worktree** — the task stores an absolute launcher
-path, and a path under `.worktrees/` disappears the moment the worktree is removed.
+**The database path is resolved at registration time and pinned into the action as `-DbPath`.**
+Without that, the launcher resolves it through `$HOME`, which differs between pwsh and Windows
+PowerShell and is not guaranteed under an `S4U` logon — and when the path misses, the launcher
+restores the committed seed and serves an **empty board** while `/api/admin/health` still answers
+`status: ok`. That endpoint never opens the database, so it cannot detect the case; see
+[#498](https://github.com/joelfuller2016/KanbanFlow-v2/issues/498).
+
+The script is idempotent (`-Force` replaces), verifies afterwards that the triggers actually landed,
+and **refuses to register the real task from a git worktree** (it asks `git rev-parse --git-dir`
+rather than matching a path, so a junction or `subst` drive cannot slip past). A non-default
+`-TaskName` is not a sandbox on its own — the action would still target the production port and
+database — so it additionally requires `-HealthUrl` and `-DbPath`.
 
 ### The adoption trial's instrument
 
