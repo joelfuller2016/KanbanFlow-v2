@@ -1384,11 +1384,10 @@ h1:focus {
    when the title button takes focus, so tabbing the board reveals the same information. The hover
    half is gated behind `(hover: hover)` so a touch browser's emulated hover cannot leave a card
    stuck open with no pointer to move away.
-   KNOWN GAP, correcting an earlier claim in this comment that a tap opens it - on touch it does
-   NOT. The card body is not focusable, and tapping the title both opens the detail panel and moves
-   focus into it (`initTaskDetailDialog` in kanbanflow.js), so `:focus-within` dies inside the same
-   interaction. The excerpt and the GitHub link are pointer/keyboard affordances only. The detail
-   panel carries the same information, so nothing is unreachable - but it is not reachable HERE. */
+   On touch devices (`@media (hover: none)`) the reveal is permanently open — see the block
+   at the bottom of this file. Hover is unavailable and a tap on the title kills `:focus-within`
+   in the same interaction, so the hover/focus rules alone would leave the excerpt and GitHub link
+   permanently inaccessible. The always-open rule corrects that. */
 .board-card-reveal {
     display: grid;
     grid-template-rows: 0fr;
