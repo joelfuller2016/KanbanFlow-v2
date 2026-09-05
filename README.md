@@ -185,7 +185,7 @@ cannot onboard a repo. That parity gap is [#231](https://github.com/joelfuller20
 | Issue | `TaskItem` | the **`#<n>` title prefix followed by one space** — the space is part of the key (`/^#(\d+)\s/`) | GitHub → board |
 | Issue labels (`P0`…`P3`, `priority:high`, `critical`, …) | `TaskItem.Priority` | — reconciled every run | GitHub → board (GitHub always wins) |
 | Issue state + linked open PR | `TaskItem.Status` | — | GitHub → board, **advance-only** (see below) |
-| Issue body | `TaskItem.Description` | `<!-- kanbanflow-sync -->` block + up to ~29,491 serialized bytes; truncated descriptions are refreshed each run | GitHub → board |
+| Issue body | `TaskItem.Description` | `<!-- kanbanflow-sync -->` block + up to ~29,491 serialized bytes; a truncated description is refreshed only while it retains the exact sync header and truncation footer | GitHub → board |
 | Issue comment | `TaskComment` (`Comment`) | GitHub node id stamped as `<!-- gh:ID -->` | GitHub → board |
 | PR conversation comment | `TaskComment` (`Comment`) | same `<!-- gh:ID -->` marker | GitHub → board |
 | PR review, `APPROVED` | `TaskComment` (**`Verification`**) | same `<!-- gh:ID -->` marker | GitHub → board |
@@ -239,7 +239,7 @@ The single most useful table here. Before you edit a field, know which side wins
 | Task **priority** | **GitHub** | Reconciled every run (`syncTasks()`) from `P0`…`P3` / `priority:high` / bare severity labels. Setting it on the board is undone on the next sync |
 | Task **status** | **Shared, GitHub-dominant** | You may move it freely, **except** that a closed issue forces `Done` (`syncTasks()`). Board `Done` + open issue is reported as drift, not corrected |
 | Task **feature** (milestone) | **GitHub** | An issue's milestone change moves the task via `PATCH /api/tasks/{id}/feature` (`syncTasks()`) |
-| Task **description** | **GitHub — refreshed when truncated** | Written from the issue body on create, capped at ~29,491 serialized bytes. Truncated descriptions (footer present) are re-synced each run; human edits that remove the footer are preserved |
+| Task **description** | **GitHub — refreshed when truncated** | Written from the issue body on create, capped at ~29,491 serialized bytes. Truncated descriptions are re-synced only while the exact sync header and truncation footer are intact; human edits that remove either marker are preserved forever |
 | **Comments** | **GitHub, append-only** | Issue comments, PR conversation, PR reviews, and inline `file:line` comments are appended, deduped by node id. Board-authored comments are never pushed |
 | **`ActivityEvent`** | **Derived** | Written by the service layer as a side effect of task writes. Never read from or sent to GitHub |
 | `TaskDependency` (DAG) | **Board** | No GitHub representation. Authored by you and by agents |
