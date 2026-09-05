@@ -424,9 +424,18 @@ function New-BarrierRelease($Run) {
 }
 
 function Stop-BarrierProcess($Run, [int]$TimeoutSeconds = 10) {
-    Stop-Process -Id $Run.Process.Id -Force
-    if (-not $Run.Process.WaitForExit($TimeoutSeconds * 1000)) {
-        throw "Killed Node creator $($Run.Process.Id) did not exit within $TimeoutSeconds second(s); refusing to assert against a live writer."
+    if ($null -eq $Run) { throw "Stop-BarrierProcess: Run must not be null." }
+    if ($TimeoutSeconds -le 0) { throw "Stop-BarrierProcess: TimeoutSeconds must be positive (got $TimeoutSeconds)." }
+    $pid = $Run.Process.Id
+    try {
+        if (-not $Run.Process.HasExited) {
+            Stop-Process -Id $pid -Force
+        }
+        if (-not $Run.Process.WaitForExit($TimeoutSeconds * 1000)) {
+            throw "Killed Node creator (PID $pid) did not exit within $TimeoutSeconds second(s); refusing to assert against a live writer."
+        }
+    } catch {
+        throw "Stop-BarrierProcess failed for PID $pid`: $_"
     }
 }
 
