@@ -354,7 +354,7 @@ public sealed class MirroredDescriptionTests
         Assert.Equal("GitHub issue #454 (opens in a new tab)", MirroredDescription.IssueAriaLabel(body));
     }
 
-    // Both SyncBlockRe and SyncOpenRe are anchored with \A\s*, so a balanced <!-- kanbanflow-sync -->
+    // Both SyncBlockRe and SyncOpenRe are anchored with \A[ \t]*, so a balanced <!-- kanbanflow-sync -->
     // block quoted anywhere in the body of a hand-written task is NOT treated as owned metadata.
     // Without anchoring, IssueUrl() would return the quoted URL and Excerpt() would strip the quoted
     // text — contradicting the comments that call the block an ownership envelope.
@@ -433,7 +433,9 @@ public sealed class MirroredDescriptionTests
         // key safety property (tested in IssueUrl_RejectsAQuotedSyncBlockPrecededByBlankLines).
         var excerpt = MirroredDescription.Excerpt(body);
         Assert.NotNull(excerpt);
-        Assert.DoesNotContain("#999", excerpt);
+        // Non-vacuity: the block text IS in the excerpt (not stripped), and no issue label appears.
+        Assert.Contains("kanbanflow-sync", excerpt);
+        Assert.Contains("issues/999", excerpt);
     }
 
     // EmphasisRe previously removed `__`, which corrupted Python dunder names and similar identifiers.
