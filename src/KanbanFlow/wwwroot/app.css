@@ -1591,14 +1591,21 @@ body:has(.kanban-ghost) .board-card .board-card-title {
    The `body:has(.kanban-ghost)` drag-suppression rules above have (0,4,1) specificity and still
    win when a drag begins, so the excerpt and link correctly hide during drags here too. */
 @media (hover: none) {
+    /* Touch devices cannot hover to expand the title, so show the full title immediately. */
+    .board-card-title {
+        -webkit-line-clamp: unset;
+        line-clamp: unset;
+        overflow: visible;
+    }
+
     .board-card-reveal {
         grid-template-rows: 1fr;
         opacity: 1;
         transition: none;
     }
 
-    /* 24px minimum touch target (WCAG 2.5.5). The resting card now always shows this link, so
-       its tap area must be reachable. Current computed height without this rule is ~17px. */
+    /* 24px minimum touch target (WCAG 2.2 SC 2.5.8). The resting card now always shows this link,
+       so its tap area must be reachable. Current computed height without this rule is ~17px. */
     .board-card-gh {
         min-height: 24px;
         padding: .2rem .4rem;
