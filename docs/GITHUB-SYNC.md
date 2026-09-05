@@ -70,7 +70,7 @@ This table describes the code, not the aspiration. Read the status row carefully
 |---|---|---|
 | Task **name** | GitHub | Always reconciled to `#<n> <issue title>`. A board-side rename is overwritten. |
 | Task **priority** | GitHub | Always reconciled from the issue's labels. A board-side change is overwritten. |
-| Task **description** | GitHub | Written **once, at creation**. Later issue-body edits are *not* re-mirrored. |
+| Task **description** | GitHub | Written at creation. A truncated mirrored description is refreshed on the next sync only when it still carries the exact sync header and truncation footer; descriptions a human has edited (removing the footer) are never overwritten. |
 | Task **feature** | GitHub | Follows the issue's milestone. A milestone change **moves** the task. |
 | Task **status** | **split — see below** | |
 | Task **comments** | GitHub | Additive only. Never edited or deleted. |
