@@ -1438,6 +1438,10 @@ h1:focus {
     -webkit-line-clamp: 2;
     line-clamp: 2;
     overflow: hidden;
+    /* Allows long unbreakable tokens (URLs, hashes, identifiers) to soft-wrap rather than clip.
+       Also sets the flex min-content width to ~0, so the flex item can shrink without pushing the
+       Blocked badge out of the overflow-hidden wrapper. */
+    overflow-wrap: anywhere;
     /* `font-size` is deliberately NOT set. An earlier version set .8125rem on the premise that the
        title rode on Bootstrap's .small (0.875rem). That premise was FALSE: .small and .btn are both
        (0,1,0) and .btn is later, so the button takes --bs-btn-font-size: 1rem. The rule shrank the
