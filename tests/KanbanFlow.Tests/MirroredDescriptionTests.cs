@@ -397,4 +397,58 @@ public sealed class MirroredDescriptionTests
             "the closing marker must sit beyond the bound or this proves nothing");
         Assert.Null(MirroredDescription.Excerpt(unterminated));
     }
+
+    // \A\s* previously accepted newlines, so a hand-written description that opened with blank lines
+    // then quoted a complete sync block was treated as a mirror. \A[ \t]* restricts the allowed
+    // prefix to horizontal whitespace only, which the sync producer never emits anyway.
+    [Fact]
+    public void IssueUrl_RejectsAQuotedSyncBlockPrecededByBlankLines()
+    {
+        var body = "\n\n<!-- kanbanflow-sync -->\n"
+            + "**Issue:** https://github.com/joelfuller2016/KanbanFlow-v2/issues/999\n"
+            + "**State:** OPEN\n"
+            + "<!-- /kanbanflow-sync -->\n\nThe preceding blank lines are hand-written content.";
+
+        // Non-vacuity: the same block at offset zero IS treated as a mirror.
+        var atZero = "<!-- kanbanflow-sync -->\n"
+            + "**Issue:** https://github.com/joelfuller2016/KanbanFlow-v2/issues/999\n"
+            + "**State:** OPEN\n"
+            + "<!-- /kanbanflow-sync -->\n\nbody";
+        Assert.Equal("#999", MirroredDescription.IssueLabel(atZero));
+
+        Assert.Null(MirroredDescription.IssueUrl(body));
+        Assert.Null(MirroredDescription.IssueLabel(body));
+    }
+
+    [Fact]
+    public void Excerpt_TreatsLeadingNewlineSyncBlockAsPlainText()
+    {
+        var body = "\n\n<!-- kanbanflow-sync -->\n"
+            + "**Issue:** https://github.com/joelfuller2016/KanbanFlow-v2/issues/999\n"
+            + "**State:** OPEN\n"
+            + "<!-- /kanbanflow-sync -->\n\ntext after.";
+
+        // The block is not owned (leading newlines disqualify it), so it is not stripped.
+        // The raw block text becomes part of the excerpt — there is no GitHub link, which is the
+        // key safety property (tested in IssueUrl_RejectsAQuotedSyncBlockPrecededByBlankLines).
+        var excerpt = MirroredDescription.Excerpt(body);
+        Assert.NotNull(excerpt);
+        Assert.DoesNotContain("#999", excerpt);
+    }
+
+    // EmphasisRe previously removed `__`, which corrupted Python dunder names and similar identifiers.
+    // `__init__` → `init`, `__all__` → `all`. The fix removes `__` from the pattern entirely.
+    [Theory]
+    [InlineData("__init__", "__init__")]
+    [InlineData("__all__", "__all__")]
+    [InlineData("path/__main__.py", "path/__main__.py")]
+    public void Excerpt_PreservesDoubleUnderscoreIdentifiers(string input, string expectedSubstring)
+    {
+        // Non-vacuity: ** IS removed, so the fix is not vacuous.
+        var boldInput = "**bold** " + input;
+        var excerpt = MirroredDescription.Excerpt(boldInput);
+        Assert.NotNull(excerpt);
+        Assert.Contains(expectedSubstring, excerpt);
+        Assert.DoesNotContain("**", excerpt);
+    }
 }
