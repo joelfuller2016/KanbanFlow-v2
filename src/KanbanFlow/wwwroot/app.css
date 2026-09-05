@@ -1591,11 +1591,13 @@ body:has(.kanban-ghost) .board-card .board-card-title {
    The `body:has(.kanban-ghost)` drag-suppression rules above have (0,4,1) specificity and still
    win when a drag begins, so the excerpt and link correctly hide during drags here too. */
 @media (hover: none) {
-    /* Touch devices cannot hover to expand the title, so show the full title immediately. */
+    /* Touch devices cannot hover to expand the title, so show the full title immediately.
+       overflow stays hidden: visible would restore min-width:auto on the flex item, letting a
+       long unbreakable token push the Blocked badge outside the overflow-hidden wrapper. The
+       clamp removal already shows all lines without widening the column. */
     .board-card-title {
         -webkit-line-clamp: unset;
         line-clamp: unset;
-        overflow: visible;
     }
 
     .board-card-reveal {
