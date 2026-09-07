@@ -295,14 +295,21 @@
     // mid-word.
     private int descriptionResetToken;
 
-    // Pulled out of the `<!-- kanbanflow-sync -->` block that scripts/portfolio-sync.mjs writes
-    // into a mirrored task's description. The block is isolated FIRST and the labels are matched
-    // only inside it — matching the whole description would render chips for a hand-written
-    // description that merely happens to contain "**Issue:** https://github.com/...", which is
-    // not what this claims to do and would present unverified text as a trusted link.
-    private static readonly System.Text.RegularExpressions.Regex SyncBlockRe = new(
-        @"<!--\s*kanbanflow-sync\s*-->(.*?)<!--\s*/kanbanflow-sync\s*-->",
-        System.Text.RegularExpressions.RegexOptions.Compiled | System.Text.RegularExpressions.RegexOptions.Singleline);
+    // Pulled out of the sync block that scripts/portfolio-sync.mjs writes into a mirrored task's
+    // description. The block is isolated FIRST — by MirroredDescription.SyncBlock — and the labels
+    // below are matched only inside it. Matching the whole description would render chips for a
+    // hand-written description that merely happens to contain "**Issue:** https://github.com/...",
+    // presenting unverified text as a trusted link.
+    //
+    // The isolation is NOT re-implemented here, and that is the point. This file used to carry its
+    // own copy of it, and the copy was unanchored: it accepted a marker pair anywhere in the
+    // description, and a description is free text that any user can edit. So a forged block pasted
+    // into a task body rendered the attacker's GitHub URL on a button styled exactly like the real
+    // one. The card path was given the `\A[ \t]*` ownership anchor and this path was not, because
+    // the same question was being answered in two places. It is now answered in one — see the
+    // remarks on MirroredDescription.SyncBlock, and MirroredDescriptionTests, which fails if a
+    // second copy of the marker pattern reappears anywhere under src/.
+    //
     // Anchored on the literal labels the sync emits, and a real URL is required — so
     // "**Open PR:** none" matches nothing. A hand-made task has no block and gets no links.
     private static readonly System.Text.RegularExpressions.Regex GitHubIssueRe = new(
@@ -331,10 +338,11 @@
         GitHubIssueUrl = GitHubIssueNumber = GitHubPrUrl = GitHubPrNumber = null;
         if (string.IsNullOrEmpty(editDescription)) return;
 
-        // Only the sync block is authoritative — see SyncBlockRe. No block, no chips.
-        var block = SyncBlockRe.Match(editDescription);
-        if (!block.Success) return;
-        var syncBlock = block.Groups[1].Value;
+        // Only a block the sync itself OWNS is authoritative: one it wrote, at the head of the
+        // description. MirroredDescription.SyncBlock is the single place that judgement is made —
+        // the board card asks the same method the same question. No owned block, no chips.
+        var syncBlock = MirroredDescription.SyncBlock(editDescription);
+        if (syncBlock is null) return;
 
         var issue = GitHubIssueRe.Match(syncBlock);
         if (issue.Success)

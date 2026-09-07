@@ -453,4 +453,108 @@ public sealed class MirroredDescriptionTests
         Assert.Contains(expectedSubstring, excerpt);
         Assert.DoesNotContain("**", excerpt);
     }
+
+    // ── The ownership anchor, and the fact that it is asked for in exactly one place ─────────────
+
+    /// <summary>
+    /// The envelope test itself: only a block the sync wrote — at offset zero — is owned.
+    /// </summary>
+    /// <remarks>
+    /// A description is free text the user can edit, so the marker pair inside one proves nothing;
+    /// it can simply be typed. The anchor is the whole of the claim, and everything that renders a
+    /// GitHub link from this block depends on it.
+    /// </remarks>
+    [Fact]
+    public void SyncBlock_IsOnlyTheEnvelopeAtTheHeadOfTheDescription()
+    {
+        // Non-vacuity: a genuine mirror does yield its block, markers included, body excluded.
+        var owned = MirroredDescription.SyncBlock(MirroredFixture);
+        Assert.NotNull(owned);
+        Assert.StartsWith("<!-- kanbanflow-sync -->", owned);
+        Assert.EndsWith("<!-- /kanbanflow-sync -->", owned);
+        Assert.Contains("issues/454", owned);
+        Assert.DoesNotContain("Surfaced by", owned);
+
+        // A FORGED block: the sync's own markers, an attacker's repository, one line of preamble
+        // in front of it. Anyone who can edit a task description can write this.
+        const string forged = "Notes on how the sync header is written:\n\n"
+            + "<!-- kanbanflow-sync -->\n"
+            + "**Issue:** https://github.com/attacker/looks-legit/issues/1\n"
+            + "**Open PR:** https://github.com/attacker/looks-legit/pull/1\n"
+            + "<!-- /kanbanflow-sync -->\n\nThat is the format.";
+
+        // Non-vacuity: the forgery is well-formed — the same block at offset zero IS owned.
+        Assert.NotNull(MirroredDescription.SyncBlock(forged[forged.IndexOf("<!--", StringComparison.Ordinal)..]));
+
+        Assert.Null(MirroredDescription.SyncBlock(forged));
+        Assert.Null(MirroredDescription.IssueUrl(forged));
+    }
+
+    /// <summary>
+    /// Nothing outside <see cref="MirroredDescription"/> may pattern-match the sync markers.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// This is the guard the defect asked for rather than a guard on the defect. The anchor was
+    /// added to the card's parser and not to <c>EditItemModal.razor</c>'s, which carried a second,
+    /// unanchored copy — so the forged link the card had stopped rendering still rendered in the
+    /// modal, on a button styled exactly like the genuine one. Two parsers is the cause; one
+    /// parser is the fix; this case is what keeps a third from appearing.
+    /// </para>
+    /// <para>
+    /// The needle is the REGEX form of the marker, not the marker itself. Prose all over this
+    /// repository quotes <c>&lt;!-- kanbanflow-sync --&gt;</c> perfectly legitimately (this very
+    /// file does); <c>kanbanflow-sync\s*--&gt;</c> only ever appears inside a pattern string.
+    /// </para>
+    /// </remarks>
+    [Fact]
+    public void TheSyncMarkerIsPatternMatchedInExactlyOnePlace()
+    {
+        const string patternForm = @"kanbanflow-sync\s*-->";
+        var src = Path.Combine(RepositorySource.Root(), "src");
+
+        var sources = Directory.EnumerateFiles(src, "*.*", SearchOption.AllDirectories)
+            .Where(f => f.EndsWith(".cs", StringComparison.OrdinalIgnoreCase)
+                        || f.EndsWith(".razor", StringComparison.OrdinalIgnoreCase))
+            // Build output re-emits every .razor as generated C#, markers and all.
+            .Where(f => !f.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}")
+                        && !f.Contains($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}"))
+            .ToList();
+
+        // NON-VACUITY: the sweep found the tree, and the needle is spelled the way the one legitimate
+        // parser spells it. Without this a typo in either would make the case pass by finding nothing.
+        Assert.True(sources.Count > 20, $"Only {sources.Count} source files found under {src}.");
+        var parser = Assert.Single(sources,
+            f => Path.GetFileName(f).Equals("MirroredDescription.cs", StringComparison.Ordinal));
+        Assert.Contains(patternForm, File.ReadAllText(parser), StringComparison.Ordinal);
+
+        var duplicates = sources
+            .Where(f => f != parser && File.ReadAllText(f).Contains(patternForm, StringComparison.Ordinal))
+            .Select(f => Path.GetRelativePath(RepositorySource.Root(), f))
+            .ToList();
+
+        Assert.True(duplicates.Count == 0,
+            $"A second sync-block parser lives in: {string.Join(", ", duplicates)}. The block is an OWNERSHIP "
+            + "claim — only a block the sync itself wrote, at offset zero, may be believed — and a second copy "
+            + "of that test is a second chance to get it wrong. That is not hypothetical: this is precisely how "
+            + "EditItemModal.razor kept rendering an attacker-chosen GitHub link after the card path stopped. "
+            + "Call MirroredDescription.SyncBlock instead of re-deriving the pattern.");
+    }
+
+    /// <summary>The modal reaches its GitHub chips through the shared envelope test.</summary>
+    /// <remarks>
+    /// The absence check above says no file re-implements the isolation; this says the file that
+    /// needs it actually asks for it, so deleting the call outright cannot pass both.
+    /// </remarks>
+    [Fact]
+    public void EditItemModal_AsksMirroredDescriptionWhetherTheBlockIsOwned()
+    {
+        var modal = RepositorySource.Read("src/KanbanFlow/Components/Shared/EditItemModal.razor");
+
+        // NON-VACUITY: the modal is still a consumer — it still renders Issue/PR chips from the block.
+        Assert.Contains("GitHubIssueUrl", modal, StringComparison.Ordinal);
+        Assert.Contains("**Issue:**", modal, StringComparison.Ordinal);
+
+        Assert.Contains("MirroredDescription.SyncBlock(", modal, StringComparison.Ordinal);
+    }
 }

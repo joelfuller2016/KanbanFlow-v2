@@ -106,26 +106,55 @@ public static class MirroredDescription
             : description;
 
     /// <summary>
+    /// The <c>kanbanflow-sync</c> block at the head of a mirrored description — its markers
+    /// included — or <c>null</c> when this description is not a mirror.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// THIS IS THE OWNERSHIP TEST, and it is deliberately the only copy of it. A description is
+    /// free text that any user can edit, so the marker pair inside one proves nothing: it can be
+    /// typed. What cannot be typed is the sync's own habit of writing its block at offset zero,
+    /// which is why <c>SyncBlockRe</c> is anchored with <c>\A[ \t]*</c>. That anchor is the entire
+    /// difference between "this description was produced by <c>scripts/portfolio-sync.mjs</c>" and
+    /// "this description contains something shaped like it".
+    /// </para>
+    /// <para>
+    /// Every consumer that presents the block's contents as TRUSTED — the card's GitHub chip, the
+    /// edit modal's Issue and PR buttons — must ask this method rather than re-deriving the test.
+    /// Asking it in two places is exactly how the modal came to answer differently from the card:
+    /// its own copy was unanchored, so a forged block pasted anywhere into a description rendered
+    /// the attacker's chosen GitHub link, on a button styled to look like the real one.
+    /// </para>
+    /// <para>
+    /// A block whose closing marker falls beyond <see cref="ScanChars"/> does not match and yields
+    /// <c>null</c>: the safe direction, and the same answer the card and the modal both want.
+    /// </para>
+    /// </remarks>
+    public static string? SyncBlock(string? description)
+    {
+        var head = Head(description);
+        if (head is null) return null;
+
+        var block = SyncBlockRe.Match(head);
+        return block.Success ? block.Value : null;
+    }
+
+    /// <summary>
     /// The GitHub issue URL this description was mirrored from, or <c>null</c> for a description
     /// that was hand-written rather than synced. Anchored to the <c>**Issue:**</c> marker the sync
     /// itself writes, so a hand-authored description simply does not match.
     /// </summary>
     public static string? IssueUrl(string? description)
     {
-        var head = Head(description);
-        if (head is null) return null;
-
         // The URL is read ONLY from inside the sync block, never from the description at large.
         // Matching `**Issue:** <url>` anywhere meant a hand-written description opening with that
         // line got a GitHub affordance pointing wherever its author chose — the card would show a
         // "#123" chip linking to an unrelated repository, indistinguishable from a real mirror.
         // The block is the sync's own signed envelope, so it is the only place the claim is good.
-        // A block whose closing marker falls outside the scan window simply does not match, and no
-        // link is shown: the safe direction.
-        var block = SyncBlockRe.Match(head);
-        if (!block.Success) return null;
+        var block = SyncBlock(description);
+        if (block is null) return null;
 
-        var m = IssueUrlRe.Match(block.Value);
+        var m = IssueUrlRe.Match(block);
         if (!m.Success) return null;
 
         // A URL written at the end of a sentence carries the stop into the match, and the resulting
