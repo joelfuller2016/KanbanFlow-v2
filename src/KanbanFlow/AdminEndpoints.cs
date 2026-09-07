@@ -124,8 +124,28 @@ public static class AdminEndpoints
             {
                 // Never throw. The unreachable database is precisely the case the caller needs an
                 // answer for, so it is reported at HTTP 200 with the reason rather than as a 500
-                // the caller can only guess at. Message only — never the stack.
+                // the caller can only guess at. Message only in the PAYLOAD — never the stack.
                 probeError = ex.Message;
+
+                // ...and the stack goes to the log, because HTTP 200 is right for the caller and
+                // tells the OPERATOR nothing. Same shape as the fail-soft path in the memory
+                // reindex below, which already logs what it swallowed.
+                //
+                // BE ACCURATE ABOUT WHAT THIS ADDS, because it is not "a trace where there was
+                // none". Measured: EF Core already logs two Error lines here — "An exception
+                // occurred while iterating over the results of a query for context type
+                // 'AppDbContext'" and "An error occurred using the connection to database 'main' on
+                // server '<path>'" — and appsettings.json leaves them on (Default: Information).
+                // What they do NOT say is which QUESTION was being asked: a failed health probe is
+                // indistinguishable in the log from any other query against the same context. This
+                // line names the probe and the resolved file, which is the whole #498 question.
+                //
+                // Warning, not Error, and deliberately NOT rate-limited: the process is up and
+                // serving, so this is not the app failing; and health is polled, so an unreachable
+                // board logs once per poll — the correct volume for a database this process cannot
+                // read. Staying quiet would need state, to suppress the exact condition #498 exists
+                // to stop being quiet about.
+                app.Logger.LogWarning(ex, "Health database probe failed for {DbPath}.", database.Path);
             }
 
             stopwatch.Stop();
