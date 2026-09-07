@@ -185,7 +185,7 @@ public sealed partial class WorkspaceService(IDbContextFactory<AppDbContext> fac
         return result;
     }
 
-    private void Audit(AppDbContext db, int? projectId, Guid requestId, string actor, string action, int entityId = 0) =>
+    private void Audit(AppDbContext db, int? projectId, Guid requestId, string actor, string action, int entityId) =>
         db.ActivityEvents.Add(new ActivityEvent { ProjectId = projectId ?? 0, EntityType = "WorkRequest", EntityId = entityId,
             EventType = action, Actor = actor, AfterJson = JsonSerializer.Serialize(new { requestId }), CreatedAt = Now });
 
