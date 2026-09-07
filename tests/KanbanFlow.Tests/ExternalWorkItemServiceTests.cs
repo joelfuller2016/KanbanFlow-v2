@@ -480,6 +480,102 @@ public sealed class ExternalWorkItemServiceTests
     }
 
     [Fact]
+    public async Task RecordFailure_AmbiguousBeforeDispatch_IsRecordedAsDefinitive()
+    {
+        using var factory = new SqliteTestFactory();
+        var seeded = await SeedTaskAsync(factory);
+        var clock = new FakeTimeProvider(Start);
+        var service = new ExternalWorkItemService(factory, clock, LeaseTtl);
+        var prepared = await service.PrepareAsync(Request(seeded));
+        Assert.Null(prepared.Operation.DispatchedAt);
+
+        var recorded = await service.RecordFailureAsync(
+            prepared.Operation.OperationId,
+            prepared.LeaseToken,
+            ExternalWriteFailureKind.AmbiguousOrIncomplete,
+            "frozen body did not contain exactly one exact push marker");
+
+        // Nothing was ever dispatched, so "the provider may have seen this" is not a possible
+        // reading of the facts. NeedsReview here is a lie that no route can undo.
+        Assert.Equal(ExternalWriteState.DefinitiveFailure, recorded.State);
+
+        await using var db = await factory.CreateDbContextAsync();
+        var audit = Assert.Single(await db.ActivityEvents
+            .Where(e => e.EventType == "ExternalWriteFailureRecorded")
+            .ToListAsync());
+        Assert.Contains("\"failureKind\":\"DefinitivePreCreate\"", audit.AfterJson);
+        // The caller's own claim survives beside the correction rather than being overwritten.
+        Assert.Contains("\"reportedKind\":\"AmbiguousOrIncomplete\"", audit.AfterJson);
+        Assert.Contains("DefinitivePreCreate", audit.Message);
+    }
+
+    [Fact]
+    public async Task RecordFailure_AmbiguousAfterDispatch_StillNeedsReview()
+    {
+        using var factory = new SqliteTestFactory();
+        var seeded = await SeedTaskAsync(factory);
+        var clock = new FakeTimeProvider(Start);
+        var service = new ExternalWorkItemService(factory, clock, LeaseTtl);
+        var prepared = await service.PrepareAsync(Request(seeded));
+        await service.MarkDispatchedAsync(prepared.Operation.OperationId, prepared.LeaseToken);
+        clock.Advance(LeaseTtl + TimeSpan.FromSeconds(1));
+        var recovery = await service.ResumeAsync(prepared.Operation.OperationId);
+
+        var recorded = await service.RecordFailureAsync(
+            prepared.Operation.OperationId,
+            recovery.LeaseToken,
+            ExternalWriteFailureKind.AmbiguousOrIncomplete,
+            "exhaustive scan was incomplete");
+
+        // The discriminator. A guard that reclassified every ambiguous failure would erase the
+        // one fact that stops a resume from minting a duplicate issue.
+        Assert.Equal(ExternalWriteState.NeedsReview, recorded.State);
+        Assert.NotNull(recorded.DispatchedAt);
+
+        await using var db = await factory.CreateDbContextAsync();
+        var audit = Assert.Single(await db.ActivityEvents
+            .Where(e => e.EventType == "ExternalWriteFailureRecorded")
+            .ToListAsync());
+        Assert.Contains("\"failureKind\":\"AmbiguousOrIncomplete\"", audit.AfterJson);
+        Assert.Contains("\"reportedKind\":null", audit.AfterJson);
+    }
+
+    [Fact]
+    public async Task PreparedNeverDispatched_DoesNotBecomeUnreachable()
+    {
+        using var factory = new SqliteTestFactory();
+        var seeded = await SeedTaskAsync(factory);
+        var clock = new FakeTimeProvider(Start);
+        var service = new ExternalWorkItemService(factory, clock, LeaseTtl);
+
+        // The exact ordinary path: portfolio-sync's pre-dispatch self-check fails and the script
+        // reports AmbiguousOrIncomplete because every failure it can see MIGHT be post-dispatch.
+        var prepared = await service.PrepareAsync(Request(seeded));
+        await service.RecordFailureAsync(
+            prepared.Operation.OperationId,
+            prepared.LeaseToken,
+            ExternalWriteFailureKind.AmbiguousOrIncomplete,
+            "pre-dispatch self-check failed");
+
+        clock.Advance(LeaseTtl + TimeSpan.FromSeconds(1));
+        var resumed = await service.ResumeAsync(prepared.Operation.OperationId);
+
+        // The whole point: a routine failed prepare is recoverable. Before the guard this row was
+        // NeedsReview with DispatchedAt == null -- Resume refuses it create permission and
+        // AuthorizeAmbiguousRetryAsync refuses it for never having dispatched, so the task was
+        // wedged for good with no board-side exit.
+        Assert.True(resumed.SafeToCreate);
+        Assert.Equal(ExternalWriteState.Prepared, resumed.Operation.State);
+        Assert.Null(resumed.Operation.DispatchedAt);
+
+        // And it really can go on to dispatch and finalize, not merely report a hopeful state.
+        var dispatched = await service.MarkDispatchedAsync(
+            prepared.Operation.OperationId,
+            resumed.LeaseToken);
+        Assert.Equal(ExternalWriteState.Dispatched, dispatched.State);
+    }
+
+    [Fact]
     public async Task ManualRetryAuthorization_RejectsNeedsReviewWithoutDurableDispatch()
     {
         using var factory = new SqliteTestFactory();
@@ -487,11 +583,24 @@ public sealed class ExternalWorkItemServiceTests
         var clock = new FakeTimeProvider(Start);
         var service = new ExternalWorkItemService(factory, clock, LeaseTtl);
         var prepared = await service.PrepareAsync(Request(seeded));
-        await service.RecordFailureAsync(
-            prepared.Operation.OperationId,
-            prepared.LeaseToken,
-            ExternalWriteFailureKind.AmbiguousOrIncomplete,
-            "caller reported uncertainty before recording dispatch");
+
+        // RecordFailureAsync now reclassifies an ambiguous failure on a never-dispatched
+        // Prepared operation as DefinitivePreCreate, so the service API can no longer MAKE a
+        // NeedsReview row with DispatchedAt == null (see
+        // RecordFailure_AmbiguousBeforeDispatch_IsRecordedAsDefinitive). The guard below is
+        // still load-bearing for such a row from any other source -- an older build, a manual
+        // repair, a future caller -- so the row is forged directly here rather than dropping
+        // the coverage. Every assertion in this test is unchanged.
+        await using (var seedDb = await factory.CreateDbContextAsync())
+        {
+            var forged = await seedDb.ExternalWriteOperations
+                .SingleAsync(o => o.OperationId == prepared.Operation.OperationId);
+            forged.State = ExternalWriteState.NeedsReview;
+            forged.LeaseToken = null;
+            forged.LeaseExpiresAt = null;
+            Assert.Null(forged.DispatchedAt);
+            await seedDb.SaveChangesAsync();
+        }
 
         var error = await Assert.ThrowsAsync<ExternalWorkItemConflictException>(() =>
             service.AuthorizeAmbiguousRetryAsync(new(

@@ -430,7 +430,26 @@ public sealed class ExternalWorkItemService : IExternalWorkItemService
                 operation);
         }
 
-        operation.State = kind == ExternalWriteFailureKind.DefinitivePreCreate
+        // The mirror of the guard twenty lines above, pointing the other way. That one refuses
+        // to call a post-dispatch failure definitive; this one refuses to call a PRE-dispatch
+        // failure ambiguous. Both rest on the same fact -- DispatchedAt is the only durable
+        // evidence that the provider may have seen the request -- and a classification that
+        // contradicts it is wrong in whichever direction it leans.
+        //
+        // Without this, an ordinary failed prepare (the frozen-body marker self-check at
+        // portfolio-sync.mjs's create path, a lost API call, a caller that simply reports
+        // uncertainty) produced a NeedsReview row with DispatchedAt == null: NeedsReview is not
+        // resumable into create permission, and AuthorizeAmbiguousRetryAsync refuses a row that
+        // was never dispatched, so no route could ever leave it. Classified truthfully as
+        // DefinitivePreCreate, the same failure lands in DefinitiveFailure, which ResumeAsync
+        // restores to Prepared. This is a classification guard, not a new state.
+        var effectiveKind = kind == ExternalWriteFailureKind.AmbiguousOrIncomplete &&
+            operation.State == ExternalWriteState.Prepared &&
+            operation.DispatchedAt is null
+            ? ExternalWriteFailureKind.DefinitivePreCreate
+            : kind;
+
+        operation.State = effectiveKind == ExternalWriteFailureKind.DefinitivePreCreate
             ? ExternalWriteState.DefinitiveFailure
             : ExternalWriteState.NeedsReview;
         operation.LastError = normalizedError;
@@ -447,12 +466,15 @@ public sealed class ExternalWorkItemService : IExternalWorkItemService
             new
             {
                 operationId = operation.OperationId,
-                failureKind = kind.ToString(),
+                failureKind = effectiveKind.ToString(),
+                // What the caller claimed, kept only when it differs from what was recorded, so
+                // the audit trail shows the reclassification rather than silently overwriting it.
+                reportedKind = effectiveKind == kind ? null : kind.ToString(),
                 operation.State,
                 operation.AttemptCount,
                 hasError = true
             },
-            $"External write operation {operation.OperationId:D} recorded {kind}.",
+            $"External write operation {operation.OperationId:D} recorded {effectiveKind}.",
             now);
 
         await db.SaveChangesAsync(ct);
