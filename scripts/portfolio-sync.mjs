@@ -1078,6 +1078,67 @@ function buildExternalDispatchRequest(operation, leaseToken, args) {
   return request;
 }
 
+// What can honestly be said after an ambiguous outcome, and nothing more.
+//
+// The old text was one fixed sentence -- "State remains NeedsReview; no create was attempted."
+// -- appended to a .catch() that had just swallowed the failure. It asserted three things it
+// never checked, and each can be false:
+//
+//   * the persist may have FAILED. The recovery path runs a full state=all repository crawl
+//     inside one lease, so the commonest failure is a 409 on an expired lease -- and the row is
+//     then still exactly what it was, usually Dispatched.
+//   * recordAmbiguousWriteFailure returns null WITHOUT SENDING ANYTHING when there is no lease
+//     token. A caller could not tell that apart from success.
+//   * "no create was attempted" is the most dangerous half. From Dispatched a create may well
+//     have reached GitHub, and this sentence is read by an operator deciding whether to retry.
+//     It is only true before dispatch -- where, since RecordFailureAsync now classifies a
+//     never-dispatched failure as DefinitivePreCreate, the resulting state is not NeedsReview
+//     either.
+//
+// Pure and exported so the wording is testable without a GitHub round trip.
+function ambiguousFailureMessage(operation, rawReason, outcome) {
+  const id = operation?.operationId;
+  const trimmed = String(rawReason ?? "").trim();
+  const reason = trimmed === "" || /[.!?]$/.test(trimmed) ? trimmed : `${trimmed}.`;
+  const observed = outcome?.observed ?? outcome?.persisted ?? operation;
+  const createClause = outcome?.dispatchAttempted || Boolean(observed?.dispatchedAt) || Boolean(operation?.dispatchedAt)
+    ? "a create MAY have reached GitHub"
+    : "no create was attempted";
+
+  if (outcome?.persisted) {
+    return `operation ${id}: ${reason} State is now ${writeStateName(outcome.persisted.state)}; ${createClause}.`;
+  }
+
+  const why = outcome?.skipped === "no-lease-token"
+    ? "no lease token was held, so nothing was sent"
+    : `the write itself failed (${outcome?.error?.message || "unknown error"})`;
+  const state = writeStateName(observed?.state) || "unknown";
+  const expiry = observed?.leaseExpiresAt ? ` and its lease expires ${observed.leaseExpiresAt}` : "";
+  return `operation ${id}: ${reason} State could NOT be persisted: ${why}. It remains ${state}${expiry}; ${createClause}. Re-run --resume ${id} once that lease has expired.`;
+}
+
+// Records the failure and reports what actually happened, so the caller can describe it instead
+// of asserting it. Never throws: an unrecordable failure is still a failure to report.
+async function recordAmbiguousOutcome(operation, leaseToken, reason, api = externalApi) {
+  if (!leaseToken) {
+    return {
+      persisted: null,
+      skipped: "no-lease-token",
+      observed: await api.getOperation(operation.operationId).catch(() => null),
+    };
+  }
+  try {
+    return { persisted: await recordAmbiguousWriteFailure(operation.operationId, leaseToken, reason, api) };
+  } catch (error) {
+    console.error(`  ! could not persist the failure for ${operation.operationId}: ${error.message}`);
+    return {
+      persisted: null,
+      error,
+      observed: await api.getOperation(operation.operationId).catch(() => null),
+    };
+  }
+}
+
 async function recordAmbiguousWriteFailure(operationId, leaseToken, error, api = externalApi) {
   if (!leaseToken) return null;
   return api.failure(operationId, {
@@ -1139,9 +1200,9 @@ async function recoverAmbiguousOperation(repo, operation, leaseToken, repoIdenti
   try {
     scan = await findIssueByPushMarker(repo, operation.operationId);
   } catch (err) {
-    await recordAmbiguousWriteFailure(operation.operationId, leaseToken, `Authoritative marker scan incomplete: ${err.message}`)
-      .catch((recordErr) => console.error(`  ! could not persist NeedsReview: ${recordErr.message}`));
-    throw new Error(`operation ${operation.operationId}: authoritative GitHub scan failed; outcome is NeedsReview and no create was attempted (${err.message})`);
+    const scanReason = `Authoritative marker scan incomplete: ${err.message}`;
+    const outcome = await recordAmbiguousOutcome(operation, leaseToken, scanReason);
+    throw new Error(ambiguousFailureMessage(operation, `Authoritative GitHub scan failed (${err.message}).`, outcome));
   }
 
   const markerDisposition = exhaustiveMarkerDisposition(
@@ -1158,9 +1219,8 @@ async function recoverAmbiguousOperation(repo, operation, leaseToken, repoIdenti
 
   const hint = scan.hints.length === 1 ? " (indexed search had one hint, but hints are never trusted)" : "";
   const reason = `Authoritative marker scan found ${scan.matches.length} clean match(es) and ${scan.rawTargetOccurrenceCount ?? "unknown"} raw target occurrence(s) across ${scan.rawTargetRecordCount ?? "unknown"} issue record(s)${hint}; expected exactly one clean record with one occurrence.`;
-  await recordAmbiguousWriteFailure(operation.operationId, leaseToken, reason)
-    .catch((recordErr) => console.error(`  ! could not persist NeedsReview: ${recordErr.message}`));
-  throw new Error(`operation ${operation.operationId}: ${reason} State remains NeedsReview; no create was attempted.`);
+  const outcome = await recordAmbiguousOutcome(operation, leaseToken, reason);
+  throw new Error(ambiguousFailureMessage(operation, reason, outcome));
 }
 
 async function scanForExplicitRetryDecision(repo, operationId) {
@@ -1329,13 +1389,11 @@ async function handleCreateWindowFailure(operation, leaseToken, issueUrl, err, a
   if (err instanceof HookAbort) throw err;
   const latest = await api.getOperation(operation.operationId).catch(() => null);
   if (writeStateName(latest?.state) === "Completed") return latest;
-  await recordAmbiguousWriteFailure(
-    operation.operationId,
-    leaseToken,
-    `${issueUrl ? `Issue may exist at ${issueUrl}; ` : "GitHub create outcome is unknown; "}${err.message}`,
-    api,
-  ).catch((recordErr) => console.error(`  ! could not persist NeedsReview: ${recordErr.message}`));
-  throw new Error(`operation ${operation.operationId} is ambiguous/NeedsReview; re-run explicitly with --resume ${operation.operationId}. ${err.message}`);
+  const reason = `${issueUrl ? `Issue may exist at ${issueUrl}; ` : "GitHub create outcome is unknown; "}${err.message}`;
+  // dispatchAttempted is asserted rather than inferred: this handler is reachable only past
+  // externalApi.dispatch, and the local snapshot predates that write.
+  const outcome = { ...await recordAmbiguousOutcome(operation, leaseToken, reason, api), dispatchAttempted: true };
+  throw new Error(ambiguousFailureMessage(operation, reason, outcome));
 }
 
 // Drift wording lives here, shared, so `status` can never disagree with what `sync` reports.
@@ -2236,9 +2294,9 @@ async function pushIssues(repo, args) {
       try {
         scanResult = await scanForExplicitRetryDecision(repo, resumed.operationId);
       } catch (err) {
-        await recordAmbiguousWriteFailure(resumed.operationId, leaseToken, `Post-Resume exhaustive marker scan failed: ${err.message}`)
-          .catch((recordErr) => console.error(`  ! could not persist NeedsReview: ${recordErr.message}`));
-        throw err;
+        const reason = `Post-Resume exhaustive marker scan failed: ${err.message}`;
+        const outcome = await recordAmbiguousOutcome(resumed, leaseToken, reason);
+        throw new Error(ambiguousFailureMessage(resumed, reason, outcome));
       }
       const { scan, disposition } = scanResult;
       if (disposition === "one") {
@@ -2248,10 +2306,9 @@ async function pushIssues(repo, args) {
         return;
       }
       if (disposition !== "zero") {
-        const reason = `Post-Resume exhaustive scan was ${disposition} with ${scan.matches.length} clean match(es) and ${scan.rawTargetOccurrenceCount} raw target occurrence(s); no create was attempted.`;
-        await recordAmbiguousWriteFailure(resumed.operationId, leaseToken, reason)
-          .catch((recordErr) => console.error(`  ! could not persist NeedsReview: ${recordErr.message}`));
-        throw new Error(`operation ${resumed.operationId}: ${reason}`);
+        const reason = `Post-Resume exhaustive scan was ${disposition} with ${scan.matches.length} clean match(es) and ${scan.rawTargetOccurrenceCount} raw target occurrence(s).`;
+        const outcome = await recordAmbiguousOutcome(resumed, leaseToken, reason);
+        throw new Error(ambiguousFailureMessage(resumed, reason, outcome));
       }
 
       const executionArgs = {
@@ -3008,6 +3065,7 @@ export {
   BODY_EXCERPT_LIMIT,
   MAX_DESCRIPTION_BYTES,
   activeGithubLink,
+  ambiguousFailureMessage,
   analyzeMarkerRecords,
   assertFreshPrecreateScan,
   assertLivePushProjectLink,
@@ -3051,6 +3109,7 @@ export {
   pushMarker,
   pushOperationIds,
   rawPushOperationIds,
+  recordAmbiguousOutcome,
   recoveryDisposition,
   refreshedProjectDescription,
   repoLinkMarker,

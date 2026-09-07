@@ -1131,7 +1131,8 @@ test("a HookAbort never becomes an ambiguous GitHub outcome", async () => {
   // The discriminator, not a blanket exemption: a real create-window error still records.
   await assert.rejects(
     () => mod.handleCreateWindowFailure(operation, "lease-1", null, new Error("gh exploded"), api),
-    /is ambiguous\/NeedsReview/,
+    // The truthful replacement for "State remains NeedsReview; no create was attempted."
+    /State is now NeedsReview; a create MAY have reached GitHub\./,
   );
   assert.deepEqual(calls, [["getOperation", OP], ["failure", OP, "AmbiguousOrIncomplete"]]);
 });
@@ -1308,4 +1309,128 @@ test("--dry-run promotes nothing", async () => {
   const result = await runSyncTasks("promote-dry", [task(1, "#42 Foo", "")], [GH_ISSUE], { dryRun: true });
   assert.deepEqual(result.requests.filter((r) => r.method !== "GET"), [], "a dry run writes nothing at all");
   assert.equal(result.linksRegistered, 0);
+});
+
+// --- the ambiguous-failure message says only what was observed -----------------------------
+//
+// "State remains NeedsReview; no create was attempted." was appended to a .catch() that had
+// just swallowed the failure. Both halves can be false, and the second one is what an operator
+// reads while deciding whether to retry a create.
+
+const DISPATCHED_OP = {
+  operationId: OP,
+  state: "Dispatched",
+  dispatchedAt: "2026-09-01T10:00:00",
+  leaseExpiresAt: "2026-09-01T10:02:00",
+};
+const PREPARED_OP = { operationId: OP, state: "Prepared", dispatchedAt: null, leaseExpiresAt: "2026-09-01T10:02:00" };
+
+test("a persisted failure reports the state that was actually written", async () => {
+  const { ambiguousFailureMessage } = await import("./portfolio-sync.mjs?msg-persisted");
+
+  const dispatched = ambiguousFailureMessage(DISPATCHED_OP, "Scan found 2 clean matches.", {
+    persisted: { ...DISPATCHED_OP, state: "NeedsReview" },
+  });
+  assert.match(dispatched, /State is now NeedsReview/);
+  assert.match(dispatched, /a create MAY have reached GitHub/);
+  assert.doesNotMatch(dispatched, /no create was attempted/,
+    "from Dispatched, a create may well have reached GitHub");
+
+  // RecordFailureAsync classifies a never-dispatched ambiguous failure as DefinitivePreCreate,
+  // so the message must report DefinitiveFailure rather than assuming NeedsReview.
+  const predispatch = ambiguousFailureMessage(PREPARED_OP, "Frozen body self-check failed.", {
+    persisted: { ...PREPARED_OP, state: "DefinitiveFailure" },
+  });
+  assert.match(predispatch, /State is now DefinitiveFailure/);
+  assert.match(predispatch, /no create was attempted/);
+  assert.doesNotMatch(predispatch, /NeedsReview/);
+});
+
+test("a failed persist never claims the state was saved", async () => {
+  const { ambiguousFailureMessage } = await import("./portfolio-sync.mjs?msg-failed");
+
+  const failed = ambiguousFailureMessage(DISPATCHED_OP, "Scan was incomplete.", {
+    persisted: null,
+    error: new Error("POST /failure -> 409 Conflict: operation-lease-expired"),
+    observed: DISPATCHED_OP,
+  });
+  assert.match(failed, /State could NOT be persisted/);
+  assert.match(failed, /operation-lease-expired/);
+  assert.match(failed, /It remains Dispatched/);
+  assert.match(failed, /its lease expires 2026-09-01T10:02:00/);
+  assert.match(failed, /Re-run --resume 11111111-2222-4333-8444-555555555555/);
+  // The two sentences the old text asserted unconditionally, both refuted here.
+  assert.doesNotMatch(failed, /State is now/);
+  assert.doesNotMatch(failed, /no create was attempted/);
+
+  // recordAmbiguousWriteFailure returns null WITHOUT sending anything when there is no lease
+  // token -- the second way the old sentence lied, and indistinguishable from success.
+  const noLease = ambiguousFailureMessage(DISPATCHED_OP, "Scan was incomplete.", {
+    persisted: null,
+    skipped: "no-lease-token",
+    observed: DISPATCHED_OP,
+  });
+  assert.match(noLease, /no lease token was held, so nothing was sent/);
+  assert.doesNotMatch(noLease, /State is now/);
+});
+
+test("recordAmbiguousOutcome reports what happened instead of swallowing it", async () => {
+  const mod = await import("./portfolio-sync.mjs?msg-outcome");
+  const calls = [];
+
+  const failing = {
+    failure: async () => { calls.push("failure"); throw new Error("POST -> 409 Conflict: operation-lease-expired"); },
+    getOperation: async () => { calls.push("getOperation"); return DISPATCHED_OP; },
+  };
+  const realError = console.error;
+  console.error = () => {};
+  let failedOutcome;
+  try {
+    failedOutcome = await mod.recordAmbiguousOutcome(DISPATCHED_OP, "lease-1", "reason", failing);
+  } finally {
+    console.error = realError;
+  }
+  assert.equal(failedOutcome.persisted, null);
+  assert.match(failedOutcome.error.message, /operation-lease-expired/);
+  assert.equal(failedOutcome.observed.state, "Dispatched");
+  assert.deepEqual(calls, ["failure", "getOperation"]);
+
+  // No lease token: nothing is sent at all, and that is reported rather than returned as null.
+  calls.length = 0;
+  const skipped = await mod.recordAmbiguousOutcome(DISPATCHED_OP, null, "reason", failing);
+  assert.equal(skipped.skipped, "no-lease-token");
+  assert.deepEqual(calls, ["getOperation"], "no failure request is sent without a lease token");
+
+  // And the success path still reports the persisted row.
+  const ok = {
+    failure: async () => ({ ...DISPATCHED_OP, state: "NeedsReview" }),
+    getOperation: async () => { throw new Error("must not be called"); },
+  };
+  const persisted = await mod.recordAmbiguousOutcome(DISPATCHED_OP, "lease-1", "reason", ok);
+  assert.equal(persisted.persisted.state, "NeedsReview");
+});
+
+test("the create window's failure text describes the row, not a hope", async () => {
+  const mod = await import("./portfolio-sync.mjs?msg-createwindow");
+  // The snapshot the create window holds predates dispatch, so "no create was attempted" would
+  // be inferred from stale data. This handler is only reachable past externalApi.dispatch.
+  const api = {
+    getOperation: async () => ({ ...PREPARED_OP, state: "Dispatched", dispatchedAt: "2026-09-01T10:00:00" }),
+    failure: async () => { throw new Error("POST -> 409 Conflict: operation-lease-expired"); },
+  };
+  const realError = console.error;
+  console.error = () => {};
+  try {
+    await assert.rejects(
+      () => mod.handleCreateWindowFailure(PREPARED_OP, "lease-1", null, new Error("gh exploded"), api),
+      (err) => {
+        assert.match(err.message, /State could NOT be persisted/);
+        assert.match(err.message, /a create MAY have reached GitHub/);
+        assert.doesNotMatch(err.message, /no create was attempted/);
+        return true;
+      },
+    );
+  } finally {
+    console.error = realError;
+  }
 });
