@@ -189,9 +189,26 @@ public sealed class AdminHealthEndpointTests
             Assert.Equal(HttpStatusCode.OK, lockedStatusCode);
             Assert.Equal("error", lockedBody.GetProperty("status").GetString());
             Assert.False(string.IsNullOrWhiteSpace(lockedBody.GetProperty("db").GetProperty("error").GetString()));
-            // The bound is what matters: the default 30 s busy retry must NOT be paid.
+            // The bound guards the CONFIGURED 2 s command timeout, not merely "less than the 30 s
+            // driver default". At 15 s this assertion stayed green against a probe raised to 10 s,
+            // so it guarded the default it was not testing rather than the value this change
+            // introduced — the non-failable-check shape #498 is about, in the test that names it.
+            //
+            // 6 s is a HARD LITERAL on purpose, and deliberately NOT "derived from the configured
+            // timeout": a bound computed from the endpoint's own constant moves in lockstep with
+            // the regression it exists to catch, so raising the timeout to 10 s would raise the
+            // bound to 10 s + overhead and stay green. The number encodes the REQUIREMENT — health
+            // answers in a few seconds — instead of mirroring the implementation.
+            //
+            // Why 6: measured 2.0 s on three consecutive runs (the 2 s timeout plus host overhead
+            // too small to move the first decimal this message prints). 3x the measurement leaves
+            // 4 s of headroom for a loaded machine's scheduling jitter, and sits 5x under the 30 s
+            // default so a dropped SetCommandTimeout is caught decisively.
+            //
+            // STATED LIMIT: a regression to 3-6 s still passes here. That is the accepted residue
+            // of any wall-clock bound — tightening further buys CI flakes, not detection.
             Assert.True(
-                start.Elapsed < TimeSpan.FromSeconds(15),
+                start.Elapsed < TimeSpan.FromSeconds(6),
                 $"health blocked for {start.Elapsed.TotalSeconds:F1}s behind a write lock");
         }
 
