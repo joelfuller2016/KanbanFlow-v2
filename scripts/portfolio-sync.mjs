@@ -1157,6 +1157,16 @@ async function recordAmbiguousWriteFailure(operationId, leaseToken, error, api =
   });
 }
 
+// `issue.node_id || issue.id` is NOT a defensive fallback and NOT dead code: it is the only
+// branch that works on the sync path. `gh issue list --json` offers no `node_id` field at all
+// (confirmed against gh's own field list), and its `id` IS the GraphQL node id; `gh api
+// repos/{repo}/issues[/{n}]` puts a repo-local NUMBER in `id` and the node id in `node_id`. So
+// each shape takes a different arm and deleting either one breaks the other's callers. The
+// asymmetry worth knowing: promotion refuses anything that is not a non-numeric string
+// (promotableIssueNodeId), because it is binding identity to a task that had none; these two
+// sites do NOT, because their issue records are already identity-verified upstream --
+// fetchIssueByNumber throws without `node_id`, and the sync path's records are node-id-shaped by
+// construction. Normalizing both boundaries into one record is 506-DESIGN.md 3 cluster 2.
 function linkMetadataNeedsRefresh(link, repoIdentity, issue) {
   return Boolean(link && repoIdentity && (
     link.repositoryExternalId !== repoIdentity.externalId
@@ -1692,6 +1702,11 @@ function legacyPromotionDisposition(task, issue, repoIdentity) {
   return { kind: "promote", nodeId };
 }
 
+// Shape note: see linkMetadataNeedsRefresh. `issue.node_id || issue.id` is load-bearing in BOTH
+// directions -- the sync-path callers (create, drift refresh, legacy promotion) hand this a
+// `gh issue list --json` record whose `id` is the node id and which has no `node_id` field, while
+// backfill hands it a REST record that has both. Promotion is the one caller that first refuses a
+// numeric id outright (promotableIssueNodeId); the others rely on their upstream verification.
 function verifiedLinkRequest(taskId, repoIdentity, issue, actor) {
   return {
     taskId,
