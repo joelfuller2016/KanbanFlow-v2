@@ -1335,6 +1335,9 @@ test("a persisted failure reports the state that was actually written", async ()
   assert.match(dispatched, /a create MAY have reached GitHub/);
   assert.doesNotMatch(dispatched, /no create was attempted/,
     "from Dispatched, a create may well have reached GitHub");
+  // NeedsReview is the one persisted outcome the operator can still act on, so the message
+  // keeps the next step the old text carried.
+  assert.match(dispatched, /Re-run --resume 11111111-2222-4333-8444-555555555555 to reconcile it\./);
 
   // RecordFailureAsync classifies a never-dispatched ambiguous failure as DefinitivePreCreate,
   // so the message must report DefinitiveFailure rather than assuming NeedsReview.
@@ -1344,6 +1347,8 @@ test("a persisted failure reports the state that was actually written", async ()
   assert.match(predispatch, /State is now DefinitiveFailure/);
   assert.match(predispatch, /no create was attempted/);
   assert.doesNotMatch(predispatch, /NeedsReview/);
+  assert.doesNotMatch(predispatch, /Re-run --resume/,
+    "a DefinitiveFailure needs no re-run hint: Resume restores it to Prepared on the next ordinary run");
 });
 
 test("a failed persist never claims the state was saved", async () => {

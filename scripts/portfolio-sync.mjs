@@ -1106,7 +1106,11 @@ function ambiguousFailureMessage(operation, rawReason, outcome) {
     : "no create was attempted";
 
   if (outcome?.persisted) {
-    return `operation ${id}: ${reason} State is now ${writeStateName(outcome.persisted.state)}; ${createClause}.`;
+    const persistedState = writeStateName(outcome.persisted.state);
+    // NeedsReview is the one persisted outcome with an operator move left; the old text named
+    // --resume and losing that hint would trade one unhelpful message for another.
+    const next = persistedState === "NeedsReview" ? ` Re-run --resume ${id} to reconcile it.` : "";
+    return `operation ${id}: ${reason} State is now ${persistedState}; ${createClause}.${next}`;
   }
 
   const why = outcome?.skipped === "no-lease-token"
