@@ -236,9 +236,15 @@ public static class DbPathResolver
     /// </summary>
     /// <remarks>
     /// One <see cref="FileInfo"/>, deliberately. Its properties are served from a single cached
-    /// stat, so "did it exist" and "what were its timestamps" describe the same instant and cannot
-    /// straddle a concurrent <c>Copy-Item</c>. Two separate calls could report a file that existed
-    /// but has no facts, or facts for a file reported absent.
+    /// stat, so the facts inside a returned snapshot describe the same instant and cannot straddle
+    /// a concurrent <c>Copy-Item</c>.
+    /// <para>That is narrower than "existence and facts always agree", and the gap is still open:
+    /// the catch below returns <c>(true, null)</c> — a file that existed but has no facts — from a
+    /// SINGLE call, so <see cref="DbPathResolution.Existed"/> true does not imply a non-null
+    /// snapshot and every reader must null-check. Both call sites now take the <c>Existed</c> this
+    /// returns rather than hardcoding it, which closes the other route to that state; the
+    /// unreadable-file case remains, tracked as
+    /// <see href="https://github.com/joelfuller2016/KanbanFlow-v2/issues/513">#513</see>.</para>
     /// </remarks>
     private static (bool Existed, DbFileSnapshot? Snapshot) Stat(string path)
     {

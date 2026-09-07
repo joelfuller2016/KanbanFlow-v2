@@ -427,7 +427,8 @@ public sealed class AdminHealthEndpointTests
 
         /// <summary>
         /// The file's real facts, stat'd exactly as <c>DbPathResolver</c> stats them at boot — null
-        /// when there is no file, which is the same invariant the resolution carries.
+        /// when there is no file. The resolver additionally returns null for a file it cannot stat
+        /// (#513); this fixture does not reproduce that case and does not need to.
         /// </summary>
         /// <remarks>
         /// Read here rather than by calling <c>DbPathResolver.Resolve</c>, which creates the parent

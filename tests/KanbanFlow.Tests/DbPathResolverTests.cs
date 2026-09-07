@@ -636,7 +636,9 @@ public sealed class DbPathResolverTests : IDisposable
         var app = NewDirectory("app");
 
         // Both branches that resolve to a file which is not there: the explicit override, and the
-        // fall-through default. Non-null exactly when Existed is true.
+        // fall-through default. This binds one direction only — no file, therefore no facts. The
+        // converse does NOT hold: Existed can be true with a null snapshot when the file is there
+        // but cannot be stat'd (#513), so this case is not evidence of a biconditional.
         var configured = DbPathResolver.Resolve(Path.Combine(app, "absent.db"), launch, launch, app);
         Assert.False(configured.Existed);
         Assert.Null(configured.Snapshot);
