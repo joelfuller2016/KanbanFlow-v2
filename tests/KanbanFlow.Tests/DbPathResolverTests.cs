@@ -66,14 +66,57 @@ public sealed class DbPathResolverTests : IDisposable
     {
         var launch = NewDirectory("launch");
         var app = NewDirectory("app");
-        WriteDatabase(launch);   // both would otherwise be probed and hit
-        WriteDatabase(app);
+        var shadowedByLaunch = WriteDatabase(launch);   // both would otherwise be probed and hit
+        var shadowedByApp = WriteDatabase(app);
         var requested = Path.Combine(NewDirectory("explicit"), "chosen.db");
 
         var resolution = DbPathResolver.Resolve(requested, launch, launch, app);
 
         Assert.Equal(DbPathResolver.SourceEnvironment, resolution.Source);
         Assert.Equal(requested, resolution.Path);
+
+        // The claim in this case's NAME — the override beats both candidates — is the two lines
+        // above. This third line used to read Assert.Empty, which recorded the #498-review defect
+        // rather than a requirement: the env branch hardcoded the list empty, so a condition the
+        // health endpoint reports could never occur in the deployed configuration (every production
+        // start pins the variable). Naming both abandoned boards is strictly stronger than
+        // asserting the list is empty — it is the same two files, now checked by path.
+        Assert.Equal([shadowedByLaunch, shadowedByApp], resolution.ShadowedPaths);
+    }
+
+    [Fact]
+    public void EnvironmentVariable_NamesTheBoardsItDidNotOpen_AtTheApplicationsOwnAnchors()
+    {
+        // #498 review, finding 4. `shadowed-by-another-database` was dead code in production:
+        // start-kanbanflow.ps1 always sets the variable and register-kanbanflow-task.ps1 pins
+        // -DbPath, so every real start took the env branch — which returned an empty list by
+        // construction. Two real boards existing while one is open is the #354 presentation itself.
+        var launch = NewDirectory("launch");
+        var app = NewDirectory("app");
+        var abandoned = WriteDatabase(app);
+        var requested = Path.Combine(NewDirectory("explicit"), DbPathResolver.FileName);
+
+        var resolution = DbPathResolver.Resolve(requested, launch, launch, app);
+
+        Assert.Equal([abandoned], resolution.ShadowedPaths);
+        // Reported, never enforced: the override still wins outright. No roadblocks (#354).
+        Assert.Equal(requested, resolution.Path);
+    }
+
+    [Fact]
+    public void EnvironmentVariable_DoesNotReportTheBoardItOpened_AsShadowingItself()
+    {
+        // The override pointing AT a candidate directory is the common harness shape:
+        // scripts/smoke-api.ps1 launches with the working directory and KANBANFLOW_DB_PATH set to
+        // the same fresh folder. Listing that file as its own shadow would make every smoke run
+        // report `degraded` for a condition that does not exist.
+        var launch = NewDirectory("launch");
+        var app = NewDirectory("app");
+        var opened = WriteDatabase(launch);
+
+        var resolution = DbPathResolver.Resolve(opened, launch, launch, app);
+
+        Assert.Equal(opened, resolution.Path);
         Assert.Empty(resolution.ShadowedPaths);
     }
 
@@ -485,6 +528,122 @@ public sealed class DbPathResolverTests : IDisposable
 
         Assert.DoesNotContain("Environment.CurrentDirectory", source, StringComparison.Ordinal);
         Assert.DoesNotContain($"\"{DbPathResolver.EnvironmentVariableName}\"", source, StringComparison.Ordinal);
+    }
+
+    // ── The boot-time capture: WHEN the resolution happens is the whole signal (#498 review, 5). ──
+
+    /// <summary>
+    /// <see cref="DbPathResolution.Existed"/> and <see cref="DbPathResolution.Snapshot"/> are worth
+    /// exactly as much as the instant they were taken. Both describe the database <em>as the
+    /// application found it</em>, which is only true while the resolution is computed once, eagerly,
+    /// before <c>EnsureCreated()</c> and <c>SeedData</c> run.
+    ///
+    /// <para>The one-line "cleanup" a future contributor writes —
+    /// <c>AddSingleton(_ =&gt; DbPathResolver.Resolve(...))</c> — makes the singleton lazy, so it is
+    /// first materialised by the health REQUEST, long after the app created and seeded the file. The
+    /// endpoint then answers <c>existedAtStartup: true</c> while the app's own boot log says
+    /// <c>existing=false</c>: the detector reports the opposite of what happened, and every
+    /// behavioural test still passes, because each one injects its own resolution.</para>
+    ///
+    /// <para>A GUARD, not a reproduction — like <see cref="TheResolutionRuleIsNotReImplemented"/>
+    /// above, it reads the source rather than running it. <c>scripts/smoke-api.ps1</c> is the
+    /// behavioural bind and does catch this (exit 1); this case exists because <c>dotnet test</c> is
+    /// the loop contributors actually run, and it stayed green through the sabotage. It is anchored
+    /// on the two structural properties rather than on any identifier, so renaming the local does
+    /// not defeat it.</para>
+    /// </summary>
+    [Fact]
+    public void TheResolutionIsCapturedEagerlyAtBoot_BeforeTheDatabaseIsCreated()
+    {
+        // Comments only, stripped: Program.cs explains this very hazard in prose ABOVE the code
+        // that avoids it, so raw text positions would report the explanation as the call site.
+        var code = File.ReadAllLines(Path.Combine(RepositoryRoot(), "src/KanbanFlow/Program.cs"))
+            .Select(line => line.TrimStart())
+            .Where(line => !line.StartsWith("//", StringComparison.Ordinal))
+            .ToList();
+
+        // 1. The registration must hand over an ALREADY-COMPUTED resolution. A factory lambda
+        //    defers the stat until first use, which for this singleton is the first health request.
+        var registration = Assert.Single(
+            code,
+            line => line.Contains("AddSingleton", StringComparison.Ordinal)
+                    && line.Contains("Resol", StringComparison.Ordinal));
+        Assert.DoesNotContain("=>", registration);
+
+        // 2. And it must be computed before the schema/seed work that changes the very facts it
+        //    captures — a resolution moved below EnsureCreated() reports the state the app itself
+        //    produced, which is the same defect by a different route.
+        var resolvedAt = code.FindIndex(line =>
+            line.Contains($"{nameof(DbPathResolver)}.{nameof(DbPathResolver.Resolve)}(", StringComparison.Ordinal));
+        var ensureCreatedAt = code.FindIndex(line => line.Contains("EnsureCreated(", StringComparison.Ordinal));
+        Assert.True(resolvedAt >= 0, "Program.cs no longer resolves the database path through DbPathResolver");
+        Assert.True(ensureCreatedAt >= 0, "Program.cs no longer calls EnsureCreated(); re-anchor this guard");
+        Assert.True(
+            resolvedAt < ensureCreatedAt,
+            "the database path must be resolved BEFORE EnsureCreated(), or existedAtStartup and the "
+            + "file facts describe the board this process just made rather than the one it found");
+    }
+
+    // ── The file's own facts, captured with Existed from one stat (#498 review, 2). ──
+
+    [Fact]
+    public void Resolution_CapturesTheFilesOwnFacts_WhenTheBoardAlreadyExists()
+    {
+        var launch = NewDirectory("launch");
+        var app = NewDirectory("app");
+        var existing = WriteDatabase(NewDirectory("explicit"));
+        var onDisk = new FileInfo(existing);
+
+        foreach (var resolution in new[]
+                 {
+                     DbPathResolver.Resolve(existing, launch, launch, app),   // env branch
+                     DbPathResolver.Resolve(null, Path.GetDirectoryName(existing)!, launch, app), // probe branch
+                 })
+        {
+            var snapshot = Assert.IsType<DbFileSnapshot>(resolution.Snapshot);
+            Assert.Equal(onDisk.Length, snapshot.SizeBytes);
+            Assert.Equal(onDisk.CreationTimeUtc, snapshot.CreatedAtUtc);
+            Assert.Equal(onDisk.LastWriteTimeUtc, snapshot.LastWriteUtc);
+        }
+    }
+
+    [Fact]
+    public void Resolution_CarriesTheCopySignature_WhenTheBoardWasRestoredFromASeed()
+    {
+        // The literal Copy-Item signature, reproduced: the destination is created NOW and inherits
+        // the source's older last-write time, so the board reports having been written before it
+        // existed. Impossible for a board that has been used since it was made — and the only
+        // in-app trace left when a launcher SUCCESSFULLY restores the seed onto the wrong path.
+        var launch = NewDirectory("launch");
+        var app = NewDirectory("app");
+        var restored = WriteDatabase(NewDirectory("wrong-root"));
+        var seedWrittenAt = DateTime.UtcNow.AddHours(-3);
+        File.SetLastWriteTimeUtc(restored, seedWrittenAt);
+
+        var resolution = DbPathResolver.Resolve(restored, launch, launch, app);
+
+        var snapshot = Assert.IsType<DbFileSnapshot>(resolution.Snapshot);
+        Assert.Equal(seedWrittenAt, snapshot.LastWriteUtc);
+        Assert.True(
+            snapshot.LastWriteUtc < snapshot.CreatedAtUtc,
+            $"last write {snapshot.LastWriteUtc:o} should precede creation {snapshot.CreatedAtUtc:o}");
+    }
+
+    [Fact]
+    public void Resolution_HasNoFileFacts_WhenThereIsNoFileToStat()
+    {
+        var launch = NewDirectory("launch");
+        var app = NewDirectory("app");
+
+        // Both branches that resolve to a file which is not there: the explicit override, and the
+        // fall-through default. Non-null exactly when Existed is true.
+        var configured = DbPathResolver.Resolve(Path.Combine(app, "absent.db"), launch, launch, app);
+        Assert.False(configured.Existed);
+        Assert.Null(configured.Snapshot);
+
+        var fallback = DbPathResolver.Resolve(null, launch, launch, app);
+        Assert.False(fallback.Existed);
+        Assert.Null(fallback.Snapshot);
     }
 
     /// <summary>
