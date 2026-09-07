@@ -453,11 +453,20 @@ The restore is guarded on the live database being **absent**, so the seed can ne
 working data — a start with a live DB present touches nothing and says so.
 
 Refreshing uses SQLite's `VACUUM INTO` against the running app rather than a file copy. This is
-not a stylistic preference: the app runs in WAL mode, so the newest committed pages live in
-`kanbanflow.db-wal`, not in the `.db` file. Copying the `.db` captures a stale, torn snapshot —
-silently, with no error, and no symptom until someone restores it. Stopping the app first does
-not fix it either, because a forced kill leaves the WAL unmerged. `VACUUM INTO` reads inside a
-transaction that sees the WAL and writes one compact file with no sidecars, needing no downtime.
+not a stylistic preference — though the reason is not the one this section used to give. **The app
+does not run in WAL mode.** Nothing in `src/` sets `journal_mode` and the committed seed reports
+`delete`; that is the same fact the health probe's 2-second bound rests on above, and WAL is
+tracked separately in [#209](https://github.com/joelfuller2016/KanbanFlow-v2/issues/209) rather
+than enabled here.
+
+The sidecar argument survives with the right sidecar. In rollback-journal mode a write goes into
+`kanbanflow.db` **in place** while the original pages are held in `kanbanflow.db-journal`, so a
+copy taken mid-transaction mixes pre- and post-write pages — silently, with no error, and no
+symptom until someone restores it. Stopping the app first does not fix it either: a forced kill
+leaves a hot journal behind, and a bare `.db` copy carries nothing to roll it back with.
+`VACUUM INTO` runs inside a read transaction, so it sees only committed state and writes one
+compact file with no sidecars. The app stays up throughout — at the cost of a shared read lock,
+so a commit landing mid-snapshot waits on it rather than tearing the copy.
 
 `scripts/snapshot-seed.mjs` needs `node:sqlite` (Node ≥ 22.5). The package floor stays at 18
 because nothing at runtime needs it — only this maintainer tool does, and it says so if the
