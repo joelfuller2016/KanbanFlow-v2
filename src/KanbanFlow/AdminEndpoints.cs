@@ -269,7 +269,7 @@ public static class AdminEndpoints
                     sizeBytes = database.Snapshot?.SizeBytes,
                     shadowedPaths = database.ShadowedPaths,
                     projects,
-                    status = probeError is null ? "ok" : "unreachable",
+                    status = probeError is null ? "ok" : "error",
                     error = probeError,
                     reasons,
                     elapsedMs = Math.Round(stopwatch.Elapsed.TotalMilliseconds, 1)
