@@ -176,9 +176,14 @@ public static class AdminEndpoints
                 //
                 // The window is minutes rather than seconds on purpose: the launcher runs a
                 // dotnet publish between restoring the seed and starting the app, and a cold publish
-                // is far slower than the ~5 s a warm one takes. Unlike the check above this one
-                // expires, so a wrong-path deployment stops reporting it after the window even
-                // though it is still wrong — the durable signal is last-write-precedes-creation.
+                // is far slower than the ~5 s a warm one takes.
+                //
+                // Note this is measured against the RECORDED START TIME, not the clock, so it does
+                // not tick away underneath a running process: a start inside the window keeps
+                // reporting for that process's whole life, and the signal is lost at the first
+                // restart more than the window after the file was created. That is the right frame
+                // for a criterion evaluated across reboots (#477 §9) — but it does expire, and the
+                // durable signal is last-write-precedes-creation above.
                 if (database.Existed &&
                     startup.StartedAtUtc - snapshot.CreatedAtUtc is { } age &&
                     age < BoardCreatedJustBeforeStartup &&

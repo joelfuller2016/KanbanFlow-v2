@@ -256,7 +256,7 @@ The `reasons` that make it `degraded`:
 | `empty-board` | the read worked and returned zero projects | until a project exists |
 | `created-at-startup` | the file was not on disk when the path was resolved | **this boot only** |
 | `last-write-precedes-creation` | the board was written *before* it was created — impossible for a board used since it was made, and the literal signature of a timestamp-preserving copy | until the first real write |
-| `created-moments-before-startup` | the file came into existence within 15 minutes before this process started | 15 minutes |
+| `created-moments-before-startup` | the file came into existence within 15 minutes before this process started | until a restart more than 15 minutes after the file was created |
 | `shadowed-by-another-database` | a second `kanbanflow.db` exists at one of the app's own anchors | until it is removed |
 
 **What these are worth, stated plainly, because a detector oversold is worse than none.** The
