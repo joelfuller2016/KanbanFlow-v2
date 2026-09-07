@@ -10,7 +10,11 @@ The user's September 6 clarification supersedes the separate-preview approach pr
 
 > I do like the ides you provided but build the plan in a github issue, and everything in a new PR
 
-**Delivery:** [PR #511](https://github.com/joelfuller2016/KanbanFlow-v2/pull/511) from `feat/unified-workflow-509` contains the implementation, tests and curated documentation. Tested implementation commit: `2447ef4c15f163644fde9ce53a2dde3534a0af96`. Existing user changes unrelated to this work remain outside the PR. [Issue #509](https://github.com/joelfuller2016/KanbanFlow-v2/issues/509) remains open for the complete initiative; implementation checkboxes are checked only after their evidence exists. The PR is open for review and has not been merged.
+The September 7 direction adds a continuing validation and human-control requirement:
+
+> you always need to rebuild and test your PR, you need to think abotu having a human be able to verify and interact with the board, understand what is happening and be able to make descisions which should redirect the AI agent. But i dont want any major ui changes unlesss we full verify and user test each change.
+
+**Delivery:** [PR #511](https://github.com/joelfuller2016/KanbanFlow-v2/pull/511) from `feat/unified-workflow-509` contains the implementation, tests and curated documentation. Latest rebuilt application/case source: `dbdacfebc3869beca4568f55e6f9f86955d597e5`, including newer review fixes and the September 7 refresh correction. Existing user changes unrelated to this work remain outside the PR. [Issue #509](https://github.com/joelfuller2016/KanbanFlow-v2/issues/509) remains open for the complete initiative. Automated verification and actual human usability approval are separate; the latter remains pending. The PR is open and has not been merged.
 
 **Source baseline:** `53a300066e118b0e5a1b0ac9d02294169d2e076f`. **Environment:** Windows, PowerShell 7.6.5, .NET SDK 10.0.400, existing .NET 10/Blazor Server/EF Core SQLite application. No Docker. **Owner:** repository maintainer. **Date:** September 6, 2026.
 
@@ -209,6 +213,33 @@ The existing task service remains authoritative for task completion and its audi
 - [x] Update README/architecture/operation guidance and local editable diagrams with source revision and actual checks.
 - [x] Put only this task's implementation and documentation into the new PR; retain unrelated working-tree changes locally.
 - [x] Link the PR back to this issue and describe completed behavior, evidence and remaining scope accurately.
+
+### U-09 — Rebuild and verify human control
+
+- [x] Fetch and inspect the latest PR changes, preserve unrelated work, and rebuild current source before testing.
+- [x] Run the required solution gate, script suite, API smoke and actual native/stdio MCP checks; record source revision, commands, results and limitations.
+- [x] Exercise a browser decision → MCP read → specific acknowledgement → revised brief/plan → same task cards, including stale-plan refusal.
+- [x] Reproduce and correct the existing refresh action leaving board cards stale; preserve filters, unsaved drafts and keyboard access without a layout change.
+- [x] Repeat the complete request-to-result browser walkthrough on the rebuilt app.
+- [x] Back up and restart the normal board; verify every prior row remains intact.
+- [x] Record the repeatable case, human walkthrough and per-area usability checks in the owning test-case registry.
+- [x] Persist the rebuild/test and human-review requirements in repository instructions and the PR template.
+
+### U-10 — Actual human usability review
+
+- [ ] A person can locate the original request, interpreted brief, current tasks, progress and reported evidence without implementation knowledge.
+- [ ] A person can distinguish a saved decision from an agent acknowledgement and a change applied to the plan/cards.
+- [ ] A person redirects work through Updates, verifies the acknowledgement and inspects the revised scope on the same tasks.
+- [ ] Record actual feedback for every affected UI area in the linked test-case checklist and resolve accepted feedback.
+- [ ] Before adopting any major UI change, verify each affected interaction and user-test the concrete change.
+
+The [TC-509 case and human checklist](../test-cases/509-unified-workflow/README.md) owns these review steps. The normal board has separate U-09 automation/fix and U-10 human-review cards. An automated walkthrough or an agent's source review cannot complete U-10.
+
+## Revalidation evidence — September 7, 2026
+
+The [pinned run](../test-cases/509-unified-workflow/runs/2026-09-07-dbdacfebc386.md) records the incoming PR head, the reproduced stale-card failure, the six-line handler correction, the rebuild and passing checks. The current correction keeps the existing layout and controls. Full rebuild: zero warnings/errors. Required gate: 1,160 .NET tests passed. Script suite: 223 passed. Actual native/stdio MCP, browser decision/replan, complete request-to-result browser flow and configured API smoke passed. Default embedding-provider latency remains unverified.
+
+The normal app was rebuilt and restarted with a SQLite-consistent backup. All prior rows in 28 tables matched after restart, with 176 existing tasks and no foreign-key violations before adding the two follow-up cards. The user's new decision, the agent's acknowledgement and the revised brief/plan are recorded on the same real board. Actual human usability review remains pending.
 
 ## Verified implementation evidence — September 6, 2026
 

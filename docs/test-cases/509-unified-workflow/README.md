@@ -1,0 +1,87 @@
+# TC-509: a human decision redirects work on the existing board
+
+For the project owner, reviewers and connected AI clients. Owner: repository maintainer. Reviewed September 7, 2026 on Windows, PowerShell 7, .NET 10 and Playwright CLI. [Issue #509](https://github.com/joelfuller2016/KanbanFlow-v2/issues/509) owns the plan; [PR #511](https://github.com/joelfuller2016/KanbanFlow-v2/pull/511) owns this implementation. Measured results belong in this case's `runs/` directory.
+
+The human should be able to locate the original request, understand the current work and evidence, make a decision, and see the connected client acknowledge and apply it to the same tasks. This case tests that loop without introducing another board or changing its layout. Actual human usability approval is a separate result.
+
+## Processes and data
+
+Use the existing ASP.NET Core app, SQLite database, native `/mcp` endpoint and optional Node stdio wrapper. For automated checks, publish the app into an ignored repository directory and use a disposable SQLite file on a separate loopback port. The [operating guide](../../request-workflow.md#verification-and-local-operation) explains startup and recovery. Automated fixtures must not write to the normal database.
+
+```mermaid
+sequenceDiagram
+    actor Person
+    participant Board as Existing board and request panel
+    participant Store as Shared workflow and task services
+    participant Client as Connected MCP client
+    Person->>Board: Save a decision in Updates
+    Board->>Store: Append decision and advance request version
+    Store-->>Board: Saved, brief needs review
+    Client->>Store: Read current request context
+    Store-->>Client: Decision ID, text, version and existing task IDs
+    Client->>Store: Record acknowledgement referencing decision ID
+    Client->>Store: Revise brief and plan with current task tokens
+    Client->>Store: Publish revision to the same task cards
+    Person->>Board: Refresh saved details
+    Board->>Store: Reload request details and existing board
+    Store-->>Board: Acknowledgement, revised cards and retained history
+    Person->>Board: Inspect outcome and accept or redirect again
+```
+
+Every client arrow is an explicit MCP call. The current PR does not launch Codex, automatically read decisions, interrupt running work, or provide authenticated reviewer identities. Caller attribution and a saved message do not prove agent delivery. The future runner must implement those controls on these same records.
+
+## Automated acceptance checks
+
+| ID | Observable check |
+|---|---|
+| A1 | A browser decision retains exact text, author and request identity in MCP context; the version advances and `needsBriefReview` becomes true. |
+| A2 | An unpublished pre-decision plan cannot publish with either its old version or a refreshed version. A revised brief also prevents publishing the old brief's plan. |
+| A3 | A connected MCP client acknowledges the decision ID, revises the brief and publishes a revised plan using the same draft/task IDs and original read tokens. |
+| A4 | Refresh saved details shows the acknowledgement and reloads actual board cards; changed checks persist and prior evidence becomes historical. |
+| A5 | Refresh preserves an unsaved brief and the person's board filter. The revised card opens by keyboard and contains its request link. |
+| A6 | The original and prior history remain intact. At 390px the request/decision view has no horizontal page overflow. |
+| A7 | Native and stdio MCP discover matching schemas and share records; full solution and script checks pass at the recorded source revision. |
+
+Executables: [workflow-human-steering.browser.js](../../../scripts/workflow-human-steering.browser.js) and [smoke-workflow.mjs](../../../scripts/smoke-workflow.mjs). The latter creates a labeled single-task fixture. The browser case refuses normal port 5123 and requires the fixture's title and original-message provenance before writing.
+
+1. **Rebuild the current PR.** From the repository root, run the quality gate and script suite. Record the source revision and actual exits. Rebuild after source changes; do not reuse stale test binaries.
+2. **Start a disposable instance.** Use a fresh ignored database and published output, for example on port 5126. Confirm the database path in startup logs. On failure, retain the log and fix that instance; do not replace the normal board.
+3. **Create the transport fixture.** Run `node scripts/smoke-workflow.mjs http://127.0.0.1:5126`. Expect `passed: true` and printed request/board/task IDs. This checks real native and stdio transports and leaves the fixture for the browser.
+4. **Run the browser case.** Open the printed URL using a named Playwright CLI session. Run from an ignored working directory, so screenshots and CLI logs remain local. Expect exit 0; an assertion failure is a failed case even when earlier checks passed.
+
+   ```powershell
+   playwright-cli -s=human-511 open <the-board-URL-printed-in-step-3>
+   playwright-cli -s=human-511 run-code --filename=C:/Users/Homepc/Projects/KanbanFlow-v2/scripts/workflow-human-steering.browser.js
+   ```
+
+   Replace the marked URL and adjust the absolute script path to your checkout. The script saves `steering-before.png`, `steering-acknowledged.png`, `steering-task-detail.png` and `steering-mobile.png` in its working directory. Inspect them after transitions settle. These are behavior-check evidence, not a pixel-diff or accessibility certification.
+5. **Record and clean up.** Add a run record with commit, environment, results, failures, limitations and human status. Close only the named browser and disposable app process you started; retain the normal app and its data.
+
+## Human walkthrough and decision contract
+
+Use a labeled practice request for changes that should not affect real work. For real work, use its existing project/request and communicate with the connected agent in the same session.
+
+1. **Orient yourself.** Open the project board and **Requests & plans**. Identify the request, read **Original**, inspect **Brief**, then compare **Plan & tasks** with the actual cards. You should be able to explain the outcome and current status without reading implementation files.
+2. **Find what needs a decision.** Read **Updates** and **Results**. Find the latest progress, question or report, its checked source revision, observed checks and limitations. A Review card means review is needed; it does not mean you accepted the result.
+3. **Redirect the work.** In **Updates**, select **decision**, enter a concrete change to scope, priority, acceptance or constraints, and choose **Add update**. Expect it in history and a brief-review notice. If absent, refresh and check the selected request before retrying.
+4. **Verify acknowledgement.** Ask the connected agent to read the request. It should cite the decision ID or exact text, explain its response, and record that acknowledgement in Updates. Until then, the decision is saved but not acknowledged. Stopping a process currently requires the connected session's stop controls; a board message does not stop it.
+5. **Inspect the revision.** After the agent updates the brief and plan, choose **Refresh saved details**. Check the revised scope on the same cards and acceptance checks. If it misses your intent, add another decision; do not accept merely because tests passed.
+
+The future managed runner must give decision delivery, acknowledgement, pause/stop, application and continuation durable, visible records. These are later requirements, not implied capabilities.
+
+## UI review checklist
+
+Record a person's feedback for each UI area introduced by PR #511. Keep a row pending until someone actually tries it. A major change remains a bounded proposal or preview until its interactions are verified and user-tested.
+
+| Area | Change from the existing UI | Actual human check |
+|---|---|---|
+| Ideas | Request & plan link and adoption of older notes | Pending: locate the original and distinguish a legacy snapshot. |
+| Project | Collapsible request section above the existing board | Pending: select requests, locate status and collapse it for the board. |
+| Original and Brief | Exact input and separately revisioned brief | Pending: distinguish ask from interpretation and preserve a draft. |
+| Plan and repositories | Drafts, repository/files and explicit publication | Pending: distinguish draft from published work and inspect the same cards. |
+| Updates | Attributed questions, decisions, progress and responses | Pending: distinguish saved, acknowledged and applied decisions. |
+| Results | Reported checks, acceptance and historical conclusions | Pending: determine what is verified, what remains and whether to accept. |
+| Task detail | Originating request and repository/result context | Pending: open with the keyboard and follow the request link. |
+| Existing board | Existing filters, ordering, drag/drop and controls | Pending: verify familiar interactions remain usable. |
+
+The September 7 correction only changes **Refresh saved details** to also reload the existing board through its existing callback. It adds no visual element or layout change. Review it by changing a task through MCP, refreshing, and checking the card while preserving your filter and unsaved brief.
