@@ -16,7 +16,7 @@
 | **Stack** | .NET 10 · Blazor Server · SQLite (EF Core 10) · Minimal APIs · Node 18+ for the MCP wrapper |
 | **Surfaces** | 6 UI routes · 71 REST endpoints · 28 native MCP tools · 50 Node-wrapper MCP tools |
 | **Sync** | GitHub → board projection, plus one explicit additive board → GitHub issue-create path. Preview is the default; live create requires `--allow-write --task <id>` and a durable journal. No edit/close/delete path — see [Who owns what](#who-owns-what) |
-| **Tests** | 1,056 xUnit · 56 in-app integration · 52 Playwright e2e · 133 script unit · 2 smoke suites — [all local, no CI](#deliberate-non-features) |
+| **Tests** | 1,079 xUnit · 56 in-app integration · 52 Playwright e2e · 274 script unit · 2 smoke suites — [all local, no CI](#deliberate-non-features) |
 | **Runs at** | `http://127.0.0.1:5123` — localhost only, no auth, no Docker, no cloud |
 | **Log book** | [`docs/BACKLOG.md`](docs/BACKLOG.md) — the authoritative record of what happened |
 | **Deep detail** | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) |
@@ -674,10 +674,10 @@ the command beside it — not copied from the previous README, and not copied fr
 | Node-wrapper MCP tools | 50 | `tools/list` over stdio against `scripts/mcp-server.mjs` — [exact invocation](docs/ARCHITECTURE.md#mcp-surface-28-native--50-wrapper) |
 | Blazor routes | 6 | `grep -rn '@page' src/KanbanFlow/Components/ \| sort -u` → `/`, `/Error`, `/ideas`, `/memory`, `/project/{Id:int}`, `/settings` |
 | Razor components | 28 | `find src/KanbanFlow/Components -name '*.razor' \| wc -l` |
-| xUnit tests | 1,056 | `dotnet test tests/KanbanFlow.Tests` |
+| xUnit tests | 1,079 | `dotnet test tests/KanbanFlow.Tests` |
 | In-app integration tests | 56 | `grep -c 'results.Add(await RunTest' src/KanbanFlow/Services/TestRunnerService.cs` (28 API + 22 service + 6 UI) |
 | Playwright e2e scenarios | 52 | `npm run test:ui` |
-| Script unit tests (`scripts/*.mjs`) | 133 | `npm run test:scripts` |
+| Script unit tests (`scripts/*.mjs`) | 274 | `npm run test:scripts` |
 
 Corrections this revision made to the previous README: **53 → 60** endpoints previously (both memory
 endpoints and `GET /api/tasks/{id}/context` were missing), then **60 → 71** for the #336
@@ -798,7 +798,7 @@ All local. There is no CI — [on purpose](#deliberate-non-features).
 ```
 
 ```bash
-dotnet test tests/KanbanFlow.Tests      # 1,056 xUnit tests
+dotnet test tests/KanbanFlow.Tests      # 1,079 xUnit tests
 ```
 
 ```powershell
