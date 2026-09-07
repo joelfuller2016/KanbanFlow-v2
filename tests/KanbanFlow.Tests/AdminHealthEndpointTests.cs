@@ -555,11 +555,32 @@ public sealed class AdminHealthEndpointTests
             }
 
             var app = builder.Build();
-            app.MapAdminEndpoints();
-            await app.StartAsync();
+            try
+            {
+                app.MapAdminEndpoints();
+                await app.StartAsync();
 
-            var address = app.Urls.First();
-            return new HealthHost(app, new HttpClient { BaseAddress = new Uri(address) }, startup.StartedAtUtc);
+                var address = app.Urls.First();
+                return new HealthHost(
+                    app, new HttpClient { BaseAddress = new Uri(address) }, startup.StartedAtUtc);
+            }
+            catch
+            {
+                // Everything above runs BEFORE HealthHost exists, and HealthHost owns the only
+                // DisposeAsync that would clean this up — so a throw from MapAdminEndpoints,
+                // StartAsync or Urls.First() leaves the host with no owner at all.
+                // WebApplication.StartAsync does not dispose the host it failed to start, so the DI
+                // container and any partially bound Kestrel listener would survive to the end of the
+                // run. These tests bind ephemeral ports and run in parallel, so that is one leak per
+                // failure rather than a one-off, and it lands on whatever test runs next.
+                //
+                // Measured, with a disposable sentinel in the container and a forced throw after
+                // StartAsync: with this clause the container is disposed; with the DisposeAsync
+                // removed it is not. (Scaffolding, not kept — a permanent test here would have to
+                // make the host fail to start on purpose.)
+                await app.DisposeAsync();
+                throw;
+            }
         }
 
         public async Task<(HttpStatusCode StatusCode, JsonElement Body)> GetHealthAsync()
