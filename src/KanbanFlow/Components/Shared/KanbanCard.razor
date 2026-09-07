@@ -11,13 +11,24 @@
                    aria-label="Mark @Task.Name as @(IsDone ? "not done" : "done")"
                    data-testid="board-card-@Task.Id-done-checkbox" />
             <div class="d-flex align-items-center gap-1 flex-grow-1 overflow-hidden">
+                @* The title text is wrapped in a <span> because the two-line clamp CANNOT live on
+                   the button. WebKit ignores `display: -webkit-box` on a `<button>` — the button's
+                   children sit in an anonymous box the property never reaches — so a clamp declared
+                   on the button is dead in Safari and in every browser on iOS, silently, while
+                   still working in Chromium and Gecko. #481's whole complaint is that a card shows
+                   too little of its title to identify; leaving the clamp on the button would have
+                   shipped that bug unchanged to WebKit readers. `.board-card-title-text` carries
+                   the clamp; `.board-card-title` keeps the flex-item concerns. See app.css.
+                   Measured in Playwright's WebKit and Chromium: with the clamp on the button, the
+                   WebKit title box was the full unclamped height and Chromium's was two lines;
+                   with it on the span both engines report two lines. *@
                 <button type="button"
                         class="btn btn-link fw-medium small text-start p-0 text-decoration-none text-reset flex-grow-1 board-card-title @(IsDone ? "text-decoration-line-through text-muted" : "")"
                         @onclick="() => OnOpenTaskDetail.InvokeAsync(Task)"
                         @onclick:stopPropagation="true"
                         title="@Task.Name"
                         aria-label="Open task details for @Task.Name"
-                        data-testid="board-card-@Task.Id-title">@Task.Name</button>
+                        data-testid="board-card-@Task.Id-title"><span class="board-card-title-text">@Task.Name</span></button>
                 @if (HasIncompleteBlockers)
                 {
                     <span class="badge text-bg-danger board-card-blocked-badge flex-shrink-0"

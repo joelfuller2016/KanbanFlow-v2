@@ -1430,39 +1430,67 @@ h1:focus {
    `-webkit-line-clamp` is the clamp with universal support; the unprefixed `line-clamp` is written
    alongside for browsers that have shipped it. Both need `display: -webkit-box`, which is why
    `text-truncate` had to come OFF the markup: its `white-space: nowrap` pins the box to one line
-   and would defeat the clamp entirely. */
+   and would defeat the clamp entirely.
+
+   ── Why the clamp is on an inner <span> and NOT on the button ──
+   WebKit does not honour `display: -webkit-box` on a `<button>`. A button's children are laid out
+   inside an anonymous box that the button's own `display` never reaches, so `-webkit-line-clamp`
+   set on the button is silently ignored there — no error, no clamp, nothing to notice locally on a
+   Chromium browser. Both titles this change clamps ARE buttons, and the same change took the old
+   `text-truncate` off the markup, so clamping the button left Safari and every other WebKit
+   browser (which is every browser on iOS) with NO truncation of any kind: #481's unreadable cards
+   would have shipped unchanged to precisely the users who cannot hover to reveal them.
+   The clamp therefore applies to a real block container inside the button. Chromium and Gecko lay
+   the inner box out exactly as they laid the button out, so their rendering is unchanged; only
+   WebKit's differs, and only by starting to work. Verified by measurement in both engines — see
+   the note in KanbanCard.razor.
+   `overflow-wrap`, `line-height` and `overflow: hidden` stay on the BUTTON: they are about the
+   flex item, not about the clamp. */
 .board-card-title {
-    display: -webkit-box;
-    -webkit-box-orient: vertical;
-    -webkit-line-clamp: 2;
-    line-clamp: 2;
+    /* `display` is deliberately left at Bootstrap's `.btn` value: the button is an ordinary
+       block-level flex item that wraps the clamped span, and is itself no longer a clamp target. */
     overflow: hidden;
     /* Allows long unbreakable tokens (URLs, hashes, identifiers) to soft-wrap rather than clip.
-       Also sets the flex min-content width to ~0, so the flex item can shrink without pushing the
-       Blocked badge out of the overflow-hidden wrapper. */
+       Inherited by .board-card-title-text, so the clamped box wraps them too. Also sets the flex
+       min-content width to ~0, so the flex item can shrink without pushing the Blocked badge out
+       of the overflow-hidden wrapper. */
     overflow-wrap: anywhere;
     /* `font-size` is deliberately NOT set. An earlier version set .8125rem on the premise that the
        title rode on Bootstrap's .small (0.875rem). That premise was FALSE: .small and .btn are both
        (0,1,0) and .btn is later, so the button takes --bs-btn-font-size: 1rem. The rule shrank the
        title to 13px — a 19% REDUCTION in a change whose purpose was legibility. The extra title now
        comes from the clamp, not from shrinking the text.
-       line-height: 1.3 rather than .btn's 1.5 stops two lines costing a full 48px on every card. */
+       line-height: 1.3 rather than .btn's 1.5 stops two lines costing a full 48px on every card.
+       Set here rather than on the span so the button box and the clamped box agree on line height
+       whatever else lands on the button. */
     line-height: 1.3;
+}
+
+/* The clamp itself: the same four declarations that used to sit on the button, moved onto the box
+   the button wraps. Nothing about the clamp changed — only which element it can reach. */
+.board-card-title-text {
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
+    overflow: hidden;
 }
 
 /* `overflow` deliberately stays `hidden`. Setting it `visible` to "show everything" un-does the
    flex-item minimum-size zeroing that CSS Sizing 3 grants only to scroll containers: `min-width`
    reverts to `auto` = min-content = the longest unbreakable token, so a title holding something like
    `` `README.md:20` `` widens past the column and shoves the "Blocked" badge out of the clipped
-   wrapper. `-webkit-line-clamp: unset` alone shows every line with `hidden` still in force. */
+   wrapper. `-webkit-line-clamp: unset` alone shows every line with `hidden` still in force.
+   These unclamp rules target `.board-card-title-text` — the box that carries the clamp — not the
+   button. Un-clamping the button would be as inert as clamping it was. */
 @media (hover: hover) {
-    .board-card:hover .board-card-title {
+    .board-card:hover .board-card-title-text {
         -webkit-line-clamp: unset;
         line-clamp: unset;
     }
 }
 
-.board-card:focus-within .board-card-title {
+.board-card:focus-within .board-card-title-text {
     -webkit-line-clamp: unset;
     line-clamp: unset;
 }
@@ -1472,14 +1500,20 @@ h1:focus {
    "#464 P1: Idea "N..." are the whole of what a reader gets. Two lines here as well, and the row
    already carries `title="@task.Name"` for the full string on hover.
    No reveal on these rows: the outline is a dense navigation list, and a hover panel in a list this
-   tight would obscure the rows around the one being read. */
+   tight would obscure the rows around the one being read.
+   Split across button and inner span for the same WebKit reason as the board card above — this row
+   is a `<button>` too, so a clamp declared on it never reaches a WebKit reader. */
 .outline-task-title {
+    overflow: hidden;
+    line-height: 1.3;
+}
+
+.outline-task-title-text {
     display: -webkit-box;
     -webkit-box-orient: vertical;
     -webkit-line-clamp: 2;
     line-clamp: 2;
     overflow: hidden;
-    line-height: 1.3;
 }
 
 /* ── Never while a drag is in flight ──────────────────────────────────────────────────────────── */
@@ -1509,7 +1543,7 @@ body:has(.kanban-ghost) .board-card > .card-body > .board-card-reveal {
     opacity: 0;
 }
 
-body:has(.kanban-ghost) .board-card .board-card-title {
+body:has(.kanban-ghost) .board-card .board-card-title-text {
     -webkit-line-clamp: 2;
     line-clamp: 2;
 }
@@ -1598,7 +1632,7 @@ body:has(.kanban-ghost) .board-card .board-card-title {
        overflow stays hidden: visible would restore min-width:auto on the flex item, letting a
        long unbreakable token push the Blocked badge outside the overflow-hidden wrapper. The
        clamp removal already shows all lines without widening the column. */
-    .board-card-title {
+    .board-card-title-text {
         -webkit-line-clamp: unset;
         line-clamp: unset;
     }
