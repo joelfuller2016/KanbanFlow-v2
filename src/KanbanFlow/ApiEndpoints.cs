@@ -1,6 +1,7 @@
 using System.Text.Json;
 using KanbanFlow.Data;
 using KanbanFlow.Models;
+using KanbanFlow.Models.Workflows;
 using Microsoft.EntityFrameworkCore;
 
 namespace KanbanFlow;
@@ -731,6 +732,10 @@ public static class ApiEndpoints
             {
                 return Results.NotFound(new { message = $"Idea {id} not found." });
             }
+            catch (WorkflowException ex) when (ex.Code == "conflict")
+            {
+                return Results.Conflict(new { message = ex.Message });
+            }
             catch (Services.ValidationException ex)
             {
                 return Results.UnprocessableEntity(new { message = ex.Message });
@@ -765,6 +770,10 @@ public static class ApiEndpoints
             catch (Services.IdeaNotFoundException)
             {
                 return Results.NotFound(new { message = $"Idea {id} not found." });
+            }
+            catch (WorkflowException ex) when (ex.Code == "conflict")
+            {
+                return Results.Conflict(new { message = ex.Message });
             }
             catch (Services.ValidationException ex)
             {

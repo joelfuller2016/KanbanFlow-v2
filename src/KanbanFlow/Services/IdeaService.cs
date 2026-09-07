@@ -1,6 +1,7 @@
 using System.Text.Json;
 using KanbanFlow.Data;
 using KanbanFlow.Models;
+using KanbanFlow.Models.Workflows;
 using Microsoft.EntityFrameworkCore;
 
 namespace KanbanFlow.Services;
@@ -213,7 +214,14 @@ public sealed class IdeaService(IDbContextFactory<AppDbContext> dbFactory) : IId
             "IdeaUpdated", before, IdeaActivitySnapshot(idea),
             $"Idea '{idea.Title}' updated");
 
-        await db.SaveChangesAsync(ct);
+        try
+        {
+            await db.SaveChangesAsync(ct);
+        }
+        catch (DbUpdateConcurrencyException)
+        {
+            throw new WorkflowException("conflict", "This idea was modified by another client. Reload before saving again.");
+        }
         return idea;
     }
 
@@ -323,7 +331,14 @@ public sealed class IdeaService(IDbContextFactory<AppDbContext> dbFactory) : IId
             "IdeaPromoted", ideaBefore, ideaAfter,
             $"Idea '{idea.Title}' promoted to project {project.Id}");
 
-        await db.SaveChangesAsync(ct);
+        try
+        {
+            await db.SaveChangesAsync(ct);
+        }
+        catch (DbUpdateConcurrencyException)
+        {
+            throw new WorkflowException("conflict", "This idea was modified by another client while being promoted. Reload before trying again.");
+        }
         return new IdeaPromoteResult(idea.Id, project.Id);
     }
 
