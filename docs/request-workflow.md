@@ -1,6 +1,6 @@
 # Requests, plans and results on the existing board
 
-For the person managing projects and the AI clients doing their work. Revalidated September 7, 2026 on Windows 11, PowerShell 7.6.5, .NET SDK 10.0.400 and Node 24. Source baseline: `53a300066e118b0e5a1b0ac9d02294169d2e076f`; tested application and steering case: `04af1cbe40f7ca7edb38cd22530c2ab793d5334e` in [PR #511](https://github.com/joelfuller2016/KanbanFlow-v2/pull/511), planned in [issue #509](https://github.com/joelfuller2016/KanbanFlow-v2/issues/509). Maintainer: repository owner. Automated verification and actual human usability approval are separate.
+For the person managing projects and the AI clients doing their work. Revalidated September 7, 2026 on Windows 11, PowerShell 7.6.5, .NET SDK 10.0.400 and Node 24. Source baseline: `53a300066e118b0e5a1b0ac9d02294169d2e076f`; latest tested card display and regression cases: `b923a62b6a9cbca86c18e17928c5bd9b462f7746` in [PR #511](https://github.com/joelfuller2016/KanbanFlow-v2/pull/511), planned in [issue #509](https://github.com/joelfuller2016/KanbanFlow-v2/issues/509). Maintainer: repository owner. Automated verification and actual human usability approval are separate.
 
 KanbanFlow now keeps the original request, improved brief, task plan, conversation, reported results and conclusion alongside its existing ideas and board cards. A request belongs to one existing idea. Promotion connects that idea to a project. Publishing a plan creates real tasks under a feature on that project's current board. The person and MCP clients see and change those same records.
 
@@ -63,6 +63,12 @@ The author field and MCP actor are attribution supplied by the caller, not authe
 A person redirects work through **Updates → decision → Add update**. The connected agent must read the latest context, explicitly acknowledge the decision, revise the brief and plan, and show the resulting change on the same cards. **Refresh saved details** now reloads both request details and the existing project board while preserving drafts and filters. A saved decision alone does not prove that an agent read it, applied it, or stopped a process.
 
 [TC-509](test-cases/509-unified-workflow/README.md) owns the human walkthrough, per-area usability checklist and repeatable browser/MCP case. Major UI changes require verification of each affected interaction and actual user testing before adoption. The current refresh and navigation corrections add no visual element or layout change. Human usability checks remain pending until a person performs them and records feedback.
+
+### Card size controls
+
+Open a task card and use the icons in its top-right corner: **Half page**, **Full page**, then **Close**. A fresh card starts at half the desktop viewport width; Full page expands the same panel to the entire viewport. Below 992px both modes use the available width.
+
+Switching size preserves the current task and unsent comment. Existing edits keep their normal save behavior. Close or Escape returns to the board; reopening starts at half page. The [card display run](test-cases/509-unified-workflow/runs/2026-09-07-b923a62b6a9c.md) records mouse, keyboard, draft, MCP and mobile checks. Actual human review remains pending.
 
 ## MCP and REST reference
 
@@ -128,7 +134,9 @@ node scripts/smoke-workflow.mjs http://127.0.0.1:5126
 
 The harness creates a labeled test project and leaves it for browser inspection. It exercises actual native and stdio `tools/list`/`tools/call`, schema parity, exact capture, retry/conflict handling, brief/plan/publication, real task identity, comments, stale-result rejection and REST parity. It prints the board/task links. Open the printed board link and follow steps 2–8 above; use the existing task editor to change a status, then read it through MCP. Stop only the verification process you started.
 
-Revalidated on September 7, 2026; the [pinned run record](test-cases/509-unified-workflow/runs/2026-09-07-04af1cbe40f7.md) records the reproduced refresh/navigation defects and the passing corrections:
+The card display follow-up at `b923a62b6a9cbca86c18e17928c5bd9b462f7746` passed the current rebuild, 1,160 .NET tests, 223 script tests, all three browser cases and real MCP checks; all 179 tasks survived the normal restart. Its [pinned run](test-cases/509-unified-workflow/runs/2026-09-07-b923a62b6a9c.md) records the current scope and checks not rerun.
+
+The earlier foundation/navigation validation is pinned to `04af1cbe40f7` below; its [run record](test-cases/509-unified-workflow/runs/2026-09-07-04af1cbe40f7.md) records the reproduced refresh/navigation defects and the passing corrections:
 
 | Check | Result |
 |---|---|

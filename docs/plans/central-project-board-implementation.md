@@ -14,7 +14,11 @@ The September 7 direction adds a continuing validation and human-control require
 
 > you always need to rebuild and test your PR, you need to think abotu having a human be able to verify and interact with the board, understand what is happening and be able to make descisions which should redirect the AI agent. But i dont want any major ui changes unlesss we full verify and user test each change.
 
-**Delivery:** [PR #511](https://github.com/joelfuller2016/KanbanFlow-v2/pull/511) from `feat/unified-workflow-509` contains the implementation, tests and curated documentation. Latest rebuilt application/case source: `04af1cbe40f7ca7edb38cd22530c2ab793d5334e`, including newer review fixes and the September 7 refresh, task-link, backdrop and request-filter corrections. Existing user changes unrelated to this work remain outside the PR. [Issue #509](https://github.com/joelfuller2016/KanbanFlow-v2/issues/509) remains open for the complete initiative. Automated verification and actual human usability approval are separate; the latter remains pending. The PR is open and has not been merged.
+The subsequent card interaction request is captured verbatim:
+
+> I want the card to be able to open to full page /half page or close with an icons in the top right corner
+
+**Delivery:** [PR #511](https://github.com/joelfuller2016/KanbanFlow-v2/pull/511) from `feat/unified-workflow-509` contains the implementation, tests and curated documentation. Latest rebuilt application/case source: `b923a62b6a9cbca86c18e17928c5bd9b462f7746`, including newer review fixes, refresh/navigation corrections and the requested top-right card size controls. Existing user changes unrelated to this work remain outside the PR. [Issue #509](https://github.com/joelfuller2016/KanbanFlow-v2/issues/509) remains open for the complete initiative. Automated verification and actual human usability approval are separate; the latter remains pending. The PR is open and has not been merged.
 
 **Source baseline:** `53a300066e118b0e5a1b0ac9d02294169d2e076f`. **Environment:** Windows, PowerShell 7.6.5, .NET SDK 10.0.400, existing .NET 10/Blazor Server/EF Core SQLite application. No Docker. **Owner:** repository maintainer. **Date:** September 6, 2026.
 
@@ -235,6 +239,34 @@ The existing task service remains authoritative for task completion and its audi
 - [ ] Before adopting any major UI change, verify each affected interaction and user-test the concrete change.
 
 The [TC-509 case and human checklist](../test-cases/509-unified-workflow/README.md) owns these review steps. The normal board has separate U-09 automation/fix and U-10 human-review cards. An automated walkthrough or an agent's source review cannot complete U-10.
+
+### U-11 — Card full-page, half-page and close controls
+
+- [x] Capture the exact request in the same board history, acknowledge it and revise the brief/plan while preserving existing tasks.
+- [x] Add Half page and Full page icon buttons beside the existing top-right Close icon in `TaskDetailPanel.razor`.
+- [x] Use scoped `TaskDetailPanel.razor.css`: half the desktop viewport, full viewport on expansion, and available width below 992px.
+- [x] Keep the same mounted task/editor; size changes preserve drafts and do not write task/workflow records.
+- [x] Keep title and icons from overlapping, label icon actions, indicate active size, and preserve existing close/Escape/focus behavior.
+- [x] Rebuild and verify current source, desktop/mobile sizing, unsent comments, full-page save through MCP, close/reopen, navigation and decision regressions.
+- [x] Rebuild the normal app after a consistent backup and verify its real controls and all existing rows.
+- [x] Record the repeatable browser case, source-pinned evidence and bounded UI change in the same PR/issue.
+- [ ] Record actual user feedback on the three icons and apply requested adjustments; this remains part of U-10's human review.
+
+```mermaid
+stateDiagram-v2
+    [*] --> Closed
+    Closed --> HalfPage: Open card
+    HalfPage --> FullPage: Full page icon
+    FullPage --> HalfPage: Half page icon
+    HalfPage --> Closed: Close or Escape
+    FullPage --> Closed: Close or Escape
+```
+
+Both display modes use the same task panel. A fresh open starts in half-page mode; narrow screens use the available width. Size changes retain task identity and drafts.
+
+## Card display verification — September 7, 2026
+
+The [card display run](../test-cases/509-unified-workflow/runs/2026-09-07-b923a62b6a9c.md) pins the current application/case source and records the initial state-attribute failure and correction. Full rebuild: zero warnings/errors. Required gate: 1,160 .NET tests passed. Scripts: 223 passed. Real MCP, card sizing/editing/close, decision and navigation browser cases passed. All 179 tasks and existing rows in 28 tables survived restart. The normal card's actual icons were exercised. User feedback remains pending; automated checks do not approve the UI.
 
 ## Revalidation evidence — September 7, 2026
 

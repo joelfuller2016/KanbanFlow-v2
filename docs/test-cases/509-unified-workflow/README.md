@@ -43,8 +43,11 @@ Every client arrow is an explicit MCP call. The current PR does not launch Codex
 | A7 | Native and stdio MCP discover matching schemas and share records; full solution and script checks pass at the recorded source revision. |
 | A8 | Direct task entry and same-project task links open the right panel, including A → B, A → no task → A and canonical task-only links. Unknown and foreign-project task IDs do not open another project's card. |
 | A9 | Closing a directly linked task removes its backdrop. Refreshing, filtering and clearing filters keep it closed while preserving task/request URL context. |
+| A10 | A fresh task panel opens at half the desktop viewport width. Top-right Half page, Full page and Close icons remain beside the title; Full page fills the viewport. |
+| A11 | Size changes retain task identity and unsent comment/type without writing task/workflow data. A comment saved from full page is visible through MCP on the same task. |
+| A12 | Enter/Space operate size controls, Close/Escape return focus to the card, reopening starts at half page, and the board remains usable. At 390px both modes fit the available width with no overlap or horizontal overflow. |
 
-Executables: [workflow-human-steering.browser.js](../../../scripts/workflow-human-steering.browser.js), [workflow-navigation.browser.js](../../../scripts/workflow-navigation.browser.js) and [smoke-workflow.mjs](../../../scripts/smoke-workflow.mjs). The latter creates a labeled single-task fixture. Both browser cases refuse normal port 5123 and require the fixture's title and original-message provenance before writing.
+Executables: [task-detail-display.browser.js](../../../scripts/task-detail-display.browser.js), [workflow-human-steering.browser.js](../../../scripts/workflow-human-steering.browser.js), [workflow-navigation.browser.js](../../../scripts/workflow-navigation.browser.js) and [smoke-workflow.mjs](../../../scripts/smoke-workflow.mjs). The latter creates a labeled single-task fixture. The browser cases refuse normal port 5123 and require the fixture's title and original-message provenance before writing.
 
 1. **Rebuild the current PR.** From the repository root, run the quality gate and script suite. Record the source revision and actual exits. Rebuild after source changes; do not reuse stale test binaries.
 2. **Start a disposable instance.** Use a fresh ignored database and published output, for example on port 5126. Confirm the database path in startup logs. On failure, retain the log and fix that instance; do not replace the normal board.
@@ -53,12 +56,15 @@ Executables: [workflow-human-steering.browser.js](../../../scripts/workflow-huma
 
    ```powershell
    playwright-cli -s=human-511 open <the-board-URL-printed-in-step-3>
+   playwright-cli -s=human-511 run-code --filename=C:/Users/Homepc/Projects/KanbanFlow-v2/scripts/task-detail-display.browser.js
    playwright-cli -s=human-511 run-code --filename=C:/Users/Homepc/Projects/KanbanFlow-v2/scripts/workflow-human-steering.browser.js
    playwright-cli -s=human-511 run-code --filename=C:/Users/Homepc/Projects/KanbanFlow-v2/scripts/workflow-navigation.browser.js
    ```
 
    Replace the marked URL and adjust the absolute script paths to your checkout. Start with a fresh transport fixture when repeating the cases: navigation adds a second ordinary task and link messages. The scripts save `steering-before.png`, `steering-acknowledged.png`, `steering-task-detail.png`, `steering-mobile.png` and `navigation-request-preserved.png` in their working directory. Inspect them after transitions settle; scroll within the request panel to see the acknowledgement on mobile. A CLI `### Error` is a failure even if the wrapper exits successfully. These are behavior-check evidence, not a pixel-diff or accessibility certification.
 5. **Record and clean up.** Add a run record with commit, environment, results, failures, limitations and human status. Close only the named browser and disposable app process you started; retain the normal app and its data.
+
+The display case writes one labeled fixture comment and saves `card-half-page.png`, `card-full-page.png` and `card-mobile.png`. It disables screenshot animations so the active icon's color is settled. The half/full/close controls resize the same mounted card; existing editing behavior remains in place.
 
 ## Human walkthrough and decision contract
 
@@ -84,7 +90,9 @@ Record a person's feedback for each UI area introduced by PR #511. Keep a row pe
 | Plan and repositories | Drafts, repository/files and explicit publication | Pending: distinguish draft from published work and inspect the same cards. |
 | Updates | Attributed questions, decisions, progress and responses | Pending: distinguish saved, acknowledged and applied decisions. |
 | Results | Reported checks, acceptance and historical conclusions | Pending: determine what is verified, what remains and whether to accept. |
-| Task detail | Originating request and repository/result context | Pending: open with the keyboard and follow the request link. |
+| Task detail | Originating request, repository/result context and requested top-right half/full/close icons | Pending: open with the keyboard, resize with a draft, close and return to the board, and follow the request link. |
 | Existing board | Existing filters, ordering, drag/drop and controls | Pending: verify familiar interactions remain usable. |
 
 The September 7 corrections keep the existing layout and controls. **Refresh saved details** also reloads cards through the existing callback. Same-project task links open their requested panel; directly linked panels open after prerender so Bootstrap does not create an extra backdrop. Filter and Clear preserve the task/request URL context. Review by changing a task through MCP, refreshing, following its link, closing the panel, and filtering while retaining the selected request and an unsaved brief.
+
+The subsequent user-requested card display change is bounded to the existing task panel: Half page is the desktop default, Full page expands that same panel, and Close returns to the board. Below 992px the panel uses the available width in either mode. Try the three icons with an unsent comment and record actual feedback in Updates; passing A10–A12 does not substitute for this human check.
