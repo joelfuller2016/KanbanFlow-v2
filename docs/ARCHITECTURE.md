@@ -533,7 +533,7 @@ restores the committed seed and serves a board nobody asked for. `/api/admin/hea
 Since [#498](https://github.com/joelfuller2016/KanbanFlow-v2/issues/498) it does. Measured through
 the launcher itself, against a wrong root:
 
-```
+```text
 pwsh -File scripts/start-kanbanflow.ps1 -DbPath "$env:TEMP\kf-wrongroot\kanbanflow.db" -Url http://127.0.0.1:5311
 
 {"status":"degraded", ...,

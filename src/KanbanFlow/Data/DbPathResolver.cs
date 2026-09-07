@@ -47,10 +47,11 @@ public sealed record DbFileSnapshot(DateTime CreatedAtUtc, DateTime LastWriteUtc
 /// that reads to a user as "my data is gone" (#354). Reported, never enforced: no roadblocks.
 /// </param>
 /// <param name="Snapshot">
-/// The file's own facts as found at resolution time, or <c>null</c> when there was no file to stat
-/// (so it is non-null exactly when <see cref="Existed"/> is true — both come from ONE
-/// <see cref="FileInfo"/>, so they cannot disagree). Callers constructing this record by hand may
-/// leave it null; the checks that read it simply do not fire.
+/// The file's own facts as found at resolution time. Normally non-null exactly when
+/// <see cref="Existed"/> is true, but <see cref="DbPathResolver.Stat"/> can return
+/// <c>(true, null)</c> when the file disappears or becomes inaccessible between the existence
+/// check and the stat — so callers must not assume the two agree. The checks that read this
+/// simply do not fire when it is null.
 /// </param>
 public sealed record DbPathResolution(
     string Path,
@@ -218,9 +219,9 @@ public static class DbPathResolver
         var existing = candidates.Where(File.Exists).ToList();
         if (existing.Count > 0)
         {
-            var (_, probedSnapshot) = Stat(existing[0]);
+            var (existed, probedSnapshot) = Stat(existing[0]);
             return new DbPathResolution(
-                existing[0], SourceProbe, true, existing.Skip(1).ToList(), probedSnapshot);
+                existing[0], SourceProbe, existed, existing.Skip(1).ToList(), probedSnapshot);
         }
 
         // 3. Nothing exists anywhere: create at the application's own directory, so a fresh install

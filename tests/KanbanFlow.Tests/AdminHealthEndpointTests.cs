@@ -490,6 +490,7 @@ public sealed class AdminHealthEndpointTests
             {
                 try { File.Delete(Path); }
                 catch (IOException) { /* a host still holding the handle is not a test failure */ }
+                catch (UnauthorizedAccessException) { }
             }
 
             if (_temporaryDirectory is not null)
