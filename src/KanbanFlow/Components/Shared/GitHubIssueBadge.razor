@@ -13,8 +13,12 @@
 
 @code {
     [Parameter] public IEnumerable<ExternalWorkItemLink>? Links { get; set; }
+    // Display-only legacy fallback, used ONLY when no durable link row exists yet. An upgraded
+    // board has none until its first sync promotes them, and without this the chip disappears in
+    // the gap. Never an identity source; see ExternalWorkItemPresentation.FindSyncBlockGitHubIssue.
+    [Parameter] public string? Description { get; set; }
     [Parameter] public string CssClass { get; set; } = "badge rounded-pill text-bg-light border text-decoration-none";
     [Parameter] public string? TestId { get; set; }
 
-    private GitHubIssueReference? Issue => ExternalWorkItemPresentation.FindActiveGitHubIssue(Links);
+    private GitHubIssueReference? Issue => ExternalWorkItemPresentation.FindActiveGitHubIssue(Links, Description);
 }

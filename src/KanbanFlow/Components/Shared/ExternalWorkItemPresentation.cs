@@ -22,6 +22,28 @@ internal static class ExternalWorkItemPresentation
         RegexOptions.Compiled,
         MatchTimeout);
 
+    private static readonly Regex SyncBlockIssue = new(
+        @"\*\*Issue:\*\*\s*https://github\.com/([A-Za-z0-9-]+)/([A-Za-z0-9._-]+)/issues/([1-9]\d*)(?=\s|$)",
+        RegexOptions.Compiled,
+        MatchTimeout);
+
+    /// <summary>
+    /// Durable link identity first; the sync block is a DISPLAY-ONLY last resort.
+    /// </summary>
+    /// <remarks>
+    /// An upgraded board has no link rows until its first sync promotes them, so without this
+    /// every mirrored task loses its issue chip between deploy and that sync -- the PR chip kept
+    /// its sync-block fallback and the issue chip did not. The ordering is the whole safety
+    /// argument: a link row wins whenever one exists, so this can only ever ADD a chip to a task
+    /// that would otherwise show none. It never feeds identity -- nothing here reaches
+    /// registerLink, PrepareAsync or externalNodeId -- and it is scoped to the machine-written
+    /// sync block, so hand-authored prose in a description can never become a trusted control.
+    /// </remarks>
+    internal static GitHubIssueReference? FindActiveGitHubIssue(
+        IEnumerable<ExternalWorkItemLink>? links,
+        string? description)
+        => FindActiveGitHubIssue(links) ?? FindSyncBlockGitHubIssue(description);
+
     internal static GitHubIssueReference? FindActiveGitHubIssue(
         IEnumerable<ExternalWorkItemLink>? links)
     {
@@ -53,6 +75,49 @@ internal static class ExternalWorkItemPresentation
         }
 
         return null;
+    }
+
+    /// <summary>
+    /// The legacy issue chip: the `**Issue:**` line inside the machine-written sync block, read
+    /// for DISPLAY ONLY. Structurally identical to <see cref="FindSyncBlockPullRequest"/> --
+    /// including taking the first block and first line rather than failing closed on a malformed
+    /// description, because two adjacent chips behaving differently is its own defect and this
+    /// value never becomes identity. Promotion in portfolio-sync.mjs reads the same line and DOES
+    /// fail closed there (legacyPromotionDisposition), because that one writes externalNodeId.
+    /// </summary>
+    internal static GitHubIssueReference? FindSyncBlockGitHubIssue(string? description)
+    {
+        if (string.IsNullOrEmpty(description))
+            return null;
+
+        try
+        {
+            var block = SyncBlock.Match(description);
+            if (!block.Success)
+                return null;
+
+            var match = SyncBlockIssue.Match(block.Groups[1].Value);
+            if (!match.Success
+                || !int.TryParse(match.Groups[3].Value, out var number)
+                || number <= 0)
+            {
+                return null;
+            }
+
+            var owner = match.Groups[1].Value;
+            var repository = match.Groups[2].Value;
+            if (!IsGitHubOwner(owner) || !IsGitHubRepositoryName(repository))
+                return null;
+
+            var url = $"https://github.com/{Uri.EscapeDataString(owner)}/{Uri.EscapeDataString(repository)}/issues/{number}";
+            return new GitHubIssueReference(owner, repository, number, url);
+        }
+        catch (RegexMatchTimeoutException)
+        {
+            // Descriptions are user-controlled. A timeout must fail closed without taking down
+            // the interactive Blazor render path.
+            return null;
+        }
     }
 
     /// <summary>

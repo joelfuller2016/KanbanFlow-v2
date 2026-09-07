@@ -100,6 +100,74 @@ public sealed class ExternalWorkItemPresentationTests
 
         Assert.Null(ExternalWorkItemPresentation.FindActiveGitHubIssue(task.ExternalLinks));
         Assert.Null(ExternalWorkItemPresentation.FindSyncBlockPullRequest(task.Description));
+        // The display-only fallback does not weaken this: the URLs above sit in free prose, not
+        // in the machine-written sync block, so the block boundary still refuses them.
+        Assert.Null(ExternalWorkItemPresentation.FindActiveGitHubIssue(task.ExternalLinks, task.Description));
+    }
+
+    [Fact]
+    public void SyncBlockIssue_RendersTheChipWhileTheBoardHasNoDurableLinkYet()
+    {
+        // The upgrade gap: an existing board carries the pre-#336 sync block and NO link rows
+        // until its first sync promotes them. Without the fallback every mirrored task silently
+        // loses its issue chip in that window.
+        const string description = """
+            <!-- kanbanflow-sync -->
+            **Issue:** https://github.com/joelfuller2016/KanbanFlow-v2/issues/336
+            <!-- /kanbanflow-sync -->
+            """;
+
+        var issue = ExternalWorkItemPresentation.FindActiveGitHubIssue(null, description);
+
+        Assert.NotNull(issue);
+        Assert.Equal(336, issue.Number);
+        Assert.Equal("joelfuller2016", issue.RepositoryOwner);
+        Assert.Equal("KanbanFlow-v2", issue.RepositoryName);
+        Assert.Equal("https://github.com/joelfuller2016/KanbanFlow-v2/issues/336", issue.Url);
+    }
+
+    [Fact]
+    public void DurableLink_AlwaysWinsOverTheSyncBlockFallback()
+    {
+        // The ordering IS the safety argument. A stale sync block must never override the row
+        // that actually carries immutable identity, so the fallback can only ever ADD a chip to a
+        // task that would otherwise show none.
+        const string staleBlock = """
+            <!-- kanbanflow-sync -->
+            **Issue:** https://github.com/joelfuller2016/KanbanFlow-v2/issues/999
+            <!-- /kanbanflow-sync -->
+            """;
+
+        var issue = ExternalWorkItemPresentation.FindActiveGitHubIssue([Link()], staleBlock);
+
+        Assert.NotNull(issue);
+        Assert.Equal(321, issue.Number);
+    }
+
+    [Fact]
+    public void IssueUrlOutsideTheSyncBlock_DoesNotProduceAChip()
+    {
+        // Hand-authored prose is not provenance. Only the machine-written block is read.
+        const string handAuthored =
+            "See **Issue:** https://github.com/attacker/spoof/issues/1 for context";
+
+        Assert.Null(ExternalWorkItemPresentation.FindActiveGitHubIssue(null, handAuthored));
+        Assert.Null(ExternalWorkItemPresentation.FindSyncBlockGitHubIssue(handAuthored));
+    }
+
+    [Theory]
+    [InlineData(".")]
+    [InlineData("..")]
+    [InlineData("bad owner/repo")]
+    public void InvalidRepositoryInTheSyncBlock_DoesNotProduceAChip(string repositoryName)
+    {
+        var description = $"""
+            <!-- kanbanflow-sync -->
+            **Issue:** https://github.com/joelfuller2016/{repositoryName}/issues/336
+            <!-- /kanbanflow-sync -->
+            """;
+
+        Assert.Null(ExternalWorkItemPresentation.FindSyncBlockGitHubIssue(description));
     }
 
     [Theory]
