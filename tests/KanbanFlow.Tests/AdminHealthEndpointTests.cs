@@ -137,10 +137,12 @@ public sealed class AdminHealthEndpointTests
         // 200, not 500: the caller must be able to READ the reason. A health endpoint that throws
         // when the database is unreachable is useless in exactly the case it is needed.
         Assert.Equal(HttpStatusCode.OK, statusCode);
+        // Top-level status and db.status are separate fields with separate vocabularies.
+        // Top-level: "ok" | "degraded" | "error". db.status: "ok" | "unreachable".
         Assert.Equal("error", body.GetProperty("status").GetString());
 
         var db = body.GetProperty("db");
-        Assert.Equal("error", db.GetProperty("status").GetString());
+        Assert.Equal("unreachable", db.GetProperty("status").GetString());
         Assert.False(string.IsNullOrWhiteSpace(db.GetProperty("error").GetString()));
         Assert.Equal(JsonValueKind.Null, db.GetProperty("projects").ValueKind);
         Assert.False(db.GetProperty("exists").GetBoolean());
