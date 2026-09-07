@@ -14,7 +14,7 @@ The September 7 direction adds a continuing validation and human-control require
 
 > you always need to rebuild and test your PR, you need to think abotu having a human be able to verify and interact with the board, understand what is happening and be able to make descisions which should redirect the AI agent. But i dont want any major ui changes unlesss we full verify and user test each change.
 
-**Delivery:** [PR #511](https://github.com/joelfuller2016/KanbanFlow-v2/pull/511) from `feat/unified-workflow-509` contains the implementation, tests and curated documentation. Latest rebuilt application/case source: `dbdacfebc3869beca4568f55e6f9f86955d597e5`, including newer review fixes and the September 7 refresh correction. Existing user changes unrelated to this work remain outside the PR. [Issue #509](https://github.com/joelfuller2016/KanbanFlow-v2/issues/509) remains open for the complete initiative. Automated verification and actual human usability approval are separate; the latter remains pending. The PR is open and has not been merged.
+**Delivery:** [PR #511](https://github.com/joelfuller2016/KanbanFlow-v2/pull/511) from `feat/unified-workflow-509` contains the implementation, tests and curated documentation. Latest rebuilt application/case source: `04af1cbe40f7ca7edb38cd22530c2ab793d5334e`, including newer review fixes and the September 7 refresh, task-link, backdrop and request-filter corrections. Existing user changes unrelated to this work remain outside the PR. [Issue #509](https://github.com/joelfuller2016/KanbanFlow-v2/issues/509) remains open for the complete initiative. Automated verification and actual human usability approval are separate; the latter remains pending. The PR is open and has not been merged.
 
 **Source baseline:** `53a300066e118b0e5a1b0ac9d02294169d2e076f`. **Environment:** Windows, PowerShell 7.6.5, .NET SDK 10.0.400, existing .NET 10/Blazor Server/EF Core SQLite application. No Docker. **Owner:** repository maintainer. **Date:** September 6, 2026.
 
@@ -220,6 +220,7 @@ The existing task service remains authoritative for task completion and its audi
 - [x] Run the required solution gate, script suite, API smoke and actual native/stdio MCP checks; record source revision, commands, results and limitations.
 - [x] Exercise a browser decision → MCP read → specific acknowledgement → revised brief/plan → same task cards, including stale-plan refusal.
 - [x] Reproduce and correct the existing refresh action leaving board cards stale; preserve filters, unsaved drafts and keyboard access without a layout change.
+- [x] Correct same-project task links, direct-entry backdrop cleanup and request/draft loss after filter debounce; verify actual clicks, close/refresh/Clear and unknown/foreign task IDs.
 - [x] Repeat the complete request-to-result browser walkthrough on the rebuilt app.
 - [x] Back up and restart the normal board; verify every prior row remains intact.
 - [x] Record the repeatable case, human walkthrough and per-area usability checks in the owning test-case registry.
@@ -237,9 +238,9 @@ The [TC-509 case and human checklist](../test-cases/509-unified-workflow/README.
 
 ## Revalidation evidence — September 7, 2026
 
-The [pinned run](../test-cases/509-unified-workflow/runs/2026-09-07-dbdacfebc386.md) records the incoming PR head, the reproduced stale-card failure, the six-line handler correction, the rebuild and passing checks. The current correction keeps the existing layout and controls. Full rebuild: zero warnings/errors. Required gate: 1,160 .NET tests passed. Script suite: 223 passed. Actual native/stdio MCP, browser decision/replan, complete request-to-result browser flow and configured API smoke passed. Default embedding-provider latency remains unverified.
+The [pinned run](../test-cases/509-unified-workflow/runs/2026-09-07-04af1cbe40f7.md) records the stale-card refresh correction and the subsequent reproduced task-link, backdrop and filter-context failures. Fresh browser cases cover actual same-project links, close/refresh/Clear, request/draft preservation after debounce, keyboard access and mobile acknowledgement. The corrections keep the existing layout and controls. Full rebuild: zero warnings/errors. Required gate: 1,160 .NET tests passed. Script suite: 223 passed. Actual native/stdio MCP, browser decision/replan, complete request-to-result browser flow and configured API smoke passed. Default embedding-provider latency remains unverified.
 
-The normal app was rebuilt and restarted with a SQLite-consistent backup. All prior rows in 28 tables matched after restart, with 176 existing tasks and no foreign-key violations before adding the two follow-up cards. The user's new decision, the agent's acknowledgement and the revised brief/plan are recorded on the same real board. Actual human usability review remains pending.
+The normal app was rebuilt and restarted with a SQLite-consistent backup. All prior rows in 28 tables matched after restart, with all 178 tasks and no foreign-key violations. The real link from Updates to the human-review task was clicked successfully after the restart. The user's new decision, the agent's acknowledgement and the revised brief/plan are recorded on the same real board. Actual human usability review remains pending.
 
 ## Verified implementation evidence — September 6, 2026
 

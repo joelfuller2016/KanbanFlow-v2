@@ -38,11 +38,13 @@ Every client arrow is an explicit MCP call. The current PR does not launch Codex
 | A2 | An unpublished pre-decision plan cannot publish with either its old version or a refreshed version. A revised brief also prevents publishing the old brief's plan. |
 | A3 | A connected MCP client acknowledges the decision ID, revises the brief and publishes a revised plan using the same draft/task IDs and original read tokens. |
 | A4 | Refresh saved details shows the acknowledgement and reloads actual board cards; changed checks persist and prior evidence becomes historical. |
-| A5 | Refresh preserves an unsaved brief and the person's board filter. The revised card opens by keyboard and contains its request link. |
+| A5 | Refresh and debounced filter URL updates preserve the selected request and unsaved brief. The revised card opens by keyboard and contains its request link. |
 | A6 | The original and prior history remain intact. At 390px the request/decision view has no horizontal page overflow. |
 | A7 | Native and stdio MCP discover matching schemas and share records; full solution and script checks pass at the recorded source revision. |
+| A8 | Direct task entry and same-project task links open the right panel, including A → B, A → no task → A and canonical task-only links. Unknown and foreign-project task IDs do not open another project's card. |
+| A9 | Closing a directly linked task removes its backdrop. Refreshing, filtering and clearing filters keep it closed while preserving task/request URL context. |
 
-Executables: [workflow-human-steering.browser.js](../../../scripts/workflow-human-steering.browser.js) and [smoke-workflow.mjs](../../../scripts/smoke-workflow.mjs). The latter creates a labeled single-task fixture. The browser case refuses normal port 5123 and requires the fixture's title and original-message provenance before writing.
+Executables: [workflow-human-steering.browser.js](../../../scripts/workflow-human-steering.browser.js), [workflow-navigation.browser.js](../../../scripts/workflow-navigation.browser.js) and [smoke-workflow.mjs](../../../scripts/smoke-workflow.mjs). The latter creates a labeled single-task fixture. Both browser cases refuse normal port 5123 and require the fixture's title and original-message provenance before writing.
 
 1. **Rebuild the current PR.** From the repository root, run the quality gate and script suite. Record the source revision and actual exits. Rebuild after source changes; do not reuse stale test binaries.
 2. **Start a disposable instance.** Use a fresh ignored database and published output, for example on port 5126. Confirm the database path in startup logs. On failure, retain the log and fix that instance; do not replace the normal board.
@@ -52,9 +54,10 @@ Executables: [workflow-human-steering.browser.js](../../../scripts/workflow-huma
    ```powershell
    playwright-cli -s=human-511 open <the-board-URL-printed-in-step-3>
    playwright-cli -s=human-511 run-code --filename=C:/Users/Homepc/Projects/KanbanFlow-v2/scripts/workflow-human-steering.browser.js
+   playwright-cli -s=human-511 run-code --filename=C:/Users/Homepc/Projects/KanbanFlow-v2/scripts/workflow-navigation.browser.js
    ```
 
-   Replace the marked URL and adjust the absolute script path to your checkout. The script saves `steering-before.png`, `steering-acknowledged.png`, `steering-task-detail.png` and `steering-mobile.png` in its working directory. Inspect them after transitions settle. These are behavior-check evidence, not a pixel-diff or accessibility certification.
+   Replace the marked URL and adjust the absolute script paths to your checkout. Start with a fresh transport fixture when repeating the cases: navigation adds a second ordinary task and link messages. The scripts save `steering-before.png`, `steering-acknowledged.png`, `steering-task-detail.png`, `steering-mobile.png` and `navigation-request-preserved.png` in their working directory. Inspect them after transitions settle; scroll within the request panel to see the acknowledgement on mobile. A CLI `### Error` is a failure even if the wrapper exits successfully. These are behavior-check evidence, not a pixel-diff or accessibility certification.
 5. **Record and clean up.** Add a run record with commit, environment, results, failures, limitations and human status. Close only the named browser and disposable app process you started; retain the normal app and its data.
 
 ## Human walkthrough and decision contract
@@ -84,4 +87,4 @@ Record a person's feedback for each UI area introduced by PR #511. Keep a row pe
 | Task detail | Originating request and repository/result context | Pending: open with the keyboard and follow the request link. |
 | Existing board | Existing filters, ordering, drag/drop and controls | Pending: verify familiar interactions remain usable. |
 
-The September 7 correction only changes **Refresh saved details** to also reload the existing board through its existing callback. It adds no visual element or layout change. Review it by changing a task through MCP, refreshing, and checking the card while preserving your filter and unsaved brief.
+The September 7 corrections keep the existing layout and controls. **Refresh saved details** also reloads cards through the existing callback. Same-project task links open their requested panel; directly linked panels open after prerender so Bootstrap does not create an extra backdrop. Filter and Clear preserve the task/request URL context. Review by changing a task through MCP, refreshing, following its link, closing the panel, and filtering while retaining the selected request and an unsaved brief.
