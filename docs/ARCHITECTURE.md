@@ -570,8 +570,11 @@ board last written an hour before it was created, at exactly the committed seed'
 
 `existedAtStartup` alone answers this scenario `ok`. It is also true from the second boot onward
 even where it does fire, so it cannot carry a criterion evaluated after reboots *plural*. The file
-facts are re-read from the file at every boot, so they do survive restarts — until the first real
-write, which is the measured boundary documented above.
+facts are re-read from the file at every boot, so both reasons survive restarts — but they expire on
+separate clocks, and the table above is the precise statement. `last-write-precedes-creation` ends at
+the first real write and no restart affects it. `created-moments-before-startup` is untouched by
+writes and ends at the first start more than 15 minutes after the file was created — so it can still
+be firing on a board that has been written to, and it is gone from a board that has not.
 
 The script is idempotent (`-Force` replaces), verifies afterwards that the triggers actually landed,
 and **refuses to register the real task from a git worktree** (it asks `git rev-parse --git-dir`

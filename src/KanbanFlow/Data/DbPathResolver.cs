@@ -15,9 +15,12 @@ namespace KanbanFlow.Data;
 /// all three so the caller can compare them against whatever it knows (the size of the committed
 /// seed, for instance, which the application itself does not ship and cannot read).</para>
 ///
-/// <para><b>What they cannot tell you.</b> Every one of these signals is erased the moment real
-/// data is written to the wrong board — after that, nothing inside the application can distinguish
-/// it from the right one. They also cannot separate a mis-restored seed from a user deliberately
+/// <para><b>What they cannot tell you.</b> Writing real data to the wrong board erases the
+/// last-write signal at once — the write is what finally puts <see cref="LastWriteUtc"/> after
+/// <see cref="CreatedAtUtc"/>. The creation-time signal is not on that clock: a write never changes
+/// a creation time, so it expires only when a start happens more than 15 minutes after the file was
+/// made. Either way, once both have gone nothing inside the application can distinguish the wrong
+/// board from the right one. They also cannot separate a mis-restored seed from a user deliberately
 /// restoring their own backup; the two are byte-for-byte the same event.</para>
 /// </remarks>
 /// <param name="CreatedAtUtc">
