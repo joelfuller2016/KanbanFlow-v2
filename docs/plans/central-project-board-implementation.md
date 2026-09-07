@@ -341,7 +341,7 @@ The final browser walkthrough passed: original request, revisioned brief, reposi
 
 Review discovered and fixed: archived promoted requests restored by unrelated idea edits; lost editor drafts on tab navigation; cycles combining plan and ordinary board edges; stale fields overwritten before plan save or before publication; and conclusions remaining current after new intent. The [current guide](../request-workflow.md) owns operation and recovery instructions. The five local diagram sources are in `docs/plans/assets/`; all rendered successfully with Mermaid CLI.
 
-## Later execution work, on the same records
+## Saved-change logging and later execution work
 
 ### U-13 — Log saved board changes and development work
 
@@ -393,8 +393,8 @@ Detailed editable source: [board-change-audit.mmd](assets/board-change-audit.mmd
 - [x] Add 29 real SQLite persistence/schema cases and update existing policy tests without removing rollback checks.
 - [x] Verify native/stdio paging and cascades, browser UI/MCP mutual visibility and project/feature history.
 - [x] Rebuild with zero warnings/errors, pass 1,288 .NET and 223 script tests; rerun card, steering, navigation and outline cases.
-- [ ] Back up, rebuild/restart the normal app and compare prior values across schema adoption.
-- [ ] Publish source-pinned evidence, update this issue/PR, and report U-13 for Review.
+- [x] Back up, rebuild/restart the normal app and compare prior values across schema adoption: all 181 tasks and all prior values in 28 tables preserved; zero FK violations.
+- [x] Record [source-pinned evidence](../test-cases/509-unified-workflow/runs/2026-09-07-50ad5afc3009.md) for source `50ad5afc3009b51047834279dcc0bbdf015f2a4d` and report U-13 for Review on the existing request. This issue/PR remains the publication target; actual human acceptance remains pending.
 - [ ] Obtain actual human History/Saved details feedback; U-10 remains pending.
 
 Independent review closed unlogged promoted-idea links, stale semantic snapshots and timestamp-only pseudo-edits. Test development corrected the SaveChanges overload used for failure injection. Browser verification corrected a fixed seed-project assumption and a selector matching nested summaries. These checks do not constitute human usability approval.
