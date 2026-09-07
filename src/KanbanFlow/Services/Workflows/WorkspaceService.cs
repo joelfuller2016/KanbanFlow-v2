@@ -54,7 +54,7 @@ public sealed partial class WorkspaceService(IDbContextFactory<AppDbContext> fac
             if (request is not null) return new MutationReceipt(request.Id, request.Version);
             var idea = await db.Ideas.SingleOrDefaultAsync(i => i.Id == ideaId, ct) ?? throw Missing("Idea");
             request = IdeaWorkflowCapture.Add(db, idea, idea.Body ?? idea.Title, actor, "legacy", exact: false);
-            Audit(db, request.ProjectId, request.Id, actor, "IdeaWorkflowAdopted");
+            Audit(db, request.ProjectId, request.Id, actor, "IdeaWorkflowAdopted", request.IdeaId);
             return new MutationReceipt(request.Id, request.Version);
         }, ct);
 
@@ -70,7 +70,7 @@ public sealed partial class WorkspaceService(IDbContextFactory<AppDbContext> fac
             var project = new Project { Name = Required(name, "Project name", 200).Trim(), CreatedAt = Now, UpdatedAt = Now };
             db.Projects.Add(project);
             await db.SaveChangesAsync(ct);
-            Audit(db, project.Id, Guid.Empty, actor, "WorkspaceProjectCreated");
+            Audit(db, project.Id, Guid.Empty, actor, "WorkspaceProjectCreated", project.Id);
             return project.Id;
         }, ct);
 
@@ -85,7 +85,7 @@ public sealed partial class WorkspaceService(IDbContextFactory<AppDbContext> fac
             var repository = new ProjectRepository { ProjectId = projectId, Name = Required(name, "Repository name", 120).Trim(), LocalPath = resolved };
             db.ProjectRepositories.Add(repository);
             await db.SaveChangesAsync(ct);
-            Audit(db, projectId, Guid.Empty, actor, "WorkspaceRepositoryRegistered");
+            Audit(db, projectId, Guid.Empty, actor, "WorkspaceRepositoryRegistered", repository.Id);
             return repository.Id;
         }, ct);
 
@@ -100,7 +100,7 @@ public sealed partial class WorkspaceService(IDbContextFactory<AppDbContext> fac
             var request = await db.WorkRequests.SingleAsync(r => r.IdeaId == idea.Id, ct);
             if (input.ProjectId is int projectId)
                 await IdeaService.PromoteInContextAsync(db, idea.Id, actor, ct, projectId);
-            Audit(db, request.ProjectId, request.Id, actor, "RequestCaptured");
+            Audit(db, request.ProjectId, request.Id, actor, "RequestCaptured", request.IdeaId);
             return new MutationReceipt(request.Id, request.Version);
         }, ct);
 
@@ -159,7 +159,7 @@ public sealed partial class WorkspaceService(IDbContextFactory<AppDbContext> fac
             await change(db, request);
             request.Version++;
             request.UpdatedAt = Now;
-            Audit(db, request.ProjectId, id, actor, operation);
+            Audit(db, request.ProjectId, id, actor, operation, request.IdeaId);
             return new MutationReceipt(id, request.Version);
         }, ct);
 
@@ -185,8 +185,8 @@ public sealed partial class WorkspaceService(IDbContextFactory<AppDbContext> fac
         return result;
     }
 
-    private void Audit(AppDbContext db, int? projectId, Guid requestId, string actor, string action) =>
-        db.ActivityEvents.Add(new ActivityEvent { ProjectId = projectId ?? 0, EntityType = "WorkRequest", EntityId = 0,
+    private void Audit(AppDbContext db, int? projectId, Guid requestId, string actor, string action, int entityId = 0) =>
+        db.ActivityEvents.Add(new ActivityEvent { ProjectId = projectId ?? 0, EntityType = "WorkRequest", EntityId = entityId,
             EventType = action, Actor = actor, AfterJson = JsonSerializer.Serialize(new { requestId }), CreatedAt = Now });
 
     public static string Required(string? value, string field, int max)
