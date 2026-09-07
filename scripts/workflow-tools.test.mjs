@@ -112,6 +112,7 @@ for (const [name, args, expected] of [
     const response = await h.send("tools/call", { name, arguments: args });
     assert.equal(response.error, undefined);
     assert.deepEqual(JSON.parse(response.result.content[0].text), expected);
+    assert.deepEqual(response.result.structuredContent, expected);
     assert.equal(h.received.length, 1);
     const forwarded = h.received[0];
     assert.equal(forwarded.method, "POST");

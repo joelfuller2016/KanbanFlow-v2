@@ -987,6 +987,7 @@ async function handleMessage(message) {
     }
     usageLogger.record({ tool: toolName, args, outcome: "ok", ms: Date.now() - startedAt });
     writeResult(id, {
+      structuredContent: result,
       content: [
         {
           type: "text",
