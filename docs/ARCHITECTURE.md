@@ -277,6 +277,13 @@ not empty. They are evidence, not proof:
   copied and the app makes the board itself, a restart inside 15 minutes still reports
   `created-moments-before-startup` — a board that new is not distinguishable from a restored one.
   Both are expected on a new deployment and both clear on the schedule in the table above.
+- `last-write-precedes-creation` compares two stamps from a single `FileInfo` and so carries no
+  clock slack, unlike its sibling — see `ClockSlack` in `AdminEndpoints.cs` for why slack here
+  would suppress detections rather than false alarms. The residue is filesystem quantisation: per
+  MS-FSA, FAT records creation at 10 ms but last write at **2 s**, so on a FAT volume an ordinary
+  board could in principle read as written before it was created. Whether the rounding actually
+  goes that way is unstated in the specification and untested here; NTFS, ReFS and exFAT record
+  both stamps at equal granularity and are unaffected.
 
 `shadowed-by-another-database` reads the application's **own** anchors — the launch directory,
 the content root and the directory the binary sits in. It does not and cannot name a board at

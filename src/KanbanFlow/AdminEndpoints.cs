@@ -28,10 +28,13 @@ public static class AdminEndpoints
     /// </summary>
     /// <remarks>
     /// The two values come from different clocks — one from the filesystem, one from
-    /// <see cref="IAppStartupInfo"/> — and FAT/exFAT timestamps are quantised to two seconds. Without
-    /// slack, a board created in the same instant as the process could land microseconds on the
-    /// wrong side and the check would silently not fire. This is not a licence for the future: a
-    /// file created well after startup is a different event and must not be reported as this one.
+    /// <see cref="IAppStartupInfo"/> — and the filesystem's is the coarser: per MS-FSA, creation is
+    /// recorded at 10 ms granularity on FAT and exFAT against NTFS's 100 ns. Without slack, a board
+    /// created in the same instant as the process could land microseconds on the wrong side and the
+    /// check would silently not fire. Note the DIRECTION: this slack WIDENS the window, so it can
+    /// only add reports, never suppress one — which is why the sibling check below deliberately
+    /// carries none. This is not a licence for the future: a file created well after startup is a
+    /// different event and must not be reported as this one.
     /// </remarks>
     private static readonly TimeSpan ClockSlack = TimeSpan.FromSeconds(5);
 
@@ -167,6 +170,26 @@ public static class AdminEndpoints
                 // A board written before it was created is not something a used board can be; it is
                 // the literal signature of a copy that preserved the source's timestamp, which is
                 // what Copy-Item, robocopy, an unzip and most sync clients all do.
+                //
+                // Deliberately NO ClockSlack, and the asymmetry with the sibling below is the point
+                // rather than an oversight. That check compares a filesystem stamp against a process
+                // clock, so its slack WIDENS the window and can only add reports. These two stamps
+                // come from ONE FileInfo — one clock, one stat — so there is no skew to absorb, and
+                // the same constant here would NARROW the window instead: it would suppress the
+                // durable signal, in a design where a false positive costs an operator one glance at
+                // db.path and a false negative is #498 itself. That direction argument is the whole
+                // of the reason; the margin below neither strengthens nor weakens it.
+                //
+                // What the choice leaves unhandled, conceded rather than papered over: per MS-FSA,
+                // FAT records creation at 10 ms but last write at 2 s, so on a FAT volume an
+                // ordinary board could in principle read as written before it was created. The
+                // natural margin really is that thin — measured on NTFS against this repo's own
+                // seed/kanbanflow.seed.db, a legitimate board's create-to-last-write gap is 3.7 ms,
+                // which a 2 s quantisation would cross easily. Whether the rounding actually goes
+                // that way is not in the specification and is untested here; NTFS, ReFS and exFAT
+                // record both stamps at equal granularity and cannot produce it. So the residue is
+                // a false POSITIVE, on a filesystem this app is not deployed to, and the cure for
+                // it would buy false negatives everywhere else.
                 if (snapshot.LastWriteUtc < snapshot.CreatedAtUtc)
                     reasons.Add("last-write-precedes-creation");
 
