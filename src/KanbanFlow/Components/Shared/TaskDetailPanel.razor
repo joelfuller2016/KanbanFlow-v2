@@ -3,13 +3,13 @@
 @inject ITaskService TaskSvc
 @implements IAsyncDisposable
 
-<div class="offcanvas offcanvas-end @(IsOpen ? "show" : "")"
+<div class="offcanvas offcanvas-end task-detail-panel @(IsOpen ? "show" : "")"
      tabindex="-1" role="dialog" aria-modal="true" aria-labelledby="task-detail-title"
-     data-testid="task-detail-panel" @ref="panelRoot"
-     style="visibility: @(IsOpen ? "visible" : "hidden"); width: min(480px, 100vw);"
+     data-testid="task-detail-panel" data-size="@(fullPage ? "full" : "half")" @ref="panelRoot"
      @onclick:stopPropagation="true">
 
-    <div class="offcanvas-header border-bottom">
+    <div class="offcanvas-header task-detail-header border-bottom">
+        <div class="task-detail-heading">
         @if (Task is not null)
         {
             @if (isEditingName)
@@ -30,7 +30,26 @@
                 </h5>
             }
         }
-        <button type="button" class="btn-close" @onclick="ClosePanel" aria-label="Close task detail panel" data-testid="task-detail-close-button"></button>
+        </div>
+        <div class="task-detail-controls" role="group" aria-label="Card display">
+            <button type="button" class="btn btn-sm btn-outline-secondary"
+                    title="Half page" aria-label="Half page" aria-pressed="@(fullPage ? "false" : "true")"
+                    data-testid="task-detail-half-page-button" @onclick="() => fullPage = false">
+                <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                    <rect x="1.5" y="2" width="13" height="12" rx="1" stroke="currentColor" />
+                    <path d="M8 2h5.5a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H8V2Z" fill="currentColor" />
+                </svg>
+            </button>
+            <button type="button" class="btn btn-sm btn-outline-secondary"
+                    title="Full page" aria-label="Full page" aria-pressed="@(fullPage ? "true" : "false")"
+                    data-testid="task-detail-full-page-button" @onclick="() => fullPage = true">
+                <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                    <path d="M6 2H2v4m8-4h4v4M2 10v4h4m4 0h4v-4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" />
+                </svg>
+            </button>
+            <button type="button" class="btn-close" title="Close" @onclick="ClosePanel"
+                    aria-label="Close task detail panel" data-testid="task-detail-close-button"></button>
+        </div>
     </div>
 
     @if (Task is not null)
@@ -491,6 +510,7 @@
 
     private ElementReference panelRoot;
     private bool wasOpen;
+    private bool fullPage;
     private DotNetObjectReference<TaskDetailPanel>? _selfRef;
     private bool _dialogInited;
 
@@ -546,6 +566,7 @@
         renderedTask = Task;
 
         var freshOpen = IsOpen && !wasOpen;
+        if (freshOpen) fullPage = false;
 
         wasOpen = IsOpen;
 

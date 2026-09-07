@@ -1,0 +1,48 @@
+.task-detail-panel {
+    width: 50vw;
+}
+
+.task-detail-panel[data-size="full"] {
+    width: 100vw;
+}
+
+.task-detail-header {
+    align-items: flex-start;
+    gap: 1rem;
+}
+
+.task-detail-heading {
+    flex: 1;
+    min-width: 0;
+}
+
+.task-detail-controls {
+    display: flex;
+    flex-shrink: 0;
+    align-items: center;
+    gap: .25rem;
+}
+
+.task-detail-controls .btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 2rem;
+    height: 2rem;
+    padding: .25rem;
+}
+
+.task-detail-controls .btn[aria-pressed="true"] {
+    color: var(--bs-white);
+    background-color: var(--bs-secondary);
+}
+
+.task-detail-controls .btn-close {
+    margin: 0;
+}
+
+@media (max-width: 991.98px) {
+    .task-detail-panel {
+        width: 100vw;
+    }
+}
