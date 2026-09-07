@@ -931,3 +931,72 @@ test("backfill quarantines a new candidate colliding with persisted Active or Qu
     assert.match(plans[1].reason, new RegExp(`persisted ${state} task 1`));
   }
 });
+
+// --- argv: every value-consuming flag refuses a flag as its value (PR #510's takeValue) -----
+//
+// One case per flag, each asserting THAT flag's name in the refusal, so reverting a single
+// flag to `argv[++i]` reddens exactly one row. The two assertions per row are deliberate and
+// neither is redundant: `args.error` alone is NOT failable for --resume /
+// --authorize-ambiguous-retry, because the post-loop UUID regex sets an error anyway when the
+// swallowed token is "--dry-run". Only "the value never became the flag" plus the takeValue
+// wording distinguishes a refusal from an accident.
+test("every value-consuming flag refuses a following flag instead of swallowing it", () => {
+  const cases = [
+    ["--max-comment-chars", "maxCommentChars", 0],
+    // `octo/board` is a bare positional repo, so --repos starts from that one entry.
+    ["--repos", "repos", ["octo/board"]],
+    ["--actor", "actor", "portfolio-sync"],
+    ["--task", "task", null],
+    ["--resume", "resume", null],
+    ["--authorize-ambiguous-retry", "authorizeAmbiguousRetry", null],
+    ["--resolution-reason", "resolutionReason", null],
+    ["--limit", "limit", 0],
+  ];
+  for (const [flag, field, untouched] of cases) {
+    const swallowed = parseArgs(["push-issue", "octo/board", flag, "--dry-run"]);
+    assert.ok(String(swallowed.error).startsWith(`${flag} needs `),
+      `${flag} must name itself in the refusal, so reverting one flag reddens exactly one row (got: ${swallowed.error})`);
+    assert.match(swallowed.error ?? "", /but got the flag "--dry-run"/,
+      `${flag} must refuse --dry-run as a value rather than consuming it`);
+    assert.deepEqual(swallowed[field], untouched, `${flag} must not keep "--dry-run" as its value`);
+    assert.equal(swallowed.dryRun, false, `${flag} must not have consumed the --dry-run it refused`);
+
+    // A short flag is a flag too: `-h` was silently eaten before #510's follow-up commit.
+    const short = parseArgs(["push-issue", "octo/board", flag, "-h"]);
+    assert.match(short.error ?? "", /but got the flag "-h"/, `${flag} must refuse a short flag`);
+    assert.deepEqual(short[field], untouched, `${flag} must not keep "-h" as its value`);
+
+    // Trailing flag with nothing after it, and an explicitly blank value.
+    assert.match(parseArgs(["push-issue", "octo/board", flag]).error ?? "", /but got nothing/);
+    assert.match(parseArgs(["push-issue", "octo/board", flag, "   "]).error ?? "", /but got a blank value/);
+  }
+});
+
+test("--resume --dry-run refuses before main() can run a live recovery", () => {
+  const args = parseArgs(["push-issue", "octo/board", "--allow-write", "--task", "7", "--resume", "--dry-run"]);
+  // The whole point: the recovery path WRITES to GitHub. A swallowed --dry-run left dryRun
+  // false and resume "--dry-run"; main() exits 2 on args.error before it touches a repo.
+  assert.notEqual(args.resume, "--dry-run");
+  assert.equal(args.resume, null);
+  assert.equal(args.dryRun, false);
+  assert.match(args.error, /^--resume needs an operation UUID, but got the flag "--dry-run"/);
+});
+
+test("a genuine value still parses, so the guard refuses flags and nothing else", () => {
+  const args = parseArgs([
+    "push-issue", "octo/board", "--allow-write", "--task", " 7 ", "--resume", OP,
+    "--authorize-ambiguous-retry", OP, "--actor", "operator-a",
+    "--resolution-reason", "Reviewed the exhaustive zero-marker scan", "--limit", "5",
+    "--max-comment-chars", "120", "--repos", "octo/other",
+  ]);
+  assert.equal(args.error, null);
+  assert.equal(args.task, 7);
+  assert.equal(args.resume, OP);
+  assert.equal(args.authorizeAmbiguousRetry, OP);
+  assert.equal(args.actor, "operator-a");
+  assert.equal(args.actorExplicit, true);
+  assert.equal(args.resolutionReason, "Reviewed the exhaustive zero-marker scan");
+  assert.equal(args.limit, 5);
+  assert.equal(args.maxCommentChars, 120);
+  assert.deepEqual(args.repos, ["octo/board", "octo/other"]);
+});

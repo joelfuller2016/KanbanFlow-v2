@@ -147,6 +147,11 @@ function parseArgs(argv) {
   // the write. main() prints args.error and exits 2 before it touches a repo, so a refusal is
   // free and a swallow is not. This lives in ONE helper on purpose: hand-written per-flag
   // copies are exactly how the check ends up on one flag and not the other four.
+  //
+  // The recovery flags matter most of all. `--resume --dry-run` swallowed the preview flag and
+  // left `dryRun` false on the ONE path whose whole purpose is finishing a half-written remote
+  // create; the post-loop UUID regexes below would then refuse for the wrong reason, or — with
+  // a UUID present later on the line — not refuse at all.
   const takeValue = (flag, need) => {
     const value = argv[i + 1];
     if (value === undefined || value.trim() === "" || value.trim().startsWith("-")) {
@@ -186,12 +191,20 @@ function parseArgs(argv) {
       if (value === null) return args;
       args.task = Number.parseInt(value, 10);
     }
-    else if (a === "--resume") args.resume = argv[++i] || "";
-    else if (a === "--authorize-ambiguous-retry") args.authorizeAmbiguousRetry = argv[++i] || "";
+    else if (a === "--resume") {
+      const value = takeValue("--resume", "an operation UUID");
+      if (value === null) return args;
+      args.resume = value;
+    }
+    else if (a === "--authorize-ambiguous-retry") {
+      const value = takeValue("--authorize-ambiguous-retry", "an operation UUID");
+      if (value === null) return args;
+      args.authorizeAmbiguousRetry = value;
+    }
     else if (a === "--resolution-reason") {
-      const reason = argv[++i];
-      if (!reason?.trim() || reason.startsWith("--")) { args.error = "--resolution-reason needs non-blank text."; return args; }
-      args.resolutionReason = reason.trim();
+      const value = takeValue("--resolution-reason", "non-blank text");
+      if (value === null) return args;
+      args.resolutionReason = value;
     }
     else if (a === "--all") args.all = true;
     else if (a === "--strict") args.strict = true;
