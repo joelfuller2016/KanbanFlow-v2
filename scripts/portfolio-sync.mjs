@@ -1559,6 +1559,75 @@ function taskMatchForIssue(index, issue) {
   return legacy ? { task: legacy, kind: "legacy" } : { task: null, kind: null };
 }
 
+// The task's sync block is the AUTHORITATIVE record of which issue a task mirrors --
+// `backfill-links` treats it as such (classifyBackfillCandidate) and refuses to link past it.
+// A legacy `#<n> ` prefix is only a repo-local NUMBER, which is exactly the mutable identity
+// #336 exists to stop trusting, so promotion may never contradict this.
+//
+// Returns null when the task simply has no sync-block URL (the ordinary pre-#336 task, which
+// promotion must ALLOW), a parsed {owner, repo, number} when there is exactly one canonical URL
+// inside exactly one block, and {malformed} otherwise. Malformed fails closed: backfill-links
+// owns the malformed-provenance taxonomy and will quarantine it properly.
+function syncBlockIssueUrl(description) {
+  const blocks = [...String(description || "").matchAll(new RegExp(SYNC_BLOCK_RE.source, "gi"))];
+  if (blocks.length === 0) return null;
+  if (blocks.length !== 1) return { malformed: `found ${blocks.length} kanbanflow-sync blocks` };
+  const issueLines = [...blocks[0][1].matchAll(new RegExp(SYNC_ISSUE_LINE_RE.source, "gmi"))];
+  if (issueLines.length === 0) return null;
+  if (issueLines.length !== 1) return { malformed: `found ${issueLines.length} **Issue:** URLs in the sync block` };
+  const parsed = parseGitHubIssueUrl(issueLines[0][1]);
+  return parsed ?? { malformed: "the **Issue:** value is not a canonical GitHub issue URL" };
+}
+
+// The value that would be persisted as the IMMUTABLE externalNodeId. syncTasks only ever sees
+// `gh issue list --json` records, whose `id` IS the GraphQL node id; a REST record
+// (`gh api repos/{repo}/issues`) puts a repo-local NUMBER there and the node id in `node_id`.
+// Persisting a number into externalNodeId would corrupt the one field the whole durable-identity
+// contract rests on, so promotion refuses anything that is not a non-numeric string rather than
+// trusting the shape of whatever it was handed.
+function promotableIssueNodeId(issue) {
+  const nodeId = issue?.node_id ?? issue?.id;
+  if (typeof nodeId !== "string") return null;
+  const trimmed = nodeId.trim();
+  if (trimmed === "" || /^\d+$/.test(trimmed)) return null;
+  return trimmed;
+}
+
+// Whether a `legacy` prefix match may be promoted to a durable link on an ordinary sync.
+//
+// Promotion is what makes #336 do anything at all on an existing board: without it a normal
+// `sync` never writes a link row, so the two new tables stay empty forever and every durable
+// identity guarantee is dead weight. But a legacy match knows only a repo-local NUMBER and the
+// repo currently being synced. A task named "#42 Foo" whose sync block says
+// `**Issue:** https://github.com/other/repo/issues/42` -- a task moved between projects, or a
+// project re-pointed at another repo -- would otherwise have its immutable identity bound to a
+// FOREIGN repository's issue by nothing but a matching integer. That is the precise failure
+// #336 exists to eliminate.
+//
+// backfill-links gets this precondition for free (it reads the sync-block URL, resolves the
+// candidate repository's identity and refuses on a mismatch). Sync does not, so it checks the
+// one thing it can check without a network call and leaves everything else to backfill.
+function legacyPromotionDisposition(task, issue, repoIdentity) {
+  const nodeId = promotableIssueNodeId(issue);
+  if (!nodeId) {
+    return { kind: "drift", reason: `issue record carries no immutable GitHub node id (got ${JSON.stringify(issue?.node_id ?? issue?.id)}); refusing to persist it as a durable identity` };
+  }
+  const syncBlock = syncBlockIssueUrl(task?.description);
+  if (syncBlock?.malformed) {
+    return { kind: "drift", reason: `legacy "#<n> " prefix cannot be promoted: ${syncBlock.malformed}; run \`backfill-links ${repoIdentity.fullName}\`` };
+  }
+  if (syncBlock) {
+    const sameRepo = `${syncBlock.owner}/${syncBlock.repo}`.toLowerCase() === repoIdentity.fullName.toLowerCase();
+    if (!sameRepo) {
+      return { kind: "drift", reason: `legacy "#<n> " prefix disagrees with the task's authoritative sync-block URL https://github.com/${syncBlock.owner}/${syncBlock.repo}/issues/${syncBlock.number}; run \`backfill-links ${repoIdentity.fullName}\`` };
+    }
+    if (syncBlock.number !== issue.number) {
+      return { kind: "drift", reason: `legacy "#<n> " prefix matched #${issue.number} but the task's authoritative sync-block URL names #${syncBlock.number}; run \`backfill-links ${repoIdentity.fullName}\`` };
+    }
+  }
+  return { kind: "promote", nodeId };
+}
+
 function verifiedLinkRequest(taskId, repoIdentity, issue, actor) {
   return {
     taskId,
@@ -1783,7 +1852,7 @@ async function syncTasks(repo, repoIdentity, projectId, issues, closedNumbers, p
       continue;
     }
     const durableIdentity = matched.kind === "durable" || matched.kind === "operation" || matched.kind === "transfer";
-    const desiredName = durableIdentity ? String(issue.title || "").trim() : taskNameFor(issue);
+    let desiredName = durableIdentity ? String(issue.title || "").trim() : taskNameFor(issue);
     if (task) byIssueNumber.set(issue.number, task);
 
     if (!task) {
@@ -1839,6 +1908,40 @@ async function syncTasks(repo, repoIdentity, projectId, issues, closedNumbers, p
           if (indexInLinks >= 0) projectLinks[indexInLinks] = refreshed;
           else projectLinks.push(refreshed);
           stats.linksRegistered++;
+        }
+      }
+    }
+
+    // A `legacy` match is a task the pre-#336 sync created, recognised by the mutable "#<n> "
+    // title prefix. Nothing else in an ordinary sync ever registers a durable link for it -- only
+    // the create path and the durable/transfer drift path do -- so without this an upgraded board
+    // never gains a single ExternalWorkItemLink row and the headline feature is inert, waiting on
+    // a `backfill-links owner/repo` that appears in no runnable instruction.
+    //
+    // The precondition is what makes it safe; see legacyPromotionDisposition.
+    if (matched.kind === "legacy") {
+      const promotion = legacyPromotionDisposition(task, issue, repoIdentity);
+      if (promotion.kind !== "promote") {
+        stats.drift.push(`${repo}#${issue.number}: task ${task.id}: ${promotion.reason}`);
+      } else {
+        plan(dryRun, "promote legacy prefix to durable link", `task ${task.id} → ${repo}#${issue.number} (${promotion.nodeId})`);
+        // GitHub owns the title once identity is durable, so the prefix goes in the same run --
+        // through the ordinary update path below, which is exactly what the next sync would do.
+        desiredName = String(issue.title || "").trim();
+        if (!dryRun) {
+          try {
+            const registered = await externalApi.registerLink(task.id, verifiedLinkRequest(task.id, repoIdentity, issue, actor));
+            projectLinks.push(registered);
+            stats.linksRegistered++;
+          } catch (err) {
+            // A competing claim on this node is arbitrated server-side by
+            // EnsureExternalIdentityAvailableAsync. Promotion is an ADDITIVE upgrade of an
+            // already-working legacy match, so a refusal is drift for a human to read -- never a
+            // reason to abort the repo and abandon the rest of the mirror, and never a reason to
+            // strip the prefix that is still this task's only identity.
+            stats.drift.push(`${repo}#${issue.number}: task ${task.id}: legacy promotion refused (${err.message}); the "#<n> " prefix still identifies this task — run \`backfill-links ${repo}\``);
+            desiredName = taskNameFor(issue);
+          }
         }
       }
     }
@@ -2931,6 +3034,7 @@ export {
   HookAbort,
   installTestHooks,
   isDirectRun,
+  legacyPromotionDisposition,
   runManualResumeHook,
   issueBodyFor,
   issueHasOneCleanOperationMarker,
@@ -2953,6 +3057,9 @@ export {
   repoNodeLinkMarker,
   resolveProjectLink,
   stripLegacyIssuePrefix,
+  stats,
+  syncBlockIssueUrl,
+  syncTasks,
   taskMatchForIssue,
   verifiedFinalizeRequest,
   writeStateName,

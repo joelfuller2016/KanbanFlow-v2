@@ -1158,3 +1158,154 @@ test("a pre-dispatch hook abort records nothing and says what it left behind", a
     mod.hooks.afterManualResume = saved;
   }
 });
+
+// --- legacy -> durable auto-promote --------------------------------------------------------
+//
+// Without this the two new tables stay empty on every existing board and the whole durable
+// identity feature is inert. WITH it, and without the sync-block precondition, it is a brand
+// new way to bind a task's immutable identity to a FOREIGN repository's issue by nothing but a
+// matching integer -- so the precondition gets as much coverage as the promotion.
+
+const SYNC_BLOCK = (owner, repo, number) =>
+  `<!-- kanbanflow-sync -->\n**Issue:** https://github.com/${owner}/${repo}/issues/${number}\n<!-- /kanbanflow-sync -->`;
+
+const GH_ISSUE = { id: "I_kwDOnode42", number: 42, title: "Foo", state: "OPEN", url: "https://github.com/octo/board/issues/42" };
+
+test("promotion is refused when the task's authoritative sync block names another repo", async () => {
+  const { legacyPromotionDisposition } = await import("./portfolio-sync.mjs?promote-precondition");
+
+  // The ordinary pre-#336 task: a "#42 " prefix and no sync block at all. This is the case
+  // promotion exists for, so it MUST be allowed.
+  const bare = legacyPromotionDisposition(task(1, "#42 Foo", ""), GH_ISSUE, REPO);
+  assert.equal(bare.kind, "promote");
+  assert.equal(bare.nodeId, "I_kwDOnode42");
+
+  // Same repo, same number -> the sync block agrees, so promotion proceeds.
+  const agrees = legacyPromotionDisposition(task(1, "#42 Foo", SYNC_BLOCK("octo", "board", 42)), GH_ISSUE, REPO);
+  assert.equal(agrees.kind, "promote");
+  // Case is not identity: "Octo/Board" is the same repository.
+  assert.equal(legacyPromotionDisposition(task(1, "#42 Foo", SYNC_BLOCK("Octo", "Board", 42)), GH_ISSUE, REPO).kind, "promote");
+
+  // THE ONE THAT MATTERS. A task moved between projects, or a project re-pointed at another
+  // repo: the number matches by coincidence and the authoritative URL says otherwise.
+  const foreign = legacyPromotionDisposition(task(1, "#42 Foo", SYNC_BLOCK("other", "repo", 42)), GH_ISSUE, REPO);
+  assert.equal(foreign.kind, "drift");
+  assert.match(foreign.reason, /disagrees with the task's authoritative sync-block URL/);
+  assert.match(foreign.reason, /other\/repo\/issues\/42/);
+  assert.match(foreign.reason, /backfill-links octo\/board/);
+
+  // Same repo, different number: the prefix and the sync block disagree about WHICH issue.
+  const wrongNumber = legacyPromotionDisposition(task(1, "#42 Foo", SYNC_BLOCK("octo", "board", 99)), GH_ISSUE, REPO);
+  assert.equal(wrongNumber.kind, "drift");
+  assert.match(wrongNumber.reason, /names #99/);
+
+  // Malformed provenance fails closed; backfill-links owns that taxonomy.
+  const twoUrls = task(1, "#42 Foo",
+    "<!-- kanbanflow-sync -->\n**Issue:** https://github.com/octo/board/issues/42\n**Issue:** https://github.com/octo/board/issues/43\n<!-- /kanbanflow-sync -->");
+  assert.equal(legacyPromotionDisposition(twoUrls, GH_ISSUE, REPO).kind, "drift");
+
+  // A REST-shaped record puts a repo-local NUMBER in `id`. Persisting that as the immutable
+  // externalNodeId would corrupt the one field the durable-identity contract rests on.
+  const restShaped = legacyPromotionDisposition(task(1, "#42 Foo", ""), { id: 42, number: 42, title: "Foo" }, REPO);
+  assert.equal(restShaped.kind, "drift");
+  assert.match(restShaped.reason, /no immutable GitHub node id/);
+  // ...but a REST record that DOES carry node_id is fine: the node id is what is checked.
+  assert.equal(
+    legacyPromotionDisposition(task(1, "#42 Foo", ""), { id: 42, node_id: "I_kwDOnode42", number: 42 }, REPO).kind,
+    "promote",
+  );
+});
+
+// Drives the real syncTasks with a stubbed transport, so the CALL SITE is covered and not just
+// the predicate. Records every request the sync makes.
+async function runSyncTasks(tag, tasks, issues, { dryRun = false, registerLinkStatus = 200 } = {}) {
+  const mod = await import(`./portfolio-sync.mjs?${tag}`);
+  const requests = [];
+  const realFetch = globalThis.fetch;
+  const realLog = console.log;
+  const driftBefore = mod.stats.drift.length;
+  const registeredBefore = mod.stats.linksRegistered;
+  globalThis.fetch = async (url, init = {}) => {
+    const path = String(url).replace(/^https?:\/\/[^/]+/, "");
+    const body = init.body ? JSON.parse(init.body) : null;
+    requests.push({ method: init.method || "GET", path, body });
+    if (path.startsWith("/api/external-work-item-links/github/by-node")) {
+      return new Response("", { status: 404, statusText: "Not Found" });
+    }
+    if (/^\/api\/tasks\/\d+\/external-work-item-links\/github$/.test(path)) {
+      if (registerLinkStatus !== 200) {
+        return new Response("external-node-already-linked", { status: registerLinkStatus, statusText: "Conflict" });
+      }
+      return Response.json({ id: 500, taskId: body.taskId, provider: "GitHub", state: "Active", ...body });
+    }
+    return Response.json({ ok: true });
+  };
+  console.log = () => {};
+  try {
+    await mod.syncTasks(
+      "octo/board", REPO, 1, issues, new Set(), new Map(), new Map(),
+      { actor: "tester", dryRun, comments: false },
+      tasks, [], new Map(),
+    );
+  } finally {
+    globalThis.fetch = realFetch;
+    console.log = realLog;
+  }
+  return {
+    requests,
+    drift: mod.stats.drift.slice(driftBefore),
+    linksRegistered: mod.stats.linksRegistered - registeredBefore,
+  };
+}
+
+test("an ordinary sync promotes a legacy prefix match and strips the prefix", async () => {
+  const result = await runSyncTasks("promote-live", [task(1, "#42 Foo", "")], [GH_ISSUE]);
+
+  const registrations = result.requests.filter((r) => r.path === "/api/tasks/1/external-work-item-links/github");
+  assert.equal(registrations.length, 1, "exactly one durable link is registered");
+  assert.equal(registrations[0].method, "PUT");
+  assert.equal(registrations[0].body.externalNodeId, "I_kwDOnode42");
+  assert.equal(registrations[0].body.externalNumber, 42);
+  assert.equal(registrations[0].body.repositoryExternalId, REPO_ID);
+  assert.equal(result.linksRegistered, 1);
+
+  const renames = result.requests.filter((r) => r.method === "PUT" && r.path === "/api/tasks/1");
+  assert.equal(renames.length, 1, "the legacy prefix is stripped in the same run");
+  assert.equal(renames[0].body.name, "Foo");
+  assert.deepEqual(result.drift, []);
+});
+
+test("promotion never binds a task to a foreign repository's issue", async () => {
+  const result = await runSyncTasks(
+    "promote-foreign",
+    [task(1, "#42 Foo", SYNC_BLOCK("other", "repo", 42))],
+    [GH_ISSUE],
+  );
+
+  assert.deepEqual(
+    result.requests.filter((r) => r.path === "/api/tasks/1/external-work-item-links/github"),
+    [],
+    "zero durable links registered when the sync block contradicts the prefix",
+  );
+  assert.equal(result.linksRegistered, 0);
+  assert.equal(result.drift.length, 1);
+  assert.match(result.drift[0], /backfill-links octo\/board/);
+  // The prefix is this task's only identity while promotion is refused; stripping it orphans it.
+  const renames = result.requests.filter((r) => r.method === "PUT" && r.path === "/api/tasks/1");
+  assert.ok(renames.every((r) => r.body.name === "#42 Foo"), "the legacy prefix must survive a refusal");
+});
+
+test("a refused registration is drift, never an aborted repo", async () => {
+  const result = await runSyncTasks("promote-409", [task(1, "#42 Foo", "")], [GH_ISSUE], { registerLinkStatus: 409 });
+  assert.equal(result.linksRegistered, 0);
+  assert.equal(result.drift.length, 1);
+  assert.match(result.drift[0], /legacy promotion refused/);
+  const renames = result.requests.filter((r) => r.method === "PUT" && r.path === "/api/tasks/1");
+  assert.ok(renames.every((r) => r.body.name === "#42 Foo"), "a refused promotion must not strip the prefix");
+});
+
+test("--dry-run promotes nothing", async () => {
+  const result = await runSyncTasks("promote-dry", [task(1, "#42 Foo", "")], [GH_ISSUE], { dryRun: true });
+  assert.deepEqual(result.requests.filter((r) => r.method !== "GET"), [], "a dry run writes nothing at all");
+  assert.equal(result.linksRegistered, 0);
+});
