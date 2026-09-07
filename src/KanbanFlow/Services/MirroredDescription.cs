@@ -96,9 +96,11 @@ public static class MirroredDescription
     // (an emoji, most CJK extension B, mathematical alphanumerics) straddles the boundary. That is
     // ill-formed text: it renders as a replacement glyph and corrupts any downstream comparison.
     // Dropping the orphan costs at most one code unit and is always safe.
+    /// <summary>Drops the trailing code unit when <paramref name="s"/> ends with a lone high surrogate.</summary>
     private static ReadOnlySpan<char> WithoutOrphanSurrogate(ReadOnlySpan<char> s) =>
         s.Length > 0 && char.IsHighSurrogate(s[^1]) ? s[..^1] : s;
 
+    /// <summary>The first <see cref="ScanChars"/> characters of <paramref name="description"/>, or <c>null</c> when the description is null or empty.</summary>
     private static string? Head(string? description) => string.IsNullOrEmpty(description)
         ? null
         : description.Length > ScanChars

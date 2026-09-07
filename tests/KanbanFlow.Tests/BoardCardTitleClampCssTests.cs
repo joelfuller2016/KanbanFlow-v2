@@ -47,6 +47,7 @@ public sealed class BoardCardTitleClampCssTests
 
     // ── The clamp ────────────────────────────────────────────────────────────────────────────────
 
+    /// <summary>The two-line title clamp is never applied directly to a <c>&lt;button&gt;</c> element.</summary>
     [Theory]
     [MemberData(nameof(TitleMarkupFiles))]
     public void TheLineClamp_IsNeverAppliedToAButton(string razorPath)
@@ -76,6 +77,7 @@ public sealed class BoardCardTitleClampCssTests
             + "the button (`.board-card-title-text` / `.outline-task-title-text`) instead.");
     }
 
+    /// <summary>Every <c>-webkit-line-clamp</c> declaration targets a selector that establishes a WebKit box.</summary>
     [Fact]
     public void EveryLineClampDeclaration_TargetsTheBoxThatCarriesTheClamp()
     {
@@ -106,6 +108,7 @@ public sealed class BoardCardTitleClampCssTests
 
     // ── The drag suppression ─────────────────────────────────────────────────────────────────────
 
+    /// <summary>Drag-suppression rules are scoped to <c>@media (hover: hover)</c> so they do not reach the touch always-open branch.</summary>
     [Fact]
     public void DragSuppression_DoesNotReachTheTouchAlwaysOpenBranch()
     {
@@ -133,6 +136,7 @@ public sealed class BoardCardTitleClampCssTests
         }
     }
 
+    /// <summary>Drag-suppression rules reset <c>transition: none</c> so the collapse is instantaneous.</summary>
     [Fact]
     public void DragSuppression_CollapsesInOneFrame()
     {
@@ -174,9 +178,11 @@ public sealed class BoardCardTitleClampCssTests
                          && SplitSelectorList(r.Selector).All(s => !SubjectClasses(s).Contains("kanban-ghost")))
              .ToList();
 
+    /// <summary>Returns true when the at-rule is <c>@media (hover: hover)</c>.</summary>
     private static bool IsHoverHover(string atRule) =>
         Regex.IsMatch(atRule, @"^@media\b[^{]*\(\s*hover\s*:\s*hover\s*\)");
 
+    /// <summary>Returns true when the at-rule is <c>@media (hover: none)</c>.</summary>
     private static bool IsHoverNone(string atRule) =>
         Regex.IsMatch(atRule, @"^@media\b[^{]*\(\s*hover\s*:\s*none\s*\)");
 
@@ -255,6 +261,7 @@ public sealed class BoardCardTitleClampCssTests
         return rules;
     }
 
+    /// <summary>Splits a CSS selector list on bare commas.</summary>
     private static IEnumerable<string> SplitSelectorList(string selector) =>
         selector.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
 

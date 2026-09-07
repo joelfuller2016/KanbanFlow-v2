@@ -35,6 +35,7 @@ public sealed class MirroredDescriptionTests
         + "\n"
         + "Second paragraph here.";
 
+    /// <summary>Excerpt returns the issue body text, stripping the sync header.</summary>
     [Fact]
     public void Excerpt_ShowsTheIssueBody_NotTheSyncHeader()
     {
@@ -59,6 +60,7 @@ public sealed class MirroredDescriptionTests
         Assert.Contains("truncates its title", excerpt);
     }
 
+    /// <summary>IssueUrl and IssueLabel extract the URL and number from the sync header.</summary>
     [Fact]
     public void IssueUrl_AndLabel_ComeFromTheSyncHeader()
     {
@@ -71,6 +73,7 @@ public sealed class MirroredDescriptionTests
     // A hand-authored description must fall through untouched: the card shows its text and no
     // GitHub affordance. Both regexes are anchored to markers only the sync writes, so this is the
     // path every non-mirrored task takes.
+    /// <summary>A hand-authored description yields no issue link and excerpts its own text verbatim.</summary>
     [Fact]
     public void HandWrittenDescription_HasNoIssueLink_AndExcerptsItsOwnText()
     {
@@ -81,6 +84,7 @@ public sealed class MirroredDescriptionTests
         Assert.Equal(plain, MirroredDescription.Excerpt(plain));
     }
 
+    /// <summary>Null, empty, and whitespace-only inputs yield null for all three outputs.</summary>
     [Theory]
     [InlineData(null)]
     [InlineData("")]
@@ -94,6 +98,7 @@ public sealed class MirroredDescriptionTests
 
     // A description that is ONLY a sync header has no body to excerpt. Returning "" here would make
     // the card render an empty <p> with padding — a reveal that opens onto nothing.
+    /// <summary>A description that is only a sync header yields a null excerpt but still provides the issue link.</summary>
     [Fact]
     public void HeaderOnlyDescription_ExcerptsToNull_ButStillLinks()
     {
@@ -104,6 +109,7 @@ public sealed class MirroredDescriptionTests
         Assert.Equal("#454", MirroredDescription.IssueLabel(headerOnly));
     }
 
+    /// <summary>Excerpt elides at exactly <see cref="MirroredDescription.ExcerptMaxLength"/> characters and appends an ellipsis.</summary>
     [Fact]
     public void Excerpt_ElidesAtTheDeclaredLength()
     {
@@ -123,6 +129,7 @@ public sealed class MirroredDescriptionTests
     // The scan bound is a PERFORMANCE guard on a 30,000-char cap, and a bound that silently lost the
     // header would be worse than no bound: the card would drop its GitHub link on exactly the long
     // issues that most need one. The header is always first, so the bound must never reach it.
+    /// <summary>The scan bound does not lose the sync header on a maximum-length body.</summary>
     [Fact]
     public void ScanBound_DoesNotCostTheHeaderOnAMaximumLengthBody()
     {
@@ -147,6 +154,7 @@ public sealed class MirroredDescriptionTests
     // The excerpt renders as plain text in a <p>, so markdown syntax in it is debris, not emphasis.
     // Observed on the real board before this: a card read "...not yet in any standard: **§4 Need &
     // usefulness** and **§5 Workflow analysis**".
+    /// <summary>Excerpt strips inline markdown syntax but keeps link text.</summary>
     [Fact]
     public void Excerpt_StripsInlineMarkdown_AndKeepsLinkText()
     {
@@ -168,6 +176,7 @@ public sealed class MirroredDescriptionTests
     // The conservative half of the same rule, and the reason a lone `*` or `_` is left alone: this
     // project's issue bodies are full of snake_case identifiers and file globs, and mangling them to
     // remove one italic marker is the worse trade. This pins the trade so it is not "tidied" later.
+    /// <summary>Excerpt preserves snake_case identifiers and file globs rather than stripping lone asterisks or underscores.</summary>
     [Fact]
     public void Excerpt_DoesNotMangleSnakeCaseOrGlobs()
     {
@@ -193,6 +202,7 @@ public sealed class MirroredDescriptionTests
     // prose — an issue that discusses the sync format, say — and must never become the card's link.
     // Unbounded, the regex would happily scan down and adopt it, and the card would link to whatever
     // repository the author happened to be quoting.
+    /// <summary>An issue marker quoted deep in the body (beyond the scan bound) is not mistaken for the sync header.</summary>
     [Fact]
     public void AnIssueMarkerQuotedDeepInTheBody_IsNotMistakenForTheHeader()
     {
@@ -231,6 +241,7 @@ public sealed class MirroredDescriptionTests
         Assert.Equal("GitHub issue #454 (opens in a new tab)", label);
     }
 
+    /// <summary>IssueAriaLabel is null without a link and uses an unnumbered label for non-issue URLs.</summary>
     [Fact]
     public void IssueAriaLabel_IsNullWithoutALink_AndUnnumberedForANonIssueUrl()
     {
@@ -246,6 +257,7 @@ public sealed class MirroredDescriptionTests
     // the pattern matched against the whole description, a hand-written task whose first line is
     // "**Issue:** https://github.com/anyone/anything/issues/1" got a "#1" chip on its card linking
     // wherever its author chose, indistinguishable from a real mirror.
+    /// <summary>An issue URL outside the sync block is ignored — only the block's own URL is trusted.</summary>
     [Fact]
     public void IssueUrl_IsIgnoredOutsideTheSyncBlock()
     {
@@ -264,6 +276,7 @@ public sealed class MirroredDescriptionTests
 
     // Slicing at a fixed UTF-16 index can keep a lone high surrogate when an astral character
     // straddles the boundary — ill-formed text that renders as a replacement glyph.
+    /// <summary>Excerpt never produces a lone high surrogate when an astral character straddles the elision boundary.</summary>
     [Fact]
     public void Excerpt_NeverSplitsASurrogatePair()
     {
@@ -285,6 +298,7 @@ public sealed class MirroredDescriptionTests
     }
 
     // A URL that is not an issue link still gets an affordance, just an unnumbered one.
+    /// <summary>A non-issue URL (e.g. a repository link) is labelled "GitHub" rather than a number.</summary>
     [Fact]
     public void NonIssueUrl_LabelsAsGitHub()
     {
@@ -299,6 +313,7 @@ public sealed class MirroredDescriptionTests
     // the scan window. Without it, SyncBlockRe.Replace matches nothing and the raw header —
     // marker, URL, milestone, labels, timestamp — leaks into the excerpt. Deleting the guard left
     // the suite green before this test was added.
+    /// <summary>Excerpt returns null when the sync block's closing marker falls beyond the scan bound.</summary>
     [Fact]
     public void Excerpt_RefusesASyncBlockWhoseCloseFallsBeyondTheScanBound()
     {
@@ -319,6 +334,7 @@ public sealed class MirroredDescriptionTests
 
     // A URL written at the end of a sentence carries the stop into the match, and the href 404s on
     // GitHub. The TrimEnd in IssueUrl strips it before the link is used.
+    /// <summary>IssueUrl drops a trailing sentence-stop character (period, comma, semicolon, colon) from the URL.</summary>
     [Theory]
     [InlineData(".")]
     [InlineData(",")]
@@ -339,6 +355,7 @@ public sealed class MirroredDescriptionTests
 
     // Without fragment/query/trailing-slash normalisation these all fell through to the unnumbered
     // "GitHub" label despite naming a perfectly good issue.
+    /// <summary>IssueLabel correctly reads the issue number through URL fragments, query strings, and trailing slashes.</summary>
     [Theory]
     [InlineData("#issuecomment-4")]
     [InlineData("?utm_source=x")]
@@ -358,6 +375,7 @@ public sealed class MirroredDescriptionTests
     // block quoted anywhere in the body of a hand-written task is NOT treated as owned metadata.
     // Without anchoring, IssueUrl() would return the quoted URL and Excerpt() would strip the quoted
     // text — contradicting the comments that call the block an ownership envelope.
+    /// <summary>A sync block quoted in the middle of body text is not mistaken for an owned sync block.</summary>
     [Fact]
     public void IssueUrl_RejectsAQuotedSyncBlockInBodyText()
     {
@@ -381,6 +399,7 @@ public sealed class MirroredDescriptionTests
     // `SyncBlockRe` accepts `<!--\s*kanbanflow-sync\s*-->`, which covers no-space and tab variants
     // that the old literal Contains check missed. A variant opener whose closing marker falls outside
     // the scan window must still return null — the guard must match the regex, not a hand-picked literal.
+    /// <summary>Whitespace-variant sync openers (no-space, tab) are refused when their closing marker falls beyond the scan bound.</summary>
     [Theory]
     [InlineData("<!--kanbanflow-sync-->")]
     [InlineData("<!--\tkanbanflow-sync -->")]
@@ -401,6 +420,7 @@ public sealed class MirroredDescriptionTests
     // \A\s* previously accepted newlines, so a hand-written description that opened with blank lines
     // then quoted a complete sync block was treated as a mirror. \A[ \t]* restricts the allowed
     // prefix to horizontal whitespace only, which the sync producer never emits anyway.
+    /// <summary>A sync block preceded by blank lines is not treated as owned — only horizontal whitespace is permitted before the marker.</summary>
     [Fact]
     public void IssueUrl_RejectsAQuotedSyncBlockPrecededByBlankLines()
     {
@@ -420,6 +440,7 @@ public sealed class MirroredDescriptionTests
         Assert.Null(MirroredDescription.IssueLabel(body));
     }
 
+    /// <summary>A sync block with leading newlines is treated as plain text, not stripped as an owned block.</summary>
     [Fact]
     public void Excerpt_TreatsLeadingNewlineSyncBlockAsPlainText()
     {
@@ -440,6 +461,7 @@ public sealed class MirroredDescriptionTests
 
     // EmphasisRe previously removed `__`, which corrupted Python dunder names and similar identifiers.
     // `__init__` → `init`, `__all__` → `all`. The fix removes `__` from the pattern entirely.
+    /// <summary>Excerpt preserves double-underscore identifiers such as Python dunder names.</summary>
     [Theory]
     [InlineData("__init__", "__init__")]
     [InlineData("__all__", "__all__")]
