@@ -1,6 +1,6 @@
 # Requests, plans and results on the existing board
 
-For the person managing projects and the AI clients doing their work. Reviewed September 6, 2026 on Windows 11, PowerShell 7.6.5, .NET SDK 10.0.400 and Node 24. Source baseline: `53a300066e118b0e5a1b0ac9d02294169d2e076f`; implementation: the PR linked from [issue #509](https://github.com/joelfuller2016/KanbanFlow-v2/issues/509). Maintainer: repository owner. Verification below distinguishes executed checks from later work.
+For the person managing projects and the AI clients doing their work. Reviewed September 6, 2026 on Windows 11, PowerShell 7.6.5, .NET SDK 10.0.400 and Node 24. Source baseline: `53a300066e118b0e5a1b0ac9d02294169d2e076f`; tested implementation: `2447ef4c15f163644fde9ce53a2dde3534a0af96` in [PR #511](https://github.com/joelfuller2016/KanbanFlow-v2/pull/511), planned in [issue #509](https://github.com/joelfuller2016/KanbanFlow-v2/issues/509). Maintainer: repository owner. Verification below distinguishes executed checks from later work.
 
 KanbanFlow now keeps the original request, improved brief, task plan, conversation, reported results and conclusion alongside its existing ideas and board cards. A request belongs to one existing idea. Promotion connects that idea to a project. Publishing a plan creates real tasks under a feature on that project's current board. The person and MCP clients see and change those same records.
 
@@ -129,6 +129,8 @@ Observed on September 6, 2026:
 | Full nonincremental solution build | 0 warnings/errors. |
 | Full .NET suite | 1,160 passed, 0 failed/skipped (980 existing + 180 workflow cases). |
 | Script suite | 223 passed (215 existing + 8 workflow wrapper regressions). |
+| Required `scripts/verify.ps1` gate | Exit 0; build/tests passed. Formatting remains advisory and reported whitespace drift in existing and new files; no broad formatting changes applied. |
+| Existing `scripts/smoke-api.ps1` | Passed with process-local `KANBANFLOW_LLM_TIMEOUT_MS=1000`. Initial default run exceeded the script's five-second memory recall timeout. Bounding optional embedding exercised its existing keyword fallback; source/assertions unchanged. Default provider latency remains unverified. |
 | Native/stdio transport harness | Passed; 33 native tools, 54 wrapper tools, matching four workflow schemas. |
 | Real legacy SQLite seed upgrade | Every existing row preserved; repeated upgrade, foreign keys and memory/FTS search checked; forced DDL failure rolled back. |
 | Publication/concurrency | Independent SQLite connections, duplicate delivery, changed retry payloads, mid-publication rollback, actual-board cycles and concurrent human scope edits covered. |

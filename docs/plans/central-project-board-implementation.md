@@ -10,7 +10,7 @@ The user's September 6 clarification supersedes the separate-preview approach pr
 
 > I do like the ides you provided but build the plan in a github issue, and everything in a new PR
 
-**Delivery:** a new PR from `feat/unified-workflow-509`. Implementation and curated documentation go together. Existing user changes unrelated to this work remain outside the PR. This issue remains open for the complete initiative; implementation checkboxes are checked only after their evidence exists.
+**Delivery:** [PR #511](https://github.com/joelfuller2016/KanbanFlow-v2/pull/511) from `feat/unified-workflow-509` contains the implementation, tests and curated documentation. Tested implementation commit: `2447ef4c15f163644fde9ce53a2dde3534a0af96`. Existing user changes unrelated to this work remain outside the PR. [Issue #509](https://github.com/joelfuller2016/KanbanFlow-v2/issues/509) remains open for the complete initiative; implementation checkboxes are checked only after their evidence exists. The PR is open for review and has not been merged.
 
 **Source baseline:** `53a300066e118b0e5a1b0ac9d02294169d2e076f`. **Environment:** Windows, PowerShell 7.6.5, .NET SDK 10.0.400, existing .NET 10/Blazor Server/EF Core SQLite application. No Docker. **Owner:** repository maintainer. **Date:** September 6, 2026.
 
@@ -207,14 +207,16 @@ The existing task service remains authoritative for task completion and its audi
 - [x] Re-run relevant existing service, MCP, script, API and browser checks; investigate regressions without weakening assertions.
 - [x] Verify restart on the same database and retain existing project/task data.
 - [x] Update README/architecture/operation guidance and local editable diagrams with source revision and actual checks.
-- [ ] Put only this task's implementation and documentation into the new PR; retain unrelated working-tree changes locally.
-- [ ] Link the PR back to this issue and describe completed behavior, evidence and remaining scope accurately.
+- [x] Put only this task's implementation and documentation into the new PR; retain unrelated working-tree changes locally.
+- [x] Link the PR back to this issue and describe completed behavior, evidence and remaining scope accurately.
 
 ## Verified implementation evidence — September 6, 2026
 
 The implementation runs in the existing app and normal launcher at port 5123. No prior live database existed on this PC, so the launcher restored the repository's existing 168-task seed into its normal location. A SQLite-consistent seed backup was retained first. After upgrade, adding this request's eight work cards and restart, every original domain/FTS row still matched the backup and `PRAGMA foreign_key_check` returned no violations. The current task's original, brief, plan, progress and reported results are recorded under its existing KanbanFlow-v2 project.
 
 The full solution build passed with zero warnings/errors. Full .NET/script counts are recorded in the [operating guide](../request-workflow.md#verification-and-local-operation). Actual native and stdio `tools/list`/`tools/call` passed through the live app: 33 native tools, 54 wrapper tools and matching workflow schemas. The transport smoke includes exact capture, duplicate delivery, stale request versions, read/edit/save task conflicts, real card identity, task comments and stale evidence rejection.
+
+The exact `scripts/verify.ps1` gate passed with 1,160 tests; formatting remains advisory and reported whitespace drift. The existing `scripts/smoke-api.ps1` passed with process-local `KANBANFLOW_LLM_TIMEOUT_MS=1000`. Its initial default run exceeded the smoke script's five-second timeout during memory recall. The single-variable retry bounded optional embedding and exercised the existing keyword fallback without changing source or assertions; default embedding-provider latency remains unverified. The script suite passed all 223 tests.
 
 The final browser walkthrough passed: original request, revisioned brief, repository registration, task plan/publication, actual existing board cards, human progress, result report, checked acceptance, Done and current conclusion. Separate checks passed for existing task status changes visible through native MCP, filtering, keyboard activation, 390px layout, preserved idea-original whitespace and actual SortableJS drag/status persistence. Draft text survives section navigation and refresh. The browser checks also exposed and resolved startup-click readiness and Markdown binding defects.
 
