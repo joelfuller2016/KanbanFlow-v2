@@ -42,5 +42,7 @@ public static class WorkflowEndpoints
 
     private static async Task<IResult> Context(IWorkspaceService service, Guid id, CancellationToken ct) =>
         await service.ContextAsync(id, ct) is { } context ? Results.Ok(context) : Results.NotFound();
-    private static IResult Problem(int status, string message) => Results.Problem(statusCode: status, title: "Workflow could not be saved", detail: message);
+    private static IResult Problem(int status, string message) => Results.Problem(statusCode: status,
+        title: status == 404 ? "Workflow not found" : status == 409 ? "Workflow conflict" : "Workflow could not be saved",
+        detail: message);
 }

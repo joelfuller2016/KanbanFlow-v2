@@ -65,7 +65,7 @@ graph and gives that graph three surfaces:
    pastes into chat as a link. Filtering never reorders anything: a drag under an active filter
    anchors on the next *visible* card's identity and the server resolves that against the full
    persisted column. For you.
-2. **A REST API** — 60 endpoints over the same graph. For scripts.
+2. **A REST API** — 65 endpoints over the same graph. For scripts.
 3. **An MCP server** — the same capabilities as first-class agent tools, plus a direction
    engine that answers *"what next, and why"* with a human-readable reason. For agents.
 
@@ -135,7 +135,7 @@ flowchart LR
     subgraph OUT["surfaces over the same graph"]
         direction TB
         UI["Blazor UI<br/>/ · /project/{id} · /ideas · /memory"]
-        REST["REST · 60 endpoints"]
+        REST["REST · 65 endpoints"]
         MCP["MCP · 28 native / 50 wrapper"]
     end
 

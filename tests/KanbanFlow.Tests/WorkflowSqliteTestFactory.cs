@@ -96,5 +96,9 @@ internal sealed class WorkflowSqliteTestFactory : IDbContextFactory<AppDbContext
         return path;
     }
 
-    public void Dispose() => Directory.Delete(ScratchDirectory, recursive: true);
+    public void Dispose()
+    {
+        try { if (Directory.Exists(ScratchDirectory)) Directory.Delete(ScratchDirectory, recursive: true); }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+    }
 }

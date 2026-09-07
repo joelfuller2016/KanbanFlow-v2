@@ -23,7 +23,8 @@ public static class WorkspaceMcpTools
     {
         var request = await service.GetForTaskAsync(taskId, cancellationToken)
             ?? throw new McpException("This task has no request workflow. Its existing board and task API remain available.");
-        return (await service.ContextAsync(request.Id, cancellationToken))!;
+        return await service.ContextAsync(request.Id, cancellationToken)
+            ?? throw new McpException("Request context not found.");
     }
 
     [McpServerTool(Name = "workflow_command")]

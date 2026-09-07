@@ -51,7 +51,7 @@ public static class KanbanMcpTools
     {
         try
         {
-            var task = await service.UpdateAsync(taskId, update, actor ?? DefaultActor, cancellationToken);
+            var task = await service.UpdateAsync(taskId, update, NormalizeActor(actor), cancellationToken);
             return new(task.Id, task.FeatureId, task.Name, task.Description, task.Status.ToString(), task.Priority.ToString(), task.Assignee, task.SortOrder, "Task updated");
         }
         catch (TaskNotFoundException ex) { throw new McpException(ex.Message); }
