@@ -2,12 +2,39 @@ using System.Data;
 using System.Diagnostics;
 using KanbanFlow.Data;
 using KanbanFlow.Services;
+using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 
 namespace KanbanFlow;
 
 public static class AdminEndpoints
 {
+    /// <summary>
+    /// How recently the database file must have been created, relative to this process's start, to
+    /// count as "this deployment brought the board with it" (#498).
+    /// </summary>
+    /// <remarks>
+    /// Sized to the launcher, not to a stopwatch. <c>scripts/start-kanbanflow.ps1</c> restores the
+    /// seed and only then runs <c>dotnet publish</c> before starting the app; a warm publish is a
+    /// few seconds, a cold one is minutes. Too small and the check misses the exact scenario it was
+    /// written for. Too large and every legitimately new install reports <c>degraded</c> for its
+    /// first quarter of an hour — which is a false positive, and the reason this is a reported
+    /// reason rather than a failure.
+    /// </remarks>
+    private static readonly TimeSpan BoardCreatedJustBeforeStartup = TimeSpan.FromMinutes(15);
+
+    /// <summary>
+    /// Tolerance for a creation stamp that reads very slightly AFTER the recorded start time.
+    /// </summary>
+    /// <remarks>
+    /// The two values come from different clocks — one from the filesystem, one from
+    /// <see cref="IAppStartupInfo"/> — and FAT/exFAT timestamps are quantised to two seconds. Without
+    /// slack, a board created in the same instant as the process could land microseconds on the
+    /// wrong side and the check would silently not fire. This is not a licence for the future: a
+    /// file created well after startup is a different event and must not be reported as this one.
+    /// </remarks>
+    private static readonly TimeSpan ClockSlack = TimeSpan.FromSeconds(5);
+
     /// <summary>
     /// /api/admin/* — runs in-process diagnostics from inside the live app.
     /// Same surface that the Settings panel uses, also reachable from curl / MCP.
@@ -25,17 +52,26 @@ public static class AdminEndpoints
         //
         // What this endpoint CAN decide on its own, and does: the file opened, a real read
         // succeeded, the board is not empty, this process did not create the board it is serving,
-        // and no second kanbanflow.db is shadowing the one in use. What it CANNOT know is which
-        // database the operator meant — the launcher pins KANBANFLOW_DB_PATH from its own
-        // ($HOME-derived) computation, so the app faithfully opens whatever it was handed. That
-        // half is completed by the caller comparing db.path against the expected file, which is
-        // why the resolved path is reported rather than merely checked (#477 §9 criterion 3).
+        // no second kanbanflow.db is shadowing the one in use, and — from the file's own facts,
+        // captured at boot — that the board does not carry the signature of a fresh copy. What it
+        // CANNOT know is which database the operator meant: the launcher pins KANBANFLOW_DB_PATH
+        // from its own ($HOME-derived) computation, so the app faithfully opens whatever it was
+        // handed. That half is completed by the caller comparing db.path — and now db.sizeBytes,
+        // db.createdAtUtc and db.lastWriteUtc — against what it expects (#477 §9 criterion 3).
         app.MapGet("/api/admin/health", async (
             IAppStartupInfo startup,
             DbPathResolution database,
             IDbContextFactory<AppDbContext> dbFactory,
             CancellationToken ct) =>
         {
+            // Read BEFORE the probe, deliberately. Computed after, this answers a question about a
+            // file the probe itself may have just made: SQLite's default open mode is
+            // ReadWriteCreate, so a probe against a missing file creates an empty one and `exists`
+            // then reports true about the endpoint's own side effect. The probe below is opened
+            // read-only so it cannot happen at all; this ordering means the answer stays honest
+            // even if that ever regresses.
+            var exists = File.Exists(database.Path);
+
             var stopwatch = Stopwatch.StartNew();
             int? projects = null;
             string? probeError = null;
@@ -43,6 +79,25 @@ public static class AdminEndpoints
             try
             {
                 await using var db = await dbFactory.CreateDbContextAsync(ct);
+
+                // Health must never CREATE the thing it is inspecting (#498 review, 8). The
+                // application's own connection string carries Microsoft.Data.Sqlite's default
+                // Mode=ReadWriteCreate, which invents an empty zero-table database when the file is
+                // absent — so the one case this endpoint exists for, a path that is not there,
+                // would be silently converted into a path that is, and the next caller would find a
+                // board. Read-only makes "the file is missing" stay missing and report itself.
+                // (Windows happens to mask this behind a sharing violation while the app holds the
+                // file; Linux and macOS do not. The mode is the fix, not the platform.)
+                //
+                // This does open a second pool, keyed on the read-only connection string. That is
+                // one extra SQLite handle for a polled endpoint and is deliberate — the branch
+                // already removed a process-global pool flush, so nothing here reaches across to
+                // the application's own connections.
+                db.Database.SetConnectionString(
+                    new SqliteConnectionStringBuilder(db.Database.GetConnectionString())
+                    {
+                        Mode = SqliteOpenMode.ReadOnly
+                    }.ConnectionString);
 
                 // Bound the busy-wait. Measured: nothing in this app sets WAL and the committed
                 // seed reports journal_mode=delete, so a reader is blocked while a writer commits
@@ -88,6 +143,51 @@ public static class AdminEndpoints
             if (!database.Existed)
                 reasons.Add("created-at-startup");
 
+            // ── The file's own facts (#498 review, 2). ────────────────────────────────────────────
+            //
+            // Existed alone is NOT enough, and the measurement that proves it is the issue's own
+            // reproduction: run through scripts/start-kanbanflow.ps1 against a wrong root and the
+            // launcher Copy-Items the committed seed into place BEFORE the app starts. The file is
+            // therefore already on disk when the path is resolved, Existed is true, the seed holds a
+            // project — and this endpoint answered a confident, wrong "ok". These two checks are
+            // what make the documented reproduction flip to degraded.
+            //
+            // WHAT THEY ARE WORTH, honestly, because a detector oversold is worse than none:
+            //   * They hold only until real data is written to the wrong board. After the first
+            //     write, LastWriteUtc moves past CreatedAtUtc and NOTHING inside this application
+            //     can tell the board apart from the right one. That includes an app upgrade whose
+            //     schema patchers write at boot, which costs the signal with no user data at all.
+            //   * NTFS file tunnelling can preserve the ORIGINAL creation time when a file of the
+            //     same name is deleted and recreated within roughly 15 seconds, which hides the copy.
+            //   * A user restoring their own board from a backup produces exactly this shape and is
+            //     reported the same way. That is a false positive, and it is why these are `degraded`
+            //     reasons carrying their evidence — never `error`, and never a refusal to start.
+            if (database.Snapshot is { } snapshot)
+            {
+                // A board written before it was created is not something a used board can be; it is
+                // the literal signature of a copy that preserved the source's timestamp, which is
+                // what Copy-Item, robocopy, an unzip and most sync clients all do.
+                if (snapshot.LastWriteUtc < snapshot.CreatedAtUtc)
+                    reasons.Add("last-write-precedes-creation");
+
+                // And the short-window catch for a copy whose last-write was NOT preserved: a board
+                // that came into existence just before this process did. Only meaningful when the
+                // file already existed — otherwise created-at-startup above already says it, louder.
+                //
+                // The window is minutes rather than seconds on purpose: the launcher runs a
+                // dotnet publish between restoring the seed and starting the app, and a cold publish
+                // is far slower than the ~5 s a warm one takes. Unlike the check above this one
+                // expires, so a wrong-path deployment stops reporting it after the window even
+                // though it is still wrong — the durable signal is last-write-precedes-creation.
+                if (database.Existed &&
+                    startup.StartedAtUtc - snapshot.CreatedAtUtc is { } age &&
+                    age < BoardCreatedJustBeforeStartup &&
+                    age > -ClockSlack)
+                {
+                    reasons.Add("created-moments-before-startup");
+                }
+            }
+
             // Two real databases exist and only one is open — the #354 presentation itself.
             if (database.ShadowedPaths.Count > 0)
                 reasons.Add("shadowed-by-another-database");
@@ -107,9 +207,18 @@ public static class AdminEndpoints
                 db = new
                 {
                     path = database.Path,
-                    exists = File.Exists(database.Path),
+                    exists,
                     source = database.Source,
                     existedAtStartup = database.Existed,
+                    // The file's own facts as the app FOUND them, reported for the same reason
+                    // db.path is: the comparison that finishes the diagnosis belongs to the caller,
+                    // which knows things this process does not. The most useful of those is the
+                    // size of the committed seed — a restored copy is byte-identical to it, and the
+                    // application does not ship seed/kanbanflow.seed.db, so it cannot make that
+                    // comparison itself. Null together when there was no file to stat.
+                    createdAtUtc = database.Snapshot?.CreatedAtUtc,
+                    lastWriteUtc = database.Snapshot?.LastWriteUtc,
+                    sizeBytes = database.Snapshot?.SizeBytes,
                     shadowedPaths = database.ShadowedPaths,
                     projects,
                     status = probeError is null ? "ok" : "error",

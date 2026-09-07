@@ -36,6 +36,7 @@ public sealed class AdminHealthEndpointTests
     {
         using var board = new TestBoard();
         board.AddProjects("Alpha", "Beta");
+        board.MarkEstablished(); // "ok" means an ordinary board, not one made moments ago
 
         await using var host = await HealthHost.StartAsync(board, existed: true);
         var (statusCode, body) = await host.GetHealthAsync();
@@ -167,6 +168,7 @@ public sealed class AdminHealthEndpointTests
     {
         using var board = new TestBoard();
         board.AddProjects("Alpha");
+        board.MarkEstablished(); // this case ends by asserting "ok" once the lock is released
 
         await using var host = await HealthHost.StartAsync(board, existed: true);
         await host.GetHealthAsync(); // warm up EF model building + JIT so the timings below mean something
@@ -204,6 +206,139 @@ public sealed class AdminHealthEndpointTests
             "the uncontended probe should not pay the busy-wait timeout");
     }
 
+    // ── The file's own facts: the wrong board a SUCCESSFUL seed restore leaves behind. ──────────
+    //
+    // #498's reproduction runs through scripts/start-kanbanflow.ps1, which Copy-Items the committed
+    // seed into place BEFORE the app starts. So the board exists at resolution time, Existed is
+    // true, and the seed holds a project: every check above answers "ok" and the endpoint declared
+    // the app healthy in exactly the scenario the issue was filed about. These cases cover the two
+    // signals that do fire there. Both read the real file through DbPathResolver, so a resolver that
+    // stopped capturing the facts turns them red too.
+
+    [Fact]
+    public async Task Health_ReportsDegraded_WhenTheBoardWasLastWrittenBeforeItWasCreated()
+    {
+        using var board = new TestBoard();
+        board.AddProjects("Sample Project"); // the seed is not empty — row counting sees nothing wrong
+
+        // The literal Copy-Item signature: the destination file is made NOW and keeps the source's
+        // older last-write time. No board that has been used since it was created can look like this.
+        board.SetLastWriteUtc(DateTime.UtcNow.AddHours(-3));
+
+        await using var host = await HealthHost.StartAsync(board, existed: true);
+        var (statusCode, body) = await host.GetHealthAsync();
+
+        Assert.Equal(HttpStatusCode.OK, statusCode);
+        Assert.Equal("degraded", body.GetProperty("status").GetString());
+
+        var db = body.GetProperty("db");
+        Assert.Contains("last-write-precedes-creation", Reasons(db));
+        // Every other check is satisfied — which is the point. This is the state the PR previously
+        // called undetectable in-app.
+        Assert.True(db.GetProperty("existedAtStartup").GetBoolean());
+        Assert.Equal(1, db.GetProperty("projects").GetInt32());
+        Assert.DoesNotContain("empty-board", Reasons(db));
+        Assert.DoesNotContain("created-at-startup", Reasons(db));
+        // A reported signal, never a failure: the read worked and the app is serving.
+        Assert.Equal("ok", db.GetProperty("status").GetString());
+    }
+
+    [Fact]
+    public async Task Health_ReportsDegraded_WhenTheBoardWasCreatedMomentsBeforeThisProcessStarted()
+    {
+        // The same wrong-root start, for a copy whose last-write was NOT preserved: all that is
+        // left is that the board came into existence just before the process serving it did.
+        using var board = new TestBoard(); // created now, so within the window of this host's start
+        board.AddProjects("Sample Project");
+
+        await using var host = await HealthHost.StartAsync(board, existed: true);
+        var (statusCode, body) = await host.GetHealthAsync();
+
+        Assert.Equal(HttpStatusCode.OK, statusCode);
+        Assert.Equal("degraded", body.GetProperty("status").GetString());
+
+        var db = body.GetProperty("db");
+        Assert.Contains("created-moments-before-startup", Reasons(db));
+        // Isolated from the sibling check above: EnsureCreated wrote after creating, so this case
+        // is carried by the creation time alone.
+        Assert.DoesNotContain("last-write-precedes-creation", Reasons(db));
+        Assert.True(db.GetProperty("existedAtStartup").GetBoolean());
+    }
+
+    /// <summary>
+    /// The negative control, and the more important half of the pair: an ordinary board must not be
+    /// slandered. A detector that reports every board as suspect is a detector nobody reads.
+    /// </summary>
+    [Fact]
+    public async Task Health_StaysOk_ForABoardCreatedLongAgoAndWrittenSince()
+    {
+        using var board = new TestBoard();
+        board.AddProjects("Alpha");
+        board.MarkEstablished();
+
+        await using var host = await HealthHost.StartAsync(board, existed: true);
+        var (statusCode, body) = await host.GetHealthAsync();
+
+        Assert.Equal(HttpStatusCode.OK, statusCode);
+        Assert.Equal("ok", body.GetProperty("status").GetString());
+        Assert.Empty(Reasons(body.GetProperty("db")));
+    }
+
+    /// <summary>
+    /// The three facts are reported as well as judged, exactly as <c>db.path</c> is (#498 review).
+    ///
+    /// <para>The most useful comparison — is this board byte-identical to the committed seed? — is
+    /// the CALLER's, not the application's: <c>seed/kanbanflow.seed.db</c> is not shipped in the
+    /// publish output (verified), so the app has nothing to compare against. Reporting the size lets
+    /// whoever does have the seed make the call.</para>
+    /// </summary>
+    [Fact]
+    public async Task Health_ReportsTheFileFacts_SoTheCallerCanCompareThemAgainstTheSeedItShipped()
+    {
+        using var board = new TestBoard();
+        board.AddProjects("Alpha");
+        var onDisk = new FileInfo(board.Path);
+
+        await using var host = await HealthHost.StartAsync(board, existed: true);
+        var (_, body) = await host.GetHealthAsync();
+
+        var db = body.GetProperty("db");
+        Assert.Equal(onDisk.Length, db.GetProperty("sizeBytes").GetInt64());
+        Assert.Equal(onDisk.CreationTimeUtc, db.GetProperty("createdAtUtc").GetDateTime());
+        Assert.Equal(onDisk.LastWriteTimeUtc, db.GetProperty("lastWriteUtc").GetDateTime());
+    }
+
+    /// <summary>
+    /// The probe must never CREATE the database it is asked about (#498 review, 8).
+    ///
+    /// <para><c>Microsoft.Data.Sqlite</c> opens <c>Mode=ReadWriteCreate</c> by default, so a probe
+    /// against a path that is not there makes an empty file, fails on the missing table, and then
+    /// reports <c>exists: true</c> — health converting the one condition it exists to detect into a
+    /// condition that no longer holds, and handing the next caller a board that was never real.</para>
+    /// </summary>
+    [Fact]
+    public async Task Health_DoesNotCreateTheDatabaseItProbes_WhenTheFileIsMissing()
+    {
+        // Parent directory present, file absent: the case ReadWriteCreate silently repairs. (The
+        // sibling case above uses a missing DIRECTORY, which SQLite refuses either way — so it
+        // could never have caught this.)
+        using var board = TestBoard.AtMissingFileInAnExistingDirectory();
+        Assert.False(File.Exists(board.Path));
+
+        await using var host = await HealthHost.StartAsync(board, existed: false);
+        var (statusCode, body) = await host.GetHealthAsync();
+
+        Assert.Equal(HttpStatusCode.OK, statusCode);
+        Assert.Equal("error", body.GetProperty("status").GetString());
+        Assert.Contains("unreachable", Reasons(body.GetProperty("db")));
+
+        // The assertion that matters: the endpoint left the filesystem alone.
+        Assert.False(
+            File.Exists(board.Path),
+            $"health created '{board.Path}' while probing it — the probe must open read-only");
+        Assert.False(body.GetProperty("db").GetProperty("exists").GetBoolean());
+    }
+
     /// <summary>
     /// Guard, not a reproduction: this one passes against the pre-#498 handler by construction. It
     /// is here because the Settings panel and <c>scripts/smoke-api.ps1</c> read these six names, and
@@ -235,6 +370,7 @@ public sealed class AdminHealthEndpointTests
     private sealed class TestBoard : IDisposable
     {
         private readonly bool _created;
+        private readonly string? _temporaryDirectory;
 
         public TestBoard()
         {
@@ -245,13 +381,70 @@ public sealed class AdminHealthEndpointTests
             _created = true;
         }
 
-        private TestBoard(string path) => Path = path;
+        private TestBoard(string path, string? temporaryDirectory = null)
+        {
+            Path = path;
+            _temporaryDirectory = temporaryDirectory;
+        }
 
         /// <summary>A path SQLite cannot open: the parent directory does not exist.</summary>
         public static TestBoard AtUnopenablePath() => new(System.IO.Path.Combine(
             System.IO.Path.GetTempPath(), $"kanbanflow-absent-{Guid.NewGuid():N}", "kanbanflow.db"));
 
+        /// <summary>
+        /// A directory that EXISTS holding no database — the shape <c>Mode=ReadWriteCreate</c>
+        /// quietly repairs by inventing a file, unlike <see cref="AtUnopenablePath"/>.
+        /// </summary>
+        public static TestBoard AtMissingFileInAnExistingDirectory()
+        {
+            var directory = System.IO.Path.Combine(
+                System.IO.Path.GetTempPath(), $"kanbanflow-emptydir-{Guid.NewGuid():N}");
+            Directory.CreateDirectory(directory);
+            return new TestBoard(System.IO.Path.Combine(directory, "kanbanflow.db"), directory);
+        }
+
         public string Path { get; }
+
+        /// <summary>
+        /// The file's real facts, stat'd exactly as <c>DbPathResolver</c> stats them at boot — null
+        /// when there is no file, which is the same invariant the resolution carries.
+        /// </summary>
+        /// <remarks>
+        /// Read here rather than by calling <c>DbPathResolver.Resolve</c>, which creates the parent
+        /// directory of whatever it is handed and would therefore repair
+        /// <see cref="AtUnopenablePath"/> out from under the case that depends on it. That the
+        /// RESOLVER captures these facts is bound separately, by
+        /// <c>DbPathResolverTests.Resolution_CapturesTheFilesOwnFacts_WhenTheBoardAlreadyExists</c>.
+        /// </remarks>
+        public DbFileSnapshot? Snapshot
+        {
+            get
+            {
+                var info = new FileInfo(Path);
+                return info.Exists
+                    ? new DbFileSnapshot(info.CreationTimeUtc, info.LastWriteTimeUtc, info.Length)
+                    : null;
+            }
+        }
+
+        /// <summary>Backdate the last write — with creation left alone, the copy signature.</summary>
+        public void SetLastWriteUtc(DateTime value) => File.SetLastWriteTimeUtc(Path, value);
+
+        /// <summary>Backdate creation, so the board reads as one that has been around a while.</summary>
+        public void SetCreationUtc(DateTime value) => File.SetCreationTimeUtc(Path, value);
+
+        /// <summary>
+        /// An ORDINARY board: made a month ago, written yesterday. Cases that assert <c>ok</c> need
+        /// this, because a <see cref="TestBoard"/> is otherwise created milliseconds before the host
+        /// that serves it — which is genuinely one of the suspicious shapes (#498 review, 3), and
+        /// those cases mean "an established board", not "a board that happens to be brand new".
+        /// Backdating the fixture is the honest fix; relaxing the assertion would not be.
+        /// </summary>
+        public void MarkEstablished()
+        {
+            SetCreationUtc(DateTime.UtcNow.AddDays(-30));
+            SetLastWriteUtc(DateTime.UtcNow.AddDays(-1));
+        }
 
         // Pooling=False so no recycled handle keeps the file alive past Dispose.
         public string ConnectionString => $"Data Source={Path};Pooling=False";
@@ -272,12 +465,23 @@ public sealed class AdminHealthEndpointTests
 
         public void Dispose()
         {
-            if (!_created) return;
             // No ClearAllPools(): every connection here is Pooling=False, and that call is
             // process-global -- it would yank idle handles out from under test classes running in
             // parallel (same reason IdeaServiceTests avoids it).
-            try { File.Delete(Path); }
-            catch (IOException) { /* a host still holding the handle is not a test failure */ }
+            if (_created)
+            {
+                try { File.Delete(Path); }
+                catch (IOException) { /* a host still holding the handle is not a test failure */ }
+            }
+
+            if (_temporaryDirectory is not null)
+            {
+                // Recursive: a probe that WRONGLY created the database leaves a file behind, and a
+                // cleanup that threw would report as a failure of whichever case ran next.
+                try { Directory.Delete(_temporaryDirectory, recursive: true); }
+                catch (IOException) { }
+                catch (UnauthorizedAccessException) { }
+            }
         }
     }
 
@@ -308,8 +512,11 @@ public sealed class AdminHealthEndpointTests
 
             var startup = new AppStartupInfo();
             builder.Services.AddSingleton<IAppStartupInfo>(startup);
+            // The file facts come from the board's REAL file, so the reasons derived from them are
+            // derived from a real stat rather than from a record hand-built to make them fire.
             builder.Services.AddSingleton(
-                new DbPathResolution(board.Path, DbPathResolver.SourceEnvironment, existed, shadowedPaths ?? []));
+                new DbPathResolution(
+                    board.Path, DbPathResolver.SourceEnvironment, existed, shadowedPaths ?? [], board.Snapshot));
             builder.Services.AddDbContextFactory<AppDbContext>(o => o.UseSqlite(board.ConnectionString));
 
             // MapAdminEndpoints maps five routes and ASP.NET Core builds the WHOLE endpoint table
