@@ -343,6 +343,64 @@ Review discovered and fixed: archived promoted requests restored by unrelated id
 
 ## Later execution work, on the same records
 
+### U-13 — Log saved board changes and development work
+
+Original direction, September 7, 2026: “Anytime there is any changes it should be logged”. Decision `01f1a495-83cd-4f66-94ea-26e16c04dcd1` is explicitly acknowledged on request `1e9c0ecd-33e4-4098-a5af-9c61c00fa2cb`. Its revised plan preserves the twelve existing cards and adds task 186 under the same feature. Improved ask: retain an attributable, inspectable history of every supported saved board mutation and record development work on its owning request/card; data and audit must succeed or fail together.
+
+| Area | Before | Changes and owning files |
+|---|---|---|
+| Direct saves | Project/feature/child writes often bypassed activity | New `Services/ChangeAudit.cs`; route `ApiEndpoints.cs`, `TaskDependencyService`, native criteria tools and Home/AddItemModal/EditItemModal/TaskDetailPanel/ProjectView saves through it |
+| Accurate values | Detached or concurrently edited objects could yield stale snapshots | Read persisted values inside a transaction, merge modified fields, reconcile semantic events, suppress timestamp-only no-ops, and restore generated IDs/savepoints after failed audit inserts |
+| Task order and lease | Bare reorders and fresh heartbeats were silent | `TaskService.cs` adds TaskReordered/TaskClaimHeartbeat without discussion comments or heartbeat UpdatedAt churn; bulk completion logs changed subtasks |
+| Deletion | Unloaded cascades/SetNull effects disappeared | `ProjectGraphDeleter.cs`, TaskService and IdeaService load children, comments, dependencies, requirements, planned mappings/evidence, request revisions, repositories and surviving promoted-idea/project links |
+| Schema | No child-to-task historical context | `ActivityEvent.cs`, `AppDbContext.cs`, `SchemaPatcher.cs`, `Program.cs` add nullable TaskId/RelatedTaskId and indexes, with no cascading audit FK |
+| Actors | Direct EF writes lacked a label path | HttpContext accessor supplies REST attribution; wrapper supplies MCP attribution; editors supply User; existing domain actors remain supported |
+| Human history | Task-root events only | `ActivityTimeline.razor` and model include children, subject identity, more field diffs and complete saved details; reuse the rail inside project/feature editors and refresh after child/MCP saves |
+| MCP history | Native had no reader; wrapper only one recent window | New `ActivityLogReader.cs`, native tools, REST and wrapper share scope/cursor ordering, retained deletions and a compatible optional paging envelope |
+| Workflow/development | Sparse operation audit content | WorkspaceService retains operation/payload/result and prior request state; AGENTS.md requires request/task development records |
+| Tests | Reorders expected silence; browser fixtures assumed project 1 | Update policy expectations and failure-injection overloads; discover actual projects and add SQLite, transport and UI regressions |
+
+```mermaid
+sequenceDiagram
+    title Saved changes in the existing KanbanFlow app
+    participant Client as Human UI or MCP
+    participant Save as Domain service and audited save
+    participant DB as Existing SQLite
+    participant History as Shared history readers
+    Client->>Save: Validated change and reported actor
+    Save->>DB: Transaction / savepoint and actual prior values
+    Save->>DB: Save data and audit with generated IDs
+    alt Both succeed
+        Save->>DB: Commit together
+        DB-->>History: Before/after, affected IDs, actor and time
+        History-->>Client: Timeline, saved details and older-page cursor
+    else Either write fails
+        Save->>DB: Roll back both
+        Save-->>Client: Failure without a success event
+    end
+```
+
+Detailed editable source: [board-change-audit.mmd](assets/board-change-audit.mmd). One host, database and board remain in use. [The operating guide](../request-workflow.md#inspect-and-record-changes) owns scope, actor meaning, paging, recovery and external-capture limitations.
+
+- [x] Record original direction, acknowledgement, revised brief and U-13 on the existing board.
+- [x] Add the standing development logging agreement to the repository.
+- [x] Implement actual old/new snapshots, generated-key handling, no-op suppression, semantic reconciliation and atomic rollback/outer-transaction behavior.
+- [x] Route silent UI/REST/native writes, reorders, dependency writes, plan child writes and fresh claim heartbeats.
+- [x] Preserve deletion descendants and cleared links, including workflow history and promoted ideas.
+- [x] Add historical task columns/indexes idempotently and preserve existing audit rows.
+- [x] Expose shared paging through REST, native and stdio MCP, including deleted subjects and invalid-cursor refusal.
+- [x] Reuse the existing timeline, show full saved details, and refresh after child saves.
+- [x] Add 29 real SQLite persistence/schema cases and update existing policy tests without removing rollback checks.
+- [x] Verify native/stdio paging and cascades, browser UI/MCP mutual visibility and project/feature history.
+- [x] Rebuild with zero warnings/errors, pass 1,288 .NET and 223 script tests; rerun card, steering, navigation and outline cases.
+- [ ] Back up, rebuild/restart the normal app and compare prior values across schema adoption.
+- [ ] Publish source-pinned evidence, update this issue/PR, and report U-13 for Review.
+- [ ] Obtain actual human History/Saved details feedback; U-10 remains pending.
+
+Independent review closed unlogged promoted-idea links, stale semantic snapshots and timestamp-only pseudo-edits. Test development corrected the SaveChanges overload used for failure injection. Browser verification corrected a fixed seed-project assumption and a selector matching nested summaries. These checks do not constitute human usability approval.
+
+### Deferred managed execution
+
 - [ ] Add paginated request discovery and history windows; current discovery returns the latest 200 matching requests and context includes full revision/message history.
 
 Managed Codex calls are a follow-on to this unified foundation. They must use these same idea/request/task IDs and visible state rather than introduce another board.

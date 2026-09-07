@@ -61,7 +61,7 @@ public sealed partial class WorkspaceService
             Feature? feature = request.FeatureId is int featureId ? await db.Features.FindAsync([featureId], ct) : null;
             feature ??= new Feature { Name = request.Title, ProjectId = request.ProjectId.Value, CreatedAt = Now, UpdatedAt = Now };
             if (feature.Id == 0) db.Features.Add(feature);
-            await db.SaveChangesAsync(ct);
+            await db.SaveChangesWithAuditAsync(actor, ct);
             request.FeatureId = feature.Id;
             var changed = new List<PlannedTask>();
             for (var index = 0; index < drafts.Length; index++)
@@ -95,13 +95,13 @@ public sealed partial class WorkspaceService
             }
             await InvalidateDependentsAsync(db, request, changed.Select(w => w.TaskItemId).Where(taskId => taskId != 0).ToHashSet(), actor, ct);
             // IDs become available here; the surrounding transaction still owns every write and receipt.
-            await db.SaveChangesAsync(ct);
+            await db.SaveChangesWithAuditAsync(actor, ct);
             foreach (var item in changed)
             {
                 var oldEdges = await db.TaskDependencies.Where(d => d.TaskItemId == item.TaskItemId).ToListAsync(ct);
                 db.TaskDependencies.RemoveRange(oldEdges);
             }
-            await db.SaveChangesAsync(ct);
+            await db.SaveChangesWithAuditAsync(actor, ct);
             var resultingEdges = await db.TaskDependencies.AsNoTracking().Where(d => d.ProjectId == request.ProjectId).ToListAsync(ct);
             foreach (var item in changed)
             {

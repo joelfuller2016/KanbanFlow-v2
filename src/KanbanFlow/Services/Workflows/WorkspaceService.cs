@@ -10,6 +10,7 @@ namespace KanbanFlow.Services.Workflows;
 
 public sealed partial class WorkspaceService(IDbContextFactory<AppDbContext> factory, TimeProvider clock) : IWorkspaceService
 {
+    private static readonly JsonSerializerOptions AuditJson = new(JsonSerializerDefaults.Web);
     public static string Hash<T>(T payload) => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(JsonSerializer.Serialize(payload))));
     public static TaskDraft[] Drafts(PlanVersion? plan) => plan is null ? [] : JsonSerializer.Deserialize<TaskDraft[]>(plan.DraftJson)!;
 
@@ -69,7 +70,7 @@ public sealed partial class WorkspaceService(IDbContextFactory<AppDbContext> fac
         {
             var project = new Project { Name = Required(name, "Project name", 200).Trim(), CreatedAt = Now, UpdatedAt = Now };
             db.Projects.Add(project);
-            await db.SaveChangesAsync(ct);
+            await db.SaveChangesWithAuditAsync(actor, ct);
             Audit(db, project.Id, Guid.Empty, actor, "WorkspaceProjectCreated", project.Id);
             return project.Id;
         }, ct);
@@ -84,7 +85,7 @@ public sealed partial class WorkspaceService(IDbContextFactory<AppDbContext> fac
             if (existing is not null) return existing.Id;
             var repository = new ProjectRepository { ProjectId = projectId, Name = Required(name, "Repository name", 120).Trim(), LocalPath = resolved };
             db.ProjectRepositories.Add(repository);
-            await db.SaveChangesAsync(ct);
+            await db.SaveChangesWithAuditAsync(actor, ct);
             Audit(db, projectId, Guid.Empty, actor, "WorkspaceRepositoryRegistered", repository.Id);
             return repository.Id;
         }, ct);
@@ -156,10 +157,12 @@ public sealed partial class WorkspaceService(IDbContextFactory<AppDbContext> fac
             var request = await Graph(db).SingleOrDefaultAsync(r => r.Id == id, ct) ?? throw Missing("Request");
             if (request.Version != expected) throw new WorkflowException("conflict", "This request changed in another tab or client. Reload before saving again.");
             if (request.Archived && !allowArchived) throw Invalid("Restore this archived request before editing it.");
+            var before = new { request.Id, request.Version, request.ProjectId, request.FeatureId, request.Archived };
             await change(db, request);
             request.Version++;
             request.UpdatedAt = Now;
             Audit(db, request.ProjectId, id, actor, operation, request.IdeaId);
+            db.ActivityEvents.Local.Last().BeforeJson = JsonSerializer.Serialize(before, AuditJson);
             return new MutationReceipt(id, request.Version);
         }, ct);
 
@@ -179,8 +182,14 @@ public sealed partial class WorkspaceService(IDbContextFactory<AppDbContext> fac
             return JsonSerializer.Deserialize<T>(receipt.ResultJson)!;
         }
         var result = await write(db);
+        foreach (var audit in db.ActivityEvents.Local.Where(e => db.Entry(e).State == EntityState.Added && e.EntityType == "WorkRequest"))
+        {
+            var original = JsonSerializer.Deserialize<JsonElement>(audit.AfterJson ?? "{}");
+            audit.AfterJson = JsonSerializer.Serialize(new { requestId = original.GetProperty("requestId"), operation, payload, result }, AuditJson);
+            audit.Message = $"{operation} by {actor}";
+        }
         db.WorkflowReceipts.Add(new WorkflowReceipt { Actor = actor, Operation = operation, Key = key, PayloadHash = hash, ResultJson = JsonSerializer.Serialize(result), CreatedAt = Now });
-        await db.SaveChangesAsync(ct);
+        await db.SaveChangesWithAuditAsync(actor, ct);
         await transaction.CommitAsync(ct);
         return result;
     }

@@ -44,6 +44,11 @@ internal static class ProjectGraphDeleter
             .Where(r => r.ProjectId == projectId)
             .ToListAsync(ct);
         db.Requirements.RemoveRange(requirements);
+        db.ProjectRepositories.RemoveRange(await db.ProjectRepositories.Where(r => r.ProjectId == projectId).ToListAsync(ct));
+        foreach (var request in await db.WorkRequests.Where(r => r.ProjectId == projectId).ToListAsync(ct))
+            request.ProjectId = null;
+        foreach (var idea in await db.Ideas.Where(i => i.PromotedProjectId == projectId).ToListAsync(ct))
+            idea.PromotedProjectId = null;
     }
 
     /// <summary>Deletes a single feature subtree (root + all descendants and their tasks/children).</summary>
@@ -102,12 +107,12 @@ internal static class ProjectGraphDeleter
             await DeleteSubtasksForTasksAsync(db, taskIds, ct);
             await DeleteAcceptanceCriteriaForTasksAsync(db, taskIds, ct);
 
-            var comments = await db.TaskComments
-                .Where(c => taskIds.Contains(c.TaskItemId))
-                .ToListAsync(ct);
-            db.TaskComments.RemoveRange(comments);
+            await DeleteTaskLinksAsync(db, taskIds, ct);
             db.Tasks.RemoveRange(tasks);
         }
+
+        foreach (var request in await db.WorkRequests.Where(r => r.FeatureId != null && featureIds.Contains(r.FeatureId.Value)).ToListAsync(ct))
+            request.FeatureId = null;
 
         // Features are self-referential Restrict, so remove the deepest first. Depth is memoized
         // (O(N) total) instead of an O(N²) per-node parent scan.
@@ -175,6 +180,28 @@ internal static class ProjectGraphDeleter
     /// <summary>Convenience overload for removing the subtasks of a single task.</summary>
     public static Task DeleteSubtasksForTaskAsync(AppDbContext db, int taskId, CancellationToken ct = default)
         => DeleteSubtasksForTasksAsync(db, [taskId], ct);
+
+    // Load cascades and SetNull effects explicitly so their prior values enter the durable audit.
+    public static async Task DeleteTaskLinksAsync(AppDbContext db, List<int> taskIds, CancellationToken ct = default)
+    {
+        db.TaskComments.RemoveRange(await db.TaskComments.Where(c => taskIds.Contains(c.TaskItemId)).ToListAsync(ct));
+        db.TaskDependencies.RemoveRange(await db.TaskDependencies
+            .Where(d => taskIds.Contains(d.TaskItemId) || taskIds.Contains(d.DependsOnTaskItemId)).ToListAsync(ct));
+        foreach (var requirement in await db.Requirements.Where(r => r.TaskItemId != null && taskIds.Contains(r.TaskItemId.Value)).ToListAsync(ct))
+            requirement.TaskItemId = null;
+        var mappings = await db.PlannedTasks.Include(w => w.Evidence).Where(w => taskIds.Contains(w.TaskItemId)).ToListAsync(ct);
+        db.TaskEvidence.RemoveRange(mappings.SelectMany(w => w.Evidence));
+        db.PlannedTasks.RemoveRange(mappings);
+    }
+
+    public static async Task DeleteIdeaRequestsAsync(AppDbContext db, int ideaId, CancellationToken ct = default)
+    {
+        var requests = await db.WorkRequests.AsSplitQuery().Where(r => r.IdeaId == ideaId)
+            .Include(r => r.Messages).Include(r => r.Briefs).Include(r => r.Plans).Include(r => r.Results)
+            .Include(r => r.WorkItems).ThenInclude(w => w.Evidence).ToListAsync(ct);
+        // EF now knows every cascading row; DetectChanges exposes those deletions to ChangeAudit.
+        db.WorkRequests.RemoveRange(requests);
+    }
 
     /// <summary>Removes all acceptance criteria belonging to <paramref name="taskIds"/>.</summary>
     public static async Task DeleteAcceptanceCriteriaForTasksAsync(AppDbContext db, List<int> taskIds, CancellationToken ct = default)

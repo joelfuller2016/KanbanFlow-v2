@@ -532,11 +532,13 @@ const tools = [
 
   {
     name: "list_project_activity",
-    description: "List recent activity events for a project (newest first). Limit defaults to 100 server-side, max 500.",
+    description: "Read retained project history, including child changes. Pass includePage=true for items, total, nextBeforeId; use nextBeforeId as beforeId for older entries. Default response remains an array.",
     inputSchema: {
       type: "object",
       properties: {
         projectId: { type: "integer", minimum: 1, description: "Project id whose activity to list." },
+        beforeId: { type: "integer", minimum: 1, description: "Older-than cursor from nextBeforeId." },
+        includePage: { type: "boolean", description: "Return paging metadata with the events." },
         limit: { type: "integer", minimum: 1, maximum: 500, description: "Optional max number of events. Server clamps to [1, 500] and defaults to 100." }
       },
       required: ["projectId"]
@@ -544,11 +546,13 @@ const tools = [
   },
   {
     name: "list_task_activity",
-    description: "List recent activity events for a task (newest first). Limit defaults to 100 server-side, max 500.",
+    description: "Read retained task history, including child changes. Pass includePage=true for items, total, nextBeforeId; use nextBeforeId as beforeId for older entries. Default response remains an array.",
     inputSchema: {
       type: "object",
       properties: {
         taskId: { type: "integer", minimum: 1, description: "Task id whose activity to list." },
+        beforeId: { type: "integer", minimum: 1, description: "Older-than cursor from nextBeforeId." },
+        includePage: { type: "boolean", description: "Return paging metadata with the events." },
         limit: { type: "integer", minimum: 1, maximum: 500, description: "Optional max number of events. Server clamps to [1, 500] and defaults to 100." }
       },
       required: ["taskId"]
@@ -1279,13 +1283,25 @@ async function callTool(toolName, args) {
     case "list_project_activity": {
       const projectId = requiredInt(args, "projectId", { min: 1 });
       const limit = optionalInt(args, "limit", { min: 1, max: 500 });
-      const query = limit === undefined ? "" : `?limit=${encodeURIComponent(limit)}`;
+      const beforeId = optionalInt(args, "beforeId", { min: 1 });
+      const includePage = optionalBool(args, "includePage");
+      const params = new URLSearchParams();
+      if (limit !== undefined) params.set("limit", limit);
+      if (beforeId !== undefined) params.set("beforeId", beforeId);
+      if (includePage !== undefined) params.set("includePage", includePage);
+      const query = params.size ? `?${params}` : "";
       return restJson(`/api/projects/${projectId}/activity${query}`);
     }
     case "list_task_activity": {
       const taskId = requiredInt(args, "taskId", { min: 1 });
       const limit = optionalInt(args, "limit", { min: 1, max: 500 });
-      const query = limit === undefined ? "" : `?limit=${encodeURIComponent(limit)}`;
+      const beforeId = optionalInt(args, "beforeId", { min: 1 });
+      const includePage = optionalBool(args, "includePage");
+      const params = new URLSearchParams();
+      if (limit !== undefined) params.set("limit", limit);
+      if (beforeId !== undefined) params.set("beforeId", beforeId);
+      if (includePage !== undefined) params.set("includePage", includePage);
+      const query = params.size ? `?${params}` : "";
       return restJson(`/api/tasks/${taskId}/activity${query}`);
     }
 
@@ -1494,7 +1510,7 @@ async function restJson(path, options = {}) {
   const timeout = setTimeout(() => controller.abort(), restTimeoutMs);
   const requestOptions = {
     method: options.method || "GET",
-    headers: { Accept: "application/json" },
+    headers: { Accept: "application/json", "X-KanbanFlow-Actor": options.body?.actor || "mcp-agent" },
     signal: controller.signal
   };
 

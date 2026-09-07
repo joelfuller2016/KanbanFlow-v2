@@ -259,7 +259,7 @@
                     SortOrder = maxSort + 1
                 };
                 db.Features.Add(feature);
-                await db.SaveChangesAsync();
+                await db.SaveChangesWithAuditAsync("User");
             }
             else
             {

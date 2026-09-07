@@ -104,3 +104,18 @@ The September 7 corrections keep the existing layout and controls. **Refresh sav
 The subsequent user-requested card display change is bounded to the existing task panel: Half page is the desktop default, Full page expands that same panel, and Close returns to the board. Below 992px the panel uses the available width in either mode. Try the three icons with an unsent comment and record actual feedback in Updates; passing A10–A12 does not substitute for this human check.
 
 The outline follow-up retains the existing feature/task/subtask editors. The added history arrows only highlight and reveal an item; Show in outline closes the card and focuses its current outline row. Test this on U-12 and record a person's feedback in Updates. Passing A13–A16 does not complete U-10.
+
+## U-13 saved-change logging
+
+| Check | Observable acceptance |
+|---|---|
+| A17 | Save child items in the card; their actor, identity and actual before/after appear immediately in History and native MCP. A native edit appears on reopening the same card. |
+| A18 | Edit project and feature names in their existing editors; reopen History and Saved details to inspect complete prior/new values. |
+| A19 | Native and stdio activity readers return the same ordered events across multiple pages. Children and both dependency ends are in task history; a cursor from another scope is refused. |
+| A20 | Delete a task/project in a disposable fixture; retained snapshots describe descendants and cleared requirement links, including after the parent is gone. An empty last page keeps the correct total. |
+| A21 | Real SQLite audit-insert failures roll back both data and logs, including a second-insert failure, generated parent/child ID retry and an outer transaction/savepoint. Detached partial saves keep concurrent untouched fields. |
+| A22 | Legacy activity columns are adopted idempotently without changing old rows; timestamp-only no-ops and semantic-event dedup behave truthfully. |
+
+`smoke-workflow.mjs` also runs [audit-transport-checks.mjs](../../../scripts/audit-transport-checks.mjs) for A19–A20 on a separate throwaway project. For A17–A18, create a fresh smoke fixture, open its board URL in a named Playwright CLI session, and run `scripts/change-logging.browser.js` using the same `run-code --filename` procedure above. It writes labeled fixture data, checks existing editors and saves local screenshots. Do not use normal port 5123. [ChangeAuditTests.cs](../../../tests/KanbanFlow.Tests/ChangeAuditTests.cs) owns A21–A22. Keep logs/databases/screenshots in an ignored repository directory.
+
+Human check remains pending: use task 186, inspect History/Saved details, make one intended change, and record whether the actor, item and change are understandable in Updates. Automated success does not complete U-10 or accept U-13.

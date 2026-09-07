@@ -40,7 +40,9 @@ async page => {
   const taskC = await mcp('create_task', { featureId: child.id, name: 'Outline navigation C', status: 'Review', actor: 'Outline verification' });
   const subtask = await api('POST', '/api/tasks/' + taskB.id + '/subtasks', { text: 'Outline subtask' });
   const nested = await api('POST', '/api/tasks/' + taskB.id + '/subtasks', { text: 'Outline nested subtask', parentSubtaskId: subtask.id });
-  const seed = await mcp('get_project_context', { projectId: 1 });
+  const otherProject = (await mcp('list_projects', {})).find(p => p.id !== context.projectId);
+  assert(otherProject, 'Expected another project for navigation.');
+  const seed = await mcp('get_project_context', { projectId: otherProject.id });
   assert(seed.id !== context.projectId, 'Expected a separate seeded project.');
   await mcp('workflow_command', { input: { actor: 'Outline verification', key: 'outline-' + Date.now(),
     requestId: context.id, expectedVersion: context.version, operation: 'add_message', kind: 'progress',

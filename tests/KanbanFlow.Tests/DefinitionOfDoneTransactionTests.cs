@@ -218,7 +218,7 @@ public sealed class DefinitionOfDoneTransactionTests
     /// any other writer for a gate that never runs. A non-Done transition must not take it.
     /// </summary>
     [Fact]
-    public async Task NonDoneTransition_DoesNotOpenATransaction()
+    public async Task NonDoneTransition_ReservesWriterForAuditWithoutRunningDoneGate()
     {
         var probe = new GateSpanProbe();
         using var f = new SqliteFileTestFactory(probe);
@@ -230,7 +230,8 @@ public sealed class DefinitionOfDoneTransactionTests
         // No explicit transaction was open when the entity was loaded.
         var reads = probe.Observations.Where(o => o.Kind == "TaskRead").ToArray();
         Assert.NotEmpty(reads);
-        Assert.All(reads, r => Assert.Null(r.Tx));
+        Assert.Null(reads[0].Tx);
+        Assert.Contains(reads, r => r.Tx is not null);
 
         // ...and the gate never touched AcceptanceCriteria, so there was nothing to serialize.
         Assert.DoesNotContain(probe.Observations, o => o.Kind == "CriteriaRead");
@@ -241,7 +242,7 @@ public sealed class DefinitionOfDoneTransactionTests
 
     /// <summary>A field-only edit must not take the writer lock either — see <see cref="UpdateAsync"/>.</summary>
     [Fact]
-    public async Task UpdateAsync_WithoutADoneStatusChange_DoesNotOpenATransaction()
+    public async Task UpdateAsync_FieldEdit_ReservesWriterForAuditWithoutRunningDoneGate()
     {
         var probe = new GateSpanProbe();
         using var f = new SqliteFileTestFactory(probe);
@@ -252,7 +253,8 @@ public sealed class DefinitionOfDoneTransactionTests
 
         var reads = probe.Observations.Where(o => o.Kind == "TaskRead").ToArray();
         Assert.NotEmpty(reads);
-        Assert.All(reads, r => Assert.Null(r.Tx));
+        Assert.Null(reads[0].Tx);
+        Assert.Contains(reads, r => r.Tx is not null);
         Assert.DoesNotContain(probe.Observations, o => o.Kind == "CriteriaRead");
         Assert.Contains(probe.Observations, o => o.Kind == "TaskUpdate");
     }

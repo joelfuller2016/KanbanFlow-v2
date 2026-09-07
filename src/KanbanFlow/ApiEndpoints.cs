@@ -1,3 +1,4 @@
+using KanbanFlow.Services;
 using System.Text.Json;
 using KanbanFlow.Data;
 using KanbanFlow.Models;
@@ -485,7 +486,7 @@ public static class ApiEndpoints
             };
 
             db.Projects.Add(project);
-            await db.SaveChangesAsync();
+            await db.SaveChangesWithAuditAsync();
 
             return Results.Created($"/api/projects/{project.Id}", new
             {
@@ -534,7 +535,7 @@ public static class ApiEndpoints
             }
             if (changed) project.UpdatedAt = DateTime.UtcNow;
 
-            await db.SaveChangesAsync();
+            await db.SaveChangesWithAuditAsync();
 
             return Results.Ok(new
             {
@@ -570,53 +571,27 @@ public static class ApiEndpoints
 
     private static void MapActivityEndpoints(this WebApplication app)
     {
-        // GET /api/projects/{id}/activity — durable project event trail
-        app.MapGet("/api/projects/{id:int}/activity", async (int id, int? limit, AppDbContext db) =>
+        // Existing callers keep the array response; MCP can request explicit paging metadata.
+        app.MapGet("/api/projects/{id:int}/activity", async (int id, int? limit, int? beforeId, bool? includePage, AppDbContext db, CancellationToken ct) =>
         {
-            // Audit events are retained without a Project FK so history survives deletion (#85).
-            // Query events first; 404 only when there is genuinely nothing — no events AND the
-            // project does not currently exist. A deleted project with retained events still returns them.
-            var take = Math.Clamp(limit ?? 100, 1, 500);
-            var events = await db.ActivityEvents
-                .Where(e => e.ProjectId == id)
-                .AsNoTracking()
-                .OrderByDescending(e => e.CreatedAt)
-                // ── Id tiebreak (#328). CreatedAt alone is NOT a total order here: TaskService
-                // writes several events inside one SaveChangesAsync, so identical instants are
-                // routine. Without a tiebreak the sort is unstable, and a `Take(n)` over an
-                // unstable sort can return a different SET between two identical requests — not
-                // merely a different order. Applied to EVERY ActivityEvent query below, not just
-                // the one that surfaced it.
-                .ThenByDescending(e => e.Id)
-                .Take(take)
-                .ToListAsync();
-
-            if (events.Count == 0 && !await db.Projects.AnyAsync(p => p.Id == id))
+            ActivityPage page;
+            try { page = await ActivityLogReader.ReadAsync(db, projectId: id, limit: limit, beforeId: beforeId, ct: ct); }
+            catch (ValidationException ex) { return Results.UnprocessableEntity(new { message = ex.Message }); }
+            if (page.Total == 0 && !await db.Projects.AnyAsync(p => p.Id == id, ct))
                 return Results.NotFound(new { message = $"Project {id} not found." });
-
-            return Results.Ok(events.Select(MapActivityEvent));
+            return includePage == true ? Results.Ok(new { items = page.Items.Select(MapActivityEvent), page.Total, page.NextBeforeId })
+                : Results.Ok(page.Items.Select(MapActivityEvent));
         });
 
-        // GET /api/tasks/{id}/activity — durable task event trail
-        app.MapGet("/api/tasks/{id:int}/activity", async (int id, int? limit, AppDbContext db) =>
+        app.MapGet("/api/tasks/{id:int}/activity", async (int id, int? limit, int? beforeId, bool? includePage, AppDbContext db, CancellationToken ct) =>
         {
-            var take = Math.Clamp(limit ?? 100, 1, 500);
-            var events = await db.ActivityEvents
-                .Where(e => e.EntityType == "Task" && e.EntityId == id)
-                .AsNoTracking()
-                .OrderByDescending(e => e.CreatedAt)
-                .ThenByDescending(e => e.Id)   // total order — see the note on /api/projects/{id}/activity
-                .Take(take)
-                .ToListAsync();
-
-            if (events.Count == 0)
-            {
-                var taskExists = await db.Tasks.AnyAsync(t => t.Id == id);
-                if (!taskExists)
-                    return Results.NotFound(new { message = $"Task {id} not found." });
-            }
-
-            return Results.Ok(events.Select(MapActivityEvent));
+            ActivityPage page;
+            try { page = await ActivityLogReader.ReadAsync(db, taskId: id, limit: limit, beforeId: beforeId, ct: ct); }
+            catch (ValidationException ex) { return Results.UnprocessableEntity(new { message = ex.Message }); }
+            if (page.Total == 0 && !await db.Tasks.AnyAsync(t => t.Id == id, ct))
+                return Results.NotFound(new { message = $"Task {id} not found." });
+            return includePage == true ? Results.Ok(new { items = page.Items.Select(MapActivityEvent), page.Total, page.NextBeforeId })
+                : Results.Ok(page.Items.Select(MapActivityEvent));
         });
     }
 
@@ -1028,7 +1003,7 @@ public static class ApiEndpoints
             };
 
             db.Features.Add(feature);
-            await db.SaveChangesAsync();
+            await db.SaveChangesWithAuditAsync();
 
             return Results.Created($"/api/features/{feature.Id}", new
             {
@@ -1089,7 +1064,7 @@ public static class ApiEndpoints
             }
             if (changed) feature.UpdatedAt = DateTime.UtcNow;
 
-            await db.SaveChangesAsync();
+            await db.SaveChangesWithAuditAsync();
 
             return Results.Ok(new
             {
@@ -1107,12 +1082,14 @@ public static class ApiEndpoints
         // DELETE /api/features/{id} — cascade delete
         app.MapDelete("/api/features/{id:int}", async (int id, AppDbContext db, CancellationToken ct) =>
         {
+            await using var transaction = await db.Database.BeginTransactionAsync(ct);
             var exists = await db.Features.AnyAsync(f => f.Id == id, ct);
             if (!exists)
                 return Results.NotFound(new { message = $"Feature {id} not found." });
 
             await KanbanFlow.Services.ProjectGraphDeleter.DeleteFeatureTreeAsync(db, id, ct);
-            await db.SaveChangesAsync(ct);
+            await db.SaveChangesWithAuditAsync(ct: ct);
+            await transaction.CommitAsync(ct);
             return Results.NoContent();
         });
     }
@@ -1405,7 +1382,7 @@ public static class ApiEndpoints
 
             // Recent activity touching this task (capped)
             var recentActivity = await db.ActivityEvents
-                .Where(e => e.EntityType == "Task" && e.EntityId == id)
+                .Where(e => (e.EntityType == "Task" && e.EntityId == id) || e.TaskId == id || e.RelatedTaskId == id)
                 .OrderByDescending(e => e.CreatedAt)
                 .ThenByDescending(e => e.Id)   // total order — see the note on /api/projects/{id}/activity
                 .Take(20)
@@ -1887,7 +1864,7 @@ public static class ApiEndpoints
                 return Results.NotFound(new { message = $"Task dependency {id} not found." });
 
             db.TaskDependencies.Remove(dependency);
-            await db.SaveChangesAsync();
+            await db.SaveChangesWithAuditAsync();
             return Results.NoContent();
         });
     }
@@ -1956,7 +1933,7 @@ public static class ApiEndpoints
             };
 
             db.Subtasks.Add(subtask);
-            await db.SaveChangesAsync();
+            await db.SaveChangesWithAuditAsync();
 
             return Results.Created($"/api/subtasks/{subtask.Id}", new
             {
@@ -2009,7 +1986,7 @@ public static class ApiEndpoints
                 subtask.ParentSubtaskId = newParentSubtaskId;
             }
 
-            await db.SaveChangesAsync();
+            await db.SaveChangesWithAuditAsync();
 
             return Results.Ok(new
             {
@@ -2026,12 +2003,14 @@ public static class ApiEndpoints
         // DELETE /api/subtasks/{id} — delete
         app.MapDelete("/api/subtasks/{id:int}", async (int id, AppDbContext db, CancellationToken ct) =>
         {
+            await using var transaction = await db.Database.BeginTransactionAsync(ct);
             var exists = await db.Subtasks.AnyAsync(s => s.Id == id, ct);
             if (!exists)
                 return Results.NotFound(new { message = $"Subtask {id} not found." });
 
             await KanbanFlow.Services.ProjectGraphDeleter.DeleteSubtaskTreeAsync(db, id, ct);
-            await db.SaveChangesAsync(ct);
+            await db.SaveChangesWithAuditAsync(ct: ct);
+            await transaction.CommitAsync(ct);
             return Results.NoContent();
         });
     }
@@ -2094,7 +2073,7 @@ public static class ApiEndpoints
             };
 
             db.AcceptanceCriteria.Add(criterion);
-            await db.SaveChangesAsync();
+            await db.SaveChangesWithAuditAsync();
 
             return Results.Created($"/api/acceptance-criteria/{criterion.Id}", new
             {
@@ -2125,7 +2104,7 @@ public static class ApiEndpoints
             if (dto.SortOrder.HasValue) criterion.SortOrder = dto.SortOrder.Value;
             criterion.UpdatedAt = DateTime.UtcNow;
 
-            await db.SaveChangesAsync();
+            await db.SaveChangesWithAuditAsync();
 
             return Results.Ok(new
             {
@@ -2147,7 +2126,7 @@ public static class ApiEndpoints
                 return Results.NotFound(new { message = $"Acceptance criterion {id} not found." });
 
             db.AcceptanceCriteria.Remove(criterion);
-            await db.SaveChangesAsync();
+            await db.SaveChangesWithAuditAsync();
             return Results.NoContent();
         });
     }
@@ -2233,7 +2212,7 @@ public static class ApiEndpoints
             };
 
             db.Requirements.Add(requirement);
-            await db.SaveChangesAsync();
+            await db.SaveChangesWithAuditAsync();
 
             return Results.Created($"/api/requirements/{requirement.Id}", new
             {
@@ -2306,7 +2285,7 @@ public static class ApiEndpoints
             if (dto.SortOrder.HasValue && requirement.SortOrder != dto.SortOrder.Value) { requirement.SortOrder = dto.SortOrder.Value; changed = true; }
             if (changed) requirement.UpdatedAt = DateTime.UtcNow;
 
-            await db.SaveChangesAsync();
+            await db.SaveChangesWithAuditAsync();
 
             return Results.Ok(new
             {
@@ -2332,7 +2311,7 @@ public static class ApiEndpoints
                 return Results.NotFound(new { message = $"Requirement {id} not found." });
 
             db.Requirements.Remove(requirement);
-            await db.SaveChangesAsync();
+            await db.SaveChangesWithAuditAsync();
             return Results.NoContent();
         });
 
@@ -2367,7 +2346,7 @@ public static class ApiEndpoints
             // stream (a different schema than every other "Task" event). The snapshot already carries
             // TaskItemId/FeatureId for consumers that want the link. (#186)
             AddActivityEvent(db, requirement.ProjectId, "Requirement", requirement.Id, null, "RequirementAssigned", before, RequirementActivitySnapshot(requirement), $"Requirement '{requirement.Text}' assignment updated");
-            await db.SaveChangesAsync();
+            await db.SaveChangesWithAuditAsync();
 
             return Results.Ok(new
             {
@@ -2460,7 +2439,7 @@ public static class ApiEndpoints
                 return Results.NotFound(new { message = $"Comment {id} not found." });
 
             db.TaskComments.Remove(comment);
-            await db.SaveChangesAsync();
+            await db.SaveChangesWithAuditAsync();
             return Results.NoContent();
         });
     }
@@ -2475,6 +2454,8 @@ public static class ApiEndpoints
         e.ProjectId,
         e.EntityType,
         e.EntityId,
+        e.TaskId,
+        e.RelatedTaskId,
         e.Actor,
         e.EventType,
         e.BeforeJson,

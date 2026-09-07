@@ -444,11 +444,8 @@ public static class KanbanMcpTools
     // #428 — the audit trail fills with overrides meaning "the tool was missing" rather than
     // "a human judged this done anyway".
     //
-    // These touch EF directly rather than a service because acceptance criteria have no audit
-    // boundary to route through: the REST surface writes them the same way (see
-    // MapAcceptanceCriterionEndpoints) and records no ActivityEvent for them. Matching REST
-    // exactly is the point — a tool that audited differently from the endpoint it mirrors would be
-    // a second source of truth. If criteria ever gain audit events, both surfaces move together.
+    // Criteria use the shared audited save boundary, as do REST and the existing Blazor editors.
+    // Their events retain task context so both MCP readers and the card show the same history.
 
     [McpServerTool(Name = "list_acceptance_criteria")]
     [Description("List a task's acceptance criteria with their completion state, ordered as they appear on the card. Call this when update_task_status refuses a move to Done, to see exactly which criteria are unmet and get the ids to pass to mark_acceptance_criterion_done.")]
@@ -470,6 +467,38 @@ public static class KanbanMcpTools
             .Select(c => new AcceptanceCriterionResult(
                 c.Id, c.TaskItemId, c.Text, c.Completed, c.SortOrder, "Listed."))
             .ToListAsync(cancellationToken);
+    }
+
+    [McpServerTool(Name = "list_project_activity")]
+    [Description("Read retained project change history, including deleted items. Returns items, total and nextBeforeId; pass nextBeforeId as beforeId to read older events. Actor is reported attribution, not authenticated identity.")]
+    public static async Task<ActivityPage> ListProjectActivity(IDbContextFactory<AppDbContext> dbFactory,
+        int projectId, int? limit = null, int? beforeId = null, CancellationToken cancellationToken = default)
+    {
+        await using var db = await dbFactory.CreateDbContextAsync(cancellationToken);
+        try
+        {
+            var page = await ActivityLogReader.ReadAsync(db, projectId: projectId, limit: limit, beforeId: beforeId, ct: cancellationToken);
+            if (page.Total == 0 && !await db.Projects.AnyAsync(p => p.Id == projectId, cancellationToken))
+                throw new McpException($"Project {projectId} not found.");
+            return page;
+        }
+        catch (ValidationException ex) { throw new McpException(ex.Message); }
+    }
+
+    [McpServerTool(Name = "list_task_activity")]
+    [Description("Read retained task history including subtasks, acceptance checks, requirements and dependency changes. Returns items, total and nextBeforeId; pass nextBeforeId as beforeId for older events, including after deletion.")]
+    public static async Task<ActivityPage> ListTaskActivity(IDbContextFactory<AppDbContext> dbFactory,
+        int taskId, int? limit = null, int? beforeId = null, CancellationToken cancellationToken = default)
+    {
+        await using var db = await dbFactory.CreateDbContextAsync(cancellationToken);
+        try
+        {
+            var page = await ActivityLogReader.ReadAsync(db, taskId: taskId, limit: limit, beforeId: beforeId, ct: cancellationToken);
+            if (page.Total == 0 && !await db.Tasks.AnyAsync(t => t.Id == taskId, cancellationToken))
+                throw new McpException($"Task {taskId} not found.");
+            return page;
+        }
+        catch (ValidationException ex) { throw new McpException(ex.Message); }
     }
 
     [McpServerTool(Name = "create_acceptance_criterion")]
@@ -510,7 +539,7 @@ public static class KanbanMcpTools
             SortOrder = resolvedSortOrder
         };
         db.AcceptanceCriteria.Add(criterion);
-        await db.SaveChangesAsync(cancellationToken);
+        await db.SaveChangesWithAuditAsync(DefaultActor, cancellationToken);
 
         // The Definition-of-Done gate is TRANSITION-only (GateDoneTransitionAsync returns
         // immediately when oldStatus == Done), so a criterion added to an already-Done task
@@ -543,7 +572,7 @@ public static class KanbanMcpTools
 
         criterion.Completed = completed;
         criterion.UpdatedAt = DateTime.UtcNow;
-        await db.SaveChangesAsync(cancellationToken);
+        await db.SaveChangesWithAuditAsync(DefaultActor, cancellationToken);
 
         // Tell the agent whether the task is now clear to move, so it does not have to call
         // list_acceptance_criteria again just to find out.
@@ -590,7 +619,7 @@ public static class KanbanMcpTools
         if (completed.HasValue) criterion.Completed = completed.Value;
         if (sortOrder.HasValue) criterion.SortOrder = sortOrder.Value;
         criterion.UpdatedAt = DateTime.UtcNow;
-        await db.SaveChangesAsync(cancellationToken);
+        await db.SaveChangesWithAuditAsync(DefaultActor, cancellationToken);
 
         return new AcceptanceCriterionResult(
             criterion.Id, criterion.TaskItemId, criterion.Text, criterion.Completed, criterion.SortOrder, "Criterion updated.");

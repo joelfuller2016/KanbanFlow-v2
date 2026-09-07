@@ -391,6 +391,7 @@ else
     EditProjectId="Id"
     EditFeatureId="editModalFeatureId"
     EditTaskId="editModalTaskId"
+    HistoryRefreshToken="historyRefreshToken"
     AllFeatures="project?.Features?.ToList()"
     InitialName="@editModalName"
     InitialDescription="@editModalDescription"
@@ -773,6 +774,7 @@ else
 
     private int CountOpenAiTasks() => aiContext?.Tasks.Count(t => t.Status != "Done") ?? 0;
 
+    private int historyRefreshToken;
     private async Task LoadProject()
     {
         try
@@ -807,6 +809,7 @@ else
             }
 
             project = loaded;
+            historyRefreshToken++;
             allTasks = project.Features.SelectMany(f => f.Tasks).ToList();
             // Re-narrow after EVERY reload. A drag, a done-toggle, an edit and a delete all end in
             // LoadProject, and each of them can change whether a task still matches the filter.
@@ -866,7 +869,7 @@ else
             using var db = await DbFactory.CreateDbContextAsync(_cts.Token);
             db.Subtasks.Attach(subtask);
             db.Entry(subtask).Property(s => s.Completed).IsModified = true;
-            await db.SaveChangesAsync(_cts.Token);
+            await db.SaveChangesWithAuditAsync("User", _cts.Token);
             StateHasChanged();
         }
         catch (OperationCanceledException) { }

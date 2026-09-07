@@ -1,0 +1,23 @@
+sequenceDiagram
+    title Saved changes in the existing KanbanFlow app
+    actor Human
+    participant UI as Existing editor
+    participant MCP as Native or stdio MCP
+    participant Save as Domain service and ChangeAudit
+    participant DB as Existing SQLite database
+    participant History as Shared activity readers
+    Human->>UI: Save a board change
+    UI->>Save: Validated mutation and actor
+    MCP->>Save: Same supported mutation
+    Save->>DB: Begin transaction or savepoint
+    Save->>DB: Read actual prior values and deletion links
+    Save->>DB: Save data, then audit with generated IDs
+    alt Both writes succeed
+        Save->>DB: Commit together
+        DB-->>History: Retained before/after and historical context
+        History-->>UI: Timeline and saved details
+        History-->>MCP: Same events and older-page cursor
+    else Either write fails
+        Save->>DB: Roll back data and audit together
+        Save-->>UI: Save failed
+    end

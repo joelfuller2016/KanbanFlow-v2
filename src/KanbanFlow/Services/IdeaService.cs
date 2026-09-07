@@ -228,6 +228,7 @@ public sealed class IdeaService(IDbContextFactory<AppDbContext> dbFactory) : IId
     public async Task DeleteAsync(int ideaId, string? actor, CancellationToken ct = default)
     {
         await using var db = await dbFactory.CreateDbContextAsync(ct);
+        await using var transaction = await db.Database.BeginTransactionAsync(ct);
         var idea = await db.Ideas.FirstOrDefaultAsync(i => i.Id == ideaId, ct);
         if (idea is null)
             throw new IdeaNotFoundException(ideaId);
@@ -239,12 +240,14 @@ public sealed class IdeaService(IDbContextFactory<AppDbContext> dbFactory) : IId
             db, IdeaProjectId(idea), "Idea", idea.Id, actor,
             "IdeaDeleted", IdeaActivitySnapshot(idea), null,
             $"Idea '{idea.Title}' deleted");
+        await ProjectGraphDeleter.DeleteIdeaRequestsAsync(db, ideaId, ct);
         db.Ideas.Remove(idea);
 
         // Single SaveChanges so the audit insert and the delete commit atomically in one EF
         // transaction (matches TaskService.DeleteAsync) — never an IdeaDeleted row with the idea
         // still present.
-        await db.SaveChangesAsync(ct);
+        await db.SaveChangesWithAuditAsync(actor, ct);
+        await transaction.CommitAsync(ct);
     }
 
     public async Task<IdeaPromoteResult> PromoteAsync(int ideaId, string? actor, int? existingProjectId = null, CancellationToken ct = default)

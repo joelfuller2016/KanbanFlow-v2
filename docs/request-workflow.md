@@ -8,6 +8,24 @@ The normal app remains at [http://127.0.0.1:5123](http://127.0.0.1:5123). It use
 
 ## Architecture, processes and data
 
+The September 7 logging follow-up (U-13, task 186) extends this same database and timeline. Supported saved board changes use a domain event method or `ChangeAudit`: project/feature fields, task reorders and claim heartbeats, subtasks, acceptance criteria, requirements, dependencies, comments and recursive deletion effects. Existing idea, memory and workflow operation histories remain in place. Workflow events also retain their operation, submitted content and resulting revision/receipt. Earlier gaps cannot be reconstructed.
+
+Read/cache counters, search indexes, retry receipts, unsaved typing and navigation/display state are bookkeeping rather than board edits. The in-app test runner keeps its existing cleanup of throwaway audit rows. Direct database edits, arbitrary terminal commands and disconnected AI conversations are outside the app's save boundary; development changes must be recorded explicitly under the owning request/task as required by [AGENTS.md](../AGENTS.md).
+
+### Inspect and record changes
+
+1. Save a normal board edit. Expect the edit and its event to commit together. If persistence fails, reload before retrying; the failed transaction must leave neither a partial change nor a success event.
+2. Open the card's **History**, or **History** in the existing project/feature editor. Read the actor, time, affected item and field changes. Expand **Saved details** for complete before/after values, including creation/deletion snapshots and long text. Use **Load older** when the displayed window does not reach the beginning. A history-load failure is shown explicitly.
+3. Through native MCP, call `list_task_activity` or `list_project_activity`. Each returns `items`, `total` and `nextBeforeId`. Pass the latter as `beforeId` until it is null. Task history includes children, both ends of dependencies and requirement unlinking, even after deletion. REST and the stdio wrapper preserve their default array response; pass `includePage=true` for the paging envelope. Limits bound a page to 1–500 events, not the lifetime history.
+4. Attribute writes using existing domain actor arguments. Direct REST saves accept `X-KanbanFlow-Actor`, falling back to `api`; the wrapper supplies `mcp-agent`, and editors use `User`. These are reported labels under the local trust model, not authenticated identities.
+5. For development, record reason/scope in Updates before editing and log meaningful progress, failures, changed files/source and actual results afterward. Keep the work card in Review until the person accepts it. The repository agreement guides connected agents; it does not monitor all external file activity.
+
+`ChangeAudit` reserves the SQLite writer before reading actual prior values, supports detached partial updates, reconciles existing semantic snapshots, obtains generated IDs, and commits data and audit together. It joins an existing transaction through a savepoint. Root deletions load cascades and cleared links before removal. The additive startup patch supplies nullable historical task IDs without foreign keys; old audit rows remain intact. [The editable flow](plans/assets/board-change-audit.mmd) and [U-13 checklist](plans/central-project-board-implementation.md#u-13--log-saved-board-changes-and-development-work) cover implementation and checks.
+
+An interceptor alone would miss bulk updates and unloaded database cascades; tracked originals alone cannot recover edits made before attachment. The explicit boundary preserves existing semantic event contracts. See Microsoft's [SaveChanges interception guidance](https://learn.microsoft.com/ef/core/logging-events-diagnostics/interceptors#savechanges-interception) and [explicit tracking guidance](https://learn.microsoft.com/ef/core/change-tracking/explicit-tracking#introduction).
+
+### Existing workflow architecture
+
 ```mermaid
 flowchart LR
     H[Person] --> UI[Existing Ideas and Project pages]

@@ -28,7 +28,9 @@ async page => {
   const taskA = context.tasks[0];
   const taskB = await mcp('create_task', { featureId: context.featureId, name: 'Navigation verification second task',
     actor: 'Navigation verification client' });
-  const seed = await mcp('get_project_context', { projectId: 1 });
+  const otherProject = (await mcp('list_projects', {})).find(p => p.id !== context.projectId && p.taskCount > 0);
+  assert(otherProject, 'Expected another populated project for membership check.');
+  const seed = await mcp('get_project_context', { projectId: otherProject.id });
   assert(seed.id !== context.projectId && seed.tasks.length > 0, 'Expected another seeded project for membership check.');
   const foreignTaskId = seed.tasks[0].id;
   const boardPath = '/project/' + context.projectId + '?request=' + context.id;

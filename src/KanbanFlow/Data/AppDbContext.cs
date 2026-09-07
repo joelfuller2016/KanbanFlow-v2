@@ -6,7 +6,14 @@ namespace KanbanFlow.Data;
 
 public class AppDbContext : DbContext
 {
-    public AppDbContext(DbContextOptions<AppDbContext> options) : base(options) { }
+    public AppDbContext(DbContextOptions<AppDbContext> options, IHttpContextAccessor? httpContext = null) : base(options)
+    {
+        var request = httpContext?.HttpContext?.Request;
+        DefaultAuditActor = request?.Headers["X-KanbanFlow-Actor"].FirstOrDefault()?.Trim()
+            is { Length: > 0 } actor ? actor : request?.Path.StartsWithSegments("/api") == true ? "api" : "System";
+    }
+
+    public string DefaultAuditActor { get; }
 
     public DbSet<WorkRequest> WorkRequests => Set<WorkRequest>();
     public DbSet<RequestMessage> RequestMessages => Set<RequestMessage>();
@@ -84,6 +91,8 @@ public class AppDbContext : DbContext
             e.Ignore(a => a.Project);
             e.HasIndex(a => new { a.ProjectId, a.CreatedAt });
             e.HasIndex(a => new { a.EntityType, a.EntityId, a.CreatedAt });
+            e.HasIndex(a => new { a.TaskId, a.CreatedAt });
+            e.HasIndex(a => new { a.RelatedTaskId, a.CreatedAt });
         });
 
         modelBuilder.Entity<Idea>(e =>

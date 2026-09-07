@@ -27,6 +27,7 @@ var builder = WebApplication.CreateBuilder(args);
 var dbResolution = DbPathResolver.Resolve(builder.Environment.ContentRootPath);
 builder.Services.AddSingleton(dbResolution);
 
+builder.Services.AddHttpContextAccessor();
 builder.Services.AddDbContextFactory<AppDbContext>(
     options => options.UseSqlite(DbPathResolver.ToConnectionString(dbResolution.Path)));
 builder.Services.AddSingleton(TimeProvider.System);
@@ -412,6 +413,7 @@ static void EnsureActivityEventTable(AppDbContext db)
             migrateTable.ExecuteNonQuery();
         }
 
+        SchemaPatcher.EnsureActivityContextColumns(connection);
         using var projectIndex = connection.CreateCommand();
         projectIndex.CommandText = "CREATE INDEX IF NOT EXISTS IX_ActivityEvents_ProjectId_CreatedAt ON ActivityEvents (ProjectId, CreatedAt)";
         projectIndex.ExecuteNonQuery();

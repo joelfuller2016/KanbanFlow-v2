@@ -244,6 +244,15 @@
                         </div>
                     </div>
                 }
+            @if (IsOpen && EditMode != EditItemType.Task)
+            {
+                <details class="mx-3 mb-3" data-testid="edit-item-history">
+                    <summary>History</summary>
+                    <ActivityTimeline ProjectId="@(EditMode == EditItemType.Project ? EditProjectId : null)"
+                                      EntityType="@(EditMode == EditItemType.Feature ? "Feature" : null)"
+                                      EntityId="EditFeatureId" RefreshToken="activityRefreshToken" />
+                </details>
+            }
             </div>
             <div class="modal-footer">
                 <button type="button" class="btn btn-secondary btn-sm" @onclick="Close" data-testid="edit-item-cancel-button">Cancel</button>
@@ -268,6 +277,8 @@
     [Parameter] public int EditProjectId { get; set; }
     [Parameter] public int? EditFeatureId { get; set; }
     [Parameter] public int? EditTaskId { get; set; }
+    [Parameter] public int HistoryRefreshToken { get; set; }
+    private int seenHistoryRefreshToken;
     [Parameter] public List<Feature>? AllFeatures { get; set; }
 
     // Pre-populated values
@@ -369,6 +380,11 @@
 
     protected override void OnParametersSet()
     {
+        if (HistoryRefreshToken != seenHistoryRefreshToken)
+        {
+            seenHistoryRefreshToken = HistoryRefreshToken;
+            activityRefreshToken++;
+        }
         // A FRESH OPEN, or a switch to a different task — not merely "the parent re-rendered".
         //
         // Everything below discards state and re-reads from the server, so running it on every
@@ -467,7 +483,8 @@
         using var db = await DbFactory.CreateDbContextAsync();
         db.Subtasks.Attach(subtask);
         db.Entry(subtask).Property(s => s.Completed).IsModified = true;
-        await db.SaveChangesAsync();
+        await db.SaveChangesWithAuditAsync("User");
+        activityRefreshToken++;
         await OnSaved.InvokeAsync();
     }
 
@@ -601,7 +618,7 @@
             // unit-of-work, so skip it. Project/Feature edits mutate the outer `db`
             // above and still need this save.
             if (EditMode != EditItemType.Task)
-                await db.SaveChangesAsync();
+                await db.SaveChangesWithAuditAsync("User");
 
             await OnSaved.InvokeAsync();
             await OnClose.InvokeAsync();

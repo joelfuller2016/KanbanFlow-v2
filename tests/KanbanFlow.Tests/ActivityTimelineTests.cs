@@ -960,7 +960,9 @@ public class ActivityTimelineTests
             new[]
             {
                 "status", "priority", "assignee", "claimedBy", "name",
-                "featureId", "description", "sortOrder", "completedAt", "claimedAt"
+                "featureId", "description", "sortOrder", "completedAt", "claimedAt",
+                "text", "completed", "goals", "readme", "projectId", "taskItemId", "dependsOnTaskItemId",
+                "parentFeatureId", "parentSubtaskId", "promotedProjectId", "archived"
             },
             ActivityTimelineBuilder.DisplayFields.Select(f => f.Json).ToArray());
     }

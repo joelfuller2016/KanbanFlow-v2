@@ -50,7 +50,7 @@ public sealed partial class WorkspaceService
             foreach (var criterion in item.Task.AcceptanceCriteria) { criterion.Completed = true; criterion.UpdatedAt = Now; }
             evidence.AcceptedAt = Now;
             evidence.AcceptedBy = actor;
-            await db.SaveChangesAsync(ct);
+            await db.SaveChangesWithAuditAsync(actor, ct);
             await TaskService.ChangeStatusInContextAsync(db, item.TaskItemId, WorkStatus.Done, actor, ct);
         }, ct);
 

@@ -605,7 +605,7 @@
         // threading a bump through all ~25 mutation call sites. (A comment add does NOT touch
         // UpdatedAt; AddCommentAsync bumps the token itself.) Computed BEFORE the block below,
         // which overwrites loadedCommentsTaskId.
-        if (taskId != loadedCommentsTaskId || Task?.UpdatedAt != lastSeenTaskUpdatedAt)
+        if (freshOpen || taskInstanceChanged || taskId != loadedCommentsTaskId || Task?.UpdatedAt != lastSeenTaskUpdatedAt)
         {
             lastSeenTaskUpdatedAt = Task?.UpdatedAt;
             activityRefreshToken++;
@@ -1132,7 +1132,8 @@
 
         using var db = await DbFactory.CreateDbContextAsync();
         db.Subtasks.Add(subtask);
-        await db.SaveChangesAsync();
+        await db.SaveChangesWithAuditAsync("User");
+        activityRefreshToken++;
 
         Task.Subtasks.Add(subtask);
         addingChildSubtaskToId = null;
@@ -1150,7 +1151,8 @@
         using var db = await DbFactory.CreateDbContextAsync();
         db.Subtasks.Attach(subtask);
         db.Entry(subtask).Property(s => s.Completed).IsModified = true;
-        await db.SaveChangesAsync();
+        await db.SaveChangesWithAuditAsync("User");
+        activityRefreshToken++;
 
         await OnTaskUpdated.InvokeAsync();
     }
@@ -1166,8 +1168,11 @@
             // Child subtasks are OnDelete(Restrict), so a parent can't be removed before its children.
             // Route through the shared leaf-first deleter (same path as REST DELETE /api/subtasks/{id})
             // instead of a single-node Remove that throws an unhandled FK error on a parent (#204).
+            await using var transaction = await db.Database.BeginTransactionAsync();
             await KanbanFlow.Services.ProjectGraphDeleter.DeleteSubtaskTreeAsync(db, subtask.Id);
-            await db.SaveChangesAsync();
+            await db.SaveChangesWithAuditAsync("User");
+            await transaction.CommitAsync();
+            activityRefreshToken++;
 
             // Prune the node + all descendants from the flat in-memory list (linear: build a
             // parent->children lookup once, then walk down from the deleted node).
@@ -1220,7 +1225,8 @@
 
         using var db = await DbFactory.CreateDbContextAsync();
         db.Subtasks.Add(subtask);
-        await db.SaveChangesAsync();
+        await db.SaveChangesWithAuditAsync("User");
+        activityRefreshToken++;
 
         Task.Subtasks.Add(subtask);
         newSubtaskText = null;
@@ -1251,7 +1257,8 @@
 
         using var db = await DbFactory.CreateDbContextAsync();
         db.AcceptanceCriteria.Add(criterion);
-        await db.SaveChangesAsync();
+        await db.SaveChangesWithAuditAsync("User");
+        activityRefreshToken++;
 
         Task.AcceptanceCriteria.Add(criterion);
         newAcceptanceCriterionText = null;
@@ -1268,7 +1275,8 @@
         db.AcceptanceCriteria.Attach(criterion);
         db.Entry(criterion).Property(c => c.Completed).IsModified = true;
         db.Entry(criterion).Property(c => c.UpdatedAt).IsModified = true;
-        await db.SaveChangesAsync();
+        await db.SaveChangesWithAuditAsync("User");
+        activityRefreshToken++;
 
         await OnTaskUpdated.InvokeAsync();
     }
@@ -1281,7 +1289,8 @@
 
         using var db = await DbFactory.CreateDbContextAsync();
         db.AcceptanceCriteria.Remove(db.AcceptanceCriteria.Attach(criterion).Entity);
-        await db.SaveChangesAsync();
+        await db.SaveChangesWithAuditAsync("User");
+        activityRefreshToken++;
 
         await OnTaskUpdated.InvokeAsync();
     }

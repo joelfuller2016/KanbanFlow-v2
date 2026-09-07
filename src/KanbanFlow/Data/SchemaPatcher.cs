@@ -16,6 +16,30 @@ namespace KanbanFlow.Data;
 /// </summary>
 public static class SchemaPatcher
 {
+    /// <summary>Add historical task links without rewriting existing audit rows.</summary>
+    public static void EnsureActivityContextColumns(DbConnection connection)
+    {
+        var columns = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        using (var command = connection.CreateCommand())
+        {
+            command.CommandText = "PRAGMA table_info('ActivityEvents')";
+            using var reader = command.ExecuteReader();
+            while (reader.Read()) columns.Add(reader.GetString(1));
+        }
+        foreach (var name in new[] { "TaskId", "RelatedTaskId" })
+        {
+            if (!columns.Contains(name))
+            {
+                using var alter = connection.CreateCommand();
+                alter.CommandText = $"ALTER TABLE ActivityEvents ADD COLUMN {name} INTEGER NULL";
+                alter.ExecuteNonQuery();
+            }
+            using var index = connection.CreateCommand();
+            index.CommandText = $"CREATE INDEX IF NOT EXISTS IX_ActivityEvents_{name}_CreatedAt ON ActivityEvents ({name}, CreatedAt)";
+            index.ExecuteNonQuery();
+        }
+    }
+
     /// <summary>
     /// Ensure the memory data model tables (<c>MemoryNodes</c>, <c>Observations</c>,
     /// <c>MemoryRelations</c>) and their indexes exist. No-op on non-SQLite providers. Opens and

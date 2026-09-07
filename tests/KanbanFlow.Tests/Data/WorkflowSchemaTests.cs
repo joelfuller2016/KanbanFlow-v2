@@ -109,6 +109,7 @@ public sealed class WorkflowSchemaTests
             WorkflowSchema.EnsureTables(db);
             var after = await FingerprintsAsync(db);
             foreach (var table in before) Assert.Equal(table.Value, after[table.Key]);
+            SchemaPatcher.EnsureActivityContextColumns(db.Database.GetDbConnection());
             Assert.Contains("WorkRequests", after.Keys);
             Assert.Contains("PlannedTasks", after.Keys);
             Assert.Empty(await db.WorkRequests.ToListAsync());
