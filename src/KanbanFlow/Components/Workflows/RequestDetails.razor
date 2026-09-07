@@ -1,0 +1,32 @@
+<nav class="d-flex flex-wrap gap-1 mb-3" aria-label="Request sections">
+    @foreach (var section in sections)
+    {
+        <button type="button" class="btn btn-sm @(tab == section ? "btn-primary" : "btn-outline-primary")" aria-pressed="@(tab == section)" @onclick="() => Open(section)">@section</button>
+    }
+</nav>
+@if (tab == "Original")
+{
+    <h3 class="h5">Actual user request</h3>
+    @foreach (var message in Context.Messages.Where(m => m.Kind == "original"))
+    {
+        <div class="small text-muted mb-2">@message.Author · @message.CreatedAt.ToLocalTime().ToString("g") · @message.Source</div>
+        <pre class="border rounded bg-white p-3" style="white-space:pre-wrap; font-family:inherit">@message.Text</pre>
+    }
+    <p class="small text-muted">The original stays intact. Add clarification in Updates, then save a new brief or plan revision.</p>
+}
+@* Mount on first visit and keep mounted, so ordinary section navigation preserves drafts. *@
+<fieldset disabled="@Context.Archived">
+    @if (visited.Contains("Brief")) { <div hidden="@(tab != "Brief")"><RequestBriefEditor Context="Context" OnSubmit="OnSubmit" /></div> }
+    @if (visited.Contains("Plan & tasks")) { <div hidden="@(tab != "Plan & tasks")"><RequestPlanEditor Context="Context" OnSubmit="OnSubmit" /></div> }
+    @if (visited.Contains("Updates")) { <div hidden="@(tab != "Updates")"><RequestConversation Context="Context" OnSubmit="OnSubmit" /></div> }
+    @if (visited.Contains("Results")) { <div hidden="@(tab != "Results")"><RequestResults Context="Context" OnSubmit="OnSubmit" /></div> }
+</fieldset>
+
+@code {
+    [Parameter, EditorRequired] public WorkflowContext Context { get; set; } = null!;
+    [Parameter] public EventCallback<WorkflowSubmission> OnSubmit { get; set; }
+    private string tab = "Original";
+    private readonly HashSet<string> visited = ["Original"];
+    private void Open(string section) { tab = section; visited.Add(section); }
+    private readonly string[] sections = ["Original", "Brief", "Plan & tasks", "Updates", "Results"];
+}

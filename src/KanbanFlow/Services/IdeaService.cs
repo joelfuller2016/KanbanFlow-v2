@@ -50,6 +50,15 @@ public sealed class IdeaService(IDbContextFactory<AppDbContext> dbFactory) : IId
 
     public async Task<Idea> CreateAsync(IdeaCreate dto, string? actor, CancellationToken ct = default)
     {
+        await using var db = await dbFactory.CreateDbContextAsync(ct);
+        await using var tx = await db.Database.BeginTransactionAsync(ct);
+        var idea = await CreateInContextAsync(db, dto, actor, ct);
+        await tx.CommitAsync(ct);
+        return idea;
+    }
+
+    internal static async Task<Idea> CreateInContextAsync(AppDbContext db, IdeaCreate dto, string? actor, CancellationToken ct, string source = "idea")
+    {
         ArgumentNullException.ThrowIfNull(dto);
 
         // Service is the trust boundary — REST, MCP, and Blazor callers all flow through here (#88).
@@ -61,7 +70,6 @@ public sealed class IdeaService(IDbContextFactory<AppDbContext> dbFactory) : IId
         if (dto.Priority is not null && !Enum.IsDefined(dto.Priority.Value))
             throw new ValidationException($"Invalid priority '{dto.Priority.Value}'.");
 
-        await using var db = await dbFactory.CreateDbContextAsync(ct);
 
         var idea = new Idea
         {
@@ -76,9 +84,9 @@ public sealed class IdeaService(IDbContextFactory<AppDbContext> dbFactory) : IId
         // Atomic create + audit: first save assigns idea.Id (needed by the activity event),
         // second persists the audit row. One transaction so a failure can't leave an idea
         // without its IdeaCreated event.
-        await using var tx = await db.Database.BeginTransactionAsync(ct);
 
         db.Ideas.Add(idea);
+        Workflows.IdeaWorkflowCapture.Add(db, idea, string.IsNullOrWhiteSpace(dto.Body) ? dto.Title : dto.Body, actor, source);
         await db.SaveChangesAsync(ct);
 
         AddActivityEvent(
@@ -87,7 +95,6 @@ public sealed class IdeaService(IDbContextFactory<AppDbContext> dbFactory) : IId
             $"Idea '{idea.Title}' created");
 
         await db.SaveChangesAsync(ct);
-        await tx.CommitAsync(ct);
         return idea;
     }
 
@@ -140,6 +147,8 @@ public sealed class IdeaService(IDbContextFactory<AppDbContext> dbFactory) : IId
             throw new IdeaNotFoundException(ideaId);
 
         var before = IdeaActivitySnapshot(idea);
+        var originalBody = idea.Body;
+        var originalPlan = idea.Plan;
         var changed = false;
 
         if (dto.Title is not null)
@@ -187,6 +196,17 @@ public sealed class IdeaService(IDbContextFactory<AppDbContext> dbFactory) : IId
         if (!changed)
             return idea; // idempotent: nothing to persist, no audit noise
 
+        var workflow = await db.WorkRequests.Include(r => r.Messages).SingleOrDefaultAsync(r => r.IdeaId == ideaId, ct)
+            ?? Workflows.IdeaWorkflowCapture.Add(db, idea, originalBody ?? idea.Title, actor, "legacy", exact: false);
+        workflow.Title = idea.Title;
+        // Promotion is terminal for ideas; archiving its workflow is an independent action.
+        // A routine title/notes edit must not restore an explicitly archived promoted request.
+        if (idea.Status != IdeaStatus.Promoted)
+            workflow.Archived = idea.Status is IdeaStatus.Archived or IdeaStatus.Rejected;
+        if (originalBody != idea.Body) Workflows.IdeaWorkflowCapture.RecordSummaryEdit(workflow, actor, "notes", idea.Body);
+        if (originalPlan != idea.Plan) Workflows.IdeaWorkflowCapture.RecordSummaryEdit(workflow, actor, "plan notes", idea.Plan);
+        if (originalBody == idea.Body && originalPlan == idea.Plan) workflow.Version++;
+        workflow.UpdatedAt = DateTime.UtcNow;
         idea.UpdatedAt = DateTime.UtcNow;
         AddActivityEvent(
             db, IdeaProjectId(idea), "Idea", idea.Id, actor,
@@ -219,9 +239,17 @@ public sealed class IdeaService(IDbContextFactory<AppDbContext> dbFactory) : IId
         await db.SaveChangesAsync(ct);
     }
 
-    public async Task<IdeaPromoteResult> PromoteAsync(int ideaId, string? actor, CancellationToken ct = default)
+    public async Task<IdeaPromoteResult> PromoteAsync(int ideaId, string? actor, CancellationToken ct = default, int? existingProjectId = null)
     {
         await using var db = await dbFactory.CreateDbContextAsync(ct);
+        await using var tx = await db.Database.BeginTransactionAsync(ct);
+        var result = await PromoteInContextAsync(db, ideaId, actor, ct, existingProjectId);
+        await tx.CommitAsync(ct);
+        return result;
+    }
+
+    internal static async Task<IdeaPromoteResult> PromoteInContextAsync(AppDbContext db, int ideaId, string? actor, CancellationToken ct, int? existingProjectId = null)
+    {
         var idea = await db.Ideas.FirstOrDefaultAsync(i => i.Id == ideaId, ct);
         if (idea is null)
             throw new IdeaNotFoundException(ideaId);
@@ -229,24 +257,24 @@ public sealed class IdeaService(IDbContextFactory<AppDbContext> dbFactory) : IId
         // guard is the conditional UPDATE below — this snapshot read can go stale under a
         // concurrent promote, so it is an optimization, not the race protection.
         if (idea.Status == IdeaStatus.Promoted || idea.PromotedProjectId is not null)
+        {
+            if (existingProjectId is int sameProject && idea.PromotedProjectId == sameProject)
+                return new IdeaPromoteResult(idea.Id, sameProject);
             throw AlreadyPromoted(idea);
+        }
 
         var ideaBefore = IdeaActivitySnapshot(idea);
 
-        var project = new Project
-        {
-            Name = idea.Title,
-            Description = idea.Body,
-            Goals = idea.Plan,
-            Readme = ComposeProjectReadme(idea)
-        };
+        var project = existingProjectId is int target
+            ? await db.Projects.SingleOrDefaultAsync(p => p.Id == target, ct) ?? throw new ProjectNotFoundException(target)
+            : new Project { Name = idea.Title, Description = idea.Body, Goals = idea.Plan, Readme = ComposeProjectReadme(idea) };
+        var createdProject = existingProjectId is null;
 
         // Atomic promote: create the project (assigns its id), then flip the idea with a
         // conditional UPDATE, then audit both sides — one transaction so we never leave a
         // half-promoted idea.
-        await using var tx = await db.Database.BeginTransactionAsync(ct);
 
-        db.Projects.Add(project);
+        if (createdProject) db.Projects.Add(project);
         await db.SaveChangesAsync(ct);
 
         // Conditional flip closes the check-then-act race: only promote while the idea is still
@@ -264,7 +292,6 @@ public sealed class IdeaService(IDbContextFactory<AppDbContext> dbFactory) : IId
         {
             // A concurrent promote won: undo our just-inserted project (no orphan) and report
             // against the now-committed state.
-            await tx.RollbackAsync(ct);
             var current = await db.Ideas.AsNoTracking().FirstOrDefaultAsync(i => i.Id == ideaId, ct);
             throw current is null ? new IdeaNotFoundException(ideaId) : AlreadyPromoted(current);
         }
@@ -280,7 +307,13 @@ public sealed class IdeaService(IDbContextFactory<AppDbContext> dbFactory) : IId
         var ideaAfter = IdeaActivitySnapshot(idea);
         db.Entry(idea).State = EntityState.Unchanged;
 
-        AddActivityEvent(
+        var workflow = await db.WorkRequests.SingleOrDefaultAsync(r => r.IdeaId == ideaId, ct)
+            ?? Workflows.IdeaWorkflowCapture.Add(db, idea, idea.Body ?? idea.Title, actor, "legacy", exact: false);
+        workflow.ProjectId = project.Id;
+        workflow.Version++;
+        workflow.UpdatedAt = now;
+
+        if (createdProject) AddActivityEvent(
             db, project.Id, "Project", project.Id, actor,
             "ProjectCreatedFromIdea", null,
             new { project.Id, project.Name, FromIdeaId = idea.Id },
@@ -291,7 +324,6 @@ public sealed class IdeaService(IDbContextFactory<AppDbContext> dbFactory) : IId
             $"Idea '{idea.Title}' promoted to project {project.Id}");
 
         await db.SaveChangesAsync(ct);
-        await tx.CommitAsync(ct);
         return new IdeaPromoteResult(idea.Id, project.Id);
     }
 

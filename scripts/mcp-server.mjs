@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import { createUsageLogger } from "./usage-log.mjs";
+import { workflowTools } from "./workflow-tools.mjs";
 
 const apiBaseUrl = (process.env.KANBANFLOW_API_URL || "http://127.0.0.1:5123").replace(/\/$/, "");
 const defaultRestTimeoutMs = 10000;
@@ -51,6 +52,7 @@ const inFlightRequestIds = new Set();
 const usageLogger = createUsageLogger();
 
 const tools = [
+  ...workflowTools,
   {
     name: "list_projects",
     description: "List all projects with feature and task counts.",
@@ -1041,6 +1043,11 @@ function isPlainObject(value) {
 
 async function callTool(toolName, args) {
   switch (toolName) {
+    case "list_requests":
+    case "get_request_context":
+    case "get_task_workflow":
+    case "workflow_command":
+      return nativeMcpToolCall(toolName, args);
     case "list_projects":
       return restJson("/api/projects");
     case "get_project":

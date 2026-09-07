@@ -12,11 +12,13 @@ command shown. If a number here disagrees with the code, the code wins — re-de
 
 ## Contents
 
+- [Request workflows](request-workflow.md) — integrated idea/brief/plan/task/result graph, shared services and MCP contracts
+
 - [Runtime shape](#runtime-shape)
 - [Entity model](#entity-model)
 - [The write path & audit boundary](#the-write-path--audit-boundary)
-- [REST surface (60 endpoints)](#rest-surface-60-endpoints)
-- [MCP surface (28 native / 50 wrapper)](#mcp-surface-28-native--50-wrapper)
+- [REST surface (65 endpoints)](#rest-surface-65-endpoints)
+- [MCP surface (33 native / 54 wrapper)](#mcp-surface-33-native--54-wrapper)
 - [Who owns what](#who-owns-what)
 - [Running it locally](#running-it-locally)
   - [Keeping it running: the scheduled task](#keeping-it-running-the-scheduled-task)
@@ -35,9 +37,9 @@ service mesh, no message bus, no container, and no build pipeline to reason abou
 ```mermaid
 flowchart TD
     H["Human"] -->|"kanban board, outline, ideas, memory map"| UI["Blazor Server<br/>Components/ (27 .razor, 6 routes)"]
-    A["AI agent"] -->|"JSON-RPC over stdio"| NODE["Node MCP wrapper<br/>scripts/mcp-server.mjs (50 tools)"]
-    A -->|"JSON-RPC over HTTP"| NATIVE["Native in-process MCP<br/>POST /mcp (28 tools)"]
-    A -->|"HTTP / JSON"| REST["REST minimal API<br/>ApiEndpoints.cs + AdminEndpoints.cs (60)"]
+    A["AI agent"] -->|"JSON-RPC over stdio"| NODE["Node MCP wrapper<br/>scripts/mcp-server.mjs (54 tools)"]
+    A -->|"JSON-RPC over HTTP"| NATIVE["Native in-process MCP<br/>POST /mcp (33 tools)"]
+    A -->|"HTTP / JSON"| REST["REST minimal API<br/>ApiEndpoints.cs + AdminEndpoints.cs + WorkflowEndpoints.cs (65)"]
     NODE -->|"HTTP"| REST
 
     UI --> EF
@@ -143,7 +145,9 @@ grep -rln 'ITaskService\|IIdeaService' src/KanbanFlow/Components/
 
 ---
 
-## REST surface (60 endpoints)
+## REST surface (65 endpoints)
+
+The five additive workflow routes are documented with complete typed payloads in [the request workflow reference](request-workflow.md#mcp-and-rest-reference) and [workflows.http](../src/KanbanFlow/Requests/workflows.http). The original routes below remain available.
 
 ```bash
 grep -cE '\.Map(Get|Post|Put|Patch|Delete)\(' src/KanbanFlow/ApiEndpoints.cs    # 55
@@ -240,7 +244,9 @@ Plus `GET /openapi.json` in `Program.cs`, which 302s to `/openapi/v1.json`.
 
 ---
 
-## MCP surface (28 native / 50 wrapper)
+## MCP surface (33 native / 54 wrapper)
+
+September 6, 2026 transport discovery verified 33 native and 54 wrapper tools. Both expose `list_requests`, `get_request_context`, `get_task_workflow` and `workflow_command`; native additionally gained `update_task`, and `get_task` now includes comments. See the [workflow contract](request-workflow.md#mcp-and-rest-reference). The original inventory below describes the earlier surface.
 
 Two MCP servers ship, and they are **not** at parity. Tracked in
 [#231](https://github.com/joelfuller2016/KanbanFlow-v2/issues/231).
@@ -549,8 +555,8 @@ reachable from both REST and MCP.
 
 | # | Requirement | Status |
 |---|---|---|
-| R-2.1 | Full REST CRUD for every entity. | ⚠️ 60 endpoints, but not *full* CRUD everywhere: `TaskComment` has create/list/delete and **no update route**, and `ActivityEvent` is read-only by design (append-only, R-7.3) |
-| R-2.2 | Every REST capability has at least one MCP tool. | ❌ native 28, wrapper 50 — neither covers requirements (#231) |
+| R-2.1 | Full REST CRUD for every entity. | ⚠️ 65 endpoints, but not *full* CRUD everywhere: `TaskComment` has create/list/delete and **no update route**, and `ActivityEvent` is read-only by design (append-only, R-7.3) |
+| R-2.2 | Every REST capability has at least one MCP tool. | ❌ native 33, wrapper 54 — neither covers requirements (#231) |
 | R-2.3 | UI mutations go through the same service layer as REST. | ✅ #88 closed; components call `ITaskService`/`IIdeaService` |
 | R-2.4 | All entity mutations produce an `ActivityEvent`. | ❌ tasks + ideas only (#149) |
 | R-2.5 | Project-boundary integrity across features, tasks, requirements. | ✅ #82 and #83 both closed — `CrossProjectReassignmentException` (`TaskService.cs:166`) plus 422 on cross-project requirement links |

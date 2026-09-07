@@ -72,7 +72,7 @@ public interface IIdeaService
     /// </summary>
     /// <exception cref="IdeaNotFoundException">The idea does not exist.</exception>
     /// <exception cref="ValidationException">The idea is already promoted.</exception>
-    Task<IdeaPromoteResult> PromoteAsync(int ideaId, string? actor, CancellationToken ct = default);
+    Task<IdeaPromoteResult> PromoteAsync(int ideaId, string? actor, CancellationToken ct = default, int? existingProjectId = null);
 }
 
 /// <summary>Create payload for <see cref="IIdeaService.CreateAsync"/>.</summary>

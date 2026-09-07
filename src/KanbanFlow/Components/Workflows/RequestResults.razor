@@ -1,0 +1,24 @@
+<h3 class="h5">Reported results and review</h3>
+<p class="small text-muted">Record what was checked and the source revision. These are attributed reports. Accept each task's current report after reviewing its checks, then write the project conclusion.</p>
+@foreach (var task in Context.Tasks)
+{
+    <TaskResultReview @key="task.Id" Task="task" Version="Context.Version" OnSubmit="OnSubmit" />
+}
+<form @onsubmit="Conclude" @onsubmit:preventDefault class="mt-3">
+    <label for="request-conclusion" class="form-label">Conclusion</label><textarea id="request-conclusion" class="form-control mb-2" rows="3" @bind="conclusion" maxlength="50000" required></textarea>
+    <label for="request-limitations" class="form-label">Limitations and remaining work</label><textarea id="request-limitations" class="form-control mb-2" rows="2" @bind="limitations" maxlength="10000"></textarea>
+    <button class="btn btn-primary" disabled="@(Context.Tasks.Count == 0)">Record completed conclusion</button>
+</form>
+@foreach (var result in Context.Results.Reverse())
+{
+    <article class="border rounded p-3 mt-3 bg-white"><strong>@(result.Current ? "Current conclusion" : "Historical conclusion · work has changed")</strong>
+        <div class="small text-muted">@result.Author · @result.CreatedAt.ToLocalTime().ToString("g")</div>
+        <MarkdownContent Markdown="@result.Conclusion" /><p><strong>Limitations:</strong> @result.Limitations</p>
+    </article>
+}
+@code {
+    [Parameter, EditorRequired] public WorkflowContext Context { get; set; } = null!;
+    [Parameter] public EventCallback<WorkflowSubmission> OnSubmit { get; set; }
+    private string conclusion = "", limitations = "";
+    private Task Conclude() => OnSubmit.InvokeAsync(new WorkflowSubmission(new() { Operation = "conclude", Text = conclusion, Limitations = limitations }));
+}

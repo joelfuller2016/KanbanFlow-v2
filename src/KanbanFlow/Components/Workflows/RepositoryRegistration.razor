@@ -1,0 +1,21 @@
+@if (Context.ProjectId is not null)
+{
+    <details class="mb-3"><summary>Project repositories (@Context.Repositories.Count)</summary>
+        @foreach (var repository in Context.Repositories) { <div class="small mt-2"><strong>@repository.Name</strong> <code>@repository.LocalPath</code></div> }
+        <form class="border rounded p-2 mt-2" @onsubmit="Register" @onsubmit:preventDefault>
+            <label for="repository-name" class="form-label">Repository name</label><input id="repository-name" class="form-control mb-2" @bind="name" required maxlength="120" />
+            <label for="repository-path" class="form-label">Existing Git repository under Projects · absolute path</label><input id="repository-path" class="form-control mb-2" @bind="path" required />
+            <button class="btn btn-sm btn-outline-primary">Register repository</button>
+        </form>
+    </details>
+}
+@code {
+    [Parameter, EditorRequired] public WorkflowContext Context { get; set; } = null!;
+    [Parameter] public EventCallback<WorkflowSubmission> OnSubmit { get; set; }
+    private string name = "", path = "";
+    private async Task Register()
+    {
+        var submission = new WorkflowSubmission(new() { Operation = "register_repository", ProjectId = Context.ProjectId, Name = name, Path = path });
+        await OnSubmit.InvokeAsync(submission); if (submission.Succeeded) name = path = "";
+    }
+}

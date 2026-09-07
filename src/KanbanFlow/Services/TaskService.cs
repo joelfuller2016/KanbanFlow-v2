@@ -157,6 +157,14 @@ public sealed class TaskService(
     public async Task<TaskItem> ChangeStatusAsync(int taskId, WorkStatus newStatus, string? actor, CancellationToken ct = default, string? overrideReason = null)
     {
         await using var db = await dbFactory.CreateDbContextAsync(ct);
+        await using var tx = newStatus == WorkStatus.Done ? await db.Database.BeginTransactionAsync(ct) : null;
+        var task = await ChangeStatusInContextAsync(db, taskId, newStatus, actor, ct, overrideReason);
+        if (tx is not null) await tx.CommitAsync(ct);
+        return task;
+    }
+
+    internal static async Task<TaskItem> ChangeStatusInContextAsync(AppDbContext db, int taskId, WorkStatus newStatus, string? actor, CancellationToken ct, string? overrideReason = null)
+    {
 
         // Serialize the Definition-of-Done read-modify-write. The gate reads AcceptanceCriteria
         // and the status write happens at SaveChanges; without a lock spanning both, a concurrent
@@ -170,9 +178,6 @@ public sealed class TaskService(
         // the lock unconditionally would make every Backlog/Todo/Review move queue behind any other
         // writer and risk SQLITE_BUSY on a transition the gate never even inspects. A non-Done
         // transition cannot read criteria (the gate returns immediately), so it needs no span.
-        await using var tx = newStatus == WorkStatus.Done
-            ? await db.Database.BeginTransactionAsync(ct)
-            : null;
 
         var task = await db.Tasks
             .Include(t => t.Feature)
@@ -221,7 +226,6 @@ public sealed class TaskService(
             AddDoneOverrideRecords(db, task, task.Feature.ProjectId, actor, overrideReason!, overriddenCriteria);
 
         await db.SaveChangesAsync(ct);
-        if (tx is not null) await tx.CommitAsync(ct);
         return task;
     }
 
@@ -726,6 +730,14 @@ public sealed class TaskService(
             ? await db.Database.BeginTransactionAsync(ct)
             : null;
 
+        var result = await UpdateInContextAsync(db, taskId, dto, actor, ct);
+        if (tx is not null) await tx.CommitAsync(ct);
+        return result;
+    }
+
+    internal static async Task<TaskItem> UpdateInContextAsync(AppDbContext db, int taskId, TaskUpdate dto, string? actor, CancellationToken ct)
+    {
+
         var task = await db.Tasks
             .Include(t => t.Feature)
             .FirstOrDefaultAsync(t => t.Id == taskId, ct);
@@ -867,7 +879,6 @@ public sealed class TaskService(
         }
 
         await db.SaveChangesAsync(ct);
-        if (tx is not null) await tx.CommitAsync(ct);
         return task;
     }
 
@@ -875,9 +886,17 @@ public sealed class TaskService(
 
     public async Task<TaskItem> CreateAsync(TaskCreate dto, string? actor, CancellationToken ct = default)
     {
+        await using var db = await dbFactory.CreateDbContextAsync(ct);
+        await using var tx = await db.Database.BeginTransactionAsync(ct);
+        var task = await CreateInContextAsync(db, dto, actor, ct);
+        await tx.CommitAsync(ct);
+        return task;
+    }
+
+    internal static async Task<TaskItem> CreateInContextAsync(AppDbContext db, TaskCreate dto, string? actor, CancellationToken ct)
+    {
         ArgumentNullException.ThrowIfNull(dto);
 
-        await using var db = await dbFactory.CreateDbContextAsync(ct);
 
         // Validate up-front so we never persist a half-built task. Service is the trust
         // boundary — REST, MCP, and Blazor direct-callers all flow through here (#88).
@@ -926,7 +945,6 @@ public sealed class TaskService(
         // activity event), the second persists those audit rows. Wrap both in one
         // transaction so a failure can't leave a task without its Created comment /
         // TaskCreated event. EF Core + SQLite supports explicit transactions.
-        await using var tx = await db.Database.BeginTransactionAsync(ct);
 
         db.Tasks.Add(task);
         // First save assigns task.Id so the comment + activity event can reference it.
@@ -949,7 +967,6 @@ public sealed class TaskService(
             $"Task '{task.Name}' created");
 
         await db.SaveChangesAsync(ct);
-        await tx.CommitAsync(ct);
         return task;
     }
 
@@ -1324,7 +1341,11 @@ public sealed class TaskService(
     public async Task<TaskComment> AddCommentAsync(int taskId, string text, string? author, CommentType type, string? actor, CancellationToken ct = default)
     {
         await using var db = await dbFactory.CreateDbContextAsync(ct);
+        return await AddCommentInContextAsync(db, taskId, text, author, type, actor, ct);
+    }
 
+    internal static async Task<TaskComment> AddCommentInContextAsync(AppDbContext db, int taskId, string text, string? author, CommentType type, string? actor, CancellationToken ct)
+    {
         // Resolve project (and prove the task exists) in one round-trip.
         var projectId = await db.Tasks
             .Where(t => t.Id == taskId)
@@ -1338,7 +1359,7 @@ public sealed class TaskService(
 
         // Only user-facing comment types may be authored directly; system types
         // (StatusChange/Created/FeatureChange/…) are emitted by the service itself.
-        if (!IsUserCommentType(type))
+        if (!AllowedUserCommentTypes.Contains(type.ToString()))
             throw new ValidationException(
                 $"Invalid comment type '{type}'. Allowed values: {string.Join(", ", AllowedUserCommentTypes)}.");
 

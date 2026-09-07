@@ -4,6 +4,8 @@ using KanbanFlow;
 using KanbanFlow.Components;
 using KanbanFlow.Data;
 using KanbanFlow.Services;
+using KanbanFlow.Services.Workflows;
+using KanbanFlow.Models.Workflows;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.AI;
 using OpenAI;
@@ -27,6 +29,14 @@ builder.Services.AddSingleton(dbResolution);
 
 builder.Services.AddDbContextFactory<AppDbContext>(
     options => options.UseSqlite(DbPathResolver.ToConnectionString(dbResolution.Path)));
+builder.Services.AddSingleton(TimeProvider.System);
+builder.Services.AddSingleton(new WorkflowOptions
+{
+    ProjectsRoot = builder.Configuration["Workflow:ProjectsRoot"]
+        ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Projects")
+});
+builder.Services.AddScoped<WorkspaceService>();
+builder.Services.AddScoped<IWorkspaceService>(sp => sp.GetRequiredService<WorkspaceService>());
 
 // Claim TTL: parse and validate once at startup so a malformed or non-positive value is rejected
 // before the first request, not on it. All consumers inject ClaimTtlSetting — never re-parse from
@@ -168,6 +178,7 @@ using (var scope = app.Services.CreateScope())
     EnsureAcceptanceCriteriaTable(db);
     EnsureActivityEventTable(db);
     EnsureIdeaTable(db);
+    WorkflowSchema.EnsureTables(db);
     SchemaPatcher.EnsureMemoryTables(db);
     SchemaPatcher.EnsureMemoryFtsTable(db);
     SeedData.Initialize(db);
@@ -194,6 +205,7 @@ app.MapGet("/openapi.json", (HttpContext ctx) =>
 });
 
 app.MapApiEndpoints();
+app.MapWorkflowEndpoints();
 app.MapAdminEndpoints();
 
 // Native MCP server (Streamable HTTP), prototype — agents connect at POST /mcp.

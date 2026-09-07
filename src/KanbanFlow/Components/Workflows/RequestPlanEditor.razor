@@ -1,0 +1,128 @@
+<h3 class="h5">Task plan</h3>
+<p class="small text-muted">Define the work, repository, files and checks. Publishing creates cards in this project's existing board. Keep task identities when revising a plan.</p>
+@if (version != Context.Version || Context.Tasks.Any(t => !taskBaselines.TryGetValue(t.TaskId, out var token) || token != t.EditToken))
+{
+    <div class="alert alert-info">The saved request changed. Review its current tasks and history before combining your draft with it.
+        <button class="btn btn-sm btn-outline-primary ms-2" @onclick="Rebase">Keep draft and use reviewed current version</button>
+    </div>
+}
+<RepositoryRegistration Context="Context" OnSubmit="OnSubmit" />
+@if (Context.Briefs.Count == 0) { <p class="alert alert-info">Save the improved brief before saving a task plan.</p> }
+<form @onsubmit="Save" @onsubmit:preventDefault>
+    @foreach (var draft in drafts)
+    {
+        <fieldset class="border rounded p-3 mb-3 bg-white" @key="draft.Id">
+            <legend class="float-none w-auto fs-6 px-1">Task @(drafts.IndexOf(draft) + 1)</legend>
+            <label class="form-label" for="title-@draft.Id">Title</label><input id="title-@draft.Id" class="form-control mb-2" @bind="draft.Title" maxlength="200" required />
+            <label class="form-label" for="description-@draft.Id">Work to do</label><textarea id="description-@draft.Id" class="form-control mb-2" rows="2" @bind="draft.Description" maxlength="10000"></textarea>
+            <label class="form-label" for="acceptance-@draft.Id">Acceptance checks · one per line</label><textarea id="acceptance-@draft.Id" class="form-control mb-2" rows="3" @bind="draft.Acceptance" maxlength="10000" required></textarea>
+            @if (Context.Tasks.FirstOrDefault(t => t.DraftId == draft.Id) is { } boardTask && Differs(draft, boardTask))
+            {
+                <details class="alert alert-info"><summary>Current board fields differ from this draft · review before saving</summary>
+                    <strong>@boardTask.Name</strong><MarkdownContent Markdown="@boardTask.Description" />
+                    <div>@boardTask.Priority · @(boardTask.Assignee ?? "Unassigned")</div>
+                    <ul>@foreach (var check in boardTask.AcceptanceCriteria) { <li>@check.Text</li> }</ul>
+                    <button type="button" class="btn btn-sm btn-outline-primary" @onclick="() => CopyBoardFields(draft, boardTask)">Copy current board fields into draft</button>
+                </details>
+            }
+            <div class="row g-2 mb-2">
+                <div class="col-md-6"><label class="form-label" for="repo-@draft.Id">Repository</label><select id="repo-@draft.Id" class="form-select" @bind="draft.RepositoryId">
+                    <option value="">No code repository</option>@foreach (var repository in Context.Repositories) { <option value="@repository.Id">@repository.Name</option> }
+                </select></div>
+                <div class="col-md-3"><label class="form-label" for="priority-@draft.Id">Priority</label><select id="priority-@draft.Id" class="form-select" @bind="draft.Priority">
+                    @foreach (var priority in Enum.GetValues<TaskPriority>()) { <option value="@priority">@priority</option> }
+                </select></div>
+                <div class="col-md-3"><label class="form-label" for="assignee-@draft.Id">Assignee</label><input id="assignee-@draft.Id" class="form-control" @bind="draft.Assignee" maxlength="200" /></div>
+            </div>
+            <label class="form-label" for="files-@draft.Id">Repository-relative file references · one per line</label><textarea id="files-@draft.Id" class="form-control mb-2" rows="2" @bind="draft.Files" maxlength="10000"></textarea>
+            <div class="small text-muted mb-2">References describe intended scope. Saving them does not inspect files or run code.</div>
+            @if (drafts.Count > 1)
+            {
+                <div class="fw-semibold small">Depends on</div>
+                @foreach (var other in drafts.Where(d => d.Id != draft.Id))
+                {
+                    <label class="d-block"><input type="checkbox" checked="@draft.Dependencies.Contains(other.Id)" @onchange="e => Dependency(draft, other.Id, e)" /> @(string.IsNullOrWhiteSpace(other.Title) ? "Untitled task" : other.Title)</label>
+                }
+            }
+            @if (!Context.Tasks.Any(t => t.DraftId == draft.Id)) { <button type="button" class="btn btn-sm btn-outline-danger mt-2" @onclick="() => Remove(draft)">Remove draft</button> }
+        </fieldset>
+    }
+    <div class="d-flex flex-wrap gap-2">
+        <button type="button" class="btn btn-outline-primary" @onclick="() => drafts.Add(new())" disabled="@(drafts.Count >= 100)">Add task draft</button>
+        <button class="btn btn-primary" disabled="@(Context.Briefs.Count == 0)">Save plan revision</button>
+        <button type="button" class="btn btn-link" @onclick="LoadSaved">Replace fields with latest saved plan</button>
+    </div>
+    <div class="small text-muted mt-2">Editing from request version @version</div>
+</form>
+@if (Context.Plans.LastOrDefault() is { } plan)
+{
+    <div class="border rounded p-3 mt-3">
+        <strong>Saved plan @plan.Number · @plan.Tasks.Length tasks</strong>
+        <span class="ms-2">@(plan.PublishedAt is null ? "Draft" : "Published to board")</span>
+        @if (plan.PublishedAt is null) { <button class="btn btn-success ms-3" disabled="@(Context.ProjectId is null)" @onclick="() => Publish(plan.Id)">Publish saved plan to board</button> }
+    </div>
+}
+@if (Context.Tasks.Count > 0)
+{
+    <ul class="list-group mt-3">@foreach (var task in Context.Tasks) { <li class="list-group-item d-flex justify-content-between"><a href="@task.Url">#@task.TaskId @task.Name</a><span>@task.Status</span></li> }</ul>
+}
+<details class="mt-3"><summary>Plan history (@Context.Plans.Count)</summary>
+    @foreach (var historicalPlan in Context.Plans.Reverse())
+    {
+        <details class="mt-2"><summary>Version @historicalPlan.Number · @(historicalPlan.PublishedAt is null ? "draft" : "published") · @historicalPlan.CreatedAt.ToLocalTime().ToString("g")</summary>
+            @foreach (var task in historicalPlan.Tasks) { <article class="border-top p-2"><strong>@task.Title</strong><MarkdownContent Markdown="@($"{task.Description}\n\nChecks: {task.Acceptance}\n\nFiles: {task.FileReferences}")" /></article> }
+        </details>
+    }
+</details>
+@code {
+    [Parameter, EditorRequired] public WorkflowContext Context { get; set; } = null!;
+    [Parameter] public EventCallback<WorkflowSubmission> OnSubmit { get; set; }
+    private List<EditableTask> drafts = [];
+    private int version;
+    private Dictionary<int, string> taskBaselines = [];
+    protected override void OnInitialized() => LoadSaved();
+    private void LoadSaved()
+    {
+        Rebase();
+        drafts = (Context.Plans.LastOrDefault()?.Tasks ?? []).Select(d => new EditableTask { Id = d.Id, Title = d.Title, Description = d.Description,
+            Acceptance = d.Acceptance, RepositoryId = d.RepositoryId, Files = d.FileReferences, Priority = d.Priority, Assignee = d.Assignee, Dependencies = d.Dependencies.ToHashSet() }).ToList();
+    }
+    private void Rebase() { version = Context.Version; taskBaselines = Context.Tasks.ToDictionary(t => t.TaskId, t => t.EditToken); }
+    private static bool Differs(EditableTask draft, WorkflowTaskContext task) => draft.Title.Trim() != task.Name || draft.Description.Trim() != (task.Description ?? "")
+        || draft.Acceptance.Trim() != string.Join('\n', task.AcceptanceCriteria.Select(c => c.Text)) || draft.Priority.ToString() != task.Priority || draft.Assignee.Trim() != (task.Assignee ?? "");
+    private static void CopyBoardFields(EditableTask draft, WorkflowTaskContext task)
+    {
+        draft.Title = task.Name; draft.Description = task.Description ?? ""; draft.Acceptance = string.Join('\n', task.AcceptanceCriteria.Select(c => c.Text));
+        draft.Priority = Enum.Parse<TaskPriority>(task.Priority); draft.Assignee = task.Assignee ?? "";
+    }
+    private void Remove(EditableTask draft) { drafts.Remove(draft); foreach (var other in drafts) other.Dependencies.Remove(draft.Id); }
+    private static void Dependency(EditableTask draft, Guid id, ChangeEventArgs e) { if (e.Value is true) draft.Dependencies.Add(id); else draft.Dependencies.Remove(id); }
+    private async Task Save()
+    {
+        var submission = new WorkflowSubmission(new() { Operation = "save_plan", ExpectedVersion = version, TaskBaselines = taskBaselines,
+            Tasks = drafts.Select(d => new TaskDraft(d.Id, d.Title, d.Description, d.Acceptance, d.RepositoryId, d.Files, d.Priority, d.Assignee, d.Dependencies.Order().ToArray())).ToArray() });
+        await OnSubmit.InvokeAsync(submission); if (submission.Succeeded) AdoptSavedTokens(submission);
+    }
+    private async Task Publish(Guid id)
+    {
+        var submission = new WorkflowSubmission(new() { Operation = "publish_plan", PlanId = id });
+        await OnSubmit.InvokeAsync(submission); if (submission.Succeeded) AdoptSavedTokens(submission);
+    }
+    private void AdoptSavedTokens(WorkflowSubmission submission)
+    {
+        version = submission.Version!.Value;
+        taskBaselines = submission.Context!.Tasks.ToDictionary(t => t.TaskId, t => t.EditToken);
+    }
+    private sealed class EditableTask
+    {
+        public Guid Id { get; set; } = Guid.NewGuid();
+        public string Title { get; set; } = "";
+        public string Description { get; set; } = "";
+        public string Acceptance { get; set; } = "";
+        public int? RepositoryId { get; set; }
+        public string Files { get; set; } = "";
+        public TaskPriority Priority { get; set; } = TaskPriority.Medium;
+        public string Assignee { get; set; } = "";
+        public HashSet<Guid> Dependencies { get; set; } = [];
+    }
+}

@@ -6,6 +6,11 @@
 
 <PageTitle>Ideas - KanbanFlow</PageTitle>
 
+@if (WorkflowIdeaId is not null)
+{
+    <RequestWorkspace IdeaId="WorkflowIdeaId" OnChanged="LoadIdeas" />
+}
+
 <div class="d-flex justify-content-between align-items-center mb-4">
     <h1 class="mb-0">Ideas</h1>
     <button class="btn btn-primary" @onclick="OpenCreateModal" data-testid="new-idea-button">
@@ -290,6 +295,7 @@ else
 }
 
 @code {
+    [SupplyParameterFromQuery(Name = "idea")] public int? WorkflowIdeaId { get; set; }
     // ── Idea list + filters ──
     private List<Idea>? ideas;
     private string? searchFilter;

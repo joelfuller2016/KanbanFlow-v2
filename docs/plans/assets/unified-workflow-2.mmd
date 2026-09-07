@@ -1,0 +1,12 @@
+erDiagram
+  Idea ||--o| WorkRequest : "one workflow record per idea"
+  Project ||--o{ Idea : "existing promotion link"
+  WorkRequest ||--o{ RequestMessage : "original and conversation"
+  WorkRequest ||--o{ BriefRevision : refines
+  WorkRequest ||--o{ PlanVersion : plans
+  PlanVersion ||--o{ PlannedTask : publishes
+  PlannedTask ||--|| TaskItem : "same existing card"
+  TaskItem ||--o{ TaskComment : "existing visible history"
+  PlannedTask ||--o{ TaskEvidence : "reported checks"
+  WorkRequest ||--o{ RequestResult : concludes
+  Project ||--o{ ProjectRepository : "repository context"

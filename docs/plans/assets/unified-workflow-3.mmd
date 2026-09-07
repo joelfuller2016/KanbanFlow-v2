@@ -1,0 +1,20 @@
+sequenceDiagram
+  participant A as Human or MCP client
+  participant I as Existing idea/workflow service
+  participant T as Existing task service
+  participant D as One SQLite database
+  participant B as Existing project board
+  A->>I: Capture original request / edit brief
+  I->>D: Idea + original + revision + audit
+  A->>I: Promote or attach to existing project
+  I->>D: Existing promotion link and request link atomically
+  A->>I: Save and publish validated task plan
+  I->>T: Create/update real tasks in shared transaction
+  T->>D: Tasks + criteria + dependencies + comments/audit + receipt
+  D-->>B: Same TaskItem IDs and WorkStatus
+  A->>T: Claim / update / move / comment
+  T->>D: Existing validation and audit path
+  A->>I: Report result / review / conclude
+  I->>D: Reported evidence and retained conclusion
+  A->>I: Retrieve complete work context
+  D-->>A: Original through current tasks and results

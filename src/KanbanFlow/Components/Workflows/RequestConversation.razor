@@ -1,0 +1,23 @@
+<h3 class="h5">Updates and decisions</h3>
+<form @onsubmit="Save" @onsubmit:preventDefault class="mb-3">
+    <label for="message-kind" class="form-label">Type</label><select id="message-kind" class="form-select mb-2" @bind="kind">
+        @foreach (var value in kinds) { <option value="@value">@value</option> }
+    </select>
+    <label for="request-message" class="form-label">Message</label><textarea id="request-message" class="form-control mb-2" rows="3" @bind="text" maxlength="50000" required></textarea>
+    <button class="btn btn-primary">Add update</button>
+</form>
+@foreach (var message in Context.Messages.Where(m => m.Kind != "original").Reverse())
+{
+    <article class="border rounded bg-white p-3 mb-2"><div class="small text-muted mb-2">@message.Kind · @message.Author · @message.CreatedAt.ToLocalTime().ToString("g")</div><MarkdownContent Markdown="@message.Text" /></article>
+}
+@code {
+    [Parameter, EditorRequired] public WorkflowContext Context { get; set; } = null!;
+    [Parameter] public EventCallback<WorkflowSubmission> OnSubmit { get; set; }
+    private string kind = "clarification", text = "";
+    private readonly string[] kinds = ["clarification", "assistant-report", "progress", "question", "decision"];
+    private async Task Save()
+    {
+        var submission = new WorkflowSubmission(new() { Operation = "add_message", Kind = kind, Text = text });
+        await OnSubmit.InvokeAsync(submission); if (submission.Succeeded) text = "";
+    }
+}

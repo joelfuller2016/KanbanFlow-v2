@@ -44,6 +44,21 @@ public static class KanbanMcpTools
     /// </remarks>
     private const int MaxCriterionTextLength = 1000;
 
+    [McpServerTool(Name = "update_task")]
+    [Description("Edit an existing board task's fields through the same audited service as the human task editor. Omitted fields stay unchanged. Done still requires completed acceptance criteria. Read get_task_workflow afterward to see whether earlier evidence became historical.")]
+    public static async Task<TaskDetailResult> UpdateTask(ITaskService service, int taskId, TaskUpdate update,
+        string? actor = null, CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            var task = await service.UpdateAsync(taskId, update, actor ?? DefaultActor, cancellationToken);
+            return new(task.Id, task.FeatureId, task.Name, task.Description, task.Status.ToString(), task.Priority.ToString(), task.Assignee, task.SortOrder, "Task updated");
+        }
+        catch (TaskNotFoundException ex) { throw new McpException(ex.Message); }
+        catch (DefinitionOfDoneNotMetException ex) { throw new McpException(ex.Message); }
+        catch (ValidationException ex) { throw new McpException(ex.Message); }
+    }
+
     [McpServerTool(Name = "list_projects")]
     [Description("List all projects with id, name, description, goals, and counts of features and tasks. Start here to discover which project to work in.")]
     public static async Task<IReadOnlyList<ProjectSummary>> ListProjects(
@@ -137,6 +152,7 @@ public static class KanbanMcpTools
             .Include(t => t.AcceptanceCriteria)
             .Include(t => t.Subtasks)
             .Include(t => t.Dependencies)
+            .Include(t => t.Comments)
             .AsSplitQuery()
             .FirstOrDefaultAsync(t => t.Id == taskId, cancellationToken)
             ?? throw new McpException($"Task {taskId} not found.");
@@ -149,7 +165,9 @@ public static class KanbanMcpTools
                 .Select(c => new ChecklistItem(c.Id, c.Text, c.Completed)).ToList(),
             task.Subtasks.OrderBy(s => s.SortOrder).ThenBy(s => s.Id)
                 .Select(s => new ChecklistItem(s.Id, s.Text, s.Completed)).ToList(),
-            task.Dependencies.Select(d => d.DependsOnTaskItemId).OrderBy(id => id).ToList());
+            task.Dependencies.Select(d => d.DependsOnTaskItemId).OrderBy(id => id).ToList(),
+            task.Comments.OrderBy(c => c.CreatedAt).ThenBy(c => c.Id)
+                .Select(c => new TaskCommentDetail(c.Id, c.Text, c.Author, c.Type.ToString(), c.CreatedAt)).ToList());
     }
 
     /// <summary>
@@ -1248,7 +1266,8 @@ public sealed record FeatureNode(int Id, int? ParentFeatureId, string Name, stri
 public sealed record TaskNode(int Id, int FeatureId, string Name, string Status, string Priority, string? Assignee, string? ClaimedBy);
 public sealed record ProjectContext(int Id, string Name, string? Description, string? Goals, string? Readme, IReadOnlyList<FeatureNode> Features, IReadOnlyList<TaskNode> Tasks);
 public sealed record ChecklistItem(int Id, string Text, bool Completed);
-public sealed record TaskDetail(int Id, int FeatureId, string Name, string? Description, string Status, string Priority, string? Assignee, string? ClaimedBy, IReadOnlyList<ChecklistItem> AcceptanceCriteria, IReadOnlyList<ChecklistItem> Subtasks, IReadOnlyList<int> DependsOnTaskIds);
+public sealed record TaskDetail(int Id, int FeatureId, string Name, string? Description, string Status, string Priority, string? Assignee, string? ClaimedBy, IReadOnlyList<ChecklistItem> AcceptanceCriteria, IReadOnlyList<ChecklistItem> Subtasks, IReadOnlyList<int> DependsOnTaskIds, IReadOnlyList<TaskCommentDetail>? Comments = null);
+public sealed record TaskCommentDetail(int Id, string Text, string? Author, string Type, DateTime CreatedAt);
 public sealed record NextTask(int Id, string Name, string Status, string Priority, string? ClaimedBy, string Reason);
 public sealed record TaskStatusResult(int Id, string Name, string Status, string Message);
 public sealed record TaskDetailResult(int Id, int FeatureId, string Name, string? Description, string Status, string Priority, string? Assignee, double SortOrder, string Message);

@@ -1,0 +1,144 @@
+@inject WorkspaceService Workflow
+@inject WorkflowOptions Options
+
+<details class="border-bottom bg-light" open="@(IdeaId is not null || RequestId is not null)" data-testid="request-workspace" data-interactive="@interactiveReady.ToString().ToLowerInvariant()">
+    <summary class="px-3 py-2 fw-semibold">Requests &amp; plans <span class="text-muted fw-normal">· @requests.Count linked requests</span></summary>
+    <div class="p-3" style="max-height: 55vh; overflow:auto">
+        <fieldset disabled="@(!interactiveReady)">
+        <div class="d-flex flex-wrap gap-2 align-items-end mb-3">
+            @if (IdeaId is null)
+            {
+                <div class="flex-grow-1"><label class="form-label" for="workflow-select">Request</label>
+                    <select id="workflow-select" class="form-select" value="@current?.Id" @onchange="SelectRequest">
+                        <option value="">Choose a request</option>
+                        @foreach (var request in requests) { <option value="@request.Id">@request.Title · @request.DoneCount/@request.TaskCount done @(request.Archived ? "(archived)" : "")</option> }
+                    </select>
+                </div>
+                <button class="btn btn-outline-primary" @onclick="() => creating = !creating">New request</button>
+            }
+            <button class="btn btn-outline-secondary" @onclick="Refresh" disabled="@busy">Refresh saved details</button>
+            <div><label class="form-label small" for="workflow-actor">Author</label><input id="workflow-actor" class="form-control" @bind="actor" maxlength="200" /></div>
+        </div>
+        @if (error is not null) { <div role="alert" class="alert alert-danger">@error</div> }
+        @if (notice is not null) { <div role="status" class="alert alert-success py-2">@notice</div> }
+        @if (creating)
+        {
+            <form @onsubmit="Capture" @onsubmit:preventDefault class="mb-3">
+                <label class="form-label" for="request-title">Request title</label><input id="request-title" class="form-control mb-2" @bind="title" maxlength="200" required />
+                <label class="form-label" for="request-original">Your actual request</label><textarea id="request-original" class="form-control mb-2" rows="4" @bind="original" maxlength="50000" required></textarea>
+                <button class="btn btn-primary" disabled="@busy">Capture request</button>
+            </form>
+        }
+        @if (current is null && IdeaId is not null)
+        {
+            <p>This existing idea can keep its request history here. Its current notes will be labeled as a legacy snapshot.</p>
+            <button class="btn btn-primary" disabled="@busy" @onclick="Adopt">Start request history</button>
+        }
+        @if (current is not null)
+        {
+            <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-2">
+                <div><strong>@current.Title</strong><span class="text-muted ms-2">Idea #@current.IdeaId · @current.IdeaStatus · version @current.Version</span></div>
+                @if (current.BoardUrl is not null) { <a href="@current.BoardUrl">Open project board</a> }
+            </div>
+            <p class="small text-muted">Original request → improved brief → task plan → board cards → reviewed results. Refresh reads AI updates while keeping your draft fields.</p>
+            @if (current.ProjectId is null)
+            {
+                <div class="d-flex gap-2 mb-3 align-items-end">
+                    <div class="flex-grow-1"><label for="request-project" class="form-label">Project</label><select id="request-project" class="form-select" @bind="attachProject">
+                        <option value="0">Choose an existing project</option>
+                        @foreach (var project in projects) { <option value="@project.Id">@project.Name</option> }
+                    </select></div>
+                    <button class="btn btn-outline-primary" @onclick="Attach" disabled="@(busy || attachProject == 0)">Promote into project</button>
+                    <button class="btn btn-outline-primary" @onclick="CreateProject" disabled="@busy">Create project from request</button>
+                </div>
+            }
+            @if (current.NeedsBriefReview && current.Briefs.Count > 0) { <p class="alert alert-info">New clarification or a decision needs review in the brief and plan before publishing or concluding.</p> }
+            <fieldset disabled="@busy">
+                <RequestDetails @key="current.Id" Context="current" OnSubmit="Submit" />
+            </fieldset>
+            <button class="btn btn-sm btn-outline-secondary mt-3" disabled="@busy" @onclick="Archive">@(current.Archived ? "Restore request" : "Archive request")</button>
+        }
+        </fieldset>
+    </div>
+</details>
+
+@code {
+    [Parameter] public int? ProjectId { get; set; }
+    [Parameter] public int? IdeaId { get; set; }
+    [Parameter] public Guid? RequestId { get; set; }
+    [Parameter] public EventCallback OnChanged { get; set; }
+    private List<RequestSummary> requests = [];
+    private List<KanbanFlow.Models.Workflows.ProjectSummary> projects = [];
+    private WorkflowContext? current;
+    private (int?, int?, Guid?) loaded;
+    private bool initialized, busy, creating, interactiveReady;
+    private string actor = "Human", title = "", original = "";
+    private string? error, notice;
+    private int attachProject;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        var scope = (ProjectId, IdeaId, RequestId);
+        if (!initialized || loaded != scope) { initialized = true; loaded = scope; current = null; await Refresh(); }
+    }
+    protected override void OnAfterRender(bool firstRender)
+    {
+        if (firstRender) { interactiveReady = true; StateHasChanged(); }
+    }
+    private async Task Refresh()
+    {
+        try
+        {
+            requests = await Workflow.RequestsAsync(ProjectId);
+            projects = await Workflow.ProjectsAsync();
+            var id = current?.Id ?? RequestId;
+            if (IdeaId is int ideaId) id = (await Workflow.GetForIdeaAsync(ideaId))?.Id;
+            current = id is Guid requestId ? await Workflow.ContextAsync(requestId) : null;
+            if (current is not null && ProjectId is int projectId && current.ProjectId != projectId) current = null;
+            error = null;
+        }
+        catch (Exception ex) when (ex is WorkflowException or InvalidOperationException) { error = ex.Message; }
+    }
+    private async Task SelectRequest(ChangeEventArgs e)
+    {
+        current = Guid.TryParse(e.Value?.ToString(), out var id) ? await Workflow.ContextAsync(id) : null;
+        error = notice = null;
+    }
+    private async Task Submit(WorkflowSubmission submission)
+    {
+        if (busy) return;
+        busy = true; error = notice = null;
+        try
+        {
+            var command = submission.Command;
+            command.Actor = actor; command.Key = string.IsNullOrEmpty(command.Key) ? Guid.NewGuid().ToString() : command.Key;
+            command.RequestId ??= current?.Id; command.ExpectedVersion ??= current?.Version;
+            var result = await Workflow.ExecuteAsync(command, Options);
+            if (result.RequestId is Guid id) current = await Workflow.ContextAsync(id);
+            await Refresh();
+            submission.Succeeded = true; submission.Version = result.Version; submission.Context = current; notice = "Saved to this board.";
+            await OnChanged.InvokeAsync();
+        }
+        catch (Exception ex) when (ex is WorkflowException or ValidationException or DefinitionOfDoneNotMetException or ProjectNotFoundException or IdeaNotFoundException)
+        { error = ex.Message; }
+        finally { busy = false; }
+    }
+    private async Task Capture()
+    {
+        var submission = new WorkflowSubmission(new() { Operation = "capture", Capture = new(title, original, ProjectId) });
+        await Submit(submission);
+        if (submission.Succeeded) { creating = false; title = original = ""; }
+    }
+    private Task Adopt() => Submit(new(new() { Operation = "adopt_idea", IdeaId = IdeaId }));
+    private Task Attach() => Submit(new(new() { Operation = "attach_project", ProjectId = attachProject }));
+    private Task Archive() => Submit(new(new() { Operation = "archive", Archived = !current!.Archived }));
+    private async Task CreateProject()
+    {
+        try
+        {
+            var id = await Workflow.CreateProjectAsync(current!.Title, actor, $"request-project-{current.Id}");
+            attachProject = id; await Attach();
+        }
+        catch (WorkflowException ex) { error = ex.Message; }
+    }
+}
