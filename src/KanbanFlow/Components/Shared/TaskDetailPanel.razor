@@ -505,6 +505,7 @@
     [Parameter] public bool IsOpen { get; set; }
     [Parameter] public int? AddSubtaskParentId { get; set; }
     [Parameter] public EventCallback OnClose { get; set; }
+    [Parameter] public EventCallback OnShowInOutline { get; set; }
     [Parameter] public EventCallback OnTaskUpdated { get; set; }
     [Parameter] public EventCallback<int> OnTaskDeleted { get; set; }
 
@@ -1404,10 +1405,15 @@
 
     private async Task ScrollToOutline()
     {
-        if (Task is not null)
+        if (Task is null) return;
+        // Release the focus trap before the outline receives focus, so dialog cleanup
+        // cannot restore the opener after the outline row has been focused.
+        if (_dialogInited)
         {
-            await JS.InvokeVoidAsync("eval", $"document.querySelector('[data-task-id=\"{Task.Id}\"]')?.scrollIntoView({{behavior:'smooth',block:'center'}})");
+            _dialogInited = false;
+            await SafeDestroyDialogAsync();
         }
+        await OnShowInOutline.InvokeAsync();
     }
 
     // ── Helpers ──

@@ -38,7 +38,7 @@ else
 {
     <div class="project-shell d-flex @(outlineOpen ? "outline-open" : null)">
 
-        <ProjectOutline Project="project"
+        <ProjectOutline @key="Id" Project="project"
                         ExpandedFeatures="expandedFeatures"
                         ExpandedTasks="expandedTasks"
                         OnGoHome="GoHome"
@@ -48,7 +48,15 @@ else
                         OnOpenAddFeature="OpenAddModalForFeature"
                         OnOpenAddTaskSubtask="OpenAddSubtaskForTask"
                         OnOpenAddSubtaskChild="OpenAddChildSubtaskFromOutline"
-                        OnOpenEditTask="OpenEditModalForTask"
+                        OnOpenEditTask="OpenOutlineTask"
+                        OnOpenSubtask="OpenOutlineSubtask"
+                        Selection="CurrentOutlineItem"
+                        RevealRequest="outlineRevealRequest"
+                        FocusSelection="outlineFocusSelection"
+                        CanGoBack="@(FindOutlineHistoryIndex(-1) >= 0)"
+                        CanGoForward="@(FindOutlineHistoryIndex(1) >= 0)"
+                        OnBack="() => NavigateOutline(-1)"
+                        OnForward="() => NavigateOutline(1)"
                         OnToggleFeature="ToggleFeature"
                         OnToggleTask="ToggleTask"
                         OnToggleTaskDone="ToggleTaskDone"
@@ -372,7 +380,8 @@ else
     Features="project?.Features?.ToList()"
     IsOpen="detailPanelOpen"
     AddSubtaskParentId="detailPanelAddSubtaskParentId"
-    OnClose="OnDetailClose"
+                     OnClose="OnDetailClose"
+                     OnShowInOutline="ShowInOutline"
     OnTaskUpdated="OnTaskUpdated"
     OnTaskDeleted="OnTaskDeleted" />
 
@@ -471,7 +480,11 @@ else
     private int? pendingDetailFocusReturnTaskId;
     private bool outlineOpen;
 
-    private void ToggleOutline() => outlineOpen = !outlineOpen;
+    private void ToggleOutline()
+    {
+        outlineOpen = !outlineOpen;
+        if (outlineOpen && CurrentOutlineItem is { } item) RevealOutlineItem(item);
+    }
 
     private void CloseOutline() => outlineOpen = false;
 
@@ -479,6 +492,8 @@ else
 
     private void OpenTaskDetail(TaskItem task, int? addSubtaskParentId, bool forceTaskExpansion)
     {
+        SelectOutlineItem(addSubtaskParentId is int subtaskId
+            ? new(OutlineItemKind.Subtask, subtaskId) : new(OutlineItemKind.Task, task.Id));
         selectedTask = task;
         detailPanelAddSubtaskParentId = addSubtaskParentId;
         detailPanelOpen = true;
@@ -558,9 +573,11 @@ else
     // Requirements are compact by default so the board is visible sooner.
     private bool requirementsExpanded;
 
+    private int? loadedProjectId;
+
     protected override async Task OnInitializedAsync()
     {
-        // Read the filter off the URL ONCE, here, and never again (#112). The URL is this filter's
+        // Read the filter off the URL once per project visit (#112). The URL is this filter's
         // only persistence, so a reload or a shared link must restore the exact view — but reading
         // it on every parameter set would fight the user: SyncFilterToUrl below navigates on every
         // keystroke, each navigation re-runs OnParametersSet, and a re-read there would race the
@@ -574,11 +591,41 @@ else
         // in-page popstate this component would ignore — at which point subscribe to
         // Nav.LocationChanged, re-parse, and unsubscribe in DisposeAsync. (CodeRabbit, PR #362.)
         filter = TaskFilterState.FromUri(Nav.Uri);
+        loadedProjectId = Id;
         await LoadProject();
     }
 
-    protected override void OnParametersSet()
+    protected override async Task OnParametersSetAsync()
     {
+        if (loadedProjectId != Id)
+        {
+            loadedProjectId = Id;
+            urlSyncCts?.Cancel();
+            filter = TaskFilterState.FromUri(Nav.Uri);
+            outlineHistory.Clear();
+            outlineHistoryIndex = -1;
+            expandedFeatures.Clear();
+            expandedTasks.Clear();
+            outlineExpansionInitialized = false;
+            outlineOpen = false;
+            detailPanelOpen = editModalOpen = addModalOpen = false;
+            selectedTask = null;
+            pendingDetailFocusReturnTaskId = detailPanelAddSubtaskParentId = null;
+            project = null;
+            allTasks = [];
+            notFound = false;
+            moveError = null;
+            aiPanelOpen = false;
+            aiContext = null;
+            aiNextTasks = [];
+            requirementsExpanded = false;
+            deepLinkApplied = false;
+            sortablesInitialized = false;
+            dotNetRef?.Dispose();
+            dotNetRef = null;
+            await LoadProject();
+        }
+
         if (observedDeepLinkTaskId != DeepLinkTaskId)
         {
             observedDeepLinkTaskId = DeepLinkTaskId;
@@ -625,6 +672,11 @@ else
 
         if (project is not null)
         {
+            if (outlineSortablesRefreshPending)
+            {
+                outlineSortablesRefreshPending = false;
+                await ReinitializeSortables();
+            }
             try
             {
                 await JS.InvokeVoidAsync("KanbanFlow.initProjectOutlineAccessibility");
@@ -932,6 +984,7 @@ else
 
     private void OpenEditModalForFeature(Feature feature)
     {
+        SelectOutlineItem(new(OutlineItemKind.Feature, feature.Id));
         editModalMode = EditItemType.Feature;
         editModalFeatureId = feature.Id;
         editModalTaskId = null;
