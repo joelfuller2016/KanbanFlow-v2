@@ -87,7 +87,7 @@ public sealed partial class WorkspaceService
             "set_task_state" => SetTaskStateAsync(id, version, Need(input.ItemId, "ItemId"), Need(input.Status, "Status"), actor, key, ct),
             "report_result" => RecordEvidenceAsync(id, version, Need(input.ItemId, "ItemId"), input.Evidence ?? throw Invalid("Evidence is required."), actor, key, ct),
             "accept_result" => AcceptEvidenceAsync(id, version, Need(input.ItemId, "ItemId"), Need(input.EvidenceId, "EvidenceId"), input.CheckedCriterionIds ?? throw Invalid("CheckedCriterionIds are required."), actor, key, ct),
-            "conclude" => ConcludeAsync(id, version, Text(input.Text, "Text"), Text(input.Limitations, "Limitations"), actor, key, ct),
+            "conclude" => ConcludeAsync(id, version, Text(input.Text, "Text"), input.Limitations ?? string.Empty, actor, key, ct),
             "archive" => ArchiveAsync(id, version, Need(input.Archived, "Archived"), actor, key, ct),
             _ => throw Invalid("Unknown workflow operation. Read the workflow API reference for supported operations.")
         }));

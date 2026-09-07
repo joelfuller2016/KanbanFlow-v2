@@ -8,7 +8,7 @@
 </form>
 @foreach (var message in Context.Messages.Where(m => m.Kind != "original").Reverse())
 {
-    <article class="border rounded bg-white p-3 mb-2"><div class="small text-muted mb-2">@message.Kind · @message.Author · @message.CreatedAt.ToLocalTime().ToString("g")</div><MarkdownContent Markdown="@message.Text" /></article>
+    <article @key="message.Id" class="border rounded bg-white p-3 mb-2"><div class="small text-muted mb-2">@message.Kind · @message.Author · @message.CreatedAt.ToLocalTime().ToString("g")</div><MarkdownContent Markdown="@message.Text" /></article>
 }
 @code {
     [Parameter, EditorRequired] public WorkflowContext Context { get; set; } = null!;

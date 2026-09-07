@@ -1,7 +1,7 @@
 @if (Context.ProjectId is not null)
 {
     <details class="mb-3"><summary>Project repositories (@Context.Repositories.Count)</summary>
-        @foreach (var repository in Context.Repositories) { <div class="small mt-2"><strong>@repository.Name</strong> <code>@repository.LocalPath</code></div> }
+        @foreach (var repository in Context.Repositories) { <div @key="repository.Id" class="small mt-2"><strong>@repository.Name</strong> <code>@repository.LocalPath</code></div> }
         <form class="border rounded p-2 mt-2" @onsubmit="Register" @onsubmit:preventDefault>
             <label for="repository-name" class="form-label">Repository name</label><input id="repository-name" class="form-control mb-2" @bind="name" required maxlength="120" />
             <label for="repository-path" class="form-label">Existing Git repository under Projects · absolute path</label><input id="repository-path" class="form-control mb-2" @bind="path" required />

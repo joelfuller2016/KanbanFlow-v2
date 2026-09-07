@@ -87,7 +87,7 @@ try {
     evidenceId: context.tasks[0].evidence[0].id, checkedCriterionIds: task.acceptanceCriteria.map(c => c.id) }), /older specification/i);
   const normalTask = await call(native, 'get_task', { taskId: task.taskId });
   assert.ok(normalTask.comments.some(c => c.type === 'Verification'));
-  const rest = await fetch(`${base}/api/workflows/${id}`); assert.equal(rest.status, 200);
+  const rest = await fetch(`${base}/api/workflows/${id}`, { signal: AbortSignal.timeout(20000) }); assert.equal(rest.status, 200);
   assert.equal((await rest.json()).tasks[0].taskId, task.taskId);
   console.log(JSON.stringify({ passed: true, nativeTools: nativeList.tools.length, wrapperTools: wrapperList.tools.length,
     requestId: id, ideaId: context.ideaId, projectId: context.projectId, taskId: task.taskId,
