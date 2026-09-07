@@ -9,7 +9,7 @@ that case's `runs/` directory records what was actually executed at one immutabl
 | ID | Feature | Stable case | Latest recorded run | Status |
 |---|---|---|---|---|
 | TC-496 | Decision & Memory Map | [Case](496-decision-memory-map/README.md) | [2026-08-30 · `d7be7da5d98d`](496-decision-memory-map/runs/2026-08-30-d7be7da5d98d.md) | Passed at the pinned implementation commit |
-| TC-509 | Human decisions on the existing workflow board | [Case](509-unified-workflow/README.md) | [2026-09-07 · `b923a62b6a9c`](509-unified-workflow/runs/2026-09-07-b923a62b6a9c.md) | Automated checks passed; actual human usability review pending |
+| TC-509 | Human decisions on the existing workflow board | [Case](509-unified-workflow/README.md) | [2026-09-07 · `829ab2ca5ba2`](509-unified-workflow/runs/2026-09-07-829ab2ca5ba2.md) | Automated checks passed; actual human usability review pending |
 
 ## Conventions
 

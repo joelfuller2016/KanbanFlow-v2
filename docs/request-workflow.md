@@ -1,6 +1,6 @@
 # Requests, plans and results on the existing board
 
-For the person managing projects and the AI clients doing their work. Revalidated September 7, 2026 on Windows 11, PowerShell 7.6.5, .NET SDK 10.0.400 and Node 24. Source baseline: `53a300066e118b0e5a1b0ac9d02294169d2e076f`; latest tested card display and regression cases: `b923a62b6a9cbca86c18e17928c5bd9b462f7746` in [PR #511](https://github.com/joelfuller2016/KanbanFlow-v2/pull/511), planned in [issue #509](https://github.com/joelfuller2016/KanbanFlow-v2/issues/509). Maintainer: repository owner. Automated verification and actual human usability approval are separate.
+For the person managing projects and the AI clients doing their work. Revalidated September 7, 2026 on Windows 11, PowerShell 7.6.5, .NET SDK 10.0.400 and Node 24. Source baseline: `53a300066e118b0e5a1b0ac9d02294169d2e076f`; latest tested outline, card display and regression cases: `829ab2ca5ba28c0d5f76759240623ec944f40334` in [PR #511](https://github.com/joelfuller2016/KanbanFlow-v2/pull/511), planned in [issue #509](https://github.com/joelfuller2016/KanbanFlow-v2/issues/509). Maintainer: repository owner. Automated verification and actual human usability approval are separate.
 
 KanbanFlow now keeps the original request, improved brief, task plan, conversation, reported results and conclusion alongside its existing ideas and board cards. A request belongs to one existing idea. Promotion connects that idea to a project. Publishing a plan creates real tasks under a feature on that project's current board. The person and MCP clients see and change those same records.
 
@@ -70,6 +70,15 @@ Open a task card and use the icons in its top-right corner: **Half page**, **Ful
 
 Switching size preserves the current task and unsent comment. Existing edits keep their normal save behavior. Close or Escape returns to the board; reopening starts at half page. The [card display run](test-cases/509-unified-workflow/runs/2026-09-07-b923a62b6a9c.md) records mouse, keyboard, draft, MCP and mobile checks. Actual human review remains pending.
 
+### Outline selection and navigation
+
+The outline follows the item you open. A feature, task or subtask has one highlighted row; its parents expand and the item list scrolls to reveal it. Existing editors retain their current behavior, and the highlight stays when you close the editor.
+
+1. **Return from a card.** Choose **Show in outline**. The card closes and the outline reveals and focuses the current highlighted item. On a narrow screen the outline drawer opens. This gives you a visible place in the project hierarchy. If another client removed the item, refresh the saved details and choose an existing item.
+2. **Revisit an item.** Use the left/right arrows below the project title (**Previous outline item** / **Next outline item**). They highlight and reveal the previous/next visited item without opening its editor. The project title and arrows stay fixed while items scroll, so you can keep navigating. A disabled arrow means there is no available item in that direction.
+3. **Choose a different path.** After going Back, open a new item to replace the forward branch. Opening the current item again does not add a duplicate. History is hidden, belongs to the current project visit, and resets on reload or leaving the project; it is not saved in the database. Deleted items are skipped after refresh.
+4. **Review the interaction.** Try a distant card, a nested subtask, Show in outline, and both arrows. Record feedback as a decision in Updates. The [outline run](test-cases/509-unified-workflow/runs/2026-09-07-829ab2ca5ba2.md) records automated desktop, keyboard, mobile and data-preservation checks; actual human usability approval remains separate.
+
 ## MCP and REST reference
 
 Start native MCP at the existing `/mcp` endpoint or use `node scripts/mcp-server.mjs`. Discover schemas through `tools/list`.
@@ -134,7 +143,7 @@ node scripts/smoke-workflow.mjs http://127.0.0.1:5126
 
 The harness creates a labeled test project and leaves it for browser inspection. It exercises actual native and stdio `tools/list`/`tools/call`, schema parity, exact capture, retry/conflict handling, brief/plan/publication, real task identity, comments, stale-result rejection and REST parity. It prints the board/task links. Open the printed board link and follow steps 2–8 above; use the existing task editor to change a status, then read it through MCP. Stop only the verification process you started.
 
-The card display follow-up at `b923a62b6a9cbca86c18e17928c5bd9b462f7746` passed the current rebuild, 1,160 .NET tests, 223 script tests, all three browser cases and real MCP checks; all 179 tasks survived the normal restart. Its [pinned run](test-cases/509-unified-workflow/runs/2026-09-07-b923a62b6a9c.md) records the current scope and checks not rerun.
+The card display follow-up at `b923a62b6a9cbca86c18e17928c5bd9b462f7746` passed its rebuild, 1,160 .NET tests, 223 script tests, all three browser cases and real MCP checks; all 179 tasks survived the normal restart. Its [pinned run](test-cases/509-unified-workflow/runs/2026-09-07-b923a62b6a9c.md) records the current scope and checks not rerun.
 
 The earlier foundation/navigation validation is pinned to `04af1cbe40f7` below; its [run record](test-cases/509-unified-workflow/runs/2026-09-07-04af1cbe40f7.md) records the reproduced refresh/navigation defects and the passing corrections:
 
@@ -154,6 +163,8 @@ The earlier foundation/navigation validation is pinned to `04af1cbe40f7` below; 
 | Normal app rebuild/restart | A SQLite-consistent backup preceded restart; every prior row in 28 tables remained equal, with all 178 tasks and zero foreign-key violations. |
 
 Key regression names and further execution evidence are recorded in [the implementation plan](plans/central-project-board-implementation.md). Temporary databases, raw logs and screenshots stay under the repository's ignored verification folders.
+
+The outline follow-up at `829ab2ca5ba28c0d5f76759240623ec944f40334` passed a fresh rebuild, the required 1,160 .NET and 223 script tests, real native/stdio MCP and all four browser cases. All 180 normal-board tasks survived restart. Its [pinned run](test-cases/509-unified-workflow/runs/2026-09-07-829ab2ca5ba2.md) owns the current results and limits. Outline navigation only changes local presentation state; task/request edits remain visible through the existing MCP tools.
 
 ## Later Codex execution
 

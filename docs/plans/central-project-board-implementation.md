@@ -18,7 +18,11 @@ The subsequent card interaction request is captured verbatim:
 
 > I want the card to be able to open to full page /half page or close with an icons in the top right corner
 
-**Delivery:** [PR #511](https://github.com/joelfuller2016/KanbanFlow-v2/pull/511) from `feat/unified-workflow-509` contains the implementation, tests and curated documentation. Latest rebuilt application/case source: `b923a62b6a9cbca86c18e17928c5bd9b462f7746`, including newer review fixes, refresh/navigation corrections and the requested top-right card size controls. Existing user changes unrelated to this work remain outside the PR. [Issue #509](https://github.com/joelfuller2016/KanbanFlow-v2/issues/509) remains open for the complete initiative. Automated verification and actual human usability approval are separate; the latter remains pending. The PR is open and has not been merged.
+The subsequent outline interaction request is captured verbatim:
+
+> The show in outline button should move to the the already highlighted item on the outline. when clicking on an item, the item in the outline is highlighted and moves to that item. We should also have a hidden breadcrumb that tracks the user going from item to item and we can have a back and forward buttons at the top of the outline that should be frozen with the header of the outline.
+
+**Delivery:** [PR #511](https://github.com/joelfuller2016/KanbanFlow-v2/pull/511) from `feat/unified-workflow-509` contains the implementation, tests and curated documentation. Latest rebuilt application/case source: `829ab2ca5ba28c0d5f76759240623ec944f40334`, including the requested outline selection/reveal and frozen Back/Forward controls, previous card size controls and review/navigation fixes. Existing user changes unrelated to this work remain outside the PR. [Issue #509](https://github.com/joelfuller2016/KanbanFlow-v2/issues/509) remains open for the complete initiative. Automated verification and actual human usability approval are separate; the latter remains pending. The PR is open and has not been merged.
 
 **Source baseline:** `53a300066e118b0e5a1b0ac9d02294169d2e076f`. **Environment:** Windows, PowerShell 7.6.5, .NET SDK 10.0.400, existing .NET 10/Blazor Server/EF Core SQLite application. No Docker. **Owner:** repository maintainer. **Date:** September 6, 2026.
 
@@ -264,9 +268,51 @@ stateDiagram-v2
 
 Both display modes use the same task panel. A fresh open starts in half-page mode; narrow screens use the available width. Size changes retain task identity and drafts.
 
+### U-12 — Synchronized outline selection and hidden visit history
+
+- [x] Record the exact outline request, acknowledge decision `372ff340-2d13-4c76-ae71-6fb39eb2f15f`, revise the brief/plan, and publish U-12 as task 185 on the same project/request.
+- [x] Use typed feature/task/subtask identities for a single current outline selection; retain it after the existing editor closes.
+- [x] Expand the selected item's ancestors and reveal its highlighted row by scrolling only the outline's item area.
+- [x] Replace Show in outline's unscoped page selector with a parent callback; release the card focus trap, close the card, open the mobile outline if necessary, and focus the current selected row.
+- [x] Keep hidden visit history within the current project visit. Suppress consecutive duplicates, disable unavailable navigation, and discard the forward branch after a new visit from an older position.
+- [x] Add Back/Forward icons beside Add Feature / Task under the project title. Keep that header fixed while the item list scrolls. Navigation highlights/reveals without reopening an editor.
+- [x] Skip deleted entries and reset selection/history when the project changes. Preserve filters and current task/request query behavior within the same project.
+- [x] Use a collocated JavaScript module and typed interop wrapper for reveal/focus; preserve sortable task-ID anchors around subtask siblings.
+- [x] Rebuild and run required .NET/script gates, real native/stdio MCP, the new outline case and all three existing workflow/card browser cases. Rebuild the normal app and verify its actual controls without changing task data.
+- [x] Update this issue plan, operating guide, repeatable case, source-pinned run and PR #511. Keep the request's implementation result in Review.
+- [ ] Record actual human feedback on highlight, reveal, history and header behavior; apply any requested adjustment. U-10 remains the separate human review task.
+
+| Interaction | Before | With U-12 |
+|---|---|---|
+| Select a card or outline item | Editor opens; no durable current outline selection | Existing editor opens; exact feature/task/subtask row stays highlighted and is revealed |
+| Show in outline | First matching task element anywhere on the page; collapsed parents and mobile visibility not handled | Parent-controlled reveal of the current item, with ancestor expansion, panel close and outline focus |
+| Browse prior items | No outline visit history | Hidden per-visit history with Back/Forward; no editor reopens on history navigation |
+| Scroll a long outline | Header scrolls with the tree | Header and navigation controls stay fixed; only items scroll |
+| Project switch or deletion | No selection/history policy | New project resets history; removed items are skipped after refresh |
+
+```mermaid
+flowchart TD
+    Click[Select card or outline item] --> Visit[Record typed item in hidden visit history]
+    Visit --> Expand[Expand required feature and task ancestors]
+    History[Back or Forward in fixed header] --> Cursor[Move history cursor and skip missing items]
+    Cursor --> Expand
+    Show[Show in outline] --> Close[Release card focus trap and close panel]
+    Close --> Current[Use the current highlighted item]
+    Current --> Expand
+    Expand --> Render[Render one highlighted outline row]
+    Render --> Reveal[Scroll outline items only]
+    Reveal --> Focus[Focus row for Show in outline]
+```
+
+The hidden history is presentation state for the current project visit, not another persisted breadcrumb or a task/workflow mutation. Existing editors, board cards, task data and MCP access use the same paths. A reload or leaving the project starts a new history. On narrow screens Show in outline opens the existing outline drawer.
+
+## Outline navigation verification — September 7, 2026
+
+The [outline run](../test-cases/509-unified-workflow/runs/2026-09-07-829ab2ca5ba2.md) pins source `829ab2ca5ba28c0d5f76759240623ec944f40334`. Nonincremental rebuild: zero warnings/errors. Required gate: 1,160 .NET tests passed; scripts: 223 passed. Native/stdio MCP, outline selection/history/hierarchy/drag/mobile checks and the existing display, decision and navigation cases passed. All 180 tasks and every prior row in 28 tables survived the normal restart, with no foreign-key violations. Real tasks 185 and 184 were checked using presentation controls only. Actual human feedback remains pending.
+
 ## Card display verification — September 7, 2026
 
-The [card display run](../test-cases/509-unified-workflow/runs/2026-09-07-b923a62b6a9c.md) pins the current application/case source and records the initial state-attribute failure and correction. Full rebuild: zero warnings/errors. Required gate: 1,160 .NET tests passed. Scripts: 223 passed. Real MCP, card sizing/editing/close, decision and navigation browser cases passed. All 179 tasks and existing rows in 28 tables survived restart. The normal card's actual icons were exercised. User feedback remains pending; automated checks do not approve the UI.
+The [card display run](../test-cases/509-unified-workflow/runs/2026-09-07-b923a62b6a9c.md) pins the earlier card-specific application/case source and records the initial state-attribute failure and correction. Full rebuild: zero warnings/errors. Required gate: 1,160 .NET tests passed. Scripts: 223 passed. Real MCP, card sizing/editing/close, decision and navigation browser cases passed. All 179 tasks and existing rows in 28 tables survived restart. The normal card's actual icons were exercised. User feedback remains pending; automated checks do not approve the UI.
 
 ## Revalidation evidence — September 7, 2026
 
