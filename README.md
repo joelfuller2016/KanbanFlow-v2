@@ -362,7 +362,7 @@ curl -s http://127.0.0.1:5123/api/admin/health
 # {"status":"ok","app":"KanbanFlow","startedAtUtc":"2026-08-02T22:26:22.1897449Z",
 #  "checkedAtUtc":"2026-08-02T22:26:30.7731684Z","runtime":".NET 10.0.10",
 #  "openApiUrl":"/openapi.json",
-#  "db":{"path":"C:\Users\you\.kanbanflow\kanbanflow.db","exists":true,"source":"env",
+#  "db":{"path":"C:\\Users\\you\\.kanbanflow\\kanbanflow.db","exists":true,"source":"env",
 #        "existedAtStartup":true,"createdAtUtc":"2026-06-01T09:12:44.1Z",
 #        "lastWriteUtc":"2026-08-02T22:19:03.7Z","sizeBytes":39124992,
 #        "shadowedPaths":[],"projects":1,"status":"ok","error":null,

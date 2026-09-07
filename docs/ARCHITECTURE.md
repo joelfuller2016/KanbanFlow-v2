@@ -528,7 +528,7 @@ the launcher itself, against a wrong root:
 pwsh -File scripts/start-kanbanflow.ps1 -DbPath "$env:TEMP\kf-wrongroot\kanbanflow.db" -Url http://127.0.0.1:5311
 
 {"status":"degraded", ...,
- "db":{"path":"...\kf-wrongroot\kanbanflow.db","existedAtStartup":true,
+ "db":{"path":"...\\kf-wrongroot\\kanbanflow.db","existedAtStartup":true,
        "createdAtUtc":"2026-09-07T21:30:30.5074753Z",
        "lastWriteUtc":"2026-09-07T20:07:00.3297704Z","sizeBytes":1282048,
        "projects":1,"reasons":["last-write-precedes-creation","created-moments-before-startup"]}}
