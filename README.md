@@ -363,15 +363,33 @@ curl -s http://127.0.0.1:5123/api/admin/health
 #  "checkedAtUtc":"2026-08-02T22:26:30.7731684Z","runtime":".NET 10.0.10",
 #  "openApiUrl":"/openapi.json",
 #  "db":{"path":"C:\Users\you\.kanbanflow\kanbanflow.db","exists":true,"source":"env",
-#        "existedAtStartup":true,"shadowedPaths":[],"projects":1,"status":"ok","error":null,
+#        "existedAtStartup":true,"createdAtUtc":"2026-06-01T09:12:44.1Z",
+#        "lastWriteUtc":"2026-08-02T22:19:03.7Z","sizeBytes":39124992,
+#        "shadowedPaths":[],"projects":1,"status":"ok","error":null,
 #        "reasons":[],"elapsedMs":1.1}}
 ```
 
 `status` is `ok` only when the app opened the database, read from it, found a board that is not
-empty, did not create that board itself, and saw no second `kanbanflow.db` shadowing it — otherwise
-`degraded`, or `error` if it could not read at all. It is **always HTTP 200**, so the reason is
-readable rather than guessed. `db.path` is the file it actually opened: compare it with the one you
-meant, which is the check no code can make for you (#498).
+empty, did not create that board itself, saw no trace of that board having been copied into place
+just before startup, and saw no second `kanbanflow.db` shadowing it — otherwise `degraded`, or
+`error` if it could not read at all. It is **always HTTP 200**, so the reason is readable rather
+than guessed.
+
+If you started the app and it is serving a board you do not recognise, this is where to look:
+
+```text
+"status":"degraded", "reasons":["last-write-precedes-creation","created-moments-before-startup"]
+```
+
+That means the file was **copied into place moments before the app started** — a board written
+before it was created cannot be one you have been using. The usual cause is the launcher failing to
+find your real database (`$HOME` resolves differently under Task Scheduler than in your shell) and
+restoring the committed seed instead. Compare `db.sizeBytes` with `seed/kanbanflow.seed.db`: if they
+match to the byte, you are looking at the seed. Pin the right file with `-DbPath` and restart.
+
+These signals fade — the first real write to the wrong board erases them, and there is then nothing
+in the app that can tell it apart from the right one. `db.path` is the durable answer: compare it
+with the file you meant, which is the check no code can make for you (#498).
 
 **Which database it opened.** The app names the file it is using, on every boot:
 
