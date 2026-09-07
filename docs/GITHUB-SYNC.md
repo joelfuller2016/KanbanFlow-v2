@@ -34,7 +34,7 @@ node scripts/portfolio-sync.mjs --help
 | *(no milestone)* | Feature `Unsorted` | the literal name `Unsorted` |
 | issue | TaskItem | the `#<n> ` prefix on `TaskItem.Name` |
 | issue labels | TaskItem.Priority | highest severity label wins; default `Medium` |
-| issue body | TaskItem.Description | provenance block + up to ~29,491 JSON-serialized UTF-8 bytes (`KANBANFLOW_BODY_EXCERPT_LIMIT`; bounded by SignalR’s 32 KB receive cap); a truncated description is refreshed only while it retains the exact sync header and truncation footer |
+| issue body | TaskItem.Description | provenance block + up to ~29,491 JSON-serialized UTF-8 bytes (`KANBANFLOW_BODY_EXCERPT_LIMIT`; bounded by SignalR’s default 32 KB receive limit); a truncated description is refreshed only while it retains the exact sync header and truncation footer |
 | issue comment | TaskComment | `<!-- gh:<node-id> -->` stamped into `TaskComment.Text` |
 | PR conversation comment | TaskComment (`Comment`) | same node-id marker |
 | PR review `APPROVED` | TaskComment (`Verification`) | same node-id marker |
