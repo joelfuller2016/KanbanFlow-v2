@@ -1000,3 +1000,161 @@ test("a genuine value still parses, so the guard refuses flags and nothing else"
   assert.equal(args.maxCommentChars, 120);
   assert.deepEqual(args.repos, ["octo/board", "octo/other"]);
 });
+
+// --- #336 crash harness: out of the shipped path -------------------------------------------
+import { mkdtempSync, readdirSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join as joinPath, resolve as resolvePath } from "node:path";
+
+const BARRIER_ENV = {
+  KANBANFLOW_336_BEFORE_PREPARE_SIGNAL: null,
+  KANBANFLOW_336_BEFORE_PREPARE_RELEASE: null,
+  KANBANFLOW_336_AFTER_DISPATCH_SIGNAL: null,
+  KANBANFLOW_336_AFTER_DISPATCH_RELEASE: null,
+  KANBANFLOW_336_AFTER_MANUAL_RESUME_SIGNAL: null,
+  KANBANFLOW_336_AFTER_MANUAL_RESUME_RELEASE: null,
+  KANBANFLOW_336_AFTER_CREATE_SIGNAL: null,
+  KANBANFLOW_336_AFTER_CREATE_RELEASE: null,
+};
+
+function barrierEnv(dir, extra = {}) {
+  const env = {};
+  let n = 0;
+  for (const name of Object.keys(BARRIER_ENV)) {
+    env[name] = joinPath(dir, `${n++}-${name.endsWith("SIGNAL") ? "signal.json" : "release"}`);
+  }
+  // Keep a sabotaged build from blocking the suite for ten minutes: the floor is 1s.
+  env.KANBANFLOW_336_BARRIER_TIMEOUT_MS = "1000";
+  return { ...env, ...extra };
+}
+
+test("all eight barrier env vars, without --internal-test-hooks, arm absolutely nothing", async () => {
+  const mod = await import("./portfolio-sync.mjs?hooks-env-only");
+  const dir = mkdtempSync(joinPath(tmpdir(), "kf336-envonly-"));
+  try {
+    const env = barrierEnv(dir, { KANBANFLOW_336_TEST_HOOKS: "scripts/test-hooks/336-barriers.mjs" });
+    const result = await mod.installTestHooks({ internalTestHooks: false, allowWrite: true }, env);
+    assert.equal(result.installed, false);
+    assert.equal(result.reason, "env-set-without-flag");
+
+    // Arming used to be "an env var exists". Prove the production hooks are inert against the
+    // fully-armed environment: no file written, no wait — process.env is what they would have
+    // read, so set it there too and put it back afterwards.
+    const saved = {};
+    for (const [key, value] of Object.entries(env)) { saved[key] = process.env[key]; process.env[key] = value; }
+    try {
+      const started = Date.now();
+      const context = { operationId: OP, taskId: 7, attemptCount: 1, issueNumber: 1, issueUrl: "u" };
+      await mod.hooks.beforePrepare(context);
+      await mod.hooks.afterDispatch(context);
+      await mod.hooks.afterManualResume(context);
+      await mod.hooks.afterCreate(context);
+      assert.ok(Date.now() - started < 900, "a production hook must not wait on anything");
+      assert.deepEqual(readdirSync(dir), [], "a production hook must not touch the filesystem");
+    } finally {
+      for (const [key, value] of Object.entries(saved)) {
+        if (value === undefined) delete process.env[key]; else process.env[key] = value;
+      }
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("the harness needs both keys, and a third to reach GitHub", async () => {
+  const mod = await import("./portfolio-sync.mjs?hooks-gates");
+  const modulePath = resolvePath("scripts/test-hooks/336-barriers.mjs");
+
+  await assert.rejects(
+    () => mod.installTestHooks({ internalTestHooks: true, allowWrite: false }, {}),
+    /requires KANBANFLOW_336_TEST_HOOKS/,
+  );
+  await assert.rejects(
+    () => mod.installTestHooks({ internalTestHooks: true, allowWrite: true }, { KANBANFLOW_336_TEST_HOOKS: modulePath }),
+    /KANBANFLOW_336_ALLOW_WRITE_HOOKS=1/,
+  );
+
+  const errors = [];
+  const realError = console.error;
+  console.error = (line) => errors.push(String(line));
+  try {
+    const result = await mod.installTestHooks(
+      { internalTestHooks: true, allowWrite: true },
+      { KANBANFLOW_336_TEST_HOOKS: modulePath, KANBANFLOW_336_ALLOW_WRITE_HOOKS: "1" },
+    );
+    assert.equal(result.installed, true);
+    assert.match(errors.join("\n"), /#336 TEST HOOKS ACTIVE — this is not a production run/);
+  } finally {
+    console.error = realError;
+  }
+  // And now they really are installed on THIS module instance — proving the flag path works
+  // rather than merely returning a truthy object.
+  const dir = mkdtempSync(joinPath(tmpdir(), "kf336-armed-"));
+  try {
+    const env = barrierEnv(dir);
+    const saved = {};
+    for (const [key, value] of Object.entries(env)) { saved[key] = process.env[key]; process.env[key] = value; }
+    try {
+      await assert.rejects(
+        () => mod.hooks.afterCreate({ operationId: OP, taskId: 7 }),
+        (err) => err instanceof mod.HookAbort && /Timed out waiting for #336 release file/.test(err.message),
+      );
+      assert.ok(readdirSync(dir).some((name) => name.endsWith("signal.json")),
+        "an armed barrier writes its signal file");
+    } finally {
+      for (const [key, value] of Object.entries(saved)) {
+        if (value === undefined) delete process.env[key]; else process.env[key] = value;
+      }
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("a HookAbort never becomes an ambiguous GitHub outcome", async () => {
+  const mod = await import("./portfolio-sync.mjs?hooks-abort");
+  const calls = [];
+  const api = {
+    getOperation: async (id) => { calls.push(["getOperation", id]); return { state: "Dispatched" }; },
+    failure: async (id, body) => { calls.push(["failure", id, body.kind]); return { state: "NeedsReview" }; },
+  };
+  const operation = { operationId: OP, taskId: 7 };
+
+  // The after-create hook fires when the issue EXISTS and its marker is already verified.
+  const abort = new mod.HookAbort("Timed out waiting for #336 release file r");
+  await assert.rejects(
+    () => mod.handleCreateWindowFailure(operation, "lease-1", "https://github.com/octo/board/issues/9", abort, api),
+    (err) => err === abort,
+  );
+  assert.deepEqual(calls, [], "a harness abort must not read or write the operation's state");
+
+  // The discriminator, not a blanket exemption: a real create-window error still records.
+  await assert.rejects(
+    () => mod.handleCreateWindowFailure(operation, "lease-1", null, new Error("gh exploded"), api),
+    /is ambiguous\/NeedsReview/,
+  );
+  assert.deepEqual(calls, [["getOperation", OP], ["failure", OP, "AmbiguousOrIncomplete"]]);
+});
+
+test("a pre-dispatch hook abort records nothing and says what it left behind", async () => {
+  const mod = await import("./portfolio-sync.mjs?hooks-predispatch");
+  const operation = { operationId: OP, taskId: 7, attemptCount: 2 };
+  const saved = mod.hooks.afterManualResume;
+  try {
+    mod.hooks.afterManualResume = async () => { throw new mod.HookAbort("Timed out waiting for #336 release file r"); };
+    await assert.rejects(
+      () => mod.runManualResumeHook(operation),
+      (err) => {
+        assert.ok(err instanceof mod.HookAbort, "the abort must stay a HookAbort so the create window re-raises it untouched");
+        assert.match(err.message, /aborted BEFORE dispatch, so no create was attempted and no state was written/);
+        assert.match(err.message, /lease stays claimed until it expires/);
+        return true;
+      },
+    );
+    // A non-hook failure is NOT reclassified — the guard discriminates rather than swallowing.
+    mod.hooks.afterManualResume = async () => { throw new Error("something else"); };
+    await assert.rejects(() => mod.runManualResumeHook(operation), /^Error: something else$/);
+  } finally {
+    mod.hooks.afterManualResume = saved;
+  }
+});

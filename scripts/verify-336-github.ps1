@@ -314,6 +314,8 @@ function Start-BarrierPush(
     $savedAfterSignal = $env:KANBANFLOW_336_AFTER_CREATE_SIGNAL
     $savedAfterRelease = $env:KANBANFLOW_336_AFTER_CREATE_RELEASE
     $savedTimeout = $env:KANBANFLOW_336_BARRIER_TIMEOUT_MS
+    $savedHookModule = $env:KANBANFLOW_336_TEST_HOOKS
+    $savedHookWrite = $env:KANBANFLOW_336_ALLOW_WRITE_HOOKS
     try {
         $env:KANBANFLOW_336_BEFORE_PREPARE_SIGNAL = $null
         $env:KANBANFLOW_336_BEFORE_PREPARE_RELEASE = $null
@@ -340,11 +342,19 @@ function Start-BarrierPush(
             $env:KANBANFLOW_336_AFTER_CREATE_RELEASE = $releasePath
         }
         $env:KANBANFLOW_336_BARRIER_TIMEOUT_MS = "600000"
+        # The four crash barriers live in scripts/test-hooks/336-barriers.mjs and are NOT
+        # imported by portfolio-sync.mjs. Arming them takes three deliberate acts: the
+        # --internal-test-hooks flag below, this module path, and — because every scenario
+        # here runs --allow-write against the fixture repo — the explicit write opt-in.
+        # Setting the KANBANFLOW_336_* signal/release pairs alone arms nothing.
+        $env:KANBANFLOW_336_TEST_HOOKS = $script:hookModule
+        $env:KANBANFLOW_336_ALLOW_WRITE_HOOKS = "1"
         $nodeArguments = @(
             $script:syncScript,
             "push-issue", $fixtureRepo,
             "--allow-write", "--task", "$TaskId",
-            "--actor", $script:actor
+            "--actor", $script:actor,
+            "--internal-test-hooks"
         )
         $nodeArguments += $AdditionalArguments
         $process = Start-Process `
@@ -366,6 +376,8 @@ function Start-BarrierPush(
         $env:KANBANFLOW_336_AFTER_CREATE_SIGNAL = $savedAfterSignal
         $env:KANBANFLOW_336_AFTER_CREATE_RELEASE = $savedAfterRelease
         $env:KANBANFLOW_336_BARRIER_TIMEOUT_MS = $savedTimeout
+        $env:KANBANFLOW_336_TEST_HOOKS = $savedHookModule
+        $env:KANBANFLOW_336_ALLOW_WRITE_HOOKS = $savedHookWrite
     }
 
     $script:childProcesses.Add($process) | Out-Null
@@ -661,6 +673,7 @@ Assert-WindowsHost
 
 $script:repoRoot = (Resolve-Path (Join-Path (Split-Path -Parent $PSCommandPath) "..")).Path
 $script:syncScript = (Resolve-Path (Join-Path $script:repoRoot "scripts/portfolio-sync.mjs")).Path
+$script:hookModule = (Resolve-Path (Join-Path $script:repoRoot "scripts/test-hooks/336-barriers.mjs")).Path
 $projectPath = (Resolve-Path (Join-Path $script:repoRoot "src/KanbanFlow/KanbanFlow.csproj")).Path
 $testProjectPath = (Resolve-Path (Join-Path $script:repoRoot "tests/KanbanFlow.Tests/KanbanFlow.Tests.csproj")).Path
 $script:baseUrl = New-FreeLoopbackUrl

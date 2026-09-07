@@ -49,10 +49,8 @@
 
 import { execFile, spawn } from "node:child_process";
 import { realpathSync } from "node:fs";
-import { access, writeFile } from "node:fs/promises";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { resolve } from "node:path";
-import { setTimeout as delay } from "node:timers/promises";
 import { promisify } from "node:util";
 // BOTH imports are used. `derivePriority` sets TaskItem.Priority in `syncTasks()` and backs the
 // priority-drift check in `statusRepo()`; `priorityFromLabel` is called by `labelForPriority()`
@@ -118,6 +116,7 @@ function parseArgs(argv) {
     comments: true, maxCommentChars: 0, // 0 = no cap; mirror the comment whole
     allowWrite: false, task: null, resume: null, authorizeAmbiguousRetry: null,
     resolutionReason: null, all: false, strict: false, json: false, limit: 0,
+    internalTestHooks: false,
     error: null,
   };
 
@@ -214,6 +213,9 @@ function parseArgs(argv) {
       if (value === null) return args;
       args.limit = Number.parseInt(value, 10) || 0;
     }
+    // Arming key 1 of 2 for the #336 crash harness. Useless on its own: without
+    // KANBANFLOW_336_TEST_HOOKS naming a module, main() refuses to start.
+    else if (a === "--internal-test-hooks") args.internalTestHooks = true;
     else if (a === "--help" || a === "-h") args.help = true;
     // `onboard owner/repo` — a bare owner/repo positional is a repo, so the common case
     // needs no flag at all.
@@ -1076,9 +1078,9 @@ function buildExternalDispatchRequest(operation, leaseToken, args) {
   return request;
 }
 
-async function recordAmbiguousWriteFailure(operationId, leaseToken, error) {
+async function recordAmbiguousWriteFailure(operationId, leaseToken, error, api = externalApi) {
   if (!leaseToken) return null;
-  return externalApi.failure(operationId, {
+  return api.failure(operationId, {
     operationId,
     leaseToken,
     // Every failure this script can observe occurs after a lease may represent prior dispatch
@@ -1178,50 +1180,65 @@ async function scanForExplicitRetryDecision(repo, operationId) {
   };
 }
 
-async function waitAtFileBarrier(signalVariable, releaseVariable, phase, context) {
-  const signalPath = process.env[signalVariable];
-  const releasePath = process.env[releaseVariable];
-  if (!signalPath && !releasePath) return;
-  if (!signalPath || !releasePath) {
-    throw new Error(`The #336 ${phase} barrier requires both ${signalVariable} and ${releaseVariable}.`);
-  }
+// --- test hooks -------------------------------------------------------------------------
+//
+// Four named instants in the live create path. In production every one of them is a no-op
+// function call: no environment reads, no filesystem access, no waiting. The crash/barrier
+// harness that `scripts/verify-336-github.ps1` drives lives in scripts/test-hooks/, which
+// this module never imports.
+//
+// This is deliberately arming-by-two-keys. The barriers used to sit here inline, armed by the
+// mere PRESENCE of an environment variable, so one stray KANBANFLOW_336_* pair in a shell
+// turned a real `push-issue --allow-write` into a run that blocked on a file and then threw
+// into the ambiguous-failure handler. Nothing documented it. Now the operator must pass
+// --internal-test-hooks AND point KANBANFLOW_336_TEST_HOOKS at a module; either alone arms
+// nothing, and loading prints a banner that cannot be mistaken for a production run.
+const hooks = {
+  beforePrepare: async () => {},
+  afterDispatch: async () => {},
+  afterManualResume: async () => {},
+  afterCreate: async () => {},
+};
 
-  await writeFile(signalPath, `${JSON.stringify({ ...context, phase }, null, 2)}\n`, { encoding: "utf8", flag: "wx" });
-  const timeoutMs = Number.parseInt(process.env.KANBANFLOW_336_BARRIER_TIMEOUT_MS || "600000", 10);
-  const deadline = Date.now() + Math.max(1000, timeoutMs);
-  while (Date.now() < deadline) {
-    try { await access(releasePath); return; } catch { await delay(100); }
+// A hook giving up is a statement about the HARNESS, never about GitHub. It must not reach
+// recordAmbiguousWriteFailure: the after-create hook fires once the issue exists and its
+// marker is verified, so recording NeedsReview there would mark a succeeded operation for
+// human review and burn an attempt. A distinct type is what lets the create-window handler
+// tell the two apart; a string match on the message would not survive a reworded barrier.
+class HookAbort extends Error {
+  constructor(message) {
+    super(message);
+    this.name = "HookAbort";
   }
-  throw new Error(`Timed out waiting for #336 release file ${releasePath}`);
 }
 
-const waitAtBeforePrepareBarrier = (context) => waitAtFileBarrier(
-  "KANBANFLOW_336_BEFORE_PREPARE_SIGNAL",
-  "KANBANFLOW_336_BEFORE_PREPARE_RELEASE",
-  "before-prepare",
-  context,
-);
-
-const waitAtAfterDispatchBarrier = (context) => waitAtFileBarrier(
-  "KANBANFLOW_336_AFTER_DISPATCH_SIGNAL",
-  "KANBANFLOW_336_AFTER_DISPATCH_RELEASE",
-  "after-dispatch-before-github-create",
-  context,
-);
-
-const waitAtAfterManualRetryResumeBarrier = (context) => waitAtFileBarrier(
-  "KANBANFLOW_336_AFTER_MANUAL_RESUME_SIGNAL",
-  "KANBANFLOW_336_AFTER_MANUAL_RESUME_RELEASE",
-  "after-manual-retry-resume-and-scan-before-dispatch",
-  context,
-);
-
-const waitAtAfterCreateBarrier = (context) => waitAtFileBarrier(
-  "KANBANFLOW_336_AFTER_CREATE_SIGNAL",
-  "KANBANFLOW_336_AFTER_CREATE_RELEASE",
-  "after-github-create-before-finalize",
-  context,
-);
+// Loaded from main() only. Returns the banner lines it printed so a test can assert that an
+// env-only arming attempt printed nothing and installed nothing.
+async function installTestHooks(args, env = process.env) {
+  const modulePath = env.KANBANFLOW_336_TEST_HOOKS;
+  if (!args.internalTestHooks) return { installed: false, reason: modulePath ? "env-set-without-flag" : "not-requested" };
+  if (!modulePath) {
+    throw new Error("--internal-test-hooks requires KANBANFLOW_336_TEST_HOOKS to name a hook module.");
+  }
+  // The crash-injection scenarios genuinely need live creates against the fixture repo, so
+  // this stays possible — never by accident. Two keys to arm the harness, a third to let it
+  // touch GitHub.
+  if (args.allowWrite && env.KANBANFLOW_336_ALLOW_WRITE_HOOKS !== "1") {
+    throw new Error("--internal-test-hooks with --allow-write additionally requires KANBANFLOW_336_ALLOW_WRITE_HOOKS=1.");
+  }
+  const module = await import(pathToFileURL(resolve(modulePath)).href);
+  const installed = await module.install({ HookAbort });
+  for (const name of Object.keys(hooks)) {
+    if (typeof installed?.[name] === "function") hooks[name] = installed[name];
+  }
+  const banner = [
+    "!! #336 TEST HOOKS ACTIVE — this is not a production run",
+    `!! hook module: ${modulePath}`,
+    `!! hooks installed: ${Object.keys(hooks).filter((name) => typeof installed?.[name] === "function").join(", ")}`,
+  ];
+  for (const line of banner) console.error(line);
+  return { installed: true, banner };
+}
 
 async function executePreparedOperation(repo, leaseResult, repoIdentity, args) {
   const operation = operationFromLease(leaseResult);
@@ -1240,18 +1257,12 @@ async function executePreparedOperation(repo, leaseResult, repoIdentity, args) {
     throw error;
   }
 
-  if (operationRequiresFreshPrecreateScan(operation)) {
-    await waitAtAfterManualRetryResumeBarrier({
-      operationId: operation.operationId,
-      taskId: operation.taskId,
-      attemptCount: operation.attemptCount,
-    });
-  }
+  if (operationRequiresFreshPrecreateScan(operation)) await runManualResumeHook(operation);
   const dispatchRequest = buildExternalDispatchRequest(operation, leaseToken, args);
   await externalApi.dispatch(operation.operationId, dispatchRequest);
   let issueUrl = null;
   try {
-    await waitAtAfterDispatchBarrier({
+    await hooks.afterDispatch({
       operationId: operation.operationId,
       taskId: operation.taskId,
       attemptCount: operation.attemptCount,
@@ -1270,7 +1281,7 @@ async function executePreparedOperation(repo, leaseResult, repoIdentity, args) {
     if (!issueHasOneCleanOperationMarker(issue, operation.operationId)) {
       throw new Error(`created issue ${issueUrl} did not preserve exactly one clean operation marker`);
     }
-    await waitAtAfterCreateBarrier({
+    await hooks.afterCreate({
       operationId: operation.operationId,
       taskId: operation.taskId,
       issueNumber: issue.number,
@@ -1281,15 +1292,50 @@ async function executePreparedOperation(repo, leaseResult, repoIdentity, args) {
     console.log(`  created ${issue.html_url} and finalized durable link for task ${operation.taskId}`);
     return link;
   } catch (err) {
-    const latest = await externalApi.getOperation(operation.operationId).catch(() => null);
-    if (writeStateName(latest?.state) === "Completed") return latest;
-    await recordAmbiguousWriteFailure(
-      operation.operationId,
-      leaseToken,
-      `${issueUrl ? `Issue may exist at ${issueUrl}; ` : "GitHub create outcome is unknown; "}${err.message}`,
-    ).catch((recordErr) => console.error(`  ! could not persist NeedsReview: ${recordErr.message}`));
-    throw new Error(`operation ${operation.operationId} is ambiguous/NeedsReview; re-run explicitly with --resume ${operation.operationId}. ${err.message}`);
+    return await handleCreateWindowFailure(operation, leaseToken, issueUrl, err);
   }
+}
+
+// The pre-dispatch hook, extracted so its abort behaviour is testable. This one sits OUTSIDE
+// the create window's try on purpose: nothing has reached GitHub yet, so there is no ambiguous
+// outcome to record and recording one would be the very path a hook must never enter. What an
+// abort here DOES leave behind is a claimed lease and a burned attempt — the resume that got us
+// here took both — so the message says so rather than leaving the operator to infer it from a
+// bare timeout. (Releasing the lease early would need a service verb that does not exist; the
+// bound is the lease TTL.)
+async function runManualResumeHook(operation) {
+  try {
+    await hooks.afterManualResume({
+      operationId: operation.operationId,
+      taskId: operation.taskId,
+      attemptCount: operation.attemptCount,
+    });
+  } catch (err) {
+    if (err instanceof HookAbort) {
+      throw new HookAbort(`operation ${operation.operationId}: #336 test hook aborted BEFORE dispatch, so no create was attempted and no state was written. The lease stays claimed until it expires; re-run --resume ${operation.operationId} after that. (${err.message})`);
+    }
+    throw err;
+  }
+}
+
+// The create window's failure handler, extracted so a test can drive it without a live create.
+//
+// The FIRST line is the load-bearing one. A HookAbort is the test harness giving up; it is not
+// evidence about GitHub. The after-create hook fires when the issue already exists and its
+// marker has already been verified, so letting a barrier timeout fall through here would record
+// NeedsReview against an operation that demonstrably succeeded — burning an attempt and
+// demanding human review for a run that did everything right.
+async function handleCreateWindowFailure(operation, leaseToken, issueUrl, err, api = externalApi) {
+  if (err instanceof HookAbort) throw err;
+  const latest = await api.getOperation(operation.operationId).catch(() => null);
+  if (writeStateName(latest?.state) === "Completed") return latest;
+  await recordAmbiguousWriteFailure(
+    operation.operationId,
+    leaseToken,
+    `${issueUrl ? `Issue may exist at ${issueUrl}; ` : "GitHub create outcome is unknown; "}${err.message}`,
+    api,
+  ).catch((recordErr) => console.error(`  ! could not persist NeedsReview: ${recordErr.message}`));
+  throw new Error(`operation ${operation.operationId} is ambiguous/NeedsReview; re-run explicitly with --resume ${operation.operationId}. ${err.message}`);
 }
 
 // Drift wording lives here, shared, so `status` can never disagree with what `sync` reports.
@@ -2197,7 +2243,7 @@ async function pushIssues(repo, args) {
     stats.issuesPreviewed++;
 
     if (!live) continue;
-    await waitAtBeforePrepareBarrier({ taskId: task.id, repository: repo });
+    await hooks.beforePrepare({ taskId: task.id, repository: repo });
     const leaseResult = await externalApi.prepare(task.id, {
       taskId: task.id,
       provider: "GitHub",
@@ -2715,6 +2761,14 @@ status
   --strict               also exit 1 on pending work, unsynced tasks, or a non-durable link
   --json                 machine-readable report (includes the exit code and completeness)
 
+testing only
+  --internal-test-hooks  load the #336 crash/barrier harness named by KANBANFLOW_336_TEST_HOOKS
+                         (scripts/test-hooks/336-barriers.mjs). BOTH are required — neither the
+                         flag nor the environment variable arms anything alone — and combining
+                         it with --allow-write additionally requires
+                         KANBANFLOW_336_ALLOW_WRITE_HOOKS=1. Loading prints a banner on stderr.
+                         Used by scripts/verify-336-github.ps1; never in a production run.
+
 WRITE SURFACE ON GITHUB: one dedicated stdin-based "gh issue create" primitive, reachable only
 through push-issue --allow-write --task. Generic gh() remains read-only. There is no close,
 edit, delete, reword, re-label-after-create, comment, or assignment path.
@@ -2745,6 +2799,16 @@ async function main() {
   // pushing to six repos because a repo argument was forgotten is not a recoverable mistake.
   if ((args.command === "onboard" || args.command === "push-issue" || args.command === "backfill-links") && !args.repos?.length) {
     console.error(`\`${args.command}\` needs an explicit repo:\n  node scripts/portfolio-sync.mjs ${args.command} owner/repo`);
+    process.exitCode = 2;
+    return;
+  }
+
+  try {
+    await installTestHooks(args);
+  } catch (err) {
+    console.error(`${err.message}
+
+${HELP}`);
     process.exitCode = 2;
     return;
   }
@@ -2862,7 +2926,12 @@ export {
   ghIssueCreate,
   globalNodeLinkDisposition,
   githubLinksOf,
+  handleCreateWindowFailure,
+  hooks,
+  HookAbort,
+  installTestHooks,
   isDirectRun,
+  runManualResumeHook,
   issueBodyFor,
   issueHasOneCleanOperationMarker,
   issueNumberFromTaskName,
