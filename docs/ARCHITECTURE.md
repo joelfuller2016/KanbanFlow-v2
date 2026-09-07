@@ -272,6 +272,11 @@ not empty. They are evidence, not proof:
 - A user restoring their own board from a backup produces exactly this shape. That is a false
   positive, and it is why these are reported reasons carrying their evidence rather than
   errors or a refusal to start.
+- A fresh install shows the same shape, and correctly: the launcher really does copy the seed in
+  moments before the first start, so both reasons fire. Even with `-NoSeed`, where nothing is
+  copied and the app makes the board itself, a restart inside 15 minutes still reports
+  `created-moments-before-startup` — a board that new is not distinguishable from a restored one.
+  Both are expected on a new deployment and both clear on the schedule in the table above.
 
 `shadowed-by-another-database` reads the application's **own** anchors — the launch directory,
 the content root and the directory the binary sits in. It does not and cannot name a board at
@@ -283,9 +288,11 @@ So what the endpoint still cannot know is which database the operator *meant* �
 pins `KANBANFLOW_DB_PATH` from its own computation, so the app faithfully opens whatever it is
 handed. That half is finished by the caller, comparing `db.path` and the file facts against
 what it expects. The sharpest of those comparisons is `db.sizeBytes` against the size of
-`seed/kanbanflow.seed.db`: a restored copy is byte-identical to it. The application cannot make
-that comparison itself — the seed is **not** in the publish output — which is exactly why the
-size is reported rather than judged.
+`seed/kanbanflow.seed.db`: a restored copy is byte-identical to it. Read that direction only — a
+match is consistent with the seed, not proof of it, because SQLite reuses freed pages instead of
+growing the file, so a board that has been written to can still report the seed's size exactly.
+The application cannot make the comparison itself — the seed is **not** in the publish output —
+which is exactly why the size is reported rather than judged.
 
 The probe opens the database **read-only**. `Microsoft.Data.Sqlite` defaults to
 `Mode=ReadWriteCreate`, which invents an empty database when the file is absent — health would

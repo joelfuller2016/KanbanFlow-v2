@@ -287,10 +287,11 @@ public sealed class AdminHealthEndpointTests
     /// <summary>
     /// The three facts are reported as well as judged, exactly as <c>db.path</c> is (#498 review).
     ///
-    /// <para>The most useful comparison — is this board byte-identical to the committed seed? — is
-    /// the CALLER's, not the application's: <c>seed/kanbanflow.seed.db</c> is not shipped in the
-    /// publish output (verified), so the app has nothing to compare against. Reporting the size lets
-    /// whoever does have the seed make the call.</para>
+    /// <para>The most useful comparison — is this board the SIZE of the committed seed? — is the
+    /// CALLER's, not the application's: <c>seed/kanbanflow.seed.db</c> is not shipped in the publish
+    /// output (verified), so the app has nothing to compare against. Reporting the size lets whoever
+    /// does have the seed make the call — a match is consistent with the seed rather than proof of
+    /// it, since SQLite reuses freed pages and a board written to can still report the same size.</para>
     /// </summary>
     [Fact]
     public async Task Health_ReportsTheFileFacts_SoTheCallerCanCompareThemAgainstTheSeedItShipped()

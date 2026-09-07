@@ -384,8 +384,18 @@ If you started the app and it is serving a board you do not recognise, this is w
 That means the file was **copied into place moments before the app started** — a board written
 before it was created cannot be one you have been using. The usual cause is the launcher failing to
 find your real database (`$HOME` resolves differently under Task Scheduler than in your shell) and
-restoring the committed seed instead. Compare `db.sizeBytes` with `seed/kanbanflow.seed.db`: if they
-match to the byte, you are looking at the seed. Pin the right file with `-DbPath` and restart.
+restoring the committed seed instead. Compare `db.sizeBytes` with the size of
+`seed/kanbanflow.seed.db`: a match is **consistent with** the seed rather than proof of it —
+SQLite reuses freed pages instead of growing the file, so a board that has been written to can
+still report the seed's size to the byte. Pin the right file with `-DbPath` and restart.
+
+**A fresh install reports `degraded` too, and that is expected.** The first start of a new
+deployment restores the seed, so the board genuinely was copied into place moments before the app
+ran and both reasons fire — correctly. With `-NoSeed` nothing is copied at all, yet a restart
+within 15 minutes still reports `created-moments-before-startup`, because a board that new is not
+distinguishable from a restored one. Neither is a fault. Both clear themselves: the first reason at
+the first real write to the board, the second at the first restart more than 15 minutes after the
+file was created. Confirm `db.path` is the file you meant before you go looking for a cause.
 
 These signals fade — the first real write to the wrong board erases them, and there is then nothing
 in the app that can tell it apart from the right one. `db.path` is the durable answer: compare it
