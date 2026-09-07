@@ -107,6 +107,9 @@ async page => {
 
   const filter = page.getByPlaceholder('Search name or description...');
   await filter.fill('keyboard');
+  await page.waitForURL(url => url.searchParams.get('q') === 'keyboard');
+  assert(await page.evaluate(() => new URLSearchParams(location.search).get('request')) === requestId,
+    'Filtering lost the selected request from the URL.');
   await workspace.getByRole('button', { name: 'Refresh saved details', exact: true }).click();
   await workspace.getByText(acknowledgement, { exact: true }).waitFor();
   assert(await filter.inputValue() === 'keyboard', 'Refreshing reset the human board filter.');

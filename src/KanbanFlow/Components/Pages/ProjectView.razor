@@ -420,11 +420,11 @@ else
     public int? DeepLinkTaskId { get; set; }
 
     /// <summary>
-    /// Applied ONCE per component instance. Every later <see cref="LoadProject"/> — a save, a
-    /// drag, closing the panel — must not silently re-open a panel the user just dismissed while
-    /// the query string is still in the address bar.
+    /// Applied once per task-query change. Reloads, closing the panel and filter changes must
+    /// not re-open a dismissed task, but following another task link must open its panel.
     /// </summary>
     private bool deepLinkApplied;
+    private int? observedDeepLinkTaskId;
 
     private Project? project;
     private List<TaskItem> allTasks = [];
@@ -575,13 +575,25 @@ else
         // Nav.LocationChanged, re-parse, and unsubscribe in DisposeAsync. (CodeRabbit, PR #362.)
         filter = TaskFilterState.FromUri(Nav.Uri);
         await LoadProject();
+    }
+
+    protected override void OnParametersSet()
+    {
+        if (observedDeepLinkTaskId != DeepLinkTaskId)
+        {
+            observedDeepLinkTaskId = DeepLinkTaskId;
+            deepLinkApplied = false;
+        }
+
         ApplyDeepLinkedTask();
     }
 
     /// <summary>Opens the task named by <see cref="DeepLinkTaskId"/>, if it exists here.</summary>
     private void ApplyDeepLinkedTask()
     {
-        if (deepLinkApplied || DeepLinkTaskId is not int taskId) return;
+        // This panel is controlled by Blazor. Rendering it open during prerender lets
+        // Bootstrap's load handler create a second backdrop outside Blazor's ownership.
+        if (!RendererInfo.IsInteractive || deepLinkApplied || DeepLinkTaskId is not int taskId) return;
         deepLinkApplied = true;
 
         var task = allTasks.FirstOrDefault(t => t.Id == taskId);
@@ -1015,8 +1027,8 @@ else
         try
         {
             // The query string is rebuilt from `filter`, not edited in place — that is what makes
-            // Clear able to leave a genuinely empty query — and then the ONE parameter this route
-            // owns outside the filter is merged back on.
+            // Clear able to remove all filters — then this route's task and request context
+            // parameters are merged back on.
             //
             // That merge is not optional. `?task=` arrived with #281 (the Home card's "Next" chip
             // deep-links straight at a task), which is precisely the "if this route ever grows an
@@ -1024,7 +1036,8 @@ else
             // first keystroke in the filter box silently strips `task=` out of the address bar, so
             // reloading or sharing the link no longer opens the task it named — and because
             // DeepLinkTaskId is [SupplyParameterFromQuery], the value is gone from the component
-            // too and cannot be put back. `taskId` is an int, so no escaping is required.
+            // too and cannot be put back. Preserve `request=` for the same reason: losing it
+            // resets the request workspace and its unsaved drafts. Ints and GUIDs need no escaping.
             //
             // replace: true so typing five characters leaves ONE history entry, not five — otherwise
             // Back walks the user backwards through their own keystrokes instead of off the page.
@@ -1034,6 +1047,10 @@ else
             if (DeepLinkTaskId is int taskId)
             {
                 query = query.Length == 0 ? $"?task={taskId}" : $"{query}&task={taskId}";
+            }
+            if (WorkflowRequestId is Guid requestId)
+            {
+                query = query.Length == 0 ? $"?request={requestId}" : $"{query}&request={requestId}";
             }
 
             Nav.NavigateTo($"/project/{Id}{query}", forceLoad: false, replace: true);
