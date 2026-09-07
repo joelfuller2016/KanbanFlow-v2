@@ -273,7 +273,9 @@ public sealed class AdminHealthEndpointTests
         public void Dispose()
         {
             if (!_created) return;
-            SqliteConnection.ClearAllPools();
+            // No ClearAllPools(): every connection here is Pooling=False, and that call is
+            // process-global -- it would yank idle handles out from under test classes running in
+            // parallel (same reason IdeaServiceTests avoids it).
             try { File.Delete(Path); }
             catch (IOException) { /* a host still holding the handle is not a test failure */ }
         }

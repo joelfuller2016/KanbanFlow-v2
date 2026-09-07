@@ -231,6 +231,10 @@ truncation are reported rather than silently presented as complete.
 | Route | Methods |
 |---|---|
 | `/api/admin/health` | `GET` — `{ status, app, startedAtUtc, checkedAtUtc, runtime, openApiUrl, db }` |
+| `/api/admin/run-tests` | `POST` — `?suite=api\|ui\|service\|all` |
+| `/api/admin/llm-ping` | `GET` — LLM connectivity self-test |
+| `/api/admin/embed-ping` | `GET` — embedding connectivity self-test |
+| `/api/admin/memory/reindex` | `POST` |
 
 `status` is `ok`, `degraded` or `error`, and the endpoint returns **HTTP 200 in all three** —
 a caller that cannot read the reason is worse off than one told nothing (#498). `db` carries
@@ -250,10 +254,6 @@ transient lock into a stalled health check — longer than `scripts/ui-e2e.mjs` 
 declaring the app dead. Contention surfaces as `error` with the SQLite message in `db.error`,
 in about two seconds, and clears itself. Measured uncontended against a seed-sized board:
 `db.elapsedMs` 0.7–1.3 ms, full round trip 2–3 ms.
-| `/api/admin/run-tests` | `POST` — `?suite=api\|ui\|service\|all` |
-| `/api/admin/llm-ping` | `GET` — LLM connectivity self-test |
-| `/api/admin/embed-ping` | `GET` — embedding connectivity self-test |
-| `/api/admin/memory/reindex` | `POST` |
 
 Plus `GET /openapi.json` in `Program.cs`, which 302s to `/openapi/v1.json`.
 
