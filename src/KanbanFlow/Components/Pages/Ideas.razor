@@ -779,7 +779,7 @@ else
 
         try
         {
-            var result = await IdeaSvc.PromoteAsync(promotingIdea.Id, "User", _cts.Token);
+            var result = await IdeaSvc.PromoteAsync(promotingIdea.Id, "User", ct: _cts.Token);
             await ClosePromoteModal();
             promoteSuccess = result;
             // The promoted card just changed columns, so LoadIdeas re-binds the sortables for us.

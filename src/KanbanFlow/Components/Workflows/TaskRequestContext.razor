@@ -21,8 +21,11 @@
     protected override async Task OnParametersSetAsync() { if (loadedId != TaskId) { loadedId = TaskId; await Load(); } }
     private async Task Load()
     {
-        var request = await Workflow.GetForTaskAsync(TaskId);
+        var id = TaskId;
+        var request = await Workflow.GetForTaskAsync(id);
+        if (id != TaskId) return;
         context = request is null ? null : await Workflow.ContextAsync(request.Id);
-        task = context?.Tasks.FirstOrDefault(t => t.TaskId == TaskId);
+        if (id != TaskId) return;
+        task = context?.Tasks.FirstOrDefault(t => t.TaskId == id);
     }
 }

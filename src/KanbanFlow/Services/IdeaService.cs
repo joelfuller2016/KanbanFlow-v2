@@ -239,7 +239,7 @@ public sealed class IdeaService(IDbContextFactory<AppDbContext> dbFactory) : IId
         await db.SaveChangesAsync(ct);
     }
 
-    public async Task<IdeaPromoteResult> PromoteAsync(int ideaId, string? actor, CancellationToken ct = default, int? existingProjectId = null)
+    public async Task<IdeaPromoteResult> PromoteAsync(int ideaId, string? actor, int? existingProjectId = null, CancellationToken ct = default)
     {
         await using var db = await dbFactory.CreateDbContextAsync(ct);
         await using var tx = await db.Database.BeginTransactionAsync(ct);

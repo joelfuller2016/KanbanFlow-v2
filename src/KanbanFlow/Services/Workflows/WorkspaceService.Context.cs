@@ -76,6 +76,9 @@ public sealed partial class WorkspaceService
         if (input.Operation == "create_project") return new(null, null, await CreateProjectAsync(Text(input.Name, "Name"), actor, key, ct));
         if (input.Operation == "register_repository") return new(null, null, await RegisterRepositoryAsync(Need(input.ProjectId, "ProjectId"),
             Text(input.Name, "Name"), Text(input.Path, "Path"), options.ProjectsRoot, actor, key, ct));
+        if (input.Operation is not ("attach_project" or "save_brief" or "save_plan" or "publish_plan" or
+                "add_message" or "set_task_state" or "report_result" or "accept_result" or "conclude" or "archive"))
+            throw Invalid("Unknown workflow operation. Read the workflow API reference for supported operations.");
         var id = Need(input.RequestId, "RequestId"); var version = Need(input.ExpectedVersion, "ExpectedVersion");
         return Reply(await (input.Operation switch
         {

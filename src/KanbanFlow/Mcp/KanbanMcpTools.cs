@@ -698,7 +698,7 @@ public static class KanbanMcpTools
     {
         try
         {
-            var result = await ideaService.PromoteAsync(ideaId, NormalizeActor(actor), cancellationToken);
+            var result = await ideaService.PromoteAsync(ideaId, NormalizeActor(actor), ct: cancellationToken);
             return new IdeaPromotionResult(
                 result.IdeaId, result.ProjectId,
                 $"Idea {result.IdeaId} promoted to project {result.ProjectId}");

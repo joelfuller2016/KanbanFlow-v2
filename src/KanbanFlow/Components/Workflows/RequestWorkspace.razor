@@ -75,6 +75,7 @@
     private string actor = "Human", title = "", original = "";
     private string? error, notice;
     private int attachProject;
+    private int _refreshGen;
 
     protected override async Task OnParametersSetAsync()
     {
@@ -87,17 +88,20 @@
     }
     private async Task Refresh()
     {
+        var gen = ++_refreshGen;
         try
         {
-            requests = await Workflow.RequestsAsync(ProjectId);
-            projects = await Workflow.ProjectsAsync();
+            var reqs = await Workflow.RequestsAsync(ProjectId);
+            var projs = await Workflow.ProjectsAsync();
             var id = current?.Id ?? RequestId;
             if (IdeaId is int ideaId) id = (await Workflow.GetForIdeaAsync(ideaId))?.Id;
-            current = id is Guid requestId ? await Workflow.ContextAsync(requestId) : null;
-            if (current is not null && ProjectId is int projectId && current.ProjectId != projectId) current = null;
+            var ctx = id is Guid requestId ? await Workflow.ContextAsync(requestId) : null;
+            if (ctx is not null && ProjectId is int projectId && ctx.ProjectId != projectId) ctx = null;
+            if (gen != _refreshGen) return;
+            requests = reqs; projects = projs; current = ctx;
             error = null;
         }
-        catch (Exception ex) when (ex is WorkflowException or InvalidOperationException) { error = ex.Message; }
+        catch (Exception ex) when (ex is WorkflowException or InvalidOperationException) { if (gen == _refreshGen) error = ex.Message; }
     }
     private async Task SelectRequest(ChangeEventArgs e)
     {

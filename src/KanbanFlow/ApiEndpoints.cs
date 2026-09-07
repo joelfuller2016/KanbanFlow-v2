@@ -759,7 +759,7 @@ public static class ApiEndpoints
         {
             try
             {
-                var result = await ideaSvc.PromoteAsync(id, dto?.Actor, ct);
+                var result = await ideaSvc.PromoteAsync(id, dto?.Actor, ct: ct);
                 return Results.Ok(new { ideaId = result.IdeaId, projectId = result.ProjectId });
             }
             catch (Services.IdeaNotFoundException)
