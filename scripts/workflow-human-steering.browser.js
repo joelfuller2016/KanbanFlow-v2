@@ -124,6 +124,10 @@ async page => {
   await detail.waitFor();
   await detail.getByRole('region', { name: 'Task request context' }).getByRole('link').waitFor();
   assert((await detail.innerText()).includes(title), 'Keyboard did not open the revised task.');
+  await page.waitForFunction(() => {
+    const panel = document.querySelector('[data-testid="task-detail-panel"]');
+    return panel && panel.getBoundingClientRect().right <= innerWidth + 1;
+  });
   await page.screenshot({ path: 'steering-task-detail.png', fullPage: true });
   await page.getByTestId('task-detail-close-button').click();
   await page.goto(entry.href);
