@@ -35,21 +35,38 @@ sync doesn't use that, because GitHub milestones aren't hierarchical.
 
 ### Issue → TaskItem
 
-Matched by parsing the **`#<n>` prefix** off the task title — the trailing space is part of the
-key, as the regex shows (`/^#(\d+)\s/`).
+Matched by the **`ExternalWorkItemLink` row's immutable `externalNodeId`** — GitHub's GraphQL
+node id for the issue (`I_kwDO…`). Repository-local numbers and URLs are refreshable display
+metadata hanging off that row; the node is the identity.
 
 ```text
-Task title:  "#287 Add kanban-portfolio skill: reconcile GitHub -> board"
-             ▲
-             └── the idempotency key
+ExternalWorkItemLink  taskId 287 ── provider GitHub
+                      externalNodeId  I_kwDOMzQ1Njc…   ← the identity
+                      externalNumber  287              ← metadata, changes on transfer
+                      url             https://…/287    ← metadata
 ```
 
-This is the whole reason the sync needs no schema change. It is also fragile in one specific
-way: **strip or edit that prefix and the task is orphaned** — the next sync won't recognise it
-and will create a duplicate. Don't rename synced tasks by hand; edit the issue instead.
+Why the node and not the number: an issue transferred between repositories keeps its node id and
+gets a **new number**. Matching on the number would fork a second task for the same issue, or —
+worse — bind a task to a different repository's issue that happens to share the integer.
 
-`TaskItem.IssueNumber` (#237) replaces this with a real column. Until then, treat the prefix as
-data, not decoration.
+**The `#<n>` title prefix is the legacy fallback**, from before durable links existed (the
+trailing space is part of it, as the regex shows: `/^#(\d+)\s/`). It still matches a task that
+has no link row yet, and the first ordinary `sync` after upgrading **promotes** that match to a
+durable link and strips the prefix in the same run.
+
+Promotion is refused, and reported as drift naming `backfill-links owner/repo`, when the task's
+`kanbanflow-sync` block names a different repository or a different issue number than the prefix
+matched. That block is authoritative; a bare `#<n> ` is not.
+
+So: until a task has been promoted the prefix is still its only identity — **strip or edit it by
+hand and the task is orphaned**, and the next sync creates a duplicate. Once the link row exists
+the prefix is decoration, GitHub owns the title outright, and the sync removes the prefix for
+you. Either way, don't rename synced tasks by hand; edit the issue instead.
+
+`backfill-links owner/repo` remains for what an ordinary sync cannot see: a task whose issue is
+already closed while `--include-closed` is off, or one whose prefix was stripped before the link
+existed. It is no longer a mandatory upgrade step.
 
 ## Field mapping
 

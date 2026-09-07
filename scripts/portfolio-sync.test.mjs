@@ -1434,3 +1434,39 @@ test("the create window's failure text describes the row, not a hope", async () 
     console.error = realError;
   }
 });
+
+// --- the agent-facing skill teaches the model this PR actually ships ------------------------
+//
+// SKILL.md is the first thing every future agent loads, so a stale contract there is not a
+// documentation nit: it is the model the next contributor codes against. Both sentences below
+// were true before #336 and are false after it, and neither is reachable from any code path, so
+// nothing else in this suite would ever notice them rotting back in.
+import { readFileSync } from "node:fs";
+import { fileURLToPath as toPath } from "node:url";
+
+const skillDir = new URL("../.claude/skills/kanban-portfolio/", import.meta.url);
+const readSkill = (name) => readFileSync(toPath(new URL(name, skillDir)), "utf8");
+
+test("the kanban-portfolio skill no longer teaches the pre-#336 contracts", () => {
+  const skill = readSkill("SKILL.md");
+  const mapping = readSkill("reference/mapping.md");
+
+  // Contract 1: the sync no longer "never writes to GitHub" -- push-issue --allow-write --task
+  // performs one additive create.
+  assert.doesNotMatch(skill, /never writes to GitHub/);
+  assert.match(skill, /exactly one write surface, and it is additive/);
+  assert.match(skill, /push-issue owner\/repo\s*\n?--allow-write --task <id>/);
+
+  // Contract 2: the "#<n> " prefix is no longer the idempotency key.
+  for (const [name, text] of [["SKILL.md", skill], ["reference/mapping.md", mapping]]) {
+    assert.doesNotMatch(text, /is the idempotency key/, `${name} still calls the prefix the key`);
+    assert.match(text, /externalNodeId/, `${name} must name the durable identity`);
+  }
+  assert.match(skill, /legacy display-only fallback/);
+  assert.match(mapping, /the legacy fallback/);
+
+  // And it tells an agent what an upgraded board actually does, since that is the question a
+  // stale doc leaves them guessing at.
+  assert.match(skill, /promotes/);
+  assert.match(mapping, /backfill-links owner\/repo/);
+});

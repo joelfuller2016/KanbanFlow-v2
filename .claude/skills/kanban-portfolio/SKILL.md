@@ -62,9 +62,17 @@ Config: `KANBANFLOW_API_URL` (default `http://127.0.0.1:5123`), `KANBANFLOW_PORT
 
 ## The one rule that governs everything
 
-**GitHub is the source of truth. The board is its projection.** The sync is strictly one-way
-(GitHub → board) and **never writes to GitHub**. If the board and GitHub disagree, GitHub is
-right and the disagreement is *reported as drift* — it is not silently resolved.
+**GitHub is the source of truth. The board is its projection.** `sync`, `status` and
+`backfill-links` are strictly one-way (GitHub → board) and read-only on GitHub. If the board and
+GitHub disagree, GitHub is right and the disagreement is *reported as drift* — it is not
+silently resolved.
+
+**There is exactly one write surface, and it is additive.** `push-issue owner/repo
+--allow-write --task <id>` performs **one** `gh issue create` for **one** board task, behind a
+durable prepare → dispatch → finalize journal. Everything else about the integration is still
+read-only: there is no edit, close, delete, reword, re-label-after-create, comment or assignment
+path anywhere, and `sync` itself never creates an issue. `push-issue` with no `--allow-write` is
+a preview and writes nothing.
 
 Corollaries you must not violate:
 
@@ -111,9 +119,17 @@ Two things about this are load-bearing, not cosmetic:
 - **Milestone → Feature is required.** Tasks are created at `POST /api/features/{featureId}/tasks`
   — a task *must* have a Feature parent. Milestones are also what keeps a 400-task board
   readable: each project's tasks group under ~7 milestone buckets.
-- **The `#<n>` title prefix is the idempotency key** (the trailing space is part of it). It is how a re-sync recognises a task
-  it already created, and it needs no schema change. (A durable `TaskItem.IssueNumber` column
-  is tracked in #237; until it lands, don't strip the prefix — you'll orphan the task.)
+- **Identity is the `ExternalWorkItemLink` row, keyed by the issue's immutable
+  `externalNodeId`** (the GraphQL node id, `I_kwDO…`) — not the issue number, which a repository
+  transfer changes, and not the task title. That row is what a re-sync matches on, and it is
+  what survives a rename, a transfer and a hand-edited title.
+- **The `#<n>` title prefix is a legacy display-only fallback**, not a key. It is how boards
+  created before #336 were matched, and the first ordinary `sync` after upgrading **promotes**
+  each such task to a durable link and then strips the prefix automatically — provided the
+  task's `kanbanflow-sync` block does not name a different repo or issue, in which case sync
+  emits drift and leaves it to `backfill-links owner/repo`. Until a task has been promoted the
+  prefix is still its only identity, so **don't strip it by hand**; after promotion it is
+  decoration and the sync removes it for you.
 
 Full mapping semantics, drift rules, and the `kanbanflow-sync` description block:
 see `reference/mapping.md`.
