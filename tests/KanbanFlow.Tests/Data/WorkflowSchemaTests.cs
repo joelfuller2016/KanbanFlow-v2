@@ -65,7 +65,10 @@ public sealed class WorkflowSchemaTests
         {
             WorkflowSchema.EnsureTables(db);
             db.WorkRequests.Add(new WorkRequest { IdeaId = request.IdeaId, Title = "Duplicate workflow" });
-            await Assert.ThrowsAsync<DbUpdateException>(() => db.SaveChangesAsync());
+            var failure = await Assert.ThrowsAsync<DbUpdateException>(() => db.SaveChangesAsync());
+            var sqlite = Assert.IsType<SqliteException>(failure.InnerException);
+            Assert.Equal(19, sqlite.SqliteErrorCode); // SQLITE_CONSTRAINT
+            Assert.Contains("UNIQUE constraint failed: WorkRequests.IdeaId", sqlite.Message, StringComparison.Ordinal);
         }
         var reloaded = await f.LoadAsync(request.Id);
         Assert.Equal(request.IdeaId, reloaded.IdeaId);

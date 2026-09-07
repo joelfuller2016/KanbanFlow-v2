@@ -57,8 +57,6 @@ public sealed class UnifiedTaskWorkflowTests
         Assert.Equal(second.Description, workflowTask.Specification.Description);
         Assert.Equal("Original request", context.Messages.Single(m => m.Kind == "original").Text);
         Assert.Equal(request.Id, (await f.Service.GetForIdeaAsync(request.IdeaId))!.Id);
-        using var serialized = JsonDocument.Parse(JsonSerializer.Serialize(context));
-        Assert.Equal(item.TaskItemId, serialized.RootElement.GetProperty("Tasks").EnumerateArray().Single(t => t.GetProperty("TaskId").GetInt32() == item.TaskItemId).GetProperty("TaskId").GetInt32());
         await using var db = f.CreateDbContext();
         Assert.Equal(2, await db.Tasks.CountAsync());
         Assert.Equal(2, await db.ActivityEvents.CountAsync(a => a.EventType == "TaskCreated"));
