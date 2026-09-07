@@ -857,7 +857,11 @@ try {
             }
 
             if ($healthy) {
-                Write-Host "[task] $healthUri answers status ok"
+                # "is serving", not "is ok": Test-KanbanFlowHealthy accepts degraded as well,
+                # because degraded means the app opened its database and read from it and is
+                # reporting something about that board (#498). Saying "ok" here would name a
+                # verdict the probe did not actually require.
+                Write-Host "[task] $healthUri is serving a database (status ok or degraded)"
             }
             else {
                 $lastResult = '(unknown)'
@@ -866,7 +870,8 @@ try {
                     $lastResult = ('0x{0:X8}' -f $info.LastTaskResult)
                 }
                 catch { }
-                throw ("Started $TaskName but $healthUri did not answer status ok within " +
+                throw ("Started $TaskName but $healthUri did not report a served database " +
+                       "(status ok or degraded) within " +
                        "${StartTimeoutSeconds}s. LastTaskResult=$lastResult (0x800710E0 means Task " +
                        "Scheduler REFUSED the start because an instance is already running, so " +
                        "nothing new was launched). The task is registered and left in place.")
