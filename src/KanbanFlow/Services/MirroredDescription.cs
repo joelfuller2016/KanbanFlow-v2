@@ -100,7 +100,7 @@ public static class MirroredDescription
     private static ReadOnlySpan<char> WithoutOrphanSurrogate(ReadOnlySpan<char> s) =>
         s.Length > 0 && char.IsHighSurrogate(s[^1]) ? s[..^1] : s;
 
-    /// <summary>The first <see cref="ScanChars"/> characters of <paramref name="description"/>, or <c>null</c> when the description is null or empty.</summary>
+    /// <summary>Up to <see cref="ScanChars"/> UTF-16 code units from <paramref name="description"/>, with a trailing high surrogate removed; returns <c>null</c> when the description is null or empty.</summary>
     private static string? Head(string? description) => string.IsNullOrEmpty(description)
         ? null
         : description.Length > ScanChars

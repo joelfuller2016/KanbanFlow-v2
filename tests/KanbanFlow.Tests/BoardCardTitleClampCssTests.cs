@@ -77,7 +77,7 @@ public sealed class BoardCardTitleClampCssTests
             + "the button (`.board-card-title-text` / `.outline-task-title-text`) instead.");
     }
 
-    /// <summary>Every <c>-webkit-line-clamp</c> declaration targets a selector that establishes a WebKit box.</summary>
+    /// <summary>Every <c>-webkit-line-clamp</c> declaration's subject class belongs to the set of classes that establish a <c>display: -webkit-box</c>.</summary>
     [Fact]
     public void EveryLineClampDeclaration_TargetsTheBoxThatCarriesTheClamp()
     {
