@@ -1537,15 +1537,39 @@ h1:focus {
    collapsed its reveal mid-click. `ghostClass` appears only once a drag genuinely begins.
 
    The TITLE needs suppressing too, and originally did not have it. Un-clamping a title from 2 lines
-   to all of them changes a card's height by MORE than the reveal does, on essentially every card. */
-body:has(.kanban-ghost) .board-card > .card-body > .board-card-reveal {
-    grid-template-rows: 0fr;
-    opacity: 0;
-}
+   to all of them changes a card's height by MORE than the reveal does, on essentially every card.
 
-body:has(.kanban-ghost) .board-card .board-card-title-text {
-    -webkit-line-clamp: 2;
-    line-clamp: 2;
+   ── Why the whole block is inside `@media (hover: hover)` ──
+   There is nothing to suppress on a touch device, and suppressing anyway was actively harmful.
+   `(hover: none)` keeps the reveal permanently open and the title permanently un-clamped (see the
+   block at the bottom of this file) precisely because a touch user has no pointer path to either.
+   Nothing there grows when a drag starts, so the geometry is already the still geometry SortableJS
+   wants. But these two rules out-specify that always-open branch, so on touch the FIRST FRAME of a
+   drag re-clamped every title and collapsed every reveal on the board at once — the whole-board
+   reflow this block exists to prevent, delivered by this block, at the one moment it must not
+   happen. Scoping to `(hover: hover)` leaves the touch branch alone; the specificity notes above
+   still govern the desktop case, since a media query changes scope and not specificity.
+
+   ── Why `transition: none` ──
+   `.board-card-reveal` declares `transition: grid-template-rows .18s ease, opacity .18s ease`, and
+   an override that does not reset it inherits it. The suppression was therefore TWEENED: 180ms of
+   geometry still moving, beginning at the instant of the drag. SortableJS resolves a drop from the
+   list's live geometry, so an animated collapse does not prevent the misdrop, it just supplies it
+   more slowly. The reset makes the collapse land in the frame the drag begins. It is on the title
+   rule as well: nothing transitions a clamp today, and this is what keeps that true if something
+   later does. */
+@media (hover: hover) {
+    body:has(.kanban-ghost) .board-card > .card-body > .board-card-reveal {
+        grid-template-rows: 0fr;
+        opacity: 0;
+        transition: none;
+    }
+
+    body:has(.kanban-ghost) .board-card .board-card-title-text {
+        -webkit-line-clamp: 2;
+        line-clamp: 2;
+        transition: none;
+    }
 }
 
 /* ── The reveal's own content ─────────────────────────────────────────────────────────────────── */
@@ -1625,8 +1649,13 @@ body:has(.kanban-ghost) .board-card .board-card-title-text {
    title both opens the detail panel and kills :focus-within in the same interaction, so the user
    has no pointer path to the excerpt or GitHub link. Keeping the reveal at rest shows the same
    information without requiring an interaction that cannot be performed.
-   The `body:has(.kanban-ghost)` drag-suppression rules above have (0,4,1) specificity and still
-   win when a drag begins, so the excerpt and link correctly hide during drags here too. */
+   The `body:has(.kanban-ghost)` drag-suppression rules above do NOT apply here, deliberately: they
+   are scoped to `(hover: hover)`. They previously did — at (0,4,1) they out-specified everything in
+   this block — and the result was the opposite of their purpose. A card here is already at its full
+   height at rest, so a drag has nothing to grow; letting the suppression through only made the
+   first frame of a touch drag re-clamp and re-collapse every card on the board simultaneously. The
+   geometry SortableJS reads is stable on touch because this block never moves, not because anything
+   suppresses it. */
 @media (hover: none) {
     /* Touch devices cannot hover to expand the title, so show the full title immediately.
        overflow stays hidden: visible would restore min-width:auto on the flex item, letting a

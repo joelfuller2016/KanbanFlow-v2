@@ -3,7 +3,7 @@ using System.Text.RegularExpressions;
 namespace KanbanFlow.Tests;
 
 /// <summary>
-/// Structural guards on the #481 two-line title clamp in
+/// Structural guards on the #481 title clamp and its drag suppression in
 /// <c>src/KanbanFlow/wwwroot/app.css</c>.
 /// </summary>
 /// <remarks>
@@ -11,7 +11,7 @@ namespace KanbanFlow.Tests;
 /// WHAT THESE CAN AND CANNOT DO. There is no CSS engine in this process, so nothing here proves a
 /// rendered height. What each case proves is a STRUCTURAL precondition that the rendering depends
 /// on — the kind of precondition whose violation is invisible in the browser the author happens to
-/// be using, which is exactly how the guarded defect shipped:
+/// be using, which is exactly how both guarded defects shipped:
 /// </para>
 /// <list type="number">
 ///   <item><description>
@@ -24,10 +24,16 @@ namespace KanbanFlow.Tests;
 ///     complaint is that a card shows too little title to identify — the pre-fix rule shipped that
 ///     bug unchanged to every WebKit reader, which is every browser on iOS.
 ///   </description></item>
+///   <item><description>
+///     The drag-suppression rules out-specified the touch always-open branch, so beginning a drag
+///     on a touch device re-clamped and re-collapsed EVERY card at once — the whole-board reflow
+///     the suppression exists to prevent — and, with no <c>transition</c> reset, animated it for
+///     180ms after the drag was already under way.
+///   </description></item>
 /// </list>
 /// <para>
 /// The stylesheet is parsed rather than string-matched so the assertions can talk about a rule's
-/// SUBJECT and its enclosing at-rules, which is where the defect lived.
+/// SUBJECT and its enclosing at-rules, which is where both defects lived.
 /// </para>
 /// </remarks>
 public sealed class BoardCardTitleClampCssTests
@@ -98,10 +104,81 @@ public sealed class BoardCardTitleClampCssTests
         }
     }
 
+    // ── The drag suppression ─────────────────────────────────────────────────────────────────────
+
+    [Fact]
+    public void DragSuppression_DoesNotReachTheTouchAlwaysOpenBranch()
+    {
+        var rules = ParseRules(RepositorySource.Read(StylesheetPath));
+
+        var touchBranch = rules.Where(r => r.AtRules.Any(IsHoverNone)).ToList();
+        // NON-VACUITY: there IS an always-open touch branch for the suppression to collide with.
+        Assert.NotEmpty(touchBranch);
+
+        var suppression = DragSuppressionRules(rules);
+        Assert.True(suppression.Count >= 2,
+            $"Expected the reveal and the title to both be suppressed during a drag, found {suppression.Count} "
+            + "rule(s) keyed on `.kanban-ghost`.");
+
+        foreach (var rule in suppression)
+        {
+            Assert.True(rule.AtRules.Any(IsHoverHover),
+                $"`{rule.Selector.Trim()}` suppresses the reveal during a drag but is not scoped to "
+                + "`@media (hover: hover)`, so it also applies on touch. On touch the reveal is permanently "
+                + "open and the title permanently unclamped, and this rule out-specifies both — so the "
+                + "instant a drag begins it re-clamps the title and collapses the reveal on EVERY card at "
+                + "once. That is a full-board reflow delivered at the exact moment the user is dragging, "
+                + "caused by the rule whose entire purpose is to keep the geometry still. Touch needs no "
+                + "suppression: with nothing growing on hover there, there is nothing to suppress.");
+        }
+    }
+
+    [Fact]
+    public void DragSuppression_CollapsesInOneFrame()
+    {
+        var rules = ParseRules(RepositorySource.Read(StylesheetPath));
+
+        // NON-VACUITY: the reveal is tweened at rest, so `transition: none` is a real reset rather
+        // than a no-op restating a default.
+        var restingReveal = rules.Single(r => r.AtRules.Count == 0 && r.Selector.Trim() == ".board-card-reveal");
+        Assert.Matches(@"transition\s*:\s*grid-template-rows", restingReveal.Body);
+
+        var suppression = DragSuppressionRules(rules);
+        Assert.True(suppression.Count >= 2, $"Only {suppression.Count} drag-suppression rule(s) found.");
+
+        foreach (var rule in suppression)
+        {
+            Assert.True(Regex.IsMatch(rule.Body, @"transition\s*:\s*none"),
+                $"`{rule.Selector.Trim()}` suppresses the reveal for the duration of a drag but does not reset "
+                + "`transition`, so the collapse it asks for is TWEENED over the .18s the resting rule "
+                + "declares. SortableJS resolves a drop from the list's live geometry, so 180ms of moving "
+                + "geometry starting at the moment of the drag is precisely the failure this suppression "
+                + "exists to prevent — it merely delays it instead of stopping it. `transition: none` makes "
+                + "the collapse happen in the frame the drag begins.");
+        }
+    }
+
     // ── Reading the stylesheet ───────────────────────────────────────────────────────────────────
 
     /// <summary>A style rule with the at-rules (media queries, etc.) it is nested inside.</summary>
     private sealed record CssRule(IReadOnlyList<string> AtRules, string Selector, string Body);
+
+    /// <summary>
+    /// The rules that style something ELSE because a drag is in flight — selectors that mention
+    /// SortableJS's ghost class as a condition rather than as their subject. The exclusion matters:
+    /// `.kanban-ghost` itself is also a rule (the drag placeholder's own appearance), and it is not
+    /// a suppression rule, so folding it in would make both cases below fail for the wrong reason.
+    /// </summary>
+    private static List<CssRule> DragSuppressionRules(IEnumerable<CssRule> rules) =>
+        rules.Where(r => r.Selector.Contains("kanban-ghost", StringComparison.Ordinal)
+                         && SplitSelectorList(r.Selector).All(s => !SubjectClasses(s).Contains("kanban-ghost")))
+             .ToList();
+
+    private static bool IsHoverHover(string atRule) =>
+        Regex.IsMatch(atRule, @"^@media\b[^{]*\(\s*hover\s*:\s*hover\s*\)");
+
+    private static bool IsHoverNone(string atRule) =>
+        Regex.IsMatch(atRule, @"^@media\b[^{]*\(\s*hover\s*:\s*none\s*\)");
 
     /// <summary>
     /// The classes that establish a line clamp — the subjects of every rule declaring
