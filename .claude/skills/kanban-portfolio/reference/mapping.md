@@ -57,16 +57,24 @@ durable link and strips the prefix in the same run.
 
 Promotion is refused, and reported as drift naming `backfill-links owner/repo`, when the task's
 `kanbanflow-sync` block names a different repository or a different issue number than the prefix
-matched. That block is authoritative; a bare `#<n> ` is not.
+matched, or when its provenance is malformed (more than one block, more than one `**Issue:**`
+line, a non-canonical URL). That block is authoritative; a bare `#<n> ` is not — but a task with
+*no* block is the ordinary pre-#336 case and promotes. Promotion is also refused when the issue
+record carries no immutable node id, rather than persist a repo-local number as `externalNodeId`.
+A refusal is drift, never a stopped sync.
 
 So: until a task has been promoted the prefix is still its only identity — **strip or edit it by
 hand and the task is orphaned**, and the next sync creates a duplicate. Once the link row exists
 the prefix is decoration, GitHub owns the title outright, and the sync removes the prefix for
 you. Either way, don't rename synced tasks by hand; edit the issue instead.
 
-`backfill-links owner/repo` remains for what an ordinary sync cannot see: a task whose issue is
-already closed while `--include-closed` is off, or one whose prefix was stripped before the link
-existed. It is no longer a mandatory upgrade step.
+`backfill-links owner/repo` remains for what an ordinary sync cannot see or refuses to touch: a
+task whose issue is already closed while `--include-closed` is off, one whose prefix was stripped
+before the link existed, an already-quarantined candidate, and any of the refusals above. Two
+tasks claiming the same `#<n> ` stop the sync for that repo outright (`refusing an ambiguous
+sync`); `backfill-links` is unaffected, because it never keys on the prefix — it classifies each
+task from its own sync block. It is no longer a mandatory upgrade step — and run it *after* a
+first sync, since live it quarantines title-only `#<n> ` tasks the sync would promote.
 
 ## Field mapping
 

@@ -15,7 +15,7 @@ node scripts/portfolio-sync.mjs --help
 | `sync` (default) | GitHub → board | **No** | Mirror issues, milestones, labels and comments onto the board. |
 | `onboard <owner/repo>` | GitHub → board | **No** | Register a new repo: create/link its Project durably, then backfill everything. |
 | `push-issue <owner/repo>` | board → GitHub | Preview: **No**. Explicit live mode: **one issue** | Preview by default. `--allow-write --task <id>` enables one additive create through the durable journal; `--resume <uuid>` reconciles an interrupted operation. |
-| `backfill-links <owner/repo>` | GitHub → board identity | **No** | Verify authoritative URLs already stored in sync blocks, persist durable links, and quarantine ambiguous legacy candidates. |
+| `backfill-links <owner/repo>` | GitHub → board identity | **No** | **Repair/audit, not a required migration step** — an ordinary `sync` promotes a legacy prefix by itself. Verifies authoritative URLs already stored in sync blocks, persists durable links, and quarantines ambiguous legacy candidates. |
 | `status` | both | **No** | Health check. Exit `0` clean · `1` drift · `2` incomplete/error. |
 
 > **The GitHub write surface is one additive primitive.** Generic `gh()` remains checked against
@@ -44,8 +44,60 @@ node scripts/portfolio-sync.mjs --help
 | inline `file:line` review comment | TaskComment (`Comment`) | same node-id marker |
 
 Newly mirrored and board-originated issues receive structured links. Existing boards keep
-working during migration because prefix matching remains a fallback; `backfill-links` promotes
-only a verified sync-block URL and persists every ambiguous candidate as `Quarantined`.
+working because prefix matching remains a fallback — and an ordinary `sync` upgrades that
+fallback by itself.
+
+### Legacy prefix → durable link
+
+An ordinary `sync` promotes a legacy `#<n> ` prefix match to a durable link, with no operator
+action. `backfill-links` is **no longer the mandatory migration step**; it is the repair and
+audit tool for the cases promotion deliberately refuses.
+
+The precondition is the point. A prefix match knows only a repo-local *number* and the repo
+being synced — exactly the mutable identity durable links exist to stop trusting. So promotion
+never contradicts the task's `kanbanflow-sync` block, which is authoritative
+(`legacyPromotionDisposition`, `scripts/portfolio-sync.mjs`).
+
+**Promotes** — registers the link *and* strips the prefix in the same run — when all hold:
+
+| Condition | Why |
+|---|---|
+| the task is a `legacy` match: no active *and* no quarantined GitHub link for this repo, not linked to another repo, `#<n> ` parses, and no other task in the project claims `<n>` | structured state always beats title parsing |
+| the issue record's `node_id ?? id` is a non-numeric string | a REST-shaped record puts a *number* there; persisting it as `externalNodeId` would corrupt the identity field (`promotableIssueNodeId`) |
+| the description has **no** `**Issue:**` URL in a sync block **or** exactly one canonical URL naming this repo (case-insensitively) *and* this issue number | the ordinary pre-#336 task has no block and must be allowed; a block that agrees adds nothing to refuse |
+
+`--dry-run` plans both the link and the rename and writes neither.
+
+**Refuses, and reports drift** — the prefix is kept, the task keeps working, the sync moves on:
+
+| Case | Drift names |
+|---|---|
+| the sync block names a **different repository** | `backfill-links owner/repo` |
+| the sync block names a **different issue number** | `backfill-links owner/repo` |
+| **malformed provenance**: more than one `kanbanflow-sync` block, more than one `**Issue:**` line inside it, or an `**Issue:**` value that is not a canonical GitHub issue URL | `backfill-links owner/repo` — backfill owns that taxonomy and quarantines it properly |
+| the issue record carries **no immutable node id** | refuses rather than persisting a number as identity |
+| the board **rejects the link registration** (a competing claim, arbitrated server-side) | `backfill-links owner/repo`; the prefix stays the task's identity |
+
+**Never reached by promotion at all** — these fall to `backfill-links`, or to the human
+verified-link PUT:
+
+- the task's issue is **closed** and `--include-closed` is off, so it is not in the fetched set —
+  `backfill-links`;
+- the prefix was **already stripped** before a link existed — only the sync block can identify
+  it, so `backfill-links`;
+- the task already carries a **quarantined** link candidate, for which the sync refuses all
+  automation — and so does a `backfill-links` rerun. Only the verified link PUT clears it;
+- two tasks claim the same `#<n> `, which is not drift but a hard stop: `buildTaskIdentityIndex`
+  throws `refusing an ambiguous sync`, the rotation loop reports `ERROR on owner/repo` and exits
+  `1`, and the remaining repos still run. `backfill-links` is unaffected — it never builds that
+  index and never keys on the prefix, so it classifies each task from its own sync block
+  (`planBackfill`). It quarantines a *duplicate* only when two blocks name the same issue.
+
+**Order matters.** A live `backfill-links` quarantines a title-only `#<n> ` task as having "no
+authoritative kanbanflow-sync issue URL" — the very case an ordinary sync promotes — and a
+quarantined task is then refused by every later sync. Run `sync` first; run `backfill-links` for
+what it leaves behind.
+
 An explicit verified link PUT is the human-resolution path that promotes a quarantine to Active;
 backfill reruns deliberately leave the quarantine untouched. If malformed provenance cannot be
 correlated to one issue number, unmatched issue projection fails closed across that project until
@@ -75,7 +127,7 @@ This table describes the code, not the aspiration. Read the status row carefully
 
 | Field | Owner | Behaviour on every `sync` |
 |---|---|---|
-| Task **name** | GitHub | Active linked tasks use the plain issue title; legacy fallback tasks retain `#<n> <issue title>` until backfill. Identity never depends on a linked task's editable name. |
+| Task **name** | GitHub | Active linked tasks use the plain issue title; a legacy fallback task keeps `#<n> <issue title>` only until the sync that promotes it (see [Legacy prefix → durable link](#legacy-prefix--durable-link)). Identity never depends on a linked task's editable name. |
 | Task **priority** | GitHub | Always reconciled from the issue's labels. A board-side change is overwritten. |
 | Task **description** | GitHub | Written **once, at creation**. Later issue-body edits are *not* re-mirrored. |
 | Task **feature** | GitHub | Follows the issue's milestone. A milestone change **moves** the task. |
@@ -358,7 +410,7 @@ npm run gh:sync:dry    # …preview it
 npm run gh:status      # health check (exit 0/1/2)
 npm run gh:onboard -- joelfuller2016/new-repo
 npm run gh:push:preview -- joelfuller2016/new-repo --all   # preview only — never writes to GitHub
-npm run gh:backfill -- joelfuller2016/new-repo --dry-run
+npm run gh:backfill -- joelfuller2016/new-repo --dry-run   # repair/audit; sync already auto-promotes
 ```
 
 ---

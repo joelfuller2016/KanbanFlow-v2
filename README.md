@@ -87,7 +87,9 @@ Three properties make it safe to point at a real portfolio:
   open — is reported as **drift** and never touched (`driftDoneButOpen`). That asymmetry is the whole rule; the
   older "never overrides your status" phrasing was half true and has been corrected here.
 - **It is idempotent and fail-closed.** Active issue links use immutable GitHub repository and
-  issue node ids. Legacy `#<n> ` names remain a fallback until verified backfill. Interrupted
+  issue node ids. Legacy `#<n> ` names are a fallback that an ordinary `sync` promotes to a
+  durable link — and strips — as soon as the task's `kanbanflow-sync` block agrees or is
+  absent; a block that disagrees is reported as drift instead. Interrupted
   creates reconcile an exact operation marker; ambiguity never automatically authorizes another
   create. Issue
   transfers are detected globally by node: same-project metadata refreshes, while cross-project
@@ -218,21 +220,35 @@ from GitHub (`closed` → `Done`; open + linked open PR → `Review`; open + ass
 **Legacy and protocol markers are data, not decoration:**
 
 - Active linked tasks have plain names and survive arbitrary task/issue renames. On a task that
-  has not been backfilled, stripping the legacy `#<n> ` prefix can still orphan the fallback.
+  has not yet been promoted or backfilled, stripping the legacy `#<n> ` prefix can still orphan
+  the fallback.
 - Edit a mirrored comment's text and you strip its `<!-- gh:ID -->` marker — the next sync
   re-adds it as a duplicate. The marker is hidden where the body renders as Markdown
   (`MarkdownRenderer` sanitises HTML comments away) but **plainly visible in raw reads**:
   `GET /api/tasks/{id}/comments`, a `curl`, and any agent pulling the comment over MCP all
   see it.
 
-Run `backfill-links owner/repo --dry-run` to review legacy candidates. Only an authoritative
-issue URL inside a sync block can proceed to immutable-node verification. A different repository
+**An ordinary `sync` is the upgrade path — `backfill-links` is not a required first step.** When
+a legacy `#<n> ` prefix matches an issue in the repo being synced, the sync registers the durable
+link and strips the prefix in the same run, provided the task's `kanbanflow-sync` block agrees
+about the repo and the issue number, or carries no `**Issue:**` URL at all
+(`legacyPromotionDisposition` in `portfolio-sync.mjs`). An upgraded board therefore heals itself
+on the first sync, with no operator action. Promotion is **refused** — the prefix kept,
+the task reported as drift — when that block names a different repo or a different issue number,
+when its provenance is malformed, or when the issue record carries no immutable node id. Full
+case list: [`docs/GITHUB-SYNC.md`](docs/GITHUB-SYNC.md#legacy-prefix--durable-link).
+
+`backfill-links owner/repo` is the **repair and audit** tool for what auto-promotion will not
+touch. Run it with `--dry-run` to review those candidates. Only an authoritative issue URL inside
+a sync block can proceed to immutable-node verification. A different repository
 path is treated as metadata drift and must resolve to the same immutable issue node before the link
 is activated; title-only, duplicate, and malformed candidates are persisted as quarantined for
 human review.
 Reruns leave quarantines in place until a human promotes one through the verified link PUT. A
 quarantine with no correlatable issue number blocks projection of otherwise-unmatched issues for
-that project instead of allowing a duplicate.
+that project instead of allowing a duplicate. Because a live `backfill-links` **quarantines** a
+title-only `#<n> ` task that an ordinary sync would have promoted, run `sync` first and reach for
+`backfill-links` afterwards, for the residue.
 
 Full semantics, including truncation warnings, comment sizing, and every drift case:
 [`docs/GITHUB-SYNC.md`](docs/GITHUB-SYNC.md) and
@@ -246,7 +262,7 @@ The single most useful table here. Before you edit a field, know which side wins
 
 | Field | Owner | What that means in practice |
 |---|---|---|
-| Task **title** | **GitHub content; not identity** | Reconciled every run (`syncTasks()`). Active linked tasks show the plain issue title and identity survives renames. Legacy fallback tasks retain `#<n> ` until backfill |
+| Task **title** | **GitHub content; not identity** | Reconciled every run (`syncTasks()`). Active linked tasks show the plain issue title and identity survives renames. Legacy fallback tasks keep `#<n> ` only until the first sync that promotes them |
 | Task **priority** | **GitHub** | Reconciled every run (`syncTasks()`) from `P0`…`P3` / `priority:high` / bare severity labels. Setting it on the board is undone on the next sync |
 | Task **status** | **Shared, GitHub-dominant** | You may move it freely, **except** that a closed issue forces `Done` (`syncTasks()`). Board `Done` + open issue is reported as drift, not corrected |
 | Task **feature** (milestone) | **GitHub** | An issue's milestone change moves the task via `PATCH /api/tasks/{id}/feature` (`syncTasks()`) |

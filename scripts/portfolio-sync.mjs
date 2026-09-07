@@ -6,11 +6,13 @@
 //
 // Five commands (full contract: docs/GITHUB-SYNC.md):
 //
-//   sync        GitHub -> board mirror. The default command.
+//   sync        GitHub -> board mirror. The default command. Also promotes a legacy "#<n> "
+//               prefix match to a durable link; see legacyPromotionDisposition.
 //   onboard     register a NEW repo: create/link the Project, then backfill everything.
 //   push-issue  Preview by default. `--allow-write --task <id>` performs one journaled,
 //               additive issue create; `--resume <uuid>` explicitly reconciles an interruption.
-//   backfill-links  verify sync-block URLs into durable links; quarantine ambiguity.
+//   backfill-links  verify sync-block URLs into durable links; quarantine ambiguity. A REPAIR
+//               tool for what sync's auto-promotion refuses, not a required migration step.
 //   status      health check: counts both sides, unsynced tasks, drift, orphans, last sync.
 //               Exit 0 = clean and complete · 1 = confirmed drift · 2 = incomplete or error.
 //
@@ -2889,11 +2891,16 @@ const HELP = `portfolio-sync — GitHub <-> KanbanFlow. GitHub is the source of 
 the visualisation. Every command is idempotent and honours --dry-run.
 
   sync                        GitHub -> board mirror. Read-only on GitHub. THE DEFAULT.
+                              Also promotes a legacy "#<n> " prefix to a durable link (and
+                              strips it) unless the task's sync block disagrees -> drift.
   onboard <owner/repo>…       register a repo: link the Project durably, then backfill it.
   push-issue <owner/repo>     preview by default; one additive issue create only with the
                               explicit --allow-write --task <id> gate.
-  backfill-links <owner/repo> verify legacy sync-block URLs and persist durable links;
-                              ambiguous/title-only candidates are quarantined.
+  backfill-links <owner/repo> REPAIR/AUDIT, not a required migration step -- sync auto-promotes.
+                              Verify legacy sync-block URLs and persist durable links;
+                              ambiguous/title-only candidates are quarantined. Run it AFTER a
+                              first sync: live, it quarantines title-only "#<n> " tasks that
+                              sync would have promoted.
   status                      health check both sides.
                               exit 0 = clean and complete · 1 = drift · 2 = incomplete/error
 

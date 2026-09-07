@@ -126,8 +126,13 @@ Two things about this are load-bearing, not cosmetic:
 - **The `#<n>` title prefix is a legacy display-only fallback**, not a key. It is how boards
   created before #336 were matched, and the first ordinary `sync` after upgrading **promotes**
   each such task to a durable link and then strips the prefix automatically — provided the
-  task's `kanbanflow-sync` block does not name a different repo or issue, in which case sync
-  emits drift and leaves it to `backfill-links owner/repo`. Until a task has been promoted the
+  task's `kanbanflow-sync` block does not name a different repo or issue and its provenance is
+  well formed (one block, one canonical `**Issue:**` URL), and the issue record carries a real
+  node id. Any of those failing is drift — most of it naming `backfill-links owner/repo`; the
+  missing-node-id case just refuses to persist a number as identity — never a stopped sync.
+  `backfill-links` is a repair/audit tool, not a required migration step — and running it live
+  *before* a first sync quarantines title-only `#<n>` tasks the sync would have promoted, so
+  sync first. Until a task has been promoted the
   prefix is still its only identity, so **don't strip it by hand**; after promotion it is
   decoration and the sync removes it for you.
 
