@@ -33,8 +33,9 @@ namespace KanbanFlow.Services;
 public static class MirroredDescription
 {
     /// <summary>
-    /// How much of a description is examined. The sync's body cap is 30,000 chars, so an unbounded
-    /// <see cref="RegexOptions.Singleline"/> scan would read up to 30 KB per card per render hunting
+    /// How much of a description is examined. The sync's body cap is <c>MAX_DESCRIPTION_BYTES</c>
+    /// (29,491 serialized UTF-8 bytes by default), so an unbounded
+    /// <see cref="RegexOptions.Singleline"/> scan would read up to ~29 KB per card per render hunting
     /// a header that is always within the first few hundred bytes (the largest measured across 320
     /// issues is 296). The live board holds 185 cards, and a filter keystroke re-renders all of
     /// them. An excerpt needs only the head of the body, so both jobs are satisfied by one slice.

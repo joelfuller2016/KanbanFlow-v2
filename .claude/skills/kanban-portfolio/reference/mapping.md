@@ -119,11 +119,13 @@ Acceptable: the convention in these repos is `Closes #N` in the body, enforced b
 **Synced:** 2026-07-12T14:02:11.000Z
 <!-- /kanbanflow-sync -->
 
-<first 30,000 chars of the issue body>
+<first ~29,491 serialized UTF-8 bytes of the issue body>
 ```
 
-The block is machine-readable and human-visible. The body is truncated at 30,000 chars — 400
-tasks × full issue bodies is a lot of payload, and the canonical text is one click away.
+The block is machine-readable and human-visible. The body is truncated at `MAX_DESCRIPTION_BYTES`
+(29,491 serialized UTF-8 bytes by default) — 400 tasks × full issue bodies is a lot of payload,
+and the canonical text is one click away. A truncated description refreshes on the next sync run
+only when it still retains both the exact sync header and the truncation footer.
 
 ## Closed issues — fetched even when not mirrored
 
