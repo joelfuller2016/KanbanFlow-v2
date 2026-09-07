@@ -133,15 +133,16 @@ async page => {
   });
   await page.screenshot({ path: 'steering-task-detail.png', fullPage: true });
   await page.getByTestId('task-detail-close-button').click();
-  await page.goto(entry.href);
   await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto(entry.href);
   await page.locator('[data-testid="request-workspace"][data-interactive="true"]').waitFor();
   await workspace.getByRole('button', { name: 'Updates', exact: true }).click();
   await workspace.getByText(acknowledgement, { exact: true }).waitFor();
+  await workspace.getByText(acknowledgement, { exact: true }).scrollIntoViewIfNeeded();
   assert(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), 'Mobile page has horizontal overflow.');
   await page.screenshot({ path: 'steering-mobile.png', fullPage: true });
   await page.setViewportSize({ width: 1280, height: 900 });
-  console.log(JSON.stringify({ passed: true, requestId, taskId, decisionId: savedDecision.id,
+  return { passed: true, requestId, taskId, decisionId: savedDecision.id,
     decisionVisibleThroughMcp: true, oldPlanRefused: true, acknowledgementVisible: true,
-    revisedSameCard: true, keyboardTaskAccess: true, humanUsabilityApproval: 'pending' }));
+    revisedSameCard: true, keyboardTaskAccess: true, humanUsabilityApproval: 'pending' };
 }
