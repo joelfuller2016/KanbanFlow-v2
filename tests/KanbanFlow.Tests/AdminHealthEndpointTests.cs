@@ -493,6 +493,10 @@ public sealed class AdminHealthEndpointTests
             {
                 try { File.Delete(Path); }
                 catch (IOException) { /* a host still holding the handle is not a test failure */ }
+                // File.Delete throws this for a read-only or in-use entry and it does NOT derive
+                // from IOException, so the catch above does not cover it. Uncaught in Dispose it
+                // would fail the class for a cleanup problem rather than for an assertion — the
+                // Directory.Delete below and DbPathResolverTests.Dispose both already catch both.
                 catch (UnauthorizedAccessException) { }
             }
 
