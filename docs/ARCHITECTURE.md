@@ -230,7 +230,26 @@ truncation are reported rather than silently presented as complete.
 
 | Route | Methods |
 |---|---|
-| `/api/admin/health` | `GET` — `{ status, app, startedAtUtc, checkedAtUtc, runtime, openApiUrl }` |
+| `/api/admin/health` | `GET` — `{ status, app, startedAtUtc, checkedAtUtc, runtime, openApiUrl, db }` |
+
+`status` is `ok`, `degraded` or `error`, and the endpoint returns **HTTP 200 in all three** —
+a caller that cannot read the reason is worse off than one told nothing (#498). `db` carries
+`{ path, exists, source, existedAtStartup, shadowedPaths, projects, status, error, reasons,
+elapsedMs }`: the file that was actually opened, a real `COUNT(*)` read from it, and every
+reason the top-level status is not `ok`.
+
+`ok` means all of: the database opened, the read succeeded, the board is not empty, this
+process did not CREATE the board it is serving, and no second `kanbanflow.db` is shadowing
+the one in use. What the endpoint cannot know is which database the operator *meant* — the
+launcher pins `KANBANFLOW_DB_PATH` from its own computation, so the app faithfully opens
+whatever it is handed. That half is finished by the caller comparing `db.path`.
+
+The probe is bounded at a 2-second command timeout. SQLite runs here in rollback-journal
+mode, so a competing writer blocks readers and the 30-second driver default would turn a
+transient lock into a stalled health check — longer than `scripts/ui-e2e.mjs` waits before
+declaring the app dead. Contention surfaces as `error` with the SQLite message in `db.error`,
+in about two seconds, and clears itself. Measured uncontended against a seed-sized board:
+`db.elapsedMs` 0.7–1.3 ms, full round trip 2–3 ms.
 | `/api/admin/run-tests` | `POST` — `?suite=api\|ui\|service\|all` |
 | `/api/admin/llm-ping` | `GET` — LLM connectivity self-test |
 | `/api/admin/embed-ping` | `GET` — embedding connectivity self-test |
@@ -435,9 +454,17 @@ the app's own logs to explain it.
 **The database path is resolved at registration time and pinned into the action as `-DbPath`.**
 Without that, the launcher resolves it through `$HOME`, which differs between pwsh and Windows
 PowerShell and is not guaranteed under an `S4U` logon — and when the path misses, the launcher
-restores the committed seed and serves an **empty board** while `/api/admin/health` still answers
-`status: ok`. That endpoint never opens the database, so it cannot detect the case; see
-[#498](https://github.com/joelfuller2016/KanbanFlow-v2/issues/498).
+restores the committed seed and serves a board nobody asked for. `/api/admin/health` used to answer
+`status: ok` through all of that, because it never opened the database.
+
+Since [#498](https://github.com/joelfuller2016/KanbanFlow-v2/issues/498) it does. A start that
+creates the board it serves now answers `status: degraded`, `reasons: ["created-at-startup"]`, and
+names the file in `db.path`. Note what that fixes and what it does not: the seed the launcher
+restores holds a real project, so counting rows would have reported a healthy `projects: 1` — it is
+`existedAtStartup`, captured before `EnsureCreated` and `SeedData` run, that carries the signal.
+When the launcher *does* successfully restore the seed onto a wrong path, the board it serves
+existed before the app started and is not empty, so no in-app check can call it wrong; `db.path`
+names it and the operator (or #477 §9 criterion 3) compares.
 
 The script is idempotent (`-Force` replaces), verifies afterwards that the triggers actually landed,
 and **refuses to register the real task from a git worktree** (it asks `git rev-parse --git-dir`

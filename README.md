@@ -361,8 +361,17 @@ Confirm it is up:
 curl -s http://127.0.0.1:5123/api/admin/health
 # {"status":"ok","app":"KanbanFlow","startedAtUtc":"2026-08-02T22:26:22.1897449Z",
 #  "checkedAtUtc":"2026-08-02T22:26:30.7731684Z","runtime":".NET 10.0.10",
-#  "openApiUrl":"/openapi.json"}
+#  "openApiUrl":"/openapi.json",
+#  "db":{"path":"C:\Users\you\.kanbanflow\kanbanflow.db","exists":true,"source":"env",
+#        "existedAtStartup":true,"shadowedPaths":[],"projects":1,"status":"ok","error":null,
+#        "reasons":[],"elapsedMs":1.1}}
 ```
+
+`status` is `ok` only when the app opened the database, read from it, found a board that is not
+empty, did not create that board itself, and saw no second `kanbanflow.db` shadowing it — otherwise
+`degraded`, or `error` if it could not read at all. It is **always HTTP 200**, so the reason is
+readable rather than guessed. `db.path` is the file it actually opened: compare it with the one you
+meant, which is the check no code can make for you (#498).
 
 **Which database it opened.** The app names the file it is using, on every boot:
 

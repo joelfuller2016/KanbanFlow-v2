@@ -31,14 +31,19 @@
     under an S4U logon both come from Task Scheduler's environment block rather than from an
     interactive logon. If that resolves anywhere else the launcher finds no database, RESTORES THE
     COMMITTED SEED (it is guarded on absence, so it cannot tell "missing" from "wrong path"), binds
-    the port, and the health endpoint answers ok -- because that endpoint returns a literal and
-    never touches the database. The reboot criterion would pass with an empty board while the real
-    one sat untouched on disk. Resolving the path in the operator's own context and passing it as
-    -DbPath removes the logon context from the answer entirely.
+    the port, and the health endpoint answers ok. The reboot criterion would pass with an empty
+    board while the real one sat untouched on disk. Resolving the path in the operator's own
+    context and passing it as -DbPath removes the logon context from the answer entirely.
 
-    A CONSEQUENCE WORTH STATING PLAINLY: `status: ok` from /api/admin/health proves the process is
-    up and its DI graph is wired. It does NOT prove the app opened the database you meant. Nothing
-    in this script can prove that; do not read the probe as more than it is.
+    Health used to be blind to all of this -- it returned a literal and never opened the database.
+    It now does (#498) and reports the file it opened, so the wrong-file start is at least VISIBLE:
+    db.path names it. Pinning -DbPath is still the fix; the endpoint is the detector.
+
+    A CONSEQUENCE WORTH STATING PLAINLY: `status: ok` from /api/admin/health used to prove only
+    that the process was up and its DI graph wired -- the endpoint never opened the database. Since
+    #498 it opens it, reads from it, and reports `db.path`, so it can now answer `degraded` or
+    `error`. It still cannot know which database you MEANT -- this script pins that -- but the
+    comparison is finally possible: read `db.path` and check it against the file you expect.
 
     REBOOT SURVIVAL NEEDS ADMINISTRATOR, and that is a measurement, not a guess. Registering the
     same trivial task as a non-elevated user on this box: Interactive principal with AtLogOn + Once
@@ -360,9 +365,11 @@ function ConvertTo-ProbeUrl {
 
 function Test-KanbanFlowHealthy {
     <#
-        True only when the endpoint answers 200 AND its BODY says the app is ok. §9 asks for
-        "status ok", and a 200 carrying anything else is not that. (It still does not prove the app
-        opened the right database -- see the docstring.)
+        True when the endpoint answers 200 AND its top-level status says the process is serving a
+        database: `ok`, or `degraded` (it opened and read one, and is reporting something about it
+        -- new, empty, or shadowed). Both mean RUNNING, which is what this readiness probe is for.
+        `error` and anything else are false. §9's reboot criterion is stricter and lives there, not
+        here: top-level `ok` AND `db.path` equal to the database the operator pinned (#498).
 
         The proxy handling is load-bearing, not defensive noise. Measured under Windows PowerShell
         5.1: the FIRST web request in a process pays a one-time proxy auto-detection cost -- 1886 ms
@@ -404,7 +411,20 @@ function Test-KanbanFlowHealthy {
         if ($response.StatusCode -ne 200) { return $false }
         $body = $response.Content
         if ($body -is [byte[]]) { $body = [System.Text.Encoding]::UTF8.GetString($body) }
-        return ([string]$body -match '"status"\s*:\s*"ok"')
+
+        # Parse, do not regex (#498). The payload now carries a nested db.status, so the old
+        # '"status"\s*:\s*"ok"' match would report the app healthy off the INNER field while the
+        # top-level status said degraded or error -- a false positive in exactly the direction this
+        # function must never fail.
+        #
+        # This is a readiness probe: "degraded" means the process is up, opened its database and
+        # read from it, and is telling you something about that board (it is new, empty, or
+        # shadowed by another file). That is running, so the caller must not restart it. §9's
+        # reboot criterion is the STRICTER check -- top-level ok, db.path equal to the expected
+        # file -- and belongs at the criterion, not here.
+        $status = $null
+        try { $status = ([string]$body | ConvertFrom-Json).status } catch { return $false }
+        return ($status -eq 'ok' -or $status -eq 'degraded')
     }
     catch {
         return $false

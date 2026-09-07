@@ -14,17 +14,111 @@ public static class AdminEndpoints
     /// </summary>
     public static WebApplication MapAdminEndpoints(this WebApplication app)
     {
-        // GET /api/admin/health — quick smoke that the app is up and DI is wired.
-        // openApiUrl advertises the OpenAPI document path so agents can discover it.
-        app.MapGet("/api/admin/health", (IAppStartupInfo startup) => Results.Ok(new
+        // GET /api/admin/health — the app is up, DI is wired, AND this process is actually
+        // serving a database (#498). openApiUrl advertises the OpenAPI document path so agents
+        // can discover it.
+        //
+        // The probe exists because a wrong-path start is otherwise indistinguishable from a
+        // correct one (#354). `status` used to be a hardcoded literal with no database injected,
+        // so there was no state of the system in which this endpoint answered anything but "ok" —
+        // it carried zero bits, and #477 §9 built a reboot criterion on top of that constant.
+        //
+        // What this endpoint CAN decide on its own, and does: the file opened, a real read
+        // succeeded, the board is not empty, this process did not create the board it is serving,
+        // and no second kanbanflow.db is shadowing the one in use. What it CANNOT know is which
+        // database the operator meant — the launcher pins KANBANFLOW_DB_PATH from its own
+        // ($HOME-derived) computation, so the app faithfully opens whatever it was handed. That
+        // half is completed by the caller comparing db.path against the expected file, which is
+        // why the resolved path is reported rather than merely checked (#477 §9 criterion 3).
+        app.MapGet("/api/admin/health", async (
+            IAppStartupInfo startup,
+            DbPathResolution database,
+            IDbContextFactory<AppDbContext> dbFactory,
+            CancellationToken ct) =>
         {
-            status = "ok",
-            app = "KanbanFlow",
-            startedAtUtc = startup.StartedAtUtc,
-            checkedAtUtc = DateTime.UtcNow,
-            runtime = $".NET {Environment.Version}",
-            openApiUrl = "/openapi.json"
-        }));
+            var stopwatch = Stopwatch.StartNew();
+            int? projects = null;
+            string? probeError = null;
+
+            try
+            {
+                await using var db = await dbFactory.CreateDbContextAsync(ct);
+
+                // Bound the busy-wait. Measured: nothing in this app sets WAL and the committed
+                // seed reports journal_mode=delete, so a reader is blocked while a writer commits
+                // and Microsoft.Data.Sqlite would retry for its 30s default. A health check that
+                // stalls for 30s under load is its own bug — scripts/ui-e2e.mjs abandons the probe
+                // after 5s and reports the app as never having come up. Two seconds turns write
+                // contention into a fast, honest answer the caller can retry instead of a hang,
+                // and is never paid on the uncontended path (measured in single-digit ms).
+                db.Database.SetCommandTimeout(TimeSpan.FromSeconds(2));
+
+                // The cheapest read that proves the file opened AND carries this app's schema.
+                // Projects is single-digit rows; health is polled, so this must never grow into a
+                // query that scans the board.
+                projects = await db.Projects.CountAsync(ct);
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                throw; // the caller hung up — that is not a verdict about the database
+            }
+            catch (Exception ex)
+            {
+                // Never throw. The unreachable database is precisely the case the caller needs an
+                // answer for, so it is reported at HTTP 200 with the reason rather than as a 500
+                // the caller can only guess at. Message only — never the stack.
+                probeError = ex.Message;
+            }
+
+            stopwatch.Stop();
+
+            // Every reason that applies, not just the first: a caller told only half the story
+            // fixes half the problem. Empty and created-at-startup routinely co-occur.
+            var reasons = new List<string>();
+            if (probeError is not null)
+                reasons.Add("unreachable");
+            else if (projects == 0)
+                reasons.Add("empty-board");
+
+            // The one "am I serving a board that existed before me" signal that survives seeding:
+            // SeedData.Initialize inserts a sample project at boot whenever Projects is empty, and
+            // the launcher restores a committed seed that already holds one, so projects > 0 alone
+            // cannot tell a real board from a board this start invented. Existed is captured by
+            // DbPathResolver BEFORE any of that runs.
+            if (!database.Existed)
+                reasons.Add("created-at-startup");
+
+            // Two real databases exist and only one is open — the #354 presentation itself.
+            if (database.ShadowedPaths.Count > 0)
+                reasons.Add("shadowed-by-another-database");
+
+            var status = probeError is not null
+                ? "error"
+                : reasons.Count > 0 ? "degraded" : "ok";
+
+            return Results.Ok(new
+            {
+                status,
+                app = "KanbanFlow",
+                startedAtUtc = startup.StartedAtUtc,
+                checkedAtUtc = DateTime.UtcNow,
+                runtime = $".NET {Environment.Version}",
+                openApiUrl = "/openapi.json",
+                db = new
+                {
+                    path = database.Path,
+                    exists = File.Exists(database.Path),
+                    source = database.Source,
+                    existedAtStartup = database.Existed,
+                    shadowedPaths = database.ShadowedPaths,
+                    projects,
+                    status = probeError is null ? "ok" : "error",
+                    error = probeError,
+                    reasons,
+                    elapsedMs = Math.Round(stopwatch.Elapsed.TotalMilliseconds, 1)
+                }
+            });
+        });
 
         // POST /api/admin/run-tests?suite=api|ui|service|all (default: all)
         app.MapPost("/api/admin/run-tests", async (string? suite, ITestRunnerService runner, CancellationToken ct) =>
