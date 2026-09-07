@@ -202,6 +202,12 @@ for (const [flag, argv, need] of [
   });
 }
 
+test("--actor refuses a short flag (-h) just as it refuses a long flag (--dry-run)", async () => {
+  const { parseArgs } = await load(undefined, "short-flag-actor");
+  const args = parseArgs(["sync", "--actor", "-h"]);
+  assert.equal(args.error, `--actor needs a non-blank name, but got the flag "-h".${REFUSAL_TAIL}`);
+});
+
 test("a value flag at the end of argv refuses instead of falling through to the default repo list", async () => {
   const { parseArgs } = await load(undefined, "argv-trailing-value-flag");
   const args = parseArgs(["sync", "--dry-run", "--repos"]);

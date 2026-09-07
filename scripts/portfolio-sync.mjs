@@ -144,7 +144,7 @@ function parseArgs(argv) {
   // copies are exactly how the check ends up on one flag and not the other four.
   const takeValue = (flag, need) => {
     const value = argv[i + 1];
-    if (value === undefined || value.trim() === "" || value.startsWith("--")) {
+    if (value === undefined || value.trim() === "" || value.trim().startsWith("-")) {
       const got = value === undefined ? "nothing" : value.trim() === "" ? "a blank value" : `the flag "${value}"`;
       args.error = `${flag} needs ${need}, but got ${got}. A flag is never a value: consuming one silently discards it, and a swallowed --dry-run runs a LIVE sync.`;
       return null;
