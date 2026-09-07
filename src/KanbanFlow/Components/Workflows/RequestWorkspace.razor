@@ -16,7 +16,7 @@
                 </div>
                 <button class="btn btn-outline-primary" @onclick="() => creating = !creating">New request</button>
             }
-            <button class="btn btn-outline-secondary" @onclick="Refresh" disabled="@busy">Refresh saved details</button>
+            <button class="btn btn-outline-secondary" @onclick="RefreshBoard" disabled="@busy">Refresh saved details</button>
             <div><label class="form-label small" for="workflow-actor">Author</label><input id="workflow-actor" class="form-control" @bind="actor" maxlength="200" /></div>
         </div>
         @if (error is not null) { <div role="alert" class="alert alert-danger">@error</div> }
@@ -85,6 +85,11 @@
     protected override void OnAfterRender(bool firstRender)
     {
         if (firstRender) { interactiveReady = true; StateHasChanged(); }
+    }
+    private async Task RefreshBoard()
+    {
+        await Refresh();
+        await OnChanged.InvokeAsync();
     }
     private async Task Refresh()
     {
