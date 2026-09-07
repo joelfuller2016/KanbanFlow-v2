@@ -199,6 +199,15 @@ try {
     Assert-Truthy ($health.status -eq "degraded") "GET /api/admin/health said '$($health.status)' for a board this run created; it must not report ok."
     Assert-Truthy ($health.db.reasons -contains "created-at-startup") "GET /api/admin/health did not name created-at-startup as the reason."
 
+    # The file's own facts must be in the CONTRACT, not merely computed internally (#498 review).
+    # They are the caller's half of the diagnosis -- the comparison that catches a launcher which
+    # SUCCESSFULLY restored the seed onto a wrong path is "is db.sizeBytes the size of the seed I
+    # ship?", and only the caller has the seed. This run creates its own database, so there was no
+    # file to stat and the three are legitimately null; presence is the contract, value is not.
+    foreach ($fact in @("createdAtUtc", "lastWriteUtc", "sizeBytes")) {
+        Assert-Truthy ($health.db.PSObject.Properties.Name -contains $fact) "GET /api/admin/health does not report db.$fact."
+    }
+
     $projectId = $projects[0].id
     Write-Host "Using seeded project id $projectId"
 
