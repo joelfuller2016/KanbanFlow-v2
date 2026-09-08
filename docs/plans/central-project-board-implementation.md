@@ -24,6 +24,8 @@ The subsequent outline interaction request is captured verbatim:
 
 **Delivery:** [PR #511](https://github.com/joelfuller2016/KanbanFlow-v2/pull/511) from `feat/unified-workflow-509` contains the implementation, tests and curated documentation. Latest delivered application changes: `50ad5afc3009b51047834279dcc0bbdf015f2a4d`, including saved-change history, outline selection/reveal and frozen Back/Forward controls, card size controls and review/navigation fixes. The [outline visibility follow-up](#outline-visibility-and-context--staged-proposal) is a documented proposal with separate future implementation cards. Existing user changes unrelated to this work remain outside the PR. [Issue #509](https://github.com/joelfuller2016/KanbanFlow-v2/issues/509) remains open for the complete initiative. Automated verification and actual human usability approval are separate; the latter remains pending. The PR is open and has not been merged.
 
+**Current content correction:** application source `55906fe4a890454262182bfc894683a8a76083d3` is running on the normal board. All 161 incomplete descriptions were restored, all 186 task identities/other fields survived, and the repeat changed nothing. [Complete current run](../test-cases/509-unified-workflow/runs/2026-09-08-55906fe4a890.md). U-18 owns this correction; human acceptance and future outline controls remain pending.
+
 **Source baseline:** `53a300066e118b0e5a1b0ac9d02294169d2e076f`. **Environment:** Windows, PowerShell 7.6.5, .NET SDK 10.0.400, existing .NET 10/Blazor Server/EF Core SQLite application. No Docker. **Owner:** repository maintainer. **Date:** September 6, 2026.
 
 ## Preserve the original user request
@@ -659,8 +661,8 @@ Detailed checklist:
 - [x] Test the multi-candidate batch, full preflight, partial failure/retry, title-only stub safety and comment deduplication.
 - [x] Verify large browser paste/save/reopen, final-line visibility, full/half/close and full audit/MCP/REST values.
 - [x] Verify actual native/stdio clients preserve large Unicode/CRLF descriptions/comments and complete history.
-- [ ] Finish current-source gates, back up the normal board, rebuild/restart it and verify all intended repairs and an unchanged repeat.
-- [ ] Publish complete issue/PR documentation and source-pinned recovery evidence, then report U-18 for review.
+- [x] Finish current-source gates, back up the normal board, rebuild/restart it and verify all 161 repairs and an unchanged repeat; [actual evidence](../test-cases/509-unified-workflow/runs/2026-09-08-55906fe4a890.md).
+- [x] Prepare complete issue/PR documentation and source-pinned recovery evidence. Remote publication and the U-18 report are recorded on the existing request after read-back.
 - [ ] Human reviews restored text, retained notes and History; U-10 remains pending.
 
 Ordinary task PUT has no atomic version token; the fresh preflight read does not promise

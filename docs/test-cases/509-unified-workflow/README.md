@@ -126,6 +126,10 @@ The user's requirement is: **“nothing should ever be truncated”**. The [owni
 defines complete storage, conservative source recovery and explicit limits. Full content
 remains in the existing card, service, database, history and MCP; no layout redesign is involved.
 
+[September 8 source-pinned run](runs/2026-09-08-55906fe4a890.md): all 161 normal-board descriptions
+restored, exact source/audit comparisons, unchanged other data and no-op repeat. Actual human
+review remains pending.
+
 | Check | Observable acceptance and executable evidence |
 |---|---|
 | F01 | Full Unicode/Markdown body and comment, including meaningful whitespace, survive import beyond old limits. `portfolio-sync.test.mjs`: `descriptionFor preserves the entire large Unicode Markdown body including whitespace and tail`; `legacy limits cannot shorten a new issue or comment`. |

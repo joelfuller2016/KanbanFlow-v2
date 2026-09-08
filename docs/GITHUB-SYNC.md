@@ -287,7 +287,7 @@ sequenceDiagram
     participant H as Human or MCP client
     R->>A: Read existing project and incomplete descriptions
     R->>G: Read complete issue sources
-    R->>R: Resolve every candidate; retain differing prior text
+    R->>R: Resolve every candidate and retain differing prior text
     R->>A: Re-read each task before changing it
     R->>A: Save description with actor
     A->>D: Commit description and full before/after audit together
