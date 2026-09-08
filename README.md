@@ -345,6 +345,7 @@ Commands are portable except where noted; `smoke-api.ps1` and `verify.ps1` are P
 ### 0. Start the app
 
 ```powershell
+$env:KANBANFLOW_DB_PATH = "$HOME\.kanbanflow\kanbanflow.db"
 dotnet run --project src/KanbanFlow/KanbanFlow.csproj --urls http://127.0.0.1:5123
 ```
 

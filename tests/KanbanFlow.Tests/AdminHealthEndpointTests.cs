@@ -242,9 +242,13 @@ public sealed class AdminHealthEndpointTests
 
         // The literal Copy-Item signature: the destination file is made NOW and keeps the source's
         // older last-write time. No board that has been used since it was created can look like this.
-        board.SetLastWriteUtc(DateTime.UtcNow.AddHours(-3));
+        // Use an explicit snapshot so the predicate is independent of platform creation-timestamp
+        // support: on Linux FileInfo.CreationTimeUtc falls back to min(mtime, ctime), which would
+        // equal LastWriteUtc after SetLastWriteUtc and make the condition undetectable.
+        var now = DateTime.UtcNow;
+        var copySignatureSnapshot = new DbFileSnapshot(now, now.AddHours(-3), board.Snapshot!.SizeBytes);
 
-        await using var host = await HealthHost.StartAsync(board, existed: true);
+        await using var host = await HealthHost.StartAsync(board, existed: true, snapshot: copySignatureSnapshot);
         var (statusCode, body) = await host.GetHealthAsync();
 
         Assert.Equal(HttpStatusCode.OK, statusCode);
@@ -522,7 +526,8 @@ public sealed class AdminHealthEndpointTests
         public DateTime StartedAtUtc { get; }
 
         public static async Task<HealthHost> StartAsync(
-            TestBoard board, bool existed, IReadOnlyList<string>? shadowedPaths = null)
+            TestBoard board, bool existed, IReadOnlyList<string>? shadowedPaths = null,
+            DbFileSnapshot? snapshot = null)
         {
             // Development so a server-side exception comes back in the response body: a host that
             // answers a bare 500 makes every failure look identical.
@@ -533,11 +538,13 @@ public sealed class AdminHealthEndpointTests
 
             var startup = new AppStartupInfo();
             builder.Services.AddSingleton<IAppStartupInfo>(startup);
-            // The file facts come from the board's REAL file, so the reasons derived from them are
-            // derived from a real stat rather than from a record hand-built to make them fire.
+            // The file facts come from the board's REAL file by default, so the reasons derived from
+            // them are derived from a real stat. Pass an explicit snapshot to override filesystem
+            // timestamps for predicate tests that must not rely on platform timestamp support.
             builder.Services.AddSingleton(
                 new DbPathResolution(
-                    board.Path, DbPathResolver.SourceEnvironment, existed, shadowedPaths ?? [], board.Snapshot));
+                    board.Path, DbPathResolver.SourceEnvironment, existed, shadowedPaths ?? [],
+                    snapshot ?? board.Snapshot));
             builder.Services.AddDbContextFactory<AppDbContext>(o => o.UseSqlite(board.ConnectionString));
 
             // MapAdminEndpoints maps five routes and ASP.NET Core builds the WHOLE endpoint table

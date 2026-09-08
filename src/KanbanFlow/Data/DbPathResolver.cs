@@ -217,11 +217,12 @@ public static class DbPathResolver
         }
 
         var existing = candidates.Where(File.Exists).ToList();
-        if (existing.Count > 0)
+        for (int i = 0; i < existing.Count; i++)
         {
-            var (existed, probedSnapshot) = Stat(existing[0]);
-            return new DbPathResolution(
-                existing[0], SourceProbe, existed, existing.Skip(1).ToList(), probedSnapshot);
+            var (existed, probedSnapshot) = Stat(existing[i]);
+            if (existed)
+                return new DbPathResolution(
+                    existing[i], SourceProbe, true, existing.Skip(i + 1).ToList(), probedSnapshot);
         }
 
         // 3. Nothing exists anywhere: create at the application's own directory, so a fresh install
