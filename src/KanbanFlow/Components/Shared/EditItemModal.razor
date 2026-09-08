@@ -296,10 +296,13 @@
     private int descriptionResetToken;
 
     // Pulled out of the sync block that scripts/portfolio-sync.mjs writes into a mirrored task's
-    // description. The block is isolated FIRST — by MirroredDescription.SyncBlock — and the labels
-    // below are matched only inside it. Matching the whole description would render chips for a
+    // description. The block is isolated FIRST — by MirroredDescription.SyncBlock — and then the
+    // single record LINE is isolated by MirroredDescription.SyncRecord; the labels below are
+    // matched only inside that. Matching the whole description would render chips for a
     // hand-written description that merely happens to contain "**Issue:** https://github.com/...",
-    // presenting unverified text as a trusted link.
+    // presenting unverified text as a trusted link; matching the whole BLOCK would render them for
+    // a marker forged inside a GitHub label, which is attacker-controlled text the sync copies in
+    // verbatim. See RefreshGitHubLinks below.
     //
     // The isolation is NOT re-implemented here, and that is the point. This file used to carry its
     // own copy of it, and the copy was unanchored: it accepted a marker pair anywhere in the
@@ -344,13 +347,25 @@
         var syncBlock = MirroredDescription.SyncBlock(editDescription);
         if (syncBlock is null) return;
 
-        var issue = GitHubIssueRe.Match(syncBlock);
+        // …and OWNERSHIP IS NOT ENOUGH. Two values inside a genuinely owned block are written by
+        // whoever can label the issue: descriptionFor() interpolates label names and the milestone
+        // title verbatim into the `**State:** … **Labels:** …` line, which it emits ABOVE
+        // `**Open PR:**`. Scanning the whole block for a marker therefore found a LABEL's forgery
+        // first — a label named `**Open PR:** https://github.com/a/b/pull/1` (42 chars, inside
+        // GitHub's 50-char cap) rendered that URL here as `PR #1 ↗`. Measured against the real
+        // producer and this component.
+        //
+        // MirroredDescription.SyncRecord narrows each match to the ONE whole line whose record key
+        // is the one asked for, so text further along another record's line can never be read as a
+        // record of its own — and two lines claiming the same key yield null rather than a guess.
+        // The patterns below are unchanged: this decides WHERE they may look, not what they accept.
+        var issue = GitHubIssueRe.Match(MirroredDescription.SyncRecord(editDescription, "Issue") ?? "");
         if (issue.Success)
         {
             GitHubIssueUrl = issue.Groups[1].Value;
             GitHubIssueNumber = issue.Groups[2].Value;
         }
-        var pr = GitHubPrRe.Match(syncBlock);
+        var pr = GitHubPrRe.Match(MirroredDescription.SyncRecord(editDescription, "Open PR") ?? "");
         if (pr.Success)
         {
             GitHubPrUrl = pr.Groups[1].Value;

@@ -106,6 +106,87 @@ public sealed class BoardCardTitleClampCssTests
         }
     }
 
+    /// <summary>
+    /// Every rule that establishes a clamp declares ALL THREE properties the clamp needs, not just
+    /// the <c>display</c> that makes it look established.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <c>-webkit-line-clamp</c> is not one property, it is three acting together, and it fails
+    /// SILENTLY and COMPLETELY when any one is missing — no error, no warning, no partial effect:
+    /// </para>
+    /// <list type="bullet">
+    ///   <item><description>
+    ///     <c>display: -webkit-box</c> — the only display value the property applies to.
+    ///   </description></item>
+    ///   <item><description>
+    ///     <c>-webkit-box-orient: vertical</c> — a <c>-webkit-box</c> is HORIZONTAL by default, and
+    ///     the line count of a horizontal box is meaningless, so the clamp is ignored outright.
+    ///   </description></item>
+    ///   <item><description>
+    ///     <c>overflow: hidden</c> — the clamp elides at line N, but the lines past N are only
+    ///     removed from view by the overflow clip. Without it they render on top of whatever sits
+    ///     below.
+    ///   </description></item>
+    /// </list>
+    /// <para>
+    /// The other cases in this file were measured to guard only the first. Deleting
+    /// <c>-webkit-box-orient: vertical</c> from <c>.board-card-title-text</c>, then
+    /// <c>overflow: hidden</c>, then the same from <c>.outline-task-title-text</c>, each left the
+    /// whole 1021-case suite green while leaving the board with the #481 defect it was changed to
+    /// fix — in EVERY engine this time, not only WebKit. That is a wider hole than the one this
+    /// file was written for: the button defect at least worked in the browser the author was
+    /// looking at.
+    /// </para>
+    /// <para>
+    /// Stated as "a rule that declares one of the three declares all of them" rather than as a
+    /// list of expected class names, so a clamp added anywhere later in this stylesheet is held to
+    /// the same standard without anyone remembering to come back here.
+    /// </para>
+    /// </remarks>
+    [Fact]
+    public void EveryClampContainer_DeclaresTheCompleteClamp()
+    {
+        var required = new (string Name, string Pattern)[]
+        {
+            ("display: -webkit-box",           @"display\s*:\s*-webkit-box"),
+            ("-webkit-box-orient: vertical",   @"-webkit-box-orient\s*:\s*vertical"),
+            ("overflow: hidden",               @"overflow\s*:\s*hidden"),
+        };
+
+        var rules = ParseRules(RepositorySource.Read(StylesheetPath));
+
+        // A rule PARTICIPATES in a clamp if it declares any one of the three. Keying off `display`
+        // alone would let a rule that dropped the display slip out of the check entirely — the
+        // guard would disappear at precisely the moment it was needed.
+        var clampRules = rules
+            .Where(r => required.Any(p => Regex.IsMatch(r.Body, p.Pattern))
+                        && Regex.IsMatch(r.Body, @"-webkit-line-clamp\s*:\s*\d"))
+            .ToList();
+
+        // NON-VACUITY: the board title, the outline row and the project-card description. If this
+        // drops, a clamp container has gone missing and the loop below is guarding nothing.
+        Assert.True(clampRules.Count >= 3,
+            $"Expected at least three clamp-establishing rules, found {clampRules.Count}. "
+            + "Re-derive this guard rather than lowering the number.");
+
+        foreach (var rule in clampRules)
+        {
+            foreach (var (name, pattern) in required)
+            {
+                Assert.True(Regex.IsMatch(rule.Body, pattern),
+                    $"`{rule.Selector.Trim()}` sets a `-webkit-line-clamp` but does not declare `{name}`. "
+                    + "The clamp needs all three of `display: -webkit-box`, `-webkit-box-orient: vertical` "
+                    + "and `overflow: hidden`, and it fails silently and completely when any one is absent: "
+                    + "a -webkit-box is HORIZONTAL unless told otherwise, so a clamp on one counts lines "
+                    + "that do not exist, and the lines past the clamp are removed from view by the "
+                    + "overflow clip rather than by the clamp itself. Unlike the <button> defect this file "
+                    + "was written for, that breaks in EVERY engine — including the one the author is "
+                    + "looking at — and puts #481's unreadable cards straight back on the board.");
+            }
+        }
+    }
+
     // ── The drag suppression ─────────────────────────────────────────────────────────────────────
 
     /// <summary>Drag-suppression rules are scoped to <c>@media (hover: hover)</c> so they do not reach the touch always-open branch.</summary>

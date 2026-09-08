@@ -67,6 +67,20 @@ public static class MirroredDescription
         @"\*\*Issue:\*\*\s*(?<u>https://github\.com/[^\s)<]+)",
         RegexOptions.Compiled);
 
+    // One `**Key:** value` record per line, which is exactly how descriptionFor() writes the block.
+    // `k` is the FIRST `**…:**` on the line and cannot span one — `[^*\r\n]` excludes both the
+    // asterisk that would start a second marker and the newline that would run into the next
+    // record. That single restriction is what makes `**Open PR:**` pasted into a LABEL part of the
+    // `**State:**` record's value rather than a record of its own. See SyncRecord.
+    //
+    // No trailing `$`: .NET's multiline `$` matches before `\n` only, so on a CRLF description —
+    // which a browser textarea will happily produce for a description a human has edited — the
+    // stranded `\r` would make every record fail to match and every chip silently vanish.
+    // `[^\r\n]*` already stops at the line end, so the anchor is redundant as well as harmful.
+    private static readonly Regex SyncRecordRe = new(
+        @"(?<line>^\*\*(?<k>[^*\r\n]+):\*\*[^\r\n]*)",
+        RegexOptions.Multiline | RegexOptions.Compiled);
+
     // Leading markdown furniture - heading hashes, quote carets, list bullets. The marker must be
     // FOLLOWED BY WHITESPACE, which is what makes it markdown rather than content. The first version
     // was the character class `^[#>\-\*\s]+`, which ate any run of those characters and corrupted
@@ -140,6 +154,63 @@ public static class MirroredDescription
 
         var block = SyncBlockRe.Match(head);
         return block.Success ? block.Value : null;
+    }
+
+    /// <summary>
+    /// The single whole LINE inside the owned sync block whose record key is <paramref name="key"/>
+    /// — <c>"Issue"</c>, <c>"Open PR"</c> — or <c>null</c> when the block is not owned, carries no
+    /// such record, or carries more than one.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// OWNERSHIP IS NOT ENOUGH. <see cref="SyncBlock"/> proves the block was written by
+    /// <c>scripts/portfolio-sync.mjs</c> at offset zero. It says nothing about the block's
+    /// CONTENTS, and two of the values inside it are attacker-controlled: <c>descriptionFor()</c>
+    /// interpolates the issue's label names and milestone title verbatim into
+    /// <c>**State:** … · **Milestone:** … · **Labels:** …</c>, and that line is emitted ABOVE
+    /// <c>**Open PR:**</c>.
+    /// </para>
+    /// <para>
+    /// So a label named <c>**Open PR:** https://github.com/a/b/pull/1</c> — 42 characters, inside
+    /// GitHub's 50-character label cap, and creatable by anyone with label write on a synced
+    /// repository — puts a second, forged <c>**Open PR:**</c> marker inside a genuinely owned
+    /// block. A reader that scans the block for the marker finds the forgery FIRST, because it is
+    /// on the earlier line. Measured against the real producer and the real component: the edit
+    /// modal rendered <c>PR #1 ↗</c> linking to the attacker's repository, on a button styled
+    /// exactly like the real one. That is the phishing surface the ownership anchor was added to
+    /// close, reopened from inside the envelope.
+    /// </para>
+    /// <para>
+    /// The fix is to stop treating the block as a bag of text and read it as what the producer
+    /// writes: one <c>**Key:** value</c> RECORD PER LINE. A line's key is the first
+    /// <c>**…:**</c> on it, so <c>**Open PR:**</c> appearing further along the <c>**State:**</c>
+    /// line is part of that record's VALUE and can never be mistaken for a record of its own.
+    /// </para>
+    /// <para>
+    /// Duplicates FAIL CLOSED rather than picking one. A label carrying a literal newline would
+    /// forge a whole line rather than part of one, and there is no honest way to choose between two
+    /// records claiming the same key: an ambiguous provenance claim is not a link worth showing.
+    /// Returning <c>null</c> costs a chip; returning the wrong one costs the reader.
+    /// </para>
+    /// <para>
+    /// The whole line is returned rather than the parsed value so that each caller still applies
+    /// its own strict pattern to it (<c>**Issue:** &lt;url&gt;</c>, <c>**Open PR:** &lt;url&gt;</c>)
+    /// — this method narrows WHERE they may look, and does not take over WHAT they accept.
+    /// </para>
+    /// </remarks>
+    public static string? SyncRecord(string? description, string key)
+    {
+        var block = SyncBlock(description);
+        if (block is null) return null;
+
+        string? found = null;
+        foreach (Match m in SyncRecordRe.Matches(block))
+        {
+            if (!string.Equals(m.Groups["k"].Value, key, StringComparison.Ordinal)) continue;
+            if (found is not null) return null;   // ambiguous → fail closed
+            found = m.Groups["line"].Value.Trim();
+        }
+        return found;
     }
 
     /// <summary>

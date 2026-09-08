@@ -1,3 +1,4 @@
+using System.Reflection;
 using KanbanFlow.Services;
 
 namespace KanbanFlow.Tests;
@@ -578,5 +579,203 @@ public sealed class MirroredDescriptionTests
         Assert.Contains("**Issue:**", modal, StringComparison.Ordinal);
 
         Assert.Contains("MirroredDescription.SyncBlock(", modal, StringComparison.Ordinal);
+    }
+
+    // ── Ownership is not enough: the forgery that lives INSIDE the owned block ───────────────────
+
+    /// <summary>
+    /// A genuinely sync-written block carrying a GitHub label whose NAME forges an
+    /// <c>**Open PR:**</c> marker.
+    /// </summary>
+    /// <remarks>
+    /// Verbatim output of <c>descriptionFor()</c> in <c>scripts/portfolio-sync.mjs</c>, captured by
+    /// running it with <c>labels: [{ name: "**Open PR:** https://github.com/a/b/pull/1" }]</c> —
+    /// 42 characters, inside GitHub's 50-character label cap, so anyone with label write on a
+    /// synced repository can create it. The producer interpolates label names verbatim and emits
+    /// the <c>**Labels:**</c> line ABOVE <c>**Open PR:**</c>, so the forgery is the FIRST marker in
+    /// the block. Nothing here is hand-shaped to make the point: this is what the sync writes.
+    /// </remarks>
+    private const string LabelForgedPrFixture =
+        "<!-- kanbanflow-sync -->\n"
+        + "**Issue:** https://github.com/joelfuller2016/KanbanFlow-v2/issues/487\n"
+        + "**State:** OPEN · **Milestone:** none · **Labels:** **Open PR:** https://github.com/a/b/pull/1\n"
+        + "**Open PR:** none\n"
+        + "**Synced:** 2026-09-07T23:51:02.090Z\n"
+        + "<!-- /kanbanflow-sync -->\n"
+        + "\n"
+        + "The real issue body.";
+
+    /// <summary>A record is read as a whole line, and its key is the first marker ON that line.</summary>
+    [Fact]
+    public void SyncRecord_ReadsTheWholeLineAndKeysItOnItsFirstMarker()
+    {
+        // NON-VACUITY: a real mirror yields its records, so every refusal below is a refusal rather
+        // than this method simply never returning anything.
+        Assert.Equal(
+            "**Issue:** https://github.com/joelfuller2016/KanbanFlow-v2/issues/454",
+            MirroredDescription.SyncRecord(MirroredFixture, "Issue"));
+        Assert.Equal("**Open PR:** none", MirroredDescription.SyncRecord(MirroredFixture, "Open PR"));
+        Assert.Equal(
+            "**State:** OPEN · **Milestone:** M1 · **Labels:** bug, ui",
+            MirroredDescription.SyncRecord(MirroredFixture, "State"));
+
+        // The `**Milestone:**` and `**Labels:**` markers sit in the MIDDLE of the State line, so
+        // they are that record's value and not records of their own. This is the whole mechanism.
+        Assert.Contains("**Milestone:**", MirroredFixture);
+        Assert.Null(MirroredDescription.SyncRecord(MirroredFixture, "Milestone"));
+        Assert.Null(MirroredDescription.SyncRecord(MirroredFixture, "Labels"));
+
+        // Unowned block, no records — the ownership anchor still gates everything.
+        Assert.Null(MirroredDescription.SyncRecord("intro\n\n" + MirroredFixture, "Issue"));
+        Assert.Null(MirroredDescription.SyncRecord("a hand-written task", "Issue"));
+    }
+
+    /// <summary>
+    /// A marker forged inside a GitHub label cannot become a record, so it cannot become a link.
+    /// </summary>
+    /// <remarks>
+    /// The ownership anchor proves the sync WROTE the block; it says nothing about the block's
+    /// contents, and label names and the milestone title are copied into it verbatim from GitHub.
+    /// Before this, scanning the block for <c>**Open PR:**</c> found the label's forgery first,
+    /// because the producer emits <c>**Labels:**</c> on an earlier line.
+    /// </remarks>
+    [Fact]
+    public void SyncRecord_RefusesAMarkerForgedInsideAnotherRecordsValue()
+    {
+        // NON-VACUITY 1: the block really is owned — this is not being refused for being unowned.
+        Assert.NotNull(MirroredDescription.SyncBlock(LabelForgedPrFixture));
+        // NON-VACUITY 2: the forged URL really is inside that owned block, so a reader that looked
+        // at the block as one piece of text would find it.
+        Assert.Contains("https://github.com/a/b/pull/1", MirroredDescription.SyncBlock(LabelForgedPrFixture)!);
+
+        var openPr = MirroredDescription.SyncRecord(LabelForgedPrFixture, "Open PR");
+
+        Assert.Equal("**Open PR:** none", openPr);
+        Assert.DoesNotContain("a/b/pull/1", openPr!);
+
+        // The genuine issue link is untouched: narrowing to the record line must not cost the
+        // affordance that works.
+        Assert.Equal(
+            "**Issue:** https://github.com/joelfuller2016/KanbanFlow-v2/issues/487",
+            MirroredDescription.SyncRecord(LabelForgedPrFixture, "Issue"));
+    }
+
+    /// <summary>Two records claiming one key yield <c>null</c> rather than a guess.</summary>
+    /// <remarks>
+    /// A label carrying a literal newline would forge a whole LINE rather than part of one, and
+    /// there is no honest way to pick between two records claiming the same key. Failing closed
+    /// costs a chip; guessing costs the reader, because the wrong guess is a link that says GitHub
+    /// and goes somewhere else.
+    /// </remarks>
+    [Fact]
+    public void SyncRecord_FailsClosedOnADuplicateRecord()
+    {
+        var duplicated = LabelForgedPrFixture.Replace(
+            "**Open PR:** none",
+            "**Open PR:** https://github.com/a/b/pull/1\n**Open PR:** none",
+            StringComparison.Ordinal);
+
+        // NON-VACUITY: the replace landed, the block is still owned, and the single-record form of
+        // the very same key still resolves — so `null` below is the duplicate rule firing.
+        Assert.NotEqual(LabelForgedPrFixture, duplicated);
+        Assert.NotNull(MirroredDescription.SyncBlock(duplicated));
+        Assert.NotNull(MirroredDescription.SyncRecord(duplicated, "Issue"));
+
+        Assert.Null(MirroredDescription.SyncRecord(duplicated, "Open PR"));
+    }
+
+    // ── The modal's chips, exercised rather than grepped ─────────────────────────────────────────
+
+    /// <summary>
+    /// Drives <c>EditItemModal.RefreshGitHubLinks</c> against <paramref name="description"/> and
+    /// returns the four values it resolves.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The cases above this point read the modal's SOURCE, which proves it calls the shared reader
+    /// but not that it uses the answer: <c>Assert.Contains("MirroredDescription.SyncBlock(")</c>
+    /// passes just as well when the result is computed and thrown away. This runs the real method
+    /// on the real compiled component instead.
+    /// </para>
+    /// <para>
+    /// Reflection rather than bUnit because the project has none. It is safe here for a specific
+    /// reason: <c>RefreshGitHubLinks</c> is a pure function of one field and touches no injected
+    /// service, no renderer and no parameter, so an uninitialised instance is a complete
+    /// environment for it. Every member lookup is asserted with the member's name in the message,
+    /// so a rename fails loudly rather than degrading into a test of nothing.
+    /// </para>
+    /// </remarks>
+    private static (string? IssueUrl, string? IssueNumber, string? PrUrl, string? PrNumber) ModalChipsFor(string description)
+    {
+        const BindingFlags Flags = BindingFlags.NonPublic | BindingFlags.Instance;
+        var type = typeof(KanbanFlow.Components.Shared.EditItemModal);
+        var instance = Activator.CreateInstance(type)!;
+
+        static T Member<T>(T? found, string name) where T : class
+            => found ?? throw new Xunit.Sdk.XunitException(
+                $"EditItemModal no longer has `{name}`. This case drives the modal's real GitHub-chip "
+                + "resolution through reflection; a rename must update it, not silently disable it.");
+
+        Member(type.GetField("editDescription", Flags), "editDescription").SetValue(instance, description);
+        Member(type.GetMethod("RefreshGitHubLinks", Flags), "RefreshGitHubLinks").Invoke(instance, null);
+
+        string? Read(string name) => (string?)Member(type.GetField(name, Flags), name).GetValue(instance);
+        return (Read("GitHubIssueUrl"), Read("GitHubIssueNumber"), Read("GitHubPrUrl"), Read("GitHubPrNumber"));
+    }
+
+    /// <summary>The modal renders the genuine chips for a genuine mirror.</summary>
+    /// <remarks>
+    /// The non-vacuity partner of the case below: a modal that resolved nothing at all would pass a
+    /// "does not show the forged link" assertion perfectly.
+    /// </remarks>
+    [Fact]
+    public void EditItemModal_RendersTheChipsOfAGenuineMirror()
+    {
+        var genuine = MirroredFixture.Replace(
+            "**Open PR:** none",
+            "**Open PR:** https://github.com/joelfuller2016/KanbanFlow-v2/pull/455",
+            StringComparison.Ordinal);
+        Assert.NotEqual(MirroredFixture, genuine);
+
+        var chips = ModalChipsFor(genuine);
+
+        Assert.Equal("https://github.com/joelfuller2016/KanbanFlow-v2/issues/454", chips.IssueUrl);
+        Assert.Equal("454", chips.IssueNumber);
+        Assert.Equal("https://github.com/joelfuller2016/KanbanFlow-v2/pull/455", chips.PrUrl);
+        Assert.Equal("455", chips.PrNumber);
+    }
+
+    /// <summary>
+    /// The modal shows no PR chip for a URL forged inside a GitHub label, and keeps the real issue
+    /// chip.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// MEASURED, not hypothesised. Before the record-line narrowing, this exact fixture — the real
+    /// producer's output for a label named <c>**Open PR:** https://github.com/a/b/pull/1</c> —
+    /// resolved <c>GitHubPrUrl = https://github.com/a/b/pull/1</c> on this component, which the
+    /// modal renders as <c>PR #1 ↗</c> on a button styled identically to the genuine one. A card
+    /// that displays a trustworthy-looking GitHub link pointing somewhere else is a phishing
+    /// surface, and it needs only label write on a synced repository.
+    /// </para>
+    /// <para>
+    /// The board card was never exposed to this one, by ordering alone: it shows only the issue
+    /// link, and <c>**Issue:**</c> is emitted above <c>**Labels:**</c>, so the leftmost match is
+    /// the real URL. Ordering is not a defence — it is the accident that decided which of the two
+    /// chips was exploitable — which is why the narrowing is applied to both.
+    /// </para>
+    /// </remarks>
+    [Fact]
+    public void EditItemModal_RefusesAPrLinkForgedInsideAGitHubLabel()
+    {
+        var chips = ModalChipsFor(LabelForgedPrFixture);
+
+        // NON-VACUITY: the modal is still resolving chips from this description — it has not simply
+        // stopped working, which would make the absence assertions below meaningless.
+        Assert.Equal("https://github.com/joelfuller2016/KanbanFlow-v2/issues/487", chips.IssueUrl);
+        Assert.Equal("487", chips.IssueNumber);
+
+        Assert.Null(chips.PrUrl);
+        Assert.Null(chips.PrNumber);
     }
 }
