@@ -6,6 +6,8 @@ KanbanFlow now keeps the original request, improved brief, task plan, conversati
 
 The normal app remains at [http://127.0.0.1:5123](http://127.0.0.1:5123). It uses the existing local access policy; there is **no access code or separate workflow login**. The earlier isolated preview is retired.
 
+The [outline visibility proposal](plans/central-project-board-implementation.md#outline-visibility-and-context--staged-proposal) compares Azure Boards and GitHub Projects and plans indentation, adjustable width, hover/eye context and clearer task attention. U-14/task 187 owns the plan; tasks 188–190 are future implementation. These controls have not been added by the planning follow-up. The [visibility review](test-cases/509-unified-workflow/README.md#outline-visibility-review-proposed) defines the bounded interaction checks and pending human feedback before adoption in this same app.
+
 ## Architecture, processes and data
 
 The September 7 logging follow-up (U-13, task 186) extends this same database and timeline. Supported saved board changes use a domain event method or `ChangeAudit`: project/feature fields, task reorders and claim heartbeats, subtasks, acceptance criteria, requirements, dependencies, comments and recursive deletion effects. Existing idea, memory and workflow operation histories remain in place. Workflow events also retain their operation, submitted content and resulting revision/receipt. Earlier gaps cannot be reconstructed.

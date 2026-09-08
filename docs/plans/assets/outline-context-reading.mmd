@@ -1,0 +1,15 @@
+stateDiagram-v2
+    [*] --> Compact
+    Compact --> Peek: Delayed hover or title focus
+    Peek --> Compact: Leave or Escape
+    Compact --> Pinned: Eye; select with existing visit deduplication
+    Peek --> Pinned: Eye; select with existing visit deduplication
+    Pinned --> Compact: Eye again or scoped Escape
+    Pinned --> Pinned: Another eye replaces current item
+    Pinned --> Compact: History navigation, hidden/deleted item, project change
+    Pinned --> ExistingPanel: Open task panel
+    ExistingPanel --> Pinned: Close panel; retain valid pinned context
+    note right of Peek
+        No selection, history, fetch or saved change
+        Freeze preview geometry during drag or resize
+    end note

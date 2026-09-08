@@ -22,7 +22,7 @@ The subsequent outline interaction request is captured verbatim:
 
 > The show in outline button should move to the the already highlighted item on the outline. when clicking on an item, the item in the outline is highlighted and moves to that item. We should also have a hidden breadcrumb that tracks the user going from item to item and we can have a back and forward buttons at the top of the outline that should be frozen with the header of the outline.
 
-**Delivery:** [PR #511](https://github.com/joelfuller2016/KanbanFlow-v2/pull/511) from `feat/unified-workflow-509` contains the implementation, tests and curated documentation. Latest rebuilt application/case source: `829ab2ca5ba28c0d5f76759240623ec944f40334`, including the requested outline selection/reveal and frozen Back/Forward controls, previous card size controls and review/navigation fixes. Existing user changes unrelated to this work remain outside the PR. [Issue #509](https://github.com/joelfuller2016/KanbanFlow-v2/issues/509) remains open for the complete initiative. Automated verification and actual human usability approval are separate; the latter remains pending. The PR is open and has not been merged.
+**Delivery:** [PR #511](https://github.com/joelfuller2016/KanbanFlow-v2/pull/511) from `feat/unified-workflow-509` contains the implementation, tests and curated documentation. Latest delivered application changes: `50ad5afc3009b51047834279dcc0bbdf015f2a4d`, including saved-change history, outline selection/reveal and frozen Back/Forward controls, card size controls and review/navigation fixes. The [outline visibility follow-up](#outline-visibility-and-context--staged-proposal) is a documented proposal with separate future implementation cards. Existing user changes unrelated to this work remain outside the PR. [Issue #509](https://github.com/joelfuller2016/KanbanFlow-v2/issues/509) remains open for the complete initiative. Automated verification and actual human usability approval are separate; the latter remains pending. The PR is open and has not been merged.
 
 **Source baseline:** `53a300066e118b0e5a1b0ac9d02294169d2e076f`. **Environment:** Windows, PowerShell 7.6.5, .NET SDK 10.0.400, existing .NET 10/Blazor Server/EF Core SQLite application. No Docker. **Owner:** repository maintainer. **Date:** September 6, 2026.
 
@@ -399,7 +399,223 @@ Detailed editable source: [board-change-audit.mmd](assets/board-change-audit.mmd
 
 Independent review closed unlogged promoted-idea links, stale semantic snapshots and timestamp-only pseudo-edits. Test development corrected the SaveChanges overload used for failure injection. Browser verification corrected a fixed seed-project assumption and a selector matching nested summaries. These checks do not constitute human usability approval.
 
-### Deferred managed execution
+## Outline visibility and context — staged proposal
+
+**Audience:** the person managing work and the developer implementing the next UI increments. **Date:** September 7, 2026. **Inspected source:** `65de739994a4a050c9fb81becbb00438989b70f4`; its application code matches the delivered `50ad5afc3009` build. **Status:** planning and baseline observation; the indentation, divider and previews below are not implemented by this follow-up. U-14/task 187 records this planning work; U-15/188, U-16/189 and U-17/190 are future Todo cards on the same project/request. U-10 remains the human review task.
+
+The user supplied two further directions, preserved verbatim on the board as decisions `6731dba4-be8f-40b5-8fa6-802290bde97e` and `6796f489-b74f-4e17-9595-b7facb073044`:
+
+> The cards in the outline needs to follow proper indentation and the cards should be able to be expanded slightly in the outline to view the details better on hover,fully expended on an eye icon click, The hover shouls slightly expand the card in place, also the left outline area boarders should be allowed to be moved to provide visbalilty of more description to see what the cards are and the context. There is so much info we need to plan out a better plan to visbaility see what is goign on with the card and the tasks/project
+
+> Think about how azure devops and github use boards and viable context and kanban.
+
+**Refined ask:** Help a person scan the existing hierarchy, understand an item's purpose and current state, expose more context without losing their place, and decide what should happen next. Add real indentation, a movable outline divider and progressive inline descriptions. Keep original request, plan, normal task, decision and result connected through the existing records and MCP. Deliver and user-test bounded increments before adopting a larger layout change.
+
+### Product lessons and the proposed application here
+
+These are design inferences from the linked primary documentation, consulted September 7, 2026. The specific hover, eye and divider interaction is our proposal; it is not a claim that either product implements that combination.
+
+| Product pattern | What the documentation establishes | Application to this board |
+|---|---|---|
+| [Azure Boards card fields](https://learn.microsoft.com/en-us/azure/devops/boards/boards/customize-cards?view=azure-devops) | Teams choose visible fields, including Parent, use field/tag styling and expose related-item annotations. | Start with title, status and owner; add an attention indicator only when actionable. Move the full description and supporting context into progressive disclosure. Keep meaningful text beside color. |
+| [Azure backlog hierarchy](https://learn.microsoft.com/en-us/azure/devops/boards/backlogs/organize-backlog?view=azure-devops) | Parent relationships, expandable hierarchy and mapping support organizing backlog items. | Use the actual Project → Feature → Task → Subtask relationships and full ancestor path. The outline answers where work belongs; status columns answer where it stands. |
+| [Azure backlog rollups](https://learn.microsoft.com/en-us/azure/devops/boards/backlogs/backlogs-overview?view=azure-devops) | Portfolio backlogs can show descendant counts and progress. | Label the existing descendant task count, count each task once, and distinguish Done status from accepted evidence. |
+| [GitHub board customization](https://docs.github.com/en/issues/planning-and-tracking-with-projects/customizing-views-in-your-project/customizing-the-board-layout) | A board chooses visible fields, grouping, sorting and slices; column limits give feedback. Sorted views constrain manual ordering. | Keep filters and ordering understandable and consistent with persistence. Viewing another slice must not silently move work. Preserve the existing task-ID drag contract. |
+| [GitHub parent and sub-issue fields](https://docs.github.com/en/issues/planning-and-tracking-with-projects/understanding-fields/about-parent-issue-and-sub-issue-progress-fields) | Parent and sub-issue progress fields expose relationships and completed-child counts. | Keep a task's parent/request close to its summary and use explicitly scoped counts. Do not substitute the currently selected request for that task's actual request. |
+
+The core design is three coordinated views of the same work: **outline for scope, board for status, existing detail/request panels for context and decisions**. No Azure/GitHub synchronization, new work-item types or second application is required. Saved views, roadmaps, configurable card-field menus, WIP limits and cycle-time analytics remain later options after the immediate readability problem is tested. In particular, a useful WIP policy needs an agreed scope and treatment of Review/blocked work; it should not be inferred from a color or a count.
+
+### What exists and what changes
+
+At 1440 × 1000 in the real app, the outline measured 320px wide. Feature 13 and its task 186 both started at x=18px and were 283px wide. The task title used `white-space: nowrap`; no resize separator existed. A screenshot and DOM measurements support these observations. Source review additionally establishes the editor and data-loading contracts below; those are not new usability-test results.
+
+| Area | Existing behavior / owning source | Bounded change |
+|---|---|---|
+| Hierarchy | `Shared/ProjectOutline.razor` passes depth to border colors but does not indent rows. Feature counts already include descendant features' tasks. | Apply logical indentation to every depth; keep full parent context reachable and label the count's scope. Preserve the existing count rather than adding another competing total. |
+| Child disclosure | Feature and task buttons expand descendants; nested subtask arrows are decorative and nested children always render. | Preserve current behavior in U-15; in U-16 add an explicit independent nested-subtask disclosure state if needed for the tested hierarchy. Do not let the eye toggle descendants. |
+| Width | `wwwroot/app.css` fixes both width and minimum width at 320px; below 992px the outline is a drawer. | U-15 adds a desktop separator with bounded width and keyboard support; retain the drawer behavior. |
+| Reading | Single-line titles compete with priority and Add controls. No inline description exists. | Wrap compact titles to at most two lines; U-16 adds a small temporary peek and an explicit full inline description. Keep action targets stable. |
+| Opening an item | `Pages/ProjectView.razor.cs` routes outline task clicks to the edit modal. Board cards open `Shared/TaskDetailPanel.razor`, which includes `Workflows/TaskRequestContext.razor`. Both existing editors have history. | Preserve row editing. Offer an explicit **Open task panel** action from pinned context for request/evidence and half/full controls. Preserve subtask identity when displaying its parent task. |
+| Navigation | Typed `OutlineItem` selection, hidden visit history, scoped reveal and fixed header already exist. | Hover stays local. Eye uses existing visit deduplication: a different identity adds one visit; the current identity and closing add none. Back/Forward closes the old preview and reveals the selected item's header without reopening editors. |
+| Context | Project loading already supplies descriptions, task status, assignee, criteria and dependencies. Full workflow context loads graph/history and task hashes. | U-16 uses loaded data. U-17 adds only the missing shared read projection or lazy request context required by the reviewed fields; never mount a full workflow query on every hovered row. |
+| Changes | Existing services/audited save log persisted UI/API/MCP mutations. | Keep all writes on that path. Width, hover and navigation are presentation state; development work and actual saved edits remain recorded. |
+
+Component paths in this table are relative to `src/KanbanFlow/Components/`, except `wwwroot/`.
+
+```mermaid
+flowchart LR
+    subgraph Before[Current outline]
+        B1[Feature row at left edge]
+        B2[Task row at same left edge]
+        B3[Subtask row at same left edge]
+    end
+    subgraph Proposed[Same items with visible relationships]
+        P[Project header and fixed Back / Forward]
+        F[Feature at depth 0]
+        T[Task at depth 1: title and status]
+        S[Subtask at depth 2: text and completion]
+        N[Nested subtask at depth 3]
+        P --> F --> T --> S --> N
+    end
+    Before -->|Presentation changes; stable IDs| Proposed
+    T --> Peek[Temporary in-place description]
+    T --> Eye[Eye pins full inline description]
+    Eye --> Panel[Existing task panel and request context]
+```
+
+Editable source: [outline-context-hierarchy.mmd](assets/outline-context-hierarchy.mmd). Arrows inside the proposed outline indicate ownership; descriptions remain inside their row rather than covering adjacent cards.
+
+### The reading and navigation contract
+
+1. **Scan:** show a two-line title with existing controls; U-17 adds a restrained status/owner row. Keep the chevron, checkbox and eye recognizable as separate actions. Put overflow metadata on a secondary line before squeezing the title into a few characters. Text wraps safely for long file paths and words.
+2. **Peek:** after a provisional 250ms fine-pointer hover or title focus, expose up to two description lines and up to three title lines in that row, growing it by at most roughly 72px. This is a trial value to measure. There is no overlay, data fetch, selection change, auto-scroll or editor open. Leaving both pointer and focus collapses after a short delay; Escape dismisses and suppresses reopening until a fresh entry. Touch uses the eye.
+3. **Pin context:** eye toggles the complete title/description without line clamping, with a full ancestor path and the applicable context fields below. Keep only one pinned item; while pinned, suppress other transient peeks so the list stays stable. Opening another eye replaces it. Place the eye at a stable header position; label it with the item name and expose `aria-expanded`/`aria-controls`. Eye uses existing typed selection: opening a different identity adds one visit; opening/reopening the current identity adds none. Reveal only the header if needed; eye close leaves selection/history unchanged.
+4. **Read deeper or edit:** pinned content is read-only. **Open task panel** uses the existing panel and half/full/close controls; normal row/title editing remains available. For a subtask, show its full text/completion and parent path, and label the panel link as opening its parent task. Do not invent subtask description, priority or assignee fields. Request/history details can remain in the existing panels rather than placing an unbounded activity feed in every row.
+5. **Return:** Back/Forward, project switches and explicit navigation cancel temporary previews. History navigation closes pinned context rather than leaving context for a different selection on screen. Descendant collapse closes a hidden pin. Deletion invalidates it. Refresh resolves the typed identity against fresh data instead of retaining an old EF object; async responses cannot replace a newer selection. Presentation changes while the same editor remains mounted preserve drafts. Closing or changing the task keeps the existing editor's draft/reset behavior; this proposal does not add draft recovery after close.
+
+**Provisional preference:** the eye means full inline description/context. An optional preference question was raised; no user answer has been recorded. This is a documented design assumption for review, not usability approval. If the person prefers the eye to open the existing task panel, change U-16's contract and case before implementation.
+
+Long pinned descriptions use the outline's existing scroller, with the header and eye still easy to reach; avoid an extra tiny scroller inside each card. Section links expose the original request, brief, plan, evidence and history through their existing owners. “Full inline context” and the panel's “Full page” remain distinct labels.
+
+```mermaid
+stateDiagram-v2
+    [*] --> Compact
+    Compact --> Peek: Delayed hover or title focus
+    Peek --> Compact: Leave or Escape
+    Compact --> Pinned: Eye; select with existing visit deduplication
+    Peek --> Pinned: Eye; select with existing visit deduplication
+    Pinned --> Compact: Eye again or scoped Escape
+    Pinned --> Pinned: Another eye replaces current item
+    Pinned --> Compact: History navigation, hidden/deleted item, project change
+    Pinned --> ExistingPanel: Open task panel
+    ExistingPanel --> Pinned: Close panel; retain valid pinned context
+    note right of Peek
+        No selection, history, fetch or saved change
+        Freeze preview geometry during drag or resize
+    end note
+```
+
+Editable source: [outline-context-reading.mmd](assets/outline-context-reading.mmd). Child expansion is an independent state; panel size is another independent state. Scoped Escape first respects an open modal's existing behavior.
+
+### Indentation and movable width
+
+Use a provisional 16px indentation step through feature, task and recursive subtask depth. Leave enough room for the title and controls; when a deep hierarchy cannot fit a minimum readable row, allow horizontal scrolling inside the item area while keeping the header fixed. Test depth 0, 1, 2, 4, 8 and 12 with long labels. Do not silently flatten deep levels or rely only on repeating border colors. The pin's complete ancestor path helps a person recover context. The minimum row width and two-line compact layout need actual readability testing.
+
+Add the separator between the outline and board, outside the outline scroller and all task drag containers. Trial values: default 320px, minimum 280px, maximum `min(640px, project-shell width - 480px - separator width)`. The 480px value reserves a usable board area and must be checked with existing columns; never create a negative/invalid range. Re-clamp on viewport change. Below the existing 992px breakpoint, remove the desktop separator from pointer and keyboard interaction and retain the existing drawer width.
+
+Use pointer capture and local animation-frame CSS updates so resizing does not rerender the whole board through Blazor on every pointer event. Commit the final width once to presentation state. Pointer cancellation, lost capture and Escape restore the starting width; cleanup removes only this component's handlers. Offer a labeled focusable vertical separator with current/minimum/maximum values; Left/Right adjust by 16px, Shift by 64px, Home/End select bounds, and a reset action/double-click restores 320px subject to the current bounds. Respect reduced-motion settings and use a visible focus indicator.
+
+Keep width local to the project visit in the first trial, with no storage dependency. A remembered width can follow human feedback; it would store only a bounded presentation preference and must tolerate blocked storage or stale values. This adds no database schema or board audit traffic.
+
+### Context fields and truthful progress
+
+| Scope | Compact scan | Pinned/deeper context | Source and meaning |
+|---|---|---|---|
+| Project | Existing name and navigation | Purpose, related requests and attention totals when actually available | Existing Project and linked requests; a project can contain several requests, so do not assume a single project-wide original ask. |
+| Feature | Title; labeled Done task count | Description, ancestor path, descendant Todo/In progress/Review/Done counts | Existing hierarchy and unique descendant TaskItem IDs. Current `GetFeatureTaskCounts` already recurses through child features. |
+| Task | Title; status and assignee/unassigned; one actionable attention indicator | Full description, parent/request, priority, incomplete dependencies, criteria/subtask counts | Existing TaskItem, requirements and dependency edges; no parallel status enum. Blocked is a dependency condition, not a new column. Missing dependency data is unknown, not zero blockers. |
+| Subtask | Text and completion | Full text, ancestor path and clearly labeled parent-task context | Existing Subtask has Text/Completed/ParentSubtaskId; parent task state must not be presented as this child's own status/owner. |
+| Request/evidence | Only an attention indication when verified data is loaded | Exact ask → current brief → published plan → this task → report/checks/source → human acceptance | Actual task-to-request mapping and WorkflowContext. Show absent mapping/context honestly; never borrow the request selected elsewhere in the workspace. |
+
+Use separately labeled counts: **2 of 8 tasks Done**, **3 tasks in Review**, **4 of 6 criteria checked**, **1 current accepted report**. These are different facts. Never combine tasks and subtasks into one denominator or turn a Done count into a claim of accepted results. A zero-task feature has “No tasks,” not 100% complete. If board filters hide work, label total versus visible scope; the existing full outline must not silently become filtered. Archived/deleted items and tasks moved to another feature must be excluded or labeled according to the selected scope, with no double counting.
+
+An In progress card or `ClaimedBy` value is reported work/lease state, not proof that an AI process is running. A saved decision is visible immediately; an acknowledgement is a separate attributed message that explicitly references it, and an applied decision requires inspecting the revised brief/plan/cards. `NeedsBriefReview` clearing alone proves neither delivery nor application. U-17 can surface the existing records and links; automatic acknowledgement/delivery/stop badges require future structured receipts and the deferred managed runner.
+
+### Component, data and change ownership
+
+```mermaid
+flowchart TB
+    Human[Person scanning, reading or deciding] --> View[Existing ProjectView]
+    View --> Outline[ProjectOutline: hierarchy, selection and row context]
+    View --> Board[Existing status board]
+    Outline --> JS[Collocated reveal / resize module: local presentation only]
+    Outline --> Detail[Existing task panel / edit modal]
+    Detail --> Request[Existing request workspace and history]
+    AI[AI client] --> MCP[Native / stdio MCP]
+    Request --> Commands[Shared validated workflow and task commands]
+    MCP --> Commands
+    Commands --> Audit[Existing atomic data and audit save]
+    Audit --> DB[(Same SQLite database)]
+    DB --> Reads[Shared task and workflow context reads]
+    Reads --> View
+    Reads --> MCP
+```
+
+Editable source: [outline-context-data-flow.mmd](assets/outline-context-data-flow.mmd). Rendering does not save domain data. Actual edits retain the existing actor, validation and before/after audit paths. Workflow commands additionally retain request versions and plan/task baselines. Ordinary task updates do not currently carry an optimistic concurrency token; universal task conflict protection would be separate work.
+
+| Owner / candidate change | Responsibility and implementation boundary |
+|---|---|
+| `Components/Pages/ProjectView.razor` and `.razor.cs` | Own current unfiltered project, hierarchy expansion, typed selection/history and panel routing. Pass row data/state down and receive explicit callbacks. Preserve request/filter query behavior. |
+| `Components/Shared/ProjectOutline.razor` and `.razor.css` | Apply row depth, compact wrapping and labeled controls while retaining direct task roots and current callbacks. If extraction improves readability, introduce focused `OutlineRow` / `OutlineContextPreview` components; avoid replacing recursion and event ownership wholesale. |
+| `Components/Shared/OutlineItem.cs`, `ProjectOutline.razor.js`, `ProjectOutlineInterop.cs` | Identify preview by project plus item kind/ID; add disposal-safe resize handling and header-scoped reveal. Keep temporary/pinned preview separate from child disclosure and visit history. |
+| `wwwroot/app.css`, `wwwroot/js/kanbanflow.js` | Replace desktop fixed width/min-width together; preserve drawer rules. Keep `.feature-tasks[data-feature-id]` and direct `[data-task-id]` roots, task-ID ordering and Blazor DOM restoration. Preview bodies stay inside their row; their links/text cannot start a drag or open the row editor. Freeze geometry from drag start through completion/cancel. |
+| `Components/Shared/TaskDetailPanel.razor`, `Components/Workflows/TaskRequestContext.razor` | Reuse existing task context and editing. Add a subtask-aware panel route rather than changing the selection to its parent task. Preserve drafts and half/full state. |
+| `Components/Workflows/RequestWorkspace.razor`, `Services/Workflows/WorkspaceService.Context.cs`, `Models/Workflows/WorkflowContext.cs` | U-17 reuses current request/evidence semantics. If a small summary projection is needed, compute it in shared reads; do not duplicate rules inside Razor. Bind it to the task's real mapping and invalidate on refreshed version/scope. |
+| `Mcp/KanbanMcpTools.cs`, `scripts/mcp-server.mjs` | Only change these in U-17 if a new shared context read is required; expose matching meanings and explicit unavailable fields. Presentation controls need no MCP mutation/tool. |
+
+Paths in this ownership table are relative to `src/KanbanFlow/`, except `scripts/`. Candidate component extraction is an implementation choice, not a promise to create every listed component.
+
+Pre-index feature children and counts once per loaded project if profiling shows recursive work is material. Hover uses only loaded text; do not fetch or render all request histories. Any lazy pinned read must be cancellable or reject late results, carry identity/version, have an explicit refresh path and show failure/unknown state. Measure render/query behavior with 200 and 1,000 synthetic rows before considering virtualization, which could break reveal and Sortable's identity assumptions. These are future experiments, not measured performance claims.
+
+### Detailed staged checklist
+
+The stages below correspond to actual cards on the existing request; dependencies express sequence, and each stage's acceptance text requires actual human review before normal-board adoption. Test on the same application's disposable review instance using labeled fixture data. A review instance is for verification, not a replacement product.
+
+**U-14 / task 187 — Plan and baseline**
+
+- [x] Record both exact decisions, explicit acknowledgement and revised brief/plan using native MCP; preserve all thirteen prior task IDs/names/statuses.
+- [x] Inspect outline, editor paths, workflow reads, data contracts and drag identity; measure the current real outline and inspect its screenshot.
+- [x] Compare primary Azure/GitHub documentation and document the inferred principles, provisional eye choice, alternatives and limits.
+- [x] Specify interaction states, source ownership, context meaning, diagrams and future cards 188–190.
+- [x] Rebuild/test the current PR, validate local documentation/diagram links, record the [dated baseline](../test-cases/509-unified-workflow/runs/2026-09-07-65de739994a4.md) and prepare the reviewed plan for issue #509 / PR #511.
+- [ ] Human reviews the proposed eye behavior and staged approach; retain feedback in Updates. This remains a pending human check after the planning result is reported.
+
+**U-15 / task 188 — Readable hierarchy and width**
+
+- [ ] Implement logical depth spacing and compact title wrapping without changing sortable task-root identity; distinguish recursive subtask ancestry.
+- [ ] Protect title/control space and provide deep-tree overflow/parent context; check Done styling and selected-row contrast.
+- [ ] Implement separator sizing, local pointer capture, keyboard bounds, cancel/reset, disposal and responsive re-clamping; keep first-trial width ephemeral.
+- [ ] Preserve fixed header, scoped reveal, selection/history, filters, existing editors and mobile drawer accessibility.
+- [ ] Run deep/wide/long-label and breakpoint browser checks, actual task drag around expanded subtasks, and compare persisted data/audit before/after viewing.
+- [ ] Rebuild and pass the required gate; give a person the bounded review build, record their findings and apply corrections before normal-board adoption.
+
+**U-16 / task 189 — Peek and pinned context**
+
+- [ ] Implement cancellable hover/focus timing, capped in-place growth, touch/keyboard eye control and reduced-motion behavior.
+- [ ] Keep one typed pinned context, stable action positions, independent child expansion and explicit close/navigation/deletion behavior; implement nested-subtask disclosure only as a separately tested part of this stage.
+- [ ] Show complete applicable title/description/text with parent path and read-only context; reuse sanitized rendering and wrap long paths safely.
+- [ ] Preserve original row edit actions; add the existing task-panel route while retaining selected subtask identity and unsaved drafts.
+- [ ] Keep preview controls/text out of drag initiation and editor bubbling; freeze/cancel preview geometry during sorting and resizing; do not perform per-hover workflow reads.
+- [ ] Test rapid crossing, bottom-visible rows, long descriptions, focus/escape, touch, stale refresh/delete, real drag and existing A10–A16 regressions.
+- [ ] Rebuild, record UI/MCP state equality and actual human feedback on eye meaning/readability; tune delay/spacing before adoption.
+
+**U-17 / task 190 — Project/task context and attention**
+
+- [ ] User-test the smallest visible field set, full parent/request path and project purpose; keep the underlying board/status layout.
+- [ ] Reuse and label unique descendant task rollups; distinguish Done, Review, criteria/subtask progress and current accepted evidence, including empty/filtered scopes.
+- [ ] Surface incomplete dependencies and unknown data honestly; do not add a second task status or infer a running agent from assignment/claim.
+- [ ] Link the actual task request, repository, files, report/checks/source and history through existing records; handle unmapped ordinary tasks and multiple requests in one project.
+- [ ] Expose matching shared summaries through UI/native/stdio only where new reads are needed; test late responses, refresh/version invalidation, query volume and unavailable context.
+- [ ] Walk through a human decision, explicit acknowledgement and revised brief/plan on unchanged task IDs; keep saved, acknowledged, applied and executed evidence distinct.
+- [ ] Preserve workflow version/baseline checks and ordinary task-service validation; verify all intended writes remain audited, rebuild/test affected surfaces, and record a person's orientation/decision feedback before adoption.
+
+### Human verification and alternatives
+
+The [TC-509 visibility review](../test-cases/509-unified-workflow/README.md#outline-visibility-review-proposed) owns the executable human script and pending acceptance matrix. Use the same fixture before/after so the comparison measures visibility rather than familiarity with new task names. Have the person identify parent, purpose, current state, blocking work and the next decision without coaching; record mistakes, unnecessary editor openings, time to answer and their explanation. Readability and predictability determine acceptance; automated success alone does not.
+
+The independent source critic identified two useful counterexamples: indentation can make a narrow title less readable, and hovering a card must not trigger the existing selection/reveal path because that changes history and recenters the list. The plan therefore pairs indentation with usable width and keeps hover local. Preview height changes during sorting and full-request reads per row are anticipated risks to test, not reproduced defects.
+
+| Alternative considered | Decision and resolving check |
+|---|---|
+| Always show all descriptions | Keep compact scan plus explicit context. Compare a long outline; reject the trial if hover still creates pointer chasing or too much movement. |
+| Eye opens the existing task panel immediately | Retain as the preference alternative. The provisional inline eye meets the requested in-place reading; confirm with the person before implementing U-16. |
+| Tooltip/floating preview | Use in-place growth as requested; test bottom rows and keyboard/touch so content is reachable without an overlay or hover-only dependency. |
+| New dashboard, global state store or copied workflow statuses | Reuse current view/component/service ownership. Add a shared read projection only when the selected context cannot be served economically by existing reads. |
+| Persist width or virtualize the tree immediately | Begin with visit-local width and existing DOM identity. Add persistence or virtualization only after the specific usability/performance need is demonstrated. |
+
+If an increment fails, leave the normal board on the previously verified build, retain the failed case and recorded feedback, and revise that stage on the same card. Before eventual normal adoption, back up the existing SQLite consistently, rebuild the approved source, restart only its owned process, compare prior data and recheck the real controls. No data migration is planned for U-15/U-16. The plan introduces no access code or login change.
+
+## Deferred managed execution
 
 - [ ] Add paginated request discovery and history windows; current discovery returns the latest 200 matching requests and context includes full revision/message history.
 
