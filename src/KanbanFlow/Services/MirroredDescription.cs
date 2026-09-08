@@ -225,10 +225,18 @@ public static class MirroredDescription
         // line got a GitHub affordance pointing wherever its author chose — the card would show a
         // "#123" chip linking to an unrelated repository, indistinguishable from a real mirror.
         // The block is the sync's own signed envelope, so it is the only place the claim is good.
-        var block = SyncBlock(description);
-        if (block is null) return null;
+        //
+        // ...and specifically its **Issue:** RECORD, not the block as a whole — the same narrowing
+        // the modal's chips use, reached through the same method. Scanning the whole block left
+        // this path safe only by the order descriptionFor() happens to emit its lines in: the
+        // attacker-controlled `**Labels:**` text lands BELOW `**Issue:**`, so the leftmost match
+        // was the real URL. That is an accident of the producer, not a property of this reader, and
+        // reordering those two lines would have made the card spoofable with every test still
+        // green. The modal was the path where the same accident ran the other way.
+        var line = SyncRecord(description, "Issue");
+        if (line is null) return null;
 
-        var m = IssueUrlRe.Match(block);
+        var m = IssueUrlRe.Match(line);
         if (!m.Success) return null;
 
         // A URL written at the end of a sentence carries the stop into the match, and the resulting
