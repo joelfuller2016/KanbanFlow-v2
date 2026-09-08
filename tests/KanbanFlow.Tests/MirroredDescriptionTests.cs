@@ -778,4 +778,51 @@ public sealed class MirroredDescriptionTests
         Assert.Null(chips.PrUrl);
         Assert.Null(chips.PrNumber);
     }
+
+    /// <summary>
+    /// A chip is only ever rendered for a URL on <c>github.com</c> itself, and only when the record
+    /// line BEGINS with it.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The chip is an assertion of provenance — it says "this task is that GitHub issue" — so the
+    /// host is the one part of the URL that may never be negotiable. The cases below are the
+    /// standard ways a URL is made to read as one host and resolve as another, and each was run
+    /// against the real component before being written down here.
+    /// </para>
+    /// <para>
+    /// The <c>\s*</c> between the marker and the URL is doing security work in the last case: it
+    /// permits whitespace and nothing else, so an attacker URL that merely CONTAINS a github.com
+    /// link later on cannot lend it the chip. Widening it — or relaxing <c>https://github\.com/</c>
+    /// to a general URL pattern — reopens all of these at once, which is why they are pinned
+    /// together rather than left to the shape of the regex.
+    /// </para>
+    /// </remarks>
+    [Theory]
+    // The host is not github.com at all.
+    [InlineData("https://evil.example/joelfuller2016/KanbanFlow-v2/issues/487")]
+    // github.com as USERINFO of another host — reads as github.com up to the first `/`.
+    [InlineData("https://github.com@evil.example/a/b/issues/9")]
+    // A github.com URL carried inside an attacker's URL, where the anchor would have to skip over
+    // the attacker's host to reach it.
+    [InlineData("https://evil.example/redirect?u=https://github.com/a/b/issues/9")]
+    // A lookalike TLD.
+    [InlineData("https://github.com.evil.example/a/b/issues/9")]
+    public void GitHubChips_AreOnlyEverRenderedForGitHubItself(string hostileUrl)
+    {
+        var description = MirroredFixture.Replace(
+            "https://github.com/joelfuller2016/KanbanFlow-v2/issues/454",
+            hostileUrl,
+            StringComparison.Ordinal);
+
+        // NON-VACUITY: the substitution landed, the block is still owned, and the record is still
+        // found — so the nulls below are the URL pattern refusing, not the description falling out
+        // of the mirrored shape entirely.
+        Assert.Contains(hostileUrl, description, StringComparison.Ordinal);
+        Assert.NotNull(MirroredDescription.SyncBlock(description));
+        Assert.NotNull(MirroredDescription.SyncRecord(description, "Issue"));
+
+        Assert.Null(ModalChipsFor(description).IssueUrl);
+        Assert.Null(MirroredDescription.IssueUrl(description));
+    }
 }
