@@ -242,13 +242,21 @@ public sealed class AdminHealthEndpointTests
 
         // The literal Copy-Item signature: the destination file is made NOW and keeps the source's
         // older last-write time. No board that has been used since it was created can look like this.
-        // Use an explicit snapshot so the predicate is independent of platform creation-timestamp
-        // support: on Linux FileInfo.CreationTimeUtc falls back to min(mtime, ctime), which would
-        // equal LastWriteUtc after SetLastWriteUtc and make the condition undetectable.
-        var now = DateTime.UtcNow;
-        var copySignatureSnapshot = new DbFileSnapshot(now, now.AddHours(-3), board.Snapshot!.SizeBytes);
+        var seedWrittenAt = DateTime.UtcNow.AddHours(-3);
+        board.SetLastWriteUtc(seedWrittenAt);
 
-        await using var host = await HealthHost.StartAsync(board, existed: true, snapshot: copySignatureSnapshot);
+        // The same platform precondition carried by
+        // DbPathResolverTests.Resolution_CarriesTheCopySignature_WhenTheBoardWasRestoredFromASeed,
+        // repeated here so the endpoint case names its own dependency: a filesystem that reports no
+        // creation time independent of the last write collapses both stamps onto seedWrittenAt, the
+        // reason cannot fire, and the assertions below would go red for the host rather than for
+        // the endpoint. Asserted, not skipped — see that test for why.
+        Assert.True(
+            Assert.IsType<DbFileSnapshot>(board.Snapshot).CreatedAtUtc > seedWrittenAt,
+            "this filesystem keeps no creation time independent of the last write, so the copy "
+            + "signature cannot be observed on this host");
+
+        await using var host = await HealthHost.StartAsync(board, existed: true);
         var (statusCode, body) = await host.GetHealthAsync();
 
         Assert.Equal(HttpStatusCode.OK, statusCode);
@@ -431,7 +439,8 @@ public sealed class AdminHealthEndpointTests
 
         /// <summary>
         /// The file's real facts, stat'd exactly as <c>DbPathResolver</c> stats them at boot — null
-        /// when there is no file, which is the same invariant the resolution carries.
+        /// when there is no file. The resolver additionally returns null for a file it cannot stat
+        /// (#513); this fixture does not reproduce that case and does not need to.
         /// </summary>
         /// <remarks>
         /// Read here rather than by calling <c>DbPathResolver.Resolve</c>, which creates the parent
@@ -463,6 +472,14 @@ public sealed class AdminHealthEndpointTests
         /// that serves it — which is genuinely one of the suspicious shapes (#498 review, 3), and
         /// those cases mean "an established board", not "a board that happens to be brand new".
         /// Backdating the fixture is the honest fix; relaxing the assertion would not be.
+        /// <para>Portability, since <see cref="SetCreationUtc"/> is not honoured everywhere: on a
+        /// host that keeps no independent creation time, the reported creation collapses to
+        /// min(mtime, ctime), which the second call below pins a day back. The board then reads as
+        /// created yesterday rather than a month ago — a different fixture from the one intended,
+        /// but still an established board comfortably outside the 15-minute window, so the cases
+        /// that assert <c>ok</c> hold there for the same reason they hold here. This one does not
+        /// need the creation stamp to be independent; the copy-signature cases do, and they say so
+        /// themselves.</para>
         /// </summary>
         public void MarkEstablished()
         {
@@ -496,6 +513,10 @@ public sealed class AdminHealthEndpointTests
             {
                 try { File.Delete(Path); }
                 catch (IOException) { /* a host still holding the handle is not a test failure */ }
+                // File.Delete throws this for a read-only or in-use entry and it does NOT derive
+                // from IOException, so the catch above does not cover it. Uncaught in Dispose it
+                // would fail the class for a cleanup problem rather than for an assertion — the
+                // Directory.Delete below and DbPathResolverTests.Dispose both already catch both.
                 catch (UnauthorizedAccessException) { }
             }
 
@@ -526,8 +547,7 @@ public sealed class AdminHealthEndpointTests
         public DateTime StartedAtUtc { get; }
 
         public static async Task<HealthHost> StartAsync(
-            TestBoard board, bool existed, IReadOnlyList<string>? shadowedPaths = null,
-            DbFileSnapshot? snapshot = null)
+            TestBoard board, bool existed, IReadOnlyList<string>? shadowedPaths = null)
         {
             // Development so a server-side exception comes back in the response body: a host that
             // answers a bare 500 makes every failure look identical.
@@ -538,13 +558,11 @@ public sealed class AdminHealthEndpointTests
 
             var startup = new AppStartupInfo();
             builder.Services.AddSingleton<IAppStartupInfo>(startup);
-            // The file facts come from the board's REAL file by default, so the reasons derived from
-            // them are derived from a real stat. Pass an explicit snapshot to override filesystem
-            // timestamps for predicate tests that must not rely on platform timestamp support.
+            // The file facts come from the board's REAL file, so the reasons derived from them are
+            // derived from a real stat rather than from a record hand-built to make them fire.
             builder.Services.AddSingleton(
                 new DbPathResolution(
-                    board.Path, DbPathResolver.SourceEnvironment, existed, shadowedPaths ?? [],
-                    snapshot ?? board.Snapshot));
+                    board.Path, DbPathResolver.SourceEnvironment, existed, shadowedPaths ?? [], board.Snapshot));
             builder.Services.AddDbContextFactory<AppDbContext>(o => o.UseSqlite(board.ConnectionString));
 
             // MapAdminEndpoints maps five routes and ASP.NET Core builds the WHOLE endpoint table

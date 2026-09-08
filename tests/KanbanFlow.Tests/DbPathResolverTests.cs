@@ -624,6 +624,26 @@ public sealed class DbPathResolverTests : IDisposable
 
         var snapshot = Assert.IsType<DbFileSnapshot>(resolution.Snapshot);
         Assert.Equal(seedWrittenAt, snapshot.LastWriteUtc);
+
+        // PLATFORM PRECONDITION, asserted so a red here reads as "this host cannot show the
+        // signature" rather than "the resolver stopped capturing it". The case needs a creation
+        // time the filesystem records independently of the last write. Windows/NTFS has one.
+        // .NET on Linux does not: System.Native's ConvertFileStatus sets HasBirthTime only where
+        // the platform supplies st_birthtimespec (BSD/macOS), so FileStatus.GetCreationTime falls
+        // back to min(mtime, ctime) — backdating the last write drags the reported creation time
+        // down with it, both stamps land on seedWrittenAt, and the strict comparison below is
+        // false. The copy signature is genuinely unobservable there, so this goes RED rather than
+        // green. Deliberate: no CI and no Assert.Skip on xunit 2.9.3 (see RepositoryRoot below), and
+        // a guard that quietly passes where it cannot run is the failure mode these guards exist to
+        // catch. Capturing CreationTimeUtc BEFORE the backdate instead — the review's other
+        // suggestion — would turn this green on such a host while the endpoint's detection stayed
+        // dead, which is the one outcome worth avoiding.
+        Assert.True(
+            snapshot.CreatedAtUtc > seedWrittenAt,
+            $"this filesystem reports creation {snapshot.CreatedAtUtc:o} at or below the backdated "
+            + $"last write {seedWrittenAt:o}, so it keeps no creation time independent of the last "
+            + "write and the copy signature cannot be observed on this host");
+
         Assert.True(
             snapshot.LastWriteUtc < snapshot.CreatedAtUtc,
             $"last write {snapshot.LastWriteUtc:o} should precede creation {snapshot.CreatedAtUtc:o}");
@@ -636,7 +656,9 @@ public sealed class DbPathResolverTests : IDisposable
         var app = NewDirectory("app");
 
         // Both branches that resolve to a file which is not there: the explicit override, and the
-        // fall-through default. Non-null exactly when Existed is true.
+        // fall-through default. This binds one direction only — no file, therefore no facts. The
+        // converse does NOT hold: Existed can be true with a null snapshot when the file is there
+        // but cannot be stat'd (#513), so this case is not evidence of a biconditional.
         var configured = DbPathResolver.Resolve(Path.Combine(app, "absent.db"), launch, launch, app);
         Assert.False(configured.Existed);
         Assert.Null(configured.Snapshot);

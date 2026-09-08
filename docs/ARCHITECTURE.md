@@ -243,6 +243,25 @@ shadowedPaths, projects, status, error, reasons, elapsedMs }`: the file that was
 opened, the file's own facts as the app found them at boot, a real `COUNT(*)` read from it,
 and every reason the top-level status is not `ok`.
 
+**`db.status` is a different field from the top-level `status`, and it does not share its
+vocabulary.** The top-level field grades the whole app; `db.status` answers exactly one question —
+did the probe throw — so it stays `ok` through every one of the `degraded` reasons below, and only
+a probe that actually threw moves it. A database that cannot be opened is reported by BOTH fields
+at once, with different words: the top-level goes to `error`, `db.status` reports the probe outcome,
+and `unreachable` appears in `db.reasons` either way.
+
+**The one thing not to do is collapse them.** They are read separately — `scripts/smoke-api.ps1`
+asserts `$health.db.status -eq "ok"`, while `scripts/register-kanbanflow-task.ps1` parses the
+top-level field and has already been fixed once for matching the wrong one. The authoritative
+values are the ones asserted in `AdminHealthEndpointTests`, which pins both fields in the same
+case precisely so a later change cannot merge them.
+
+> **The failure literal for `db.status` is unsettled — see the note on
+> [#512](https://github.com/joelfuller2016/KanbanFlow-v2/pull/512) and a ruling pending from
+> [#498](https://github.com/joelfuller2016/KanbanFlow-v2/issues/498)'s author.** #498 specifies it
+> twice and does not agree with itself, so read the endpoint and its tests for the current value
+> rather than trusting a remembered one.
+
 `ok` means all of: the database opened, the read succeeded, the board is not empty, this
 process did not CREATE the board it is serving, the board carries no trace of having been
 copied into place just before the app started, and no second `kanbanflow.db` is shadowing the
@@ -551,8 +570,11 @@ board last written an hour before it was created, at exactly the committed seed'
 
 `existedAtStartup` alone answers this scenario `ok`. It is also true from the second boot onward
 even where it does fire, so it cannot carry a criterion evaluated after reboots *plural*. The file
-facts are re-read from the file at every boot, so they do survive restarts — until the first real
-write, which is the measured boundary documented above.
+facts are re-read from the file at every boot, so both reasons survive restarts — but they expire on
+separate clocks, and the table above is the precise statement. `last-write-precedes-creation` ends at
+the first real write and no restart affects it. `created-moments-before-startup` is untouched by
+writes and ends at the first start more than 15 minutes after the file was created — so it can still
+be firing on a board that has been written to, and it is gone from a board that has not.
 
 The script is idempotent (`-Force` replaces), verifies afterwards that the triggers actually landed,
 and **refuses to register the real task from a git worktree** (it asks `git rev-parse --git-dir`

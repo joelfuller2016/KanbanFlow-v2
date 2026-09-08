@@ -398,9 +398,15 @@ distinguishable from a restored one. Neither is a fault. Both clear themselves: 
 the first real write to the board, the second at the first restart more than 15 minutes after the
 file was created. Confirm `db.path` is the file you meant before you go looking for a cause.
 
-These signals fade — the first real write to the wrong board erases them, and there is then nothing
-in the app that can tell it apart from the right one. `db.path` is the durable answer: compare it
-with the file you meant, which is the check no code can make for you (#498).
+These signals fade, and they fade on **different clocks** — neither one waits for the other. A write
+to the wrong board erases `last-write-precedes-creation` immediately, because the write is what
+finally puts the last-write time after the creation time. It does nothing at all to
+`created-moments-before-startup`, which reads the creation time and a write never touches that; that
+one lasts until the next start more than 15 minutes after the file was created, whether or not the
+board has been written to. So a wrongly-restored board can keep reporting `degraded` after you have
+been using it, and — the direction that costs you — a board written to and then restarted a day later
+reports a clean `ok` with both signals gone. `db.path` is the durable answer: compare it with the
+file you meant, which is the check no code can make for you (#498).
 
 **Which database it opened.** The app names the file it is using, on every boot:
 

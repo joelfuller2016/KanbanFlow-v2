@@ -15,9 +15,12 @@ namespace KanbanFlow.Data;
 /// all three so the caller can compare them against whatever it knows (the size of the committed
 /// seed, for instance, which the application itself does not ship and cannot read).</para>
 ///
-/// <para><b>What they cannot tell you.</b> Every one of these signals is erased the moment real
-/// data is written to the wrong board — after that, nothing inside the application can distinguish
-/// it from the right one. They also cannot separate a mis-restored seed from a user deliberately
+/// <para><b>What they cannot tell you.</b> Writing real data to the wrong board erases the
+/// last-write signal at once — the write is what finally puts <see cref="LastWriteUtc"/> after
+/// <see cref="CreatedAtUtc"/>. The creation-time signal is not on that clock: a write never changes
+/// a creation time, so it expires only when a start happens more than 15 minutes after the file was
+/// made. Either way, once both have gone nothing inside the application can distinguish the wrong
+/// board from the right one. They also cannot separate a mis-restored seed from a user deliberately
 /// restoring their own backup; the two are byte-for-byte the same event.</para>
 /// </remarks>
 /// <param name="CreatedAtUtc">
@@ -237,9 +240,15 @@ public static class DbPathResolver
     /// </summary>
     /// <remarks>
     /// One <see cref="FileInfo"/>, deliberately. Its properties are served from a single cached
-    /// stat, so "did it exist" and "what were its timestamps" describe the same instant and cannot
-    /// straddle a concurrent <c>Copy-Item</c>. Two separate calls could report a file that existed
-    /// but has no facts, or facts for a file reported absent.
+    /// stat, so the facts inside a returned snapshot describe the same instant and cannot straddle
+    /// a concurrent <c>Copy-Item</c>.
+    /// <para>That is narrower than "existence and facts always agree", and the gap is still open:
+    /// the catch below returns <c>(true, null)</c> — a file that existed but has no facts — from a
+    /// SINGLE call, so <see cref="DbPathResolution.Existed"/> true does not imply a non-null
+    /// snapshot and every reader must null-check. Both call sites now take the <c>Existed</c> this
+    /// returns rather than hardcoding it, which closes the other route to that state; the
+    /// unreadable-file case remains, tracked as
+    /// <see href="https://github.com/joelfuller2016/KanbanFlow-v2/issues/513">#513</see>.</para>
     /// </remarks>
     private static (bool Existed, DbFileSnapshot? Snapshot) Stat(string path)
     {
