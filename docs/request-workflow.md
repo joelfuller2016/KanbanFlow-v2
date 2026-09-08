@@ -186,6 +186,14 @@ Key regression names and further execution evidence are recorded in [the impleme
 
 The outline follow-up at `829ab2ca5ba28c0d5f76759240623ec944f40334` passed a fresh rebuild, the required 1,160 .NET and 223 script tests, real native/stdio MCP and all four browser cases. All 180 normal-board tasks survived restart. Its [pinned run](test-cases/509-unified-workflow/runs/2026-09-07-829ab2ca5ba2.md) owns the current results and limits. Outline navigation only changes local presentation state; task/request edits remain visible through the existing MCP tools.
 
+## Complete content
+
+Complete request, task and result text must remain readable in the same board and MCP. The
+[full-content sync and recovery guide](GITHUB-SYNC.md#complete-content-and-legacy-recovery)
+owns the preservation rules, repair command, limits and recovery procedure. TC-509's
+[U-18 checks](test-cases/509-unified-workflow/README.md#u-18-complete-content) verify actual
+large browser edits and native/stdio round trips. A short preview must never replace stored text.
+
 ## Later Codex execution
 
 The current PR provides manual and MCP authoring/review. It does not launch Codex or passively capture unrelated sessions. [Issue #509](https://github.com/joelfuller2016/KanbanFlow-v2/issues/509) retains the explicit follow-on checklist: task-scoped CLI adapter, visible dispatch/run/attempt records, configured model/access preservation, output capture, stop/continue, durable recovery and connected-client capture. Those additions must write to these same request and task IDs. Read the [product direction](plans/central-project-board.md) before implementing them.

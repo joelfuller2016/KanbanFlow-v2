@@ -6,11 +6,13 @@ using KanbanFlow.Data;
 using KanbanFlow.Services;
 using KanbanFlow.Services.Workflows;
 using KanbanFlow.Models.Workflows;
+using Microsoft.AspNetCore.Http.Connections;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.AI;
 using OpenAI;
 
 var builder = WebApplication.CreateBuilder(args);
+const int editorMessageLimit = 4 * 1024 * 1024;
 
 // Database (#354): DbPathResolver owns which file is opened — KANBANFLOW_DB_PATH first, then a
 // probe for an existing kanbanflow.db, then a launch-directory-independent default. Resolving
@@ -141,7 +143,11 @@ builder.Services.AddMcpServer()
 
 // Blazor
 builder.Services.AddRazorComponents()
-    .AddInteractiveServerComponents();
+    .AddInteractiveServerComponents()
+    // Full issue bodies/comments must survive an actual editor input event. The default 32KB
+    // inbound frame limit previously motivated lossy sync excerpts. This is a transport bound,
+    // never a storage clipping rule; 4MiB covers complete GitHub text plus JSON/Unicode overhead.
+    .AddHubOptions(options => options.MaximumReceiveMessageSize = editorMessageLimit);
 
 // CORS for AI agents
 builder.Services.AddCors(options =>
@@ -194,7 +200,15 @@ app.UseCors();
 app.UseAntiforgery();
 app.MapStaticAssets();
 app.MapRazorComponents<App>()
-    .AddInteractiveServerRenderMode();
+    .AddInteractiveServerRenderMode()
+    .Add(endpoint =>
+    {
+        // Keep the inbound pipe above a complete allowed frame so receiving one editor
+        // event does not pause behind the transport's default 64KB backpressure threshold.
+        var connection = endpoint.Metadata.OfType<HttpConnectionDispatcherOptions>().FirstOrDefault();
+        if (connection is not null)
+            connection.ApplicationMaxBufferSize = editorMessageLimit * 2;
+    });
 
 // OpenAPI: serve at /openapi/v1.json (default) and redirect /openapi.json → /openapi/v1.json
 // so the README-documented path works for agents doing discovery.

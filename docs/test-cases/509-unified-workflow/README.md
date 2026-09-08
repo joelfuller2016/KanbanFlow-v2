@@ -120,6 +120,33 @@ The outline follow-up retains the existing feature/task/subtask editors. The add
 
 Human check remains pending: use task 186, inspect History/Saved details, make one intended change, and record whether the actor, item and change are understandable in Updates. Automated success does not complete U-10 or accept U-13.
 
+## U-18 complete content
+
+The user's requirement is: **“nothing should ever be truncated”**. The [owning sync guide](../../GITHUB-SYNC.md#complete-content-and-legacy-recovery)
+defines complete storage, conservative source recovery and explicit limits. Full content
+remains in the existing card, service, database, history and MCP; no layout redesign is involved.
+
+| Check | Observable acceptance and executable evidence |
+|---|---|
+| F01 | Full Unicode/Markdown body and comment, including meaningful whitespace, survive import beyond old limits. `portfolio-sync.test.mjs`: `descriptionFor preserves the entire large Unicode Markdown body including whitespace and tail`; `legacy limits cannot shorten a new issue or comment`. |
+| F02 | Recovery handles the whole batch, source/identity failure before writes, local edits, partial failure/retry and a no-op repeat. See the multi-candidate/preflight/retry cases in `portfolio-sync.test.mjs`. |
+| F03 | Service create/update/comment and the card commit handler preserve exact nonblank text and complete audit values; blank values retain their existing validation/clearing contract. `TaskServiceContentTests.cs` and `TaskDetailDescriptionCommit_PreservesIndentationAndTrailingMarkdownWhitespace`. |
+| F04 | Actual browser paste/save/reopen preserves a 128,098-character description and 69,062-character comment, and a human can reach the final line. `scripts/full-content.browser.js` also checks full/half/close, unrelated fields, REST/native read-back and complete history. |
+| F05 | Actual native/stdio/REST clients preserve large descriptions, comments, CRLF, Unicode and audit values. `scripts/full-content-transport-checks.mjs` runs inside `smoke-workflow.mjs`. |
+| F06 | Consistent live backup, unchanged restart, all intended repairs, exact full source hashes and complete before/after audit. The second repair makes zero changes. Record actual task/table/count results, rather than a mocked test claim. |
+
+For F04, run the transport smoke against a disposable app/database, open its printed board URL
+in a named Playwright CLI session, then run `scripts/full-content.browser.js` with
+`run-code --filename`. The script creates an ordinary fixture card under the test feature,
+grants clipboard access only to that automation session, pastes through the real browser input
+and saves through the existing Blazor handlers. No REST call substitutes for the editor save.
+Keep the resulting screenshot/log in the ignored verification folder. Exit zero alone is not
+enough: require the returned `passed: true` and absence of `### Error`.
+
+Human review remains pending: open several restored imports, scroll to their last requirement,
+inspect any **Preserved prior board text**, use Edit/full/half/close and check History/Saved
+details. Record feedback on U-18 and the request's Updates; automated success does not accept U-10.
+
 ## Outline visibility review (proposed)
 
 This is the acceptance specification for future U-15/188, U-16/189 and U-17/190, planned by U-14/187. The [canonical plan](../../plans/central-project-board-implementation.md#outline-visibility-and-context--staged-proposal) owns interaction rules, source changes, diagrams and the implementation checklist. The live outline still uses fixed width and the existing controls; the following future checks have **not run**. All human outcomes are pending.

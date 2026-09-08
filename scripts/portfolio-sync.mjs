@@ -4,10 +4,11 @@
 // GitHub is the source of truth for issue CONTENT. The board is the visualisation, plus the
 // one place where work that does not exist on GitHub yet can be drafted and then pushed.
 //
-// Four commands (full contract: docs/GITHUB-SYNC.md):
+// Commands (full contract: docs/GITHUB-SYNC.md):
 //
 //   sync        GitHub -> board mirror. The default command.
 //   onboard     register a NEW repo: create/link the Project, then backfill everything.
+//   restore-content  recover incomplete legacy descriptions for one explicit repo.
 //   push-issue  PREVIEW ONLY. Computes and prints the exact GitHub issue a board task would
 //               become, and REFUSES to perform the write. See "why" below.
 //   status      health check: counts both sides, unsynced tasks, drift, orphans, last sync.
@@ -53,6 +54,7 @@ import { promisify } from "node:util";
 import { realpathSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { createHash } from "node:crypto";
 // BOTH imports are used. `derivePriority` sets TaskItem.Priority in `syncTasks()` and backs the
 // priority-drift check in `statusRepo()`; `priorityFromLabel` is called by `labelForPriority()`
 // below, which picks the label a pushed issue should carry so the priority survives the round trip.
@@ -79,28 +81,17 @@ const DEFAULT_REPOS = [
 ];
 
 const UNSORTED_FEATURE = "Unsorted";
-const SYNC_DESCRIPTION_PREFIX = "<!-- kanbanflow-sync -->\n**Issue:** ";
 const TRUNCATION_FOOTER = "…(truncated — see the issue)";
-const SIGNALR_MAX_RECEIVE_BYTES = 32_768;
-// Assume a 32,768-byte receive limit and reserve at least 10% for any protocol envelope and fields
-// other than the markdown: ceil(32,768 / 10) = 3,277 bytes. This repo does not configure or prove
-// that transport limit, so it is a conservative compatibility assumption, not a protocol guarantee.
-// The enforced 29,491-byte description limit measures JSON.stringify(description), including the
-// expansion of newlines, quotes and backslashes plus the JSON string's surrounding quotes.
-const SIGNALR_ENVELOPE_HEADROOM_BYTES = Math.ceil(SIGNALR_MAX_RECEIVE_BYTES / 10);
-const MAX_DESCRIPTION_BYTES = SIGNALR_MAX_RECEIVE_BYTES - SIGNALR_ENVELOPE_HEADROOM_BYTES;
-const MIN_BODY_EXCERPT_BYTES = 1_024;
-const requestedBodyLimit = Number.parseInt(process.env.KANBANFLOW_BODY_EXCERPT_LIMIT || "", 10);
-const BODY_EXCERPT_LIMIT = Math.min(
-  MAX_DESCRIPTION_BYTES,
-  Math.max(MIN_BODY_EXCERPT_BYTES, Number.isFinite(requestedBodyLimit) ? requestedBodyLimit : MAX_DESCRIPTION_BYTES),
-);
+const COMMENT_TRUNCATION_FOOTER = "…(truncated — read it on GitHub)";
+const COMPLETE_COMMENT_MARKER = "<!-- kanbanflow-comment:complete -->";
+const OVERSIZED_HEADER_STUB = "<!-- kanbanflow-sync -->\n**Issue:** (provenance omitted: header exceeded description budget)\n<!-- /kanbanflow-sync -->";
+// Historical markers are read only to repair old imports. Source text is never shortened.
 // High enough that no repo in the portfolio comes near it, because SATURATING it is a hard
 // failure, not a warning: a read that stopped early makes every count and every "no drift"
 // verdict downstream a lie. Overridable so the incompleteness path can actually be exercised.
 const GH_PAGE_LIMIT = Math.max(1, Number.parseInt(process.env.KANBANFLOW_GH_PAGE_LIMIT || "2000", 10) || 2000);
 
-const COMMANDS = ["sync", "onboard", "push-issue", "status"];
+const COMMANDS = ["sync", "onboard", "restore-content", "push-issue", "status"];
 
 // Statuses the sync is allowed to advance a task *out of* when GitHub shows a linked open
 // PR. A task a human has already parked in Review/Done is left alone (reported as drift
@@ -111,7 +102,7 @@ function parseArgs(argv) {
   const args = {
     command: "sync",
     dryRun: false, includeClosed: false, repos: null, actor: "portfolio-sync",
-    comments: true, maxCommentChars: 0, // 0 = no cap; mirror the comment whole
+    comments: true,
     allowWrite: false, task: null, all: false, strict: false, json: false, limit: 0,
     error: null,
   };
@@ -135,7 +126,10 @@ function parseArgs(argv) {
     if (a === "--dry-run") args.dryRun = true;
     else if (a === "--include-closed") args.includeClosed = true;
     else if (a === "--no-comments") args.comments = false;
-    else if (a === "--max-comment-chars") args.maxCommentChars = Number.parseInt(argv[++i], 10) || 0;
+    else if (a === "--max-comment-chars") {
+      args.error = "--max-comment-chars is no longer supported: full comment text must be preserved. Remove this option.";
+      return args;
+    }
     else if (a === "--repos") args.repos = [...(args.repos || []), ...(argv[++i] || "").split(",").map((r) => r.trim()).filter(Boolean)];
     else if (a === "--actor") args.actor = argv[++i] || args.actor;
     // --push is the alias; both spellings mean "you may create issues on GitHub".
@@ -355,12 +349,18 @@ function collectComments(issue, linkedPr) {
   return out;
 }
 
-function commentTextFor(c, maxChars) {
-  let body = c.body;
-  if (maxChars > 0) {
-    body = excerptFor(body, maxChars, "…(truncated — read it on GitHub)", (value) => value.length);
-  }
-  return `<!-- gh:${c.ghId} -->\n${c.header}\n\n${body}`;
+function commentTextFor(c) {
+  return `<!-- gh:${c.ghId} -->\n${COMPLETE_COMMENT_MARKER}\n${c.header}\n\n${c.body ?? ""}`;
+}
+
+function completeCommentIds(comments, incoming = []) {
+  const completeLegacyText = new Map(incoming.map((c) => [c.ghId, `<!-- gh:${c.ghId} -->\n${c.header}\n\n${c.body ?? ""}`]));
+  return new Set(comments.filter((c) => {
+    const text = String(c.text || "");
+    return /^<!-- gh:[^>]+ -->\r?\n<!-- kanbanflow-comment:complete -->\r?\n/.test(text)
+      || text === completeLegacyText.get(ghIdOf(text))
+      || !text.trimEnd().endsWith(COMMENT_TRUNCATION_FOOTER);
+  }).map((c) => ghIdOf(c.text)).filter(Boolean));
 }
 
 // "Closes #12", "fixes #34", "resolved: #56" — GitHub's own closing-keyword vocabulary.
@@ -477,14 +477,13 @@ function stripSyncBlock(description) {
     .trim();
 }
 
-const utf8Bytes = (value) => Buffer.byteLength(value, "utf8");
-const serializedUtf8Bytes = (value) => utf8Bytes(JSON.stringify(String(value)));
 const OPEN_FENCE_LINE = /^ {0,3}(`{3,}|~{3,})(.*)$/;
 const CLOSE_FENCE_LINE = /^ {0,3}(`{3,}|~{3,})[ \t]*$/;
 
 function unclosedFence(text) {
   let open = null;
-  for (const line of text.split("\n")) {
+  for (const rawLine of text.split("\n")) {
+    const line = rawLine.replace(/\r$/, "");
     if (open) {
       const close = CLOSE_FENCE_LINE.exec(line);
       const marker = close?.[1];
@@ -501,30 +500,8 @@ function unclosedFence(text) {
   return open;
 }
 
-// Return the longest line-boundary excerpt whose complete rendered value fits maxBytes. Both
-// backtick and tilde fences are recognised; an open retained fence is closed before the prose
-// footer. Recomputing the footer and fence for each candidate charges the caller's exact size.
-function excerptFor(body, maxBytes, footer = TRUNCATION_FOOTER, sizeOf = utf8Bytes) {
-  const source = String(body || "");
-  if (sizeOf(source) <= maxBytes) return source;
-
-  const render = (kept) => {
-    const fence = unclosedFence(kept);
-    return `${kept}${fence ? `\n${fence}` : ""}\n\n${footer}`;
-  };
-  let kept = "";
-  let newline = source.indexOf("\n");
-  while (newline !== -1) {
-    const candidate = source.slice(0, newline);
-    if (sizeOf(render(candidate)) > maxBytes) break;
-    kept = candidate;
-    newline = source.indexOf("\n", newline + 1);
-  }
-  return render(kept);
-}
-
 function descriptionFor(issue, linkedPr) {
-  const oversizedHeaderStub = "<!-- kanbanflow-sync -->\n**Issue:** (provenance omitted: header exceeded description budget)\n<!-- /kanbanflow-sync -->";
+  const body = String(issue.body ?? "");
   const labels = (issue.labels || []).map((l) => l.name).join(", ") || "none";
   const milestone = issue.milestone?.title || "none";
   const lines = [
@@ -533,37 +510,51 @@ function descriptionFor(issue, linkedPr) {
     `**State:** ${issue.state || "OPEN"} · **Milestone:** ${milestone} · **Labels:** ${labels}`,
     linkedPr ? `**Open PR:** ${linkedPr.url}${linkedPr.isDraft ? " (draft)" : ""}` : "**Open PR:** none",
     `**Synced:** ${new Date().toISOString()}`,
+    "**Content:** complete",
+    `**Source SHA-256:** ${createHash("sha256").update(body, "utf8").digest("hex")}`,
     "<!-- /kanbanflow-sync -->",
     "",
   ];
-  let prefix = `${lines.join("\n")}\n`;
-  if (serializedUtf8Bytes(`${prefix}\n\n${TRUNCATION_FOOTER}`) > BODY_EXCERPT_LIMIT) {
-    return oversizedHeaderStub;
-  }
-  const body = String(issue.body || "").trim();
-  if (body) {
-    // Charge the complete JSON-serialized description for every candidate. This accounts for
-    // escaping in both the generated prefix and markdown body, rather than treating raw bytes as
-    // though they were the wire representation.
-    const descriptionSize = (candidateBody) => serializedUtf8Bytes(`${prefix}${candidateBody}`);
-    lines.push(excerptFor(body, BODY_EXCERPT_LIMIT, TRUNCATION_FOOTER, descriptionSize));
-  }
-  return lines.join("\n");
+  return `${lines.join("\n")}\n${body}`;
 }
 
-// Issue #495 tracks general description reconciliation. This is intentionally only its narrow,
-// conservative slice: refresh descriptions that still have both our exact generated header shape
-// and our truncation footer. Anything else may contain a human edit and must be left untouched.
+function syncDescriptionParts(description) {
+  const match = /^(<!-- kanbanflow-sync -->\r?\n\*\*Issue:\*\* ([^\r\n]+)\r?\n[\s\S]*?<!-- \/kanbanflow-sync -->)\r?\n\r?\n([\s\S]*)$/.exec(String(description || ""));
+  return match ? { header: match[1], issueUrl: match[2], body: match[3] } : null;
+}
+
+function needsContentRestoration(description) {
+  if (description === OVERSIZED_HEADER_STUB) return true;
+  const parts = syncDescriptionParts(description);
+  return Boolean(parts && !/^\*\*Content:\*\* complete\r?$/m.test(parts.header)
+    && parts.body.trimEnd().endsWith(TRUNCATION_FOOTER));
+}
+
+// Restore only recognizable incomplete imports. A changed source or local edit is kept in a
+// labeled section as well as the existing audit snapshot; no assumption of GitHub ownership
+// is used to discard differing board text. Complete imports remain untouched (#495).
 function descriptionRefreshFor(storedDescription, regeneratedDescription) {
-  const stored = String(storedDescription || "");
-  if (!stored.startsWith(SYNC_DESCRIPTION_PREFIX)) return null;
-  if (!stored.trimEnd().endsWith(TRUNCATION_FOOTER)) return null;
-  // `descriptionFor()` stamps the current time. Ignore that one generated field when deciding
-  // whether the body is stale, or a still-truncated large issue would be rewritten on every run.
-  const withoutSyncTime = (value) => value.replace(/^\*\*Synced:\*\* .*$/m, "**Synced:**");
-  return withoutSyncTime(stored) === withoutSyncTime(regeneratedDescription)
-    ? null
-    : regeneratedDescription;
+  if (!needsContentRestoration(storedDescription)) return null;
+  const next = syncDescriptionParts(regeneratedDescription);
+  if (!next || !/^\*\*Content:\*\* complete\r?$/m.test(next.header)) return null;
+  if (storedDescription === OVERSIZED_HEADER_STUB) return regeneratedDescription;
+  const old = syncDescriptionParts(storedDescription);
+  if (old.issueUrl !== next.issueUrl) return null;
+  const beforeFooter = old.body.trimEnd().slice(0, -TRUNCATION_FOOTER.length);
+  const kept = beforeFooter.endsWith("\r\n\r\n") ? beforeFooter.slice(0, -4)
+    : beforeFooter.endsWith("\n\n") ? beforeFooter.slice(0, -2) : beforeFooter;
+  const sourceHasPrefix = (prefix) => next.body.startsWith(prefix) || next.body.trimStart().startsWith(prefix);
+  let matchesSource = sourceHasPrefix(kept);
+  // Older clipping closed an open Markdown fence synthetically. Recognize that one added
+  // closing line, while retaining any differing text verbatim in the preservation section.
+  const lastLine = kept.lastIndexOf("\n");
+  if (!matchesSource && lastLine >= 0) {
+    const prefix = kept.slice(0, lastLine);
+    const closer = kept.slice(lastLine + 1).trim();
+    matchesSource = unclosedFence(prefix) === closer && sourceHasPrefix(prefix);
+  }
+  if (matchesSource) return regeneratedDescription;
+  return `${regeneratedDescription}\n\n<!-- kanbanflow-preserved-board-text -->\n## Preserved prior board text\n\nThe prior board text differs from the current GitHub source. It is retained below; the complete current issue is above.\n\n${kept}\n<!-- /kanbanflow-preserved-board-text -->`;
 }
 
 // --- KanbanFlow REST --------------------------------------------------------------------
@@ -651,7 +642,7 @@ async function ensureFeatures(projectId, names, dryRun) {
 // taskId is null ONLY on the dry-run "this task would be created" path — a task that does not
 // exist yet cannot have comments, so an empty dedupe set is correct there. Everywhere else a real
 // id is required, and the guard below enforces that rather than trusting the call sites.
-async function syncComments(issue, linkedPr, taskId, args) {
+async function syncComments(issue, linkedPr, taskId, args, request = api) {
   const incoming = collectComments(issue, linkedPr);
   if (incoming.length === 0) return;
 
@@ -661,23 +652,85 @@ async function syncComments(issue, linkedPr, taskId, args) {
   // every previously-mirrored comment was reported as "would add". A preview that overstates its
   // own writes is worse than no preview — it is exactly the lie --dry-run exists to prevent.
   // Reads are safe under --dry-run; only writes are suppressed.
-  const existing = taskId == null ? [] : await api("GET", `/api/tasks/${taskId}/comments`);
-  const seen = new Set((existing || []).map((c) => ghIdOf(c.text)).filter(Boolean));
+  const existing = taskId == null ? [] : await request("GET", `/api/tasks/${taskId}/comments`);
+  // A legacy clipped import is not a complete copy. Append the full source under the same
+  // node identity, preserving its earlier history; the full marker makes the next run a no-op.
+  const seen = completeCommentIds(existing || [], incoming);
 
   for (const c of incoming) {
     if (seen.has(c.ghId)) { stats.commentsUnchanged++; continue; }
-    const text = commentTextFor(c, args.maxCommentChars);
+    const text = commentTextFor(c);
     plan(args.dryRun, "add comment", `#${issue.number} ← ${c.author} [${c.type}] ${c.body.length.toLocaleString()} chars`);
     if (args.dryRun) { stats.commentsCreated++; continue; }
     if (taskId == null) {
       throw new Error(`syncComments: taskId is null outside --dry-run (issue #${issue.number}) — refusing to POST to /api/tasks/null/comments`);
     }
-    await api("POST", `/api/tasks/${taskId}/comments`, { text, author: c.author, type: c.type });
+    await request("POST", `/api/tasks/${taskId}/comments`, { text, author: c.author, type: c.type });
+    seen.add(c.ghId);
     stats.commentsCreated++;
     if (c.body.length > stats.biggestComment.chars) {
       stats.biggestComment = { chars: c.body.length, author: c.author, issue: issue.number };
     }
   }
+}
+
+async function restorationSources(repo) {
+  const [issues, prs] = await Promise.all([
+    gh(["issue", "list", "-R", repo, "--state", "all", "--limit", String(GH_PAGE_LIMIT),
+      "--json", "number,title,body,labels,milestone,assignees,state,updatedAt,url"]),
+    fetchOpenPrs(repo, false),
+  ]);
+  if (issues.length >= GH_PAGE_LIMIT || prs.length >= GH_PAGE_LIMIT) {
+    throw new Error("Content restoration requires a complete source read. Raise KANBANFLOW_GH_PAGE_LIMIT and retry; no descriptions were changed.");
+  }
+  return { issues, prByIssue: mapIssueToOpenPr(prs) };
+}
+
+// A content-only repair does not run normal sync's title/priority/status/feature reconciliation.
+// Injectable I/O keeps dry-run, source failure and description-only writes testable without GitHub.
+async function restoreContent(repo, args, { request = api, readSources = restorationSources } = {}) {
+  const link = resolveProjectLink(repo, await request("GET", "/api/projects"));
+  if (link.conflict || !link.project) throw new Error(link.conflict || `No existing project for ${repo}. Content restoration creates nothing.`);
+  const tasks = await request("GET", `/api/projects/${link.project.id}/tasks`);
+  const candidates = tasks.filter((t) => needsContentRestoration(t.description));
+  const result = { candidates: candidates.length, restored: 0, preservedPriorText: 0 };
+  if (!candidates.length) return result;
+  const { issues, prByIssue } = await readSources(repo);
+  const byNumber = new Map(issues.map((issue) => [issue.number, issue]));
+  // Resolve every candidate before the first write, so missing/deleted source is an explicit
+  // failure rather than a misleading successful repair of only the first part of the project.
+  const repairs = candidates.map((task) => {
+    const parts = syncDescriptionParts(task.description);
+    const source = parts && /^https:\/\/github\.com\/([^/]+\/[^/]+)\/issues\/(\d+)$/.exec(parts.issueUrl);
+    if (source && source[1].toLowerCase() !== repo.toLowerCase()) throw new Error(`Task ${task.id} points to a different repository; no content was changed.`);
+    if (!source && !(task.description === OVERSIZED_HEADER_STUB && link.linkedBy === "marker")) {
+      throw new Error(`Task ${task.id}: a title-only source needs a durable matching project marker; no content was changed.`);
+    }
+    const number = source ? Number(source[2]) : issueNumberFromTaskName(task.name);
+    const issue = byNumber.get(number);
+    if (!issue) throw new Error(`Task ${task.id}: full GitHub issue ${number ?? "identity"} is unavailable; no content was changed.`);
+    const completeDescription = descriptionFor(issue, prByIssue.get(number) || null);
+    const description = descriptionRefreshFor(task.description, completeDescription);
+    if (description === null) throw new Error(`Task ${task.id}: source provenance does not match; no content was changed.`);
+    return { task, description, preserved: description !== completeDescription };
+  });
+  for (const { task, description, preserved } of repairs) {
+    plan(args.dryRun, "restore content", `task ${task.id}: ${task.description.length} → ${description.length} characters${preserved ? "; differing prior board text retained" : ""}`);
+    if (!args.dryRun) {
+      const fresh = await request("GET", `/api/tasks/${task.id}`);
+      if (fresh.name !== task.name || fresh.description !== task.description
+        || (task.updatedAt != null && fresh.updatedAt !== task.updatedAt)) {
+        throw new Error(`Task ${task.id} changed while the repair was being prepared. Its repair was not written; re-read and retry. Earlier successful repairs are retained and logged.`);
+      }
+      await request("PUT", `/api/tasks/${task.id}`, { name: fresh.name, description, actor: args.actor });
+      const saved = await request("GET", `/api/tasks/${task.id}`);
+      if (saved.description !== description) throw new Error(`Task ${task.id}: full-content read-back failed. Retain the source and inspect the saved record before retrying.`);
+    }
+    result.restored++;
+    if (preserved) result.preservedPriorText++;
+    stats.descriptionsRefreshed++;
+  }
+  return result;
 }
 
 async function syncTasks(repo, projectId, issues, closedNumbers, prByIssue, featureIds, args) {
@@ -1180,6 +1233,7 @@ the visualisation. Every command is idempotent and honours --dry-run.
 
   sync                        GitHub -> board mirror. Read-only on GitHub. THE DEFAULT.
   onboard <owner/repo>…       register a repo: link the Project durably, then backfill it.
+  restore-content <repo>      restore incomplete imported descriptions on existing cards only.
   push-issue <owner/repo>     PREVIEW ONLY: print the exact issue each unsynced board task
                               would become. Refuses to write — see docs/GITHUB-SYNC.md.
   status                      health check both sides.
@@ -1193,7 +1247,6 @@ common
 sync / onboard
   --include-closed       also mirror closed issues (as Done)
   --no-comments          skip GitHub comment mirroring (on by default)
-  --max-comment-chars N  truncate each mirrored comment at N chars (default: no cap)
 
 push-issue
   --task <id>            preview exactly this board task
@@ -1223,10 +1276,13 @@ async function main() {
     return;
   }
   if (args.command === "push-issue" && refusesWrite(args)) return;
+  if (process.env.KANBANFLOW_BODY_EXCERPT_LIMIT !== undefined) {
+    console.warn("KANBANFLOW_BODY_EXCERPT_LIMIT is obsolete and ignored. Complete issue and comment text is always preserved.");
+  }
   // `sync` and `status` sweep the whole portfolio by design. onboard/push-issue act on ONE
   // repo at a time and must never fall back to the default six — silently onboarding or
   // pushing to six repos because a repo argument was forgotten is not a recoverable mistake.
-  if ((args.command === "onboard" || args.command === "push-issue") && !args.repos?.length) {
+  if ((args.command === "onboard" || args.command === "push-issue" || args.command === "restore-content") && !args.repos?.length) {
     console.error(`\`${args.command}\` needs an explicit repo:\n  node scripts/portfolio-sync.mjs ${args.command} owner/repo`);
     process.exitCode = 2;
     return;
@@ -1250,7 +1306,7 @@ async function main() {
     return;
   }
 
-  const runners = { sync: syncRepo, onboard: onboardRepo, "push-issue": pushIssues };
+  const runners = { sync: syncRepo, onboard: onboardRepo, "restore-content": restoreContent, "push-issue": pushIssues };
   const run = runners[args.command];
   for (const repo of repos) {
     try {
@@ -1288,7 +1344,7 @@ async function main() {
     if (stats.biggestComment.chars > 20_000) {
       const b = stats.biggestComment;
       console.log(`\n  ! biggest comment: ${b.chars.toLocaleString()} chars from ${b.author} on #${b.issue}.`);
-      console.log(`    Mirrored whole. Use --max-comment-chars N to cap it (agents reading this task over MCP pay for it).`);
+      console.log("    Full content preserved. Clients can page or collapse their views without changing the saved text.");
     }
   }
   if (stats.drift.length) {
@@ -1319,10 +1375,12 @@ if (invokedDirectly) {
 }
 
 export {
-  BODY_EXCERPT_LIMIT,
-  MAX_DESCRIPTION_BYTES,
   commentTextFor,
+  completeCommentIds,
   descriptionRefreshFor,
   descriptionFor,
-  excerptFor,
+  needsContentRestoration,
+  restoreContent,
+  parseArgs,
+  syncComments,
 };

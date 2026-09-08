@@ -476,15 +476,23 @@ public sealed class TaskServiceMutationTests
         Assert.Equal(0, await db.ActivityEvents.CountAsync(e => e.EntityId == taskId));
     }
 
-    [Fact]
-    public async Task AddComment_BlankText_ThrowsValidation()
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    [InlineData("\t\r\n\u2003")]
+    public async Task AddComment_BlankText_ThrowsValidation(string? text)
     {
         using var f = new SqliteTestFactory();
         var (_, taskId) = SeedFeatureWithTask(f);
         var svc = new TaskService(f);
 
         await Assert.ThrowsAsync<ValidationException>(
-            () => svc.AddCommentAsync(taskId, "   ", "x", CommentType.Note, "x"));
+            () => svc.AddCommentAsync(taskId, text!, "x", CommentType.Note, "x"));
+
+        using var persisted = f.CreateDbContext();
+        Assert.Empty(await persisted.TaskComments.ToListAsync());
+        Assert.Empty(await persisted.ActivityEvents.ToListAsync());
     }
 
     [Fact]

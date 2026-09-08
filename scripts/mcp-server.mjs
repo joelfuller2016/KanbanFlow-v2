@@ -1105,7 +1105,7 @@ async function callTool(toolName, args) {
     case "add_task_comment":
       return restJson(`/api/tasks/${requiredInt(args, "taskId")}/comments`, {
         method: "POST",
-        body: { text: requiredString(args, "text"), author: args.author ?? "MCP", type: optionalCommentType(args) }
+        body: { text: requiredString(args, "text", { preserveWhitespace: true }), author: args.author ?? "MCP", type: optionalCommentType(args) }
       });
 
     // ── Authoring tools ──
@@ -1613,12 +1613,12 @@ function optionalFiniteNumber(args, name) {
   return value;
 }
 
-function requiredString(args, name) {
+function requiredString(args, name, { preserveWhitespace = false } = {}) {
   const value = args[name];
   if (typeof value !== "string" || value.trim().length === 0) {
     throw new McpError(-32602, `${name} is required.`);
   }
-  return value.trim();
+  return preserveWhitespace ? value : value.trim();
 }
 
 // `hint` is optional: when a value is rejected for a reason the allowed-list alone does not explain

@@ -1006,7 +1006,7 @@
     private async Task SaveDescriptionAsync()
     {
         if (Task is null) return;
-        var newDesc = string.IsNullOrWhiteSpace(editingDescription) ? null : editingDescription.Trim();
+        var newDesc = string.IsNullOrWhiteSpace(editingDescription) ? null : editingDescription;
         if (newDesc == Task.Description) return;
 
         try

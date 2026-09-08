@@ -7,6 +7,7 @@ import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { workflowTools } from './workflow-tools.mjs';
 import { verifyAuditTransports } from './audit-transport-checks.mjs';
+import { verifyFullContentTransports } from './full-content-transport-checks.mjs';
 
 const base = process.argv[2];
 if (!base) throw new Error('Usage: node scripts/smoke-workflow.mjs http://127.0.0.1:5126 (disposable board)');
@@ -91,7 +92,8 @@ try {
   const rest = await fetch(`${base}/api/workflows/${id}`, { signal: AbortSignal.timeout(20000) }); assert.equal(rest.status, 200);
   assert.equal((await rest.json()).tasks[0].taskId, task.taskId);
   const audit = await verifyAuditTransports(base, call, native, stdio);
-  console.log(JSON.stringify({ passed: true, audit, nativeTools: nativeList.tools.length, wrapperTools: wrapperList.tools.length,
+  const fullContent = await verifyFullContentTransports(base, call, native, stdio);
+  console.log(JSON.stringify({ passed: true, audit, fullContent, nativeTools: nativeList.tools.length, wrapperTools: wrapperList.tools.length,
     requestId: id, ideaId: context.ideaId, projectId: context.projectId, taskId: task.taskId,
     boardUrl: `${base}${context.boardUrl}`, taskUrl: `${base}${task.url}` }, null, 2));
 } finally {

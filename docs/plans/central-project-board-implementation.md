@@ -615,6 +615,60 @@ The independent source critic identified two useful counterexamples: indentation
 
 If an increment fails, leave the normal board on the previously verified build, retain the failed case and recorded feedback, and revise that stage on the same card. Before eventual normal adoption, back up the existing SQLite consistently, rebuild the approved source, restart only its owned process, compare prior data and recheck the real controls. No data migration is planned for U-15/U-16. The plan introduces no access code or login change.
 
+## U-18 — Complete content and legacy import recovery
+
+The September 7 correction is preserved verbatim:
+
+> …(truncated — see the issue) ??? Why are these here, nothing should ever be truncated????
+
+The old importer actually removed the end of issue bodies and optionally shortened comments.
+The normal-board audit identified **161 incomplete descriptions** and **zero incomplete
+comments**; complete source issues are available for every candidate. Decision
+`92f05822-eb17-42dc-9a2b-d1f2a561713a`, its acknowledgement and **U-18/task 223** are on the
+existing request `1e9c0ecd-33e4-4098-a5af-9c61c00fa2cb`. Earlier card identities/statuses remain
+intact. The [sync guide](../GITHUB-SYNC.md#complete-content-and-legacy-recovery) owns the full
+numbered repair procedure and source diagram; TC-509 records actual recovery evidence.
+
+| Previous behavior | Change and owning files |
+|---|---|
+| Shortened bodies and optional comment cap | `portfolio-sync.mjs` preserves every source character, adds complete-content provenance and a source SHA-256, rejects the old comment cap and ignores obsolete excerpt settings. |
+| Already incomplete descriptions | Explicit-repo `restore-content` resolves the full batch, preserves differing prior board text, re-reads each task, writes only its description/actor and verifies exact persistence. |
+| Whitespace removed before storage | `TaskService.cs`, `TaskDetailPanel.razor` and `mcp-server.mjs` preserve nonblank description/comment text. Existing name/actor normalization and empty-field rules remain. |
+| Small editor transport defaults | `Program.cs` permits 4 MiB inbound SignalR messages and an 8 MiB transport buffer. Limits never justify clipping saved text. |
+| Missing full-content browser/MCP evidence | `full-content.browser.js` checks real large paste/save/reopen, complete history, final-line visibility and existing size controls; `full-content-transport-checks.mjs` checks actual native/stdio/REST parity. |
+
+```mermaid
+flowchart LR
+    Source[Complete GitHub source] --> Recover[Resolve all candidates and retain differing board notes]
+    Prior[Existing incomplete description] --> Recover
+    Recover --> Save[Existing audited task service]
+    Editor[Same card editor and MCP] --> Save
+    Save --> Store[(Same SQLite and full before/after history)]
+    Store --> Human[Full details, review and decisions on same board]
+```
+
+Detailed checklist:
+
+- [x] Capture exact direction, acknowledge it and publish U-18 on the same request.
+- [x] Identify generated legacy cutoffs and obtain every complete source; literal marker-like prose is preserved.
+- [x] Remove lossy issue/comment formatting and preserve exact source whitespace/provenance.
+- [x] Reject ambiguous/foreign/missing source before any write; retain differing board notes and audit snapshots.
+- [x] Scope recovery to descriptions; re-read before writing, verify full persistence and make retries repeatable.
+- [x] Preserve additive comment history while permitting one complete copy of an incomplete import.
+- [x] Fix nonblank whitespace loss in the service, card editor and stdio comment wrapper.
+- [x] Test the multi-candidate batch, full preflight, partial failure/retry, title-only stub safety and comment deduplication.
+- [x] Verify large browser paste/save/reopen, final-line visibility, full/half/close and full audit/MCP/REST values.
+- [x] Verify actual native/stdio clients preserve large Unicode/CRLF descriptions/comments and complete history.
+- [ ] Finish current-source gates, back up the normal board, rebuild/restart it and verify all intended repairs and an unchanged repeat.
+- [ ] Publish complete issue/PR documentation and source-pinned recovery evidence, then report U-18 for review.
+- [ ] Human reviews restored text, retained notes and History; U-10 remains pending.
+
+Ordinary task PUT has no atomic version token; the fresh preflight read does not promise
+atomic compare-and-swap. A page-bound source read fails explicitly. Future larger sources
+require refusal or streaming, never excerpts. Browser textareas normalize line endings to
+LF; API/MCP source imports preserve CRLF. The outline visibility controls under U-15–U-17
+remain separately proposed and are not implemented by this content correction.
+
 ## Deferred managed execution
 
 - [ ] Add paginated request discovery and history windows; current discovery returns the latest 200 matching requests and context includes full revision/message history.

@@ -781,10 +781,12 @@ public sealed class TaskService(
 
         if (dto.Description is not null)
         {
-            var trimmed = string.IsNullOrWhiteSpace(dto.Description) ? null : dto.Description.Trim();
-            if (task.Description != trimmed)
+            // Nonblank bodies are authored content: indentation, hard breaks and trailing
+            // newlines can be meaningful Markdown. Only an explicit blank value clears it.
+            var description = string.IsNullOrWhiteSpace(dto.Description) ? null : dto.Description;
+            if (task.Description != description)
             {
-                task.Description = trimmed;
+                task.Description = description;
                 changedFields.Add("Description");
             }
         }
@@ -932,7 +934,7 @@ public sealed class TaskService(
         {
             FeatureId = dto.FeatureId,
             Name = dto.Name.Trim(),
-            Description = string.IsNullOrWhiteSpace(dto.Description) ? null : dto.Description.Trim(),
+            Description = string.IsNullOrWhiteSpace(dto.Description) ? null : dto.Description,
             Status = status,
             Priority = priority,
             Assignee = string.IsNullOrWhiteSpace(dto.Assignee) ? null : dto.Assignee.Trim(),
@@ -1379,7 +1381,7 @@ public sealed class TaskService(
         var comment = new TaskComment
         {
             TaskItemId = taskId,
-            Text = text.Trim(),
+            Text = text,
             Author = string.IsNullOrWhiteSpace(author) ? null : author.Trim(),
             Type = type,
             CreatedAt = DateTime.UtcNow
