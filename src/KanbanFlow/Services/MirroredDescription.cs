@@ -33,12 +33,10 @@ namespace KanbanFlow.Services;
 public static class MirroredDescription
 {
     /// <summary>
-    /// How much of a description is examined. The sync's body cap is <c>MAX_DESCRIPTION_BYTES</c>
-    /// (29,491 serialized UTF-8 bytes by default), so an unbounded
-    /// <see cref="RegexOptions.Singleline"/> scan would read up to ~29 KB per card per render hunting
-    /// a header that is always within the first few hundred bytes (the largest measured across 320
-    /// issues is 296). The live board holds 185 cards, and a filter keystroke re-renders all of
-    /// them. An excerpt needs only the head of the body, so both jobs are satisfied by one slice.
+    /// How much of a description is examined for the card preview and metadata. This bounds
+    /// rendering work independently of the complete stored description's length. It does not
+    /// shorten storage or the detail editor. The generated header normally occupies the first
+    /// few hundred characters, and the preview needs only the opening body text.
     /// </summary>
     public const int ScanChars = 4096;
 
@@ -61,10 +59,6 @@ public static class MirroredDescription
     // drift from what SyncBlockRe accepts.
     private static readonly Regex SyncOpenRe = new(
         @"\A[ \t]*<!--\s*kanbanflow-sync\s*-->",
-        RegexOptions.Compiled);
-
-    private static readonly Regex IssueUrlRe = new(
-        @"\*\*Issue:\*\*\s*(?<u>https://github\.com/[^\s)<]+)",
         RegexOptions.Compiled);
 
     // One `**Key:** value` record per line, which is exactly how descriptionFor() writes the block.
@@ -128,15 +122,12 @@ public static class MirroredDescription
     /// </summary>
     /// <remarks>
     /// <para>
-    /// THIS IS THE OWNERSHIP TEST, and it is deliberately the only copy of it. A description is
-    /// free text that any user can edit, so the marker pair inside one proves nothing: it can be
-    /// typed. What cannot be typed is the sync's own habit of writing its block at offset zero,
-    /// which is why <c>SyncBlockRe</c> is anchored with <c>\A[ \t]*</c>. That anchor is the entire
-    /// difference between "this description was produced by <c>scripts/portfolio-sync.mjs</c>" and
-    /// "this description contains something shaped like it".
+    /// This identifies the generated header's position and shape, not its author. A user with
+    /// task-edit access can type the same block at offset zero. The anchor prevents quoted body
+    /// content from being interpreted as metadata; it is not authentication or durable identity.
     /// </para>
     /// <para>
-    /// Every consumer that presents the block's contents as TRUSTED — the card's GitHub chip, the
+    /// Every consumer that presents the block's contents — the card's GitHub chip, the
     /// edit modal's Issue and PR buttons — must ask this method rather than re-deriving the test.
     /// Asking it in two places is exactly how the modal came to answer differently from the card:
     /// its own copy was unanchored, so a forged block pasted anywhere into a description rendered
@@ -163,9 +154,8 @@ public static class MirroredDescription
     /// </summary>
     /// <remarks>
     /// <para>
-    /// OWNERSHIP IS NOT ENOUGH. <see cref="SyncBlock"/> proves the block was written by
-    /// <c>scripts/portfolio-sync.mjs</c> at offset zero. It says nothing about the block's
-    /// CONTENTS, and two of the values inside it are attacker-controlled: <c>descriptionFor()</c>
+    /// Header position is not a trust boundary. Two of the values inside it come from GitHub
+    /// users: <c>descriptionFor()</c>
     /// interpolates the issue's label names and milestone title verbatim into
     /// <c>**State:** … · **Milestone:** … · **Labels:** …</c>, and that line is emitted ABOVE
     /// <c>**Open PR:**</c>.
@@ -215,33 +205,54 @@ public static class MirroredDescription
 
     /// <summary>
     /// The GitHub issue URL this description was mirrored from, or <c>null</c> for a description
-    /// that was hand-written rather than synced. Anchored to the <c>**Issue:**</c> marker the sync
-    /// itself writes, so a hand-authored description simply does not match.
+    /// without a matching header record. The URL is normalized before either its href or label
+    /// is derived. Editable metadata is an advisory link, not proof of repository identity.
     /// </summary>
     public static string? IssueUrl(string? description)
     {
-        // The URL is read ONLY from inside the sync block, never from the description at large.
-        // Matching `**Issue:** <url>` anywhere meant a hand-written description opening with that
-        // line got a GitHub affordance pointing wherever its author chose — the card would show a
-        // "#123" chip linking to an unrelated repository, indistinguishable from a real mirror.
-        // The block is the sync's own signed envelope, so it is the only place the claim is good.
-        //
-        // ...and specifically its **Issue:** RECORD, not the block as a whole — the same narrowing
-        // the modal's chips use, reached through the same method. Scanning the whole block left
-        // this path safe only by the order descriptionFor() happens to emit its lines in: the
-        // attacker-controlled `**Labels:**` text lands BELOW `**Issue:**`, so the leftmost match
-        // was the real URL. That is an accident of the producer, not a property of this reader, and
-        // reordering those two lines would have made the card spoofable with every test still
-        // green. The modal was the path where the same accident ran the other way.
-        var line = SyncRecord(description, "Issue");
+        return UrlFromRecord(description, "Issue");
+    }
+
+    /// <summary>The normalized pull request URL from its header record, or null.</summary>
+    public static string? PullRequestUrl(string? description)
+    {
+        var url = UrlFromRecord(description, "Open PR");
+        return ItemNumberForUrl(url, "pull") is null ? null : url;
+    }
+
+    private static string? UrlFromRecord(string? description, string key)
+    {
+        var line = SyncRecord(description, key);
         if (line is null) return null;
 
-        var m = IssueUrlRe.Match(line);
-        if (!m.Success) return null;
+        // Read the value at its start. Searching for another **Issue:** marker inside the value
+        // would let free text forge a second record even after SyncRecord isolated the first one.
+        var value = line[(key.Length + 5)..].TrimStart(); // **Key:**
+        var candidate = value.Split([' ', '\t', ')', '<'], 2)[0].TrimEnd('.', ',', ';', ':');
+        if (!candidate.StartsWith("https://github.com/", StringComparison.OrdinalIgnoreCase)
+            || !Uri.TryCreate(candidate, UriKind.Absolute, out var uri)
+            || uri.Scheme != Uri.UriSchemeHttps || uri.Host != "github.com"
+            || uri.UserInfo.Length != 0 || !uri.IsDefaultPort)
+        {
+            return null;
+        }
 
-        // A URL written at the end of a sentence carries the stop into the match, and the resulting
-        // href 404s on GitHub. Trailing `.`/`,`/`;`/`:` are never part of a GitHub issue URL.
-        return m.Groups["u"].Value.TrimEnd('.', ',', ';', ':');
+        // Uri resolves dot segments. Derive every label from this same destination, rather than
+        // matching a number in the unnormalized text and linking somewhere different.
+        return uri.AbsoluteUri;
+    }
+
+    /// <summary>The ASCII item number for an exact GitHub owner/repository/item-kind/number path.</summary>
+    public static string? ItemNumberForUrl(string? url, string itemKind)
+    {
+        if (!Uri.TryCreate(url, UriKind.Absolute, out var uri)
+            || uri.Scheme != Uri.UriSchemeHttps || uri.Host != "github.com"
+            || uri.UserInfo.Length != 0 || !uri.IsDefaultPort) return null;
+
+        var parts = uri.AbsolutePath.Trim('/').Split('/');
+        return parts.Length == 4 && parts[0].Length > 0 && parts[1].Length > 0
+            && parts[2] == itemKind && parts[3].Length > 0
+            && parts[3].All(c => c is >= '0' and <= '9') ? parts[3] : null;
     }
 
     /// <summary>
@@ -255,14 +266,8 @@ public static class MirroredDescription
     public static string? LabelForUrl(string? url)
     {
         if (url is null) return null;
-        // Strip a fragment, a query and any trailing slash before reading the number. Without this
-        // `.../issues/123#issuecomment-4`, `.../issues/123?x=y` and `.../issues/123/` all fell
-        // through to the unnumbered "GitHub" label despite naming a perfectly good issue.
-        var path = url.Split('#')[0].Split('?')[0].TrimEnd('/');
-        var tail = path[(path.LastIndexOf('/') + 1)..];
-        // ASCII digits only: char.IsDigit is Unicode-wide, so `issues/١٢٣` would
-        // otherwise yield an Arabic-Indic "#١٢٣" that matches no issue.
-        return tail.Length > 0 && tail.All(c => c is >= '0' and <= '9') ? "#" + tail : "GitHub";
+        var number = ItemNumberForUrl(url, "issues");
+        return number is null ? "GitHub" : "#" + number;
     }
 
     /// <summary>

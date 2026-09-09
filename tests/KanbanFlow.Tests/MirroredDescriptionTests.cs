@@ -825,4 +825,46 @@ public sealed class MirroredDescriptionTests
         Assert.Null(ModalChipsFor(description).IssueUrl);
         Assert.Null(MirroredDescription.IssueUrl(description));
     }
+
+    [Fact]
+    public void GitHubChips_LabelTheNormalizedDestination_AndPreserveTheQueryAndFragment()
+    {
+        var description = MirroredFixture.Replace("issues/454", "issues/454/../455?view=full#issuecomment-9", StringComparison.Ordinal)
+            .Replace("**Open PR:** none", "**Open PR:** https://github.com/joelfuller2016/KanbanFlow-v2/pull/21/../22?view=files#diff-9", StringComparison.Ordinal);
+
+        var chips = ModalChipsFor(description);
+
+        Assert.Equal("https://github.com/joelfuller2016/KanbanFlow-v2/issues/455?view=full#issuecomment-9", chips.IssueUrl);
+        Assert.Equal("455", chips.IssueNumber);
+        Assert.Equal(chips.IssueUrl, MirroredDescription.IssueUrl(description));
+        Assert.Equal("#455", MirroredDescription.IssueLabel(description));
+        Assert.Equal("https://github.com/joelfuller2016/KanbanFlow-v2/pull/22?view=files#diff-9", chips.PrUrl);
+        Assert.Equal("22", chips.PrNumber);
+    }
+
+    [Theory]
+    [InlineData("https://github.com/a/b/issues/12suffix")]
+    [InlineData("https://github.com/a/b/issues/12/../../discussions/13")]
+    [InlineData("https://github.com/a/b/discussions/14")]
+    public void GitHubChips_DoNotLabelOtherResourcesAsIssues(string url)
+    {
+        var description = MirroredFixture.Replace("https://github.com/joelfuller2016/KanbanFlow-v2/issues/454", url, StringComparison.Ordinal);
+
+        Assert.Null(ModalChipsFor(description).IssueUrl);
+        Assert.Null(ModalChipsFor(description).IssueNumber);
+        Assert.Equal("GitHub", MirroredDescription.IssueLabel(description));
+    }
+
+    [Fact]
+    public void GitHubChips_DoNotSearchPastTheStartOfARecordValue()
+    {
+        var description = MirroredFixture.Replace("**Issue:** https://", "**Issue:** note **Issue:** https://", StringComparison.Ordinal)
+            .Replace("**Open PR:** none", "**Open PR:** note **Open PR:** https://github.com/a/b/pull/9", StringComparison.Ordinal);
+
+        var chips = ModalChipsFor(description);
+
+        Assert.Null(chips.IssueUrl);
+        Assert.Null(chips.PrUrl);
+        Assert.Null(MirroredDescription.IssueUrl(description));
+    }
 }

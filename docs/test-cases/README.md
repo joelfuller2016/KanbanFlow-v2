@@ -8,6 +8,7 @@ that case's `runs/` directory records what was actually executed at one immutabl
 
 | ID | Feature | Stable case | Latest recorded run | Status |
 |---|---|---|---|---|
+| TC-481 | Card legibility and accurate GitHub links | [Case](481-card-legibility/README.md) | Verification in progress | Human density/usability review pending |
 | TC-496 | Decision & Memory Map | [Case](496-decision-memory-map/README.md) | [2026-08-30 · `d7be7da5d98d`](496-decision-memory-map/runs/2026-08-30-d7be7da5d98d.md) | Passed at the pinned implementation commit |
 
 ## Conventions

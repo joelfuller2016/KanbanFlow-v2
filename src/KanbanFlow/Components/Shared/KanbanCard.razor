@@ -67,7 +67,7 @@
                     }
                     @if (IssueUrl is not null)
                     {
-                        <a href="@IssueUrl" target="_blank" rel="noopener noreferrer"
+                        <a href="@IssueUrl" target="_blank" rel="noopener noreferrer" tabindex="0"
                            class="board-card-gh"
                            @onclick:stopPropagation="true"
                            title="Open @IssueLabel on GitHub"
