@@ -153,6 +153,38 @@ export async function verifyNullableTextUpdates({ callTool, restJson, apiBaseUrl
       assert.equal(released[0].actor, "mcp-agent");
     });
 
+    for (const [createTool, updateTool, listTool, idKey, resource] of [
+      ["create_subtask", "update_subtask", "list_subtasks", "subtaskId", "subtasks"],
+      ["create_acceptance_criterion", "update_acceptance_criterion", "list_acceptance_criteria", "acId", "acceptance-criteria"]
+    ]) {
+      const item = await callTool(createTool, { taskId: task.id, text: `${marker} original checklist text` });
+      const listPath = `/api/tasks/${task.id}/${resource}`;
+      for (const [state, input, rejected] of [
+        ["omitted", {}, false], ["null", { text: null }, false],
+        ["empty", { text: "" }, true], ["whitespace", { text: " \t\r\n " }, true]
+      ]) {
+        await check(`${updateTool}.text.${state}`, async () => {
+          const before = (await restJson(listPath)).find(row => row.id === item.id);
+          const priorActivity = await restJson(`/api/tasks/${task.id}/activity?limit=500`);
+          const update = callTool(updateTool, { [idKey]: item.id, ...input });
+          if (rejected) {
+            await assert.rejects(update, error => error.code === -32000 && error.data?.status === 422
+              && error.data.path === `/api/${resource}/${item.id}`
+              && error.data.payload?.message === "Text cannot be empty.");
+          } else {
+            await update;
+          }
+          const after = (await restJson(listPath)).find(row => row.id === item.id);
+          const throughMcp = (await callTool(listTool, { taskId: task.id })).find(row => row.id === item.id);
+          assert.equal(after.text, before.text, "checklist text persisted unchanged");
+          assert.equal(throughMcp.text, before.text, "stdio checklist readback");
+          if (rejected) assert.deepEqual(after, before, "rejected checklist update changed stored data");
+          assert.deepEqual(await restJson(`/api/tasks/${task.id}/activity?limit=500`), priorActivity,
+            "rejected/no-op checklist update changed activity");
+        });
+      }
+    }
+
     for (const [tool, args, fields] of [
       ["create_task", { featureId: feature.id, name: `${marker} invalid task` }, ["status", "priority"]],
       ["update_task", { taskId: task.id, name: task.name }, ["status", "priority"]],
@@ -181,7 +213,7 @@ export async function verifyNullableTextUpdates({ callTool, restJson, apiBaseUrl
     `Nullable-text transport checks failed (${failures.length}); see every failed scenario above.`);
 }
 
-async function nativeToolCall(apiBaseUrl, timeoutMs, name, args) {
+export async function nativeToolCall(apiBaseUrl, timeoutMs, name, args) {
   const requestId = 462;
   const response = await fetch(`${apiBaseUrl}/mcp`, {
     method: "POST",
@@ -197,9 +229,16 @@ async function nativeToolCall(apiBaseUrl, timeoutMs, name, args) {
   const messages = response.headers.get("content-type")?.includes("text/event-stream")
     ? body.split(/\r?\n\r?\n/).map(event => event.split(/\r?\n/)
       .filter(line => line.startsWith("data:")).map(line => line.slice(5).trimStart()).join("\n"))
-      .filter(Boolean).map(data => JSON.parse(data))
+      .filter(Boolean).flatMap(data => {
+        // Match the wrapper's tolerance of heartbeat/non-JSON data frames. A stream
+        // without a real response still fails the matching-response assertion below.
+        try { return [JSON.parse(data)]; } catch { return []; }
+      })
     : [JSON.parse(body)];
-  const message = messages.find(item => item.id === requestId);
+  // Progress notifications and server-initiated requests are not the response to our
+  // tool call, even if a request in the opposite direction happens to reuse its id.
+  const message = messages.find(item => item?.jsonrpc === "2.0" && item.id === requestId
+    && !Object.hasOwn(item, "method") && (Object.hasOwn(item, "result") || Object.hasOwn(item, "error")));
   assert.ok(message, "Native MCP matching JSON-RPC response");
   assert.equal(message.error, undefined, JSON.stringify(message.error));
   assert.ok(message.result && !message.result.isError, JSON.stringify(message.result));

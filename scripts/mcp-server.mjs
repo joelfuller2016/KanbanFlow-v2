@@ -1199,7 +1199,7 @@ async function callTool(toolName, args) {
       return restJson(`/api/subtasks/${requiredInt(args, "subtaskId", { min: 1 })}`, {
         method: "PUT",
         body: {
-          text: optionalNonEmptyString(args, "text"),
+          text: optionalString(args, "text"),
           completed: optionalBool(args, "completed"),
           parentSubtaskId: optionalInt(args, "parentSubtaskId", { min: 0 }),
           sortOrder: optionalInt(args, "sortOrder", { min: 0 })
@@ -1229,7 +1229,7 @@ async function callTool(toolName, args) {
       return restJson(`/api/acceptance-criteria/${requiredInt(args, "acId", { min: 1 })}`, {
         method: "PUT",
         body: {
-          text: optionalNonEmptyString(args, "text"),
+          text: optionalString(args, "text"),
           completed: optionalBool(args, "completed"),
           sortOrder: optionalInt(args, "sortOrder", { min: 0 })
         }
@@ -1478,7 +1478,7 @@ function optionalString(args, name) {
   return value;
 }
 
-// Compatibility policy for creation, filters, actors and non-clearable optional text.
+// Compatibility policy for creation, filters, actors and the optional idea title.
 // Unlike nullable update fields, these call sites historically treat exactly "" as absent.
 // Do not trim here: whitespace handling remains with each existing receiving contract.
 function optionalNonEmptyString(args, name) {

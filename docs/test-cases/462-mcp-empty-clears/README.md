@@ -7,6 +7,7 @@ documentation or an assignee actually changes the persisted record.
 Owner: KanbanFlow maintainers. Reviewed: September 8, 2026. Source baseline:
 `8073b3e5bccd227e503f0ecd888ccad8199e97d2`. Measured results belong in `runs/` at their tested commit.
 Issue: [#462](https://github.com/joelfuller2016/KanbanFlow-v2/issues/462).
+Implementation: [PR #517](https://github.com/joelfuller2016/KanbanFlow-v2/pull/517).
 
 ## Contract and architecture
 
@@ -45,11 +46,15 @@ correctly preserved a field it never received. The fix changes only transport va
 schema documentation; it retains the receiving REST/service boundary and existing data model.
 
 The call-site audit deliberately keeps creation fields, idea query filters, actor defaults,
-optional non-clearable title/checklist text and the Done override reason on
+the optional idea title and the Done override reason on
 `optionalNonEmptyString`. That helper preserves their prior exact-empty-as-absent behavior;
 whitespace normalization stays at the existing receiving boundary. Update enums are validated
 before serialization. `requiredString`, including future full-content handling in #511, is
 independent of this change.
+
+Checklist update text uses the intent-preserving helper: omitted/null leaves text unchanged;
+empty or whitespace reaches REST and returns its existing 422 validation response. A rejected
+checklist update must leave the entity and activity unchanged.
 
 ## Executable checks
 
@@ -67,6 +72,8 @@ project, feature, task and idea and deletes its own project/idea in `finally`.
 | REST/agent audit agreement | Compare update event types/counts against the equivalent REST operation for every state |
 | Call-site compatibility | Empty create fields, default task enums, empty idea filters and empty release actor retain their previous behavior |
 | Blank enum errors | Empty and whitespace status/priority fail with JSON-RPC `-32602` for task create/update and idea create/update where supported |
+| Checklist text validation | Subtask/acceptance-criterion omitted/null text is preserved; empty/whitespace returns REST 422 through stdio, with unchanged persisted entity/activity |
+| Native response framing | Local HTTP fixtures cover JSON responses, SSE heartbeats/progress/unrelated requests, missing responses and retained tool errors; real native calls remain in the full matrix |
 | No stranded fixtures | Own project and idea are deleted even when a scenario fails |
 
 The matrix emits one JSON record per check, aggregates failures, and fails the smoke run.
@@ -80,7 +87,7 @@ It does not stop at the first lost clear, so a mutation run can show all nine re
    fails, inspect that process's log and database path before trying again.
 2. In a second PowerShell terminal, set `KANBANFLOW_API_URL` to that process (for example
    `http://127.0.0.1:5188`) and run `node scripts/smoke-mcp.mjs 1`, replacing `1` with a project id
-   returned by the disposable board. Expect `190 passed, 0 failed` for this case and the normal
+   returned by the disposable board. Expect `198 passed, 0 failed` for this case and the normal
    final MCP smoke success line. A failed row names the transport, entity, field and input state.
 3. Run `node scripts/framing-ab.mjs all` and `npm run test:scripts` to check wrapper framing and
    script regressions. Run `pwsh -NoProfile -File scripts/verify.ps1` for the repository rebuild
@@ -88,8 +95,9 @@ It does not stop at the first lost clear, so a mutation run can show all nine re
    Keep temporary API run files inside an ignored repository directory on this Windows setup.
 4. Prove sensitivity in an isolated checkout: save the wrapper's bytes/hash, temporarily add
    `|| value === ""` back to the guard **inside `optionalString` only**, and rerun MCP smoke.
-   Expect exactly nine `stdio.*.populated-empty` failures, with all populated-omitted checks
-   still passing. Restore the original bytes in `finally` and verify the hash before any
+   Expect nine `stdio.*.populated-empty` failures plus two `update_*.text.empty` checklist
+   validation failures, with all populated-omitted checks still passing. Restore the original
+   bytes in `finally` and verify the hash before any
    further validation, commit or publication. Repeat normal smoke after restoration.
 5. Stop only the local processes created for this run. Preserve complete logs and the mutation
    matrix in ignored scratch; record the source commit, command outcomes and limitations in
