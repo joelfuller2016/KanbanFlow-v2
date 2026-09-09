@@ -15,6 +15,19 @@ reverting to the vulnerable `AngleSharp` with the suppression deleted fails the 
 by adding an audit suppression — see
 [reviews/2026-08-02-anglesharp-cve-suppression-removal.md](reviews/2026-08-02-anglesharp-cve-suppression-removal.md) (#320).
 
+## Verify the current checkout
+
+Run `pwsh -NoProfile -File ./scripts/verify.ps1` from the repository before pushing. Restore,
+build and tests are required; formatting drift remains advisory. The gate explicitly exits 0 after
+successful required steps and 1 after a required-step failure. This also sets the correct
+`$LASTEXITCODE` when another PowerShell script calls it with `& ./scripts/verify.ps1`.
+
+The invocation regression runs with `node --test scripts/verify.test.mjs` and requires Node.js and
+PowerShell 7+. It executes a copy of the real gate with a native command stand-in, checking exit
+codes, step ordering, failure stops and restoration of the caller's working directory. It does not
+replace the real application build and tests. See the
+[exit-status review and measured results](reviews/2026-09-08-verify-exit-253.md).
+
 ## Scripts
 
 | Script | Purpose |
