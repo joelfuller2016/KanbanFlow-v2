@@ -84,6 +84,8 @@ internal static class ProjectGraphDeleter
             .ToListAsync(ct);
         var taskIds = tasks.Select(t => t.Id).ToList();
 
+        await EnsureNoNonTerminalExternalWritesAsync(db, taskIds, ct);
+
         var requirements = await db.Requirements
             .Where(r => (r.FeatureId.HasValue && featureIds.Contains(r.FeatureId.Value)) ||
                         (r.TaskItemId.HasValue && taskIds.Contains(r.TaskItemId.Value)))
@@ -175,6 +177,39 @@ internal static class ProjectGraphDeleter
     /// <summary>Convenience overload for removing the subtasks of a single task.</summary>
     public static Task DeleteSubtasksForTaskAsync(AppDbContext db, int taskId, CancellationToken ct = default)
         => DeleteSubtasksForTasksAsync(db, [taskId], ct);
+
+    /// <summary>
+    /// A task cannot disappear while an issue create may still be in flight. The journal has no
+    /// task FK so its audit evidence survives deletion, but finalization needs the originating task
+    /// to exist. Call this before every task/feature/project graph removal (#336).
+    /// </summary>
+    public static async Task EnsureNoNonTerminalExternalWritesAsync(
+        AppDbContext db,
+        IReadOnlyCollection<int> taskIds,
+        CancellationToken ct = default)
+    {
+        if (taskIds.Count == 0) return;
+
+        var operation = await db.ExternalWriteOperations
+            .AsNoTracking()
+            .Where(operation => taskIds.Contains(operation.TaskId) &&
+                operation.State != ExternalWriteState.Completed &&
+                operation.State != ExternalWriteState.DefinitiveFailure)
+            .OrderBy(operation => operation.Id)
+            .FirstOrDefaultAsync(ct);
+
+        if (operation is null) return;
+
+        throw new ExternalWorkItemConflictException(
+            "external-operation-blocks-delete",
+            $"Task {operation.TaskId} cannot be deleted while external write operation " +
+            $"{operation.OperationId:D} is {operation.State}.",
+            operation.TaskId,
+            operation.Provider,
+            operation.OperationId,
+            operation.State,
+            operation.LeaseExpiresAt);
+    }
 
     /// <summary>Removes all acceptance criteria belonging to <paramref name="taskIds"/>.</summary>
     public static async Task DeleteAcceptanceCriteriaForTasksAsync(AppDbContext db, List<int> taskIds, CancellationToken ct = default)
