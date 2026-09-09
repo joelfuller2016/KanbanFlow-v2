@@ -15,9 +15,10 @@ namespace KanbanFlow.Data;
 /// all three so the caller can compare them against whatever it knows (the size of the committed
 /// seed, for instance, which the application itself does not ship and cannot read).</para>
 ///
-/// <para><b>What they cannot tell you.</b> Writing real data to the wrong board erases the
-/// last-write signal at once — the write is what finally puts <see cref="LastWriteUtc"/> after
-/// <see cref="CreatedAtUtc"/>. The creation-time signal is not on that clock: a write never changes
+/// <para><b>What they cannot tell you.</b> Writing real data to the wrong board erases the copy
+/// signature on disk — the write puts its last-write time after creation. This captured snapshot
+/// stays unchanged, so the reported last-write reason clears only after a restart reads the new
+/// facts. The creation-time signal is not on that clock: a write never changes
 /// a creation time, so it expires only when a start happens more than 15 minutes after the file was
 /// made. Either way, once both have gone nothing inside the application can distinguish the wrong
 /// board from the right one. They also cannot separate a mis-restored seed from a user deliberately

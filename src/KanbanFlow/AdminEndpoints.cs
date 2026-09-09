@@ -176,10 +176,11 @@ public static class AdminEndpoints
             // what make the documented reproduction flip to degraded.
             //
             // WHAT THEY ARE WORTH, honestly, because a detector oversold is worse than none:
-            //   * They hold only until real data is written to the wrong board. After the first
-            //     write, LastWriteUtc moves past CreatedAtUtc and NOTHING inside this application
-            //     can tell the board apart from the right one. That includes an app upgrade whose
-            //     schema patchers write at boot, which costs the signal with no user data at all.
+            //   * A write removes the copy signature from the file, but this boot-time snapshot
+            //     retains it until restart. The creation-window reason is independent of writes.
+            //     Once both reasons are absent at a later start, neither identifies the wrong board.
+            //     Schema patchers can also remove the on-disk copy signature; resolution precedes
+            //     them, so that loss affects the following restart's snapshot.
             //   * NTFS file tunnelling can preserve the ORIGINAL creation time when a file of the
             //     same name is deleted and recreated within roughly 15 seconds, which hides the copy.
             //   * A user restoring their own board from a backup produces exactly this shape and is
@@ -236,7 +237,8 @@ public static class AdminEndpoints
                 }
             }
 
-            // Two real databases exist and only one is open — the #354 presentation itself.
+            // Two database candidates existed at resolution time and only one was selected.
+            // The startup shadow list remains fixed even if a candidate is subsequently removed.
             if (database.ShadowedPaths.Count > 0)
                 reasons.Add("shadowed-by-another-database");
 
@@ -263,7 +265,7 @@ public static class AdminEndpoints
                     // which knows things this process does not. The most useful of those is the
                     // size of the committed seed — a restored copy is byte-identical to it, and the
                     // application does not ship seed/kanbanflow.seed.db, so it cannot make that
-                    // comparison itself. Null together when there was no file to stat.
+                    // comparison itself. Null together when resolution captured no file facts.
                     createdAtUtc = database.Snapshot?.CreatedAtUtc,
                     lastWriteUtc = database.Snapshot?.LastWriteUtc,
                     sizeBytes = database.Snapshot?.SizeBytes,

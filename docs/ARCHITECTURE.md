@@ -256,36 +256,44 @@ top-level field and has already been fixed once for matching the wrong one. The 
 values are the ones asserted in `AdminHealthEndpointTests`, which pins both fields in the same
 case precisely so a later change cannot merge them.
 
-> **The failure literal for `db.status` is unsettled — see the note on
-> [#512](https://github.com/joelfuller2016/KanbanFlow-v2/pull/512) and a ruling pending from
-> [#498](https://github.com/joelfuller2016/KanbanFlow-v2/issues/498)'s author.** #498 specifies it
-> twice and does not agree with itself, so read the endpoint and its tests for the current value
-> rather than trusting a remembered one.
+The implemented database status contract is `ok` or `unreachable`, as required by the constraints
+in [#498](https://github.com/joelfuller2016/KanbanFlow-v2/issues/498) and asserted in
+`AdminHealthEndpointTests`. The issue's older implementation example uses `error` for this nested
+field; that example does not describe the current endpoint. Top-level `error` remains unchanged.
 
 `ok` means all of: the database opened, the read succeeded, the board is not empty, this
 process did not CREATE the board it is serving, the board carries no trace of having been
 copied into place just before the app started, and no second `kanbanflow.db` is shadowing the
 one in use.
 
-The `reasons` that make it `degraded`:
+The reported reasons and their lifetimes (`unreachable` makes the top-level status `error`; the
+others make it `degraded`):
 
 | Reason | What it saw | How long it lasts |
 |---|---|---|
 | `unreachable` | the probe threw; `db.error` carries the SQLite message | until the database opens |
 | `empty-board` | the read worked and returned zero projects | until a project exists |
 | `created-at-startup` | the file was not on disk when the path was resolved | **this boot only** |
-| `last-write-precedes-creation` | the board was written *before* it was created — impossible for a board used since it was made, and the literal signature of a timestamp-preserving copy | until the first real write |
+| `last-write-precedes-creation` | the startup snapshot records a last-write time before creation, consistent with a timestamp-preserving copy | until a restart captures a write at or after creation |
 | `created-moments-before-startup` | the file came into existence within 15 minutes before this process started | until a restart more than 15 minutes after the file was created |
-| `shadowed-by-another-database` | a second `kanbanflow.db` exists at one of the app's own anchors | until it is removed |
+| `shadowed-by-another-database` | a second `kanbanflow.db` existed at one of the app's own anchors when the path was resolved | until a restart after that candidate is removed |
+
+`DbPathResolution` is captured once before schema and seed work. Its existence-at-startup, file
+facts and shadow list stay fixed for that process. Each request separately checks current file
+existence and queries the current project count; those live checks do not refresh the startup
+snapshot. The [September 8 review](reviews/2026-09-08-health-512.md) records a launcher, write and
+restart check of this distinction.
 
 **What these are worth, stated plainly, because a detector oversold is worse than none.** The
 two file-fact reasons exist for the one case row counting cannot see: a launcher that
 *successfully* restores the committed seed onto the wrong path, where the board exists and is
 not empty. They are evidence, not proof:
 
-- They die at the first real write. Once `lastWriteUtc` moves past `createdAtUtc`, nothing
-  inside the application can tell that board from the right one — and an upgrade whose
-  `Ensure*` patchers write at boot spends the signal with no user data involved at all.
+- A write removes the copy signature from the file, but the running process retains its startup
+  observation. On the next start the copy reason clears; the creation-window reason can still
+  remain. An upgrade whose `Ensure*` patchers write at boot can remove the on-disk copy signal
+  without a user edit. Because resolution precedes those patchers, that loss becomes visible at
+  the following restart. Once both reasons are gone, neither identifies the wrong board.
 - NTFS **file tunnelling** can preserve the original creation time when a file of the same
   name is deleted and recreated within roughly 15 seconds, hiding the copy.
 - A user restoring their own board from a backup produces exactly this shape. That is a false
@@ -571,8 +579,8 @@ board last written an hour before it was created, at exactly the committed seed'
 `existedAtStartup` alone answers this scenario `ok`. It is also true from the second boot onward
 even where it does fire, so it cannot carry a criterion evaluated after reboots *plural*. The file
 facts are re-read from the file at every boot, so both reasons survive restarts — but they expire on
-separate clocks, and the table above is the precise statement. `last-write-precedes-creation` ends at
-the first real write and no restart affects it. `created-moments-before-startup` is untouched by
+separate clocks, and the table above is the precise statement. `last-write-precedes-creation` clears
+when a restart captures a post-creation write. `created-moments-before-startup` is untouched by
 writes and ends at the first start more than 15 minutes after the file was created — so it can still
 be firing on a board that has been written to, and it is gone from a board that has not.
 
