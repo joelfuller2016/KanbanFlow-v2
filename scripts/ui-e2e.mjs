@@ -52,6 +52,7 @@ async function nativeMcpTool(name, args) {
   const requestId = ++mcpRequestId;
   const res = await fetch(`${baseUrl}/mcp`, {
     method: "POST",
+    signal: AbortSignal.timeout(10_000),
     headers: {
       "content-type": "application/json",
       accept: "application/json, text/event-stream",
@@ -2636,8 +2637,10 @@ async function main() {
 
       await page.goto(`${baseUrl}/project/${proj.id}`);
       await page.locator(card).waitFor({ state: "visible" });
-      await page.locator(`[data-testid="${openerTestid}"]`).click();
-      await page.locator(panel).waitFor({ state: "visible" });
+      await clickUntil(
+        () => page.locator(`[data-testid="${openerTestid}"]`).click(),
+        page.locator(panel)
+      );
 
       const opened = await probeDialogFocus(page, panel);
       assert(opened.count >= 2,
@@ -3621,8 +3624,14 @@ async function main() {
         }, { once: true });
       });
       await page.keyboard.press("Enter");
+      // SCOPED to the detail panel's read box. An unscoped `document.querySelector` was safe only
+      // while the panel held the sole link to this issue; board cards now render their own
+      // `a[href=".../issues/357"]` for a mirrored task, and `<KanbanBoard>` precedes
+      // `<TaskDetailPanel>` in document order (ProjectView.razor), so the unscoped query returned
+      // the CARD's link - which this test never instruments - and waited out its full timeout.
       await page.waitForFunction((href) =>
-        document.querySelector(`a[href="${href}"]`)?.dataset.e2eActivated === "true", syncIssueUrl);
+        document.querySelector(`[data-testid="task-detail-description-read"] a[href="${href}"]`)
+          ?.dataset.e2eActivated === "true", syncIssueUrl);
       await sleep(600); // let a regressed Blazor click bubble complete before the negative check
       assert(await page.locator('[data-testid="task-detail-description-edit"]').count() === 0,
         "Enter on a rendered link bubbled to the wrapper and opened the description editor");

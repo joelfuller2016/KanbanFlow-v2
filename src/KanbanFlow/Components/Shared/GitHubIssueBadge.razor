@@ -21,5 +21,8 @@
     [Parameter] public string CssClass { get; set; } = "badge rounded-pill text-bg-light border text-decoration-none";
     [Parameter] public string? TestId { get; set; }
 
-    private GitHubIssueReference? Issue => ExternalWorkItemPresentation.FindActiveGitHubIssue(Links, Description);
+    private GitHubIssueReference? Issue;
+
+    protected override void OnParametersSet() =>
+        Issue = ExternalWorkItemPresentation.FindActiveGitHubIssue(Links, Description);
 }

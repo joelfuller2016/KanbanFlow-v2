@@ -216,12 +216,16 @@
                                    @onkeydown:stopPropagation="true"
                                    aria-label="Mark @task.Name as @(taskIsDone ? "not done" : "done")"
                                    data-testid="outline-task-@task.Id-done-checkbox" />
+                            @* Inner <span> for the same reason KanbanCard's title has one: WebKit
+                               ignores `display: -webkit-box` on a `<button>`, so the two-line clamp
+                               has to apply to a box inside it or it does nothing at all on Safari
+                               and iOS. `.outline-task-title-text` is the clamp; see app.css. *@
                             <button type="button"
-                                    class="btn btn-link text-reset text-decoration-none text-start p-0 flex-grow-1 text-truncate small @(taskIsDone ? "text-decoration-line-through text-muted" : "")"
+                                    class="btn btn-link text-reset text-decoration-none text-start p-0 flex-grow-1 small outline-task-title @(taskIsDone ? "text-decoration-line-through text-muted" : "")"
                                     @onclick="() => OnOpenEditTask.InvokeAsync(task)"
                                     @onclick:stopPropagation="true"
                                     aria-label="Open task details for @task.Name"
-                                    title="@task.Name">@task.Name</button>
+                                    title="@task.Name"><span class="outline-task-title-text">@task.Name</span></button>
                             <span class="ms-auto @GetPriorityBadgeClass(task.Priority)" style="font-size: 0.6rem;">@task.Priority</span>
                             <button type="button" class="outline-action-btn ms-1"
                                     @onclick="() => OnOpenAddTaskSubtask.InvokeAsync(task)"

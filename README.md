@@ -192,7 +192,7 @@ cannot onboard a repo. That parity gap is [#231](https://github.com/joelfuller20
 | Issue | `TaskItem` | Active `ExternalWorkItemLink` keyed by immutable repository node id + issue node id; legacy **`#<n> `** prefix only when no structured state exists | GitHub → board; explicit additive create board → GitHub |
 | Issue labels (`P0`…`P3`, `priority:high`, `critical`, …) | `TaskItem.Priority` | — reconciled every run | GitHub → board (GitHub always wins) |
 | Issue state + linked open PR | `TaskItem.Status` | — | GitHub → board, **advance-only** (see below) |
-| Issue body | `TaskItem.Description` | `<!-- kanbanflow-sync -->` block + first 1500 chars | GitHub → board |
+| Issue body | `TaskItem.Description` | `<!-- kanbanflow-sync -->` block + up to ~29,491 serialized bytes; a truncated description is refreshed only while it retains the exact sync header and truncation footer | GitHub → board |
 | Issue comment | `TaskComment` (`Comment`) | GitHub node id stamped as `<!-- gh:ID -->` | GitHub → board |
 | PR conversation comment | `TaskComment` (`Comment`) | same `<!-- gh:ID -->` marker | GitHub → board |
 | PR review, `APPROVED` | `TaskComment` (**`Verification`**) | same `<!-- gh:ID -->` marker | GitHub → board |
@@ -266,7 +266,7 @@ The single most useful table here. Before you edit a field, know which side wins
 | Task **priority** | **GitHub** | Reconciled every run (`syncTasks()`) from `P0`…`P3` / `priority:high` / bare severity labels. Setting it on the board is undone on the next sync |
 | Task **status** | **Shared, GitHub-dominant** | You may move it freely, **except** that a closed issue forces `Done` (`syncTasks()`). Board `Done` + open issue is reported as drift, not corrected |
 | Task **feature** (milestone) | **GitHub** | An issue's milestone change moves the task via `PATCH /api/tasks/{id}/feature` (`syncTasks()`) |
-| Task **description** | **GitHub, once** | Written from the issue body **only at creation**, truncated to 1,500 chars. It is **never refreshed** — the update patch carries only name, priority, status |
+| Task **description** | **GitHub — refreshed when truncated** | Written from the issue body on create, capped at ~29,491 serialized bytes. Truncated descriptions are re-synced only while the exact sync header and truncation footer are intact; human edits that remove either marker are preserved forever |
 | **Comments** | **GitHub, append-only** | Issue comments, PR conversation, PR reviews, and inline `file:line` comments are appended, deduped by node id. Board-authored comments are never pushed |
 | **`ActivityEvent`** | **Derived** | Written by the service layer as a side effect of task writes. Never read from or sent to GitHub |
 | `TaskDependency` (DAG) | **Board** | No GitHub representation. Authored by you and by agents |
@@ -301,7 +301,7 @@ that assumes otherwise will be wrong.
 
 | Omission | Detail |
 |---|---|
-| **Issue body is never refreshed** | Written once at task creation, truncated at `BODY_EXCERPT_LIMIT = 1500` (`portfolio-sync.mjs`). Edit an issue body and the board keeps the original excerpt forever |
+| **Description refresh is conditional** | On create the description is written from the issue body. On subsequent runs `descriptionRefreshFor()` refreshes it only when it carries both the sync header **and** the truncation footer. A human edit that removes either marker is preserved forever. The cap is `BODY_EXCERPT_LIMIT` (~29,491 serialized bytes by default), derived from SignalR's default 32 KB `MaximumReceiveMessageSize` minus framing headroom; a larger description could not be edited in `EditableMarkdown` at all |
 | **Closed issues are fetched as numbers only** | Without `--include-closed` the sync pulls only issue *numbers* for closed issues (`fetchClosedIssues(repo, full)`), enough to converge a task to `Done` — their bodies and comments are not mirrored |
 | **Assignees are not synchronised** | GitHub assignees are read once, only to infer `InProgress` on create (`deriveStatus()`). `TaskItem.Assignee` is never populated from GitHub |
 | **Labels collapse to one priority** | The first matching severity label becomes `TaskItem.Priority`. Every other label survives only as text inside the description block — there is no label entity, and no filtering by label on the board |

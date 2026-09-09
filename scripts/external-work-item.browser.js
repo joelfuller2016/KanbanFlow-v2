@@ -43,6 +43,8 @@ async page => {
     check(await page.getByTestId(`board-card-${verified.id}-github-link`).evaluate(element => document.activeElement === element), 'Tab from the task title must reach the issue link');
     await link(page.getByTestId(`board-card-${legacy.id}-github-link`), 42, 'legacy card');
     check(await page.getByTestId(`board-card-${quarantined.id}-github-link`).count() === 0, 'quarantine card must suppress the legacy fallback');
+    check(await page.getByTestId(`board-card-${quarantined.id}`).locator('a[href^="https://github.com/"]').count() === 0,
+      'quarantine must also suppress any old hover-only GitHub control');
     for (const [task, expectedNumber] of [[legacy, 42], [quarantined, null], [verified, 44]]) {
       await go();
       await open(page.getByTestId(`board-card-${task.id}-title`), page.getByTestId('task-detail-panel'));
@@ -61,13 +63,22 @@ async page => {
       }
     }
     check(await page.getByTestId('edit-item-github-pr-link').getAttribute('href') === 'https://github.com/octo/board/pull/43', 'task PR positive control');
+    await page.getByTestId('edit-item-description-read').click();
+    const draftPrUrl = 'https://github.com/octo/board/pull/99?filter=(open)#review-7.';
+    const draftDescription = description.replace('https://github.com/octo/board/pull/43', draftPrUrl);
+    await page.getByTestId('edit-item-description-edit').fill(draftDescription);
+    await page.waitForFunction(url => document.querySelector('[data-testid="edit-item-github-pr-link"]')?.getAttribute('href') === url, draftPrUrl);
+    await link(page.getByTestId('edit-item-github-link'), 44, 'durable identity during a description edit');
+    await page.getByTestId('edit-item-description-edit').fill(draftDescription.replace(draftPrUrl, 'none'));
+    await page.getByTestId('edit-item-github-pr-link').waitFor({ state: 'detached' });
+    check((await api('GET', `/api/tasks/${verified.id}`)).description === description, 'link previews must not save the draft');
     for (const [testId, mode] of [['edit-project-button', 'Project'], [`outline-feature-${feature.id}`, 'Feature']]) {
       await go();
       await open(page.getByTestId(testId), page.getByTestId('edit-item-modal'));
       check(await page.getByTestId('edit-item-github-link').count() === 0, `${mode} must not render a task issue control`);
       check(await page.getByTestId('edit-item-github-pr-link').count() === 0, `${mode} must not render a task PR control`);
     }
-    return { passed: true, legacyCardDetailEditor: true, verifiedCardDetailEditor: true, quarantinedCardDetailEditor: true, sourceRetained: true, projectFeatureControls: true };
+    return { passed: true, legacyCardDetailEditor: true, verifiedCardDetailEditor: true, quarantinedCardDetailEditor: true, sourceRetained: true, liveDraftPrLink: true, projectFeatureControls: true };
   } finally {
     await page.goto(base);
     await api('DELETE', `/api/projects/${project.id}`, undefined, 204);
