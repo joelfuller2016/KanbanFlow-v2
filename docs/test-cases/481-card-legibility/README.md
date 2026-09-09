@@ -28,6 +28,8 @@ PR #487 does not change importer storage or resolve description ownership. Keep 
 
 ## Repeatable verification
 
+Latest [integrated shared-badge and complete-URL run](runs/2026-09-09-cd8e4ce699e6.md).
+
 1. Rebuild the selected source with `scripts/verify.ps1`, then run `npm run test:scripts`. Expect the hard build and test gates to pass. Preserve the failure log and investigate before retrying; the repository's format check is advisory at this source.
 2. Publish the application into an ignored directory inside the owning worktree. Launch a local process with a new `KANBANFLOW_DB_PATH` in that directory and an unused port. Confirm the startup log names that database. This protects the normal board and avoids validating older build output. Stop only the process created for this run.
 3. Open that address with a named Playwright CLI session. Run [card-reveal.browser.js](../../../scripts/card-reveal.browser.js) using `run-code --filename=<absolute script path>`. The script refuses the normal port 5123 and creates a labeled fixture project. Expect an explicit result with `completeDetails`, `exactLinkNavigation` and `realDragPersisted` equal to true. A CLI exit code of zero alone is insufficient: inspect `### Error` and the returned result.
