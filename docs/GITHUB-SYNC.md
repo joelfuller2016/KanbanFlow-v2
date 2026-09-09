@@ -68,7 +68,7 @@ never contradicts the task's `kanbanflow-sync` block, which is authoritative
 
 `--dry-run` plans both the link and the rename and writes neither.
 
-**Refuses, and reports drift** — the prefix is kept, the task keeps working, the sync moves on:
+**Refuses, and reports drift** — the entire task is left untouched, and the sync continues with other issues:
 
 | Case | Drift names |
 |---|---|
@@ -77,6 +77,16 @@ never contradicts the task's `kanbanflow-sync` block, which is authoritative
 | **malformed provenance**: more than one `kanbanflow-sync` block, more than one `**Issue:**` line inside it, or an `**Issue:**` value that is not a canonical GitHub issue URL | `backfill-links owner/repo` — backfill owns that taxonomy and quarantines it properly |
 | the issue record carries **no immutable node id** | refuses rather than persisting a number as identity |
 | the board **rejects the link registration** (a competing claim, arbitrated server-side) | `backfill-links owner/repo`; the prefix stays the task's identity |
+
+A refusal also prevents comment imports, feature movement, description/title/priority changes,
+and closing the task. A matching integer does not authorize changing a task whose source identity
+was rejected. Failure details and quarantine explanations retain their complete text and Markdown
+whitespace in the journal/link and applicable audit event; they are never silently shortened.
+
+The issue badge uses the actual description as a display fallback only when there is no durable
+GitHub row. A quarantined or invalid row suppresses that fallback across card, detail and editor.
+The source description remains accessible. See [TC-336](test-cases/336-durable-github-links/README.md)
+for the repeatable review and browser checks.
 
 **Never reached by promotion at all** — these fall to `backfill-links`, or to the human
 verified-link PUT:
