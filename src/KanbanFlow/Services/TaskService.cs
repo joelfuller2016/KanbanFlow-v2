@@ -956,6 +956,9 @@ public sealed class TaskService(
     public async Task DeleteAsync(int taskId, string? actor, CancellationToken ct = default)
     {
         await using var db = await dbFactory.CreateDbContextAsync(ct);
+        // Serialize the operation guard and graph removal with PrepareAsync. Without one write
+        // transaction, a prepare could commit after the guard read and before this delete (#336).
+        await using var tx = await db.Database.BeginTransactionAsync(ct);
         var task = await db.Tasks
             .Include(t => t.Feature)
             .FirstOrDefaultAsync(t => t.Id == taskId, ct);
@@ -963,6 +966,8 @@ public sealed class TaskService(
             throw new TaskNotFoundException(taskId);
         if (task.Feature is null)
             throw new InvalidOperationException($"Task {taskId} has no feature; cannot resolve project for audit.");
+
+        await ProjectGraphDeleter.EnsureNoNonTerminalExternalWritesAsync(db, [taskId], ct);
 
         // Snapshot + emit the audit event BEFORE removal. ActivityEvent has no FK to the
         // task (intentional — audit history must survive deletion), so the row persists.
@@ -986,11 +991,13 @@ public sealed class TaskService(
 
         db.Tasks.Remove(task);
         await db.SaveChangesAsync(ct);
+        await tx.CommitAsync(ct);
     }
 
     public async Task DeleteProjectAsync(int projectId, string? actor, CancellationToken ct = default)
     {
         await using var db = await dbFactory.CreateDbContextAsync(ct);
+        await using var tx = await db.Database.BeginTransactionAsync(ct);
         var project = await db.Projects.FirstOrDefaultAsync(p => p.Id == projectId, ct);
         if (project is null)
             throw new ProjectNotFoundException(projectId);
@@ -1010,6 +1017,7 @@ public sealed class TaskService(
         await ProjectGraphDeleter.DeleteProjectChildrenAsync(db, projectId, ct);
         db.Projects.Remove(project);
         await db.SaveChangesAsync(ct);
+        await tx.CommitAsync(ct);
     }
 
     private static object ProjectActivitySnapshot(Project project) => new

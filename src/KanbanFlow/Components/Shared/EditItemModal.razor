@@ -48,7 +48,8 @@
                                           Label="Description"
                                           Rows="3"
                                           ResetToken="descriptionResetToken"
-                                          @bind-Value="editDescription" />
+                                          @bind-Value="editDescription"
+                                          @bind-Value:after="RefreshGitHubPullRequest" />
                     }
                     else
                     {
@@ -59,38 +60,25 @@
                     }
                 </div>
 
-                @* GitHub links. The portfolio sync stamps the issue/PR URLs into a mirrored task's
-                   description. Since #357 that description RENDERS in read mode, so Markdig's
-                   autolinker already turns those bare URLs into working links — the "dead text you
-                   cannot click" this block was written to work around no longer exists.
-
-                   Kept anyway, as a decision rather than an oversight: a chip in a fixed position
-                   beats a link buried in prose. It stays put whether or not the reader has scrolled
-                   the description, and it stays clickable while the field is in EDIT mode showing
-                   raw source. Hand-made tasks have no sync block, so nothing renders. *@
-                @if (GitHubIssueUrl is not null || GitHubPrUrl is not null)
+                @* Issue identity comes only from a verified durable link row (#336); mutable task
+                   text is never an issue-identity fallback. PRs remain scoped to the exact legacy
+                   sync block until #237 gives them a structured identity. *@
+                @if (EditMode == EditItemType.Task)
                 {
-                    @* aria-label carries the "opens in a new tab" warning: target="_blank" moves the
-                       user out of the app with no announcement otherwise, and the ↗ glyph conveys
-                       that only visually — so it is aria-hidden and the label says it in words. *@
-                    <div class="mb-3 d-flex gap-2 flex-wrap" data-testid="edit-item-github-links">
-                        @if (GitHubIssueUrl is not null)
-                        {
-                            <a class="btn btn-sm btn-outline-secondary" href="@GitHubIssueUrl"
-                               target="_blank" rel="noopener noreferrer"
-                               aria-label="@($"GitHub issue #{GitHubIssueNumber} (opens in a new tab)")">
-                                Issue #@GitHubIssueNumber <span aria-hidden="true">↗</span>
-                            </a>
-                        }
-                        @if (GitHubPrUrl is not null)
-                        {
-                            <a class="btn btn-sm btn-outline-primary" href="@GitHubPrUrl"
-                               target="_blank" rel="noopener noreferrer"
-                               aria-label="@($"GitHub pull request #{GitHubPrNumber} (opens in a new tab)")">
-                                PR #@GitHubPrNumber <span aria-hidden="true">↗</span>
-                            </a>
-                        }
-                    </div>
+                    <GitHubIssueBadge Links="InitialExternalLinks"
+                                      Description="@editDescription"
+                                      CssClass="btn btn-sm btn-outline-secondary mb-3 me-2"
+                                      TestId="edit-item-github-link" />
+                    @if (gitHubPullRequest is not null)
+                    {
+                        <a class="btn btn-sm btn-outline-primary mb-3"
+                           href="@gitHubPullRequest.Url"
+                           target="_blank" rel="noopener noreferrer"
+                           data-testid="edit-item-github-pr-link"
+                           aria-label="@($"Open GitHub pull request #{gitHubPullRequest.Number} for {gitHubPullRequest.RepositoryOwner}/{gitHubPullRequest.RepositoryName} in a new tab")">
+                            PR #@gitHubPullRequest.Number <span aria-hidden="true">↗</span>
+                        </a>
+                    }
                 }
 
                 @* Project-only fields *@
@@ -280,6 +268,7 @@
     [Parameter] public int? InitialStatus { get; set; }
     [Parameter] public int? InitialPriority { get; set; }
     [Parameter] public string? InitialAssignee { get; set; }
+    [Parameter] public IReadOnlyList<ExternalWorkItemLink>? InitialExternalLinks { get; set; }
 
     [Parameter] public EventCallback OnClose { get; set; }
     [Parameter] public EventCallback OnSaved { get; set; }
@@ -294,61 +283,11 @@
     // ValueChanged per keystroke, so resetting on every OnParametersSet would eject the user
     // mid-word.
     private int descriptionResetToken;
+    private GitHubPullRequestReference? gitHubPullRequest;
 
-    // Pulled out of the `<!-- kanbanflow-sync -->` block that scripts/portfolio-sync.mjs writes
-    // into a mirrored task's description. The block is isolated FIRST and the labels are matched
-    // only inside it — matching the whole description would render chips for a hand-written
-    // description that merely happens to contain "**Issue:** https://github.com/...", which is
-    // not what this claims to do and would present unverified text as a trusted link.
-    private static readonly System.Text.RegularExpressions.Regex SyncBlockRe = new(
-        @"<!--\s*kanbanflow-sync\s*-->(.*?)<!--\s*/kanbanflow-sync\s*-->",
-        System.Text.RegularExpressions.RegexOptions.Compiled | System.Text.RegularExpressions.RegexOptions.Singleline);
-    // Anchored on the literal labels the sync emits, and a real URL is required — so
-    // "**Open PR:** none" matches nothing. A hand-made task has no block and gets no links.
-    private static readonly System.Text.RegularExpressions.Regex GitHubIssueRe = new(
-        @"\*\*Issue:\*\*\s*(https://github\.com/[^\s)]+/issues/(\d+))",
-        System.Text.RegularExpressions.RegexOptions.Compiled);
-    private static readonly System.Text.RegularExpressions.Regex GitHubPrRe = new(
-        @"\*\*Open PR:\*\*\s*(https://github\.com/[^\s)]+/pull/(\d+))",
-        System.Text.RegularExpressions.RegexOptions.Compiled);
+    private void RefreshGitHubPullRequest() =>
+        gitHubPullRequest = ExternalWorkItemPresentation.FindSyncBlockPullRequest(editDescription);
 
-    // Resolved once per description change, NOT on every render. These are read from the markup,
-    // and the Name field binds on `oninput` — so computed properties here would re-run four
-    // regexes on every keystroke, against a description that hasn't changed.
-    private string? GitHubIssueUrl;
-    private string? GitHubIssueNumber;
-    private string? GitHubPrUrl;
-    private string? GitHubPrNumber;
-    private string? gitHubLinksSource;
-
-    private void RefreshGitHubLinks()
-    {
-        // Cheap guard: the description only changes when a different item is loaded (or the user
-        // edits it), so skip the regex entirely when the source text is unchanged.
-        if (ReferenceEquals(gitHubLinksSource, editDescription) && gitHubLinksSource is not null) return;
-        gitHubLinksSource = editDescription;
-
-        GitHubIssueUrl = GitHubIssueNumber = GitHubPrUrl = GitHubPrNumber = null;
-        if (string.IsNullOrEmpty(editDescription)) return;
-
-        // Only the sync block is authoritative — see SyncBlockRe. No block, no chips.
-        var block = SyncBlockRe.Match(editDescription);
-        if (!block.Success) return;
-        var syncBlock = block.Groups[1].Value;
-
-        var issue = GitHubIssueRe.Match(syncBlock);
-        if (issue.Success)
-        {
-            GitHubIssueUrl = issue.Groups[1].Value;
-            GitHubIssueNumber = issue.Groups[2].Value;
-        }
-        var pr = GitHubPrRe.Match(syncBlock);
-        if (pr.Success)
-        {
-            GitHubPrUrl = pr.Groups[1].Value;
-            GitHubPrNumber = pr.Groups[2].Value;
-        }
-    }
     private int editParentFeatureId;
     private int editFeatureId;
     private int editStatus;
@@ -394,8 +333,7 @@
             taskSubtasks = [];
             taskComments = [];
             descriptionResetToken++;   // a fresh open never lands in description edit mode (#357)
-            RefreshGitHubLinks();
-
+            RefreshGitHubPullRequest();
             // ActivityTimeline only re-queries on a TaskId change, and closing then reopening the
             // SAME task does not change it — so a reopen has to say so explicitly.
             activityRefreshToken++;

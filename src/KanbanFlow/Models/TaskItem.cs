@@ -26,6 +26,7 @@ public class TaskItem
     public List<TaskComment> Comments { get; set; } = [];
     public List<TaskDependency> Dependencies { get; set; } = [];
     public List<TaskDependency> BlockingDependencies { get; set; } = [];
+    public List<ExternalWorkItemLink> ExternalLinks { get; set; } = [];
 }
 
 // ON-DISK CONTRACT: persisted as a raw ordinal int (no HasConversion). Append only — never

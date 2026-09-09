@@ -87,6 +87,26 @@ public class PersistedEnumOrdinalTests
         ["Open"] = 0, ["InProgress"] = 1, ["Done"] = 2,
     };
 
+    private static readonly Dictionary<string, int> ExternalProviderLock = new()
+    {
+        ["GitHub"] = 0,
+    };
+
+    private static readonly Dictionary<string, int> ExternalLinkStateLock = new()
+    {
+        ["Active"] = 0, ["Quarantined"] = 1,
+    };
+
+    private static readonly Dictionary<string, int> ExternalWriteStateLock = new()
+    {
+        ["Prepared"] = 0,
+        ["Dispatched"] = 1,
+        ["Completed"] = 2,
+        ["NeedsReview"] = 3,
+        ["DefinitiveFailure"] = 4,
+        ["ManualRetryAuthorized"] = 5,
+    };
+
     /// <summary>Every enum that reaches a database column, with its frozen ordinals.</summary>
     public static TheoryData<string, Type, Dictionary<string, int>> PersistedEnums() => new()
     {
@@ -99,6 +119,9 @@ public class PersistedEnumOrdinalTests
         { nameof(MemoryScope), typeof(MemoryScope), MemoryScopeLock },
         { nameof(RequirementPriority), typeof(RequirementPriority), RequirementPriorityLock },
         { nameof(RequirementStatus), typeof(RequirementStatus), RequirementStatusLock },
+        { nameof(ExternalProvider), typeof(ExternalProvider), ExternalProviderLock },
+        { nameof(ExternalLinkState), typeof(ExternalLinkState), ExternalLinkStateLock },
+        { nameof(ExternalWriteState), typeof(ExternalWriteState), ExternalWriteStateLock },
     };
 
     /// <summary>

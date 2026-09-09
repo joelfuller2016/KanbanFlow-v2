@@ -391,6 +391,7 @@ else
     InitialStatus="editModalStatus"
     InitialPriority="editModalPriority"
     InitialAssignee="@editModalAssignee"
+    InitialExternalLinks="editModalExternalLinks"
     OnClose="OnEditModalClose"
     OnSaved="OnEditSaved" />
 
@@ -543,6 +544,7 @@ else
     private int? editModalStatus;
     private int? editModalPriority;
     private string? editModalAssignee;
+    private IReadOnlyList<ExternalWorkItemLink> editModalExternalLinks = [];
 
     // AI action bar state
     private bool aiControlsExpanded;
@@ -719,6 +721,9 @@ else
                 .Include(p => p.Features)
                     .ThenInclude(f => f.Tasks)
                         .ThenInclude(t => t.AcceptanceCriteria)
+                .Include(p => p.Features)
+                    .ThenInclude(f => f.Tasks)
+                        .ThenInclude(t => t.ExternalLinks)
                 .Include(p => p.Features)
                     .ThenInclude(f => f.Tasks)
                         .ThenInclude(t => t.Dependencies)
@@ -909,6 +914,7 @@ else
         editModalMode = EditItemType.Project;
         editModalFeatureId = null;
         editModalTaskId = null;
+        editModalExternalLinks = [];
         editModalName = project.Name;
         editModalDescription = project.Description;
         editModalGoals = project.Goals;
@@ -921,6 +927,7 @@ else
         editModalMode = EditItemType.Feature;
         editModalFeatureId = feature.Id;
         editModalTaskId = null;
+        editModalExternalLinks = [];
         editModalName = feature.Name;
         editModalDescription = feature.Description;
         editModalParentFeatureId = feature.ParentFeatureId.HasValue ? feature.ParentFeatureId.Value : 0;
@@ -932,6 +939,7 @@ else
         editModalMode = EditItemType.Task;
         editModalFeatureId = null;
         editModalTaskId = task.Id;
+        editModalExternalLinks = task.ExternalLinks.ToList();
         editModalName = task.Name;
         editModalDescription = task.Description;
         editModalTaskFeatureId = task.FeatureId;
