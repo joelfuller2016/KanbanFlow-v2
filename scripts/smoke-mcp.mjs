@@ -3,6 +3,7 @@
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
+import { verifyNullableTextUpdates } from "./mcp-clear-checks.mjs";
 
 const projectId = Number.parseInt(process.argv[2] || "1", 10);
 if (!Number.isInteger(projectId)) {
@@ -144,6 +145,8 @@ try {
       throw new Error(`Missing MCP tool: ${requiredTool}`);
     }
   }
+
+  await verifyNullableTextUpdates({ callTool, restJson, apiBaseUrl, timeoutMs: restTimeoutMs, marker: runMarker });
 
   const projects = await callTool("list_projects", {});
   if (!Array.isArray(projects) || !projects.some(project => project.id === projectId)) {
