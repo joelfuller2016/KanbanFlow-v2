@@ -1241,7 +1241,7 @@ public sealed partial class ExternalWorkItemService : IExternalWorkItemService
             throw Conflict(
                 "external-node-already-linked",
                 $"{provider} node '{externalNodeId}' is already linked to task {nodeOwner.TaskId}.",
-                taskId,
+                taskId > 0 ? taskId : nodeOwner.TaskId,
                 provider);
         }
 
@@ -1259,7 +1259,7 @@ public sealed partial class ExternalWorkItemService : IExternalWorkItemService
                 "external-number-already-linked",
                 $"{provider} repository item #{externalNumber} is already linked to task " +
                 $"{numberOwner.TaskId}.",
-                taskId,
+                taskId > 0 ? taskId : numberOwner.TaskId,
                 provider);
         }
     }

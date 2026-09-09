@@ -105,6 +105,10 @@ try {
   }
   const cross = await api("POST", `/api/features/${features[1].id}/external-work-item-projections/github`, args, 409);
   assert.equal(cross.conflictCode, "external-node-cross-project");
+  assert.equal(cross.taskId, first.task.id);
+  const numberConflict = await api("POST", path, { ...args, externalNodeId: args.externalNodeId + "_conflict" }, 409);
+  assert.equal(numberConflict.conflictCode, "external-number-already-linked");
+  assert.equal(numberConflict.taskId, first.task.id);
   await api("POST", path, { ...args, repositoryExternalId: "R_wrong" }, 422);
   await api("POST", path, { ...args, url: "https://github.com/foreign/board/issues/42" }, 422);
   await api("POST", path, null, 400);

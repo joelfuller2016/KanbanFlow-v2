@@ -125,7 +125,11 @@ public sealed class ExternalWorkItemProjectionTests
         var payload = JsonSerializer.SerializeToElement(Assert.IsAssignableFrom<IValueHttpResult>(result).Value,
             new JsonSerializerOptions(JsonSerializerDefaults.Web));
         Assert.False(string.IsNullOrWhiteSpace(payload.GetProperty("message").GetString()));
-        if (code is not null) Assert.Equal(code, payload.GetProperty("conflictCode").GetString());
+        if (code is not null)
+        {
+            Assert.Equal(code, payload.GetProperty("conflictCode").GetString());
+            Assert.Equal(created.Task.Id, payload.GetProperty("taskId").GetInt32());
+        }
         Assert.Equal(0, saves.Count);
         await AssertOneProjection(factory, created.Task.Id);
     }
