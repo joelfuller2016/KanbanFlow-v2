@@ -88,6 +88,20 @@ GitHub row. A quarantined or invalid row suppresses that fallback across card, d
 The source description remains accessible. See [TC-336](test-cases/336-durable-github-links/README.md)
 for the repeatable review and browser checks.
 
+### Atomic first projection
+
+A new verified inbound issue now uses one compound request to
+`POST /api/features/{id}/external-work-item-projections/github`. An immediate SQLite transaction
+commits the task, durable link, Created comment and creation/link audit pair together. Concurrent
+same-project calls converge on one card; an exact replay returns current fields unchanged, so it
+does not overwrite a human edit. Identity conflicts and unresolved quarantine return 409/422 with
+zero saves. The sync reports the full reason and skips follow-up mutations for that issue.
+
+Both native and stdio MCP expose `project_github_issue` over this same service boundary. The
+[TC-507 guide](test-cases/507-atomic-github-projection/README.md) owns its architecture, detailed
+checklist, response/recovery table and actual test evidence. Later ordinary sync field ownership
+still applies; idempotent projection does not create a permanent manual field pin.
+
 **Never reached by promotion at all** — these fall to `backfill-links`, or to the human
 verified-link PUT:
 
@@ -242,7 +256,7 @@ indistinguishable from a human's in the history.
 | `POST /api/projects` | a repo has no project | description carries immutable `<!-- github-node: … -->` plus the refreshable `<!-- github: … -->` display marker |
 | `PUT /api/projects/{id}` | `onboard` adopting a name-matched project | sends **only** `name` + `description`. This PUT is a true partial update (#203), so `Goals` and `Readme` are preserved *by omission* — sending every field back would be the riskier move |
 | `POST /api/projects/{id}/features` | a milestone has no feature | |
-| `POST /api/features/{id}/tasks` | an issue has no task | |
+| `POST /api/features/{id}/external-work-item-projections/github` | a verified issue has no task | one task/link/audit transaction; 201 on creation, 200 on same-project replay; no separate create/register/rename window |
 | `PUT /api/tasks/{id}` | title or priority is behind | **`name` is mandatory** — a priority-only body 422s (`ApiEndpoints.cs:1451`), so `name` always goes on the wire even when unchanged. Do **not** generalise from the projects PUT; the two behave differently |
 | `PATCH /api/tasks/{id}/status` | an issue closed since the last sync | |
 | `PATCH /api/tasks/{id}/feature` | an issue's milestone changed | feature is not settable through the task PUT; reassignment is its own verb |

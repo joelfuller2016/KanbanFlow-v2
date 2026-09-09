@@ -8,6 +8,7 @@ that case's `runs/` directory records what was actually executed at one immutabl
 
 | ID | Feature | Stable case | Latest recorded run | Status |
 |---|---|---|---|---|
+| TC-507 | Atomic inbound GitHub projection | [Case](507-atomic-github-projection/README.md) | [2026-09-08 · `e912072205bc`](507-atomic-github-projection/runs/2026-09-08-e912072205bc.md) | Compound operation verified; final broad API smoke and human feedback remain |
 | TC-336 | Durable GitHub links and review safety | [Case](336-durable-github-links/README.md) | [2026-09-08 · `5f4126562a41`](336-durable-github-links/runs/2026-09-08-5f4126562a41.md) | Bounded repairs verified; atomic projection #507 and human review remain |
 | TC-496 | Decision & Memory Map | [Case](496-decision-memory-map/README.md) | [2026-08-30 · `d7be7da5d98d`](496-decision-memory-map/runs/2026-08-30-d7be7da5d98d.md) | Passed at the pinned implementation commit |
 
