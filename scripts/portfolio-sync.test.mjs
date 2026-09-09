@@ -1219,7 +1219,12 @@ test("promotion is refused when the task's authoritative sync block names anothe
 
 // Drives the real syncTasks with a stubbed transport, so the CALL SITE is covered and not just
 // the predicate. Records every request the sync makes.
-async function runSyncTasks(tag, tasks, issues, { dryRun = false, registerLinkStatus = 200 } = {}) {
+async function runSyncTasks(tag, tasks, issues, {
+  dryRun = false,
+  registerLinkStatus = 200,
+  comments = false,
+  featureIds = new Map(),
+} = {}) {
   const mod = await import(`./portfolio-sync.mjs?${tag}`);
   const requests = [];
   const realFetch = globalThis.fetch;
@@ -1233,6 +1238,9 @@ async function runSyncTasks(tag, tasks, issues, { dryRun = false, registerLinkSt
     if (path.startsWith("/api/external-work-item-links/github/by-node")) {
       return new Response("", { status: 404, statusText: "Not Found" });
     }
+    if ((init.method || "GET") === "GET" && /^\/api\/tasks\/\d+\/comments$/.test(path)) {
+      return Response.json([]);
+    }
     if (/^\/api\/tasks\/\d+\/external-work-item-links\/github$/.test(path)) {
       if (registerLinkStatus !== 200) {
         return new Response("external-node-already-linked", { status: registerLinkStatus, statusText: "Conflict" });
@@ -1244,8 +1252,8 @@ async function runSyncTasks(tag, tasks, issues, { dryRun = false, registerLinkSt
   console.log = () => {};
   try {
     await mod.syncTasks(
-      "octo/board", REPO, 1, issues, new Set(), new Map(), new Map(),
-      { actor: "tester", dryRun, comments: false },
+      "octo/board", REPO, 1, issues, new Set(), new Map(), featureIds,
+      { actor: "tester", dryRun, comments },
       tasks, [], new Map(),
     );
   } finally {
@@ -1291,18 +1299,48 @@ test("promotion never binds a task to a foreign repository's issue", async () =>
   assert.equal(result.linksRegistered, 0);
   assert.equal(result.drift.length, 1);
   assert.match(result.drift[0], /backfill-links octo\/board/);
-  // The prefix is this task's only identity while promotion is refused; stripping it orphans it.
-  const renames = result.requests.filter((r) => r.method === "PUT" && r.path === "/api/tasks/1");
-  assert.ok(renames.every((r) => r.body.name === "#42 Foo"), "the legacy prefix must survive a refusal");
+  assert.deepEqual(result.requests.filter((r) => r.method !== "GET"), [],
+    "the task's full content, status, name and location must survive an identity refusal");
 });
+
+for (const [name, description, issue, reason] of [
+  ["foreign repository", SYNC_BLOCK("other", "repo", 42), GH_ISSUE, /disagrees with/],
+  ["different issue", SYNC_BLOCK("octo", "board", 99), GH_ISSUE, /names #99/],
+  ["ambiguous provenance", `${SYNC_BLOCK("octo", "board", 42)}\n${SYNC_BLOCK("octo", "board", 43)}`, GH_ISSUE, /2 kanbanflow-sync blocks/],
+  ["numeric issue identity", "", { ...GH_ISSUE, id: 42 }, /no immutable GitHub node id/],
+]) {
+  test(`rejected legacy identity (${name}) skips every mutation and continues other issues`, async () => {
+    const unrelatedIssue = { ...GH_ISSUE, id: "I_other43", number: 43, title: "Other", url: "https://github.com/octo/board/issues/43" };
+    const result = await runSyncTasks(`reject-legacy-${name}`, [
+      { ...task(1, "#42 Original title", description), featureId: 10 },
+      { ...task(2, "#43 Other", ""), featureId: 20 },
+    ], [{
+      ...issue,
+      state: "CLOSED",
+      body: "Replacement source content",
+      milestone: { title: "Incoming milestone" },
+      comments: [{ id: "IC_wrong-source", body: "Do not copy this comment", author: { login: "octo" } }],
+    }, unrelatedIssue], {
+      comments: true,
+      featureIds: new Map([["Incoming milestone", 99], ["Unsorted", 20]]),
+    });
+
+    assert.equal(result.drift.length, 1);
+    assert.match(result.drift[0], reason);
+    assert.deepEqual(result.requests.filter((r) => r.method !== "GET" && /^\/api\/tasks\/1(?:\/|$)/.test(r.path)), [],
+      "rejected identity must not register a link, add comments, move the task or update any task fields");
+    assert.equal(result.linksRegistered, 1, "a rejected issue must not abort a later valid issue");
+    assert.equal(result.requests.find((r) => r.method === "PUT" && r.path === "/api/tasks/2")?.body.name, "Other");
+  });
+}
 
 test("a refused registration is drift, never an aborted repo", async () => {
   const result = await runSyncTasks("promote-409", [task(1, "#42 Foo", "")], [GH_ISSUE], { registerLinkStatus: 409 });
   assert.equal(result.linksRegistered, 0);
   assert.equal(result.drift.length, 1);
   assert.match(result.drift[0], /legacy promotion refused/);
-  const renames = result.requests.filter((r) => r.method === "PUT" && r.path === "/api/tasks/1");
-  assert.ok(renames.every((r) => r.body.name === "#42 Foo"), "a refused promotion must not strip the prefix");
+  assert.deepEqual(result.requests.filter((r) => r.method !== "GET" && !r.path.endsWith("/external-work-item-links/github")), [],
+    "a rejected link registration must not be followed by changes to the unverified task");
 });
 
 test("--dry-run promotes nothing", async () => {
@@ -1413,6 +1451,52 @@ test("recordAmbiguousOutcome reports what happened instead of swallowing it", as
   };
   const persisted = await mod.recordAmbiguousOutcome(DISPATCHED_OP, "lease-1", "reason", ok);
   assert.equal(persisted.persisted.state, "NeedsReview");
+});
+
+test("failure recording sends complete evidence through the real HTTP adapter", async () => {
+  const mod = await import("./portfolio-sync.mjs?full-failure-evidence");
+  const evidence = `\r\n    Trace 漢字 🧪\r\n${"x".repeat(4_001)}\r\n    Root cause at the end  \r\n\t`;
+  const calls = [];
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (url, init) => {
+    calls.push({ url: String(url), method: init.method, body: JSON.parse(init.body) });
+    return Response.json({ ...DISPATCHED_OP, state: "NeedsReview", lastError: JSON.parse(init.body).error });
+  };
+  try {
+    const outcome = await mod.recordAmbiguousOutcome(DISPATCHED_OP, "lease-full", evidence);
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].method, "POST");
+    assert.ok(calls[0].url.endsWith(`/api/external-write-operations/${OP}/failure`));
+    assert.equal(calls[0].body.error, evidence);
+    assert.equal(outcome.persisted.lastError, evidence);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("failure recording preserves complete HTTP rejection details", async () => {
+  const mod = await import("./portfolio-sync.mjs?full-http-failure");
+  const details = `\r\n    Validation detail 漢字 🧪\r\n${"x".repeat(301)}\r\n    Final explanation  \r\n\t`;
+  const originalFetch = globalThis.fetch;
+  const originalError = console.error;
+  const calls = [];
+  globalThis.fetch = async (url, init) => {
+    calls.push(init.method);
+    return init.method === "POST"
+      ? new Response(details, { status: 409, statusText: "Conflict" })
+      : Response.json(DISPATCHED_OP);
+  };
+  console.error = () => {};
+  try {
+    const outcome = await mod.recordAmbiguousOutcome(DISPATCHED_OP, "lease-1", "reason");
+    assert.equal(outcome.persisted, null);
+    assert.equal(outcome.error.message, `POST /api/external-write-operations/${OP}/failure -> 409 Conflict: ${details}`);
+    assert.equal(outcome.observed.state, "Dispatched");
+    assert.deepEqual(calls, ["POST", "GET"]);
+  } finally {
+    globalThis.fetch = originalFetch;
+    console.error = originalError;
+  }
 });
 
 test("the create window's failure text describes the row, not a hope", async () => {

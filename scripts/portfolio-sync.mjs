@@ -913,7 +913,7 @@ async function api(method, path, body) {
   });
   if (!res.ok) {
     const text = await res.text().catch(() => "");
-    throw new Error(`${method} ${path} -> ${res.status} ${res.statusText}${text ? `: ${text.slice(0, 300)}` : ""}`);
+    throw new Error(`${method} ${path} -> ${res.status} ${res.statusText}${text ? `: ${text}` : ""}`);
   }
   if (res.status === 204) return null;
   const text = await res.text();
@@ -1153,7 +1153,7 @@ async function recordAmbiguousWriteFailure(operationId, leaseToken, error, api =
     // Every failure this script can observe occurs after a lease may represent prior dispatch
     // lineage. It never asks the service to erase that fact as DefinitivePreCreate.
     kind: "AmbiguousOrIncomplete",
-    error: String(error?.message || error).slice(0, 4000),
+    error: String(error?.message || error),
   });
 }
 
@@ -2001,7 +2001,10 @@ async function syncTasks(repo, repoIdentity, projectId, issues, closedNumbers, p
     if (matched.kind === "legacy") {
       const promotion = legacyPromotionDisposition(task, issue, repoIdentity);
       if (promotion.kind !== "promote") {
-        stats.drift.push(`${repo}#${issue.number}: task ${task.id}: ${promotion.reason}`);
+        stats.drift.push(`${repo}#${issue.number}: task ${task.id}: ${promotion.reason}; sync skipped every mutation pending human repair`);
+        // Refusing the link also refuses this task as the issue's projection. Continuing would
+        // still overwrite its source content, copy foreign comments, move it or close it.
+        continue;
       } else {
         plan(dryRun, "promote legacy prefix to durable link", `task ${task.id} → ${repo}#${issue.number} (${promotion.nodeId})`);
         // GitHub owns the title once identity is durable, so the prefix goes in the same run --
@@ -2013,13 +2016,11 @@ async function syncTasks(repo, repoIdentity, projectId, issues, closedNumbers, p
             projectLinks.push(registered);
             stats.linksRegistered++;
           } catch (err) {
-            // A competing claim on this node is arbitrated server-side by
-            // EnsureExternalIdentityAvailableAsync. Promotion is an ADDITIVE upgrade of an
-            // already-working legacy match, so a refusal is drift for a human to read -- never a
-            // reason to abort the repo and abandon the rest of the mirror, and never a reason to
-            // strip the prefix that is still this task's only identity.
-            stats.drift.push(`${repo}#${issue.number}: task ${task.id}: legacy promotion refused (${err.message}); the "#<n> " prefix still identifies this task — run \`backfill-links ${repo}\``);
-            desiredName = taskNameFor(issue);
+            // A competing claim is arbitrated server-side. The preflight may have raced with
+            // that claim, so a refused registration makes this candidate unverified again.
+            // Leave the whole task untouched and continue the repository's other issues.
+            stats.drift.push(`${repo}#${issue.number}: task ${task.id}: legacy promotion refused (${err.message}); sync skipped every further mutation and preserved the task — run \`backfill-links ${repo}\``);
+            continue;
           }
         }
       }

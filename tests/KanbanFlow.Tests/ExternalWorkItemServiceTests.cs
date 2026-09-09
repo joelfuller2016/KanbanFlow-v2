@@ -1,3 +1,4 @@
+using System.Text.Json;
 using System.Text.RegularExpressions;
 using KanbanFlow.Models;
 using KanbanFlow.Services;
@@ -195,6 +196,31 @@ public sealed class ExternalWorkItemServiceTests
     }
 
     [Fact]
+    public async Task RecordFailure_PreservesCompleteEvidenceAndWhitespace()
+    {
+        using var factory = new SqliteTestFactory();
+        var seeded = await SeedTaskAsync(factory);
+        var service = Service(factory);
+        var prepared = await service.PrepareAsync(Request(seeded));
+        await service.MarkDispatchedAsync(prepared.Operation.OperationId, prepared.LeaseToken);
+        var evidence = "\r\n    Trace begins 漢字 🧪\r\n" + new string('x', 4_001) + "\r\n    Final cause must survive  \r\n\t";
+
+        var result = await service.RecordFailureAsync(
+            prepared.Operation.OperationId,
+            prepared.LeaseToken,
+            ExternalWriteFailureKind.AmbiguousOrIncomplete,
+            evidence);
+
+        Assert.Equal(evidence, result.LastError);
+        var reread = await service.GetOperationAsync(prepared.Operation.OperationId);
+        Assert.NotNull(reread);
+        Assert.Equal(evidence, reread.LastError);
+        Assert.Equal(ExternalWriteState.NeedsReview, reread.State);
+        await using var db = await factory.CreateDbContextAsync();
+        Assert.Single(await db.ActivityEvents.Where(e => e.EventType == "ExternalWriteFailureRecorded").ToListAsync());
+    }
+
+    [Fact]
     public async Task DefinitiveFailure_BeforeDispatch_CanBeExplicitlyResumedForCreate()
     {
         using var factory = new SqliteTestFactory();
@@ -279,7 +305,7 @@ public sealed class ExternalWorkItemServiceTests
             ObservedRawTargetOccurrenceCount: 0,
             ScanCompletedAt: clock.GetUtcNow(),
             Actor: "operator@example",
-            Reason: "prior process is stopped; accept residual provider visibility risk");
+            Reason: "\r\n    prior process is stopped; accept residual provider visibility risk  \r\n\t");
 
         var authorized = await service.AuthorizeAmbiguousRetryAsync(request);
         var duplicate = await service.AuthorizeAmbiguousRetryAsync(request);
@@ -297,7 +323,8 @@ public sealed class ExternalWorkItemServiceTests
                 .Where(e => e.EventType == "ExternalWriteManualRetryAuthorized")
                 .ToListAsync());
             Assert.Equal("operator@example", audit.Actor);
-            Assert.Contains("residual provider visibility risk", audit.AfterJson);
+            using var after = JsonDocument.Parse(audit.AfterJson!);
+            Assert.Equal(request.Reason, after.RootElement.GetProperty("reason").GetString());
             Assert.DoesNotContain("frozen payload", audit.AfterJson);
             Assert.DoesNotContain(prepared.LeaseToken, audit.AfterJson);
         }
@@ -1106,6 +1133,37 @@ public sealed class ExternalWorkItemServiceTests
         await using var db = await factory.CreateDbContextAsync();
         Assert.Single(await db.ExternalWorkItemLinks.ToListAsync());
         Assert.Single(await db.ActivityEvents.Where(e => e.EventType == "ExternalLinkQuarantined").ToListAsync());
+    }
+
+    [Fact]
+    public async Task Quarantine_PreservesCompleteReasonAndWhitespaceInLinkAndAudit()
+    {
+        using var factory = new SqliteTestFactory();
+        var seeded = await SeedTaskAsync(factory);
+        var service = Service(factory);
+        var reason = "\r\n    Human explanation 漢字 🧪\r\n" + new string('x', 2_001) + "\r\n    Final decision context  \r\n\t";
+        var request = new QuarantineExternalWorkItemRequest(
+            seeded.TaskId,
+            ExternalProvider.GitHub,
+            "R_repo",
+            "acme",
+            "widgets",
+            CandidateNumber: 123,
+            CandidateUrl: "https://github.com/acme/widgets/issues/123",
+            Reason: reason);
+
+        var result = await service.QuarantineAsync(request, actor: "human");
+        var replay = await service.QuarantineAsync(request, actor: "retry");
+
+        Assert.Equal(reason, result.QuarantineReason);
+        Assert.Equal(result.Id, replay.Id);
+        await using var db = await factory.CreateDbContextAsync();
+        Assert.Equal(reason, (await db.ExternalWorkItemLinks.SingleAsync()).QuarantineReason);
+        var audit = Assert.Single(await db.ActivityEvents.Where(e => e.EventType == "ExternalLinkQuarantined").ToListAsync());
+        using var after = JsonDocument.Parse(audit.AfterJson!);
+        Assert.Equal(reason, after.RootElement.GetProperty("reason").GetString());
+        Assert.EndsWith(reason, audit.Message);
+        Assert.Equal("human", audit.Actor);
     }
 
     [Fact]

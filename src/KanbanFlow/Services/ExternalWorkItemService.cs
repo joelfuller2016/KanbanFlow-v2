@@ -391,9 +391,7 @@ public sealed class ExternalWorkItemService : IExternalWorkItemService
         ValidateOperationId(operationId);
         if (!Enum.IsDefined(kind))
             throw new ValidationException($"Invalid external write failure kind '{kind}'.");
-        var normalizedError = Required(error, "Error");
-        if (normalizedError.Length > 4_000)
-            normalizedError = normalizedError[..4_000];
+        var recordedError = Required(error, "Error", preserveWhitespace: true);
 
         await using var db = await dbFactory.CreateDbContextAsync(ct);
         await using var tx = await db.Database.BeginTransactionAsync(ct);
@@ -452,7 +450,7 @@ public sealed class ExternalWorkItemService : IExternalWorkItemService
         operation.State = effectiveKind == ExternalWriteFailureKind.DefinitivePreCreate
             ? ExternalWriteState.DefinitiveFailure
             : ExternalWriteState.NeedsReview;
-        operation.LastError = normalizedError;
+        operation.LastError = recordedError;
         operation.LeaseToken = null;
         operation.LeaseExpiresAt = null;
         operation.UpdatedAt = now;
@@ -507,7 +505,7 @@ public sealed class ExternalWorkItemService : IExternalWorkItemService
         var actor = Required(request.Actor, "Actor");
         if (actor.Length > 200)
             throw new ValidationException("Actor must be 200 characters or fewer.");
-        var reason = Required(request.Reason, "Reason");
+        var reason = Required(request.Reason, "Reason", preserveWhitespace: true);
         if (reason.Length > 1_000)
             throw new ValidationException("Reason must be 1000 characters or fewer.");
 
@@ -1077,9 +1075,7 @@ public sealed class ExternalWorkItemService : IExternalWorkItemService
                     : throw new ValidationException(
                         "CandidateNumber is required when CandidateUrl is supplied.")
                 : ValidatedUrl(request.CandidateUrl);
-        var reason = Required(request.Reason, "Reason");
-        if (reason.Length > 2_000)
-            reason = reason[..2_000];
+        var reason = Required(request.Reason, "Reason", preserveWhitespace: true);
 
         await using var db = await dbFactory.CreateDbContextAsync(ct);
         await using var tx = await db.Database.BeginTransactionAsync(ct);
@@ -1537,11 +1533,11 @@ public sealed class ExternalWorkItemService : IExternalWorkItemService
             operation?.State,
             operation?.LeaseExpiresAt);
 
-    private static string Required(string? value, string field)
+    private static string Required(string? value, string field, bool preserveWhitespace = false)
     {
         if (string.IsNullOrWhiteSpace(value))
             throw new ValidationException($"{field} is required.");
-        return value.Trim();
+        return preserveWhitespace ? value : value.Trim();
     }
 
     private static string? Optional(string? value) =>

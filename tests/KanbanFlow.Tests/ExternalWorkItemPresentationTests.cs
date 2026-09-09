@@ -10,6 +10,12 @@ namespace KanbanFlow.Tests;
 /// </summary>
 public sealed class ExternalWorkItemPresentationTests
 {
+    private const string LegacyDescription = """
+        <!-- kanbanflow-sync -->
+        **Issue:** https://github.com/joelfuller2016/KanbanFlow-v2/issues/336
+        <!-- /kanbanflow-sync -->
+        """;
+
     [Fact]
     public void ActiveVerifiedLink_ProducesCanonicalGitHubIssueReference()
     {
@@ -35,6 +41,7 @@ public sealed class ExternalWorkItemPresentationTests
         link.ExternalNodeId = nodeId;
 
         Assert.Null(ExternalWorkItemPresentation.FindActiveGitHubIssue([link]));
+        Assert.Null(ExternalWorkItemPresentation.FindActiveGitHubIssue([link], LegacyDescription));
     }
 
     [Theory]
@@ -47,6 +54,7 @@ public sealed class ExternalWorkItemPresentationTests
         link.ExternalNumber = externalNumber;
 
         Assert.Null(ExternalWorkItemPresentation.FindActiveGitHubIssue([link]));
+        Assert.Null(ExternalWorkItemPresentation.FindActiveGitHubIssue([link], LegacyDescription));
     }
 
     [Theory]
@@ -60,6 +68,7 @@ public sealed class ExternalWorkItemPresentationTests
         link.RepositoryOwner = repositoryOwner;
 
         Assert.Null(ExternalWorkItemPresentation.FindActiveGitHubIssue([link]));
+        Assert.Null(ExternalWorkItemPresentation.FindActiveGitHubIssue([link], LegacyDescription));
     }
 
     [Fact]
@@ -124,6 +133,9 @@ public sealed class ExternalWorkItemPresentationTests
         Assert.Equal("joelfuller2016", issue.RepositoryOwner);
         Assert.Equal("KanbanFlow-v2", issue.RepositoryName);
         Assert.Equal("https://github.com/joelfuller2016/KanbanFlow-v2/issues/336", issue.Url);
+        var emptyLinks = ExternalWorkItemPresentation.FindActiveGitHubIssue([], description);
+        Assert.NotNull(emptyLinks);
+        Assert.Equal("https://github.com/joelfuller2016/KanbanFlow-v2/issues/336", emptyLinks.Url);
     }
 
     [Fact]

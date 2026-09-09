@@ -42,7 +42,14 @@ internal static class ExternalWorkItemPresentation
     internal static GitHubIssueReference? FindActiveGitHubIssue(
         IEnumerable<ExternalWorkItemLink>? links,
         string? description)
-        => FindActiveGitHubIssue(links) ?? FindSyncBlockGitHubIssue(description);
+    {
+        var githubLinks = links?.Where(link => link.Provider == ExternalProvider.GitHub).ToArray();
+        // A quarantined or invalid durable row is still authoritative: mutable legacy text must
+        // not restore the trusted-looking issue control that the recorded identity rejects.
+        return githubLinks is { Length: > 0 }
+            ? FindActiveGitHubIssue(githubLinks)
+            : FindSyncBlockGitHubIssue(description);
+    }
 
     internal static GitHubIssueReference? FindActiveGitHubIssue(
         IEnumerable<ExternalWorkItemLink>? links)
