@@ -7,6 +7,14 @@ namespace KanbanFlow.Services.Workflows;
 
 public sealed partial class WorkspaceService
 {
+    private const string MissingTaskStateHash = "missing-task";
+
+    private static void RequireCompleteTaskState(string stateHash)
+    {
+        if (stateHash == MissingTaskStateHash)
+            throw Invalid("The task's dependency graph contains a missing task. Repair its dependencies before reporting or accepting a result.");
+    }
+
     // This snapshot belongs to one operation and its existing transaction. Keeping it
     // local prevents a later human edit from reusing a cached evidence or edit token.
     private sealed class TaskSnapshot(IReadOnlyDictionary<int, TaskItem> tasks)
@@ -56,7 +64,7 @@ public sealed partial class WorkspaceService
             while (pending.TryDequeue(out var id))
             {
                 if (reachable.ContainsKey(id)) continue;
-                if (!tasks.TryGetValue(id, out var task)) return stateHashes[taskId] = "missing-task";
+                if (!tasks.TryGetValue(id, out var task)) return stateHashes[taskId] = MissingTaskStateHash;
                 reachable.Add(id, task);
                 foreach (var edge in task.Dependencies) pending.Enqueue(edge.DependsOnTaskItemId);
             }

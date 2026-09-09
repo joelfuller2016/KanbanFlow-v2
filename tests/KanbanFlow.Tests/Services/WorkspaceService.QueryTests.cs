@@ -11,6 +11,53 @@ namespace KanbanFlow.Tests.Services;
 
 public sealed class WorkspaceQueryTests(ITestOutputHelper output)
 {
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ReportAndAccept_RejectMissingDependenciesWithoutEvidenceOrCompletion(bool legacyEvidence)
+    {
+        using var factory = new WorkflowSqliteTestFactory();
+        var prerequisite = Draft("Prerequisite");
+        var root = Draft("Root", prerequisite.Id);
+        var request = await factory.PublishedAsync(prerequisite, root);
+        var item = request.WorkItems.Single(t => t.DraftId == root.Id);
+        await using var db = factory.CreateDbContext();
+        await db.Database.OpenConnectionAsync();
+        await db.Database.ExecuteSqlRawAsync("PRAGMA foreign_keys = OFF");
+        await db.Database.ExecuteSqlInterpolatedAsync($"UPDATE TaskDependencies SET DependsOnTaskItemId = {int.MaxValue} WHERE TaskItemId = {item.TaskItemId}");
+
+        if (!legacyEvidence)
+        {
+            await RejectAsync("invalid", () => factory.Service.RecordEvidenceAsync(request.Id, request.Version, item.Id,
+                new EvidenceDraft("Claimed result", "Claimed checks", "src/Work.cs"), Actor, "missing-report"));
+            var unchanged = await factory.LoadAsync(request.Id);
+            Assert.Equal(request.Version, unchanged.Version);
+            Assert.Empty(unchanged.WorkItems.Single(t => t.Id == item.Id).Evidence);
+            Assert.Equal(WorkStatus.Todo, unchanged.WorkItems.Single(t => t.Id == item.Id).Task.Status);
+            Assert.False(await db.WorkflowReceipts.AnyAsync(r => r.Key == "missing-report"));
+            return;
+        }
+
+        // A legacy report may already carry the old sentinel. It must be historical in
+        // context and must not pass acceptance merely because both hashes are identical.
+        var evidence = new TaskEvidence { WorkItemId = item.Id, SpecificationVersion = item.SpecificationVersion,
+            SpecificationHash = item.SpecificationHash, TaskStateHash = "missing-task", Summary = "Legacy report",
+            Checks = "Claimed checks", CodeReference = "old-source", Author = Actor, CreatedAt = factory.Clock.GetUtcNow().UtcDateTime };
+        db.TaskEvidence.Add(evidence);
+        await db.SaveChangesAsync();
+        await RejectAsync("invalid", () => factory.Service.AcceptEvidenceAsync(request.Id, request.Version, item.Id,
+            evidence.Id, item.Task.AcceptanceCriteria.Select(c => c.Id).ToArray(), Actor, "missing-accept"));
+        var context = (await factory.Service.ContextAsync(request.Id))!;
+        Assert.False(context.Tasks.Single(t => t.Id == item.Id).Evidence.Single().Current);
+        var after = await factory.LoadAsync(request.Id);
+        var task = after.WorkItems.Single(t => t.Id == item.Id);
+        Assert.Equal(WorkStatus.Todo, task.Task.Status);
+        Assert.All(task.Task.AcceptanceCriteria, c => Assert.False(c.Completed));
+        Assert.Null(task.Evidence.Single().AcceptedAt);
+        Assert.Equal(request.Version, after.Version);
+        Assert.False(await db.WorkflowReceipts.AnyAsync(r => r.Key == "missing-report" || r.Key == "missing-accept"));
+    }
+
     [Fact]
     public async Task TaskStateHash_CycleTerminatesAndMissingDependencyRejectsPartialGraph()
     {

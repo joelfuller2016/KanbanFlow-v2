@@ -24,8 +24,10 @@ public sealed partial class WorkspaceService
         {
             var item = request.WorkItems.SingleOrDefault(w => w.Id == itemId) ?? throw Missing("Task");
             if (item.Task.Status == WorkStatus.Done) await InvalidateDependentsAsync(db, request, [item.TaskItemId], actor, ct);
+            var stateHash = await TaskStateHashAsync(db, item.TaskItemId, ct);
+            RequireCompleteTaskState(stateHash);
             item.Evidence.Add(new TaskEvidence { WorkItemId = itemId, SpecificationVersion = item.SpecificationVersion, SpecificationHash = item.SpecificationHash,
-                TaskStateHash = await TaskStateHashAsync(db, item.TaskItemId, ct),
+                TaskStateHash = stateHash,
                 Summary = Required(evidence.Summary, "Result summary", 20000), Checks = Required(evidence.Checks, "Observed checks", 20000),
                 CodeReference = Required(evidence.CodeReference, "Checked source or document reference", 2000), Author = actor, CreatedAt = Now });
             var report = $"Reported result for task #{item.TaskItemId}\n\n{evidence.Summary}\n\nChecks: {evidence.Checks}\n\nReference: {evidence.CodeReference}";
@@ -40,7 +42,9 @@ public sealed partial class WorkspaceService
         {
             var item = request.WorkItems.SingleOrDefault(w => w.Id == itemId) ?? throw Missing("Task");
             var evidence = item.Evidence.SingleOrDefault(e => e.Id == evidenceId) ?? throw Missing("Evidence");
-            if (!EvidenceMatches(item, evidence, await TaskStateHashAsync(db, item.TaskItemId, ct)))
+            var stateHash = await TaskStateHashAsync(db, item.TaskItemId, ct);
+            RequireCompleteTaskState(stateHash);
+            if (!EvidenceMatches(item, evidence, stateHash))
                 throw Invalid("This evidence covers an older specification. Record checks for the current task.");
             var criteria = item.Task.AcceptanceCriteria.Select(c => c.Id).ToHashSet();
             if (checkedCriterionIds is null || criteria.Count == 0 || !criteria.SetEquals(checkedCriterionIds) || criteria.Count != checkedCriterionIds.Length)
@@ -71,6 +75,7 @@ public sealed partial class WorkspaceService
             {
                 if (item.Task.Feature.ProjectId != request.ProjectId) throw Invalid($"Task #{item.TaskItemId} moved to another project. Resolve its request mapping before concluding.");
                 var stateHash = taskSnapshot.StateHash(item.TaskItemId);
+                RequireCompleteTaskState(stateHash);
                 hashes[item.TaskItemId] = stateHash;
                 if (!item.Evidence.Any(e => e.AcceptedAt is not null && EvidenceMatches(item, e, stateHash))
                     || item.Task.AcceptanceCriteria.Count == 0 || item.Task.AcceptanceCriteria.Any(c => !c.Completed))
@@ -98,7 +103,8 @@ public sealed partial class WorkspaceService
     }
 
     public static bool EvidenceMatches(PlannedTask item, TaskEvidence evidence, string stateHash) =>
-        evidence.SpecificationVersion == item.SpecificationVersion && evidence.SpecificationHash == item.SpecificationHash
+        stateHash != MissingTaskStateHash
+        && evidence.SpecificationVersion == item.SpecificationVersion && evidence.SpecificationHash == item.SpecificationHash
         && evidence.TaskStateHash == stateHash;
 
     // Read the actual task graph, including edits through the existing UI/REST/MCP services.
