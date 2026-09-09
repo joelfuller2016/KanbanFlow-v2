@@ -184,24 +184,120 @@ public sealed class ExternalWorkItemProjectionTests
         Assert.Empty(await db.ActivityEvents.ToListAsync());
     }
 
-    [Fact]
-    public async Task QuarantineCandidate_ProjectionCannotBypassHumanReview()
+    [Theory]
+    [InlineData(false, null, null)]
+    [InlineData(false, null, "I_quarantined_other")]
+    [InlineData(false, 42, null)]
+    [InlineData(true, 42, null)]
+    public async Task QuarantineCandidate_ProjectionCannotBypassHumanReview_WithoutAnyWrite(
+        bool otherProject, int? candidateNumber, string? candidateNode)
     {
-        using var factory = new SqliteTestFactory();
+        var saves = new CountSaves();
+        using var factory = new SqliteFileTestFactory(saves);
         var feature = await SeedFeature(factory);
+        await using var lookup = await factory.CreateDbContextAsync();
+        var projectId = await lookup.Features.Where(f => f.Id == feature).Select(f => f.ProjectId).SingleAsync();
+        var targetFeature = await SeedFeature(factory, otherProject ? null : projectId);
         var taskService = new TaskService(factory);
         var task = await taskService.CreateAsync(new TaskCreate(feature, "Candidate"), "human");
         var service = new ExternalWorkItemService(factory);
-        await service.QuarantineAsync(new(task.Id, ExternalProvider.GitHub, "R_board", "octo", "board", 42,
-            "https://github.com/octo/board/issues/42", "Human review pending"), "human");
-        await using var before = await factory.CreateDbContextAsync();
-        var eventCount = await before.ActivityEvents.CountAsync();
-        var error = await Assert.ThrowsAsync<ExternalWorkItemConflictException>(() => service.ProjectInboundGitHubIssueAsync(Request(feature), "importer"));
-        Assert.Equal("quarantined-link-exists", error.ConflictCode);
-        await using var after = await factory.CreateDbContextAsync();
-        Assert.Equal(1, await after.Tasks.CountAsync());
-        Assert.Equal(ExternalLinkState.Quarantined, (await after.ExternalWorkItemLinks.SingleAsync()).State);
-        Assert.Equal(eventCount, await after.ActivityEvents.CountAsync());
+        await service.QuarantineAsync(new(task.Id, ExternalProvider.GitHub, "R_board", "octo", "board", candidateNumber,
+            null, "Human review pending  \r\nFull reason Ω"), "human");
+        if (candidateNode is not null)
+        {
+            // The importer applies the same human-review policy to legacy quarantines that
+            // happen to retain another node. Do not narrow the null-number guard to null nodes.
+            await using var legacy = await factory.CreateDbContextAsync();
+            (await legacy.ExternalWorkItemLinks.SingleAsync()).ExternalNodeId = candidateNode;
+            await legacy.SaveChangesAsync();
+        }
+        var before = await ProjectionRows(factory);
+        saves.Count = 0;
+
+        var result = await ApiEndpoints.ProjectInboundGitHubIssueEndpointAsync(targetFeature, Dto(), service, default);
+
+        Assert.Equal(409, Assert.IsAssignableFrom<IStatusCodeHttpResult>(result).StatusCode);
+        var error = JsonSerializer.SerializeToElement(Assert.IsAssignableFrom<IValueHttpResult>(result).Value,
+            new JsonSerializerOptions(JsonSerializerDefaults.Web));
+        Assert.Equal("quarantined-link-exists", error.GetProperty("conflictCode").GetString());
+        Assert.Equal(task.Id, error.GetProperty("taskId").GetInt32());
+        Assert.Equal(candidateNumber is null
+            ? $"Task {task.Id} has an unresolved quarantine without an issue number in this project and repository; resolve it before creating another projection."
+            : $"Task {task.Id} has an unresolved quarantine for this repository issue number.",
+            error.GetProperty("message").GetString());
+        Assert.Equal(0, saves.Count);
+        Assert.Equal(before, await ProjectionRows(factory));
+    }
+
+    [Theory]
+    [InlineData(true, false, null)]
+    [InlineData(false, true, null)]
+    [InlineData(false, false, 41)]
+    [InlineData(true, false, 41)]
+    [InlineData(false, true, 42)]
+    public async Task UnrelatedQuarantine_NewProjectionRemainsAllowed(
+        bool otherProject, bool otherRepository, int? candidateNumber)
+    {
+        using var factory = new SqliteTestFactory();
+        var feature = await SeedFeature(factory);
+        await using var lookup = await factory.CreateDbContextAsync();
+        var projectId = await lookup.Features.Where(f => f.Id == feature).Select(f => f.ProjectId).SingleAsync();
+        var targetFeature = await SeedFeature(factory, otherProject ? null : projectId);
+        var task = await new TaskService(factory).CreateAsync(new TaskCreate(feature, "Human review item"), "human");
+        var service = new ExternalWorkItemService(factory);
+        var quarantined = await service.QuarantineAsync(new(task.Id, ExternalProvider.GitHub,
+            otherRepository ? "R_other" : "R_board", "octo", "board", candidateNumber, null, "Keep this decision"), "human");
+
+        var result = await service.ProjectInboundGitHubIssueAsync(Request(targetFeature), "importer");
+
+        Assert.True(result.Created);
+        Assert.NotEqual(task.Id, result.Task.Id);
+        Assert.Equal(targetFeature, result.Task.FeatureId);
+        await using var db = await factory.CreateDbContextAsync();
+        Assert.Equal(2, await db.Tasks.CountAsync());
+        Assert.Equal(2, await db.ExternalWorkItemLinks.CountAsync());
+        Assert.Equal(2, await db.TaskComments.CountAsync());
+        Assert.Equal(4, await db.ActivityEvents.CountAsync());
+        var preserved = await db.ExternalWorkItemLinks.AsNoTracking().SingleAsync(l => l.Id == quarantined.Id);
+        Assert.Equal(ExternalLinkState.Quarantined, preserved.State);
+        Assert.Equal(candidateNumber, preserved.ExternalNumber);
+        Assert.Equal("Keep this decision", preserved.QuarantineReason);
+        Assert.Equal(quarantined.UpdatedAt, preserved.UpdatedAt);
+        var created = await db.ActivityEvents.Where(e => e.EntityId == result.Task.Id).ToListAsync();
+        Assert.Equal(new[] { "ExternalWorkItemLinked", "TaskCreated" }, created.Select(e => e.EventType).Order().ToArray());
+        Assert.All(created, e => Assert.Equal("importer", e.Actor));
+    }
+
+    [Fact]
+    public async Task NullNumberQuarantine_ExistingActiveReplayPreservesHumanEditsWithoutAnyWrite()
+    {
+        var saves = new CountSaves();
+        using var factory = new SqliteFileTestFactory(saves);
+        var feature = await SeedFeature(factory);
+        var service = new ExternalWorkItemService(factory);
+        var created = await service.ProjectInboundGitHubIssueAsync(Request(feature), "importer");
+        var candidate = await new TaskService(factory).CreateAsync(new TaskCreate(feature, "Review separately"), "human");
+        await service.QuarantineAsync(new(candidate.Id, ExternalProvider.GitHub, "R_board", "octo", "board",
+            null, null, "Unresolved candidate"), "human");
+        await using (var edit = await factory.CreateDbContextAsync())
+        {
+            var task = await edit.Tasks.SingleAsync(t => t.Id == created.Task.Id);
+            task.Name = "Human-owned title";
+            task.Description = Description + "Human decision  \r\n";
+            await edit.SaveChangesAsync();
+        }
+        var before = await ProjectionRows(factory);
+        saves.Count = 0;
+
+        var replay = await service.ProjectInboundGitHubIssueAsync(Request(feature), "importer");
+
+        Assert.False(replay.Created);
+        Assert.Equal(created.Task.Id, replay.Task.Id);
+        Assert.Equal(created.Link.Id, replay.Link.Id);
+        Assert.Equal("Human-owned title", replay.Task.Name);
+        Assert.Equal(Description + "Human decision  \r\n", replay.Task.Description);
+        Assert.Equal(0, saves.Count);
+        Assert.Equal(before, await ProjectionRows(factory));
     }
 
     [Fact]
@@ -264,6 +360,24 @@ public sealed class ExternalWorkItemProjectionTests
         db.Features.Add(feature);
         await db.SaveChangesAsync();
         return feature.Id;
+    }
+
+    private static async Task<string> ProjectionRows(IDbContextFactory<AppDbContext> factory)
+    {
+        await using var db = await factory.CreateDbContextAsync();
+        async Task<object[]> Rows<TEntity>() where TEntity : class
+        {
+            var rows = await db.Set<TEntity>().AsNoTracking().OrderBy(e => EF.Property<int>(e, "Id")).ToListAsync();
+            return rows.Select(row => (object)db.Entry(row).Properties.OrderBy(p => p.Metadata.Name)
+                .ToDictionary(p => p.Metadata.Name, p => p.CurrentValue)).ToArray();
+        }
+        return JsonSerializer.Serialize(new
+        {
+            Tasks = await Rows<TaskItem>(),
+            Links = await Rows<ExternalWorkItemLink>(),
+            Comments = await Rows<TaskComment>(),
+            Events = await Rows<ActivityEvent>()
+        });
     }
 
     private static async Task AssertOneProjection(IDbContextFactory<AppDbContext> factory, int id,

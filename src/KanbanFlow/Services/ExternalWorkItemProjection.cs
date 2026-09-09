@@ -59,13 +59,19 @@ public sealed partial class ExternalWorkItemService
 
         await EnsureExternalIdentityAvailableAsync(db, 0, identity.Provider,
             identity.RepositoryExternalId, identity.ExternalNodeId, identity.ExternalNumber, ct);
+        // An unnumbered candidate can represent any unmatched issue in this project/repository.
+        // Recheck the human decision under the same writer reservation as creation: a direct
+        // caller or a sync cache read before quarantine must not create a replacement card.
         var quarantined = await db.ExternalWorkItemLinks.AsNoTracking().FirstOrDefaultAsync(
             l => l.Provider == identity.Provider && l.State == ExternalLinkState.Quarantined &&
                 l.RepositoryExternalId == identity.RepositoryExternalId &&
-                l.ExternalNumber == identity.ExternalNumber, ct);
+                (l.ExternalNumber == identity.ExternalNumber ||
+                 (l.ExternalNumber == null && l.Task.Feature.ProjectId == projectId)), ct);
         if (quarantined is not null)
             throw Conflict("quarantined-link-exists",
-                $"Task {quarantined.TaskId} has an unresolved quarantine for this repository issue number.",
+                quarantined.ExternalNumber is null
+                    ? $"Task {quarantined.TaskId} has an unresolved quarantine without an issue number in this project and repository; resolve it before creating another projection."
+                    : $"Task {quarantined.TaskId} has an unresolved quarantine for this repository issue number.",
                 quarantined.TaskId, identity.Provider);
         var task = await TaskService.CreateInContextAsync(db, request.Task, actor, ct);
         var now = UtcNow();
