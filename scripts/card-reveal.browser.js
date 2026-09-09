@@ -108,7 +108,10 @@ async (page) => {
   // A real click proves the InteractiveServer callback and complete detail view still work.
   for (let attempt = 0; attempt < 10 && !await page.getByTestId('task-detail-panel').isVisible(); attempt++) {
     await page.locator(titleSelector).click();
-    await page.waitForTimeout(150);
+    // An opening offcanvas can display its backdrop before its panel becomes visible. Wait for
+    // the real transition so a second click cannot be intercepted by that opening backdrop.
+    try { await page.getByTestId('task-detail-panel').waitFor({ state: 'visible', timeout: 2000 }); }
+    catch (error) { if (attempt === 9) throw error; }
   }
   check(await page.getByTestId('task-detail-panel').isVisible(), 'Card title must open task details.');
   const detailText = await page.getByTestId('task-detail-description-read').innerText();

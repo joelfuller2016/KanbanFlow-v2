@@ -6,13 +6,17 @@ This case lets a maintainer verify [issue #481](https://github.com/joelfuller201
 
 [KanbanCard](../../../src/KanbanFlow/Components/Shared/KanbanCard.razor) retains the complete task model. Its title wraps to two lines at rest, expands on hover or keyboard focus, and stays expanded on devices without hover. A short display preview comes from [MirroredDescription](../../../src/KanbanFlow/Services/MirroredDescription.cs); storage and the task description editor retain the complete source. The outline also wraps task titles to two lines.
 
-The shared reader recognizes only a leading metadata header and one record per line. Duplicate records are rejected. Editable header text is an advisory link, not authenticated repository identity. A normalized `github.com` URL supplies both the destination and its displayed number. Only an exact owner/repository/issues/number route receives an issue label; the modal's PR chip similarly requires a pull-request route. Query strings and fragments survive.
+The existing shared issue badge resolves durable GitHub identity first. A quarantined or invalid GitHub row suppresses the editable fallback. When no durable GitHub row exists, the shared reader recognizes only a leading metadata header and one record per line. Duplicate records are rejected. Editable header text is an advisory link, not authenticated repository identity. A normalized `github.com` URL supplies both the destination and its displayed number. Only an exact owner/repository/issues/number route receives an issue label; the modal's PR chip similarly requires a pull-request route. Query strings and fragments, including parentheses and terminal punctuation, survive. The modal updates its PR link from the unsaved description without persisting that draft.
 
 ```mermaid
 flowchart LR
+    Rows[Durable GitHub rows] --> State{Active valid identity?}
+    State -->|Yes| Card[Existing shared issue badge]
+    State -->|No| Hidden[Suppress issue control]
+    Rows -->|No GitHub rows| Header
     Task[Complete task description] --> Header[Leading header and unique record]
     Header --> URL[Normalize GitHub URL]
-    URL --> Card[Card href and issue label]
+    URL -->|Legacy fallback| Card
     URL --> Modal[Existing edit modal chips]
     Task --> Preview[Display preview only]
     Preview --> Card
