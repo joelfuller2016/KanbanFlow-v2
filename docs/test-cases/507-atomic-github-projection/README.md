@@ -85,7 +85,7 @@ Both native MCP and the stdio wrapper expose `project_github_issue` with the sam
 - [x] Add deterministic independent-connection concurrency and injected rollback/retry tests.
 - [x] Add endpoint no-save conflict tests, native service tests, actual stdio/HTTP adapter tests and a same-board browser check.
 - [x] Add repeatable [HTTP examples](../../../atomic-projection.http), [transport smoke](../../../scripts/atomic-projection-smoke.mjs) and [browser fixture](../../../scripts/atomic-projection.browser.js).
-- [ ] Record the parent's final combined-branch broad API smoke result; the default-provider run exceeded the existing five-second memory recall timeout.
+- [x] Record the final combined-branch API result: every original HTTP/data assertion passed against the owned foreground published app; source/check hashes and provider budget are recorded.
 - [ ] Record actual human usability feedback before claiming human acceptance.
 
 ## Repeatable validation
@@ -102,5 +102,7 @@ Both native MCP and the stdio wrapper expose `project_github_issue` with the sam
 This operation does not merge or delete historical duplicates, alter outbound issue-write recovery, or normalize the two GitHub fetch record shapes tracked in [#514](https://github.com/joelfuller2016/KanbanFlow-v2/issues/514). The current native `get_task` response still lacks durable links/journal fields; adding the compound tool does not close that separate read-shape parity gap. The parent integration owns that work and #511's complete-content recovery.
 
 ## Runs
+
+- [2026-09-09 integrated published-app source `f6b83bb52240`](runs/2026-09-09-f6b83bb52240.md)
 
 - [2026-09-08 integrated source `e912072205bc`](runs/2026-09-08-e912072205bc.md)
