@@ -45,10 +45,16 @@ async page => {
     const replay = await api('POST', path, request);
     check(!replay.created && replay.task.name === 'Human redirected this card', 'Retry must retain the human decision');
     check(replay.task.description === description, 'Complete Markdown whitespace must survive create and human name edit');
+    const activity = await api('GET', `/api/tasks/${id}/activity`);
+    check(activity.length === 3, 'Creation pair plus one human edit, with no replay audit');
+    check(activity.filter(event => event.eventType === 'TaskCreated').length === 1, 'One task creation audit');
+    check(activity.filter(event => event.eventType === 'ExternalWorkItemLinked').length === 1, 'One link creation audit');
+    const humanEdit = activity.find(event => event.eventType === 'TaskUpdated');
+    check(humanEdit && JSON.parse(humanEdit.afterJson).name === 'Human redirected this card', 'The human title decision must be audited');
     await page.reload();
     await page.getByTestId(`board-card-${id}-title`).waitFor({ state: 'visible' });
     check((await page.getByTestId(`board-card-${id}-title`).innerText()).includes('Human redirected this card'), 'Same card shows the human title after reload');
-    return { passed: true, concurrentOneCard: true, cardAndDetailIdentity: true, humanEditRetainedOnReplay: true, completeDescription: true };
+    return { passed: true, concurrentOneCard: true, cardAndDetailIdentity: true, humanEditRetainedOnReplay: true, humanEditAudited: true, completeDescription: true };
   } finally {
     await page.goto(base);
     await api('DELETE', `/api/projects/${project.id}`, undefined, 204);
