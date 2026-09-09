@@ -66,10 +66,11 @@ public sealed partial class WorkspaceService
             if (!Drafts(latest).Select(d => d.Id).ToHashSet().SetEquals(request.WorkItems.Select(w => w.DraftId)))
                 throw Invalid("A published task was deleted. Restore the plan's tasks before concluding.");
             var hashes = new Dictionary<int, string>();
+            var taskSnapshot = await TaskSnapshot.LoadAsync(db, request.WorkItems.Select(w => w.TaskItemId), ct);
             foreach (var item in request.WorkItems)
             {
                 if (item.Task.Feature.ProjectId != request.ProjectId) throw Invalid($"Task #{item.TaskItemId} moved to another project. Resolve its request mapping before concluding.");
-                var stateHash = await TaskStateHashAsync(db, item.TaskItemId, ct);
+                var stateHash = taskSnapshot.StateHash(item.TaskItemId);
                 hashes[item.TaskItemId] = stateHash;
                 if (!item.Evidence.Any(e => e.AcceptedAt is not null && EvidenceMatches(item, e, stateHash))
                     || item.Task.AcceptanceCriteria.Count == 0 || item.Task.AcceptanceCriteria.Any(c => !c.Completed))
@@ -100,40 +101,13 @@ public sealed partial class WorkspaceService
         evidence.SpecificationVersion == item.SpecificationVersion && evidence.SpecificationHash == item.SpecificationHash
         && evidence.TaskStateHash == stateHash;
 
-    private static async Task<string> PublicationStateHashAsync(AppDbContext db, int taskId, CancellationToken ct)
-    {
-        var task = await db.Tasks.AsNoTracking().Include(t => t.AcceptanceCriteria).SingleAsync(t => t.Id == taskId, ct);
-        return Hash(new { Scope = await TaskStateHashAsync(db, taskId, ct), task.Priority, task.Assignee, task.Status, task.UpdatedAt,
-            Checks = task.AcceptanceCriteria.OrderBy(c => c.Id).Select(c => c.Completed) });
-    }
-
     // Read the actual task graph, including edits through the existing UI/REST/MCP services.
     // Own status/check ticks are excluded so accepting a report does not invalidate itself.
     // Prerequisite completion and transitive scope ARE included, so reopening or changing
     // a dependency cannot leave a previously accepted report looking current.
     public static async Task<string> TaskStateHashAsync(AppDbContext db, int taskId, CancellationToken ct = default)
     {
-        var tasks = new Dictionary<int, TaskItem>();
-        var pending = new Queue<int>();
-        pending.Enqueue(taskId);
-        while (pending.TryDequeue(out var id))
-        {
-            if (tasks.ContainsKey(id)) continue;
-            var task = await db.Tasks.AsNoTracking().AsSplitQuery().Include(t => t.AcceptanceCriteria)
-                .Include(t => t.Subtasks).Include(t => t.Dependencies).SingleOrDefaultAsync(t => t.Id == id, ct);
-            if (task is null) return "missing-task";
-            tasks.Add(id, task);
-            foreach (var edge in task.Dependencies) pending.Enqueue(edge.DependsOnTaskItemId);
-        }
-        return Hash(tasks.OrderBy(p => p.Key).Select(p => new
-        {
-            p.Key, p.Value.FeatureId, p.Value.Name, p.Value.Description,
-            Criteria = p.Value.AcceptanceCriteria.OrderBy(c => c.Id).Select(c => new { c.Id, c.Text }),
-            Subtasks = p.Value.Subtasks.OrderBy(c => c.Id).Select(c => new { c.Id, c.Text }),
-            Dependencies = p.Value.Dependencies.OrderBy(d => d.DependsOnTaskItemId).Select(d => new { d.DependsOnTaskItemId, d.Type }),
-            PrerequisiteStatus = p.Key == taskId ? (WorkStatus?)null : p.Value.Status,
-            PrerequisiteCompletedAt = p.Key == taskId ? null : p.Value.CompletedAt,
-            PrerequisiteChecks = p.Key == taskId ? null : p.Value.AcceptanceCriteria.OrderBy(c => c.Id).Select(c => c.Completed).ToArray()
-        }));
+        var snapshot = await TaskSnapshot.LoadAsync(db, [taskId], ct);
+        return snapshot.StateHash(taskId);
     }
 }

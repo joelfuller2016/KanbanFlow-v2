@@ -22,9 +22,10 @@ public sealed partial class WorkspaceService
             if (request.WorkItems.Count > 0 && (expectedTaskStates is null
                 || !request.WorkItems.Select(w => w.TaskItemId).ToHashSet().SetEquals(expectedTaskStates.Keys)))
                 throw Invalid("Include taskBaselines from each current task's editToken when revising published work.");
+            var taskSnapshot = await TaskSnapshot.LoadAsync(db, request.WorkItems.Select(w => w.TaskItemId), ct);
             foreach (var item in request.WorkItems)
             {
-                var currentHash = await PublicationStateHashAsync(db, item.TaskItemId, ct);
+                var currentHash = taskSnapshot.PublicationHash(item.TaskItemId);
                 if (expectedTaskStates![item.TaskItemId] != currentHash)
                     throw new WorkflowException("conflict", $"Task #{item.TaskItemId} changed on the board while this plan was being edited. Refresh, review its current details and combine your draft before saving.");
                 baseline[item.TaskItemId] = currentHash;
@@ -50,12 +51,16 @@ public sealed partial class WorkspaceService
             if (await db.ProjectRepositories.CountAsync(r => repositoryIds.Contains(r.Id) && r.ProjectId == request.ProjectId, ct) != repositoryIds.Length)
                 throw Invalid("A draft repository no longer belongs to this request's project. Update the plan before publishing.");
             var baseline = JsonSerializer.Deserialize<Dictionary<int, string>>(plan.TaskBaselineJson)!;
+            var changedTaskIds = request.WorkItems
+                .Where(item => item.SpecificationHash != Hash(drafts.Single(d => d.Id == item.DraftId)))
+                .Select(item => item.TaskItemId);
+            var taskSnapshot = await TaskSnapshot.LoadAsync(db, changedTaskIds, ct);
             foreach (var item in request.WorkItems)
             {
                 if (item.Task.Feature.ProjectId != request.ProjectId) throw Invalid($"Task #{item.TaskItemId} moved to another project. Resolve its request mapping before publishing.");
                 var draft = drafts.Single(d => d.Id == item.DraftId);
                 if (item.SpecificationHash != Hash(draft) && (!baseline.TryGetValue(item.TaskItemId, out var savedHash)
-                    || savedHash != await PublicationStateHashAsync(db, item.TaskItemId, ct)))
+                    || savedHash != taskSnapshot.PublicationHash(item.TaskItemId)))
                     throw new WorkflowException("conflict", $"Task #{item.TaskItemId} changed on the board after this plan was saved. Review its current fields and save a revised plan before publishing.");
             }
             Feature? feature = request.FeatureId is int featureId ? await db.Features.FindAsync([featureId], ct) : null;

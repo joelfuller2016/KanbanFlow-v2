@@ -18,10 +18,11 @@ public sealed partial class WorkspaceService
         if (request is null) return null;
         var hashes = new Dictionary<int, string>();
         var editTokens = new Dictionary<int, string>();
+        var taskSnapshot = await TaskSnapshot.LoadAsync(db, request.WorkItems.Select(w => w.TaskItemId), ct);
         foreach (var item in request.WorkItems)
         {
-            hashes[item.TaskItemId] = await TaskStateHashAsync(db, item.TaskItemId, ct);
-            editTokens[item.TaskItemId] = await PublicationStateHashAsync(db, item.TaskItemId, ct);
+            hashes[item.TaskItemId] = taskSnapshot.StateHash(item.TaskItemId);
+            editTokens[item.TaskItemId] = taskSnapshot.PublicationHash(item.TaskItemId);
         }
         var contextHash = ConclusionHash(request, hashes);
         var repositories = await RepositoriesAsync(request.ProjectId, ct);

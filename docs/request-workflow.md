@@ -147,6 +147,10 @@ REST adds `GET /api/workflows/`, `GET /api/workflows/{requestId}`, `GET /api/wor
 
 ## Verification and local operation
 
+The [September 8 review and delivery cycle](plans/pr-review-cycle-2026-09-08.md) records
+the current PR order, complete backlog inventory, review findings and acceptance procedure.
+Its maintenance request uses this same Project 2 board and audited MCP workflow.
+
 Use the [normal launcher](../scripts/start-kanbanflow.ps1) for the existing board:
 
 ```powershell
