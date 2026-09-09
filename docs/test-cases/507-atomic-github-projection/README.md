@@ -114,3 +114,5 @@ This operation does not merge or delete historical duplicates, alter outbound is
 - [2026-09-09 integrated published-app source `f6b83bb52240`](runs/2026-09-09-f6b83bb52240.md)
 
 - [2026-09-08 integrated source `e912072205bc`](runs/2026-09-08-e912072205bc.md)
+
+- [Final integration with PR #518: 1,201 .NET, 298 scripts, 55 UI cases and actual compound transports](runs/2026-09-09-f6da854e4403.md).
