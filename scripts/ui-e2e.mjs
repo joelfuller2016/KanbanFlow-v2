@@ -3708,6 +3708,9 @@ async function main() {
         // against the viewport or size it beyond the task panel that owns the description.
         const layoutProbe = read.getByText(layoutProbeText, { exact: true });
         await layoutProbe.waitFor({ state: "visible" });
+        // Long descriptions live inside a scrolling panel. Measure the paragraph after bringing
+        // it into view; an ordinary offscreen paragraph is not escaped or viewport-positioned.
+        await layoutProbe.scrollIntoViewIfNeeded();
         const geometry = await layoutProbe.evaluate((el) => {
           const probeRect = el.getBoundingClientRect();
           const panelRect = el.closest('[data-testid="task-detail-panel"]').getBoundingClientRect();
