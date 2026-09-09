@@ -55,6 +55,8 @@ sequenceDiagram
 
 Every context uses the same existing SQLite database. `BEGIN IMMEDIATE` happens before the ownership reads, so independent app/sync processes serialize through SQLite. The existing unique indexes remain a final constraint. The shared task creation core preserves defaults, finite append ordering, completion timestamps, actor attribution, the Created comment and the original TaskCreated snapshot. Descriptions are retained exactly, including meaningful leading/trailing Markdown whitespace. A failure while saving the link rolls back earlier task and audit saves.
 
+For a new identity, that transaction also rechecks human quarantine decisions. A quarantine without an issue number blocks unmatched new issues in the same target project and repository, including requests into another feature of that project. This keeps direct REST/MCP callers and an importer whose cache predates the decision consistent. Exact active replays still return the existing card. An unnumbered quarantine in another project or repository does not block creation; the existing matching-number quarantine rule remains global within its repository.
+
 ## Human-visible behavior and transport contract
 
 The card, outline, detail panel and editor keep the existing UI. New imports start with the plain GitHub title and immediately have their durable issue badge. Humans can rename or move the card through existing controls. An identical projection retry returns those current fields without renaming, moving, editing, or adding another creation audit. Normal later sync reconciliation remains governed by the separate field-ownership policy; this change does not introduce a permanent manual field pin.
@@ -70,6 +72,7 @@ Both native MCP and the stdio wrapper expose `project_github_issue` with the sam
 | Same node reports another number | 409 `external-node-number-mismatch`; zero saves | Reconcile the verified link through the existing transfer/refresh path first. |
 | Same node reports another repository node, owner/name or URL | 422; zero saves | Verify a rename/transfer and refresh the existing link explicitly before retrying projection. |
 | A matching repository/number has unresolved quarantine | 409 `quarantined-link-exists`; zero saves | Resolve the human review item before projection. |
+| A quarantine has no number in the target project and repository | 409 `quarantined-link-exists` identifies the review card; zero saves | Resolve its ambiguous identity before creating another unmatched projection. An existing active identity can still replay. |
 | Missing feature | 404; zero saves | Refresh the project/feature context. |
 | Invalid identity/task fields | 422; zero saves | Correct the named field. Literal JSON `null` is 400. |
 | Failure after task creation, before link commit | Entire transaction rolls back | Retry the same identity after the persistence failure is resolved. |
@@ -79,6 +82,7 @@ Both native MCP and the stdio wrapper expose `project_github_issue` with the sam
 - [x] Add the projection request/result contracts and `IExternalWorkItemService` operation.
 - [x] Reuse the existing task creation/audit/default implementation inside a caller-owned transaction.
 - [x] Recheck global immutable identity and repository-number ownership inside an immediate transaction.
+- [x] Recheck unnumbered quarantines in the target project/repository inside that transaction; preserve unrelated scopes and exact active replay.
 - [x] Preserve exact content, existing human edits and quarantine decisions.
 - [x] Commit task, Created comment, TaskCreated event, link and ExternalWorkItemLinked event together.
 - [x] Add the REST endpoint, dedicated response DTOs, documented status codes and nullable-body guard.
@@ -94,7 +98,7 @@ Both native MCP and the stdio wrapper expose `project_github_issue` with the sam
 
 1. Inspect the current commit and clean/dirty state. Run `pwsh -NoProfile -File scripts/verify.ps1`; expect a fresh warnings-as-errors build and all .NET tests passing. Run `npm run test:scripts`; expect Node's script suite, including the real stdio adapter checks, to pass. Fix the first failing gate before using prior artifacts.
 2. Review [ExternalWorkItemProjectionTests](../../../tests/KanbanFlow.Tests/ExternalWorkItemProjectionTests.cs). The concurrency fixture uses independent file-backed SQLite connections and coordinates the second transaction attempt while the first is paused before task save. A watchdog bounds failures. The link-save interceptor proves a task ID was assigned before failure, then fresh reads prove no task/link/comment/audit survived and retry produces exactly one projection.
-3. Publish current source into an ignored folder. Start a disposable app with an explicit database path and a free loopback port. Run `scripts/atomic-projection-smoke.mjs` with `KANBANFLOW_API_URL` pointing to it. Expect exact full-content reads and audit JSON through REST, native MCP and stdio; 201/200/409/422/400 status checks; cleanup of only the labeled fixture projects. No provider write is made.
+3. Publish current source into an ignored folder. Start a disposable app with an explicit database path and a free loopback port. Run `scripts/atomic-projection-smoke.mjs` with `KANBANFLOW_API_URL` pointing to it. Expect exact full-content reads and audit JSON through REST, native MCP and stdio; 201/200/409/422/400 status checks; unnumbered-quarantine refusal through all three transports with complete task/link/comment/activity equality; active replay and unrelated scopes allowed; cleanup of only the labeled fixture projects. No provider write is made.
 4. Open the disposable app in a named Playwright CLI session. Run `scripts/atomic-projection.browser.js`. Expect one card after two concurrent HTTP calls, the same badge in card/detail, a saved human title change, and that title plus full description preserved after retry and reload. The script deletes only its fixture project in `finally`.
 5. Run the existing `scripts/smoke-mcp.mjs`, `scripts/framing-ab.mjs all`, `scripts/ui-e2e.mjs` and broad API smoke under their documented isolated-app prerequisites. Keep the optional provider budget compatible with the API harness's five-second client timeout through an approved local invocation. Record failures and approval rejections rather than replacing them with a generic pass.
 6. Stop only owned app/browser processes after checking their identities. Keep full logs, databases and snapshots in the owning checkout's ignored folder. Record the source commit, actual results, environment and remaining limits in the run record.
@@ -104,6 +108,8 @@ Both native MCP and the stdio wrapper expose `project_github_issue` with the sam
 This operation does not merge or delete historical duplicates, alter outbound issue-write recovery, or normalize the two GitHub fetch record shapes tracked in [#514](https://github.com/joelfuller2016/KanbanFlow-v2/issues/514). The current native `get_task` response still lacks durable links/journal fields; adding the compound tool does not close that separate read-shape parity gap. The parent integration owns that work and #511's complete-content recovery.
 
 ## Runs
+
+- [2026-09-09 unnumbered quarantine enforcement at source `c0db0bac3225`](runs/2026-09-09-c0db0bac3225.md)
 
 - [2026-09-09 integrated published-app source `f6b83bb52240`](runs/2026-09-09-f6b83bb52240.md)
 
