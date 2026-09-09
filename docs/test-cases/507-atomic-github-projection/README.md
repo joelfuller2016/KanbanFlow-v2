@@ -4,6 +4,8 @@ This guide helps maintainers and human reviewers verify [issue #507](https://git
 
 ## Purpose and architecture
 
+Implementation: [PR #519](https://github.com/joelfuller2016/KanbanFlow-v2/pull/519).
+
 An inbound GitHub issue must become one existing board card, its durable identity row and its audit trail. A lost response or a concurrent sync must not create an orphan card. Replaying the same identity must preserve human edits already made to that card.
 
 Previously the sync script committed three requests: create a task with a temporary issue-number prefix, register its link, then rename it to the plain title. The link's uniqueness constraint protected only the second request. A competing process could leave behind a task whose link insert was refused.
