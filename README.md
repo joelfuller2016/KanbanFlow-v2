@@ -345,6 +345,7 @@ Commands are portable except where noted; `smoke-api.ps1` and `verify.ps1` are P
 ### 0. Start the app
 
 ```powershell
+$env:KANBANFLOW_DB_PATH = "$HOME\.kanbanflow\kanbanflow.db"
 dotnet run --project src/KanbanFlow/KanbanFlow.csproj --urls http://127.0.0.1:5123
 ```
 
@@ -361,8 +362,55 @@ Confirm it is up:
 curl -s http://127.0.0.1:5123/api/admin/health
 # {"status":"ok","app":"KanbanFlow","startedAtUtc":"2026-08-02T22:26:22.1897449Z",
 #  "checkedAtUtc":"2026-08-02T22:26:30.7731684Z","runtime":".NET 10.0.10",
-#  "openApiUrl":"/openapi.json"}
+#  "openApiUrl":"/openapi.json",
+#  "db":{"path":"C:\\Users\\you\\.kanbanflow\\kanbanflow.db","exists":true,"source":"env",
+#        "existedAtStartup":true,"createdAtUtc":"2026-06-01T09:12:44.1Z",
+#        "lastWriteUtc":"2026-08-02T22:19:03.7Z","sizeBytes":39124992,
+#        "shadowedPaths":[],"projects":1,"status":"ok","error":null,
+#        "reasons":[],"elapsedMs":1.1}}
 ```
+
+`status` is `ok` only when the app opened the database, read from it, found a board that is not
+empty, did not create that board itself, saw no trace of that board having been copied into place
+just before startup, and saw no second `kanbanflow.db` shadowing it — otherwise `degraded`, or
+`error` if it could not read at all. It is **always HTTP 200**, so the reason is readable rather
+than guessed.
+
+If you started the app and it is serving a board you do not recognise, this is where to look:
+
+```text
+"status":"degraded", "reasons":["last-write-precedes-creation","created-moments-before-startup"]
+```
+
+That means the file was **copied into place moments before the app started** — a board written
+before it was created cannot be one you have been using. The usual cause is the launcher failing to
+find your real database (`$HOME` resolves differently under Task Scheduler than in your shell) and
+restoring the committed seed instead. Compare `db.sizeBytes` with the size of
+`seed/kanbanflow.seed.db`: a match is **consistent with** the seed rather than proof of it —
+SQLite reuses freed pages instead of growing the file, so a board that has been written to can
+still report the seed's size to the byte. Pin the right file with `-DbPath` and restart.
+
+**A fresh install reports `degraded` too, and that is expected.** The first start of a new
+deployment restores the seed, so the board genuinely was copied into place moments before the app
+ran and both reasons fire — correctly. With `-NoSeed` nothing is copied at all, yet a restart
+within 15 minutes still reports `created-moments-before-startup`, because a board that new is not
+distinguishable from a restored one. Neither is a fault. The first reason clears on a restart after
+the board has been written; the second clears on a restart more than 15 minutes after the file was
+created. Confirm `db.path` is the file you meant before you go looking for a cause.
+
+These signals use the **file facts captured at startup**. A write to the wrong board moves its
+last-write time past its creation time on disk, but `last-write-precedes-creation` remains in the
+running process's health response until a restart captures the changed file. A write does nothing to
+`created-moments-before-startup`, which reads the creation time and a write never touches that; that
+one lasts until the next start more than 15 minutes after the file was created, whether or not the
+board has been written to. So a wrongly-restored board can keep reporting `degraded` after you have
+been using it, and — the direction that costs you — a board written to and then restarted a day later
+reports a clean `ok` with both signals gone. `db.path` is the durable answer: compare it with the
+file you meant, which is the check no code can make for you (#498).
+
+The shadow-database list is also captured at startup: removing a reported shadow file does not
+clear its warning until a restart. Each health request reads the current project count and reports
+whether the selected database currently exists, alongside those recorded startup facts.
 
 **Which database it opened.** The app names the file it is using, on every boot:
 

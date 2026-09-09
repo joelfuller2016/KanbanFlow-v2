@@ -230,11 +230,121 @@ truncation are reported rather than silently presented as complete.
 
 | Route | Methods |
 |---|---|
-| `/api/admin/health` | `GET` — `{ status, app, startedAtUtc, checkedAtUtc, runtime, openApiUrl }` |
+| `/api/admin/health` | `GET` — `{ status, app, startedAtUtc, checkedAtUtc, runtime, openApiUrl, db }` |
 | `/api/admin/run-tests` | `POST` — `?suite=api\|ui\|service\|all` |
 | `/api/admin/llm-ping` | `GET` — LLM connectivity self-test |
 | `/api/admin/embed-ping` | `GET` — embedding connectivity self-test |
 | `/api/admin/memory/reindex` | `POST` |
+
+`status` is `ok`, `degraded` or `error`, and the endpoint returns **HTTP 200 in all three** —
+a caller that cannot read the reason is worse off than one told nothing (#498). `db` carries
+`{ path, exists, source, existedAtStartup, createdAtUtc, lastWriteUtc, sizeBytes,
+shadowedPaths, projects, status, error, reasons, elapsedMs }`: the file that was actually
+opened, the file's own facts as the app found them at boot, a real `COUNT(*)` read from it,
+and every reason the top-level status is not `ok`.
+
+**`db.status` is a different field from the top-level `status`, and it does not share its
+vocabulary.** The top-level field grades the whole app; `db.status` answers exactly one question —
+did the probe throw — so it stays `ok` through every one of the `degraded` reasons below, and only
+a probe that actually threw moves it. A database that cannot be opened is reported by BOTH fields
+at once, with different words: the top-level goes to `error`, `db.status` reports the probe outcome,
+and `unreachable` appears in `db.reasons` either way.
+
+**The one thing not to do is collapse them.** They are read separately — `scripts/smoke-api.ps1`
+asserts `$health.db.status -eq "ok"`, while `scripts/register-kanbanflow-task.ps1` parses the
+top-level field and has already been fixed once for matching the wrong one. The authoritative
+values are the ones asserted in `AdminHealthEndpointTests`, which pins both fields in the same
+case precisely so a later change cannot merge them.
+
+The implemented database status contract is `ok` or `unreachable`, as required by the constraints
+in [#498](https://github.com/joelfuller2016/KanbanFlow-v2/issues/498) and asserted in
+`AdminHealthEndpointTests`. The issue's older implementation example uses `error` for this nested
+field; that example does not describe the current endpoint. Top-level `error` remains unchanged.
+
+`ok` means all of: the database opened, the read succeeded, the board is not empty, this
+process did not CREATE the board it is serving, the board carries no trace of having been
+copied into place just before the app started, and no second `kanbanflow.db` is shadowing the
+one in use.
+
+The reported reasons and their lifetimes (`unreachable` makes the top-level status `error`; the
+others make it `degraded`):
+
+| Reason | What it saw | How long it lasts |
+|---|---|---|
+| `unreachable` | the probe threw; `db.error` carries the SQLite message | until the database opens |
+| `empty-board` | the read worked and returned zero projects | until a project exists |
+| `created-at-startup` | the file was not on disk when the path was resolved | **this boot only** |
+| `last-write-precedes-creation` | the startup snapshot records a last-write time before creation, consistent with a timestamp-preserving copy | until a restart captures a write at or after creation |
+| `created-moments-before-startup` | the file came into existence within 15 minutes before this process started | until a restart more than 15 minutes after the file was created |
+| `shadowed-by-another-database` | a second `kanbanflow.db` existed at one of the app's own anchors when the path was resolved | until a restart after that candidate is removed |
+
+`DbPathResolution` is captured once before schema and seed work. Its existence-at-startup, file
+facts and shadow list stay fixed for that process. Each request separately checks current file
+existence and queries the current project count; those live checks do not refresh the startup
+snapshot. The [September 8 review](reviews/2026-09-08-health-512.md) records a launcher, write and
+restart check of this distinction.
+
+**What these are worth, stated plainly, because a detector oversold is worse than none.** The
+two file-fact reasons exist for the one case row counting cannot see: a launcher that
+*successfully* restores the committed seed onto the wrong path, where the board exists and is
+not empty. They are evidence, not proof:
+
+- A write removes the copy signature from the file, but the running process retains its startup
+  observation. On the next start the copy reason clears; the creation-window reason can still
+  remain. An upgrade whose `Ensure*` patchers write at boot can remove the on-disk copy signal
+  without a user edit. Because resolution precedes those patchers, that loss becomes visible at
+  the following restart. Once both reasons are gone, neither identifies the wrong board.
+- NTFS **file tunnelling** can preserve the original creation time when a file of the same
+  name is deleted and recreated within roughly 15 seconds, hiding the copy.
+- A user restoring their own board from a backup produces exactly this shape. That is a false
+  positive, and it is why these are reported reasons carrying their evidence rather than
+  errors or a refusal to start.
+- A fresh install shows the same shape, and correctly: the launcher really does copy the seed in
+  moments before the first start, so both reasons fire. Even with `-NoSeed`, where nothing is
+  copied and the app makes the board itself, a restart inside 15 minutes still reports
+  `created-moments-before-startup` — a board that new is not distinguishable from a restored one.
+  Both are expected on a new deployment and both clear on the schedule in the table above.
+- `last-write-precedes-creation` compares two stamps from a single `FileInfo` and so carries no
+  clock slack, unlike its sibling — see `ClockSlack` in `AdminEndpoints.cs` for why slack here
+  would suppress detections rather than false alarms. The residue is filesystem quantisation: per
+  MS-FSA, FAT records creation at 10 ms but last write at **2 s**, so on a FAT volume an ordinary
+  board could in principle read as written before it was created. Whether the rounding actually
+  goes that way is unstated in the specification and untested here; NTFS, ReFS and exFAT record
+  both stamps at equal granularity and are unaffected.
+
+`shadowed-by-another-database` reads the application's **own** anchors — the launch directory,
+the content root and the directory the binary sits in. It does not and cannot name a board at
+the *launcher's* default location, because that path comes from a shell variable this process
+would have to re-derive, and a second disagreeing implementation of that rule is the #354
+defect itself.
+
+So what the endpoint still cannot know is which database the operator *meant* — the launcher
+pins `KANBANFLOW_DB_PATH` from its own computation, so the app faithfully opens whatever it is
+handed. That half is finished by the caller, comparing `db.path` and the file facts against
+what it expects. The sharpest of those comparisons is `db.sizeBytes` against the size of
+`seed/kanbanflow.seed.db`: a restored copy is byte-identical to it. Read that direction only — a
+match is consistent with the seed, not proof of it, because SQLite reuses freed pages instead of
+growing the file, so a board that has been written to can still report the seed's size exactly.
+The application cannot make the comparison itself — the seed is **not** in the publish output —
+which is exactly why the size is reported rather than judged.
+
+The probe opens the database **read-only**. `Microsoft.Data.Sqlite` defaults to
+`Mode=ReadWriteCreate`, which invents an empty database when the file is absent — health would
+convert the one condition it exists to detect into a condition that no longer holds, and hand
+the next caller a board that was never real. `db.exists` is also read before the probe rather
+than after, so the answer stays honest even if the mode ever regresses. Measured: with
+`ReadWriteCreate` and an existing parent directory this reproduces on Windows.
+
+Health takes a **shared read lock** where the pre-#498 endpoint took no locks at all. At
+realistic polling intervals that is negligible, but it is not nothing: an external writer
+committing at the same instant can fail on the lock. Stated because it was previously unstated.
+
+The probe is bounded at a 2-second command timeout. SQLite runs here in rollback-journal
+mode, so a competing writer blocks readers and the 30-second driver default would turn a
+transient lock into a stalled health check — longer than `scripts/ui-e2e.mjs` waits before
+declaring the app dead. Contention surfaces as `error` with the SQLite message in `db.error`,
+in about two seconds, and clears itself. Measured uncontended against a seed-sized board:
+`db.elapsedMs` 0.7–1.3 ms, full round trip 2–3 ms.
 
 Plus `GET /openapi.json` in `Program.cs`, which 302s to `/openapi/v1.json`.
 
@@ -370,11 +480,20 @@ The restore is guarded on the live database being **absent**, so the seed can ne
 working data — a start with a live DB present touches nothing and says so.
 
 Refreshing uses SQLite's `VACUUM INTO` against the running app rather than a file copy. This is
-not a stylistic preference: the app runs in WAL mode, so the newest committed pages live in
-`kanbanflow.db-wal`, not in the `.db` file. Copying the `.db` captures a stale, torn snapshot —
-silently, with no error, and no symptom until someone restores it. Stopping the app first does
-not fix it either, because a forced kill leaves the WAL unmerged. `VACUUM INTO` reads inside a
-transaction that sees the WAL and writes one compact file with no sidecars, needing no downtime.
+not a stylistic preference — though the reason is not the one this section used to give. **The app
+does not run in WAL mode.** Nothing in `src/` sets `journal_mode` and the committed seed reports
+`delete`; that is the same fact the health probe's 2-second bound rests on above, and WAL is
+tracked separately in [#209](https://github.com/joelfuller2016/KanbanFlow-v2/issues/209) rather
+than enabled here.
+
+The sidecar argument survives with the right sidecar. In rollback-journal mode a write goes into
+`kanbanflow.db` **in place** while the original pages are held in `kanbanflow.db-journal`, so a
+copy taken mid-transaction mixes pre- and post-write pages — silently, with no error, and no
+symptom until someone restores it. Stopping the app first does not fix it either: a forced kill
+leaves a hot journal behind, and a bare `.db` copy carries nothing to roll it back with.
+`VACUUM INTO` runs inside a read transaction, so it sees only committed state and writes one
+compact file with no sidecars. The app stays up throughout — at the cost of a shared read lock,
+so a commit landing mid-snapshot waits on it rather than tearing the copy.
 
 `scripts/snapshot-seed.mjs` needs `node:sqlite` (Node ≥ 22.5). The package floor stays at 18
 because nothing at runtime needs it — only this maintainer tool does, and it says so if the
@@ -435,9 +554,35 @@ the app's own logs to explain it.
 **The database path is resolved at registration time and pinned into the action as `-DbPath`.**
 Without that, the launcher resolves it through `$HOME`, which differs between pwsh and Windows
 PowerShell and is not guaranteed under an `S4U` logon — and when the path misses, the launcher
-restores the committed seed and serves an **empty board** while `/api/admin/health` still answers
-`status: ok`. That endpoint never opens the database, so it cannot detect the case; see
-[#498](https://github.com/joelfuller2016/KanbanFlow-v2/issues/498).
+restores the committed seed and serves a board nobody asked for. `/api/admin/health` used to answer
+`status: ok` through all of that, because it never opened the database.
+
+Since [#498](https://github.com/joelfuller2016/KanbanFlow-v2/issues/498) it does. Measured through
+the launcher itself, against a wrong root:
+
+```text
+pwsh -File scripts/start-kanbanflow.ps1 -DbPath "$env:TEMP\kf-wrongroot\kanbanflow.db" -Url http://127.0.0.1:5311
+
+{"status":"degraded", ...,
+ "db":{"path":"...\\kf-wrongroot\\kanbanflow.db","existedAtStartup":true,
+       "createdAtUtc":"2026-09-07T21:30:30.5074753Z",
+       "lastWriteUtc":"2026-09-07T20:07:00.3297704Z","sizeBytes":1282048,
+       "projects":1,"reasons":["last-write-precedes-creation","created-moments-before-startup"]}}
+```
+
+Note what carries that verdict, because it is not the obvious thing. The launcher `Copy-Item`s the
+seed into place **before** the app starts, so the file is already there when the path is resolved:
+`existedAtStartup` is `true`, and the seed holds a real project, so counting rows reports a healthy
+`projects: 1`. `created-at-startup` does not fire either. What fires is the file's own history — a
+board last written an hour before it was created, at exactly the committed seed's 1,282,048 bytes.
+
+`existedAtStartup` alone answers this scenario `ok`. It is also true from the second boot onward
+even where it does fire, so it cannot carry a criterion evaluated after reboots *plural*. The file
+facts are re-read from the file at every boot, so both reasons survive restarts — but they expire on
+separate clocks, and the table above is the precise statement. `last-write-precedes-creation` clears
+when a restart captures a post-creation write. `created-moments-before-startup` is untouched by
+writes and ends at the first start more than 15 minutes after the file was created — so it can still
+be firing on a board that has been written to, and it is gone from a board that has not.
 
 The script is idempotent (`-Force` replaces), verifies afterwards that the triggers actually landed,
 and **refuses to register the real task from a git worktree** (it asks `git rev-parse --git-dir`
