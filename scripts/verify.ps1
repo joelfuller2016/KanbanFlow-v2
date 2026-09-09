@@ -69,4 +69,6 @@ finally {
     Pop-Location
 }
 
-if ($script:verifyFailed) { exit 1 }
+# Set both the process result and a calling PowerShell session's LASTEXITCODE. Without an
+# explicit success exit, the advisory formatter can leave its exit 2 behind after a green gate.
+exit ($script:verifyFailed ? 1 : 0)
