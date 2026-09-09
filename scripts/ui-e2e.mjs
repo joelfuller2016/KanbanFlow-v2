@@ -867,6 +867,164 @@ async function main() {
       await waitForApiStatus(created.id, "Done");
     });
 
+    // BEGIN AddItemModal draft regression (#463).
+    // OnParametersSet must initialize only on a fresh open. Each case drives the real
+    // board-filter callback while the modal is open; no production test hook is needed.
+    // Mutation proof: rebuild with the old `if (IsOpen)` guard and rerun these cases.
+    // Preservation must fail; restoring the guard must also keep fresh-open reset working.
+    async function withAddItemDraft(check) {
+      const returnUrl = page.url();
+      const draftProject = await api("POST", "/api/projects", { name: `E2E add draft ${stamp}` });
+      try {
+        const first = await api("POST", `/api/projects/${draftProject.id}/features`, { name: "Opening feature" });
+        const second = await api("POST", `/api/projects/${draftProject.id}/features`, { name: "Chosen feature" });
+        await page.goto(`${baseUrl}/project/${draftProject.id}`);
+        await clickUntil(
+          () => page.locator('[data-testid="add-task-Todo-button"]').click(),
+          page.locator("#add-item-name"),
+        );
+        await check({ project: draftProject, first, second });
+      } finally {
+        await page.goto(returnUrl);
+        await api("DELETE", `/api/projects/${draftProject.id}`);
+      }
+    }
+
+    async function rerenderAddItem(label) {
+      const query = `draft-${label}-${stamp}`;
+      await page.locator('[data-testid="board-filter-search"]').evaluate((el, value) => {
+        el.value = value;
+        el.dispatchEvent(new Event("input", { bubbles: true }));
+      }, query);
+      await page.waitForFunction((value) => new URL(location.href).searchParams.get("q") === value,
+        query, { timeout: 10000 });
+      // Wait beyond the 250ms URL debounce and its route render before asserting silence.
+      await sleep(600);
+    }
+
+    async function assertAddDraft(expected) {
+      assert(await page.locator('[data-testid="add-item-modal"]').isVisible(), "draft dialog closed unexpectedly");
+      for (const [id, value] of Object.entries(expected)) {
+        const actual = await page.locator(`#add-item-${id}`).inputValue();
+        assert(actual === value, `add draft ${id}: expected ${JSON.stringify(value)}, got ${JSON.stringify(actual)}`);
+      }
+    }
+
+    const taskDraft = (featureId) => ({
+      name: `Human task draft ${stamp}`,
+      description: "Keep **all** details.  \n\n    indented context — café\n",
+      feature: String(featureId), status: "3", priority: "3",
+    });
+    async function fillAddDraft(draft) {
+      await page.locator("#add-item-name").fill(draft.name);
+      await page.locator("#add-item-description").fill(draft.description);
+      for (const id of ["feature", "status", "priority"]) {
+        await page.locator(`#add-item-${id}`).selectOption(draft[id]);
+      }
+      // Description binds on change: the select interaction above commits its edit.
+      await page.locator("#add-item-description").focus();
+      await page.locator("#add-item-description").evaluate((el) => el.setSelectionRange(3, 11));
+    }
+
+    await test("AddItemModal preserves every task field and caret across parent renders (#463)", async () => {
+      await withAddItemDraft(async ({ second }) => {
+        const draft = taskDraft(second.id);
+        await fillAddDraft(draft);
+        await rerenderAddItem("task");
+        await assertAddDraft(draft);
+        assert(await page.locator("#add-item-type-task").isChecked(), "task type was reset");
+        const focus = await page.locator("#add-item-description").evaluate((el) => ({
+          active: document.activeElement === el, start: el.selectionStart, end: el.selectionEnd,
+        }));
+        assert(focus.active && focus.start === 3 && focus.end === 11,
+          `parent render moved the active edit or caret: ${JSON.stringify(focus)}`);
+
+        await page.locator('[data-testid="add-item-create-button"]').click();
+        await page.locator('[data-testid="add-item-modal"]').waitFor({ state: "hidden" });
+        const saved = await api("GET", `/api/features/${second.id}/tasks`);
+        assert(saved.length === 1 && saved[0].name === draft.name && saved[0].featureId === second.id &&
+          saved[0].status === "Review" && saved[0].priority === "Critical",
+        `Save lost the preserved task context: ${JSON.stringify(saved)}`);
+      });
+    });
+
+    await test("AddItemModal preserves a feature draft and adopts defaults on fresh reopen (#463)", async () => {
+      await withAddItemDraft(async ({ second }) => {
+        // Change away from the opening task type using the native keyboard control.
+        await page.locator("#add-item-type-feature").focus();
+        await page.keyboard.press("Space");
+        // Wait for the server-rendered feature fields before following their Tab order.
+        // The native radio checks immediately, while task-only controls can still be present.
+        await page.locator("#add-item-status").waitFor({ state: "hidden" });
+        await page.locator("#add-item-name").focus();
+        await page.keyboard.type(`Human feature draft ${stamp}`);
+        await page.keyboard.press("Tab");
+        await page.keyboard.press("Home");
+        await page.keyboard.press("Tab");
+        await page.waitForFunction(() => document.activeElement?.id === "add-item-description");
+        await page.keyboard.type("Feature details remain here.");
+        await page.keyboard.press("Tab");
+        const draft = { name: `Human feature draft ${stamp}`, description: "Feature details remain here.", feature: "0" };
+        await assertAddDraft(draft);
+        await rerenderAddItem("feature");
+        await assertAddDraft(draft);
+        assert(await page.locator("#add-item-type-feature").isChecked(), "feature type reverted to task");
+        assert(await page.locator('[data-testid="add-item-modal"]').evaluate((el) => el.contains(document.activeElement)),
+          "parent render moved focus outside the dialog");
+
+        await page.locator('[data-testid="add-item-cancel-button"]').click();
+        await page.locator('[data-testid="add-item-modal"]').waitFor({ state: "hidden" });
+        await page.locator(`[data-testid="outline-feature-${second.id}-add-button"]`).click();
+        await page.locator("#add-item-name").waitFor({ state: "visible" });
+        await assertAddDraft({ name: "", description: "", feature: String(second.id), status: "0", priority: "1" });
+        assert(await page.locator("#add-item-type-task").isChecked(), "feature opener did not reset type to task");
+        assert(await page.locator('[data-testid="add-item-modal"] [role="alert"]').count() === 0, "fresh open retained an error");
+        // Tab containment and Escape/opener restoration retain their existing behavior.
+        for (let i = 0; i < 12; i++) {
+          await page.keyboard.press("Tab");
+          assert(await page.locator('[data-testid="add-item-modal"]').evaluate((el) => el.contains(document.activeElement)),
+            `Tab ${i + 1} escaped the add dialog`);
+        }
+        await page.keyboard.press("Escape");
+        await page.locator('[data-testid="add-item-modal"]').waitFor({ state: "hidden" });
+        assert(await page.locator(`[data-testid="outline-feature-${second.id}-add-button"]`)
+          .evaluate((el) => el === document.activeElement), "Escape did not restore the feature opener's focus");
+        await page.locator('[data-testid="add-project-item-button"]').click();
+        await page.locator("#add-item-name").waitFor({ state: "visible" });
+        await assertAddDraft({ name: "", description: "" });
+        assert(await page.locator("#add-item-type-feature").isChecked(), "project opener did not adopt its feature type default");
+      });
+    });
+
+    await test("AddItemModal retains a failed-save draft and missing-feature error across renders (#463)", async () => {
+      await withAddItemDraft(async ({ project: draftProject, first, second }) => {
+        const draft = taskDraft(second.id);
+        await fillAddDraft(draft);
+        // A concurrent actor removes the chosen feature through the real API while editing.
+        await api("DELETE", `/api/features/${second.id}`);
+        await page.locator('[data-testid="add-item-create-button"]').click();
+        const error = page.locator('[data-testid="add-item-modal"] [role="alert"]');
+        await error.waitFor({ state: "visible" });
+        const expectedError = `Feature ${second.id} not found.`;
+        assert((await error.innerText()).trim() === expectedError, "failed save did not explain the missing feature");
+        await assertAddDraft(draft);
+        await rerenderAddItem("failed-save");
+        await assertAddDraft(draft);
+        assert(await error.isVisible() && (await error.innerText()).trim() === expectedError,
+          "parent render discarded the actionable save error");
+        const board = await api("GET", `/api/projects/${draftProject.id}/board`);
+        assert(Object.values(board).flat().length === 0, "failed save silently created a task in another feature");
+
+        await page.locator('[data-testid="add-item-cancel-button"]').click();
+        await page.locator('[data-testid="add-item-modal"]').waitFor({ state: "hidden" });
+        await page.locator('[data-testid="add-task-Review-button"]').click();
+        await page.locator("#add-item-name").waitFor({ state: "visible" });
+        await assertAddDraft({ name: "", description: "", feature: String(first.id), status: "3", priority: "1" });
+        assert(await error.count() === 0, "fresh column open retained a failed save error");
+      });
+    });
+    // END AddItemModal draft regression (#463).
+
     // ── Regression guard: cards inside a column render in SortOrder sequence ──
     // ProjectView orders cards through the canonical effective/raw-rank/Id rule, and that sort lives
     // ONLY in the Razor: ProjectView builds `allTasks` from an unordered
