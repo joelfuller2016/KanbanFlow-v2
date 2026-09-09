@@ -139,10 +139,13 @@
     private int selectedStatus;
     private int selectedPriority = (int)TaskPriority.Medium;
     private string? errorMessage;
+    private bool wasOpen;
 
     protected override void OnParametersSet()
     {
-        if (IsOpen)
+        // IsOpen is state, not an event: parent renders must preserve the draft and errors.
+        // Apply the caller's defaults only on a fresh closed-to-open transition.
+        if (IsOpen && !wasOpen)
         {
             // Apply defaults from context when modal opens
             itemType = DefaultType;
@@ -153,6 +156,7 @@
             itemDescription = null;
             errorMessage = null;
         }
+        wasOpen = IsOpen;
     }
 
     private const string FeatureType = "feature";
