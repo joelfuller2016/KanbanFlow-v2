@@ -2595,6 +2595,13 @@ async function main() {
         page.locator(promoteModal),
       );
 
+      // Visible DOM precedes the async OnAfterRender/initDialog focus transfer. Wait for the
+      // real transfer, without moving focus ourselves; missing focus wiring still fails here.
+      await page.waitForFunction(
+        selector => document.querySelector(selector)?.contains(document.activeElement),
+        promoteModal, { timeout: 5000 },
+      );
+
       const promoteOpen = await probeDialogFocus(page, promoteModal);
       // Load-bearing precondition. Clicking the opener FOCUSED it, so "focus is on the opener after
       // close" is also true of a dialog that never took focus in the first place. Focus has to be
