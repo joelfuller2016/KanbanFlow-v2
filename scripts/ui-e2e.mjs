@@ -475,9 +475,14 @@ async function startApp() {
       let status = null;
       try { status = JSON.parse(body)?.status; } catch { /* not JSON — record it below */ }
 
-      if (r.ok && status === "ok") {
+      // "degraded" counts as up (#498). This is a READINESS probe — is the process serving? —
+      // and health now reports the database it opened, so a board this harness handed the app
+      // seconds ago correctly answers degraded/created-at-startup. Insisting on "ok" here would
+      // poll for 90s against a perfectly working app. "error" keeps retrying: that one means the
+      // app is answering but cannot read its database, which is worth waiting out.
+      if (r.ok && (status === "ok" || status === "degraded")) {
         started = true;
-        log(`App is up. (${((Date.now() - startedAt) / 1000).toFixed(1)}s)`);
+        log(`App is up (health: ${status}). (${((Date.now() - startedAt) / 1000).toFixed(1)}s)`);
         return;
       }
       lastProbe = `answered HTTP ${r.status}, body: ${body.slice(0, 160)}`;
