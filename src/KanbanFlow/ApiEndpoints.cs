@@ -1893,6 +1893,16 @@ public static class ApiEndpoints
             return Results.Ok(MapExternalWorkItemLinks(links));
         });
 
+        app.MapPost("/api/features/{featureId:int}/external-work-item-projections/github",
+            ProjectInboundGitHubIssueEndpointAsync)
+            .WithSummary("Atomically project a verified GitHub issue into one board task.")
+            .Produces<ExternalWorkItemProjectionResponse>(StatusCodes.Status201Created)
+            .Produces<ExternalWorkItemProjectionResponse>(StatusCodes.Status200OK)
+            .Produces(StatusCodes.Status400BadRequest)
+            .Produces(StatusCodes.Status404NotFound)
+            .Produces(StatusCodes.Status409Conflict)
+            .Produces(StatusCodes.Status422UnprocessableEntity);
+
         // A verified link is an explicit PUT because (TaskId, Provider) names one durable
         // identity. RegisterVerifiedLinkAsync owns idempotency, uniqueness and ActivityEvent audit.
         app.MapPut("/api/tasks/{taskId:int}/external-work-item-links/github", async (
@@ -3062,6 +3072,53 @@ public static class ApiEndpoints
     private static DateTime? AsUtc(DateTime? value) =>
         value.HasValue ? AsUtc(value.Value) : null;
 
+    internal static Task<IResult> ProjectInboundGitHubIssueEndpointAsync(
+        int featureId,
+        ProjectInboundGitHubIssueDto? dto,
+        Services.IExternalWorkItemService service,
+        CancellationToken ct) => ExecuteExternalWorkItemEndpointAsync(async () =>
+        {
+            if (dto is null)
+                return Results.BadRequest(new { message = "Request body is required." });
+            var result = await service.ProjectInboundGitHubIssueAsync(
+                ToInboundGitHubIssueRequest(featureId, dto), dto.Actor, ct);
+            var response = MapExternalWorkItemProjection(result);
+            return result.Created
+                ? Results.Created($"/api/tasks/{result.Task.Id}", response)
+                : Results.Ok(response);
+        });
+
+    internal static Services.ProjectInboundGitHubIssueRequest ToInboundGitHubIssueRequest(
+        int featureId, ProjectInboundGitHubIssueDto dto)
+    {
+        ValidateVerifiedGitHubIssue(dto.RepositoryExternalId, dto.RepositoryOwner,
+            dto.RepositoryName, dto.ExternalNodeId, dto.ExternalNumber, dto.Url);
+        WorkStatus? status = null;
+        TaskPriority? priority = null;
+        if (dto.Status is not null)
+        {
+            if (!EnumParse.TryParseDefined<WorkStatus>(dto.Status, out var parsed))
+                throw new Services.ValidationException($"Invalid status: {dto.Status}.");
+            status = parsed;
+        }
+        if (dto.Priority is not null)
+        {
+            if (!EnumParse.TryParseDefined<TaskPriority>(dto.Priority, out var parsed))
+                throw new Services.ValidationException($"Invalid priority: {dto.Priority}.");
+            priority = parsed;
+        }
+        return new(new Services.TaskCreate(featureId, dto.Name!, dto.Description, status,
+            priority, dto.Assignee, dto.SortOrder), dto.RepositoryExternalId!, dto.RepositoryOwner!,
+            dto.RepositoryName!, dto.ExternalNodeId!, dto.ExternalNumber!.Value, dto.Url!);
+    }
+
+    internal static ExternalWorkItemProjectionResponse MapExternalWorkItemProjection(
+        Services.ExternalWorkItemProjectionResult result) => new(
+            new ProjectedTaskResponse(result.Task.Id, result.Task.FeatureId, result.Task.Name,
+                result.Task.Description, result.Task.Status.ToString(), result.Task.Priority.ToString(),
+                result.Task.Assignee, result.Task.SortOrder),
+            MapExternalWorkItemLink(result.Link), result.Created);
+
     internal static async Task<IResult> ExecuteExternalWorkItemEndpointAsync(
         Func<Task<IResult>> action)
     {
@@ -3072,6 +3129,10 @@ public static class ApiEndpoints
         catch (Services.TaskNotFoundException ex)
         {
             return Results.NotFound(new { message = ex.Message, taskId = ex.TaskId });
+        }
+        catch (Services.FeatureNotFoundException ex)
+        {
+            return Results.NotFound(new { message = ex.Message, featureId = ex.FeatureId });
         }
         catch (Services.ExternalWriteOperationNotFoundException ex)
         {
@@ -3364,6 +3425,30 @@ public record TaskDto(
     string? Assignee,
     double? SortOrder,
     string? Actor = null);
+
+/// <summary>Complete task content and verified immutable identity for atomic inbound projection.</summary>
+public sealed record ProjectInboundGitHubIssueDto(
+    string? Name,
+    string? RepositoryExternalId,
+    string? RepositoryOwner,
+    string? RepositoryName,
+    string? ExternalNodeId,
+    int? ExternalNumber,
+    string? Url,
+    string? Description = null,
+    string? Status = null,
+    string? Priority = null,
+    string? Assignee = null,
+    double? SortOrder = null,
+    string? Actor = null);
+
+/// <summary>Current task fields returned without exposing tracked navigation graphs.</summary>
+public sealed record ProjectedTaskResponse(int Id, int FeatureId, string Name, string? Description,
+    string Status, string Priority, string? Assignee, double SortOrder);
+
+/// <summary>One durable projection; Created is false for an unchanged idempotent replay.</summary>
+public sealed record ExternalWorkItemProjectionResponse(
+    ProjectedTaskResponse Task, ExternalWorkItemLinkResponse Link, bool Created);
 
 public sealed record RegisterExternalWorkItemLinkDto(
     string? Provider,

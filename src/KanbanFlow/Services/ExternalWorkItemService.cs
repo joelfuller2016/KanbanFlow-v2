@@ -14,7 +14,7 @@ namespace KanbanFlow.Services;
 /// Every check-then-write path begins an immediate SQLite transaction before reading, so two app
 /// instances cannot both reserve or advance the same task/provider operation.
 /// </summary>
-public sealed class ExternalWorkItemService : IExternalWorkItemService
+public sealed partial class ExternalWorkItemService : IExternalWorkItemService
 {
     public static readonly TimeSpan DefaultLeaseTtl = TimeSpan.FromMinutes(5);
     public const string LeaseSecondsConfigurationKey = "KANBANFLOW_EXTERNAL_WRITE_LEASE_SECONDS";
@@ -1314,10 +1314,11 @@ public sealed class ExternalWorkItemService : IExternalWorkItemService
         existing.QuarantineReason == reason;
 
     private static RegisterExternalWorkItemLinkRequest NormalizeVerifiedLink(
-        RegisterExternalWorkItemLinkRequest request)
+        RegisterExternalWorkItemLinkRequest request,
+        bool requireTaskId = true)
     {
         ValidateProvider(request.Provider);
-        if (request.TaskId <= 0)
+        if (requireTaskId && request.TaskId <= 0)
             throw new ValidationException("TaskId must be positive.");
         ValidateExternalNumber(request.ExternalNumber);
         var repositoryOwner = Required(request.RepositoryOwner, "RepositoryOwner");

@@ -936,6 +936,8 @@ const externalApi = {
   },
   registerLink: (taskId, request) =>
     api("PUT", `/api/tasks/${taskId}/external-work-item-links/github`, request),
+  projectIssue: (featureId, request) =>
+    api("POST", `/api/features/${featureId}/external-work-item-projections/github`, request),
   quarantine: (taskId, request) =>
     api("POST", `/api/tasks/${taskId}/external-work-item-quarantines/github`, request),
   prepare: (taskId, request) =>
@@ -1935,32 +1937,33 @@ async function syncTasks(repo, repoIdentity, projectId, issues, closedNumbers, p
     if (task) byIssueNumber.set(issue.number, task);
 
     if (!task) {
-      const safeInitialName = taskNameFor(issue);
-      plan(dryRun, "create task", `${safeInitialName}  [${desiredStatus}/${desiredPriority}]`);
+      const plainName = String(issue.title || "").trim();
+      plan(dryRun, "project issue atomically", `${plainName}  [${desiredStatus}/${desiredPriority}]`);
       if (dryRun) {
-        plan(true, "register durable link", `${repo}#${issue.number} → new task, then render plain title "${String(issue.title || "").trim()}"`);
+        plan(true, "create task and durable link together", `${repo}#${issue.number} → "${plainName}"`);
         if (args.comments) await syncComments(issue, linkedPr, null, args);
         continue;
       }
       if (featureId == null) throw new Error(`No feature id for "${featureName}" (issue #${issue.number})`);
-      const created = await api("POST", `/api/features/${featureId}/tasks`, {
-        // The legacy prefix is a crash-safe temporary fallback until the link insert succeeds.
-        name: safeInitialName,
-        description: descriptionFor(issue, linkedPr),
-        status: desiredStatus,
-        priority: desiredPriority,
-        actor,
-      });
-      stats.tasksCreated++;
-      const registered = await externalApi.registerLink(created.id, verifiedLinkRequest(created.id, repoIdentity, issue, actor));
-      projectLinks.push(registered);
-      stats.linksRegistered++;
-      await api("PUT", `/api/tasks/${created.id}`, {
-        name: String(issue.title || "").trim(),
-        actor,
-      });
-      created.name = String(issue.title || "").trim();
-      if (args.comments) await syncComments(issue, linkedPr, created.id, args);
+      let projection;
+      try {
+        projection = await externalApi.projectIssue(featureId, {
+          ...verifiedLinkRequest(null, repoIdentity, issue, actor),
+          name: plainName, description: descriptionFor(issue, linkedPr),
+          status: desiredStatus, priority: desiredPriority, actor,
+        });
+      } catch (error) {
+        if (!/->\s*(409|422)\b/.test(error.message)) throw error;
+        stats.drift.push(`${repo}#${issue.number}: atomic projection refused; no task created or changed: ${error.message}`);
+        continue;
+      }
+      projectLinks.push(projection.link);
+      if (projection.created) {
+        stats.tasksCreated++;
+        stats.linksRegistered++;
+      }
+      byIssueNumber.set(issue.number, projection.task);
+      if (args.comments) await syncComments(issue, linkedPr, projection.task.id, args);
       continue;
     }
 

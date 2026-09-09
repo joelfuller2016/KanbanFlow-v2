@@ -242,6 +242,33 @@ public static class KanbanMcpTools
         }
     }
 
+    [McpServerTool(Name = "project_github_issue")]
+    [Description("Atomically create a board task, verified GitHub link and audit together. Supply identity from a verified GitHub read. Identical same-project retries return the current card unchanged; conflicts require human reconciliation. Does not write to GitHub.")]
+    public static async Task<ExternalWorkItemProjectionResponse> ProjectGitHubIssue(
+        IExternalWorkItemService service,
+        int featureId, string name, string repositoryExternalId, string repositoryOwner,
+        string repositoryName, string externalNodeId, int externalNumber, string url,
+        string? description = null, string? status = null, string? priority = null,
+        string? assignee = null, double? sortOrder = null, string? actor = null,
+        CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            var dto = new ProjectInboundGitHubIssueDto(name, repositoryExternalId, repositoryOwner,
+                repositoryName, externalNodeId, externalNumber, url, description, status, priority,
+                assignee, sortOrder, actor ?? DefaultActor);
+            var result = await service.ProjectInboundGitHubIssueAsync(
+                ApiEndpoints.ToInboundGitHubIssueRequest(featureId, dto), dto.Actor, cancellationToken);
+            return ApiEndpoints.MapExternalWorkItemProjection(result);
+        }
+        catch (ExternalWorkItemConflictException ex)
+        {
+            throw new McpException($"{ex.ConflictCode}: {ex.Message}");
+        }
+        catch (FeatureNotFoundException ex) { throw new McpException(ex.Message); }
+        catch (ValidationException ex) { throw new McpException(ex.Message); }
+    }
+
     [McpServerTool(Name = "create_task")]
     [Description("Create a task inside a feature through the audit-aware service layer (writes a Created comment + TaskCreated activity event; no HTTP hop). Defaults: status=Backlog, priority=Low. Returns the new task — pass its id to update_task_status, claim_task, or add_task_comment next.")]
     public static async Task<TaskDetailResult> CreateTask(
