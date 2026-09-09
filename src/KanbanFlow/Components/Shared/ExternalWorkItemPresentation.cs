@@ -1,32 +1,15 @@
 using KanbanFlow.Models;
-using System.Text.RegularExpressions;
+using KanbanFlow.Services;
+using System.Globalization;
 
 namespace KanbanFlow.Components.Shared;
 
 /// <summary>
-/// Resolves display-only external-work-item metadata. Issue identity comes only from durable link
-/// rows; the one legacy exception is a PR chip scoped to the exact sync protocol block until #237
-/// gives pull requests their own structured identity.
+/// Resolves external-work-item controls. Durable rows own issue identity. Legacy issue and PR
+/// links use the shared leading-header reader for display only; editable text is not identity.
 /// </summary>
 internal static class ExternalWorkItemPresentation
 {
-    private static readonly TimeSpan MatchTimeout = TimeSpan.FromMilliseconds(250);
-
-    private static readonly Regex SyncBlock = new(
-        @"<!--\s*kanbanflow-sync\s*-->(.*?)<!--\s*/kanbanflow-sync\s*-->",
-        RegexOptions.Compiled | RegexOptions.Singleline,
-        MatchTimeout);
-
-    private static readonly Regex PullRequest = new(
-        @"\*\*Open PR:\*\*\s*https://github\.com/([A-Za-z0-9-]+)/([A-Za-z0-9._-]+)/pull/([1-9]\d*)(?=\s|$)",
-        RegexOptions.Compiled,
-        MatchTimeout);
-
-    private static readonly Regex SyncBlockIssue = new(
-        @"\*\*Issue:\*\*\s*https://github\.com/([A-Za-z0-9-]+)/([A-Za-z0-9._-]+)/issues/([1-9]\d*)(?=\s|$)",
-        RegexOptions.Compiled,
-        MatchTimeout);
-
     /// <summary>
     /// Durable link identity first; the sync block is a DISPLAY-ONLY last resort.
     /// </summary>
@@ -34,10 +17,10 @@ internal static class ExternalWorkItemPresentation
     /// An upgraded board has no link rows until its first sync promotes them, so without this
     /// every mirrored task loses its issue chip between deploy and that sync -- the PR chip kept
     /// its sync-block fallback and the issue chip did not. The ordering is the whole safety
-    /// argument: a link row wins whenever one exists, so this can only ever ADD a chip to a task
-    /// that would otherwise show none. It never feeds identity -- nothing here reaches
-    /// registerLink, PrepareAsync or externalNodeId -- and it is scoped to the machine-written
-    /// sync block, so hand-authored prose in a description can never become a trusted control.
+    /// argument: any GitHub row prevents legacy fallback, including quarantined or invalid rows.
+    /// The fallback never feeds registerLink, PrepareAsync or externalNodeId. Its leading-header
+    /// shape separates metadata from quoted prose; a user can edit that header, so its shape
+    /// does not authenticate the source.
     /// </remarks>
     internal static GitHubIssueReference? FindActiveGitHubIssue(
         IEnumerable<ExternalWorkItemLink>? links,
@@ -85,85 +68,42 @@ internal static class ExternalWorkItemPresentation
     }
 
     /// <summary>
-    /// The legacy issue chip: the `**Issue:**` line inside the machine-written sync block, read
-    /// for DISPLAY ONLY. Structurally identical to <see cref="FindSyncBlockPullRequest"/> --
-    /// including taking the first block and first line rather than failing closed on a malformed
-    /// description, because two adjacent chips behaving differently is its own defect and this
-    /// value never becomes identity. Promotion in portfolio-sync.mjs reads the same line and DOES
-    /// fail closed there (legacyPromotionDisposition), because that one writes externalNodeId.
+    /// Reads a single whole Issue record in the leading header. Ambiguous, quoted or malformed
+    /// records produce no control. The normalized destination keeps its query and fragment.
     /// </summary>
     internal static GitHubIssueReference? FindSyncBlockGitHubIssue(string? description)
     {
-        if (string.IsNullOrEmpty(description))
-            return null;
-
-        try
-        {
-            var block = SyncBlock.Match(description);
-            if (!block.Success)
-                return null;
-
-            var match = SyncBlockIssue.Match(block.Groups[1].Value);
-            if (!match.Success
-                || !int.TryParse(match.Groups[3].Value, out var number)
-                || number <= 0)
-            {
-                return null;
-            }
-
-            var owner = match.Groups[1].Value;
-            var repository = match.Groups[2].Value;
-            if (!IsGitHubOwner(owner) || !IsGitHubRepositoryName(repository))
-                return null;
-
-            var url = $"https://github.com/{Uri.EscapeDataString(owner)}/{Uri.EscapeDataString(repository)}/issues/{number}";
-            return new GitHubIssueReference(owner, repository, number, url);
-        }
-        catch (RegexMatchTimeoutException)
-        {
-            // Descriptions are user-controlled. A timeout must fail closed without taking down
-            // the interactive Blazor render path.
-            return null;
-        }
+        var reference = ReadLegacyReference(MirroredDescription.IssueUrl(description), "issues");
+        return reference is { } value
+            ? new GitHubIssueReference(value.Owner, value.Repository, value.Number, value.Url)
+            : null;
     }
 
     /// <summary>
-    /// PR identity remains a legacy sync-block concern until #237 gives it a structured row. The
-    /// block boundary is mandatory so hand-authored prose can never become a trusted PR control.
+    /// Reads a legacy PR display link through the same bounded, whole-record parser as issues.
+    /// Structured pull-request identity remains separate work in #237.
     /// </summary>
     internal static GitHubPullRequestReference? FindSyncBlockPullRequest(string? description)
     {
-        if (string.IsNullOrEmpty(description))
+        var reference = ReadLegacyReference(MirroredDescription.PullRequestUrl(description), "pull");
+        return reference is { } value
+            ? new GitHubPullRequestReference(value.Owner, value.Repository, value.Number, value.Url)
+            : null;
+    }
+
+    private static (string Owner, string Repository, int Number, string Url)? ReadLegacyReference(string? url, string kind)
+    {
+        var numberText = MirroredDescription.ItemNumberForUrl(url, kind);
+        if (!int.TryParse(numberText, NumberStyles.None, CultureInfo.InvariantCulture, out var number) || number <= 0)
             return null;
 
-        try
-        {
-            var block = SyncBlock.Match(description);
-            if (!block.Success)
-                return null;
-
-            var match = PullRequest.Match(block.Groups[1].Value);
-            if (!match.Success
-                || !int.TryParse(match.Groups[3].Value, out var number)
-                || number <= 0)
-            {
-                return null;
-            }
-
-            var owner = match.Groups[1].Value;
-            var repository = match.Groups[2].Value;
-            if (!IsGitHubOwner(owner) || !IsGitHubRepositoryName(repository))
-                return null;
-
-            var url = $"https://github.com/{Uri.EscapeDataString(owner)}/{Uri.EscapeDataString(repository)}/pull/{number}";
-            return new GitHubPullRequestReference(owner, repository, number, url);
-        }
-        catch (RegexMatchTimeoutException)
-        {
-            // Descriptions are user-controlled. A timeout must fail closed without taking down
-            // the interactive Blazor render path.
-            return null;
-        }
+        // ItemNumberForUrl already checked the exact HTTPS GitHub route. Keep the normalized
+        // destination rather than rebuilding it and discarding source query/fragment context.
+        var uri = new Uri(url!, UriKind.Absolute);
+        var parts = uri.AbsolutePath.Trim('/').Split('/');
+        return IsGitHubOwner(parts[0]) && IsGitHubRepositoryName(parts[1])
+            ? (parts[0], parts[1], number, uri.AbsoluteUri)
+            : null;
     }
 
     private static bool IsGitHubOwner(string value) =>

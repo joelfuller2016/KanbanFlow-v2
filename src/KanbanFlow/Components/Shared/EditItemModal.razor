@@ -48,7 +48,8 @@
                                           Label="Description"
                                           Rows="3"
                                           ResetToken="descriptionResetToken"
-                                          @bind-Value="editDescription" />
+                                          @bind-Value="editDescription"
+                                          @bind-Value:after="RefreshGitHubPullRequest" />
                     }
                     else
                     {
@@ -284,6 +285,9 @@
     private int descriptionResetToken;
     private GitHubPullRequestReference? gitHubPullRequest;
 
+    private void RefreshGitHubPullRequest() =>
+        gitHubPullRequest = ExternalWorkItemPresentation.FindSyncBlockPullRequest(editDescription);
+
     private int editParentFeatureId;
     private int editFeatureId;
     private int editStatus;
@@ -329,7 +333,7 @@
             taskSubtasks = [];
             taskComments = [];
             descriptionResetToken++;   // a fresh open never lands in description edit mode (#357)
-            gitHubPullRequest = ExternalWorkItemPresentation.FindSyncBlockPullRequest(editDescription);
+            RefreshGitHubPullRequest();
             // ActivityTimeline only re-queries on a TaskId change, and closing then reopening the
             // SAME task does not change it — so a reopen has to say so explicitly.
             activityRefreshToken++;

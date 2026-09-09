@@ -11,12 +11,24 @@
                    aria-label="Mark @Task.Name as @(IsDone ? "not done" : "done")"
                    data-testid="board-card-@Task.Id-done-checkbox" />
             <div class="d-flex align-items-center gap-1 flex-grow-1 overflow-hidden">
+                @* The title text is wrapped in a <span> because the two-line clamp CANNOT live on
+                   the button. WebKit ignores `display: -webkit-box` on a `<button>` — the button's
+                   children sit in an anonymous box the property never reaches — so a clamp declared
+                   on the button is dead in Safari and in every browser on iOS, silently, while
+                   still working in Chromium and Gecko. #481's whole complaint is that a card shows
+                   too little of its title to identify; leaving the clamp on the button would have
+                   shipped that bug unchanged to WebKit readers. `.board-card-title-text` carries
+                   the clamp; `.board-card-title` keeps the flex-item concerns. See app.css.
+                   Measured in Playwright's WebKit and Chromium: with the clamp on the button, the
+                   WebKit title box was the full unclamped height and Chromium's was two lines;
+                   with it on the span both engines report two lines. *@
                 <button type="button"
-                        class="btn btn-link fw-medium small text-start p-0 text-decoration-none text-reset flex-grow-1 text-truncate @(IsDone ? "text-decoration-line-through text-muted" : "")"
+                        class="btn btn-link fw-medium small text-start p-0 text-decoration-none text-reset flex-grow-1 board-card-title @(IsDone ? "text-decoration-line-through text-muted" : "")"
                         @onclick="() => OnOpenTaskDetail.InvokeAsync(Task)"
                         @onclick:stopPropagation="true"
+                        title="@Task.Name"
                         aria-label="Open task details for @Task.Name"
-                        data-testid="board-card-@Task.Id-title">@Task.Name</button>
+                        data-testid="board-card-@Task.Id-title"><span class="board-card-title-text">@Task.Name</span></button>
                 @if (HasIncompleteBlockers)
                 {
                     <span class="badge text-bg-danger board-card-blocked-badge flex-shrink-0"
@@ -28,10 +40,40 @@
                 }
                 <GitHubIssueBadge Links="Task.ExternalLinks"
                                   Description="@Task.Description"
-                                  CssClass="badge rounded-pill text-bg-light border text-decoration-none flex-shrink-0"
+                                  CssClass="badge rounded-pill text-bg-light border text-decoration-none flex-shrink-0 board-card-gh"
                                   TestId="@($"board-card-{Task.Id}-github-link")" />
             </div>
         </div>
+
+        @* -- The reveal (hover / focus-within) -------------------------------------------------
+           Hover or keyboard focus exposes the full title and a body preview. The existing shared
+           GitHub badge stays beside the title and respects durable identity/quarantine state.
+           Everything below is already on the card's model; the preview spends vertical space
+           only while the pointer (or keyboard focus) is on it.
+
+           `board-card-reveal` collapses via `grid-template-rows: 0fr -> 1fr` rather than a
+           `max-height` guess: a guessed max-height either clips a long excerpt or, set generously,
+           makes the transition open with a long dead interval. The grid technique animates to the
+           content's REAL height with no magic number. `min-height: 0` on the inner track is what
+           lets the row actually reach zero (Grid's automatic minimum size is `auto`, not 0).
+
+           `aria-hidden` is deliberately NOT set: the content stays in the accessibility tree at
+           rest, so a screen-reader user is never gated on a hover they cannot perform, and
+           `:focus-within` opens it visually for a keyboard user who tabs to the title. *@
+        @if (HasReveal)
+        {
+            <div class="board-card-reveal">
+                <div class="board-card-reveal-inner">
+                    <div class="board-card-reveal-content">
+                    @if (!string.IsNullOrWhiteSpace(Excerpt))
+                    {
+                        <p class="board-card-excerpt mb-1" data-testid="board-card-@Task.Id-excerpt">@Excerpt</p>
+                    }
+                    </div>
+                </div>
+            </div>
+        }
+
         <div class="d-flex justify-content-between align-items-center mt-1 ps-4">
             @* #322 phase 3 -- `flex-shrink-0` so a long feature name can never squash the priority
                word, and `board-card-meta-label` so the label takes the REMAINING track instead of
@@ -55,6 +97,35 @@
         .Where(d => d.DependsOnTaskItem is not null && d.DependsOnTaskItem.Status != WorkStatus.Done)
         .ToList();
     private bool HasIncompleteBlockers => IncompleteBlockers.Count > 0;
+
+    // The mirrored-description reader lives in Services/MirroredDescription.cs, not here: this
+    // project has no bUnit, so logic left in a `.razor` @code block is unreachable from a test.
+    // Same reason IdeaBadge exists. The card only asks the questions; the parsing is pinned by
+    // MirroredDescriptionTests.
+    //
+    // Resolved once per description change, NOT on every render — the same treatment, and for the
+    // same reason, as EditItemModal's GitHub links. As expression-bodied properties these re-ran the
+    // whole pipeline on every `@` reference: measured at ~9 regex passes and ~50 KB of allocation
+    // per card per render, and the board holds 185 cards. `BoardFilterBar` binds `@oninput` with no
+    // debounce and there is no `Virtualize`, so a filter keystroke re-renders every card on the
+    // circuit's synchronization context — the cost multiplies by every character typed.
+    private string? Excerpt;
+    private bool HasReveal;
+    private string? parsedFrom;
+    private bool parsedOnce;
+
+    protected override void OnParametersSet()
+    {
+        // Reference equality is not enough: two tasks can share a description string, and a task's
+        // description can change in place. Compare by value, and use a separate `parsedOnce` flag so
+        // a genuinely null description is not re-parsed on every render.
+        if (parsedOnce && string.Equals(parsedFrom, Task.Description, StringComparison.Ordinal)) return;
+
+        parsedFrom = Task.Description;
+        parsedOnce = true;
+        Excerpt = MirroredDescription.Excerpt(Task.Description);
+        HasReveal = !string.IsNullOrWhiteSpace(Excerpt);
+    }
 
     private static string GetPriorityBadgeClass(TaskPriority priority) => priority switch
     {
