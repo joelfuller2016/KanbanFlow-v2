@@ -349,3 +349,63 @@ test("restore-content retries a partially successful batch without rewriting the
   assert.deepEqual(io.calls.filter(c => c.method !== "GET").map(c => c.path), ["/api/tasks/7", "/api/tasks/8"]);
   assert.equal(io.sourceReads(), 2);
 });
+
+// --- argv guards: a flag must never be consumed as another flag's value -------------------
+//
+// The hazard is not a WRONG value, it is a LOST flag. `sync --max-comment-chars --dry-run`
+// used to eat the --dry-run as the character count: `args.dryRun` stayed false, `sync` with no
+// --repos fell through to all of DEFAULT_REPOS, and the operator who asked for a preview got a
+// live mirror of six repositories. Every test below asserts the flag's SPECIFIC refusal — its
+// own name and the swallowed token — never merely `error !== null`, because `--task` already
+// produced an error by accident (its NaN trips the unrelated post-loop Number.isFinite check),
+// so a vague assertion would stay green with the guard ripped back out.
+
+const REFUSAL_TAIL =
+  ` A flag is never a value: consuming one silently discards it, and a swallowed --dry-run runs a LIVE sync.`;
+
+for (const [flag, argv, need] of [
+
+  ["--repos", ["sync", "--repos", "--dry-run"], "a comma-separated owner/repo list"],
+  ["--actor", ["sync", "--actor", "--dry-run"], "a non-blank name"],
+  ["--task", ["push-issue", "--task", "--dry-run"], "an integer task id"],
+  ["--limit", ["push-issue", "--limit", "--dry-run"], "an integer count"],
+]) {
+  test(`${flag} refuses a following --dry-run instead of swallowing it and running live`, async () => {
+    const args = parseArgs(argv);
+    assert.equal(args.error, `${flag} needs ${need}, but got the flag "--dry-run".${REFUSAL_TAIL}`);
+    assert.equal(args.dryRun, false,
+      "the --dry-run really was consumed — refusing is the only thing standing between this and a live write");
+  });
+}
+
+test("--actor refuses a short flag (-h) just as it refuses a long flag (--dry-run)", async () => {
+  const args = parseArgs(["sync", "--actor", "-h"]);
+  assert.equal(args.error, `--actor needs a non-blank name, but got the flag "-h".${REFUSAL_TAIL}`);
+});
+
+test("a value flag at the end of argv refuses instead of falling through to the default repo list", async () => {
+  const args = parseArgs(["sync", "--dry-run", "--repos"]);
+  assert.equal(args.error, `--repos needs a comma-separated owner/repo list, but got nothing.${REFUSAL_TAIL}`);
+});
+
+test("a fully specified command line still parses every value-taking flag", async () => {
+  const args = parseArgs([
+    "push-issue", "owner/repo", "--task", "42", "--limit", "5",
+    "--actor", "nightly-sync", "--dry-run",
+  ]);
+  assert.equal(args.error, null);
+  assert.equal(args.command, "push-issue");
+  assert.equal(args.dryRun, true);
+  assert.deepEqual(args.repos, ["owner/repo"]);
+  assert.equal(args.task, 42);
+  assert.equal(args.limit, 5);
+  assert.equal(args.actor, "nightly-sync");
+
+});
+
+test("--repos still accepts a comma-separated list and still leaves --dry-run visible", async () => {
+  const args = parseArgs(["sync", "--repos", "owner/a, owner/b", "--dry-run"]);
+  assert.equal(args.error, null);
+  assert.deepEqual(args.repos, ["owner/a", "owner/b"]);
+  assert.equal(args.dryRun, true);
+});

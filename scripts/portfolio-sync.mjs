@@ -121,6 +121,29 @@ function parseArgs(argv) {
     i = 1;
   }
 
+  // Every flag below that consumes the NEXT argv token goes through this. Un-guarded, that
+  // token is taken on faith, so `--max-comment-chars --dry-run` EATS the --dry-run: the loop
+  // never sees it, `args.dryRun` stays false, and `sync` with no --repos falls through to all
+  // of DEFAULT_REPOS. The operator asked for a preview and got a live six-repo mirror —
+  // projects, features, tasks and every mirrored comment, none of it reversible.
+  //
+  // Every plausible "just cope with it" answer is worse than refusing, because all of them
+  // still RUN: `Number.parseInt("--dry-run", 10) || 0` is a clean-looking 0, `--actor` keeps
+  // "--dry-run" as the audit-trail actor, `--repos` builds ["--dry-run"]. Only an error stops
+  // the write. main() prints args.error and exits 2 before it touches a repo, so a refusal is
+  // free and a swallow is not. This lives in ONE helper on purpose: hand-written per-flag
+  // copies are exactly how the check ends up on one flag and not the other four.
+  const takeValue = (flag, need) => {
+    const value = argv[i + 1];
+    if (value === undefined || value.trim() === "" || value.trim().startsWith("-")) {
+      const got = value === undefined ? "nothing" : value.trim() === "" ? "a blank value" : `the flag "${value}"`;
+      args.error = `${flag} needs ${need}, but got ${got}. A flag is never a value: consuming one silently discards it, and a swallowed --dry-run runs a LIVE sync.`;
+      return null;
+    }
+    i += 1;
+    return value.trim();
+  };
+
   for (; i < argv.length; i++) {
     const a = argv[i];
     if (a === "--dry-run") args.dryRun = true;
@@ -130,15 +153,31 @@ function parseArgs(argv) {
       args.error = "--max-comment-chars is no longer supported: full comment text must be preserved. Remove this option.";
       return args;
     }
-    else if (a === "--repos") args.repos = [...(args.repos || []), ...(argv[++i] || "").split(",").map((r) => r.trim()).filter(Boolean)];
-    else if (a === "--actor") args.actor = argv[++i] || args.actor;
+    else if (a === "--repos") {
+      const value = takeValue("--repos", "a comma-separated owner/repo list");
+      if (value === null) return args;
+      args.repos = [...(args.repos || []), ...value.split(",").map((r) => r.trim()).filter(Boolean)];
+    }
+    else if (a === "--actor") {
+      const value = takeValue("--actor", "a non-blank name");
+      if (value === null) return args;
+      args.actor = value;
+    }
     // --push is the alias; both spellings mean "you may create issues on GitHub".
     else if (a === "--allow-write" || a === "--push") args.allowWrite = true;
-    else if (a === "--task") args.task = Number.parseInt(argv[++i], 10);
+    else if (a === "--task") {
+      const value = takeValue("--task", "an integer task id");
+      if (value === null) return args;
+      args.task = Number.parseInt(value, 10);
+    }
     else if (a === "--all") args.all = true;
     else if (a === "--strict") args.strict = true;
     else if (a === "--json") args.json = true;
-    else if (a === "--limit") args.limit = Number.parseInt(argv[++i], 10) || 0;
+    else if (a === "--limit") {
+      const value = takeValue("--limit", "an integer count");
+      if (value === null) return args;
+      args.limit = Number.parseInt(value, 10) || 0;
+    }
     else if (a === "--help" || a === "-h") args.help = true;
     // `onboard owner/repo` — a bare owner/repo positional is a repo, so the common case
     // needs no flag at all.
