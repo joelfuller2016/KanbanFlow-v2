@@ -2,6 +2,8 @@
 
 For the project owner, reviewers and connected AI clients. Owner: repository maintainer. Reviewed September 7, 2026 on Windows, PowerShell 7, .NET 10 and Playwright CLI. [Issue #509](https://github.com/joelfuller2016/KanbanFlow-v2/issues/509) owns the plan; [PR #511](https://github.com/joelfuller2016/KanbanFlow-v2/pull/511) owns this implementation. Measured results belong in this case's `runs/` directory.
 
+The [September 8 dependency-read and result-integrity run](runs/2026-09-08-3a07aa855551.md) records the review-cycle repair, old/new query measurements, missing-dependency refusal, and rebuilt API/MCP/browser results.
+
 The human should be able to locate the original request, understand the current work and evidence, make a decision, and see the connected client acknowledge and apply it to the same tasks. This case tests that loop without introducing another board or changing its layout. Actual human usability approval is a separate result.
 
 ## Processes and data
