@@ -1224,6 +1224,8 @@ async function runSyncTasks(tag, tasks, issues, {
   registerLinkStatus = 200,
   comments = false,
   featureIds = new Map(),
+  projectionStatus = 201,
+  projectionCreated = true,
 } = {}) {
   const mod = await import(`./portfolio-sync.mjs?${tag}`);
   const requests = [];
@@ -1231,6 +1233,7 @@ async function runSyncTasks(tag, tasks, issues, {
   const realLog = console.log;
   const driftBefore = mod.stats.drift.length;
   const registeredBefore = mod.stats.linksRegistered;
+  const createdBefore = mod.stats.tasksCreated;
   globalThis.fetch = async (url, init = {}) => {
     const path = String(url).replace(/^https?:\/\/[^/]+/, "");
     const body = init.body ? JSON.parse(init.body) : null;
@@ -1240,6 +1243,15 @@ async function runSyncTasks(tag, tasks, issues, {
     }
     if ((init.method || "GET") === "GET" && /^\/api\/tasks\/\d+\/comments$/.test(path)) {
       return Response.json([]);
+    }
+    if (path.endsWith("/external-work-item-projections/github")) {
+      if (projectionStatus >= 400)
+        return new Response("external-node-cross-project; full explanation", { status: projectionStatus });
+      return Response.json({
+        task: { id: 77, featureId: 10, name: body.name, description: body.description },
+        link: { id: 500, taskId: 77, provider: "GitHub", state: "Active", ...body },
+        created: projectionCreated,
+      }, { status: projectionStatus });
     }
     if (/^\/api\/tasks\/\d+\/external-work-item-links\/github$/.test(path)) {
       if (registerLinkStatus !== 200) {
@@ -1264,7 +1276,48 @@ async function runSyncTasks(tag, tasks, issues, {
     requests,
     drift: mod.stats.drift.slice(driftBefore),
     linksRegistered: mod.stats.linksRegistered - registeredBefore,
+    tasksCreated: mod.stats.tasksCreated - createdBefore,
   };
+}
+
+test("new verified inbound issue makes one atomic request with the plain title", async () => {
+  const result = await runSyncTasks("atomic-new", [], [{ ...GH_ISSUE, milestone: { title: "Imported" } }], {
+    featureIds: new Map([["Imported", 10]]),
+  });
+  const writes = result.requests.filter(r => r.method !== "GET");
+  assert.equal(writes.length, 1, "task, link and plain title must be one server-side transaction");
+  assert.equal(writes[0].method, "POST");
+  assert.equal(writes[0].path, "/api/features/10/external-work-item-projections/github");
+  assert.equal(writes[0].body.name, "Foo");
+  assert.equal(writes[0].body.externalNodeId, GH_ISSUE.id);
+  assert.equal(writes[0].body.repositoryExternalId, REPO_ID);
+  assert.equal(writes[0].body.externalNumber, 42);
+  assert.equal(result.tasksCreated, 1);
+  assert.equal(result.linksRegistered, 1);
+});
+
+test("atomic projection replay never renames or counts the existing card as newly created", async () => {
+  const result = await runSyncTasks("atomic-replay", [], [{ ...GH_ISSUE, milestone: { title: "Imported" } }], {
+    featureIds: new Map([["Imported", 10]]), projectionCreated: false, projectionStatus: 200,
+  });
+  assert.equal(result.requests.filter(r => r.method !== "GET").length, 1);
+  assert.equal(result.tasksCreated, 0);
+  assert.equal(result.linksRegistered, 0);
+  assert.deepEqual(result.drift, []);
+});
+
+for (const status of [409, 422]) {
+  test(`atomic projection ${status} refusal causes no follow-up mutation`, async () => {
+    const result = await runSyncTasks(`atomic-refused-${status}`, [], [{ ...GH_ISSUE, milestone: { title: "Imported" }, comments: [{ id: "c1", body: "Do not import", author: { login: "human" } }] }], {
+      featureIds: new Map([["Imported", 10]]), projectionStatus: status, comments: true,
+    });
+    assert.equal(result.requests.filter(r => r.method !== "GET").length, 1);
+    assert.equal(result.tasksCreated, 0);
+    assert.equal(result.linksRegistered, 0);
+    assert.equal(result.drift.length, 1);
+    assert.match(result.drift[0], /atomic projection refused; no task created or changed/);
+    assert.match(result.drift[0], /external-node-cross-project; full explanation/);
+  });
 }
 
 test("an ordinary sync promotes a legacy prefix match and strips the prefix", async () => {

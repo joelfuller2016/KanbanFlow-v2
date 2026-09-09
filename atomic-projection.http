@@ -1,0 +1,39 @@
+@baseUrl = http://127.0.0.1:5208
+@featureId = 1
+
+### Disposable local app only: use a feature created for this test. No GitHub writes occur.
+POST {{baseUrl}}/api/features/{{featureId}}/external-work-item-projections/github
+Content-Type: application/json
+
+{
+  "name": "Atomic import fixture",
+  "description": "\r\n    Full source is preserved.\r\n\r\n",
+  "repositoryExternalId": "R_local_fixture",
+  "repositoryOwner": "octo",
+  "repositoryName": "board",
+  "externalNodeId": "I_local_fixture",
+  "externalNumber": 42,
+  "url": "https://github.com/octo/board/issues/42",
+  "actor": "local-verification"
+}
+
+### Repeat the previous request: 200 with created:false, same task/link IDs, no new audit.
+### Literal null: 400, no mutation.
+POST {{baseUrl}}/api/features/{{featureId}}/external-work-item-projections/github
+Content-Type: application/json
+
+null
+
+### Missing feature: 404, no mutation.
+POST {{baseUrl}}/api/features/2147483647/external-work-item-projections/github
+Content-Type: application/json
+
+{
+  "name": "Missing feature fixture",
+  "repositoryExternalId": "R_local_fixture",
+  "repositoryOwner": "octo",
+  "repositoryName": "board",
+  "externalNodeId": "I_local_fixture",
+  "externalNumber": 42,
+  "url": "https://github.com/octo/board/issues/42"
+}

@@ -9,6 +9,12 @@ namespace KanbanFlow.Services;
 /// </summary>
 public interface IExternalWorkItemService
 {
+    /// <summary>Create or return one existing same-project task with its verified GitHub identity.</summary>
+    Task<ExternalWorkItemProjectionResult> ProjectInboundGitHubIssueAsync(
+        ProjectInboundGitHubIssueRequest request,
+        string? actor,
+        CancellationToken ct = default);
+
     Task<ExternalWriteLeaseResult> PrepareAsync(
         PrepareExternalWriteRequest request,
         CancellationToken ct = default);
@@ -133,6 +139,19 @@ public sealed record RegisterExternalWorkItemLinkRequest(
     string ExternalNodeId,
     int ExternalNumber,
     string Url);
+
+/// <summary>Task fields and immutable identity for one atomic inbound GitHub projection.</summary>
+public sealed record ProjectInboundGitHubIssueRequest(
+    TaskCreate Task,
+    string RepositoryExternalId,
+    string RepositoryOwner,
+    string RepositoryName,
+    string ExternalNodeId,
+    int ExternalNumber,
+    string Url);
+
+/// <summary>Created is false when a same-project identity already owns an unchanged task.</summary>
+public sealed record ExternalWorkItemProjectionResult(TaskItem Task, ExternalWorkItemLink Link, bool Created);
 
 public sealed record QuarantineExternalWorkItemRequest(
     int TaskId,

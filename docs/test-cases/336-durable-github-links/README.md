@@ -19,7 +19,7 @@ flowchart TD
     Description --> Badge
 ```
 
-The ordinary first import still has a split task-create/link-register transaction in this PR. [Issue #507](https://github.com/joelfuller2016/KanbanFlow-v2/issues/507) owns the atomic projection follow-on. Until that acceptance passes, do not describe concurrent inbound projection as duplicate-free or issue #336 as fully complete. [Issue #514](https://github.com/joelfuller2016/KanbanFlow-v2/issues/514) separately normalizes the two GitHub fetch record shapes; deleting either existing node-ID fallback before that normalization would break a real caller.
+The original #506 review left ordinary first import with a split task-create/link-register transaction. [TC-507](../507-atomic-github-projection/README.md) now owns the atomic projection follow-on and its current acceptance evidence. Until the combined acceptance passes, do not describe issue #336 as fully complete. [Issue #514](https://github.com/joelfuller2016/KanbanFlow-v2/issues/514) separately normalizes the two GitHub fetch record shapes; deleting either existing node-ID fallback before that normalization would break a real caller.
 
 ## Repeatable checks
 

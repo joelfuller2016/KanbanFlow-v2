@@ -876,23 +876,21 @@ public sealed class TaskService(
     public async Task<TaskItem> CreateAsync(TaskCreate dto, string? actor, CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(dto);
-
         await using var db = await dbFactory.CreateDbContextAsync(ct);
+        await using var tx = await db.Database.BeginTransactionAsync(ct);
+        var task = await CreateInContextAsync(db, dto, actor, ct);
+        await tx.CommitAsync(ct);
+        return task;
+    }
 
-        // Validate up-front so we never persist a half-built task. Service is the trust
-        // boundary — REST, MCP, and Blazor direct-callers all flow through here (#88).
-        if (string.IsNullOrWhiteSpace(dto.Name))
-            throw new ValidationException("Name cannot be empty or whitespace.");
-        if (dto.Name.Length > MaxNameLength)
-            throw new ValidationException($"Name cannot exceed {MaxNameLength} characters.");
-        // Defensive enum guard (matches UpdateAsync): rejects undefined/out-of-range
-        // values such as a cast numeric the caller failed to validate.
-        if (dto.Status is not null && !Enum.IsDefined(dto.Status.Value))
-            throw new ValidationException($"Invalid status '{dto.Status.Value}'.");
-        if (dto.Priority is not null && !Enum.IsDefined(dto.Priority.Value))
-            throw new ValidationException($"Invalid priority '{dto.Priority.Value}'.");
-        if (dto.SortOrder is not null && !double.IsFinite(dto.SortOrder.Value))
-            throw new ValidationException("SortOrder must be a finite number.");
+    // Shared with atomic external projection (#507): the caller owns the transaction, including
+    // every task, Created comment, TaskCreated event and any additional durable identity rows.
+    internal static async Task<TaskItem> CreateInContextAsync(
+        AppDbContext db, TaskCreate dto, string? actor, CancellationToken ct = default)
+    {
+        ValidateCreate(dto);
+        if (db.Database.CurrentTransaction is null)
+            throw new InvalidOperationException("Task creation requires a caller-owned transaction.");
 
         // Resolve the project for audit attribution; a missing feature is a distinct,
         // actionable error (the task itself does not exist yet).
@@ -914,7 +912,7 @@ public sealed class TaskService(
         {
             FeatureId = dto.FeatureId,
             Name = dto.Name.Trim(),
-            Description = string.IsNullOrWhiteSpace(dto.Description) ? null : dto.Description.Trim(),
+            Description = dto.Description,
             Status = status,
             Priority = priority,
             Assignee = string.IsNullOrWhiteSpace(dto.Assignee) ? null : dto.Assignee.Trim(),
@@ -926,8 +924,6 @@ public sealed class TaskService(
         // activity event), the second persists those audit rows. Wrap both in one
         // transaction so a failure can't leave a task without its Created comment /
         // TaskCreated event. EF Core + SQLite supports explicit transactions.
-        await using var tx = await db.Database.BeginTransactionAsync(ct);
-
         db.Tasks.Add(task);
         // First save assigns task.Id so the comment + activity event can reference it.
         await db.SaveChangesAsync(ct);
@@ -949,8 +945,22 @@ public sealed class TaskService(
             $"Task '{task.Name}' created");
 
         await db.SaveChangesAsync(ct);
-        await tx.CommitAsync(ct);
         return task;
+    }
+
+    internal static void ValidateCreate(TaskCreate dto)
+    {
+        ArgumentNullException.ThrowIfNull(dto);
+        if (string.IsNullOrWhiteSpace(dto.Name))
+            throw new ValidationException("Name cannot be empty or whitespace.");
+        if (dto.Name.Length > MaxNameLength)
+            throw new ValidationException($"Name cannot exceed {MaxNameLength} characters.");
+        if (dto.Status is not null && !Enum.IsDefined(dto.Status.Value))
+            throw new ValidationException($"Invalid status '{dto.Status.Value}'.");
+        if (dto.Priority is not null && !Enum.IsDefined(dto.Priority.Value))
+            throw new ValidationException($"Invalid priority '{dto.Priority.Value}'.");
+        if (dto.SortOrder is not null && !double.IsFinite(dto.SortOrder.Value))
+            throw new ValidationException("SortOrder must be a finite number.");
     }
 
     public async Task DeleteAsync(int taskId, string? actor, CancellationToken ct = default)

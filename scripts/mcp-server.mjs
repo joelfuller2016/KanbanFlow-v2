@@ -266,6 +266,30 @@ const tools = [
     }
   },
   {
+    name: "project_github_issue",
+    description: "Atomically create one board task with its verified GitHub identity and audit. Same-project retries return the existing card unchanged; conflicts require reconciliation. Does not write to GitHub.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        featureId: { type: "integer", minimum: 1 },
+        name: { type: "string", maxLength: 500 },
+        repositoryExternalId: { type: "string" },
+        repositoryOwner: { type: "string" },
+        repositoryName: { type: "string" },
+        externalNodeId: { type: "string" },
+        externalNumber: { type: "integer", minimum: 1 },
+        url: { type: "string" },
+        description: { type: "string", description: "Complete original Markdown; whitespace is preserved." },
+        status: { type: "string", enum: ["Backlog", "Todo", "InProgress", "Review", "Done"] },
+        priority: { type: "string", enum: ["Low", "Medium", "High", "Critical"] },
+        assignee: { type: "string" },
+        sortOrder: { type: "number" },
+        actor: { type: "string" }
+      },
+      required: ["featureId", "name", "repositoryExternalId", "repositoryOwner", "repositoryName", "externalNodeId", "externalNumber", "url"]
+    }
+  },
+  {
     name: "create_task",
     description: "Create a task inside a feature. Defaults: status=Backlog, priority=Low.",
     inputSchema: {
@@ -1140,6 +1164,25 @@ async function callTool(toolName, args) {
       });
     case "delete_feature":
       return restJson(`/api/features/${requiredInt(args, "featureId", { min: 1 })}`, { method: "DELETE" });
+    case "project_github_issue":
+      return restJson(`/api/features/${requiredInt(args, "featureId", { min: 1 })}/external-work-item-projections/github`, {
+        method: "POST",
+        body: {
+          name: requiredString(args, "name"),
+          repositoryExternalId: requiredString(args, "repositoryExternalId"),
+          repositoryOwner: requiredString(args, "repositoryOwner"),
+          repositoryName: requiredString(args, "repositoryName"),
+          externalNodeId: requiredString(args, "externalNodeId"),
+          externalNumber: requiredInt(args, "externalNumber", { min: 1 }),
+          url: requiredString(args, "url"),
+          description: args.description === "" ? "" : optionalString(args, "description"),
+          status: optionalString(args, "status"),
+          priority: optionalString(args, "priority"),
+          assignee: optionalString(args, "assignee"),
+          sortOrder: optionalFiniteNumber(args, "sortOrder"),
+          actor: optionalString(args, "actor") ?? "mcp-agent"
+        }
+      });
     case "create_task":
       if (args.status !== undefined && args.status !== null)
         assertEnum(args, "status", ["Backlog", "Todo", "InProgress", "Review", "Done"]);
