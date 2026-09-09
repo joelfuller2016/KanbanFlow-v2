@@ -6,7 +6,7 @@ documentation or an assignee actually changes the persisted record.
 
 Owner: KanbanFlow maintainers. Reviewed: September 8, 2026. Source baseline:
 `8073b3e5bccd227e503f0ecd888ccad8199e97d2`. Measured results belong in `runs/` at their tested commit.
-Issue: [#462](https://github.com/joelfuller2016/KanbanFlow-v2/issues/462).
+Issue: [#462](https://github.com/joelfuller2016/KanbanFlow-v2/issues/462). Implementation: [#517](https://github.com/joelfuller2016/KanbanFlow-v2/pull/517).
 
 ## Contract and architecture
 

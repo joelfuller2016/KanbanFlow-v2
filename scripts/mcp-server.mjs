@@ -1199,7 +1199,7 @@ async function callTool(toolName, args) {
       return restJson(`/api/subtasks/${requiredInt(args, "subtaskId", { min: 1 })}`, {
         method: "PUT",
         body: {
-          text: optionalNonEmptyString(args, "text"),
+          text: optionalString(args, "text"),
           completed: optionalBool(args, "completed"),
           parentSubtaskId: optionalInt(args, "parentSubtaskId", { min: 0 }),
           sortOrder: optionalInt(args, "sortOrder", { min: 0 })
@@ -1229,7 +1229,7 @@ async function callTool(toolName, args) {
       return restJson(`/api/acceptance-criteria/${requiredInt(args, "acId", { min: 1 })}`, {
         method: "PUT",
         body: {
-          text: optionalNonEmptyString(args, "text"),
+          text: optionalString(args, "text"),
           completed: optionalBool(args, "completed"),
           sortOrder: optionalInt(args, "sortOrder", { min: 0 })
         }
