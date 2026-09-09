@@ -211,15 +211,15 @@ const tools = [
   },
   {
     name: "update_project",
-    description: "Update project name, description, goals, and/or readme. Use this to maintain the project's living documentation as the work evolves.",
+    description: "Update project name and living documentation. For description/goals/readme: omit or null to preserve, empty/whitespace to clear, non-empty text to replace.",
     inputSchema: {
       type: "object",
       properties: {
         projectId: { type: "integer", minimum: 1, description: "Project id to update." },
         name: { type: "string", description: "New name (required by API; must be non-empty)." },
-        description: { type: "string", description: "New description (markdown)." },
-        goals: { type: "string", description: "New goals (markdown)." },
-        readme: { type: "string", description: "New README (markdown)." }
+        description: { type: ["string", "null"], description: "Markdown description: omit or null to preserve, empty/whitespace to clear, non-empty text to replace." },
+        goals: { type: ["string", "null"], description: "Markdown goals: omit or null to preserve, empty/whitespace to clear, non-empty text to replace." },
+        readme: { type: ["string", "null"], description: "Markdown README: omit or null to preserve, empty/whitespace to clear, non-empty text to replace." }
       },
       required: ["projectId", "name"]
     }
@@ -241,13 +241,13 @@ const tools = [
   },
   {
     name: "update_feature",
-    description: "Update an existing feature. Set parentFeatureId to 0 to clear it (make it top-level). Cycle-protected.",
+    description: "Update an existing feature. For description: omit or null to preserve, empty/whitespace to clear, non-empty text to replace. Set parentFeatureId to 0 to make it top-level (cycle-protected).",
     inputSchema: {
       type: "object",
       properties: {
         featureId: { type: "integer", minimum: 1, description: "Feature id to update." },
         name: { type: "string", description: "New name (required by API; must be non-empty)." },
-        description: { type: "string", description: "New description (markdown)." },
+        description: { type: ["string", "null"], description: "Markdown description: omit or null to preserve, empty/whitespace to clear, non-empty text to replace." },
         parentFeatureId: { type: "integer", minimum: 0, description: "New parent feature id, or 0 to make top-level." },
         sortOrder: { type: "integer", minimum: 0, description: "New sort order within parent." }
       },
@@ -292,13 +292,13 @@ const tools = [
   },
   {
     name: "update_task",
-    description: "Update task fields (name, description, status, priority, assignee). Use update_task_status for status-only or reassign_task to move between features.",
+    description: "Update task fields (name, description, status, priority, assignee). For description/assignee: omit or null to preserve, empty/whitespace to clear, non-empty text to replace. Use update_task_status for status-only or reassign_task to move between features.",
     inputSchema: {
       type: "object",
       properties: {
         taskId: { type: "integer", minimum: 1, description: "Task id to update." },
         name: { type: "string", description: "New name (required by API; must be non-empty)." },
-        description: { type: "string", description: "New description (markdown)." },
+        description: { type: ["string", "null"], description: "Markdown description: omit or null to preserve, empty/whitespace to clear, non-empty text to replace." },
         status: {
           type: "string",
           enum: ["Backlog", "Todo", "InProgress", "Review", "Done"],
@@ -309,7 +309,7 @@ const tools = [
           enum: ["Low", "Medium", "High", "Critical"],
           description: "New priority."
         },
-        assignee: { type: "string", description: "New assignee label." },
+        assignee: { type: ["string", "null"], description: "Assignee label: omit or null to preserve, empty/whitespace to clear, non-empty text to replace." },
         sortOrder: { type: "number", description: "New finite task rank within the column; may be fractional." }
       },
       required: ["taskId", "name"]
@@ -606,14 +606,14 @@ const tools = [
   },
   {
     name: "update_idea",
-    description: "Update mutable idea fields (title, body, plan, status, tags, priority). Omitted fields are left unchanged.",
+    description: "Update mutable idea fields (title, body, plan, status, tags, priority). For body/plan/tags: omit or null to preserve, empty/whitespace to clear, non-empty text to replace. Other omitted/null fields are left unchanged.",
     inputSchema: {
       type: "object",
       properties: {
         ideaId: { type: "integer", minimum: 1, description: "Idea id to update." },
         title: { type: "string", description: "New title (≤500 chars)." },
-        body: { type: "string", description: "New markdown body." },
-        plan: { type: "string", description: "New markdown plan." },
+        body: { type: ["string", "null"], description: "Markdown body: omit or null to preserve, empty/whitespace to clear, non-empty text to replace." },
+        plan: { type: ["string", "null"], description: "Markdown plan: omit or null to preserve, empty/whitespace to clear, non-empty text to replace." },
         status: {
           type: "string",
           // `Promoted` is DERIVED and deliberately absent (#283): the service rejects it here, so
@@ -622,7 +622,7 @@ const tools = [
           enum: ["New", "Triaging", "Archived", "Rejected"],
           description: "New status. 'Promoted' is derived and terminal — use promote_idea (it also creates the linked project); an already-promoted idea cannot be moved to another status either, though its other fields stay editable."
         },
-        tags: { type: "string", description: "New comma-separated tags." },
+        tags: { type: ["string", "null"], description: "Comma-separated tags: omit or null to preserve, empty/whitespace to clear, non-empty text to replace." },
         priority: {
           type: "string",
           enum: ["Low", "Medium", "High", "Critical"],
@@ -1072,7 +1072,7 @@ async function callTool(toolName, args) {
       return restJson(`/api/tasks/${requiredInt(args, "taskId")}/release`, {
         method: "POST",
         // Actor is optional and defaults to "mcp-agent", mirroring the native tool (#168).
-        body: { actor: optionalString(args, "actor") ?? "mcp-agent" }
+        body: { actor: optionalNonEmptyString(args, "actor") ?? "mcp-agent" }
       });
     case "update_task_status":
       assertEnum(args, "status", ["Backlog", "Todo", "InProgress", "Review", "Done"]);
@@ -1087,7 +1087,7 @@ async function callTool(toolName, args) {
           // verbatim would attribute audit rows to a blank actor on this path only.
           actor: optionalString(args, "actor")?.trim() || "mcp-agent",
           status: args.status,
-          overrideReason: optionalString(args, "overrideReason")
+          overrideReason: optionalNonEmptyString(args, "overrideReason")
         }
       });
     case "add_task_comment":
@@ -1103,9 +1103,9 @@ async function callTool(toolName, args) {
         method: "POST",
         body: {
           name: requiredString(args, "name"),
-          description: optionalString(args, "description"),
-          goals: optionalString(args, "goals"),
-          readme: optionalString(args, "readme")
+          description: optionalNonEmptyString(args, "description"),
+          goals: optionalNonEmptyString(args, "goals"),
+          readme: optionalNonEmptyString(args, "readme")
         }
       });
     case "update_project":
@@ -1123,7 +1123,7 @@ async function callTool(toolName, args) {
         method: "POST",
         body: {
           name: requiredString(args, "name"),
-          description: optionalString(args, "description"),
+          description: optionalNonEmptyString(args, "description"),
           parentFeatureId: optionalInt(args, "parentFeatureId", { min: 1 }),
           sortOrder: optionalInt(args, "sortOrder", { min: 0 })
         }
@@ -1141,25 +1141,25 @@ async function callTool(toolName, args) {
     case "delete_feature":
       return restJson(`/api/features/${requiredInt(args, "featureId", { min: 1 })}`, { method: "DELETE" });
     case "create_task":
-      if (args.status !== undefined && args.status !== null && args.status !== "")
+      if (args.status !== undefined && args.status !== null)
         assertEnum(args, "status", ["Backlog", "Todo", "InProgress", "Review", "Done"]);
-      if (args.priority !== undefined && args.priority !== null && args.priority !== "")
+      if (args.priority !== undefined && args.priority !== null)
         assertEnum(args, "priority", ["Low", "Medium", "High", "Critical"]);
       return restJson(`/api/features/${requiredInt(args, "featureId", { min: 1 })}/tasks`, {
         method: "POST",
         body: {
           name: requiredString(args, "name"),
-          description: optionalString(args, "description"),
+          description: optionalNonEmptyString(args, "description"),
           status: optionalString(args, "status"),
           priority: optionalString(args, "priority"),
-          assignee: optionalString(args, "assignee"),
+          assignee: optionalNonEmptyString(args, "assignee"),
           sortOrder: optionalFiniteNumber(args, "sortOrder")
         }
       });
     case "update_task":
-      if (args.status !== undefined && args.status !== null && args.status !== "")
+      if (args.status !== undefined && args.status !== null)
         assertEnum(args, "status", ["Backlog", "Todo", "InProgress", "Review", "Done"]);
-      if (args.priority !== undefined && args.priority !== null && args.priority !== "")
+      if (args.priority !== undefined && args.priority !== null)
         assertEnum(args, "priority", ["Low", "Medium", "High", "Critical"]);
       return restJson(`/api/tasks/${requiredInt(args, "taskId", { min: 1 })}`, {
         method: "PUT",
@@ -1199,7 +1199,7 @@ async function callTool(toolName, args) {
       return restJson(`/api/subtasks/${requiredInt(args, "subtaskId", { min: 1 })}`, {
         method: "PUT",
         body: {
-          text: optionalString(args, "text"),
+          text: optionalNonEmptyString(args, "text"),
           completed: optionalBool(args, "completed"),
           parentSubtaskId: optionalInt(args, "parentSubtaskId", { min: 0 }),
           sortOrder: optionalInt(args, "sortOrder", { min: 0 })
@@ -1229,7 +1229,7 @@ async function callTool(toolName, args) {
       return restJson(`/api/acceptance-criteria/${requiredInt(args, "acId", { min: 1 })}`, {
         method: "PUT",
         body: {
-          text: optionalString(args, "text"),
+          text: optionalNonEmptyString(args, "text"),
           completed: optionalBool(args, "completed"),
           sortOrder: optionalInt(args, "sortOrder", { min: 0 })
         }
@@ -1292,22 +1292,22 @@ async function callTool(toolName, args) {
         method: "POST",
         body: {
           title: requiredString(args, "title"),
-          body: optionalString(args, "body"),
-          plan: optionalString(args, "plan"),
-          tags: optionalString(args, "tags"),
+          body: optionalNonEmptyString(args, "body"),
+          plan: optionalNonEmptyString(args, "plan"),
+          tags: optionalNonEmptyString(args, "tags"),
           priority: optionalString(args, "priority"),
-          actor: optionalString(args, "actor")
+          actor: optionalNonEmptyString(args, "actor")
         }
       });
     case "list_ideas": {
       if (args.status !== undefined && args.status !== null && args.status !== "")
         assertEnum(args, "status", ["New", "Triaging", "Promoted", "Archived", "Rejected"]);
       const params = new URLSearchParams();
-      const status = optionalString(args, "status");
+      const status = optionalNonEmptyString(args, "status");
       if (status !== undefined) params.set("status", status);
-      const tag = optionalString(args, "tag");
+      const tag = optionalNonEmptyString(args, "tag");
       if (tag !== undefined) params.set("tag", tag);
-      const q = optionalString(args, "q");
+      const q = optionalNonEmptyString(args, "q");
       if (q !== undefined) params.set("q", q);
       const limit = optionalInt(args, "limit", { min: 1, max: 500 });
       if (limit !== undefined) params.set("limit", String(limit));
@@ -1332,19 +1332,19 @@ async function callTool(toolName, args) {
       return restJson(`/api/ideas/${requiredInt(args, "ideaId", { min: 1 })}`, {
         method: "PATCH",
         body: {
-          title: optionalString(args, "title"),
+          title: optionalNonEmptyString(args, "title"),
           body: optionalString(args, "body"),
           plan: optionalString(args, "plan"),
           status: optionalString(args, "status"),
           tags: optionalString(args, "tags"),
           priority: optionalString(args, "priority"),
-          actor: optionalString(args, "actor")
+          actor: optionalNonEmptyString(args, "actor")
         }
       });
     case "promote_idea":
       return restJson(`/api/ideas/${requiredInt(args, "ideaId", { min: 1 })}/promote`, {
         method: "POST",
-        body: { actor: optionalString(args, "actor") }
+        body: { actor: optionalNonEmptyString(args, "actor") }
       });
 
     // ── Knowledge-graph memory tools (#224) — forwarded to the native MCP server ──
@@ -1466,13 +1466,24 @@ function extractSseJsonRpcMessage(body, requestId) {
   return lastParsed;
 }
 
+// Nullable-text updates have three states: omitted/null preserves, empty/whitespace clears,
+// and non-empty text replaces. Preserve the caller's actual string here; the receiving
+// REST/service boundary owns normalization and auditing. JSON.stringify must not drop "".
 function optionalString(args, name) {
   const value = args[name];
-  if (value === undefined || value === null || value === "") return undefined;
+  if (value === undefined || value === null) return undefined;
   if (typeof value !== "string") {
     throw new McpError(-32602, `${name} must be a string when provided.`);
   }
   return value;
+}
+
+// Compatibility policy for creation, filters, actors and non-clearable optional text.
+// Unlike nullable update fields, these call sites historically treat exactly "" as absent.
+// Do not trim here: whitespace handling remains with each existing receiving contract.
+function optionalNonEmptyString(args, name) {
+  const value = optionalString(args, name);
+  return value === "" ? undefined : value;
 }
 
 function optionalCommentType(args) {
