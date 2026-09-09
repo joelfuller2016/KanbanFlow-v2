@@ -58,6 +58,9 @@ checklist update must leave the entity and activity unchanged.
 
 ## Executable checks
 
+Latest [master integration and current review](runs/2026-09-09-2152b312709e.md), with links to
+the original reproduction and review-repair evidence.
+
 [The smoke entry point](../../../scripts/smoke-mcp.mjs) starts the real
 [stdio wrapper](../../../scripts/mcp-server.mjs). It invokes
 [the focused transport matrix](../../../scripts/mcp-clear-checks.mjs), which creates its own
