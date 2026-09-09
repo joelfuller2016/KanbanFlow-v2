@@ -65,7 +65,7 @@
                 @if (EditMode == EditItemType.Task)
                 {
                     <GitHubIssueBadge Links="InitialExternalLinks"
-                                      Description="editDescription"
+                                      Description="@editDescription"
                                       CssClass="btn btn-sm btn-outline-secondary mb-3 me-2"
                                       TestId="edit-item-github-link" />
                     @if (gitHubPullRequest is not null)
