@@ -1,4 +1,6 @@
 using System.Reflection;
+using System.Globalization;
+using KanbanFlow.Components.Shared;
 using KanbanFlow.Services;
 
 namespace KanbanFlow.Tests;
@@ -564,21 +566,20 @@ public sealed class MirroredDescriptionTests
             + "Call MirroredDescription.SyncBlock instead of re-deriving the pattern.");
     }
 
-    /// <summary>The modal reaches its GitHub chips through the shared envelope test.</summary>
-    /// <remarks>
-    /// The absence check above says no file re-implements the isolation; this says the file that
-    /// needs it actually asks for it, so deleting the call outright cannot pass both.
-    /// </remarks>
+    /// <summary>The compiled chip resolvers reject quoted metadata and accept a leading header.</summary>
     [Fact]
     public void EditItemModal_AsksMirroredDescriptionWhetherTheBlockIsOwned()
     {
-        var modal = RepositorySource.Read("src/KanbanFlow/Components/Shared/EditItemModal.razor");
+        var leading = MirroredFixture.Replace("**Open PR:** none",
+            "**Open PR:** https://github.com/joelfuller2016/KanbanFlow-v2/pull/455",
+            StringComparison.Ordinal);
+        var accepted = ModalChipsFor(leading);
+        Assert.NotNull(accepted.IssueUrl);
+        Assert.NotNull(accepted.PrUrl);
 
-        // NON-VACUITY: the modal is still a consumer — it still renders Issue/PR chips from the block.
-        Assert.Contains("GitHubIssueUrl", modal, StringComparison.Ordinal);
-        Assert.Contains("**Issue:**", modal, StringComparison.Ordinal);
-
-        Assert.Contains("MirroredDescription.SyncBlock(", modal, StringComparison.Ordinal);
+        var quoted = ModalChipsFor("Human context before an example header.\n\n" + leading);
+        Assert.Null(quoted.IssueUrl);
+        Assert.Null(quoted.PrUrl);
     }
 
     // ── Ownership is not enough: the forgery that lives INSIDE the owned block ───────────────────
@@ -687,21 +688,18 @@ public sealed class MirroredDescriptionTests
     // ── The modal's chips, exercised rather than grepped ─────────────────────────────────────────
 
     /// <summary>
-    /// Drives <c>EditItemModal.RefreshGitHubLinks</c> against <paramref name="description"/> and
-    /// returns the four values it resolves.
+    /// Drives the compiled modal PR resolver and shared issue badge against a description.
     /// </summary>
     /// <remarks>
     /// <para>
-    /// The cases above this point read the modal's SOURCE, which proves it calls the shared reader
-    /// but not that it uses the answer: <c>Assert.Contains("MirroredDescription.SyncBlock(")</c>
-    /// passes just as well when the result is computed and thrown away. This runs the real method
-    /// on the real compiled component instead.
+    /// Runtime component calls verify that the resolved values reach the fields used by markup.
+    /// The browser suite separately verifies actual rendered links and live description edits.
     /// </para>
     /// <para>
     /// Reflection rather than bUnit because the project has none. It is safe here for a specific
-    /// reason: <c>RefreshGitHubLinks</c> is a pure function of one field and touches no injected
-    /// service, no renderer and no parameter, so an uninitialised instance is a complete
-    /// environment for it. Every member lookup is asserted with the member's name in the message,
+    /// reason: these two resolver methods touch no injected service or renderer. The issue badge
+    /// receives its real Description parameter before its lifecycle method runs.
+    /// Every member lookup is asserted with the member's name in the message,
     /// so a rename fails loudly rather than degrading into a test of nothing.
     /// </para>
     /// </remarks>
@@ -717,10 +715,16 @@ public sealed class MirroredDescriptionTests
                 + "resolution through reflection; a rename must update it, not silently disable it.");
 
         Member(type.GetField("editDescription", Flags), "editDescription").SetValue(instance, description);
-        Member(type.GetMethod("RefreshGitHubLinks", Flags), "RefreshGitHubLinks").Invoke(instance, null);
+        Member(type.GetMethod("RefreshGitHubPullRequest", Flags), "RefreshGitHubPullRequest").Invoke(instance, null);
+        var pr = (GitHubPullRequestReference?)Member(type.GetField("gitHubPullRequest", Flags), "gitHubPullRequest").GetValue(instance);
 
-        string? Read(string name) => (string?)Member(type.GetField(name, Flags), name).GetValue(instance);
-        return (Read("GitHubIssueUrl"), Read("GitHubIssueNumber"), Read("GitHubPrUrl"), Read("GitHubPrNumber"));
+        var badgeType = typeof(GitHubIssueBadge);
+        var badge = Activator.CreateInstance(badgeType)!;
+        Member(badgeType.GetProperty("Description"), "GitHubIssueBadge.Description").SetValue(badge, description);
+        Member(badgeType.GetMethod("OnParametersSet", Flags), "GitHubIssueBadge.OnParametersSet").Invoke(badge, null);
+        var issue = (GitHubIssueReference?)Member(badgeType.GetField("Issue", Flags), "GitHubIssueBadge.Issue").GetValue(badge);
+        return (issue?.Url, issue?.Number.ToString(CultureInfo.InvariantCulture),
+            pr?.Url, pr?.Number.ToString(CultureInfo.InvariantCulture));
     }
 
     /// <summary>The modal renders the genuine chips for a genuine mirror.</summary>

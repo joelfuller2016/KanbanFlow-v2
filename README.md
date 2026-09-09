@@ -14,9 +14,9 @@
 | | |
 |---|---|
 | **Stack** | .NET 10 · Blazor Server · SQLite (EF Core 10) · Minimal APIs · Node 18+ for the MCP wrapper |
-| **Surfaces** | 6 UI routes · 60 REST endpoints · 28 native MCP tools · 50 Node-wrapper MCP tools |
-| **Sync** | **One-way**, GitHub → board. It **never writes to GitHub**. GitHub owns title, priority, milestone; the board owns dependencies, criteria, subtasks, claims, ordering, memory — see [Who owns what](#who-owns-what) |
-| **Tests** | 980 xUnit · 56 in-app integration · 50 Playwright e2e · 100 script unit · 2 smoke suites — [all local, no CI](#deliberate-non-features) |
+| **Surfaces** | 6 UI routes · 71 REST endpoints · 28 native MCP tools · 50 Node-wrapper MCP tools |
+| **Sync** | GitHub → board projection, plus one explicit additive board → GitHub issue-create path. Preview is the default; live create requires `--allow-write --task <id>` and a durable journal. No edit/close/delete path — see [Who owns what](#who-owns-what) |
+| **Tests** | 1,079 xUnit · 56 in-app integration · 52 Playwright e2e · 274 script unit · 2 smoke suites — [all local, no CI](#deliberate-non-features) |
 | **Runs at** | `http://127.0.0.1:5123` — localhost only, no auth, no Docker, no cloud |
 | **Log book** | [`docs/BACKLOG.md`](docs/BACKLOG.md) — the authoritative record of what happened |
 | **Deep detail** | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) |
@@ -63,7 +63,7 @@ graph and gives that graph three surfaces:
    pastes into chat as a link. Filtering never reorders anything: a drag under an active filter
    anchors on the next *visible* card's identity and the server resolves that against the full
    persisted column. For you.
-2. **A REST API** — 60 endpoints over the same graph. For scripts.
+2. **A REST API** — 71 endpoints over the same graph. For scripts.
 3. **An MCP server** — the same capabilities as first-class agent tools, plus a direction
    engine that answers *"what next, and why"* with a human-readable reason. For agents.
 
@@ -76,17 +76,24 @@ Editing an issue will never change a dependency edge or tick an acceptance crite
 
 Three properties make it safe to point at a real portfolio:
 
-- **GitHub is upstream.** The sync reads GitHub and writes the board. **It never writes to
-  GitHub** — not a label, not a comment, not a status. Today the board→GitHub direction does
-  not exist at all.
+- **GitHub is upstream.** Normal `sync`, `status`, `onboard`, and `backfill-links` only read
+  GitHub. `push-issue` previews by default; `--allow-write --task <id>` exposes exactly one
+  additive issue create backed by a persisted operation and durable identity. It cannot edit,
+  close, delete, or comment on GitHub.
 - **It advances your board, and overrides it in exactly one case.** Drag a task to
   `InProgress` and the sync leaves it there — *unless the issue is closed*, in which case the
   task is forced to `Done` regardless of where you put it
   (`syncTasks()` in `portfolio-sync.mjs`). The opposite disagreement — board `Done`, issue still
   open — is reported as **drift** and never touched (`driftDoneButOpen`). That asymmetry is the whole rule; the
   older "never overrides your status" phrasing was half true and has been corrected here.
-- **It is idempotent.** Re-running converges instead of duplicating, with **no schema change** —
-  the identity of every projected row is encoded in data GitHub already gave it.
+- **It is idempotent and fail-closed.** Active issue links use immutable GitHub repository and
+  issue node ids. Legacy `#<n> ` names are a fallback that an ordinary `sync` promotes to a
+  durable link — and strips — as soon as the task's `kanbanflow-sync` block agrees or is
+  absent; a block that disagrees is reported as drift instead. Interrupted
+  creates reconcile an exact operation marker; ambiguity never automatically authorizes another
+  create. Issue
+  transfers are detected globally by node: same-project metadata refreshes, while cross-project
+  ownership reports actionable drift and never moves or duplicates a task automatically.
 
 ---
 
@@ -106,7 +113,7 @@ flowchart LR
     subgraph ENGINE["sync engine — scripts/portfolio-sync.mjs"]
         direction TB
         READ["gh CLI, read-only<br/>issues · PRs · comments"]
-        MATCH["match by idempotency key<br/>name · #n prefix · gh node id"]
+        MATCH["match by durable identity first<br/>repo node · issue node<br/>legacy #n fallback"]
         PLAN["plan writes<br/>--dry-run prints, mutates nothing"]
         READ --> MATCH --> PLAN
     end
@@ -133,7 +140,7 @@ flowchart LR
     subgraph OUT["surfaces over the same graph"]
         direction TB
         UI["Blazor UI<br/>/ · /project/{id} · /ideas · /memory"]
-        REST["REST · 60 endpoints"]
+        REST["REST · 71 endpoints"]
         MCP["MCP · 28 native / 50 wrapper"]
     end
 
@@ -158,8 +165,8 @@ flowchart LR
 
     DRIFT["drift report<br/>disagreements the sync refuses to resolve"]
     PLAN --> DRIFT
-    XBACK["board to GitHub:<br/>no write path exists"]
-    KF -.-x XBACK
+    XBACK["explicit additive create only<br/>prepare · dispatch · create · finalize"]
+    KF -.-> XBACK
 ```
 
 Every sync write goes over **REST**, never straight to SQLite — so the mutations the service
@@ -180,9 +187,9 @@ cannot onboard a repo. That parity gap is [#231](https://github.com/joelfuller20
 
 | GitHub concept | KanbanFlow entity | Idempotency key | Direction |
 |---|---|---|---|
-| Repo | `Project` | `<!-- github: owner/repo -->` marker in `Project.Description`; falls back to `Project.Name` == repo short name (case-insensitive) | GitHub → board |
+| Repo | `Project` | immutable `<!-- github-node: R_… -->` marker in `Project.Description`; legacy path marker and short-name match are upgrade-only fallbacks | GitHub → board |
 | Milestone | `Feature` | `Feature.Name` == milestone title, within the project; issues with no milestone go to a feature literally named `Unsorted` | GitHub → board |
-| Issue | `TaskItem` | the **`#<n>` title prefix followed by one space** — the space is part of the key (`/^#(\d+)\s/`) | GitHub → board |
+| Issue | `TaskItem` | Active `ExternalWorkItemLink` keyed by immutable repository node id + issue node id; legacy **`#<n> `** prefix only when no structured state exists | GitHub → board; explicit additive create board → GitHub |
 | Issue labels (`P0`…`P3`, `priority:high`, `critical`, …) | `TaskItem.Priority` | — reconciled every run | GitHub → board (GitHub always wins) |
 | Issue state + linked open PR | `TaskItem.Status` | — | GitHub → board, **advance-only** (see below) |
 | Issue body | `TaskItem.Description` | `<!-- kanbanflow-sync -->` block + up to ~29,491 serialized bytes; a truncated description is refreshed only while it retains the exact sync header and truncation footer | GitHub → board |
@@ -192,7 +199,7 @@ cannot onboard a repo. That parity gap is [#231](https://github.com/joelfuller20
 | PR review, `CHANGES_REQUESTED` | `TaskComment` (**`Blocked`**) | same `<!-- gh:ID -->` marker | GitHub → board |
 | PR inline `file:line` review comment | `TaskComment` (`Comment`) | same `<!-- gh:ID -->` marker | GitHub → board |
 | *(every task mutation the sync makes)* | `ActivityEvent` | — append-only | board-internal |
-| *(nothing)* | — | — | **board → GitHub: never** |
+| Board-only task | GitHub issue | durable `ExternalWriteOperation` UUID embedded as `<!-- kanbanflow-push:… -->`, then finalized to an Active link | board → GitHub, explicit additive create only |
 
 **Status is deliberately asymmetric — and one row does override you.** On create it is derived
 from GitHub (`closed` → `Done`; open + linked open PR → `Review`; open + assignee →
@@ -210,18 +217,38 @@ from GitHub (`closed` → `Done`; open + linked open PR → `Review`; open + ass
 > true**. Row 1 is a genuine override. If you deliberately park a task in `Todo` while its issue
 > is closed, the next sync will move it to `Done` and keep doing so.
 
-**The two fragile keys.** Both are data, not decoration:
+**Legacy and protocol markers are data, not decoration:**
 
-- Strip or edit the `#<n>` prefix (the number, then one space) on a task title and the task is orphaned — the next sync
-  creates a duplicate. Rename the *issue*, not the task.
+- Active linked tasks have plain names and survive arbitrary task/issue renames. On a task that
+  has not yet been promoted or backfilled, stripping the legacy `#<n> ` prefix can still orphan
+  the fallback.
 - Edit a mirrored comment's text and you strip its `<!-- gh:ID -->` marker — the next sync
   re-adds it as a duplicate. The marker is hidden where the body renders as Markdown
   (`MarkdownRenderer` sanitises HTML comments away) but **plainly visible in raw reads**:
   `GET /api/tasks/{id}/comments`, a `curl`, and any agent pulling the comment over MCP all
   see it.
 
-A durable `Project.RepoUrl` and `TaskItem.IssueNumber` would replace both keys with real
-columns — [#237](https://github.com/joelfuller2016/KanbanFlow-v2/issues/237).
+**An ordinary `sync` is the upgrade path — `backfill-links` is not a required first step.** When
+a legacy `#<n> ` prefix matches an issue in the repo being synced, the sync registers the durable
+link and strips the prefix in the same run, provided the task's `kanbanflow-sync` block agrees
+about the repo and the issue number, or carries no `**Issue:**` URL at all
+(`legacyPromotionDisposition` in `portfolio-sync.mjs`). An upgraded board therefore heals itself
+on the first sync, with no operator action. Promotion is **refused** — the prefix kept,
+the task reported as drift — when that block names a different repo or a different issue number,
+when its provenance is malformed, or when the issue record carries no immutable node id. Full
+case list: [`docs/GITHUB-SYNC.md`](docs/GITHUB-SYNC.md#legacy-prefix--durable-link).
+
+`backfill-links owner/repo` is the **repair and audit** tool for what auto-promotion will not
+touch. Run it with `--dry-run` to review those candidates. Only an authoritative issue URL inside
+a sync block can proceed to immutable-node verification. A different repository
+path is treated as metadata drift and must resolve to the same immutable issue node before the link
+is activated; title-only, duplicate, and malformed candidates are persisted as quarantined for
+human review.
+Reruns leave quarantines in place until a human promotes one through the verified link PUT. A
+quarantine with no correlatable issue number blocks projection of otherwise-unmatched issues for
+that project instead of allowing a duplicate. Because a live `backfill-links` **quarantines** a
+title-only `#<n> ` task that an ordinary sync would have promoted, run `sync` first and reach for
+`backfill-links` afterwards, for the residue.
 
 Full semantics, including truncation warnings, comment sizing, and every drift case:
 [`docs/GITHUB-SYNC.md`](docs/GITHUB-SYNC.md) and
@@ -235,7 +262,7 @@ The single most useful table here. Before you edit a field, know which side wins
 
 | Field | Owner | What that means in practice |
 |---|---|---|
-| Task **title** | **GitHub** | Reconciled every run (`syncTasks()`). Rename the issue; renaming the task is undone — and stripping the `#<n>` prefix, the number followed by one space, orphans it |
+| Task **title** | **GitHub content; not identity** | Reconciled every run (`syncTasks()`). Active linked tasks show the plain issue title and identity survives renames. Legacy fallback tasks keep `#<n> ` only until the first sync that promotes them |
 | Task **priority** | **GitHub** | Reconciled every run (`syncTasks()`) from `P0`…`P3` / `priority:high` / bare severity labels. Setting it on the board is undone on the next sync |
 | Task **status** | **Shared, GitHub-dominant** | You may move it freely, **except** that a closed issue forces `Done` (`syncTasks()`). Board `Done` + open issue is reported as drift, not corrected |
 | Task **feature** (milestone) | **GitHub** | An issue's milestone change moves the task via `PATCH /api/tasks/{id}/feature` (`syncTasks()`) |
@@ -282,10 +309,10 @@ that assumes otherwise will be wrong.
 | **PR comments on a PR that closes no issue are dropped** | With no `Closes #n` there is no task to attach them to. They are counted and reported, never silently discarded |
 | **Inline review comments cost one API call per PR** | Fetched via `gh api repos/{repo}/pulls/{n}/comments`. A failure is reported and sets a non-zero exit code — the board is explicitly flagged incomplete rather than looking whole |
 | **Fetches are capped per list** | `GH_PAGE_LIMIT` defaults to `2000` (`KANBANFLOW_GH_PAGE_LIMIT` overrides it). Hitting the cap is a hard failure, not a warning — a count derived from a partial read is worse than no count |
-| **No board → GitHub write path exists** | The sync creates nothing on GitHub — not an issue, not a comment, not a label. A task created on the board has no issue and will be reported as drift |
+| **No general board → GitHub editing** | The only outbound path creates one issue after `--allow-write --task`. Titles/bodies/status/comments of existing issues are never written back; no issue is closed or deleted |
 | **Board-owned structure never round-trips** | Dependencies, acceptance criteria, subtasks, requirements, claims, ordering, and memory have no GitHub equivalent. See [Who owns what](#who-owns-what) |
 | **Milestones are flattened** | Features are created flat; GitHub milestones are not hierarchical, so the recursive-feature capability is unused by the sync |
-| **Project ↔ repo link has no dedicated column** | There is still no `RepoUrl` column ([#237](https://github.com/joelfuller2016/KanbanFlow-v2/issues/237)), but the link is durable anyway: a `<!-- github: owner/repo -->` marker in `Project.Description` is the primary key, so a **marker-linked project survives a rename**. Short-name matching remains as a legacy fallback, and a hand-made project matching a repo short name is still adopted (and then stamped with a marker) on the next `onboard` |
+| **Project ↔ repo link has no dedicated column** | There is still no `RepoUrl` column ([#237](https://github.com/joelfuller2016/KanbanFlow-v2/issues/237)), but the link is durable anyway: immutable `<!-- github-node: R_… -->` is primary and survives rename/transfer; mutable `<!-- github: owner/repo -->` is refreshed display/compatibility metadata. Short-name matching is an upgrade-only fallback, and `onboard` stamps both markers |
 
 ---
 
@@ -345,6 +372,7 @@ Commands are portable except where noted; `smoke-api.ps1` and `verify.ps1` are P
 ### 0. Start the app
 
 ```powershell
+$env:KANBANFLOW_DB_PATH = "$HOME\.kanbanflow\kanbanflow.db"
 dotnet run --project src/KanbanFlow/KanbanFlow.csproj --urls http://127.0.0.1:5123
 ```
 
@@ -361,8 +389,55 @@ Confirm it is up:
 curl -s http://127.0.0.1:5123/api/admin/health
 # {"status":"ok","app":"KanbanFlow","startedAtUtc":"2026-08-02T22:26:22.1897449Z",
 #  "checkedAtUtc":"2026-08-02T22:26:30.7731684Z","runtime":".NET 10.0.10",
-#  "openApiUrl":"/openapi.json"}
+#  "openApiUrl":"/openapi.json",
+#  "db":{"path":"C:\\Users\\you\\.kanbanflow\\kanbanflow.db","exists":true,"source":"env",
+#        "existedAtStartup":true,"createdAtUtc":"2026-06-01T09:12:44.1Z",
+#        "lastWriteUtc":"2026-08-02T22:19:03.7Z","sizeBytes":39124992,
+#        "shadowedPaths":[],"projects":1,"status":"ok","error":null,
+#        "reasons":[],"elapsedMs":1.1}}
 ```
+
+`status` is `ok` only when the app opened the database, read from it, found a board that is not
+empty, did not create that board itself, saw no trace of that board having been copied into place
+just before startup, and saw no second `kanbanflow.db` shadowing it — otherwise `degraded`, or
+`error` if it could not read at all. It is **always HTTP 200**, so the reason is readable rather
+than guessed.
+
+If you started the app and it is serving a board you do not recognise, this is where to look:
+
+```text
+"status":"degraded", "reasons":["last-write-precedes-creation","created-moments-before-startup"]
+```
+
+That means the file was **copied into place moments before the app started** — a board written
+before it was created cannot be one you have been using. The usual cause is the launcher failing to
+find your real database (`$HOME` resolves differently under Task Scheduler than in your shell) and
+restoring the committed seed instead. Compare `db.sizeBytes` with the size of
+`seed/kanbanflow.seed.db`: a match is **consistent with** the seed rather than proof of it —
+SQLite reuses freed pages instead of growing the file, so a board that has been written to can
+still report the seed's size to the byte. Pin the right file with `-DbPath` and restart.
+
+**A fresh install reports `degraded` too, and that is expected.** The first start of a new
+deployment restores the seed, so the board genuinely was copied into place moments before the app
+ran and both reasons fire — correctly. With `-NoSeed` nothing is copied at all, yet a restart
+within 15 minutes still reports `created-moments-before-startup`, because a board that new is not
+distinguishable from a restored one. Neither is a fault. The first reason clears on a restart after
+the board has been written; the second clears on a restart more than 15 minutes after the file was
+created. Confirm `db.path` is the file you meant before you go looking for a cause.
+
+These signals use the **file facts captured at startup**. A write to the wrong board moves its
+last-write time past its creation time on disk, but `last-write-precedes-creation` remains in the
+running process's health response until a restart captures the changed file. A write does nothing to
+`created-moments-before-startup`, which reads the creation time and a write never touches that; that
+one lasts until the next start more than 15 minutes after the file was created, whether or not the
+board has been written to. So a wrongly-restored board can keep reporting `degraded` after you have
+been using it, and — the direction that costs you — a board written to and then restarted a day later
+reports a clean `ok` with both signals gone. `db.path` is the durable answer: compare it with the
+file you meant, which is the check no code can make for you (#498).
+
+The shadow-database list is also captured at startup: removing a reported shadow file does not
+clear its warning until a restart. Each health request reads the current project count and reports
+whether the selected database currently exists, alongside those recorded startup facts.
 
 **Which database it opened.** The app names the file it is using, on every boot:
 
@@ -403,7 +478,8 @@ node scripts/portfolio-sync.mjs --repos joelfuller2016/KanbanFlow-v2
 ```
 
 **`onboard` is the explicit version of step 2's first half.** It resolves (or creates) the
-`Project` for a repo and stamps the durable `<!-- github: owner/repo -->` marker into
+`Project` for a repo and stamps immutable `<!-- github-node: R_… -->` plus the refreshable
+`<!-- github: owner/repo -->` marker into
 `Project.Description` — including onto a legacy project that was previously linked by name
 alone. It is safe to re-run:
 
@@ -431,7 +507,7 @@ node scripts/portfolio-sync.mjs
 
 ### 2. Create a new issue
 
-Create it **on GitHub** — that is the substrate. The board is downstream.
+GitHub remains the substrate. You can create there directly:
 
 ```bash
 gh issue create --repo joelfuller2016/KanbanFlow-v2 \
@@ -447,15 +523,49 @@ Then bring it onto the board:
 node scripts/portfolio-sync.mjs --repos joelfuller2016/KanbanFlow-v2
 ```
 
-The new issue arrives as a `TaskItem` titled `#<n> <issue title>`, filed under the milestone's
+The new issue arrives as a linked `TaskItem` with a plain title, filed under the milestone's
 `Feature` (or `Unsorted`), with priority from the `P2` label and status `Backlog`.
 
 Repo issue templates live in [`.github/ISSUE_TEMPLATE/`](.github/ISSUE_TEMPLATE); what a
 well-formed issue contains is in [`docs/issue-quality-checklist.md`](docs/issue-quality-checklist.md).
 
-> **Tasks created *on the board* stay on the board.** The sync is one-way, so a board-only task
-> has no issue and will be reported as drift on the next run. Use the board for triage and
-> annotation; use GitHub to create work.
+Or preview one board-only task, then opt into one additive create:
+
+```bash
+node scripts/portfolio-sync.mjs push-issue joelfuller2016/KanbanFlow-v2 --task 123
+node scripts/portfolio-sync.mjs push-issue joelfuller2016/KanbanFlow-v2 --allow-write --task 123
+```
+
+There is no GitHub issue-create idempotency key. KanbanFlow persists `Prepared` then
+`Dispatched`, embeds an exact operation marker, and finalizes the immutable link. If interrupted,
+use the operation UUID printed by the failure:
+
+```bash
+node scripts/portfolio-sync.mjs push-issue joelfuller2016/KanbanFlow-v2 \
+  --allow-write --task 123 --resume 00000000-0000-4000-8000-000000000000
+```
+
+`Dispatched`/`NeedsReview` recovery performs a complete paginated marker scan and never
+auto-creates. Authorization uses raw occurrences: duplicate marker copies, a marker mixed with
+another operation marker, copies across issues, or an incomplete read all fail closed.
+
+For a persistent zero-occurrence `NeedsReview`, an operator may record (not execute) one manual
+retry decision. The UUID must be repeated and an explicit actor/reason are mandatory:
+
+```bash
+node scripts/portfolio-sync.mjs push-issue joelfuller2016/KanbanFlow-v2 \
+  --allow-write --task 123 --resume 00000000-0000-4000-8000-000000000000 \
+  --authorize-ambiguous-retry 00000000-0000-4000-8000-000000000000 \
+  --actor operator-name --resolution-reason "Reviewed the zero-marker audit"
+```
+
+That invocation reads GitHub exhaustively but exits without mutating it or invoking issue create.
+A separate normal `--resume` first claims and timestamps the next journal attempt, then scans every
+issue again: one late marker finalizes, ambiguity blocks, and only a post-Resume zero scan permits
+an evidence-bound dispatch of the same frozen create. The raw
+counter includes malformed target tokens and PR records. This is an audited residual-risk escape hatch, not exactly-once proof—GitHub has no
+issue-create idempotency key and a negative-read race remains. See
+[`docs/GITHUB-SYNC.md`](docs/GITHUB-SYNC.md#safe-push-issue-preview-live-create-and-recovery).
 
 ### 3. Run a sync
 
@@ -511,7 +621,8 @@ comments mirrored:   0
 comments existing: 404
 ```
 
-If a re-run keeps creating tasks, a `#<n> ` title prefix has been edited off.
+If a re-run keeps creating tasks, inspect the durable link/quarantine rows first; only legacy
+tasks without structured state depend on the `#<n> ` fallback.
 
 ### 4. Check status and drift
 
@@ -604,24 +715,25 @@ the command beside it — not copied from the previous README, and not copied fr
 
 | Surface | Count | Command that produced it |
 |---|---:|---|
-| REST endpoints (app) | 55 | `grep -cE '\.Map(Get\|Post\|Put\|Patch\|Delete)\(' src/KanbanFlow/ApiEndpoints.cs` |
+| REST endpoints (app) | 66 | `grep -cE '\.Map(Get\|Post\|Put\|Patch\|Delete)\(' src/KanbanFlow/ApiEndpoints.cs` |
 | REST endpoints (admin) | 5 | `grep -cE '\.Map(Get\|Post\|Put\|Patch\|Delete)\(' src/KanbanFlow/AdminEndpoints.cs` |
-| **REST endpoints total** | **60** | *sum of the two above* |
+| **REST endpoints total** | **71** | *sum of the two above* |
 | Native MCP tools (`POST /mcp`) | 28 | `grep -c '\[McpServerTool(' src/KanbanFlow/Mcp/KanbanMcpTools.cs` |
 | Node-wrapper MCP tools | 50 | `tools/list` over stdio against `scripts/mcp-server.mjs` — [exact invocation](docs/ARCHITECTURE.md#mcp-surface-28-native--50-wrapper) |
 | Blazor routes | 6 | `grep -rn '@page' src/KanbanFlow/Components/ \| sort -u` → `/`, `/Error`, `/ideas`, `/memory`, `/project/{Id:int}`, `/settings` |
-| Razor components | 27 | `find src/KanbanFlow/Components -name '*.razor' \| wc -l` |
-| xUnit tests | 980 | `dotnet test tests/KanbanFlow.Tests` |
+| Razor components | 28 | `find src/KanbanFlow/Components -name '*.razor' \| wc -l` |
+| xUnit tests | 1,079 | `dotnet test tests/KanbanFlow.Tests` |
 | In-app integration tests | 56 | `grep -c 'results.Add(await RunTest' src/KanbanFlow/Services/TestRunnerService.cs` (28 API + 22 service + 6 UI) |
-| Playwright e2e scenarios | 50 | `npm run test:ui` |
-| Script unit tests (`scripts/*.mjs`) | 100 | `npm run test:scripts` |
+| Playwright e2e scenarios | 52 | `npm run test:ui` |
+| Script unit tests (`scripts/*.mjs`) | 274 | `npm run test:scripts` |
 
-Corrections this revision made to the previous README: **53 → 60** endpoints (both memory
-endpoints and `GET /api/tasks/{id}/context` were missing from the route list entirely);
-**41 → 50** wrapper tools; native tool count stated for the first time (**24**); in-app suite
+Corrections this revision made to the previous README: **53 → 60** endpoints previously (both memory
+endpoints and `GET /api/tasks/{id}/context` were missing), then **60 → 71** for the #336
+external-identity/write-journal routes;
+**41 → 50** wrapper tools; native tool count stated for the first time (**28**); in-app suite
 **40 → 56**; and `GET /api/subtasks/{id}`, `GET /api/acceptance-criteria/{id}`,
 `GET /api/requirements/{id}` were listed as existing — **they do not exist**. The route map in
-[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md#rest-surface-60-endpoints) now marks them.
+[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md#rest-surface-71-endpoints) now marks them.
 
 Also corrected: `#82`, `#83`, `#85`, `#88`, and `#89` were all cited as open/broken. All five
 are **closed**, and the code enforces what they asked for.
@@ -682,7 +794,7 @@ filed and rejected; please read the linked issue before filing another.
 | **No multi-tenancy** | One database, one user. Per-project ownership scoping is not a goal. |
 | **No real-time multi-human collaboration** | Single-user UX. Refresh on demand. |
 | **No notifications** | The agent is the integration. |
-| **No board → GitHub writes** | The whole safety argument rests on this. A sync that can write to GitHub is a sync that can corrupt the source of truth. |
+| **No destructive/broad GitHub writes** | The sole outbound mutation is one explicitly gated additive issue create. There is no edit, close, delete, comment, bulk-create, or implicit retry path; generic `gh()` is structurally read-only. |
 | **No mobile-first UI** | Desktop primary; existing responsive work is a courtesy, not a target. |
 
 If you need something in the right-hand column, this is not the tool.
@@ -734,7 +846,7 @@ All local. There is no CI — [on purpose](#deliberate-non-features).
 ```
 
 ```bash
-dotnet test tests/KanbanFlow.Tests      # 980 xUnit tests
+dotnet test tests/KanbanFlow.Tests      # 1,079 xUnit tests
 ```
 
 ```powershell

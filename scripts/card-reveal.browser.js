@@ -28,7 +28,7 @@ async (page) => {
   await api('POST', `/api/tasks/${task.id}/dependencies`, { dependsOnTaskItemId: blocker.id });
   const cardSelector = `[data-testid="board-card-${task.id}"]`;
   const titleSelector = `[data-testid="board-card-${task.id}-title"]`;
-  const githubSelector = `[data-testid="board-card-${task.id}-github"]`;
+  const githubSelector = `[data-testid="board-card-${task.id}-github-link"]`;
   const revealSelector = `${cardSelector} .board-card-reveal`;
   const readMetrics = async (targetPage) => targetPage.locator(cardSelector).evaluate(card => {
     const title = card.querySelector('.board-card-title-text');
@@ -70,12 +70,14 @@ async (page) => {
   await page.waitForFunction(selector => getComputedStyle(document.querySelector(selector)).opacity === '1', revealSelector);
   const hovered = await metrics(page);
   check(hovered.title.height > resting.title.height && hovered.clamp !== '2', 'Hover must expose the complete title.');
-  check(hovered.reveal.height > 20, 'Hover must expose description and GitHub link.');
+  check(hovered.reveal.height > 20, 'Hover must expose the description preview.');
   check(hovered.badge.right <= hovered.card.right && hovered.badge.width > 0, 'Long tokens must keep the Blocked badge inside the card.');
   const excerpt = await page.locator(`[data-testid="board-card-${task.id}-excerpt"]`).innerText();
   check(excerpt.startsWith('Opening context includes __init__, a negative -5 value'), 'Preview must show body context without corrupting identifiers.');
   check(!excerpt.includes('kanbanflow-sync') && !excerpt.includes('PR487-END-OF-COMPLETE-CONTENT'), 'Preview must omit metadata while leaving details accessible.');
   check(await page.locator(githubSelector).getAttribute('href') === issueUrl, 'Card href must retain query and fragment.');
+  check(await page.locator(cardSelector).locator('a[href^="https://github.com/"]').count() === 1,
+    'The existing shared badge must be the card’s only GitHub control.');
 
   await page.mouse.move(1, 1);
   await page.locator(titleSelector).focus();
@@ -136,7 +138,7 @@ async (page) => {
   if (outlineEditor === 'modal') {
     check(await page.locator('#edit-item-name').inputValue() === fullTitle, 'The outline must open the same full task.');
     check((await page.getByTestId('edit-item-description-read').innerText()).includes('PR487-END-OF-COMPLETE-CONTENT'), 'The outline editor must preserve complete content.');
-    check(await page.getByTestId('edit-item-modal').getByRole('link', { name: 'GitHub issue #487 (opens in a new tab)', exact: true }).getAttribute('href') === issueUrl, 'The modal chip must preserve the same full destination.');
+    check(await page.getByTestId('edit-item-github-link').getAttribute('href') === issueUrl, 'The modal chip must preserve the same full destination.');
     await page.getByTestId('edit-item-close-button').click();
     await page.getByTestId('edit-item-modal').waitFor({ state: 'hidden' });
   } else {

@@ -5,12 +5,16 @@
 // restores when no live database exists. This script is the only sanctioned way to update it,
 // so the seed never drifts on its own: a commit that changes it is always a deliberate act.
 //
-// Why VACUUM INTO and not a file copy: the app runs SQLite in WAL mode, so the newest committed
-// pages live in `kanbanflow.db-wal`, not in the `.db` file. Copying the `.db` while the app holds
-// it captures a stale, torn snapshot — silently, with no error, and no symptom until someone
-// restores it. Stopping the app first does not fix that either: a forced kill leaves the WAL
-// unmerged. VACUUM INTO runs inside a read transaction against the live database, so it sees the
-// WAL, writes one compact file with no sidecars, and needs no downtime at all.
+// Why VACUUM INTO and not a file copy — and NOT because of WAL, which this comment used to claim.
+// The app does not enable it: nothing in src/ sets journal_mode and the committed seed reports
+// `delete` (WAL is tracked in #209, not turned on here). In rollback-journal mode a write lands in
+// `kanbanflow.db` IN PLACE while the original pages are held in `kanbanflow.db-journal`, so copying
+// the `.db` while the app holds it mixes pre- and post-write pages — silently, with no error, and
+// no symptom until someone restores it. Stopping the app first does not fix that either: a forced
+// kill leaves a hot journal, and a bare `.db` copy carries nothing to roll it back with. VACUUM
+// INTO runs inside a read transaction against the live database, so it sees only committed state
+// and writes one compact file with no sidecars. The app stays up — at the cost of a shared read
+// lock, so a commit landing mid-snapshot waits on it rather than tearing the copy.
 //
 // Reads the live DB. The only file it writes is the seed.
 //

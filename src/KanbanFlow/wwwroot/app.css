@@ -1579,10 +1579,8 @@ h1:focus {
    Moving padding to the child (.board-card-reveal-content) lets the item's content box reach 0
    while keeping the visible padding when the panel is open. */
 .board-card-reveal-content {
-    /* overflow:hidden on the parent clips descendants' outlines. The GitHub link is the one
-       keyboard-only affordance on the card: without padding on all sides its :focus-visible ring is
-       shaved on the left and bottom. 3px clears the widest default ring. The inward outline on
-       .board-card-gh works in concert with this to keep the ring inside the clipping boundary. */
+    /* Keep the preview text clear of the clipping boundary as the grid opens. The shared GitHub
+       badge is in the title row and draws its focus ring inward within that row's boundary. */
     padding: .35rem 3px 3px;
 }
 
@@ -1593,9 +1591,8 @@ h1:focus {
     margin-bottom: .25rem;
 }
 
-/* The GitHub affordance. The board is a MIRROR of GitHub — "KanbanFlow IS GitHub, visualised" — and
-   until now nothing on a card said so: the issue URL was buried in the description behind a sync
-   header the reader had to open the panel and scroll past. */
+/* The existing shared GitHub badge stays in the title row. It resolves durable issue identity
+   first and uses a validated leading-header link only when no durable GitHub row exists. */
 .board-card-gh {
     display: inline-flex;
     align-items: center;
@@ -1617,7 +1614,7 @@ h1:focus {
     background-color: var(--bs-tertiary-bg, #f8f9fa);
 }
 
-/* Ring drawn inward so it stays fully inside the overflow:hidden clipping box on .board-card-reveal-inner. */
+/* Draw the ring inward so it stays inside the title row's overflow:hidden clipping box. */
 .board-card-gh:focus-visible {
     outline: 2px solid var(--bs-focus-ring-color, rgba(13, 110, 253, .5));
     outline-offset: -2px;
@@ -1647,7 +1644,7 @@ h1:focus {
 /* ── Touch / no-hover devices ─────────────────────────────────────────────────────────────────── */
 /* On (hover: none) browsers the reveal is permanently open: hover is unavailable and a tap on the
    title both opens the detail panel and kills :focus-within in the same interaction, so the user
-   has no pointer path to the excerpt or GitHub link. Keeping the reveal at rest shows the same
+   has no pointer path to the excerpt. Keeping the reveal at rest shows the same
    information without requiring an interaction that cannot be performed.
    The `body:has(.kanban-ghost)` drag-suppression rules above do NOT apply here, deliberately: they
    are scoped to `(hover: hover)`. They previously did — at (0,4,1) they out-specified everything in
@@ -1679,4 +1676,3 @@ h1:focus {
         padding: .2rem .4rem;
     }
 }
-

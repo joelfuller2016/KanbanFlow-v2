@@ -38,14 +38,18 @@
                         Blocked
                     </span>
                 }
+                <GitHubIssueBadge Links="Task.ExternalLinks"
+                                  Description="@Task.Description"
+                                  CssClass="badge rounded-pill text-bg-light border text-decoration-none flex-shrink-0 board-card-gh"
+                                  TestId="@($"board-card-{Task.Id}-github-link")" />
             </div>
         </div>
 
         @* -- The reveal (hover / focus-within) -------------------------------------------------
-           A resting card shows a TRUNCATED title and nothing else, so two tasks whose names share
-           a prefix are indistinguishable without opening the panel -- the reader had to click to
-           find out whether it was worth clicking. Everything below is already on the card's own
-           model; this spends vertical space only while the pointer (or keyboard focus) is on it.
+           Hover or keyboard focus exposes the full title and a body preview. The existing shared
+           GitHub badge stays beside the title and respects durable identity/quarantine state.
+           Everything below is already on the card's model; the preview spends vertical space
+           only while the pointer (or keyboard focus) is on it.
 
            `board-card-reveal` collapses via `grid-template-rows: 0fr -> 1fr` rather than a
            `max-height` guess: a guessed max-height either clips a long excerpt or, set generously,
@@ -64,18 +68,6 @@
                     @if (!string.IsNullOrWhiteSpace(Excerpt))
                     {
                         <p class="board-card-excerpt mb-1" data-testid="board-card-@Task.Id-excerpt">@Excerpt</p>
-                    }
-                    @if (IssueUrl is not null)
-                    {
-                        <a href="@IssueUrl" target="_blank" rel="noopener noreferrer" tabindex="0"
-                           class="board-card-gh"
-                           @onclick:stopPropagation="true"
-                           title="Open @IssueLabel on GitHub"
-                           aria-label="@IssueAriaLabel"
-                           data-testid="board-card-@Task.Id-github">
-                            <svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true" focusable="false"><path fill="currentColor" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z" /></svg>
-                            <span>@IssueLabel</span>
-                        </a>
                     }
                     </div>
                 </div>
@@ -117,9 +109,6 @@
     // per card per render, and the board holds 185 cards. `BoardFilterBar` binds `@oninput` with no
     // debounce and there is no `Virtualize`, so a filter keystroke re-renders every card on the
     // circuit's synchronization context — the cost multiplies by every character typed.
-    private string? IssueUrl;
-    private string? IssueLabel;
-    private string? IssueAriaLabel;
     private string? Excerpt;
     private bool HasReveal;
     private string? parsedFrom;
@@ -134,11 +123,8 @@
 
         parsedFrom = Task.Description;
         parsedOnce = true;
-        IssueUrl = MirroredDescription.IssueUrl(Task.Description);
-        IssueLabel = MirroredDescription.LabelForUrl(IssueUrl);
-        IssueAriaLabel = MirroredDescription.AriaLabelForLabel(IssueLabel);
         Excerpt = MirroredDescription.Excerpt(Task.Description);
-        HasReveal = IssueUrl is not null || !string.IsNullOrWhiteSpace(Excerpt);
+        HasReveal = !string.IsNullOrWhiteSpace(Excerpt);
     }
 
     private static string GetPriorityBadgeClass(TaskPriority priority) => priority switch
