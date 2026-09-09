@@ -3,6 +3,7 @@
     <a class="@CssClass"
        href="@Issue.Url"
        target="_blank"
+       tabindex="0"
        rel="noopener noreferrer"
        title="@($"GitHub issue {Issue.RepositoryOwner}/{Issue.RepositoryName}#{Issue.Number}")"
        aria-label="@($"Open GitHub issue #{Issue.Number} for {Issue.RepositoryOwner}/{Issue.RepositoryName} in a new tab")"

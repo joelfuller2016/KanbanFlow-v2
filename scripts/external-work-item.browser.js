@@ -38,6 +38,9 @@ async page => {
     await go();
     await page.getByTestId(`board-card-${verified.id}`).waitFor({ state: 'visible' });
     await link(page.getByTestId(`board-card-${verified.id}-github-link`), 44, 'verified card');
+    await page.getByTestId(`board-card-${verified.id}-title`).focus();
+    await page.keyboard.press('Tab');
+    check(await page.getByTestId(`board-card-${verified.id}-github-link`).evaluate(element => document.activeElement === element), 'Tab from the task title must reach the issue link');
     await link(page.getByTestId(`board-card-${legacy.id}-github-link`), 42, 'legacy card');
     check(await page.getByTestId(`board-card-${quarantined.id}-github-link`).count() === 0, 'quarantine card must suppress the legacy fallback');
     for (const [task, expectedNumber] of [[legacy, 42], [quarantined, null], [verified, 44]]) {
