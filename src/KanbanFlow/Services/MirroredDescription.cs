@@ -228,7 +228,11 @@ public static class MirroredDescription
         // Read the value at its start. Searching for another **Issue:** marker inside the value
         // would let free text forge a second record even after SyncRecord isolated the first one.
         var value = line[(key.Length + 5)..].TrimStart(); // **Key:**
-        var candidate = value.Split([' ', '\t', ')', '<'], 2)[0].TrimEnd('.', ',', ';', ':');
+        var candidate = value.Split([' ', '\t', '<'], 2)[0];
+        // Preserve the complete query/fragment token: parentheses and final punctuation can be
+        // meaningful there. Keep the existing sentence-stop cleanup only for a bare path.
+        if (candidate.IndexOfAny(['?', '#']) < 0)
+            candidate = candidate.Split(')', 2)[0].TrimEnd('.', ',', ';', ':');
         if (!candidate.StartsWith("https://github.com/", StringComparison.OrdinalIgnoreCase)
             || !Uri.TryCreate(candidate, UriKind.Absolute, out var uri)
             || uri.Scheme != Uri.UriSchemeHttps || uri.Host != "github.com"

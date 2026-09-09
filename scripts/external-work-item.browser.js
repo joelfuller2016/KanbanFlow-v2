@@ -64,7 +64,7 @@ async page => {
     }
     check(await page.getByTestId('edit-item-github-pr-link').getAttribute('href') === 'https://github.com/octo/board/pull/43', 'task PR positive control');
     await page.getByTestId('edit-item-description-read').click();
-    const draftPrUrl = 'https://github.com/octo/board/pull/99?view=all#review-7';
+    const draftPrUrl = 'https://github.com/octo/board/pull/99?filter=(open)#review-7.';
     const draftDescription = description.replace('https://github.com/octo/board/pull/43', draftPrUrl);
     await page.getByTestId('edit-item-description-edit').fill(draftDescription);
     await page.waitForFunction(url => document.querySelector('[data-testid="edit-item-github-pr-link"]')?.getAttribute('href') === url, draftPrUrl);

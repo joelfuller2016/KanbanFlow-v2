@@ -54,6 +54,24 @@ public sealed class ExternalWorkItemIntegrationTests
     private static string Header(bool pullRequest, string value) =>
         $"<!-- kanbanflow-sync -->\n**{(pullRequest ? "Open PR" : "Issue")}:** {value}\n<!-- /kanbanflow-sync -->";
 
+    [Theory]
+    [InlineData(false, "?filter=(open)")]
+    [InlineData(true, "?filter=(open)")]
+    [InlineData(false, "#section.")]
+    [InlineData(true, "#section.")]
+    [InlineData(false, "#section:")]
+    [InlineData(true, "#section:")]
+    [InlineData(false, "?filter=a,")]
+    [InlineData(true, "?filter=a,")]
+    [InlineData(false, "?filter=a;")]
+    [InlineData(true, "?filter=a;")]
+    public void LegacyControl_PreservesPunctuationInsideTheQueryOrFragment(bool pullRequest, string suffix)
+    {
+        var expected = $"https://github.com/acme/widgets/{(pullRequest ? "pull" : "issues")}/42{suffix}";
+
+        Assert.Equal(expected, ResolveUrl(pullRequest, Header(pullRequest, expected)));
+    }
+
     private static string? ResolveUrl(bool pullRequest, string description) => pullRequest
         ? ExternalWorkItemPresentation.FindSyncBlockPullRequest(description)?.Url
         : ExternalWorkItemPresentation.FindActiveGitHubIssue([], description)?.Url;

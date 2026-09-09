@@ -14,7 +14,7 @@ async (page) => {
   const project = await api('POST', '/api/projects', { name: marker });
   const feature = await api('POST', `/api/projects/${project.id}/features`, { name: 'Card context' });
   const fullTitle = 'Review the complete GitHub issue and its linked task before changing the plan: ' + 'LongUnbrokenContextToken'.repeat(8);
-  const issueUrl = 'https://github.com/joelfuller2016/KanbanFlow-v2/issues/487?view=full#issuecomment-9';
+  const issueUrl = 'https://github.com/joelfuller2016/KanbanFlow-v2/issues/487?filter=(open)#issuecomment-9.';
   const body = 'Opening context includes __init__, a negative -5 value, and the requested outcome.\n\n'
     + 'Complete description remains accessible inside this board. '.repeat(200) + '\n\nPR487-END-OF-COMPLETE-CONTENT';
   const description = '<!-- kanbanflow-sync -->\n**Issue:** ' + issueUrl + '\n**State:** OPEN\n'
@@ -70,6 +70,7 @@ async (page) => {
   await page.waitForFunction(selector => getComputedStyle(document.querySelector(selector)).opacity === '1', revealSelector);
   const hovered = await metrics(page);
   check(hovered.title.height > resting.title.height && hovered.clamp !== '2', 'Hover must expose the complete title.');
+  check(hovered.titleScrollHeight <= hovered.title.height + 1, 'Every title line must fit in the visible hover box.');
   check(hovered.reveal.height > 20, 'Hover must expose the description preview.');
   check(hovered.badge.right <= hovered.card.right && hovered.badge.width > 0, 'Long tokens must keep the Blocked badge inside the card.');
   const excerpt = await page.locator(`[data-testid="board-card-${task.id}-excerpt"]`).innerText();
@@ -157,6 +158,7 @@ async (page) => {
     touchResting = await metrics(touchPage);
     check(touchResting.hasNoHover, 'The touch case must execute in an actual no-hover media context.');
     check(touchResting.opacity === '1' && touchResting.reveal.height > 20 && touchResting.clamp !== '2', `Touch readers must see the title, preview and link without hovering: ${JSON.stringify(touchResting)}`);
+    check(touchResting.titleScrollHeight <= touchResting.title.height + 1, 'Every title line must fit in the visible touch box.');
     check(touchResting.link.height >= 24, 'Touch link must have at least a 24px target.');
     await touchPage.locator(cardSelector).evaluate(card => card.classList.add('kanban-ghost'));
     touchDrag = await metrics(touchPage);
