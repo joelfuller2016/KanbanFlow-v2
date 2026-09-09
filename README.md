@@ -869,6 +869,9 @@ npm run test:ui                         # Playwright e2e — builds, boots an is
 > the other's app and fail as `Feature <n> not found` rather than as a port clash. Override with
 > `UI_E2E_PORT=<free port> npm run test:ui` when anything else might be running the suite.
 
+The [Add Item draft-preservation review](docs/reviews/2026-09-08-add-drafts-463.md)
+records the parent-render regression, browser red/green evidence, and human checks for #463.
+
 ```bash
 # The in-app integration suite, from inside the live app.
 # Also available as "Run all" at /settings.
