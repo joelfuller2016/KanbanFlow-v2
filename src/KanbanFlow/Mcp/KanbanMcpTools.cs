@@ -82,7 +82,7 @@ public static class KanbanMcpTools
     }
 
     [McpServerTool(Name = "get_project_context")]
-    [Description("Return the full project graph in one payload: project docs (description, goals, readme), all features (with parentFeatureId for the tree), and every task (status, priority, assignee, claim). Load this before planning work on a project.")]
+    [Description("Load authoritative KanbanFlow project docs, features, tasks and current project memory before planning. Memory is limited to the newest 200 nodes; MemoryTruncated indicates more. Keep the configured server identity with returned references; do not copy project decisions into another memory store.")]
     public static async Task<ProjectContext> GetProjectContext(
         IDbContextFactory<AppDbContext> dbFactory,
         [Description("The project id (from list_projects).")] int projectId,
@@ -117,9 +117,23 @@ public static class KanbanMcpTools
                 t.Assignee, t.ClaimedBy))
             .ToList();
 
+        var scopeKey = projectId.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        var memory = await db.MemoryNodes.AsNoTracking()
+            .Where(m => m.Scope == MemoryScope.Project && m.ScopeKey == scopeKey &&
+                        m.ValidTo == null && m.SupersededById == null)
+            .OrderByDescending(m => m.Id)
+            .Select(m => new { m.Id, m.Type, m.Content, m.Source, m.ValidFrom })
+            .Take(201)
+            .ToListAsync(cancellationToken);
+
         return new ProjectContext(
             project.Id, project.Name, project.Description, project.Goals, project.Readme,
-            features, tasks);
+            features, tasks)
+        {
+            Memory = memory.Take(200).Select(m => new ProjectMemoryContext(
+                m.Id, $"MemoryNode:{m.Id}", m.Type.ToString(), m.Content, m.Source, m.ValidFrom)).ToList(),
+            MemoryTruncated = memory.Count > 200
+        };
     }
 
     [McpServerTool(Name = "get_task")]
@@ -1277,7 +1291,14 @@ public static class KanbanMcpTools
 public sealed record ProjectSummary(int Id, string Name, string? Description, string? Goals, int FeatureCount, int TaskCount);
 public sealed record FeatureNode(int Id, int? ParentFeatureId, string Name, string? Description);
 public sealed record TaskNode(int Id, int FeatureId, string Name, string Status, string Priority, string? Assignee, string? ClaimedBy);
-public sealed record ProjectContext(int Id, string Name, string? Description, string? Goals, string? Readme, IReadOnlyList<FeatureNode> Features, IReadOnlyList<TaskNode> Tasks);
+public sealed record ProjectContext(int Id, string Name, string? Description, string? Goals, string? Readme, IReadOnlyList<FeatureNode> Features, IReadOnlyList<TaskNode> Tasks)
+{
+    public string Authority => "KanbanFlow";
+    public string Reference => $"Project:{Id}";
+    public IReadOnlyList<ProjectMemoryContext> Memory { get; init; } = [];
+    public bool MemoryTruncated { get; init; }
+}
+public sealed record ProjectMemoryContext(int Id, string Reference, string Type, string Content, string? Source, DateTime ValidFrom);
 public sealed record ChecklistItem(int Id, string Text, bool Completed);
 public sealed record TaskDetail(int Id, int FeatureId, string Name, string? Description, string Status, string Priority, string? Assignee, string? ClaimedBy, IReadOnlyList<ChecklistItem> AcceptanceCriteria, IReadOnlyList<ChecklistItem> Subtasks, IReadOnlyList<int> DependsOnTaskIds);
 public sealed record NextTask(int Id, string Name, string Status, string Priority, string? ClaimedBy, string Reason);
