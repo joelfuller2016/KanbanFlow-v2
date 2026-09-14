@@ -37,16 +37,20 @@ export async function projectSkipNavigation(page, api) {
       });
       const filteredUrl = `${origin}/project/${project.id}?q=Keyboard&hideDone=true`;
       for (const testId of ['skip-to-board-search', 'skip-to-board-cards']) {
+        const targetId = testId === 'skip-to-board-search' ? 'board-filter-search' : 'kanban-board-heading';
         await fallbackPage.goto(filteredUrl);
         await fallbackPage.getByTestId('board-filter-search').waitFor();
         assert.ok(blockedModules > 0, 'fallback test must block the skip-link module');
         assert.equal(await fallbackPage.getByTestId(testId).evaluate((el) => el.href),
-          `${filteredUrl}#project-content`, 'native fallback must retain project and filter query');
+          `${filteredUrl}#${targetId}`, 'native fallback must retain project/query and bypass the outline');
         await fallbackPage.keyboard.press('Tab');
         if (testId === 'skip-to-board-cards') await fallbackPage.keyboard.press('Tab');
         await fallbackPage.keyboard.press('Enter');
-        await fallbackPage.waitForURL(`${filteredUrl}#project-content`);
-        await fallbackPage.waitForFunction(() => document.activeElement?.id === 'project-content');
+        await fallbackPage.waitForURL(`${filteredUrl}#${targetId}`);
+        await fallbackPage.waitForFunction((id) => document.activeElement?.id === id, targetId);
+        await fallbackPage.keyboard.press('Tab');
+        assert.ok(await fallbackPage.evaluate(() => !document.querySelector('#project-outline')
+          .contains(document.activeElement)), 'native fallback must not resume in the outline');
       }
     } finally {
       await fallbackPage.close();
@@ -123,10 +127,16 @@ export async function projectSkipNavigation(page, api) {
     await page.evaluate(() => { window.skipNavigationDocument = true; });
     await page.getByRole('link', { name: 'KanbanFlow', exact: true }).click();
     const projectOpener = page.locator(`[data-project-id="${project.id}"]`).getByRole('button', { name: 'Open', exact: true });
+    const projectUrl = `${origin}/project/${project.id}`;
     for (let attempt = 0; attempt < 3; attempt++) {
+      if (page.url() === projectUrl) break;
       await projectOpener.click();
-      try { await page.waitForURL(`${origin}/project/${project.id}`, { timeout: 2500 }); break; }
-      catch (error) { if (attempt === 2) throw error; }
+      try { await page.waitForURL(projectUrl, { timeout: 2500 }); break; }
+      catch (error) {
+        const arrived = await page.waitForURL(projectUrl, { timeout: 500 }).then(() => true, () => false);
+        if (arrived) break;
+        if (attempt === 2) throw error;
+      }
     }
     await page.getByTestId('board-filter-search').waitFor();
     assert.equal(await page.evaluate(() => window.skipNavigationDocument), true,

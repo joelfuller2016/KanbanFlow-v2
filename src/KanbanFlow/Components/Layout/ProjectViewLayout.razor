@@ -3,9 +3,9 @@
 @inject IDbContextFactory<AppDbContext> DbFactory
 @inject NavigationManager Nav
 
-<a class="project-skip-link visually-hidden-focusable" href="@ProjectContentHref" data-enhance-nav="false"
+<a class="project-skip-link visually-hidden-focusable" href="@BoardSearchHref" data-enhance-nav="false"
    data-project-skip-target="board-filter-search" data-testid="skip-to-board-search">Skip to board search</a>
-<a class="project-skip-link visually-hidden-focusable" href="@ProjectContentHref" data-enhance-nav="false"
+<a class="project-skip-link visually-hidden-focusable" href="@BoardCardsHref" data-enhance-nav="false"
    data-project-skip-target="kanban-board-heading" data-testid="skip-to-board-cards">Skip to board cards</a>
 
 <NavMenu ProjectName="@projectName" />
@@ -22,7 +22,8 @@
 
 @code {
     private string? projectName;
-    private string ProjectContentHref => Nav.Uri.Split('#')[0] + "#project-content";
+    private string BoardSearchHref => Nav.Uri.Split('#')[0] + "#board-filter-search";
+    private string BoardCardsHref => Nav.Uri.Split('#')[0] + "#kanban-board-heading";
 
     protected override void OnInitialized()
     {

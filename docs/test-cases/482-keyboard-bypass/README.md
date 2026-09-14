@@ -4,6 +4,15 @@
 
 This slice makes the existing board reachable without traversing the outline. It does not replace the outline with a roving ARIA tree and does not close #482.
 
+Traceability: [issue #482](https://github.com/joelfuller2016/KanbanFlow-v2/issues/482),
+[implementation PR #523](https://github.com/joelfuller2016/KanbanFlow-v2/pull/523),
+[executable browser scenario](../../../scripts/project-skip-navigation.browser.mjs),
+[layout](../../../src/KanbanFlow/Components/Layout/ProjectViewLayout.razor),
+[board heading](../../../src/KanbanFlow/Components/Shared/KanbanBoard.razor),
+[module](../../../src/KanbanFlow/wwwroot/js/project-skip-links.js),
+[styles](../../../src/KanbanFlow/wwwroot/app.css), and
+[asset loading](../../../src/KanbanFlow/Components/App.razor).
+
 | Case | Expected behavior | Executable evidence |
 |---|---|---|
 | Loaded 170-task board | First Tab reaches search bypass; Enter focuses actual search input | `project-skip-navigation.browser.mjs` |
@@ -14,7 +23,7 @@ This slice makes the existing board reachable without traversing the outline. It
 | Narrow screen | Focused link is visible within 390px; no page-wide overflow; closed outline remains inert | Same scenario |
 | High contrast | Visible focus outline under forced colors | Same scenario |
 | Missing project | Focus moves to named main fallback, not a missing card | Same scenario |
-| Native fallback/module failure | Link stays on the current project and retains query parameters | Browser regression added following independent review |
+| Native fallback/module failure | Link retains project/query and focuses the actual search/cards destination; next Tab bypasses the outline | Browser regression added following independent review |
 | Navigation/modal isolation | Bypass survives navigation and does not move behind a visible modal | Browser regression added following independent review |
 
 ## Implementation boundaries
@@ -30,6 +39,9 @@ This slice makes the existing board reachable without traversing the outline. It
 ## Reproduce
 
 From the isolated worktree, after installing dependencies and Chromium:
+
+The following block uses Bash syntax. In PowerShell 7, replace its inline UI environment
+assignment with `$env:UI_E2E_PORT='5278'; $env:SKIP_BUILD='1'; npm run test:ui`.
 
 ```bash
 npm ci
@@ -51,3 +63,6 @@ Optional embedding calls may exceed smoke-api's five-second client budget if the
 The original code was tested before implementation: the new scenario failed because the first Tab had no `skip-to-board-search` target, while the existing 55 scenarios passed. The independent reviewer later identified a separate native-fallback defect; it receives its own failing regression before repair. No failing assertion was weakened to manufacture green output.
 
 The [full run record](runs/2026-09-14-f39c404e992a.md) is pinned to implementation commit `f39c404e992a` and separate from this stable contract. A successful prior run is not verification of a later edit. Report intermittent failures and advisory formatter drift alongside the final passing run. Human workflow acceptance remains outstanding; browser automation is not human approval.
+
+
+The [PR review follow-up](runs/2026-09-14-pr523-review.md) records later corrections and their actual verification. The standalone `node scripts/verify-project-skip-links.mjs` check uses Chromium with the real module/styles and a small DOM fixture; it starts no Kanban server and exercises no database. It complements the [full application scenario](../../../scripts/project-skip-navigation.browser.mjs), whose rerun remains pending for that follow-up.

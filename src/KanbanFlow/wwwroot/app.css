@@ -1682,7 +1682,8 @@ h1:focus {
     position: fixed;
     top: .5rem;
     left: .5rem;
-    z-index: 1080;
+    /* Above ordinary navigation, below Bootstrap modal/offcanvas backdrops. */
+    z-index: 1030;
     max-width: calc(100vw - 1rem);
     padding: .75rem 1rem;
     border-radius: .25rem;

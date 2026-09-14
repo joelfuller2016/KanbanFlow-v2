@@ -1,5 +1,7 @@
 # Workflow and UI review: KanbanFlow
 
+This is the original review of the source heads named below. Subsequent review work integrated PR #511 at `6345d5d`, pushed corrections at `a95c1ea`, and obtained CodeRabbit approval of PR #521 at `599a714`. The original findings and evidence are retained as historical observations. [PR #523 follow-up](../test-cases/482-keyboard-bypass/runs/2026-09-14-pr523-review.md) records its own corrections.
+
 ## Scope and evidence
 
 Reviewed `master` at `8cdd684322eec15485a400c81c3372999c1789fa`, the installed IIS application, the connected native MCP project, the bodies of **182 unique open GitHub issues**, and both open PRs. Ten decision/UI issue threads received full-comment review: #515, #509, #493, #501, #147, #482, #481, #465, #492, and #491. Other issue comments were not exhaustively reviewed.
