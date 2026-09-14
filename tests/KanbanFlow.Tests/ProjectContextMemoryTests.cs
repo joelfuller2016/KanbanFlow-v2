@@ -1,7 +1,9 @@
+using System.Data.Common;
 using KanbanFlow.Data;
 using KanbanFlow.Mcp;
 using KanbanFlow.Models;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.DependencyInjection;
 using ModelContextProtocol;
 using ModelContextProtocol.Server;
@@ -10,6 +12,80 @@ namespace KanbanFlow.Tests;
 
 public sealed class ProjectContextMemoryTests
 {
+    /// <summary>Both fresh and upgraded databases execute real first/cursor queries without a temporary sort.</summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Context_UsesCurrentMemoryIndexOnEveryPage(bool upgradeExistingDatabase)
+    {
+        using var factory = new SqliteTestFactory();
+        await using var db = factory.CreateDbContext();
+        var project = new Project { Name = "Indexed context" };
+        db.Projects.Add(project);
+        await db.SaveChangesAsync();
+        var key = project.Id.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        db.MemoryNodes.AddRange(Enumerable.Range(0, 201).Select(i => new MemoryNode
+        {
+            ScopeKey = key, Content = $"Fact {i}", CreatedAt = new DateTime(2026, 1, 1).AddSeconds(i)
+        }));
+        await db.SaveChangesAsync();
+        if (upgradeExistingDatabase)
+        {
+            await db.Database.ExecuteSqlRawAsync("DROP INDEX IX_MemoryNodes_CurrentProjectContext");
+            SchemaPatcher.EnsureMemoryTables(db.Database.GetDbConnection());
+            SchemaPatcher.EnsureMemoryTables(db.Database.GetDbConnection());
+        }
+        var probe = new MemoryQueryPlanProbe();
+        var observed = new ObservedContextFactory(new DbContextOptionsBuilder<AppDbContext>(factory.Options)
+            .AddInterceptors(probe).Options);
+
+        var first = await KanbanMcpTools.GetProjectContext(observed, project.Id);
+        var next = await KanbanMcpTools.GetProjectContext(observed, project.Id, first.MemoryNextCursor);
+
+        Assert.Single(next.Memory);
+        Assert.Equal(2, probe.Plans.Count);
+        Assert.All(probe.Plans, plan =>
+        {
+            Assert.Contains("USING INDEX IX_MemoryNodes_CurrentProjectContext", plan);
+            Assert.DoesNotContain("USE TEMP B-TREE", plan);
+        });
+    }
+
+    private sealed class ObservedContextFactory(DbContextOptions<AppDbContext> options) : IDbContextFactory<AppDbContext>
+    {
+        public AppDbContext CreateDbContext() => new(options);
+    }
+
+    private sealed class MemoryQueryPlanProbe : DbCommandInterceptor
+    {
+        public List<string> Plans { get; } = [];
+
+        public override async ValueTask<InterceptionResult<DbDataReader>> ReaderExecutingAsync(
+            DbCommand command, CommandEventData eventData, InterceptionResult<DbDataReader> result,
+            CancellationToken cancellationToken = default)
+        {
+            if (command.CommandText.Contains("FROM \"MemoryNodes\"", StringComparison.Ordinal))
+            {
+                await using var explain = command.Connection!.CreateCommand();
+                explain.Transaction = command.Transaction;
+                explain.CommandText = "EXPLAIN QUERY PLAN " + command.CommandText;
+                foreach (DbParameter parameter in command.Parameters)
+                {
+                    var copy = explain.CreateParameter();
+                    copy.ParameterName = parameter.ParameterName;
+                    copy.DbType = parameter.DbType;
+                    copy.Value = parameter.Value;
+                    explain.Parameters.Add(copy);
+                }
+                await using var reader = await explain.ExecuteReaderAsync(cancellationToken);
+                var steps = new List<string>();
+                while (await reader.ReadAsync(cancellationToken)) steps.Add(reader.GetString(3));
+                Plans.Add(string.Join("\n", steps));
+            }
+            return result;
+        }
+    }
+
     /// <summary>The native MCP schema makes continuation discoverable without exposing DI services.</summary>
     [Fact]
     public void Context_NativeToolSchemaExposesAnOptionalMemoryCursor()

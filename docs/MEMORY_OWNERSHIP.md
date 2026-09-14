@@ -52,6 +52,8 @@ project ID, use its current memory and preserve `Authority`, `Reference`, `Sourc
 and `ValidFrom` with the answer's supporting context. Request write tools only
 when the task calls for a project change.
 
-This extends the existing project-context tool. It does not add a competing
-memory service, a database migration or a second project synchronization loop.
-The scope/version tests use the actual SQLite schema and MCP method.
+This extends the existing project-context tool and adds a partial index for
+current-memory paging. The EF model creates the index for new databases; the
+idempotent startup patch adds it to existing databases. There is no additional
+memory service or project synchronization loop. Scope/version tests use the
+actual SQLite schema and MCP method; query-plan tests check both page queries.
