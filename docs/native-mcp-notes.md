@@ -42,6 +42,7 @@ one deployable, and mutations reuse the exact audit-aware code path the UI/REST 
 | `get_task` | `IDbContextFactory<AppDbContext>` | read |
 | `update_task_status` | **`ITaskService.ChangeStatusAsync`** | mutation (audit-aware) |
 | `create_task` | **`ITaskService.CreateAsync`** | mutation (audit-aware) |
+| `project_github_issue` | **`IExternalWorkItemService.ProjectInboundGitHubIssueAsync`** | atomic task/link/audit projection; same-project retry returns current card unchanged |
 | `delete_task` | **`ITaskService.DeleteAsync`** | mutation (audit-aware) |
 | `add_task_comment` | **`ITaskService.AddCommentAsync`** | mutation (audit-aware) |
 | `claim_task` | **`ITaskService.ClaimAsync`** | mutation (audit-aware) |
@@ -55,6 +56,8 @@ one deployable, and mutations reuse the exact audit-aware code path the UI/REST 
 > `update_idea` cannot set `status: Promoted` — that status is **derived**, written only by
 > `promote_idea`/`PromoteAsync`, which alone also creates the linked project. `UpdateAsync` throws
 > `ValidationException` (surfaced as an actionable tool error naming the promote path) if you try (#283).
+
+The atomic import tool is exposed through both native and stdio MCP. Its [TC-507 contract](test-cases/507-atomic-github-projection/README.md) records full-content, conflict and replay checks. This does not close the older native `get_task` response's missing durable links/journal fields; that separate read-shape gap remains explicit during workflow integration.
 
 ### Service-layer extraction (done — closes the task/comment half of #88)
 

@@ -41,6 +41,118 @@ public static class SchemaPatcher
     }
 
     /// <summary>
+    /// Ensure the durable external-work-item link and write-journal tables added by #336 exist on
+    /// databases created before those entities joined the EF model. No-op on non-SQLite providers.
+    /// </summary>
+    public static void EnsureExternalWorkItemTables(AppDbContext db)
+    {
+        ArgumentNullException.ThrowIfNull(db);
+
+        if (!db.Database.IsSqlite())
+            return;
+
+        db.Database.OpenConnection();
+        Exception? patchException = null;
+        try
+        {
+            EnsureExternalWorkItemTables(db.Database.GetDbConnection());
+        }
+        catch (Exception ex)
+        {
+            patchException = ex;
+            throw;
+        }
+        finally
+        {
+            try
+            {
+                db.Database.CloseConnection();
+            }
+            catch when (patchException is not null)
+            {
+                // Preserve the patch failure; cleanup is best-effort only on failure path.
+            }
+        }
+    }
+
+    /// <summary>
+    /// Connection-level worker for <see cref="EnsureExternalWorkItemTables(AppDbContext)"/>. The
+    /// column and index names intentionally match EF's fresh-database schema and every statement is
+    /// idempotent.
+    /// </summary>
+    public static void EnsureExternalWorkItemTables(DbConnection connection)
+    {
+        ArgumentNullException.ThrowIfNull(connection);
+
+        using var transaction = connection.BeginTransaction();
+
+        Execute(connection, transaction, """
+            CREATE TABLE IF NOT EXISTS ExternalWorkItemLinks (
+                Id INTEGER NOT NULL CONSTRAINT PK_ExternalWorkItemLinks PRIMARY KEY AUTOINCREMENT,
+                TaskId INTEGER NOT NULL,
+                Provider INTEGER NOT NULL,
+                State INTEGER NOT NULL,
+                RepositoryExternalId TEXT NOT NULL,
+                RepositoryOwner TEXT NOT NULL,
+                RepositoryName TEXT NOT NULL,
+                ExternalNodeId TEXT NULL,
+                ExternalNumber INTEGER NULL,
+                Url TEXT NULL,
+                QuarantineReason TEXT NULL,
+                CreatedAt TEXT NOT NULL,
+                UpdatedAt TEXT NOT NULL,
+                CONSTRAINT FK_ExternalWorkItemLinks_Tasks_TaskId FOREIGN KEY (TaskId)
+                    REFERENCES Tasks (Id) ON DELETE CASCADE
+            )
+            """);
+
+        Execute(connection, transaction, """
+            CREATE TABLE IF NOT EXISTS ExternalWriteOperations (
+                Id INTEGER NOT NULL CONSTRAINT PK_ExternalWriteOperations PRIMARY KEY AUTOINCREMENT,
+                OperationId TEXT NOT NULL,
+                TaskId INTEGER NOT NULL,
+                ProjectId INTEGER NOT NULL,
+                Provider INTEGER NOT NULL,
+                RepositoryExternalId TEXT NOT NULL,
+                RepositoryOwner TEXT NOT NULL,
+                RepositoryName TEXT NOT NULL,
+                Title TEXT NOT NULL,
+                Body TEXT NOT NULL,
+                MilestoneTitle TEXT NULL,
+                Label TEXT NULL,
+                RequestHash TEXT NOT NULL,
+                ExpectedTaskUpdatedAt TEXT NOT NULL,
+                State INTEGER NOT NULL,
+                LeaseToken TEXT NULL,
+                LeaseExpiresAt TEXT NULL,
+                AttemptCount INTEGER NOT NULL,
+                LastAttemptAt TEXT NULL,
+                DispatchedAt TEXT NULL,
+                LastError TEXT NULL,
+                ResultingExternalNodeId TEXT NULL,
+                ResultingExternalNumber INTEGER NULL,
+                ResultingUrl TEXT NULL,
+                CreatedAt TEXT NOT NULL,
+                UpdatedAt TEXT NOT NULL,
+                CompletedAt TEXT NULL
+            )
+            """);
+
+        Execute(connection, transaction,
+            "CREATE UNIQUE INDEX IF NOT EXISTS IX_ExternalWorkItemLinks_Provider_ExternalNodeId ON ExternalWorkItemLinks (Provider, ExternalNodeId) WHERE \"ExternalNodeId\" IS NOT NULL");
+        Execute(connection, transaction,
+            "CREATE UNIQUE INDEX IF NOT EXISTS IX_ExternalWorkItemLinks_TaskId_Provider ON ExternalWorkItemLinks (TaskId, Provider)");
+        Execute(connection, transaction,
+            "CREATE UNIQUE INDEX IF NOT EXISTS IX_ExternalWorkItemLinks_Provider_RepositoryExternalId_ExternalNumber ON ExternalWorkItemLinks (Provider, RepositoryExternalId, ExternalNumber) WHERE \"State\" = 0 AND \"ExternalNumber\" IS NOT NULL");
+        Execute(connection, transaction,
+            "CREATE UNIQUE INDEX IF NOT EXISTS IX_ExternalWriteOperations_OperationId ON ExternalWriteOperations (OperationId)");
+        Execute(connection, transaction,
+            "CREATE UNIQUE INDEX IF NOT EXISTS IX_ExternalWriteOperations_TaskId_Provider ON ExternalWriteOperations (TaskId, Provider)");
+
+        transaction.Commit();
+    }
+
+    /// <summary>
     /// Ensure the memory data model tables (<c>MemoryNodes</c>, <c>Observations</c>,
     /// <c>MemoryRelations</c>) and their indexes exist. No-op on non-SQLite providers. Opens and
     /// closes the context connection like the other startup patchers.

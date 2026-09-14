@@ -13,6 +13,69 @@ public class ChangeAuditTests
     private static readonly DateTime T0 = new(2026, 9, 7, 12, 0, 0, DateTimeKind.Utc);
 
     [Theory]
+    [InlineData("Task", false)]
+    [InlineData("Feature", false)]
+    [InlineData("Project", false)]
+    [InlineData("Task", true)]
+    [InlineData("Feature", true)]
+    [InlineData("Project", true)]
+    public async Task Delete_ExternalLinkAuditCommitsAtomicallyWithGraph(string scope, bool failAudit)
+    {
+        using var factory = new SqliteTestFactory();
+        var fixture = await SeedAsync(factory);
+        int linkId;
+        await using (var db = factory.CreateDbContext())
+        {
+            var link = new ExternalWorkItemLink
+            {
+                TaskId = fixture.TaskId, RepositoryExternalId = "R_audit",
+                RepositoryOwner = "owner", RepositoryName = "repo", ExternalNodeId = "I_audit",
+                ExternalNumber = 17, Url = "https://github.com/owner/repo/issues/17"
+            };
+            db.ExternalWorkItemLinks.Add(link);
+            await db.SaveChangesAsync();
+            linkId = link.Id;
+            if (failAudit)
+                await db.Database.ExecuteSqlRawAsync("""
+                    CREATE TRIGGER reject_external_deletion_audit BEFORE INSERT ON ActivityEvents
+                    WHEN NEW.EventType = 'ExternalWorkItemLinkDeleted'
+                    BEGIN SELECT RAISE(ABORT, 'forced external deletion audit failure'); END;
+                    """);
+        }
+
+        async Task DeleteAsync()
+        {
+            var service = new TaskService(factory);
+            if (scope == "Task") await service.DeleteAsync(fixture.TaskId, "Codex");
+            else if (scope == "Project") await service.DeleteProjectAsync(fixture.ProjectId, "Codex");
+            else
+            {
+                await using var db = factory.CreateDbContext();
+                await ApiEndpoints.DeleteFeatureAsync(fixture.FeatureId, db);
+            }
+        }
+
+        if (failAudit) await Assert.ThrowsAnyAsync<Exception>(DeleteAsync);
+        else await DeleteAsync();
+
+        await using var verify = factory.CreateDbContext();
+        Assert.Equal(failAudit, await verify.Tasks.AnyAsync(t => t.Id == fixture.TaskId));
+        Assert.Equal(failAudit, await verify.ExternalWorkItemLinks.AnyAsync(l => l.Id == linkId));
+        var events = await verify.ActivityEvents.Where(e => e.EventType == "ExternalWorkItemLinkDeleted").ToListAsync();
+        if (failAudit) Assert.Empty(events);
+        else
+        {
+            var audit = Assert.Single(events);
+            Assert.Equal(fixture.ProjectId, audit.ProjectId);
+            Assert.Equal(fixture.TaskId, audit.TaskId);
+            Assert.Equal(linkId, audit.EntityId);
+            Assert.Null(audit.AfterJson);
+            using var before = JsonDocument.Parse(audit.BeforeJson!);
+            Assert.Equal("I_audit", before.RootElement.GetProperty("externalNodeId").GetString());
+        }
+    }
+
+    [Theory]
     [InlineData("Subtask")]
     [InlineData("AcceptanceCriterion")]
     [InlineData("Requirement")]

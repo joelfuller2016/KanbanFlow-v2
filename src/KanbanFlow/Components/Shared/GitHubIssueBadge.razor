@@ -1,0 +1,28 @@
+@if (Issue is not null)
+{
+    <a class="@CssClass"
+       href="@Issue.Url"
+       target="_blank"
+       tabindex="0"
+       rel="noopener noreferrer"
+       title="@($"GitHub issue {Issue.RepositoryOwner}/{Issue.RepositoryName}#{Issue.Number}")"
+       aria-label="@($"Open GitHub issue #{Issue.Number} for {Issue.RepositoryOwner}/{Issue.RepositoryName} in a new tab")"
+       data-testid="@TestId"
+       @onclick:stopPropagation="true"
+       @onkeydown:stopPropagation="true">#@Issue.Number</a>
+}
+
+@code {
+    [Parameter] public IEnumerable<ExternalWorkItemLink>? Links { get; set; }
+    // Display-only legacy fallback, used ONLY when no durable link row exists yet. An upgraded
+    // board has none until its first sync promotes them, and without this the chip disappears in
+    // the gap. Never an identity source; see ExternalWorkItemPresentation.FindSyncBlockGitHubIssue.
+    [Parameter] public string? Description { get; set; }
+    [Parameter] public string CssClass { get; set; } = "badge rounded-pill text-bg-light border text-decoration-none";
+    [Parameter] public string? TestId { get; set; }
+
+    private GitHubIssueReference? Issue;
+
+    protected override void OnParametersSet() =>
+        Issue = ExternalWorkItemPresentation.FindActiveGitHubIssue(Links, Description);
+}

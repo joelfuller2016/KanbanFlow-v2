@@ -6,25 +6,26 @@
 //
 // Commands (full contract: docs/GITHUB-SYNC.md):
 //
-//   sync        GitHub -> board mirror. The default command.
+//   sync        GitHub -> board mirror. The default command. Also promotes a legacy "#<n> "
+//               prefix match to a durable link; see legacyPromotionDisposition.
 //   onboard     register a NEW repo: create/link the Project, then backfill everything.
 //   restore-content  recover incomplete legacy descriptions for one explicit repo.
-//   push-issue  PREVIEW ONLY. Computes and prints the exact GitHub issue a board task would
-//               become, and REFUSES to perform the write. See "why" below.
+//   push-issue  Preview by default. `--allow-write --task <id>` performs one journaled,
+//               additive issue create; `--resume <uuid>` explicitly reconciles an interruption.
+//   backfill-links  verify sync-block URLs into durable links; quarantine ambiguity. A REPAIR
+//               tool for what sync's auto-promotion refuses, not a required migration step.
 //   status      health check: counts both sides, unsynced tasks, drift, orphans, last sync.
 //               Exit 0 = clean and complete · 1 = confirmed drift · 2 = incomplete or error.
 //
-// THIS FILE NEVER WRITES TO GITHUB. There is no create/update/close/label/delete call in it —
-// `grep -n "gh\(\"\|(\[\"\)" ` finds only reads. push-issue stops one step short of the write
-// on purpose: the board has no durable external-id column, so a task's only identity is the
-// "#<n> " title prefix, and that prefix does not exist until AFTER the issue is created. That
-// window is unrecoverable under additive-only rules — a crash, a concurrent push, or a sync
-// landing between create and stamp produces a duplicate issue that nothing is allowed to
-// close. Enabling the write needs a pending-operation id persisted BEFORE the GitHub call;
-// that is schema work, tracked separately. Until then, preview is the honest deliverable.
+// GITHUB WRITE SURFACE: exactly one dedicated `gh issue create` wrapper. It is unreachable
+// without both --allow-write and --task, sends the frozen body over stdin, and runs only after
+// the board has persisted Prepared -> Dispatched. Generic gh() stays structurally read-only.
+// There is no edit/close/delete/comment path. GitHub has no issue-create idempotency key, so an
+// exact operation marker plus authoritative paginated recovery closes the crash window; an
+// ambiguous or incomplete result fails closed in NeedsReview and never auto-creates.
 //
 // Invariants this tool holds:
-//   * GitHub owns issue content. Nothing here can reword, close, re-label or delete an issue.
+//   * GitHub owns issue content. Nothing here can reword, close, re-label-after-create or delete.
 //   * Every board mutation goes through the REST API — never SQLite/EF directly — so the
 //     ActivityEvent audit trail stays complete.
 //   * Idempotent. A second consecutive run of any command creates nothing.
@@ -37,10 +38,10 @@
 // "never override a hand-set status" is an aspiration, not the current behaviour. See the
 // field-ownership table in docs/GITHUB-SYNC.md.
 //
-// Identity: repo -> Project (durable "<!-- github: owner/repo -->" marker in the project
-// description; short-name matching survives only as a fallback for pre-marker boards),
-// milestone -> Feature (matched by name), issue -> TaskItem (matched by the "#<n> " title
-// prefix), GitHub comment -> TaskComment (matched by node id).
+// Identity: repo -> Project (description marker for project selection), milestone -> Feature
+// (name), issue -> TaskItem (Active ExternalWorkItemLink by immutable repo/issue node ids first;
+// legacy "#<n> " prefix only when structured state is absent), GitHub comment -> TaskComment
+// (node id marker). Linked task names are plain, human-editable titles.
 //
 //   node scripts/portfolio-sync.mjs --dry-run
 //   node scripts/portfolio-sync.mjs --repos joelfuller2016/ZeroRouter
@@ -49,12 +50,12 @@
 //   node scripts/portfolio-sync.mjs status
 //   KANBANFLOW_PORTFOLIO_REPOS="o/a,o/b" node scripts/portfolio-sync.mjs
 
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
+import { execFile, spawn } from "node:child_process";
 import { realpathSync } from "node:fs";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { resolve } from "node:path";
-import { fileURLToPath } from "node:url";
 import { createHash } from "node:crypto";
+import { promisify } from "node:util";
 // BOTH imports are used. `derivePriority` sets TaskItem.Priority in `syncTasks()` and backs the
 // priority-drift check in `statusRepo()`; `priorityFromLabel` is called by `labelForPriority()`
 // below, which picks the label a pushed issue should carry so the priority survives the round trip.
@@ -91,7 +92,10 @@ const OVERSIZED_HEADER_STUB = "<!-- kanbanflow-sync -->\n**Issue:** (provenance 
 // verdict downstream a lie. Overridable so the incompleteness path can actually be exercised.
 const GH_PAGE_LIMIT = Math.max(1, Number.parseInt(process.env.KANBANFLOW_GH_PAGE_LIMIT || "2000", 10) || 2000);
 
-const COMMANDS = ["sync", "onboard", "restore-content", "push-issue", "status"];
+const COMMANDS = ["sync", "onboard", "restore-content", "push-issue", "backfill-links", "status"];
+const PUSH_MARKER_RE = /<!--\s*kanbanflow-push:([0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})\s*-->/gi;
+const RAW_PUSH_MARKER_TOKEN_RE = /kanbanflow-push\s*:\s*([0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})/gi;
+const GITHUB_ISSUE_URL_RE = /^https:\/\/github\.com\/([^/]+)\/([^/]+)\/issues\/(\d+)\/?$/i;
 
 // Statuses the sync is allowed to advance a task *out of* when GitHub shows a linked open
 // PR. A task a human has already parked in Review/Done is left alone (reported as drift
@@ -101,9 +105,11 @@ const ADVANCEABLE_TO_REVIEW = new Set(["Backlog", "Todo", "InProgress"]);
 function parseArgs(argv) {
   const args = {
     command: "sync",
-    dryRun: false, includeClosed: false, repos: null, actor: "portfolio-sync",
+    dryRun: false, includeClosed: false, repos: null, actor: "portfolio-sync", actorExplicit: false,
     comments: true,
-    allowWrite: false, task: null, all: false, strict: false, json: false, limit: 0,
+    allowWrite: false, task: null, resume: null, authorizeAmbiguousRetry: null,
+    resolutionReason: null, all: false, strict: false, json: false, limit: 0,
+    internalTestHooks: false,
     error: null,
   };
 
@@ -133,6 +139,11 @@ function parseArgs(argv) {
   // the write. main() prints args.error and exits 2 before it touches a repo, so a refusal is
   // free and a swallow is not. This lives in ONE helper on purpose: hand-written per-flag
   // copies are exactly how the check ends up on one flag and not the other four.
+  //
+  // The recovery flags matter most of all. `--resume --dry-run` swallowed the preview flag and
+  // left `dryRun` false on the ONE path whose whole purpose is finishing a half-written remote
+  // create; the post-loop UUID regexes below would then refuse for the wrong reason, or — with
+  // a UUID present later on the line — not refuse at all.
   const takeValue = (flag, need) => {
     const value = argv[i + 1];
     if (value === undefined || value.trim() === "" || value.trim().startsWith("-")) {
@@ -162,6 +173,7 @@ function parseArgs(argv) {
       const value = takeValue("--actor", "a non-blank name");
       if (value === null) return args;
       args.actor = value;
+      args.actorExplicit = true;
     }
     // --push is the alias; both spellings mean "you may create issues on GitHub".
     else if (a === "--allow-write" || a === "--push") args.allowWrite = true;
@@ -169,6 +181,21 @@ function parseArgs(argv) {
       const value = takeValue("--task", "an integer task id");
       if (value === null) return args;
       args.task = Number.parseInt(value, 10);
+    }
+    else if (a === "--resume") {
+      const value = takeValue("--resume", "an operation UUID");
+      if (value === null) return args;
+      args.resume = value;
+    }
+    else if (a === "--authorize-ambiguous-retry") {
+      const value = takeValue("--authorize-ambiguous-retry", "an operation UUID");
+      if (value === null) return args;
+      args.authorizeAmbiguousRetry = value;
+    }
+    else if (a === "--resolution-reason") {
+      const value = takeValue("--resolution-reason", "non-blank text");
+      if (value === null) return args;
+      args.resolutionReason = value;
     }
     else if (a === "--all") args.all = true;
     else if (a === "--strict") args.strict = true;
@@ -178,6 +205,9 @@ function parseArgs(argv) {
       if (value === null) return args;
       args.limit = Number.parseInt(value, 10) || 0;
     }
+    // Arming key 1 of 2 for the #336 crash harness. Useless on its own: without
+    // KANBANFLOW_336_TEST_HOOKS naming a module, main() refuses to start.
+    else if (a === "--internal-test-hooks") args.internalTestHooks = true;
     else if (a === "--help" || a === "-h") args.help = true;
     // `onboard owner/repo` — a bare owner/repo positional is a repo, so the common case
     // needs no flag at all.
@@ -186,6 +216,12 @@ function parseArgs(argv) {
   }
 
   if (args.task !== null && !Number.isFinite(args.task)) args.error = "--task needs an integer task id.";
+  if (args.resume !== null && !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(args.resume)) {
+    args.error = "--resume needs an operation UUID.";
+  }
+  if (args.authorizeAmbiguousRetry !== null && !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(args.authorizeAmbiguousRetry)) {
+    args.error = "--authorize-ambiguous-retry needs an operation UUID.";
+  }
   return args;
 }
 
@@ -198,10 +234,9 @@ function resolveRepos(args) {
 
 // --- GitHub (read-only) -----------------------------------------------------------------
 
-// "This file never writes to GitHub" is a property a future edit must not be able to break by
-// accident, so it is enforced here instead of at review time. A WHITELIST, not a blacklist:
-// anything that is not one of these four read verbs is refused, so a newly added `gh issue
-// create` / `issue edit` / `issue close` fails immediately and loudly.
+// Generic `gh()` is permanently read-only, enforced here instead of by review convention. A
+// WHITELIST, not a blacklist: anything outside these read verbs is refused. The sole issue-create
+// capability is the separate, fixed-argv `ghIssueCreate()` wrapper above its own explicit gate.
 const GH_READ_VERBS = new Set(["issue list", "pr list", "label list", "api"]);
 // `gh api` is GET unless something makes it otherwise. These are the flags that do.
 const GH_API_WRITE_FLAGS = new Set(["--method", "-X", "-f", "--field", "-F", "--raw-field", "--input"]);
@@ -212,7 +247,10 @@ function assertReadOnly(args) {
     throw new Error(`portfolio-sync is READ-ONLY against GitHub; refusing to run "gh ${verb}". If a write is genuinely needed, it belongs behind the durable-link design in docs/GITHUB-SYNC.md, not here.`);
   }
   if (args[0] === "api") {
-    const offender = args.find((a) => GH_API_WRITE_FLAGS.has(a) || /^--method=/.test(a));
+    const offender = args.find((a) =>
+      GH_API_WRITE_FLAGS.has(a)
+      || /^--(?:method|field|raw-field|input)=/.test(a)
+      || /^-[XfF].+/.test(a));
     if (offender) throw new Error(`portfolio-sync is READ-ONLY against GitHub; "gh api ${offender}" would issue a write.`);
   }
 }
@@ -223,10 +261,200 @@ async function gh(args) {
   return JSON.parse(stdout || "[]");
 }
 
+function assertGhIssueCreateAllowed(options) {
+  if (!options?.allowWrite || !Number.isInteger(options?.task) || options.task <= 0) {
+    throw new Error("GitHub issue creation requires both --allow-write and --task <positive-id>.");
+  }
+  if (options.dryRun) {
+    throw new Error("GitHub issue creation is disabled during --dry-run/preview.");
+  }
+}
+
+function buildGhIssueCreateArgs(repo, request) {
+  const args = [
+    "issue", "create", "--repo", repo,
+    "--title", request.title,
+    "--body-file", "-",
+  ];
+  if (request.milestoneTitle) args.push("--milestone", request.milestoneTitle);
+  if (request.label) args.push("--label", request.label);
+  return args;
+}
+
+async function spawnWithStdin(command, args, input, spawnImpl = spawn) {
+  return new Promise((resolvePromise, reject) => {
+    const child = spawnImpl(command, args, {
+      stdio: ["pipe", "pipe", "pipe"],
+      windowsHide: true,
+    });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.setEncoding("utf8");
+    child.stderr.setEncoding("utf8");
+    child.stdout.on("data", (chunk) => { stdout += chunk; });
+    child.stderr.on("data", (chunk) => { stderr += chunk; });
+    child.on("error", reject);
+    child.on("close", (code) => {
+      if (code === 0) resolvePromise({ stdout, stderr });
+      else reject(new Error(`gh issue create exited ${code}${stderr.trim() ? `: ${stderr.trim()}` : ""}`));
+    });
+    child.stdin.on("error", reject);
+    child.stdin.end(String(input ?? ""), "utf8");
+  });
+}
+
+// The only GitHub write primitive in this file. It deliberately does not call generic `gh()`:
+// callers cannot smuggle a write verb through the read-only allow-list, and the body travels on
+// stdin so Markdown/newlines never cross a Windows command-line quoting boundary.
+async function ghIssueCreate(repo, request, options, spawnImpl = spawn) {
+  assertGhIssueCreateAllowed(options);
+  const { stdout } = await spawnWithStdin(
+    "gh",
+    buildGhIssueCreateArgs(repo, request),
+    request.body,
+    spawnImpl,
+  );
+  const url = stdout.trim().split(/\r?\n/).find((line) => GITHUB_ISSUE_URL_RE.test(line.trim()))?.trim();
+  if (!url) throw new Error(`gh issue create returned no GitHub issue URL: ${stdout.trim() || "(empty stdout)"}`);
+  return url;
+}
+
+async function fetchRepositoryIdentity(repo) {
+  const record = await gh(["api", `repos/${repo}`]);
+  if (!record?.node_id || !record?.owner?.login || !record?.name) {
+    throw new Error(`${repo}: GitHub repository response omitted node_id/owner/name; refusing an unstable repository link.`);
+  }
+  return {
+    externalId: record.node_id,
+    owner: record.owner.login,
+    name: record.name,
+    fullName: record.full_name || `${record.owner.login}/${record.name}`,
+  };
+}
+
+function parseGitHubIssueUrl(value) {
+  const match = GITHUB_ISSUE_URL_RE.exec(String(value || "").trim());
+  if (!match) return null;
+  return { owner: match[1], repo: match[2], number: Number.parseInt(match[3], 10) };
+}
+
+function pushOperationIds(body) {
+  const ids = [];
+  for (const match of String(body || "").matchAll(PUSH_MARKER_RE)) ids.push(match[1].toLowerCase());
+  return [...new Set(ids)];
+}
+
+function rawPushOperationIds(body) {
+  const ids = [];
+  for (const match of String(body || "").matchAll(new RegExp(RAW_PUSH_MARKER_TOKEN_RE.source, "gi"))) {
+    ids.push(match[1].toLowerCase());
+  }
+  return ids;
+}
+
+function issuePushMarkerDisposition(body) {
+  const rawOperationIds = rawPushOperationIds(body);
+  if (rawOperationIds.length === 0) return { kind: "none", operationId: null, rawOperationIds };
+  const exactOperationIds = pushOperationIds(body);
+  const operationId = rawOperationIds[0];
+  if (rawOperationIds.length === 1
+    && exactOperationIds.length === 1
+    && exactOperationIds[0] === operationId
+    && exactMarkerCount(body, operationId) === 1) {
+    return { kind: "one", operationId, rawOperationIds };
+  }
+  return { kind: "ambiguous", operationId: null, rawOperationIds, exactOperationIds };
+}
+
+function pushMarker(operationId) {
+  return `<!-- kanbanflow-push:${String(operationId).toLowerCase()} -->`;
+}
+
+function exactMarkerCount(body, operationId) {
+  const expected = String(operationId).toLowerCase();
+  let count = 0;
+  for (const match of String(body || "").matchAll(new RegExp(PUSH_MARKER_RE.source, "gi"))) {
+    if (match[1].toLowerCase() === expected) count++;
+  }
+  return count;
+}
+
+function rawTargetMarkerTokenCount(body, operationId) {
+  const escaped = String(operationId).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  // Manual retry needs a stronger negative than protocol parsing: even a malformed/comment-less
+  // copy or a token pasted into a PR proves the UUID is visible remotely and blocks recreation.
+  const token = new RegExp(`kanbanflow-push\\s*:\\s*${escaped}`, "gi");
+  return [...String(body || "").matchAll(token)].length;
+}
+
+function flattenGhPages(value) {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((page) => Array.isArray(page) ? page : [page]);
+}
+
+function exactMarkerMatches(records, operationId) {
+  return flattenGhPages(records).filter((record) =>
+    !record?.pull_request
+    && pushOperationIds(record?.body).length === 1
+    && exactMarkerCount(record?.body, operationId) === 1);
+}
+
+function analyzeMarkerRecords(records, operationId) {
+  const allRecords = flattenGhPages(records);
+  const issues = allRecords.filter((record) => !record?.pull_request);
+  const rawRecords = allRecords
+    .map((record) => ({ record, occurrences: rawTargetMarkerTokenCount(record?.body, operationId) }))
+    .filter(({ occurrences }) => occurrences > 0);
+  return {
+    matches: exactMarkerMatches(issues, operationId),
+    rawTargetOccurrenceCount: rawRecords.reduce((count, item) => count + item.occurrences, 0),
+    rawTargetRecordCount: rawRecords.length,
+  };
+}
+
+function issueHasOneCleanOperationMarker(issue, operationId) {
+  const diagnostics = analyzeMarkerRecords([issue], operationId);
+  return exhaustiveMarkerDisposition(
+    true,
+    diagnostics.matches.length,
+    diagnostics.rawTargetOccurrenceCount,
+  ) === "one";
+}
+
+async function fetchIssueByNumber(repo, number) {
+  const issue = await gh(["api", `repos/${repo}/issues/${number}`]);
+  if (!issue || issue.pull_request || !issue.node_id || issue.number !== number || !issue.html_url) {
+    throw new Error(`${repo}#${number}: GitHub did not return a verifiable issue record.`);
+  }
+  return issue;
+}
+
+async function findIssueByPushMarker(repo, operationId) {
+  const marker = pushMarker(operationId);
+  let hints = [];
+  try {
+    hints = await gh([
+      "issue", "list", "-R", repo, "--state", "all",
+      "--search", `\"${marker}\" in:body`,
+      "--limit", String(GH_PAGE_LIMIT), "--json", "id,number,url,title,body,state",
+    ]);
+  } catch (err) {
+    // Search is an indexed hint only. Recovery still proceeds to the authoritative REST scan.
+    console.warn(`  ! marker search hint failed for ${operationId}: ${err.message}`);
+  }
+
+  const pages = await gh([
+    "api", "--paginate", "--slurp",
+    `repos/${repo}/issues?state=all&per_page=100`,
+  ]);
+  const diagnostics = analyzeMarkerRecords(pages, operationId);
+  return { hints, ...diagnostics, complete: true };
+}
+
 // `comments` rides along on the list call we already make, so issue comments cost zero extra
 // requests. Each carries a stable node id (e.g. `IC_kwDO…`) — that id is the dedupe key that
 // makes comment mirroring idempotent.
-const ISSUE_FIELDS = "number,title,body,labels,milestone,assignees,state,updatedAt,url,comments";
+const ISSUE_FIELDS = "id,number,title,body,labels,milestone,assignees,state,updatedAt,url,comments";
 
 // Never truncate silently: a board that quietly drops issues past the limit still *looks*
 // like a full mirror, which is the one thing this tool must not do. Saturation is RECORDED,
@@ -441,9 +669,8 @@ function taskNameFor(issue) {
   return `#${issue.number} ${title}`;
 }
 
-// The "#<n> " prefix is the idempotency key: it survives round-trips through the board and
-// is how a re-sync recognises a task it already created. (A durable TaskItem.IssueNumber
-// column is #237's job; this needs no schema change.)
+// Legacy fallback only. New links use ExternalWorkItemLink; pre-#336 boards continue to resolve
+// the historical "#<n> " display prefix until verified backfill, with no flag day.
 function issueNumberFromTaskName(name) {
   const m = /^#(\d+)\s/.exec(String(name || ""));
   return m ? Number.parseInt(m[1], 10) : null;
@@ -457,9 +684,14 @@ function issueNumberFromTaskName(name) {
 // schema change. Resolution order is marker -> short name, so boards synced before the marker
 // existed keep working untouched.
 const REPO_LINK_RE = /<!--\s*github:\s*([A-Za-z0-9._-]+\/[A-Za-z0-9._-]+)\s*-->/;
+const REPO_NODE_LINK_RE = /<!--\s*github-node:\s*([^\s>]+)\s*-->/;
 
 function repoLinkMarker(repo) {
   return `<!-- github: ${repo} -->`;
+}
+
+function repoNodeLinkMarker(repositoryExternalId) {
+  return `<!-- github-node: ${repositoryExternalId} -->`;
 }
 
 function linkedRepoOf(project) {
@@ -467,32 +699,84 @@ function linkedRepoOf(project) {
   return m ? m[1] : null;
 }
 
-function projectDescriptionFor(repo) {
-  return `${repoLinkMarker(repo)}\nSynced from https://github.com/${repo} — GitHub issues are the source of truth.`;
+function linkedRepoNodeOf(project) {
+  const match = REPO_NODE_LINK_RE.exec(String(project?.description || ""));
+  return match ? match[1] : null;
+}
+
+function projectDescriptionFor(repo, repoIdentity) {
+  return `${repoNodeLinkMarker(repoIdentity.externalId)}\n${repoLinkMarker(repo)}\nSynced from https://github.com/${repo} — GitHub issues are the source of truth.`;
+}
+
+function refreshedProjectDescription(project, repo, repoIdentity) {
+  const content = String(project?.description || "")
+    .replace(new RegExp(REPO_NODE_LINK_RE.source, "g"), "")
+    .replace(new RegExp(REPO_LINK_RE.source, "g"), "")
+    .replace(/^Synced from https:\/\/github\.com\/\S+ — GitHub issues are the source of truth\.$/m,
+      `Synced from https://github.com/${repo} — GitHub issues are the source of truth.`)
+    .replace(/^\s+/, "")
+    .trimEnd();
+  const markers = `${repoNodeLinkMarker(repoIdentity.externalId)}\n${repoLinkMarker(repo)}`;
+  return content ? `${markers}\n${content}` : projectDescriptionFor(repo, repoIdentity);
 }
 
 // Returns { project, linkedBy: "marker" | "name" | null, conflict }. `conflict` is a
 // human-readable warning that is ALWAYS surfaced — a forked or hijacked link is exactly the
 // class of failure that otherwise looks like a healthy mirror.
-function resolveProjectLink(repo, projects) {
+function resolveProjectLink(repo, projects, repoIdentity = null) {
   const shortName = repo.split("/").pop();
   const lower = repo.toLowerCase();
 
+  if (repoIdentity?.externalId) {
+    const byNode = projects.filter((project) => linkedRepoNodeOf(project) === repoIdentity.externalId);
+    if (byNode.length > 1) {
+      return {
+        project: byNode[0], linkedBy: "node", needsRefresh: true, hardConflict: true,
+        conflict: `${byNode.length} projects carry repository node ${repoIdentity.externalId} (${byNode.map((p) => `#${p.id} "${p.name}"`).join(", ")}) — the mirror is FORKED.`,
+      };
+    }
+    if (byNode.length === 1) {
+      const project = byNode[0];
+      return {
+        project,
+        linkedBy: "node",
+        needsRefresh: (linkedRepoOf(project) || "").toLowerCase() !== lower,
+        conflict: null,
+      };
+    }
+  }
+
   const marked = projects.filter((p) => (linkedRepoOf(p) || "").toLowerCase() === lower);
+  const conflictingNodeMarkers = repoIdentity?.externalId
+    ? marked.filter((project) => {
+      const nodeId = linkedRepoNodeOf(project);
+      return nodeId && nodeId !== repoIdentity.externalId;
+    })
+    : [];
+  if (conflictingNodeMarkers.length > 0) {
+    const project = conflictingNodeMarkers[0];
+    return {
+      project,
+      linkedBy: "marker",
+      needsRefresh: false,
+      hardConflict: true,
+      conflict: `project #${project.id} carries mutable path ${repo} but conflicting immutable repository node ${linkedRepoNodeOf(project)} (expected ${repoIdentity.externalId}); refusing to overwrite it.`,
+    };
+  }
   if (marked.length > 1) {
     return {
-      project: marked[0], linkedBy: "marker",
+      project: marked[0], linkedBy: "marker", needsRefresh: Boolean(repoIdentity?.externalId),
       conflict: `${marked.length} projects carry the ${repo} link marker (${marked.map((p) => `#${p.id} "${p.name}"`).join(", ")}) — the mirror is FORKED. Merge them by hand; syncing into #${marked[0].id}.`,
     };
   }
-  if (marked.length === 1) return { project: marked[0], linkedBy: "marker", conflict: null };
+  if (marked.length === 1) return { project: marked[0], linkedBy: "marker", needsRefresh: Boolean(repoIdentity?.externalId), conflict: null };
 
   // Fallback: match the repo's short name, but only against a project no OTHER repo has
   // claimed. Adopting a project already marked for a different repo would merge two repos'
   // issues into one board permanently.
   const named = projects.filter((p) => p.name.toLowerCase() === shortName.toLowerCase());
-  const unclaimed = named.filter((p) => linkedRepoOf(p) === null);
-  if (unclaimed.length === 1) return { project: unclaimed[0], linkedBy: "name", conflict: null };
+  const unclaimed = named.filter((p) => linkedRepoOf(p) === null && linkedRepoNodeOf(p) === null);
+  if (unclaimed.length === 1) return { project: unclaimed[0], linkedBy: "name", needsRefresh: true, conflict: null };
   if (unclaimed.length > 1) {
     return {
       project: unclaimed[0], linkedBy: "name",
@@ -500,20 +784,30 @@ function resolveProjectLink(repo, projects) {
     };
   }
   if (named.length > 0) {
+    const claimedBy = linkedRepoNodeOf(named[0])
+      ? `repository node ${linkedRepoNodeOf(named[0])}`
+      : linkedRepoOf(named[0]);
     return {
       project: null, linkedBy: null,
-      conflict: `project "${named[0].name}" (#${named[0].id}) is already linked to ${linkedRepoOf(named[0])}, so ${repo} will NOT be merged into it.`,
+      conflict: `project "${named[0].name}" (#${named[0].id}) is already linked to ${claimedBy}, so ${repo} will NOT be merged into it.`,
     };
   }
   return { project: null, linkedBy: null, conflict: null };
 }
 
+function assertLivePushProjectLink(link, live) {
+  if (live && link?.conflict) {
+    throw new Error(`Live push refuses an ambiguous project mapping: ${link.conflict}`);
+  }
+}
+
 // The sync stamps a provenance block into every task description it creates. When a task is
 // previewed for the other direction that block is noise on GitHub, so strip it out.
 function stripSyncBlock(description) {
-  return String(description || "")
-    .replace(/<!--\s*kanbanflow-sync\s*-->[\s\S]*?<!--\s*\/kanbanflow-sync\s*-->/g, "")
-    .trim();
+  // Remove only a leading metadata block and its separator. Authored body text,
+  // including quoted sync markers and Markdown whitespace, stays byte-for-byte intact.
+  return String(description || "").replace(
+    /^<!--\s*kanbanflow-sync\s*-->\r?\n\*\*Issue:\*\* [^\r\n]+\r?\n[\s\S]*?<!--\s*\/kanbanflow-sync\s*-->(?:\r?\n){0,2}/, "");
 }
 
 const OPEN_FENCE_LINE = /^ {0,3}(`{3,}|~{3,})(.*)$/;
@@ -607,11 +901,85 @@ async function api(method, path, body) {
   });
   if (!res.ok) {
     const text = await res.text().catch(() => "");
-    throw new Error(`${method} ${path} -> ${res.status} ${res.statusText}${text ? `: ${text.slice(0, 300)}` : ""}`);
+    throw new Error(`${method} ${path} -> ${res.status} ${res.statusText}${text ? `: ${text}` : ""}`);
   }
   if (res.status === 204) return null;
   const text = await res.text();
   return text ? JSON.parse(text) : null;
+}
+
+// All #336 REST paths live behind this adapter. The service owns journal/uniqueness semantics;
+// the script owns GitHub I/O. Keeping the route vocabulary here makes endpoint naming changes a
+// one-block edit while the C# and Node work land in parallel.
+const externalApi = {
+  listProjectLinks: (projectId) =>
+    api("GET", `/api/projects/${projectId}/external-work-item-links`),
+  findGitHubLinkByNode: async (externalNodeId) => {
+    try {
+      return await api("GET", `/api/external-work-item-links/github/by-node?externalNodeId=${encodeURIComponent(externalNodeId)}`);
+    } catch (err) {
+      if (/->\s*404\b/.test(err.message)) return null;
+      throw err;
+    }
+  },
+  registerLink: (taskId, request) =>
+    api("PUT", `/api/tasks/${taskId}/external-work-item-links/github`, request),
+  projectIssue: (featureId, request) =>
+    api("POST", `/api/features/${featureId}/external-work-item-projections/github`, request),
+  quarantine: (taskId, request) =>
+    api("POST", `/api/tasks/${taskId}/external-work-item-quarantines/github`, request),
+  prepare: (taskId, request) =>
+    api("POST", `/api/tasks/${taskId}/external-write-operations`, request),
+  getOperation: (operationId) =>
+    api("GET", `/api/external-write-operations/${operationId}`),
+  resume: (operationId) =>
+    api("POST", `/api/external-write-operations/${operationId}/resume`),
+  dispatch: (operationId, request) =>
+    api("POST", `/api/external-write-operations/${operationId}/dispatch`, request),
+  finalize: (operationId, request) =>
+    api("POST", `/api/external-write-operations/${operationId}/finalize`, request),
+  failure: (operationId, request) =>
+    api("POST", `/api/external-write-operations/${operationId}/failure`, request),
+  authorizeAmbiguousRetry: (operationId, request) =>
+    api("POST", `/api/external-write-operations/${operationId}/authorize-ambiguous-retry`, request),
+};
+
+const WRITE_STATE_BY_ORDINAL = ["Prepared", "Dispatched", "Completed", "NeedsReview", "DefinitiveFailure", "ManualRetryAuthorized"];
+function writeStateName(value) {
+  if (typeof value === "number") return WRITE_STATE_BY_ORDINAL[value] || `Unknown(${value})`;
+  return String(value || "");
+}
+
+function isActiveLink(link) {
+  return link && (link.state === 0 || String(link.state).toLowerCase() === "active");
+}
+
+function githubLinksOf(task, projectLinks = []) {
+  const embedded = Array.isArray(task?.externalLinks) ? task.externalLinks : [];
+  // A transfer refresh updates the separately fetched project link list while the task DTO's
+  // embedded snapshot remains stale for this run. Put refreshed/project rows first so id-based
+  // dedupe cannot resurrect the old repository identity.
+  return [...projectLinks.filter((link) => link.taskId === task?.id), ...embedded]
+    .filter((link, index, all) => all.findIndex((other) =>
+      other.id != null && link.id != null ? other.id === link.id : other === link) === index)
+    .filter((link) => link.provider === 0 || String(link.provider).toLowerCase() === "github");
+}
+
+function activeGithubLink(task, repositoryExternalId, projectLinks = []) {
+  const matches = githubLinksOf(task, projectLinks).filter((link) =>
+    isActiveLink(link) && link.repositoryExternalId === repositoryExternalId);
+  if (matches.length > 1) {
+    throw new Error(`task ${task.id} has ${matches.length} active GitHub links for repository ${repositoryExternalId}`);
+  }
+  return matches[0] || null;
+}
+
+function operationFromLease(value) {
+  return value?.operation || value;
+}
+
+function leaseTokenFrom(value) {
+  return value?.leaseToken || operationFromLease(value)?.leaseToken || null;
 }
 
 // --- Sync -------------------------------------------------------------------------------
@@ -620,7 +988,8 @@ const stats = {
   projectsCreated: 0, featuresCreated: 0, tasksCreated: 0,
   tasksUpdated: 0, tasksMoved: 0, tasksUnchanged: 0, descriptionsRefreshed: 0,
   commentsCreated: 0, commentsUnchanged: 0, commentFetchFailures: 0,
-  projectsLinked: 0, issuesPreviewed: 0,
+  projectsLinked: 0, issuesPreviewed: 0, issuesCreated: 0,
+  linksFinalized: 0, linksRegistered: 0, linksQuarantined: 0,
   biggestComment: { chars: 0, author: null, issue: null },
   drift: [],
   incomplete: [], // a fetch that hit its bound — every count derived from it is unreliable
@@ -630,6 +999,409 @@ function plan(dryRun, verb, what) {
   console.log(`  ${dryRun ? "[dry-run] would" : "        "} ${verb} ${what}`);
 }
 
+function recoveryDisposition(stateValue, safeToCreate, scanComplete, matchCount) {
+  const state = writeStateName(stateValue);
+  if (state === "Completed") return "completed";
+  if (state === "Dispatched" || state === "NeedsReview") {
+    return scanComplete && matchCount === 1 ? "finalize" : "needs-review";
+  }
+  if ((state === "Prepared" || state === "DefinitiveFailure" || state === "ManualRetryAuthorized") && safeToCreate) return "create";
+  return "needs-review";
+}
+
+function exhaustiveMarkerDisposition(scanComplete, matchCount, rawTargetOccurrenceCount = matchCount) {
+  if (!scanComplete) return "incomplete";
+  if (rawTargetOccurrenceCount === 0 && matchCount === 0) return "zero";
+  if (rawTargetOccurrenceCount === 1 && matchCount === 1) return "one";
+  return "ambiguous";
+}
+
+function operationRepo(operation) {
+  return `${operation.repositoryOwner}/${operation.repositoryName}`;
+}
+
+function validateOperationTarget(operation, repoIdentity, taskId) {
+  if (!operation?.operationId) throw new Error("External write response omitted operation.operationId.");
+  if (operation.taskId !== taskId) {
+    throw new Error(`operation ${operation.operationId} belongs to task ${operation.taskId}, not requested task ${taskId}`);
+  }
+  if (operation.repositoryExternalId !== repoIdentity.externalId) {
+    throw new Error(`operation ${operation.operationId} targets repository node ${operation.repositoryExternalId}, not ${repoIdentity.externalId}`);
+  }
+  if (operationRepo(operation).toLowerCase() !== repoIdentity.fullName.toLowerCase()) {
+    console.warn(`  ! operation ${operation.operationId} was prepared for ${operationRepo(operation)}; immutable repository node still resolves to renamed/transferred ${repoIdentity.fullName}`);
+  }
+}
+
+function operationRequiresFreshPrecreateScan(operation) {
+  return writeStateName(operation?.state) === "ManualRetryAuthorized" || Boolean(operation?.dispatchedAt);
+}
+
+function assertFreshPrecreateScan(operation, args) {
+  if (!operationRequiresFreshPrecreateScan(operation)) return;
+  const evidence = args?.freshZeroScanEvidence;
+  const scanCompletedAt = Date.parse(evidence?.scanCompletedAt);
+  const lastAttemptAt = Date.parse(operation?.lastAttemptAt);
+  if (String(evidence?.confirmationOperationId || "").toLowerCase() !== String(operation.operationId).toLowerCase()
+    || evidence?.scanComplete !== true
+    || evidence?.observedMatchCount !== 0
+    || evidence?.observedRawTargetOccurrenceCount !== 0
+    || !Number.isFinite(scanCompletedAt)
+    || (writeStateName(operation?.state) === "ManualRetryAuthorized"
+      && (!Number.isFinite(lastAttemptAt) || scanCompletedAt < lastAttemptAt))) {
+    throw new Error(`operation ${operation.operationId} has prior dispatch history; a fresh exhaustive zero-marker scan is required immediately before create`);
+  }
+}
+
+function buildExternalDispatchRequest(operation, leaseToken, args) {
+  assertFreshPrecreateScan(operation, args);
+  const request = { operationId: operation.operationId, leaseToken };
+  if (writeStateName(operation.state) === "ManualRetryAuthorized") {
+    return {
+      ...request,
+      ...args.freshZeroScanEvidence,
+      confirmationOperationId: operation.operationId,
+      expectedAttemptCount: operation.attemptCount,
+    };
+  }
+  if (operationRequiresFreshPrecreateScan(operation)) {
+    throw new Error(`operation ${operation.operationId} is Prepared with prior dispatch history; it may proof-finalize a late marker but cannot dispatch a replacement without ManualRetryAuthorized state`);
+  }
+  return request;
+}
+
+// What can honestly be said after an ambiguous outcome, and nothing more.
+//
+// The old text was one fixed sentence -- "State remains NeedsReview; no create was attempted."
+// -- appended to a .catch() that had just swallowed the failure. It asserted three things it
+// never checked, and each can be false:
+//
+//   * the persist may have FAILED. The recovery path runs a full state=all repository crawl
+//     inside one lease, so the commonest failure is a 409 on an expired lease -- and the row is
+//     then still exactly what it was, usually Dispatched.
+//   * recordAmbiguousWriteFailure returns null WITHOUT SENDING ANYTHING when there is no lease
+//     token. A caller could not tell that apart from success.
+//   * "no create was attempted" is the most dangerous half. From Dispatched a create may well
+//     have reached GitHub, and this sentence is read by an operator deciding whether to retry.
+//     It is only true before dispatch -- where, since RecordFailureAsync now classifies a
+//     never-dispatched failure as DefinitivePreCreate, the resulting state is not NeedsReview
+//     either.
+//
+// Pure and exported so the wording is testable without a GitHub round trip.
+function ambiguousFailureMessage(operation, rawReason, outcome) {
+  const id = operation?.operationId;
+  const trimmed = String(rawReason ?? "").trim();
+  const reason = trimmed === "" || /[.!?]$/.test(trimmed) ? trimmed : `${trimmed}.`;
+  const observed = outcome?.observed ?? outcome?.persisted ?? operation;
+  const createClause = outcome?.dispatchAttempted || Boolean(observed?.dispatchedAt) || Boolean(operation?.dispatchedAt)
+    ? "a create MAY have reached GitHub"
+    : "no create was attempted";
+
+  if (outcome?.persisted) {
+    const persistedState = writeStateName(outcome.persisted.state);
+    // NeedsReview is the one persisted outcome with an operator move left; the old text named
+    // --resume and losing that hint would trade one unhelpful message for another.
+    const next = persistedState === "NeedsReview" ? ` Re-run --resume ${id} to reconcile it.` : "";
+    return `operation ${id}: ${reason} State is now ${persistedState}; ${createClause}.${next}`;
+  }
+
+  const why = outcome?.skipped === "no-lease-token"
+    ? "no lease token was held, so nothing was sent"
+    : `the write itself failed (${outcome?.error?.message || "unknown error"})`;
+  const state = writeStateName(observed?.state) || "unknown";
+  const expiry = observed?.leaseExpiresAt ? ` and its lease expires ${observed.leaseExpiresAt}` : "";
+  return `operation ${id}: ${reason} State could NOT be persisted: ${why}. It remains ${state}${expiry}; ${createClause}. Re-run --resume ${id} once that lease has expired.`;
+}
+
+// Records the failure and reports what actually happened, so the caller can describe it instead
+// of asserting it. Never throws: an unrecordable failure is still a failure to report.
+async function recordAmbiguousOutcome(operation, leaseToken, reason, api = externalApi) {
+  if (!leaseToken) {
+    return {
+      persisted: null,
+      skipped: "no-lease-token",
+      observed: await api.getOperation(operation.operationId).catch(() => null),
+    };
+  }
+  try {
+    return { persisted: await recordAmbiguousWriteFailure(operation.operationId, leaseToken, reason, api) };
+  } catch (error) {
+    console.error(`  ! could not persist the failure for ${operation.operationId}: ${error.message}`);
+    return {
+      persisted: null,
+      error,
+      observed: await api.getOperation(operation.operationId).catch(() => null),
+    };
+  }
+}
+
+async function recordAmbiguousWriteFailure(operationId, leaseToken, error, api = externalApi) {
+  if (!leaseToken) return null;
+  return api.failure(operationId, {
+    operationId,
+    leaseToken,
+    // Every failure this script can observe occurs after a lease may represent prior dispatch
+    // lineage. It never asks the service to erase that fact as DefinitivePreCreate.
+    kind: "AmbiguousOrIncomplete",
+    error: String(error?.message || error),
+  });
+}
+
+// `issue.node_id || issue.id` is NOT a defensive fallback and NOT dead code: it is the only
+// branch that works on the sync path. `gh issue list --json` offers no `node_id` field at all
+// (confirmed against gh's own field list), and its `id` IS the GraphQL node id; `gh api
+// repos/{repo}/issues[/{n}]` puts a repo-local NUMBER in `id` and the node id in `node_id`. So
+// each shape takes a different arm and deleting either one breaks the other's callers. The
+// asymmetry worth knowing: promotion refuses anything that is not a non-numeric string
+// (promotableIssueNodeId), because it is binding identity to a task that had none; these two
+// sites do NOT, because their issue records are already identity-verified upstream --
+// fetchIssueByNumber throws without `node_id`, and the sync path's records are node-id-shaped by
+// construction. Normalizing both boundaries into one record is 506-DESIGN.md 3 cluster 2.
+function linkMetadataNeedsRefresh(link, repoIdentity, issue) {
+  return Boolean(link && repoIdentity && (
+    link.repositoryExternalId !== repoIdentity.externalId
+    || link.repositoryOwner !== repoIdentity.owner
+    || link.repositoryName !== repoIdentity.name
+    || link.externalNodeId !== (issue.node_id || issue.id)
+    || link.externalNumber !== issue.number
+    || link.url !== (issue.html_url || issue.url)
+  ));
+}
+
+function verifiedFinalizeRequest(operation, leaseToken, repoIdentity, issue, actor) {
+  return {
+    operationId: operation.operationId,
+    leaseToken: leaseToken || null,
+    repositoryExternalId: repoIdentity.externalId,
+    repositoryOwner: repoIdentity.owner,
+    repositoryName: repoIdentity.name,
+    externalNodeId: issue.node_id || issue.id,
+    externalNumber: issue.number,
+    url: issue.html_url || issue.url,
+    actor,
+  };
+}
+
+async function finalizeVerifiedIssue(operation, leaseToken, issue, repoIdentity, actor) {
+  let link = await externalApi.finalize(
+    operation.operationId,
+    verifiedFinalizeRequest(operation, leaseToken, repoIdentity, issue, actor),
+  );
+  stats.linksFinalized++;
+  // An operation freezes owner/name before GitHub contact, but repository node identity survives
+  // rename/transfer. Immediately refresh mutable display metadata through the idempotent verified
+  // registration boundary so a resumed in-flight operation never leaves a stale URL behind.
+  if (linkMetadataNeedsRefresh(link, repoIdentity, issue)) {
+    link = await externalApi.registerLink(
+      operation.taskId,
+      verifiedLinkRequest(operation.taskId, repoIdentity, issue, actor),
+    );
+    stats.linksRegistered++;
+  }
+  return link;
+}
+
+async function recoverAmbiguousOperation(repo, operation, leaseToken, repoIdentity, args) {
+  let scan;
+  try {
+    scan = await findIssueByPushMarker(repo, operation.operationId);
+  } catch (err) {
+    const scanReason = `Authoritative marker scan incomplete: ${err.message}`;
+    const outcome = await recordAmbiguousOutcome(operation, leaseToken, scanReason);
+    throw new Error(ambiguousFailureMessage(operation, `Authoritative GitHub scan failed (${err.message}).`, outcome));
+  }
+
+  const markerDisposition = exhaustiveMarkerDisposition(
+    scan.complete,
+    scan.matches.length,
+    scan.rawTargetOccurrenceCount,
+  );
+  if (markerDisposition === "one") {
+    const issue = scan.matches[0];
+    const link = await finalizeVerifiedIssue(operation, leaseToken, issue, repoIdentity, args.actor);
+    console.log(`  recovered operation ${operation.operationId} → ${issue.html_url || issue.url}`);
+    return link;
+  }
+
+  const hint = scan.hints.length === 1 ? " (indexed search had one hint, but hints are never trusted)" : "";
+  const reason = `Authoritative marker scan found ${scan.matches.length} clean match(es) and ${scan.rawTargetOccurrenceCount ?? "unknown"} raw target occurrence(s) across ${scan.rawTargetRecordCount ?? "unknown"} issue record(s)${hint}; expected exactly one clean record with one occurrence.`;
+  const outcome = await recordAmbiguousOutcome(operation, leaseToken, reason);
+  throw new Error(ambiguousFailureMessage(operation, reason, outcome));
+}
+
+async function scanForExplicitRetryDecision(repo, operationId) {
+  let scan;
+  try {
+    scan = await findIssueByPushMarker(repo, operationId);
+  } catch (err) {
+    throw new Error(`operation ${operationId}: exhaustive GitHub marker scan failed; retry authorization/create remains blocked (${err.message})`);
+  }
+  return {
+    scan,
+    disposition: exhaustiveMarkerDisposition(
+      scan.complete,
+      scan.matches.length,
+      scan.rawTargetOccurrenceCount,
+    ),
+  };
+}
+
+// --- test hooks -------------------------------------------------------------------------
+//
+// Four named instants in the live create path. In production every one of them is a no-op
+// function call: no environment reads, no filesystem access, no waiting. The crash/barrier
+// harness that `scripts/verify-336-github.ps1` drives lives in scripts/test-hooks/, which
+// this module never imports.
+//
+// This is deliberately arming-by-two-keys. The barriers used to sit here inline, armed by the
+// mere PRESENCE of an environment variable, so one stray KANBANFLOW_336_* pair in a shell
+// turned a real `push-issue --allow-write` into a run that blocked on a file and then threw
+// into the ambiguous-failure handler. Nothing documented it. Now the operator must pass
+// --internal-test-hooks AND point KANBANFLOW_336_TEST_HOOKS at a module; either alone arms
+// nothing, and loading prints a banner that cannot be mistaken for a production run.
+const hooks = {
+  beforePrepare: async () => {},
+  afterDispatch: async () => {},
+  afterManualResume: async () => {},
+  afterCreate: async () => {},
+};
+
+// A hook giving up is a statement about the HARNESS, never about GitHub. It must not reach
+// recordAmbiguousWriteFailure: the after-create hook fires once the issue exists and its
+// marker is verified, so recording NeedsReview there would mark a succeeded operation for
+// human review and burn an attempt. A distinct type is what lets the create-window handler
+// tell the two apart; a string match on the message would not survive a reworded barrier.
+class HookAbort extends Error {
+  constructor(message) {
+    super(message);
+    this.name = "HookAbort";
+  }
+}
+
+// Loaded from main() only. Returns the banner lines it printed so a test can assert that an
+// env-only arming attempt printed nothing and installed nothing.
+async function installTestHooks(args, env = process.env) {
+  const modulePath = env.KANBANFLOW_336_TEST_HOOKS;
+  if (!args.internalTestHooks) return { installed: false, reason: modulePath ? "env-set-without-flag" : "not-requested" };
+  if (!modulePath) {
+    throw new Error("--internal-test-hooks requires KANBANFLOW_336_TEST_HOOKS to name a hook module.");
+  }
+  // The crash-injection scenarios genuinely need live creates against the fixture repo, so
+  // this stays possible — never by accident. Two keys to arm the harness, a third to let it
+  // touch GitHub.
+  if (args.allowWrite && env.KANBANFLOW_336_ALLOW_WRITE_HOOKS !== "1") {
+    throw new Error("--internal-test-hooks with --allow-write additionally requires KANBANFLOW_336_ALLOW_WRITE_HOOKS=1.");
+  }
+  const module = await import(pathToFileURL(resolve(modulePath)).href);
+  const installed = await module.install({ HookAbort });
+  for (const name of Object.keys(hooks)) {
+    if (typeof installed?.[name] === "function") hooks[name] = installed[name];
+  }
+  const banner = [
+    "!! #336 TEST HOOKS ACTIVE — this is not a production run",
+    `!! hook module: ${modulePath}`,
+    `!! hooks installed: ${Object.keys(hooks).filter((name) => typeof installed?.[name] === "function").join(", ")}`,
+  ];
+  for (const line of banner) console.error(line);
+  return { installed: true, banner };
+}
+
+async function executePreparedOperation(repo, leaseResult, repoIdentity, args) {
+  const operation = operationFromLease(leaseResult);
+  const leaseToken = leaseTokenFrom(leaseResult);
+  validateOperationTarget(operation, repoIdentity, args.task);
+  assertFreshPrecreateScan(operation, args);
+
+  const disposition = recoveryDisposition(operation.state, leaseResult?.safeToCreate, true, 0);
+  const writeState = writeStateName(operation.state);
+  if (disposition !== "create" || !["Prepared", "ManualRetryAuthorized"].includes(writeState) || !leaseToken) {
+    throw new Error(`operation ${operation.operationId} is ${writeStateName(operation.state)} and is not safe to create; use --resume for reconciliation`);
+  }
+  if (exactMarkerCount(operation.body, operation.operationId) !== 1) {
+    const error = new Error(`operation ${operation.operationId} frozen body does not contain exactly one exact push marker`);
+    await recordAmbiguousWriteFailure(operation.operationId, leaseToken, error);
+    throw error;
+  }
+
+  if (operationRequiresFreshPrecreateScan(operation)) await runManualResumeHook(operation);
+  const dispatchRequest = buildExternalDispatchRequest(operation, leaseToken, args);
+  await externalApi.dispatch(operation.operationId, dispatchRequest);
+  let issueUrl = null;
+  try {
+    await hooks.afterDispatch({
+      operationId: operation.operationId,
+      taskId: operation.taskId,
+      attemptCount: operation.attemptCount,
+    });
+    issueUrl = await ghIssueCreate(repo, {
+      title: operation.title,
+      body: operation.body,
+      milestoneTitle: operation.milestoneTitle,
+      label: operation.label,
+    }, args);
+    const parsed = parseGitHubIssueUrl(issueUrl);
+    if (!parsed || `${parsed.owner}/${parsed.repo}`.toLowerCase() !== repo.toLowerCase()) {
+      throw new Error(`created issue URL ${issueUrl} does not belong to ${repo}`);
+    }
+    const issue = await fetchIssueByNumber(repo, parsed.number);
+    if (!issueHasOneCleanOperationMarker(issue, operation.operationId)) {
+      throw new Error(`created issue ${issueUrl} did not preserve exactly one clean operation marker`);
+    }
+    await hooks.afterCreate({
+      operationId: operation.operationId,
+      taskId: operation.taskId,
+      issueNumber: issue.number,
+      issueUrl: issue.html_url,
+    });
+    const link = await finalizeVerifiedIssue(operation, leaseToken, issue, repoIdentity, args.actor);
+    stats.issuesCreated++;
+    console.log(`  created ${issue.html_url} and finalized durable link for task ${operation.taskId}`);
+    return link;
+  } catch (err) {
+    return await handleCreateWindowFailure(operation, leaseToken, issueUrl, err);
+  }
+}
+
+// The pre-dispatch hook, extracted so its abort behaviour is testable. This one sits OUTSIDE
+// the create window's try on purpose: nothing has reached GitHub yet, so there is no ambiguous
+// outcome to record and recording one would be the very path a hook must never enter. What an
+// abort here DOES leave behind is a claimed lease and a burned attempt — the resume that got us
+// here took both — so the message says so rather than leaving the operator to infer it from a
+// bare timeout. (Releasing the lease early would need a service verb that does not exist; the
+// bound is the lease TTL.)
+async function runManualResumeHook(operation) {
+  try {
+    await hooks.afterManualResume({
+      operationId: operation.operationId,
+      taskId: operation.taskId,
+      attemptCount: operation.attemptCount,
+    });
+  } catch (err) {
+    if (err instanceof HookAbort) {
+      throw new HookAbort(`operation ${operation.operationId}: #336 test hook aborted BEFORE dispatch, so no create was attempted and no state was written. The lease stays claimed until it expires; re-run --resume ${operation.operationId} after that. (${err.message})`);
+    }
+    throw err;
+  }
+}
+
+// The create window's failure handler, extracted so a test can drive it without a live create.
+//
+// The FIRST line is the load-bearing one. A HookAbort is the test harness giving up; it is not
+// evidence about GitHub. The after-create hook fires when the issue already exists and its
+// marker has already been verified, so letting a barrier timeout fall through here would record
+// NeedsReview against an operation that demonstrably succeeded — burning an attempt and
+// demanding human review for a run that did everything right.
+async function handleCreateWindowFailure(operation, leaseToken, issueUrl, err, api = externalApi) {
+  if (err instanceof HookAbort) throw err;
+  const latest = await api.getOperation(operation.operationId).catch(() => null);
+  if (writeStateName(latest?.state) === "Completed") return latest;
+  const reason = `${issueUrl ? `Issue may exist at ${issueUrl}; ` : "GitHub create outcome is unknown; "}${err.message}`;
+  // dispatchAttempted is asserted rather than inferred: this handler is reachable only past
+  // externalApi.dispatch, and the local snapshot predates that write.
+  const outcome = { ...await recordAmbiguousOutcome(operation, leaseToken, reason, api), dispatchAttempted: true };
+  throw new Error(ambiguousFailureMessage(operation, reason, outcome));
+}
+
 // Drift wording lives here, shared, so `status` can never disagree with what `sync` reports.
 // Two kinds, and only two: both describe a disagreement the sync deliberately WILL NOT fix.
 const driftDoneButOpen = (repo, issue) =>
@@ -637,14 +1409,27 @@ const driftDoneButOpen = (repo, issue) =>
 const driftOrphanTask = (repo, taskName, issueNumber) =>
   `${repo}: task "${taskName}" has no matching issue #${issueNumber} on GitHub (deleted or transferred?)`;
 
-async function ensureProject(repo, dryRun) {
+async function ensureProject(repo, repoIdentity, dryRun) {
   const shortName = repo.split("/").pop();
   const projects = await api("GET", "/api/projects");
   // Marker first, then the case-insensitive short name ("ZeroRouter" and "zerorouter" are the
   // same repo, and creating a second project for one repo would fork the mirror permanently).
-  const link = resolveProjectLink(repo, projects);
+  const link = resolveProjectLink(repo, projects, repoIdentity);
   if (link.conflict) console.warn(`  ! ${link.conflict}`);
-  if (link.project) return link.project.id;
+  if (link.hardConflict) throw new Error(link.conflict);
+  if (link.project) {
+    if (link.needsRefresh) {
+      plan(dryRun, "refresh project repository identity", `#${link.project.id} → ${repo} (${repoIdentity.externalId})`);
+      if (!dryRun) {
+        await api("PUT", `/api/projects/${link.project.id}`, {
+          name: link.project.name,
+          description: refreshedProjectDescription(link.project, repo, repoIdentity),
+        });
+        stats.projectsLinked++;
+      }
+    }
+    return link.project.id;
+  }
 
   // The short name is taken by a project another repo owns, so it cannot be reused without
   // merging two repos' issues into one board. Fall back to the unambiguous "owner/repo".
@@ -655,7 +1440,7 @@ async function ensureProject(repo, dryRun) {
   if (dryRun) return null;
   const created = await api("POST", "/api/projects", {
     name,
-    description: projectDescriptionFor(repo),
+    description: projectDescriptionFor(repo, repoIdentity),
   });
   stats.projectsCreated++;
   return created.id;
@@ -716,7 +1501,7 @@ async function syncComments(issue, linkedPr, taskId, args, request = api) {
 async function restorationSources(repo) {
   const [issues, prs] = await Promise.all([
     gh(["issue", "list", "-R", repo, "--state", "all", "--limit", String(GH_PAGE_LIMIT),
-      "--json", "number,title,body,labels,milestone,assignees,state,updatedAt,url"]),
+      "--json", "id,number,title,body,labels,milestone,assignees,state,updatedAt,url"]),
     fetchOpenPrs(repo, false),
   ]);
   if (issues.length >= GH_PAGE_LIMIT || prs.length >= GH_PAGE_LIMIT) {
@@ -727,40 +1512,60 @@ async function restorationSources(repo) {
 
 // A content-only repair does not run normal sync's title/priority/status/feature reconciliation.
 // Injectable I/O keeps dry-run, source failure and description-only writes testable without GitHub.
-async function restoreContent(repo, args, { request = api, readSources = restorationSources } = {}) {
-  const link = resolveProjectLink(repo, await request("GET", "/api/projects"));
+async function restoreContent(repo, args, {
+  request = api, readSources = restorationSources, readRepositoryIdentity = fetchRepositoryIdentity,
+} = {}) {
+  const repoIdentity = await readRepositoryIdentity(repo);
+  const link = resolveProjectLink(repo, await request("GET", "/api/projects"), repoIdentity);
   if (link.conflict || !link.project) throw new Error(link.conflict || `No existing project for ${repo}. Content restoration creates nothing.`);
   const tasks = await request("GET", `/api/projects/${link.project.id}/tasks`);
   const candidates = tasks.filter((t) => needsContentRestoration(t.description));
   const result = { candidates: candidates.length, restored: 0, preservedPriorText: 0 };
   if (!candidates.length) return result;
   const { issues, prByIssue } = await readSources(repo);
+  const projectLinks = await request("GET", `/api/projects/${link.project.id}/external-work-item-links`);
   const byNumber = new Map(issues.map((issue) => [issue.number, issue]));
+  const validateIdentity = (task, issue, links) => {
+    const recorded = githubLinksOf(task, links);
+    if (recorded.length && (recorded.length !== 1 || !isActiveLink(recorded[0]) ||
+        recorded[0].repositoryExternalId !== repoIdentity.externalId ||
+        recorded[0].externalNodeId !== promotableIssueNodeId(issue) ||
+        recorded[0].externalNumber !== issue.number)) {
+      throw new Error(`Task ${task.id}: durable identity is quarantined, ambiguous or conflicts with the source; no repair was written for this task.`);
+    }
+  };
   // Resolve every candidate before the first write, so missing/deleted source is an explicit
   // failure rather than a misleading successful repair of only the first part of the project.
   const repairs = candidates.map((task) => {
-    const parts = syncDescriptionParts(task.description);
-    const source = parts && /^https:\/\/github\.com\/([^/]+\/[^/]+)\/issues\/(\d+)$/.exec(parts.issueUrl);
-    if (source && source[1].toLowerCase() !== repo.toLowerCase()) throw new Error(`Task ${task.id} points to a different repository; no content was changed.`);
-    if (!source && !(task.description === OVERSIZED_HEADER_STUB && link.linkedBy === "marker")) {
+    const stub = task.description === OVERSIZED_HEADER_STUB;
+    const source = stub ? null : syncBlockIssueUrl(task.description);
+    if (source?.malformed) throw new Error(`Task ${task.id}: malformed source provenance; no content was changed.`);
+    if (source && `${source.owner}/${source.repo}`.toLowerCase() !== repo.toLowerCase()) throw new Error(`Task ${task.id} points to a different repository; no content was changed.`);
+    if (!source && !(stub && ["marker", "node"].includes(link.linkedBy))) {
       throw new Error(`Task ${task.id}: a title-only source needs a durable matching project marker; no content was changed.`);
     }
-    const number = source ? Number(source[2]) : issueNumberFromTaskName(task.name);
+    const number = source ? source.number : issueNumberFromTaskName(task.name);
     const issue = byNumber.get(number);
     if (!issue) throw new Error(`Task ${task.id}: full GitHub issue ${number ?? "identity"} is unavailable; no content was changed.`);
+    validateIdentity(task, issue, projectLinks);
     const completeDescription = descriptionFor(issue, prByIssue.get(number) || null);
     const description = descriptionRefreshFor(task.description, completeDescription);
     if (description === null) throw new Error(`Task ${task.id}: source provenance does not match; no content was changed.`);
-    return { task, description, preserved: description !== completeDescription };
+    return { task, issue, description, preserved: description !== completeDescription };
   });
-  for (const { task, description, preserved } of repairs) {
+  for (const { task, issue, description, preserved } of repairs) {
     plan(args.dryRun, "restore content", `task ${task.id}: ${task.description.length} → ${description.length} characters${preserved ? "; differing prior board text retained" : ""}`);
     if (!args.dryRun) {
       const fresh = await request("GET", `/api/tasks/${task.id}`);
       if (fresh.name !== task.name || fresh.description !== task.description
+        || fresh.featureId !== task.featureId
         || (task.updatedAt != null && fresh.updatedAt !== task.updatedAt)) {
         throw new Error(`Task ${task.id} changed while the repair was being prepared. Its repair was not written; re-read and retry. Earlier successful repairs are retained and logged.`);
       }
+      const freshProject = resolveProjectLink(repo, await request("GET", "/api/projects"), repoIdentity);
+      if (freshProject.conflict || freshProject.project?.id !== link.project.id)
+        throw new Error(`Task ${task.id}: project identity changed during repair; re-read and retry.`);
+      validateIdentity(fresh, issue, await request("GET", `/api/projects/${link.project.id}/external-work-item-links`));
       await request("PUT", `/api/tasks/${task.id}`, { name: fresh.name, description, actor: args.actor });
       const saved = await request("GET", `/api/tasks/${task.id}`);
       if (saved.description !== description) throw new Error(`Task ${task.id}: full-content read-back failed. Retain the source and inspect the saved record before retrying.`);
@@ -772,41 +1577,526 @@ async function restoreContent(repo, args, { request = api, readSources = restora
   return result;
 }
 
-async function syncTasks(repo, projectId, issues, closedNumbers, prByIssue, featureIds, args) {
-  const { actor, dryRun } = args;
-  const existing = projectId ? await api("GET", `/api/projects/${projectId}/tasks`) : [];
-  const byIssueNumber = new Map();
-  for (const t of existing) {
-    const n = issueNumberFromTaskName(t.name);
-    if (n !== null) byIssueNumber.set(n, t);
+function addUnique(map, key, task, kind) {
+  if (key == null || key === "") return;
+  const existing = map.get(key);
+  if (existing && existing.id !== task.id) {
+    throw new Error(`${kind} ${key} is claimed by tasks ${existing.id} and ${task.id}; refusing an ambiguous sync`);
+  }
+  map.set(key, task);
+}
+
+function buildTaskIdentityIndex(tasks, repoIdentity, projectLinks = [], operationTasks = new Map()) {
+  const byId = new Map(tasks.map((task) => [task.id, task]));
+  const durableByNode = new Map();
+  const durableByNumber = new Map();
+  const durableLinkByTaskId = new Map();
+  const legacyByNumber = new Map();
+  const quarantineByNumber = new Map();
+  const foreignLinkByNumber = new Map();
+  const durableTaskIds = new Set();
+  const quarantinedTaskIds = new Set();
+  const projectWideQuarantines = [];
+  const foreignLinkedTaskIds = new Set();
+
+  for (const task of tasks) {
+    const allGithubLinks = githubLinksOf(task, projectLinks);
+    const repoLinks = allGithubLinks
+      .filter((candidate) => candidate.repositoryExternalId === repoIdentity.externalId);
+    if (allGithubLinks.length > 0 && repoLinks.length === 0) {
+      foreignLinkedTaskIds.add(task.id);
+      const candidateNumber = allGithubLinks[0].externalNumber ?? issueNumberFromTaskName(task.name);
+      if (candidateNumber != null) {
+        const group = foreignLinkByNumber.get(candidateNumber) || [];
+        group.push(task);
+        foreignLinkByNumber.set(candidateNumber, group);
+      }
+      continue;
+    }
+    const link = activeGithubLink(task, repoIdentity.externalId, projectLinks);
+    if (link) {
+      durableTaskIds.add(task.id);
+      durableLinkByTaskId.set(task.id, link);
+      addUnique(durableByNode, link.externalNodeId, task, "GitHub node id");
+      addUnique(durableByNumber, link.externalNumber, task, "GitHub issue number");
+      continue;
+    }
+    const quarantined = repoLinks.find((candidate) => !isActiveLink(candidate));
+    if (quarantined) {
+      quarantinedTaskIds.add(task.id);
+      if (quarantined.externalNumber == null) projectWideQuarantines.push(task);
+      // CandidateNumber can be null for malformed provenance. A visible legacy prefix may still
+      // correlate it to an incoming issue for the sole purpose of refusing all automation.
+      const candidateNumber = quarantined.externalNumber ?? issueNumberFromTaskName(task.name);
+      if (candidateNumber != null) {
+        const group = quarantineByNumber.get(candidateNumber) || [];
+        group.push(task);
+        quarantineByNumber.set(candidateNumber, group);
+      }
+      continue;
+    }
+    // Legacy title parsing is deliberately the fallback, never a competitor to structured data.
+    const legacyNumber = issueNumberFromTaskName(task.name);
+    addUnique(legacyByNumber, legacyNumber, task, "legacy issue prefix");
   }
 
+  return {
+    byId, durableByNode, durableByNumber, durableLinkByTaskId,
+    legacyByNumber, quarantineByNumber, foreignLinkByNumber,
+    durableTaskIds, quarantinedTaskIds, projectWideQuarantines, foreignLinkedTaskIds,
+    operationTasks,
+  };
+}
+
+function taskMatchForIssue(index, issue) {
+  const byNode = issue.id ? index.durableByNode.get(issue.id) : null;
+  const byNumber = index.durableByNumber.get(issue.number);
+  if (byNode && byNumber && byNode.id !== byNumber.id) {
+    return {
+      task: null,
+      kind: "identity-mismatch",
+      conflictingTasks: [byNode, byNumber],
+      reason: `GitHub node ${issue.id} and issue number #${issue.number} are claimed by different tasks`,
+    };
+  }
+  if (byNode) {
+    // Issue transfers can change repository-local numbers. The immutable node is canonical and
+    // the number/URL are refreshable metadata, never a reason to fork a second task.
+    return { task: byNode, kind: "durable" };
+  }
+  if (byNumber) {
+    const stored = index.durableLinkByTaskId.get(byNumber.id);
+    // Number fallback exists for compatibility with an old structured row that has no node id.
+    // Once a node id is recorded it is authoritative: a matching mutable/repo-local number must
+    // never override a different immutable issue identity.
+    if (issue.id && stored?.externalNodeId && stored.externalNodeId !== issue.id) {
+      return {
+        task: null,
+        kind: "identity-mismatch",
+        conflictingTasks: [byNumber],
+        reason: `task ${byNumber.id} links #${issue.number} to GitHub node ${stored.externalNodeId}, not ${issue.id}`,
+      };
+    }
+    return { task: byNumber, kind: "durable" };
+  }
+  const operationTaskId = index.operationTasks.get(issue.id) ?? index.operationTasks.get(issue.number);
+  if (operationTaskId != null) {
+    const task = index.byId.get(operationTaskId);
+    if (!task) throw new Error(`push marker targets task ${operationTaskId}, which is not in this project`);
+    return { task, kind: "operation" };
+  }
+  const quarantined = index.quarantineByNumber.get(issue.number);
+  if (quarantined?.length) {
+    return { task: quarantined[0], kind: "quarantine", quarantinedTasks: quarantined };
+  }
+  if (index.projectWideQuarantines.length) {
+    return {
+      task: index.projectWideQuarantines[0],
+      kind: "quarantine",
+      quarantinedTasks: index.projectWideQuarantines,
+      projectWide: true,
+    };
+  }
+  const foreign = index.foreignLinkByNumber.get(issue.number);
+  if (foreign?.length) {
+    return { task: foreign[0], kind: "foreign-link", foreignTasks: foreign };
+  }
+  const legacy = index.legacyByNumber.get(issue.number);
+  return legacy ? { task: legacy, kind: "legacy" } : { task: null, kind: null };
+}
+
+// The task's sync block is the AUTHORITATIVE record of which issue a task mirrors --
+// `backfill-links` treats it as such (classifyBackfillCandidate) and refuses to link past it.
+// A legacy `#<n> ` prefix is only a repo-local NUMBER, which is exactly the mutable identity
+// #336 exists to stop trusting, so promotion may never contradict this.
+//
+// Returns null when the task simply has no sync-block URL (the ordinary pre-#336 task, which
+// promotion must ALLOW), a parsed {owner, repo, number} when there is exactly one canonical URL
+// inside exactly one block, and {malformed} otherwise. Malformed fails closed: backfill-links
+// owns the malformed-provenance taxonomy and will quarantine it properly.
+function syncBlockIssueUrl(description) {
+  const blocks = [...String(description || "").matchAll(new RegExp(SYNC_BLOCK_RE.source, "gi"))];
+  if (blocks.length === 0) return null;
+  if (blocks.length !== 1) return { malformed: `found ${blocks.length} kanbanflow-sync blocks` };
+  const issueLines = [...blocks[0][1].matchAll(new RegExp(SYNC_ISSUE_LINE_RE.source, "gmi"))];
+  if (issueLines.length === 0) return null;
+  if (issueLines.length !== 1) return { malformed: `found ${issueLines.length} **Issue:** URLs in the sync block` };
+  const parsed = parseGitHubIssueUrl(issueLines[0][1]);
+  return parsed ?? { malformed: "the **Issue:** value is not a canonical GitHub issue URL" };
+}
+
+// The value that would be persisted as the IMMUTABLE externalNodeId. syncTasks only ever sees
+// `gh issue list --json` records, whose `id` IS the GraphQL node id; a REST record
+// (`gh api repos/{repo}/issues`) puts a repo-local NUMBER there and the node id in `node_id`.
+// Persisting a number into externalNodeId would corrupt the one field the whole durable-identity
+// contract rests on, so promotion refuses anything that is not a non-numeric string rather than
+// trusting the shape of whatever it was handed.
+function promotableIssueNodeId(issue) {
+  const nodeId = issue?.node_id ?? issue?.id;
+  if (typeof nodeId !== "string") return null;
+  const trimmed = nodeId.trim();
+  if (trimmed === "" || /^\d+$/.test(trimmed)) return null;
+  return trimmed;
+}
+
+// Whether a `legacy` prefix match may be promoted to a durable link on an ordinary sync.
+//
+// Promotion is what makes #336 do anything at all on an existing board: without it a normal
+// `sync` never writes a link row, so the two new tables stay empty forever and every durable
+// identity guarantee is dead weight. But a legacy match knows only a repo-local NUMBER and the
+// repo currently being synced. A task named "#42 Foo" whose sync block says
+// `**Issue:** https://github.com/other/repo/issues/42` -- a task moved between projects, or a
+// project re-pointed at another repo -- would otherwise have its immutable identity bound to a
+// FOREIGN repository's issue by nothing but a matching integer. That is the precise failure
+// #336 exists to eliminate.
+//
+// backfill-links gets this precondition for free (it reads the sync-block URL, resolves the
+// candidate repository's identity and refuses on a mismatch). Sync does not, so it checks the
+// one thing it can check without a network call and leaves everything else to backfill.
+function legacyPromotionDisposition(task, issue, repoIdentity) {
+  const nodeId = promotableIssueNodeId(issue);
+  if (!nodeId) {
+    return { kind: "drift", reason: `issue record carries no immutable GitHub node id (got ${JSON.stringify(issue?.node_id ?? issue?.id)}); refusing to persist it as a durable identity` };
+  }
+  const syncBlock = syncBlockIssueUrl(task?.description);
+  if (syncBlock?.malformed) {
+    return { kind: "drift", reason: `legacy "#<n> " prefix cannot be promoted: ${syncBlock.malformed}; run \`backfill-links ${repoIdentity.fullName}\`` };
+  }
+  if (syncBlock) {
+    const sameRepo = `${syncBlock.owner}/${syncBlock.repo}`.toLowerCase() === repoIdentity.fullName.toLowerCase();
+    if (!sameRepo) {
+      return { kind: "drift", reason: `legacy "#<n> " prefix disagrees with the task's authoritative sync-block URL https://github.com/${syncBlock.owner}/${syncBlock.repo}/issues/${syncBlock.number}; run \`backfill-links ${repoIdentity.fullName}\`` };
+    }
+    if (syncBlock.number !== issue.number) {
+      return { kind: "drift", reason: `legacy "#<n> " prefix matched #${issue.number} but the task's authoritative sync-block URL names #${syncBlock.number}; run \`backfill-links ${repoIdentity.fullName}\`` };
+    }
+  }
+  return { kind: "promote", nodeId };
+}
+
+// Shape note: see linkMetadataNeedsRefresh. `issue.node_id || issue.id` is load-bearing in BOTH
+// directions -- the sync-path callers (create, drift refresh, legacy promotion) hand this a
+// `gh issue list --json` record whose `id` is the node id and which has no `node_id` field, while
+// backfill hands it a REST record that has both. Promotion is the one caller that first refuses a
+// numeric id outright (promotableIssueNodeId); the others rely on their upstream verification.
+function verifiedLinkRequest(taskId, repoIdentity, issue, actor) {
+  return {
+    taskId,
+    provider: "GitHub",
+    repositoryExternalId: repoIdentity.externalId,
+    repositoryOwner: repoIdentity.owner,
+    repositoryName: repoIdentity.name,
+    externalNodeId: issue.node_id || issue.id,
+    externalNumber: issue.number,
+    url: issue.html_url || issue.url,
+    actor,
+  };
+}
+
+function operationTaskDisposition(stateValue, taskExists, completedResultMatches = true) {
+  const state = writeStateName(stateValue);
+  if (state === "Completed") {
+    if (!completedResultMatches) return "block";
+    return taskExists ? "map" : "project-new-task";
+  }
+  return taskExists ? "continue" : "block";
+}
+
+function completedOperationMatchesIssue(operation, issue) {
+  const recordedNode = String(operation?.resultingExternalNodeId || "").trim();
+  const recordedNumber = operation?.resultingExternalNumber;
+  if (!recordedNode && recordedNumber == null) return false;
+  return recordedNode ? recordedNode === issue.id : recordedNumber === issue.number;
+}
+
+function markerOperationCanFinalize(stateValue, dispatchedAt) {
+  const state = writeStateName(stateValue);
+  return state === "Dispatched"
+    || state === "NeedsReview"
+    || state === "ManualRetryAuthorized"
+    || (state === "Prepared" && Boolean(dispatchedAt));
+}
+
+function globalNodeLinkDisposition(lookup, currentProjectId, index) {
+  if (!lookup) return { kind: "none" };
+  const link = lookup.link;
+  if (!link?.taskId || lookup.projectId == null) {
+    return { kind: "invalid", reason: "global node lookup omitted link.taskId or projectId" };
+  }
+  if (lookup.projectId !== currentProjectId) {
+    return { kind: "cross-project", link, projectId: lookup.projectId };
+  }
+  const task = index.byId.get(link.taskId);
+  if (!task) {
+    return {
+      kind: "invalid",
+      link,
+      projectId: lookup.projectId,
+      reason: `global node lookup points to task ${link.taskId}, which is absent from current project ${currentProjectId}`,
+    };
+  }
+  return { kind: "local-transfer", task, link, projectId: lookup.projectId };
+}
+
+function operationMarkerRepositoryDisposition(operation, repoIdentity, issue) {
+  if (operation.repositoryExternalId === repoIdentity.externalId) return "same-repository";
+  return writeStateName(operation.state) === "Completed"
+    && Boolean(operation.resultingExternalNodeId)
+    && operation.resultingExternalNodeId === issue.id
+    ? "completed-node-transfer"
+    : "block";
+}
+
+async function reconcilePushMarkers(repo, repoIdentity, issues, tasks, args) {
+  const byOperation = new Map();
+  const blockedIssues = new Set();
+  const block = (issue, reason) => {
+    blockedIssues.add(issue.id);
+    blockedIssues.add(issue.number);
+    stats.drift.push(`${repo}#${issue.number}: ${reason}; sync skipped task creation and every mutation`);
+  };
   for (const issue of issues) {
+    const marker = issuePushMarkerDisposition(issue.body);
+    if (marker.kind === "none") continue;
+    if (marker.kind === "ambiguous") {
+      const distinct = new Set(marker.rawOperationIds);
+      block(issue, `contains ${marker.rawOperationIds.length} raw push-marker token(s) across ${distinct.size} operation id(s), but not exactly one clean protocol marker`);
+      continue;
+    }
+    const list = byOperation.get(marker.operationId) || [];
+    list.push(issue);
+    byOperation.set(marker.operationId, list);
+  }
+
+  const operationTasks = new Map();
+  const finalizedLinks = [];
+  const taskIds = new Set(tasks.map((task) => task.id));
+  for (const [operationId, markedIssues] of byOperation) {
+    if (markedIssues.length !== 1) {
+      for (const issue of markedIssues) block(issue, `operation ${operationId} appears on ${markedIssues.length} fetched issues`);
+      continue;
+    }
+    const issue = markedIssues[0];
+    let operation;
+    try {
+      operation = operationFromLease(await externalApi.getOperation(operationId));
+    } catch (err) {
+      if (!/->\s*404\b/.test(err.message)) throw err;
+      block(issue, `references operation ${operationId}, which is unknown to this board database`);
+      continue;
+    }
+    if (!operation) {
+      block(issue, `references unknown operation ${operationId}`);
+      continue;
+    }
+    const repositoryDisposition = operationMarkerRepositoryDisposition(operation, repoIdentity, issue);
+    if (repositoryDisposition === "block") {
+      block(issue, `marker ${operationId} belongs to another repository node`);
+      continue;
+    }
+    const state = writeStateName(operation.state);
+    if (state === "Completed") {
+      const same = completedOperationMatchesIssue(operation, issue);
+      const taskDisposition = operationTaskDisposition(state, taskIds.has(operation.taskId), same);
+      if (taskDisposition === "block") {
+        block(issue, `completed operation ${operationId} points at a different GitHub issue`);
+        continue;
+      }
+      if (taskDisposition === "project-new-task") {
+        // Journal rows deliberately survive task deletion. A completed remote issue is still
+        // valid GitHub truth; with its old task/link gone, normal projection may create and link
+        // one replacement task instead of blocking the issue forever.
+        continue;
+      }
+    } else if (markerOperationCanFinalize(state, operation.dispatchedAt)) {
+      if (operationTaskDisposition(state, taskIds.has(operation.taskId)) === "block") {
+        block(issue, `nonterminal operation ${operationId} targets missing task ${operation.taskId}`);
+        continue;
+      }
+      // The fetched issue is not sufficient proof by itself: scan all issue pages so a copied
+      // marker cannot make sync finalize the first of two claimants.
+      const scan = await findIssueByPushMarker(repo, operationId);
+      const markerDisposition = exhaustiveMarkerDisposition(
+        scan.complete,
+        scan.matches.length,
+        scan.rawTargetOccurrenceCount,
+      );
+      if (markerDisposition !== "one") {
+        block(issue, `operation ${operationId} authoritative scan found ${scan.matches.length} clean match(es) and ${scan.rawTargetOccurrenceCount} raw target occurrence(s)`);
+        continue;
+      }
+      const verified = scan.matches[0];
+      const same = verified.node_id === issue.id && verified.number === issue.number;
+      if (!same) {
+        block(issue, `operation ${operationId} fetched issue does not match the authoritative marker result`);
+        continue;
+      }
+      if (!args.dryRun) {
+        const link = await finalizeVerifiedIssue(operation, null, verified, repoIdentity, args.actor);
+        finalizedLinks.push(link);
+      }
+    } else {
+      if (!taskIds.has(operation.taskId)) {
+        block(issue, `nonterminal operation ${operationId} targets missing task ${operation.taskId}`);
+        continue;
+      }
+      block(issue, `operation ${operationId} is ${state}; remote marker requires human review`);
+      continue;
+    }
+
+    operationTasks.set(issue.id, operation.taskId);
+    operationTasks.set(issue.number, operation.taskId);
+  }
+  return { operationTasks, finalizedLinks, blockedIssues };
+}
+
+async function syncTasks(repo, repoIdentity, projectId, issues, closedNumbers, prByIssue, featureIds, args, existing, projectLinks, operationTasks, blockedIssues = new Set()) {
+  const { actor, dryRun } = args;
+  const index = buildTaskIdentityIndex(existing, repoIdentity, projectLinks, operationTasks);
+  const byIssueNumber = new Map([...index.legacyByNumber, ...index.durableByNumber]);
+
+  for (const issue of issues) {
+    if (blockedIssues.has(issue.id) || blockedIssues.has(issue.number)) continue;
     const linkedPr = prByIssue.get(issue.number) || null;
-    const desiredName = taskNameFor(issue);
     const desiredPriority = derivePriority(issue);
     const desiredStatus = deriveStatus(issue, linkedPr);
     const featureName = featureNameFor(issue);
     const featureId = featureIds.get(featureName);
-    let task = byIssueNumber.get(issue.number);
+    let matched = taskMatchForIssue(index, issue);
+    // A repository transfer can change repo node + issue number/URL while the issue node remains
+    // immutable. Consult the global node owner before trusting a fallback or creating anything.
+    // Cross-project relocation is deliberately a human operation; sync never moves a task.
+    if (!index.durableByNode.has(issue.id)) {
+      const transfer = globalNodeLinkDisposition(
+        await externalApi.findGitHubLinkByNode(issue.id),
+        projectId,
+        index,
+      );
+      if (transfer.kind === "cross-project") {
+        stats.drift.push(`${repo}#${issue.number}: immutable GitHub node ${issue.id} is already linked to task ${transfer.link.taskId} in project ${transfer.projectId}; issue transfer requires an explicit human move/link decision, so sync made zero mutations and did not create a task`);
+        continue;
+      }
+      if (transfer.kind === "invalid") {
+        stats.drift.push(`${repo}#${issue.number}: ${transfer.reason}; sync made zero mutations and did not create a task`);
+        continue;
+      }
+      if (transfer.kind === "local-transfer") {
+        matched = { task: transfer.task, kind: "transfer", link: transfer.link };
+      }
+    }
+    let task = matched.task;
+    if (matched.kind === "identity-mismatch") {
+      stats.drift.push(`${repo}#${issue.number}: ${matched.reason}; sync skipped every mutation pending human repair`);
+      continue;
+    }
+    if (matched.kind === "quarantine") {
+      const taskIds = matched.quarantinedTasks.map((candidate) => candidate.id).join(", ");
+      const scope = matched.projectWide
+        ? "null-number quarantine cannot be correlated safely; unmatched issue projection is blocked project-wide"
+        : "quarantined link candidate";
+      stats.drift.push(`${repo}#${issue.number}: ${scope} on task(s) ${taskIds}; sync skipped every mutation pending human review`);
+      continue;
+    }
+    if (matched.kind === "foreign-link") {
+      const taskIds = matched.foreignTasks.map((candidate) => candidate.id).join(", ");
+      stats.drift.push(`${repo}#${issue.number}: task(s) ${taskIds} carry a GitHub link for a different repository; sync skipped every mutation`);
+      continue;
+    }
+    const durableIdentity = matched.kind === "durable" || matched.kind === "operation" || matched.kind === "transfer";
+    let desiredName = durableIdentity ? String(issue.title || "").trim() : taskNameFor(issue);
+    if (task) byIssueNumber.set(issue.number, task);
 
     if (!task) {
-      plan(dryRun, "create task", `${desiredName}  [${desiredStatus}/${desiredPriority}]`);
+      const plainName = String(issue.title || "").trim();
+      plan(dryRun, "project issue atomically", `${plainName}  [${desiredStatus}/${desiredPriority}]`);
       if (dryRun) {
+        plan(true, "create task and durable link together", `${repo}#${issue.number} → "${plainName}"`);
         if (args.comments) await syncComments(issue, linkedPr, null, args);
         continue;
       }
       if (featureId == null) throw new Error(`No feature id for "${featureName}" (issue #${issue.number})`);
-      const created = await api("POST", `/api/features/${featureId}/tasks`, {
-        name: desiredName,
-        description: descriptionFor(issue, linkedPr),
-        status: desiredStatus,
-        priority: desiredPriority,
-        actor,
-      });
-      stats.tasksCreated++;
-      if (args.comments) await syncComments(issue, linkedPr, created.id, args);
+      let projection;
+      try {
+        projection = await externalApi.projectIssue(featureId, {
+          ...verifiedLinkRequest(null, repoIdentity, issue, actor),
+          name: plainName, description: descriptionFor(issue, linkedPr),
+          status: desiredStatus, priority: desiredPriority, actor,
+        });
+      } catch (error) {
+        if (!/->\s*(409|422)\b/.test(error.message)) throw error;
+        stats.drift.push(`${repo}#${issue.number}: atomic projection refused; no task created or changed: ${error.message}`);
+        continue;
+      }
+      projectLinks.push(projection.link);
+      if (projection.created) {
+        stats.tasksCreated++;
+        stats.linksRegistered++;
+      }
+      byIssueNumber.set(issue.number, projection.task);
+      if (args.comments) await syncComments(issue, linkedPr, projection.task.id, args);
       continue;
+    }
+
+    if (matched.kind === "durable" || matched.kind === "transfer") {
+      const currentLink = matched.kind === "transfer"
+        ? matched.link
+        : activeGithubLink(task, repoIdentity.externalId, projectLinks);
+      const metadataDrift = currentLink && (
+        currentLink.repositoryExternalId !== repoIdentity.externalId
+        || currentLink.repositoryOwner !== repoIdentity.owner
+        || currentLink.repositoryName !== repoIdentity.name
+        || currentLink.externalNodeId !== issue.id
+        || currentLink.externalNumber !== issue.number
+        || currentLink.url !== issue.url
+      );
+      if (metadataDrift) {
+        const verb = currentLink.repositoryExternalId === repoIdentity.externalId
+          ? "refresh durable link metadata"
+          : "refresh transferred issue repository metadata";
+        plan(dryRun, verb, `task ${task.id} → ${repo}#${issue.number}`);
+        if (!dryRun) {
+          const refreshed = await externalApi.registerLink(task.id, verifiedLinkRequest(task.id, repoIdentity, issue, actor));
+          const indexInLinks = projectLinks.findIndex((candidate) => candidate.id === refreshed.id);
+          if (indexInLinks >= 0) projectLinks[indexInLinks] = refreshed;
+          else projectLinks.push(refreshed);
+          stats.linksRegistered++;
+        }
+      }
+    }
+
+    // A `legacy` match is a task the pre-#336 sync created, recognised by the mutable "#<n> "
+    // title prefix. Nothing else in an ordinary sync ever registers a durable link for it -- only
+    // the create path and the durable/transfer drift path do -- so without this an upgraded board
+    // never gains a single ExternalWorkItemLink row and the headline feature is inert, waiting on
+    // a `backfill-links owner/repo` that appears in no runnable instruction.
+    //
+    // The precondition is what makes it safe; see legacyPromotionDisposition.
+    if (matched.kind === "legacy") {
+      const promotion = legacyPromotionDisposition(task, issue, repoIdentity);
+      if (promotion.kind !== "promote") {
+        stats.drift.push(`${repo}#${issue.number}: task ${task.id}: ${promotion.reason}; sync skipped every mutation pending human repair`);
+        // Refusing the link also refuses this task as the issue's projection. Continuing would
+        // still overwrite its source content, copy foreign comments, move it or close it.
+        continue;
+      } else {
+        plan(dryRun, "promote legacy prefix to durable link", `task ${task.id} → ${repo}#${issue.number} (${promotion.nodeId})`);
+        // GitHub owns the title once identity is durable, so the prefix goes in the same run --
+        // through the ordinary update path below, which is exactly what the next sync would do.
+        desiredName = String(issue.title || "").trim();
+        if (!dryRun) {
+          try {
+            const registered = await externalApi.registerLink(task.id, verifiedLinkRequest(task.id, repoIdentity, issue, actor));
+            projectLinks.push(registered);
+            stats.linksRegistered++;
+          } catch (err) {
+            // A competing claim is arbitrated server-side. The preflight may have raced with
+            // that claim, so a refused registration makes this candidate unverified again.
+            // Leave the whole task untouched and continue the repository's other issues.
+            stats.drift.push(`${repo}#${issue.number}: task ${task.id}: legacy promotion refused (${err.message}); sync skipped every further mutation and preserved the task — run \`backfill-links ${repo}\``);
+            continue;
+          }
+        }
+      }
     }
 
     if (args.comments) await syncComments(issue, linkedPr, task.id, args);
@@ -878,12 +2168,13 @@ async function syncTasks(repo, projectId, issues, closedNumbers, prByIssue, feat
   }
 }
 
-async function syncRepo(repo, args, { header = true } = {}) {
+async function syncRepo(repo, args, { header = true, repoIdentity: suppliedRepoIdentity = null } = {}) {
   if (header) console.log(`\n${repo}`);
-  const [openIssues, closed, prs] = await Promise.all([
+  const [openIssues, closed, prs, repoIdentity] = await Promise.all([
     fetchOpenIssues(repo),
     fetchClosedIssues(repo, args.includeClosed),
     fetchOpenPrs(repo, args.comments),
+    suppliedRepoIdentity || fetchRepositoryIdentity(repo),
   ]);
   const closedNumbers = new Set(closed.map((i) => i.number));
   // With --include-closed, closed issues are mirrored as tasks too. Without it they are still
@@ -912,10 +2203,23 @@ async function syncRepo(repo, args, { header = true } = {}) {
     console.log(`  ! ${orphanedPrComments} comment(s) on PRs that close no issue — no task to attach them to, NOT mirrored.`);
   }
 
-  const projectId = await ensureProject(repo, args.dryRun);
+  const projectId = await ensureProject(repo, repoIdentity, args.dryRun);
   const featureNames = [...new Set(issues.map(featureNameFor))].sort();
   const featureIds = await ensureFeatures(projectId, featureNames, args.dryRun);
-  await syncTasks(repo, projectId, issues, closedNumbers, prByIssue, featureIds, args);
+  const [existingTasks, projectLinks] = projectId == null
+    ? [[], []]
+    : await Promise.all([
+      api("GET", `/api/projects/${projectId}/tasks`),
+      externalApi.listProjectLinks(projectId),
+    ]);
+  const reconciliation = projectId == null
+    ? { operationTasks: new Map(), finalizedLinks: [], blockedIssues: new Set() }
+    : await reconcilePushMarkers(repo, repoIdentity, issues, existingTasks, args);
+  projectLinks.push(...reconciliation.finalizedLinks);
+  await syncTasks(
+    repo, repoIdentity, projectId, issues, closedNumbers, prByIssue, featureIds, args,
+    existingTasks, projectLinks, reconciliation.operationTasks, reconciliation.blockedIssues,
+  );
 }
 
 // --- onboard ------------------------------------------------------------------------------
@@ -924,23 +2228,23 @@ async function syncRepo(repo, args, { header = true } = {}) {
 // everything (milestones -> features, issues -> tasks, labels -> priority, comments).
 // Idempotent in both halves — re-running links nothing and creates nothing.
 
-async function linkProject(repo, args) {
+async function linkProject(repo, repoIdentity, args) {
   const projects = await api("GET", "/api/projects");
-  const link = resolveProjectLink(repo, projects);
+  const link = resolveProjectLink(repo, projects, repoIdentity);
   if (link.conflict) console.warn(`  ! ${link.conflict}`);
+  if (link.hardConflict) throw new Error(link.conflict);
 
-  if (link.linkedBy === "marker") {
+  if (link.linkedBy === "node" && !link.needsRefresh) {
     console.log(`          already linked → project #${link.project.id} "${link.project.name}"`);
     return link.project.id;
   }
 
-  if (link.linkedBy === "name") {
+  if (link.project) {
     // Adopting a project the old name-matching found, and making that link permanent. This is
     // the upgrade path for every project synced before the marker existed.
     plan(args.dryRun, "link project", `#${link.project.id} "${link.project.name}" ← ${repo}  (name match → durable marker)`);
     if (args.dryRun) return link.project.id;
-    const current = String(link.project.description || "").trim();
-    const description = current ? `${repoLinkMarker(repo)}\n${current}` : projectDescriptionFor(repo);
+    const description = refreshedProjectDescription(link.project, repo, repoIdentity);
     // PUT /api/projects/{id} is a TRUE partial update since #203: `name` is required (422
     // without it) and any field NOT sent is preserved — so Goals and Readme are safe by
     // omission. Sending them all back would be the riskier move here, not the safer one.
@@ -957,30 +2261,12 @@ async function linkProject(repo, args) {
 
 async function onboardRepo(repo, args) {
   console.log(`\n${repo}  (onboard)`);
-  await linkProject(repo, args);
-  await syncRepo(repo, args, { header: false });
+  const repoIdentity = await fetchRepositoryIdentity(repo);
+  await linkProject(repo, repoIdentity, args);
+  await syncRepo(repo, args, { header: false, repoIdentity });
 }
 
-// --- push-issue (PREVIEW ONLY) -------------------------------------------------------------
-//
-// Computes, for every board task with no "#<n> " prefix, the exact GitHub issue it would
-// become — title, milestone, labels, body — and prints it. Then stops.
-//
-// WHY IT STOPS. Performing the write needs two operations that cannot be made one:
-// create the issue, then record its number on the board. The board's only identity for a
-// mirrored issue is the "#<n> " title prefix (TaskItem has no external-id column), and that
-// prefix cannot exist until the first operation has already succeeded. Everything that can
-// happen in that window produces a duplicate issue, and additive-only means nothing may close
-// it afterwards:
-//   * a crash between the two → the retry sees an unprefixed task and creates a second issue;
-//   * two concurrent push runs → both read the same unprefixed task, both create;
-//   * a `sync` landing mid-window → a second board task for the issue just created;
-//   * stamping the title races a human editing that same title — last writer wins, silently.
-// PUT /api/tasks/{id} has no ETag/version check, so there is nothing to lose that race on.
-//
-// The fix is a pending-operation id persisted through REST BEFORE the GitHub call and matched
-// back from the issue body on restart — real schema work, deliberately out of scope here.
-// Previewing is honest and useful; a write keyed on the title prefix would not be.
+// --- push-issue (preview by default; explicit single-task live mode) ------------------------
 
 function labelForPriority(labelNames, priority) {
   // Pick a label the sync's own priorityFromLabel() will read back as this priority — the
@@ -1000,21 +2286,167 @@ function issueBodyFor(project, task, featureName) {
 }
 
 async function pushIssues(repo, args) {
-  console.log(`\n${repo}  (push-issue — PREVIEW ONLY, nothing is written to GitHub)`);
-  const projects = await api("GET", "/api/projects");
-  const link = resolveProjectLink(repo, projects);
+  const live = args.allowWrite && !args.dryRun;
+  console.log(`\n${repo}  (push-issue — ${live ? "LIVE additive create" : "PREVIEW, zero writes"})`);
+  const [projects, repoIdentity] = await Promise.all([
+    api("GET", "/api/projects"),
+    fetchRepositoryIdentity(repo),
+  ]);
+  const link = resolveProjectLink(repo, projects, repoIdentity);
   if (link.conflict) console.warn(`  ! ${link.conflict}`);
+  assertLivePushProjectLink(link, live);
   if (!link.project) {
     throw new Error(`${repo} has no project on the board. Run: node scripts/portfolio-sync.mjs onboard ${repo}`);
   }
   const projectId = link.project.id;
 
-  const tasks = await api("GET", `/api/projects/${projectId}/tasks`);
-  let candidates = tasks.filter((t) => issueNumberFromTaskName(t.name) === null);
+  const [tasks, projectLinks] = await Promise.all([
+    api("GET", `/api/projects/${projectId}/tasks`),
+    externalApi.listProjectLinks(projectId),
+  ]);
+  // Resume is operation-driven, never re-planned from mutable task text/current repo labels.
+  // This must run before the active/quarantine/#n candidate short-circuits below: a user may
+  // rename an in-flight task arbitrarily and the operation UUID still has to recover it.
+  if (args.resume) {
+    const chosen = tasks.find((task) => task.id === args.task);
+    if (!chosen) throw new Error(`task ${args.task} is not in project #${projectId} "${link.project.name}"`);
+    const existingOperation = operationFromLease(await externalApi.getOperation(args.resume));
+    validateOperationTarget(existingOperation, repoIdentity, chosen.id);
+    if (writeStateName(existingOperation.state) === "Completed") {
+      console.log(`  operation ${args.resume} is already Completed → ${existingOperation.resultingUrl}`);
+      return;
+    }
+
+    if (args.authorizeAmbiguousRetry) {
+      // This is deliberately lease-free: authorizing an ambiguous retry must be a separate,
+      // auditable operator action. It reads GitHub exhaustively, then exits without reaching
+      // ResumeAsync or any GitHub mutation/create primitive.
+      const { scan, disposition } = await scanForExplicitRetryDecision(repo, existingOperation.operationId);
+      if (disposition === "one") {
+        const issue = scan.matches[0];
+        await finalizeVerifiedIssue(existingOperation, null, issue, repoIdentity, args.actor);
+        console.log(`  operation ${existingOperation.operationId}: exhaustive scan found ${issue.html_url}; finalized instead of authorizing a retry.`);
+        return;
+      }
+      if (disposition !== "zero") {
+        throw new Error(`operation ${existingOperation.operationId}: exhaustive scan was ${disposition} with ${scan.matches.length} clean match(es) and ${scan.rawTargetOccurrenceCount} raw target occurrence(s); retry authorization is blocked.`);
+      }
+      if (!Number.isInteger(existingOperation.attemptCount) || existingOperation.attemptCount <= 0) {
+        throw new Error(`operation ${existingOperation.operationId}: API omitted a valid attemptCount; retry authorization is blocked.`);
+      }
+      const authorized = operationFromLease(await externalApi.authorizeAmbiguousRetry(
+        existingOperation.operationId,
+        {
+          confirmationOperationId: args.authorizeAmbiguousRetry,
+          expectedAttemptCount: existingOperation.attemptCount,
+          scanComplete: true,
+          observedMatchCount: 0,
+          observedRawTargetOccurrenceCount: scan.rawTargetOccurrenceCount,
+          scanCompletedAt: new Date().toISOString(),
+          actor: args.actor,
+          reason: args.resolutionReason,
+        },
+      ));
+      validateOperationTarget(authorized, repoIdentity, chosen.id);
+      if (writeStateName(authorized.state) !== "ManualRetryAuthorized") {
+        throw new Error(`operation ${authorized.operationId}: authorization returned unexpected state ${writeStateName(authorized.state)}`);
+      }
+      console.log(`  operation ${authorized.operationId}: ManualRetryAuthorized after a complete zero-match scan. No GitHub create was attempted.`);
+      console.log(`  Re-run a separate normal --resume ${authorized.operationId}; it will scan every issue again before any create.`);
+      return;
+    }
+
+    if (writeStateName(existingOperation.state) === "Prepared" && operationRequiresFreshPrecreateScan(existingOperation)) {
+      // Defensive compatibility only: an older Prepared row that retains dispatch history may
+      // proof-finalize a late marker, but it cannot acquire a replacement-create lease.
+      const { scan, disposition } = await scanForExplicitRetryDecision(repo, existingOperation.operationId);
+      if (disposition === "one") {
+        const issue = scan.matches[0];
+        await finalizeVerifiedIssue(existingOperation, null, issue, repoIdentity, args.actor);
+        console.log(`  operation ${existingOperation.operationId}: compatibility scan found late issue ${issue.html_url}; finalized without creating.`);
+        return;
+      }
+      throw new Error(`operation ${existingOperation.operationId}: Prepared with prior dispatch history is a compatibility-only proof-finalization state; scan was ${disposition}, so no replacement create is permitted.`);
+    }
+
+    if (writeStateName(existingOperation.state) === "ManualRetryAuthorized") {
+      // Claim/increment the durable attempt first. The exhaustive scan must finish after the
+      // returned LastAttemptAt, otherwise old negative evidence could be replayed under a newer
+      // lease. The service independently enforces the same ordering at dispatch.
+      const leaseResult = await externalApi.resume(args.resume);
+      const resumed = operationFromLease(leaseResult);
+      const leaseToken = leaseTokenFrom(leaseResult);
+      validateOperationTarget(resumed, repoIdentity, chosen.id);
+      if (writeStateName(resumed.state) === "Completed") {
+        console.log(`  operation ${resumed.operationId} completed concurrently → ${resumed.resultingUrl}`);
+        return;
+      }
+      if (writeStateName(resumed.state) !== "ManualRetryAuthorized" || !leaseResult.safeToCreate || !leaseToken) {
+        throw new Error(`operation ${resumed.operationId}: Resume did not return a leased ManualRetryAuthorized attempt; no GitHub scan/create was attempted.`);
+      }
+
+      let scanResult;
+      try {
+        scanResult = await scanForExplicitRetryDecision(repo, resumed.operationId);
+      } catch (err) {
+        const reason = `Post-Resume exhaustive marker scan failed: ${err.message}`;
+        const outcome = await recordAmbiguousOutcome(resumed, leaseToken, reason);
+        throw new Error(ambiguousFailureMessage(resumed, reason, outcome));
+      }
+      const { scan, disposition } = scanResult;
+      if (disposition === "one") {
+        const issue = scan.matches[0];
+        await finalizeVerifiedIssue(resumed, leaseToken, issue, repoIdentity, args.actor);
+        console.log(`  operation ${resumed.operationId}: post-Resume exhaustive scan found late issue ${issue.html_url}; finalized without creating.`);
+        return;
+      }
+      if (disposition !== "zero") {
+        const reason = `Post-Resume exhaustive scan was ${disposition} with ${scan.matches.length} clean match(es) and ${scan.rawTargetOccurrenceCount} raw target occurrence(s).`;
+        const outcome = await recordAmbiguousOutcome(resumed, leaseToken, reason);
+        throw new Error(ambiguousFailureMessage(resumed, reason, outcome));
+      }
+
+      const executionArgs = {
+        ...args,
+        freshZeroScanEvidence: {
+          confirmationOperationId: resumed.operationId,
+          scanComplete: true,
+          observedMatchCount: 0,
+          observedRawTargetOccurrenceCount: scan.rawTargetOccurrenceCount,
+          scanCompletedAt: new Date().toISOString(),
+        },
+      };
+      console.log(`  operation ${resumed.operationId}: leased attempt ${resumed.attemptCount}, then exhaustive scan found zero target occurrences; proceeding to evidence-bound dispatch.`);
+      await executePreparedOperation(repo, leaseResult, repoIdentity, executionArgs);
+      return;
+    }
+
+    const leaseResult = await externalApi.resume(args.resume);
+    const resumed = operationFromLease(leaseResult);
+    validateOperationTarget(resumed, repoIdentity, chosen.id);
+    const disposition = recoveryDisposition(resumed.state, leaseResult.safeToCreate, true, 0);
+    if (disposition === "create") {
+      await executePreparedOperation(repo, leaseResult, repoIdentity, args);
+    } else if (writeStateName(resumed.state) === "Dispatched" || writeStateName(resumed.state) === "NeedsReview") {
+      await recoverAmbiguousOperation(repo, resumed, leaseTokenFrom(leaseResult), repoIdentity, args);
+    } else {
+      throw new Error(`operation ${resumed.operationId} resumed in unsupported state ${writeStateName(resumed.state)}`);
+    }
+    return;
+  }
+
+  const hasAnyGithubState = (task) => githubLinksOf(task, projectLinks).length > 0;
+  let candidates = tasks.filter((task) =>
+    !hasAnyGithubState(task) && issueNumberFromTaskName(task.name) === null);
 
   if (args.task !== null) {
     const chosen = tasks.find((t) => t.id === args.task);
     if (!chosen) throw new Error(`task ${args.task} is not in project #${projectId} "${link.project.name}"`);
+    const linkState = githubLinksOf(chosen, projectLinks)[0];
+    if (linkState) {
+      console.log(`  task ${chosen.id} already has ${isActiveLink(linkState) ? "an active" : "a quarantined"} GitHub link — nothing to create.`);
+      return;
+    }
     const already = issueNumberFromTaskName(chosen.name);
     if (already !== null) {
       console.log(`  task ${chosen.id} is already mirrored as #${already} — nothing to preview.`);
@@ -1023,11 +2455,15 @@ async function pushIssues(repo, args) {
     candidates = [chosen];
   } else if (!args.all) {
     // Neither --task nor --all: list what COULD be pushed and stop.
-    console.log(`  ${candidates.length} task(s) have no "#<n> " prefix and would become issues:`);
+    console.log(`  ${candidates.length} task(s) have no durable link or legacy "#<n> " fallback and would become issues:`);
     for (const t of candidates.slice(0, 50)) console.log(`    ${String(t.id).padStart(5)}  [${t.status}/${t.priority}]  ${t.name}`);
     if (candidates.length > 50) console.log(`    … and ${candidates.length - 50} more`);
     console.log(`\n  Choose: --task <id> for one, --all for every one.`);
     return;
+  }
+
+  if (live && (args.task === null || args.all)) {
+    throw new Error("Live GitHub creation is intentionally single-task only: use --allow-write --task <id>. --all is preview-only.");
   }
 
   if (args.limit > 0 && candidates.length > args.limit) {
@@ -1048,8 +2484,9 @@ async function pushIssues(repo, args) {
     const label = labelForPriority(labelNames, task.priority);
     const title = String(task.name).trim();
     const body = issueBodyFor(link.project, task, featureName);
+    const request = { title, body, milestoneTitle: milestone, label };
 
-    console.log(`  would create issue on ${repo} ← task ${task.id}`);
+    console.log(`  ${live ? "creating" : "would create"} issue on ${repo} ← task ${task.id}`);
     console.log(`      title:     ${title}`);
     console.log(`      milestone: ${milestone ?? "(none)"}${featureName !== UNSORTED_FEATURE && !milestone ? `   ← feature "${featureName}" has no milestone on ${repo}; one would NOT be created` : ""}`);
     console.log(`      labels:    ${label ?? "(none)"}`);
@@ -1059,10 +2496,253 @@ async function pushIssues(repo, args) {
       console.warn(`      ! no label on ${repo} maps to priority ${task.priority} — a sync would read this issue back as Medium.`);
     }
     stats.issuesPreviewed++;
+
+    if (!live) continue;
+    await hooks.beforePrepare({ taskId: task.id, repository: repo });
+    const leaseResult = await externalApi.prepare(task.id, {
+      taskId: task.id,
+      provider: "GitHub",
+      repositoryExternalId: repoIdentity.externalId,
+      repositoryOwner: repoIdentity.owner,
+      repositoryName: repoIdentity.name,
+      title: request.title,
+      body: request.body,
+      milestoneTitle: request.milestoneTitle,
+      label: request.label,
+      expectedTaskUpdatedAt: task.updatedAt,
+    });
+    await executePreparedOperation(repo, leaseResult, repoIdentity, args);
   }
 
-  console.log(`\n  Nothing was written. Performing these creates safely needs a durable board-side`);
-  console.log(`  issue link (see the "Why push-issue does not write" section of docs/GITHUB-SYNC.md).`);
+  if (!live) console.log(`\n  Preview complete. No GitHub or KanbanFlow writes were made.`);
+}
+
+// --- durable-link backfill ---------------------------------------------------------------
+
+const SYNC_BLOCK_RE = /<!--\s*kanbanflow-sync\s*-->([\s\S]*?)<!--\s*\/kanbanflow-sync\s*-->/gi;
+const SYNC_ISSUE_LINE_RE = /^\s*\*\*Issue:\*\*\s+(\S+)\s*$/gmi;
+
+function stripLegacyIssuePrefix(name) {
+  return String(name || "").replace(/^#\d+\s+/, "").trim();
+}
+
+function malformedProvenanceCandidate(description, legacyNumber) {
+  const canonical = [];
+  for (const match of String(description || "").matchAll(new RegExp(SYNC_ISSUE_LINE_RE.source, "gmi"))) {
+    const parsed = parseGitHubIssueUrl(match[1]);
+    if (!parsed) continue;
+    const key = `${parsed.owner.toLowerCase()}/${parsed.repo.toLowerCase()}#${parsed.number}`;
+    if (!canonical.some((candidate) => candidate.key === key)) canonical.push({ ...parsed, key });
+  }
+  if (canonical.length === 1) {
+    const candidate = canonical[0];
+    return {
+      candidateNumber: candidate.number,
+      candidateUrl: `https://github.com/${candidate.owner}/${candidate.repo}/issues/${candidate.number}`,
+      canonicalCount: 1,
+    };
+  }
+  return {
+    candidateNumber: canonical.length === 0 ? legacyNumber : null,
+    candidateUrl: null,
+    canonicalCount: canonical.length,
+  };
+}
+
+function classifyBackfillCandidate(task) {
+  const description = String(task?.description || "");
+  const blocks = [...description.matchAll(new RegExp(SYNC_BLOCK_RE.source, "gi"))];
+  const legacyNumber = issueNumberFromTaskName(task?.name);
+  if (blocks.length === 0) {
+    const { canonicalCount, ...candidate } = malformedProvenanceCandidate(description, legacyNumber);
+    if (legacyNumber === null && canonicalCount === 0) return { kind: "none" };
+    return {
+      kind: "quarantine",
+      ...candidate,
+      reason: canonicalCount > 0
+        ? `malformed provenance: found ${canonicalCount} canonical **Issue:** URL(s) outside a kanbanflow-sync block`
+        : "title-only #n candidate has no authoritative kanbanflow-sync issue URL",
+    };
+  }
+  if (blocks.length !== 1) {
+    const { canonicalCount: _canonicalCount, ...candidate } = malformedProvenanceCandidate(description, legacyNumber);
+    return {
+      kind: "quarantine",
+      ...candidate,
+      reason: `malformed provenance: found ${blocks.length} kanbanflow-sync blocks`,
+    };
+  }
+
+  const issueLines = [...blocks[0][1].matchAll(new RegExp(SYNC_ISSUE_LINE_RE.source, "gmi"))];
+  if (issueLines.length !== 1) {
+    const { canonicalCount: _canonicalCount, ...candidate } = malformedProvenanceCandidate(description, legacyNumber);
+    return {
+      kind: "quarantine",
+      ...candidate,
+      reason: `malformed provenance: expected one **Issue:** URL, found ${issueLines.length}`,
+    };
+  }
+  const parsed = parseGitHubIssueUrl(issueLines[0][1]);
+  if (!parsed) {
+    return { kind: "quarantine", candidateNumber: legacyNumber, candidateUrl: null, reason: "malformed provenance: **Issue:** value is not a canonical GitHub issue URL" };
+  }
+  const canonicalUrl = `https://github.com/${parsed.owner}/${parsed.repo}/issues/${parsed.number}`;
+  return { kind: "verify", ...parsed, candidateNumber: parsed.number, candidateUrl: canonicalUrl };
+}
+
+function planBackfill(tasks, projectLinks, repoIdentity) {
+  const plans = [];
+  const verifyGroups = new Map();
+  const persistedClaims = new Map();
+  for (const link of projectLinks) {
+    if ((link.provider === 0 || String(link.provider).toLowerCase() === "github")
+      && link.repositoryExternalId === repoIdentity.externalId
+      && link.externalNumber != null) {
+      const group = persistedClaims.get(link.externalNumber) || [];
+      group.push(link);
+      persistedClaims.set(link.externalNumber, group);
+    }
+  }
+  for (const task of tasks) {
+    const existing = githubLinksOf(task, projectLinks)[0];
+    if (existing) {
+      const plainName = isActiveLink(existing) ? stripLegacyIssuePrefix(task.name) : null;
+      plans.push({
+        task,
+        kind: "existing",
+        link: existing,
+        plainName: plainName && plainName !== task.name ? plainName : null,
+      });
+      continue;
+    }
+    const candidate = classifyBackfillCandidate(task);
+    const planItem = { task, ...candidate };
+    if (candidate.kind === "verify") {
+      const sameRepo = `${candidate.owner}/${candidate.repo}`.toLowerCase() === repoIdentity.fullName.toLowerCase();
+      planItem.pathDrift = !sameRepo;
+      const claims = persistedClaims.get(candidate.number) || [];
+      if (claims.length > 0) {
+        planItem.kind = "quarantine";
+        planItem.reason = `issue candidate #${candidate.number} is already claimed by persisted ${claims.map((claim) => `${claim.state} task ${claim.taskId}`).join(", ")}`;
+        plans.push(planItem);
+        continue;
+      }
+      const key = `${repoIdentity.externalId}:${candidate.number}`;
+      const group = verifyGroups.get(key) || [];
+      group.push(planItem);
+      verifyGroups.set(key, group);
+    }
+    plans.push(planItem);
+  }
+
+  for (const group of verifyGroups.values()) {
+    if (group.length <= 1) continue;
+    const ids = group.map((item) => item.task.id).join(", ");
+    for (const item of group) {
+      item.kind = "quarantine";
+      item.reason = `duplicate authoritative issue candidate #${item.number} is claimed by tasks ${ids}`;
+    }
+  }
+  return plans;
+}
+
+async function persistQuarantine(item, repoIdentity, args) {
+  plan(args.dryRun, "quarantine link candidate", `task ${item.task.id}: ${item.reason}`);
+  if (args.dryRun) return;
+  await externalApi.quarantine(item.task.id, {
+    taskId: item.task.id,
+    provider: "GitHub",
+    repositoryExternalId: repoIdentity.externalId,
+    repositoryOwner: repoIdentity.owner,
+    repositoryName: repoIdentity.name,
+    candidateNumber: item.candidateNumber ?? null,
+    candidateUrl: item.candidateUrl ?? null,
+    reason: item.reason,
+    actor: args.actor,
+  });
+  stats.linksQuarantined++;
+}
+
+async function backfillLinks(repo, args) {
+  console.log(`\n${repo}  (backfill-links${args.dryRun ? " — DRY RUN" : ""})`);
+  const [projects, repoIdentity] = await Promise.all([
+    api("GET", "/api/projects"),
+    fetchRepositoryIdentity(repo),
+  ]);
+  const projectLink = resolveProjectLink(repo, projects, repoIdentity);
+  if (projectLink.conflict) throw new Error(projectLink.conflict);
+  if (!projectLink.project) throw new Error(`${repo} has no linked board project; run onboard first`);
+
+  const [tasks, projectLinks] = await Promise.all([
+    api("GET", `/api/projects/${projectLink.project.id}/tasks`),
+    externalApi.listProjectLinks(projectLink.project.id),
+  ]);
+  const plans = planBackfill(tasks, projectLinks, repoIdentity);
+
+  for (const item of plans) {
+    if (item.kind === "none") continue;
+    if (item.kind === "existing") {
+      console.log(`          task ${item.task.id}: already ${isActiveLink(item.link) ? "linked" : "quarantined"}`);
+      if (item.plainName) {
+        plan(args.dryRun, "render linked task name without legacy prefix", `task ${item.task.id}: "${item.plainName}"`);
+        if (!args.dryRun) await api("PUT", `/api/tasks/${item.task.id}`, { name: item.plainName, actor: args.actor });
+      }
+      continue;
+    }
+    if (item.kind === "quarantine") {
+      await persistQuarantine(item, repoIdentity, args);
+      continue;
+    }
+
+    const candidateRepo = `${item.owner}/${item.repo}`;
+    if (item.pathDrift) {
+      let candidateRepoIdentity;
+      try {
+        candidateRepoIdentity = await fetchRepositoryIdentity(candidateRepo);
+      } catch (err) {
+        if (!/(?:HTTP\s+404|Not Found|status 404)/i.test(err.message)) throw err;
+        await persistQuarantine({ ...item, reason: `authoritative sync URL repository ${candidateRepo} no longer resolves` }, repoIdentity, args);
+        continue;
+      }
+      if (candidateRepoIdentity.externalId !== repoIdentity.externalId) {
+        await persistQuarantine({
+          ...item,
+          reason: `authoritative sync URL belongs to different repository node ${candidateRepoIdentity.externalId}, not ${repoIdentity.externalId}`,
+        }, repoIdentity, args);
+        continue;
+      }
+      console.log(`          task ${item.task.id}: legacy URL ${candidateRepo} follows immutable node ${repoIdentity.externalId} to ${repoIdentity.fullName}`);
+    }
+
+    let issue;
+    try {
+      issue = await fetchIssueByNumber(candidateRepo, item.number);
+    } catch (err) {
+      if (!/(?:HTTP\s+404|Not Found|status 404)/i.test(err.message)) throw err;
+      await persistQuarantine({
+        ...item,
+        reason: `authoritative sync URL did not resolve to an issue in ${repo}`,
+      }, repoIdentity, args);
+      continue;
+    }
+
+    if (issue.number !== item.number || !issue.node_id || issue.pull_request) {
+      await persistQuarantine({ ...item, reason: "authoritative sync URL did not verify as a GitHub issue" }, repoIdentity, args);
+      continue;
+    }
+
+    plan(args.dryRun, "register durable link", `task ${item.task.id} → ${repo}#${issue.number} (${issue.node_id})`);
+    if (args.dryRun) continue;
+    await externalApi.registerLink(item.task.id, verifiedLinkRequest(item.task.id, repoIdentity, issue, args.actor));
+    stats.linksRegistered++;
+    const plainName = stripLegacyIssuePrefix(item.task.name);
+    if (plainName && plainName !== item.task.name) {
+      await api("PUT", `/api/tasks/${item.task.id}`, { name: plainName, actor: args.actor });
+    }
+  }
+
+  const actionable = plans.filter((item) => item.kind !== "none");
+  console.log(`  ${actionable.length} candidate(s): ${plans.filter((x) => x.kind === "verify").length} verified/linkable · ${plans.filter((x) => x.kind === "quarantine").length} quarantined · ${plans.filter((x) => x.kind === "existing").length} already recorded`);
 }
 
 // --- status -------------------------------------------------------------------------------
@@ -1109,7 +2789,8 @@ async function statusRepo(repo, args, projects) {
     pending: [], drift: [], unsynced: [], lastSync: null,
   };
 
-  const link = resolveProjectLink(repo, projects);
+  const repoIdentity = await fetchRepositoryIdentity(repo);
+  const link = resolveProjectLink(repo, projects, repoIdentity);
   rec.link = link.linkedBy ?? "none";
   // A forked or ambiguous link is drift, not a warning: sync will not repair it and the
   // mirror looks healthy while it silently splits.
@@ -1135,12 +2816,25 @@ async function statusRepo(repo, args, projects) {
     return rec;
   }
 
-  const tasks = await api("GET", `/api/projects/${link.project.id}/tasks`);
-  const byIssueNumber = new Map();
-  for (const t of tasks) {
-    const n = issueNumberFromTaskName(t.name);
-    if (n === null) rec.unsynced.push({ id: t.id, name: t.name, status: t.status, priority: t.priority });
-    else byIssueNumber.set(n, t);
+  const [tasks, projectLinks] = await Promise.all([
+    api("GET", `/api/projects/${link.project.id}/tasks`),
+    externalApi.listProjectLinks(link.project.id),
+  ]);
+  const index = buildTaskIdentityIndex(tasks, repoIdentity, projectLinks);
+  const byIssueNumber = new Map([...index.legacyByNumber, ...index.durableByNumber]);
+  for (const task of tasks) {
+    const links = githubLinksOf(task, projectLinks);
+    if (index.foreignLinkedTaskIds.has(task.id)) {
+      rec.drift.push(`${repo}: task ${task.id} has a GitHub link for repository node ${links[0]?.repositoryExternalId}; structured identity blocks legacy fallback`);
+      continue;
+    }
+    if (links.some((candidate) => !isActiveLink(candidate))) {
+      rec.drift.push(`${repo}: task ${task.id} is quarantined for GitHub link review`);
+      continue;
+    }
+    if (!index.durableTaskIds.has(task.id) && issueNumberFromTaskName(task.name) === null) {
+      rec.unsynced.push({ id: task.id, name: task.name, status: task.status, priority: task.priority });
+    }
   }
   rec.board = { tasks: tasks.length, mirrored: byIssueNumber.size, unsynced: rec.unsynced.length };
 
@@ -1156,13 +2850,22 @@ async function statusRepo(repo, args, projects) {
     // Same two conditions syncTasks uses, and the same message text (shared builders above),
     // so `status` can never report drift that `sync` would not.
     if (task.status === "Done") rec.drift.push(driftDoneButOpen(repo, issue));
-    if (task.name !== taskNameFor(issue)) titleLag++;
+    const expectedName = index.durableTaskIds.has(task.id)
+      ? String(issue.title || "").trim()
+      : taskNameFor(issue);
+    if (task.name !== expectedName) titleLag++;
     if (task.priority !== derivePriority(issue)) priorityLag++;
     if ((task.featureName || "") !== featureNameFor(issue)) featureLag++;
     if (prByIssue.get(n) && ADVANCEABLE_TO_REVIEW.has(task.status) && task.status !== "Review") reviewLag++;
   }
 
-  const missing = openIssues.filter((i) => !byIssueNumber.has(i.number)).length;
+  const openMatches = openIssues.map((issue) => ({ issue, match: taskMatchForIssue(index, issue) }));
+  for (const { issue, match } of openMatches) {
+    if (match.kind === "identity-mismatch") {
+      rec.drift.push(`${repo}#${issue.number}: ${match.reason}; immutable identity requires human repair`);
+    }
+  }
+  const missing = openMatches.filter(({ match }) => !match.task && match.kind !== "identity-mismatch").length;
   if (missing) rec.pending.push(`${missing} GitHub issue(s) not on the board`);
   if (closeLag) rec.pending.push(`${closeLag} task(s) whose issue is closed but which are not Done`);
   if (titleLag) rec.pending.push(`${titleLag} task title(s) behind the issue title`);
@@ -1179,7 +2882,7 @@ function printStatusRepo(rec) {
   console.log(`\n${rec.repo}`);
   const linkText = rec.projectId === null
     ? `UNLINKED — no project on the board`
-    : `project #${rec.projectId} "${rec.projectName}"  (${rec.link === "marker" ? "durable marker" : "name match only — run `onboard` to make it durable"})`;
+    : `project #${rec.projectId} "${rec.projectName}"  (${rec.link === "node" ? "immutable repository node" : rec.link === "marker" ? "legacy path marker — run `onboard` to add node identity" : "name match only — run `onboard` to make it durable"})`;
   console.log(`  link       ${linkText}`);
   console.log(`  github     ${g.openIssues} open · ${g.closedIssues} closed issues · ${g.openPrs} open PRs (${g.linkedPrs} linked) · ${g.milestones} milestones`);
   console.log(`  board      ${rec.board.tasks} tasks · ${rec.board.mirrored} mirrored · ${rec.board.unsynced} unsynced`);
@@ -1210,7 +2913,7 @@ async function statusAll(repos, args) {
 
   const total = (key) => records.reduce((n, r) => n + r[key].length, 0);
   const drift = total("drift"), pending = total("pending"), unsynced = total("unsynced");
-  const notDurable = records.filter((r) => r.link !== "marker").length;
+  const notDurable = records.filter((r) => r.link !== "node").length;
   // "I could not see everything" is a different answer from "I looked and it is clean", and
   // conflating them is how a partial read reports a green board.
   const blind = stats.incomplete.length > 0 || errors.length > 0;
@@ -1244,37 +2947,50 @@ async function statusAll(repos, args) {
   process.exitCode = exit;
 }
 
-// --allow-write / --push are recognised so that asking for the write gets a real explanation
-// rather than "unknown option". They are refused, not honoured.
-function refusesWrite(args) {
-  if (!args.allowWrite) return false;
-  console.error(`
-push-issue is PREVIEW ONLY — --allow-write / --push is refused, by design.
-
-Creating the issue and recording its number on the board are two operations, and the board's
-only identity for a mirrored issue is the "#<n> " title prefix, which cannot exist until the
-first one has already succeeded. A crash, a second push run, or a \`sync\` landing in that
-window creates a duplicate issue — and additive-only means nothing here may close it.
-
-Enabling the write needs a pending-operation id persisted through REST BEFORE the GitHub call.
-That is schema work and is tracked separately. Until then:
-
-  node scripts/portfolio-sync.mjs push-issue ${args.repos?.[0] ?? "owner/repo"} --all
-      prints the exact issue each unsynced task would become, and writes nothing.
-
-See "Why push-issue does not write" in docs/GITHUB-SYNC.md.`);
-  process.exitCode = 2;
-  return true;
+function commandValidationError(args) {
+  if (args.allowWrite && args.command !== "push-issue") return "--allow-write is valid only with push-issue.";
+  if (args.authorizeAmbiguousRetry !== null) {
+    if (!args.resume || args.authorizeAmbiguousRetry.toLowerCase() !== args.resume.toLowerCase()) {
+      return "--authorize-ambiguous-retry must exactly repeat the UUID supplied to --resume.";
+    }
+    if (!args.actorExplicit) {
+      return "--authorize-ambiguous-retry requires an explicit non-blank --actor <name>.";
+    }
+    if (!String(args.resolutionReason || "").trim()) {
+      return "--authorize-ambiguous-retry requires --resolution-reason <text>.";
+    }
+  }
+  if (args.resolutionReason !== null && args.authorizeAmbiguousRetry === null) {
+    return "--resolution-reason is valid only with --authorize-ambiguous-retry.";
+  }
+  if (args.resume && (!args.allowWrite || args.command !== "push-issue" || args.task === null)) {
+    return "--resume requires: push-issue <owner/repo> --allow-write --task <id> --resume <operation-uuid>.";
+  }
+  if (args.resume && args.dryRun) return "--resume performs recovery and cannot be combined with --dry-run.";
+  if (args.command === "push-issue" && args.allowWrite && args.task === null) {
+    return "Live push-issue requires --task <id>; bulk --all writes are intentionally forbidden.";
+  }
+  if (args.command === "push-issue" && args.allowWrite && args.all) {
+    return "--all is preview-only and cannot be combined with --allow-write.";
+  }
+  return null;
 }
 
 const HELP = `portfolio-sync — GitHub <-> KanbanFlow. GitHub is the source of truth; the board is
 the visualisation. Every command is idempotent and honours --dry-run.
 
   sync                        GitHub -> board mirror. Read-only on GitHub. THE DEFAULT.
+                              Also promotes a legacy "#<n> " prefix to a durable link (and
+                              strips it) unless the task's sync block disagrees -> drift.
   onboard <owner/repo>…       register a repo: link the Project durably, then backfill it.
   restore-content <repo>      restore incomplete imported descriptions on existing cards only.
-  push-issue <owner/repo>     PREVIEW ONLY: print the exact issue each unsynced board task
-                              would become. Refuses to write — see docs/GITHUB-SYNC.md.
+  push-issue <owner/repo>     preview by default; one additive issue create only with the
+                              explicit --allow-write --task <id> gate.
+  backfill-links <owner/repo> REPAIR/AUDIT, not a required migration step -- sync auto-promotes.
+                              Verify legacy sync-block URLs and persist durable links;
+                              ambiguous/title-only candidates are quarantined. Run it AFTER a
+                              first sync: live, it quarantines title-only "#<n> " tasks that
+                              sync would have promoted.
   status                      health check both sides.
                               exit 0 = clean and complete · 1 = drift · 2 = incomplete/error
 
@@ -1289,15 +3005,33 @@ sync / onboard
 
 push-issue
   --task <id>            preview exactly this board task
-  --all                  preview every task with no "#<n> " prefix
+  --all                  preview every task with no durable link or legacy "#<n> " fallback
   --limit N              cap how many --all previews in one run
+  --allow-write          enable one live additive create; requires --task (alias: --push)
+  --resume <uuid>        explicitly resume/reconcile one persisted operation; requires
+                         --allow-write and --task. Dispatched/NeedsReview never auto-create.
+  --authorize-ambiguous-retry <same uuid>
+                         after a normal zero-match recovery reached NeedsReview, record an
+                         operator-authorized retry and EXIT without creating. Must accompany
+                         --resume plus explicit --actor and --resolution-reason. A later, separate
+                         normal --resume scans every issue again before it may create.
+  --resolution-reason T  required audit reason for --authorize-ambiguous-retry
 
 status
   --strict               also exit 1 on pending work, unsynced tasks, or a non-durable link
   --json                 machine-readable report (includes the exit code and completeness)
 
-WRITE SURFACE ON GITHUB: NONE. This script only ever reads GitHub. It cannot create, close,
-delete, reword, re-label or reassign an issue. All writes go to the KanbanFlow REST API.
+testing only
+  --internal-test-hooks  load the #336 crash/barrier harness named by KANBANFLOW_336_TEST_HOOKS
+                         (scripts/test-hooks/336-barriers.mjs). BOTH are required — neither the
+                         flag nor the environment variable arms anything alone — and combining
+                         it with --allow-write additionally requires
+                         KANBANFLOW_336_ALLOW_WRITE_HOOKS=1. Loading prints a banner on stderr.
+                         Used by scripts/verify-336-github.ps1; never in a production run.
+
+WRITE SURFACE ON GITHUB: one dedicated stdin-based "gh issue create" primitive, reachable only
+through push-issue --allow-write --task. Generic gh() remains read-only. There is no close,
+edit, delete, reword, re-label-after-create, comment, or assignment path.
 
 Comments: issue comments, PR conversation, PR reviews (APPROVED -> Verification,
 CHANGES_REQUESTED -> Blocked), and inline file:line review comments are all mirrored onto
@@ -1314,15 +3048,30 @@ async function main() {
     process.exitCode = 2;
     return;
   }
-  if (args.command === "push-issue" && refusesWrite(args)) return;
+  const validationError = commandValidationError(args);
+  if (validationError) {
+    console.error(`${validationError}\n\n${HELP}`);
+    process.exitCode = 2;
+    return;
+  }
   if (process.env.KANBANFLOW_BODY_EXCERPT_LIMIT !== undefined) {
     console.warn("KANBANFLOW_BODY_EXCERPT_LIMIT is obsolete and ignored. Complete issue and comment text is always preserved.");
   }
   // `sync` and `status` sweep the whole portfolio by design. onboard/push-issue act on ONE
   // repo at a time and must never fall back to the default six — silently onboarding or
   // pushing to six repos because a repo argument was forgotten is not a recoverable mistake.
-  if ((args.command === "onboard" || args.command === "push-issue" || args.command === "restore-content") && !args.repos?.length) {
+  if ((args.command === "onboard" || args.command === "push-issue" || args.command === "backfill-links" || args.command === "restore-content") && !args.repos?.length) {
     console.error(`\`${args.command}\` needs an explicit repo:\n  node scripts/portfolio-sync.mjs ${args.command} owner/repo`);
+    process.exitCode = 2;
+    return;
+  }
+
+  try {
+    await installTestHooks(args);
+  } catch (err) {
+    console.error(`${err.message}
+
+${HELP}`);
     process.exitCode = 2;
     return;
   }
@@ -1345,7 +3094,7 @@ async function main() {
     return;
   }
 
-  const runners = { sync: syncRepo, onboard: onboardRepo, "restore-content": restoreContent, "push-issue": pushIssues };
+  const runners = { sync: syncRepo, "restore-content": restoreContent, onboard: onboardRepo, "push-issue": pushIssues, "backfill-links": backfillLinks };
   const run = runners[args.command];
   for (const repo of repos) {
     try {
@@ -1359,7 +3108,13 @@ async function main() {
   console.log(`\n── summary ──`);
   if (args.command === "push-issue") {
     console.log(`issues previewed: ${stats.issuesPreviewed}`);
-    console.log(`issues created:   0   (push-issue never writes to GitHub)`);
+    console.log(`issues created:   ${stats.issuesCreated}`);
+    console.log(`links finalized:  ${stats.linksFinalized}`);
+    return;
+  }
+  if (args.command === "backfill-links") {
+    console.log(`links registered: ${stats.linksRegistered}`);
+    console.log(`links quarantined:${String(stats.linksQuarantined).padStart(3)}`);
     return;
   }
 
@@ -1402,24 +3157,80 @@ async function main() {
 function resolvedEntry(p) {
   try { return realpathSync(resolve(p)); } catch { return resolve(p); }
 }
-const selfPath = fileURLToPath(import.meta.url);
-const invokedDirectly = Boolean(process.argv[1])
-  && (resolve(process.argv[1]) === selfPath || resolvedEntry(process.argv[1]) === selfPath);
-
-if (invokedDirectly) {
-  main().catch((err) => {
-    console.error(err);
-    process.exit(1);
-  });
+function isDirectRun(metaUrl, argv1 = process.argv[1]) {
+  if (!argv1) return false;
+  const selfPath = fileURLToPath(metaUrl);
+  return resolve(argv1) === resolve(selfPath)
+    || resolvedEntry(argv1) === resolvedEntry(selfPath);
 }
 
 export {
+  activeGithubLink,
+  ambiguousFailureMessage,
+  analyzeMarkerRecords,
+  assertFreshPrecreateScan,
+  assertLivePushProjectLink,
+  assertGhIssueCreateAllowed,
+  assertReadOnly,
+  buildGhIssueCreateArgs,
+  buildExternalDispatchRequest,
+  buildTaskIdentityIndex,
+  classifyBackfillCandidate,
+  completedOperationMatchesIssue,
+  commandValidationError,
   commentTextFor,
   completeCommentIds,
   descriptionRefreshFor,
   descriptionFor,
   needsContentRestoration,
   restoreContent,
-  parseArgs,
   syncComments,
+  exactMarkerCount,
+  exactMarkerMatches,
+  exhaustiveMarkerDisposition,
+  ghIssueCreate,
+  globalNodeLinkDisposition,
+  githubLinksOf,
+  handleCreateWindowFailure,
+  hooks,
+  HookAbort,
+  installTestHooks,
+  isDirectRun,
+  legacyPromotionDisposition,
+  runManualResumeHook,
+  issueBodyFor,
+  issueHasOneCleanOperationMarker,
+  issueNumberFromTaskName,
+  issuePushMarkerDisposition,
+  linkMetadataNeedsRefresh,
+  markerOperationCanFinalize,
+  operationTaskDisposition,
+  operationRequiresFreshPrecreateScan,
+  operationMarkerRepositoryDisposition,
+  parseArgs,
+  parseGitHubIssueUrl,
+  planBackfill,
+  pushMarker,
+  pushOperationIds,
+  rawPushOperationIds,
+  recordAmbiguousOutcome,
+  recoveryDisposition,
+  refreshedProjectDescription,
+  repoLinkMarker,
+  repoNodeLinkMarker,
+  resolveProjectLink,
+  stripLegacyIssuePrefix,
+  stats,
+  syncBlockIssueUrl,
+  syncTasks,
+  taskMatchForIssue,
+  verifiedFinalizeRequest,
+  writeStateName,
 };
+
+if (isDirectRun(import.meta.url)) {
+  main().catch((err) => {
+    console.error(err);
+    process.exit(1);
+  });
+}

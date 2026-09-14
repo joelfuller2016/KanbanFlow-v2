@@ -52,6 +52,7 @@ async function nativeMcpTool(name, args) {
   const requestId = ++mcpRequestId;
   const res = await fetch(`${baseUrl}/mcp`, {
     method: "POST",
+    signal: AbortSignal.timeout(10_000),
     headers: {
       "content-type": "application/json",
       accept: "application/json, text/event-stream",
@@ -475,9 +476,14 @@ async function startApp() {
       let status = null;
       try { status = JSON.parse(body)?.status; } catch { /* not JSON — record it below */ }
 
-      if (r.ok && status === "ok") {
+      // "degraded" counts as up (#498). This is a READINESS probe — is the process serving? —
+      // and health now reports the database it opened, so a board this harness handed the app
+      // seconds ago correctly answers degraded/created-at-startup. Insisting on "ok" here would
+      // poll for 90s against a perfectly working app. "error" keeps retrying: that one means the
+      // app is answering but cannot read its database, which is worth waiting out.
+      if (r.ok && (status === "ok" || status === "degraded")) {
         started = true;
-        log(`App is up. (${((Date.now() - startedAt) / 1000).toFixed(1)}s)`);
+        log(`App is up (health: ${status}). (${((Date.now() - startedAt) / 1000).toFixed(1)}s)`);
         return;
       }
       lastProbe = `answered HTTP ${r.status}, body: ${body.slice(0, 160)}`;
@@ -860,6 +866,164 @@ async function main() {
         .waitFor({ state: "visible" });
       await waitForApiStatus(created.id, "Done");
     });
+
+    // BEGIN AddItemModal draft regression (#463).
+    // OnParametersSet must initialize only on a fresh open. Each case drives the real
+    // board-filter callback while the modal is open; no production test hook is needed.
+    // Mutation proof: rebuild with the old `if (IsOpen)` guard and rerun these cases.
+    // Preservation must fail; restoring the guard must also keep fresh-open reset working.
+    async function withAddItemDraft(check) {
+      const returnUrl = page.url();
+      const draftProject = await api("POST", "/api/projects", { name: `E2E add draft ${stamp}` });
+      try {
+        const first = await api("POST", `/api/projects/${draftProject.id}/features`, { name: "Opening feature" });
+        const second = await api("POST", `/api/projects/${draftProject.id}/features`, { name: "Chosen feature" });
+        await page.goto(`${baseUrl}/project/${draftProject.id}`);
+        await clickUntil(
+          () => page.locator('[data-testid="add-task-Todo-button"]').click(),
+          page.locator("#add-item-name"),
+        );
+        await check({ project: draftProject, first, second });
+      } finally {
+        await page.goto(returnUrl);
+        await api("DELETE", `/api/projects/${draftProject.id}`);
+      }
+    }
+
+    async function rerenderAddItem(label) {
+      const query = `draft-${label}-${stamp}`;
+      await page.locator('[data-testid="board-filter-search"]').evaluate((el, value) => {
+        el.value = value;
+        el.dispatchEvent(new Event("input", { bubbles: true }));
+      }, query);
+      await page.waitForFunction((value) => new URL(location.href).searchParams.get("q") === value,
+        query, { timeout: 10000 });
+      // Wait beyond the 250ms URL debounce and its route render before asserting silence.
+      await sleep(600);
+    }
+
+    async function assertAddDraft(expected) {
+      assert(await page.locator('[data-testid="add-item-modal"]').isVisible(), "draft dialog closed unexpectedly");
+      for (const [id, value] of Object.entries(expected)) {
+        const actual = await page.locator(`#add-item-${id}`).inputValue();
+        assert(actual === value, `add draft ${id}: expected ${JSON.stringify(value)}, got ${JSON.stringify(actual)}`);
+      }
+    }
+
+    const taskDraft = (featureId) => ({
+      name: `Human task draft ${stamp}`,
+      description: "Keep **all** details.  \n\n    indented context — café\n",
+      feature: String(featureId), status: "3", priority: "3",
+    });
+    async function fillAddDraft(draft) {
+      await page.locator("#add-item-name").fill(draft.name);
+      await page.locator("#add-item-description").fill(draft.description);
+      for (const id of ["feature", "status", "priority"]) {
+        await page.locator(`#add-item-${id}`).selectOption(draft[id]);
+      }
+      // Description binds on change: the select interaction above commits its edit.
+      await page.locator("#add-item-description").focus();
+      await page.locator("#add-item-description").evaluate((el) => el.setSelectionRange(3, 11));
+    }
+
+    await test("AddItemModal preserves every task field and caret across parent renders (#463)", async () => {
+      await withAddItemDraft(async ({ second }) => {
+        const draft = taskDraft(second.id);
+        await fillAddDraft(draft);
+        await rerenderAddItem("task");
+        await assertAddDraft(draft);
+        assert(await page.locator("#add-item-type-task").isChecked(), "task type was reset");
+        const focus = await page.locator("#add-item-description").evaluate((el) => ({
+          active: document.activeElement === el, start: el.selectionStart, end: el.selectionEnd,
+        }));
+        assert(focus.active && focus.start === 3 && focus.end === 11,
+          `parent render moved the active edit or caret: ${JSON.stringify(focus)}`);
+
+        await page.locator('[data-testid="add-item-create-button"]').click();
+        await page.locator('[data-testid="add-item-modal"]').waitFor({ state: "hidden" });
+        const saved = await api("GET", `/api/features/${second.id}/tasks`);
+        assert(saved.length === 1 && saved[0].name === draft.name && saved[0].featureId === second.id &&
+          saved[0].status === "Review" && saved[0].priority === "Critical",
+        `Save lost the preserved task context: ${JSON.stringify(saved)}`);
+      });
+    });
+
+    await test("AddItemModal preserves a feature draft and adopts defaults on fresh reopen (#463)", async () => {
+      await withAddItemDraft(async ({ second }) => {
+        // Change away from the opening task type using the native keyboard control.
+        await page.locator("#add-item-type-feature").focus();
+        await page.keyboard.press("Space");
+        // Wait for the server-rendered feature fields before following their Tab order.
+        // The native radio checks immediately, while task-only controls can still be present.
+        await page.locator("#add-item-status").waitFor({ state: "hidden" });
+        await page.locator("#add-item-name").focus();
+        await page.keyboard.type(`Human feature draft ${stamp}`);
+        await page.keyboard.press("Tab");
+        await page.keyboard.press("Home");
+        await page.keyboard.press("Tab");
+        await page.waitForFunction(() => document.activeElement?.id === "add-item-description");
+        await page.keyboard.type("Feature details remain here.");
+        await page.keyboard.press("Tab");
+        const draft = { name: `Human feature draft ${stamp}`, description: "Feature details remain here.", feature: "0" };
+        await assertAddDraft(draft);
+        await rerenderAddItem("feature");
+        await assertAddDraft(draft);
+        assert(await page.locator("#add-item-type-feature").isChecked(), "feature type reverted to task");
+        assert(await page.locator('[data-testid="add-item-modal"]').evaluate((el) => el.contains(document.activeElement)),
+          "parent render moved focus outside the dialog");
+
+        await page.locator('[data-testid="add-item-cancel-button"]').click();
+        await page.locator('[data-testid="add-item-modal"]').waitFor({ state: "hidden" });
+        await page.locator(`[data-testid="outline-feature-${second.id}-add-button"]`).click();
+        await page.locator("#add-item-name").waitFor({ state: "visible" });
+        await assertAddDraft({ name: "", description: "", feature: String(second.id), status: "0", priority: "1" });
+        assert(await page.locator("#add-item-type-task").isChecked(), "feature opener did not reset type to task");
+        assert(await page.locator('[data-testid="add-item-modal"] [role="alert"]').count() === 0, "fresh open retained an error");
+        // Tab containment and Escape/opener restoration retain their existing behavior.
+        for (let i = 0; i < 12; i++) {
+          await page.keyboard.press("Tab");
+          assert(await page.locator('[data-testid="add-item-modal"]').evaluate((el) => el.contains(document.activeElement)),
+            `Tab ${i + 1} escaped the add dialog`);
+        }
+        await page.keyboard.press("Escape");
+        await page.locator('[data-testid="add-item-modal"]').waitFor({ state: "hidden" });
+        assert(await page.locator(`[data-testid="outline-feature-${second.id}-add-button"]`)
+          .evaluate((el) => el === document.activeElement), "Escape did not restore the feature opener's focus");
+        await page.locator('[data-testid="add-project-item-button"]').click();
+        await page.locator("#add-item-name").waitFor({ state: "visible" });
+        await assertAddDraft({ name: "", description: "" });
+        assert(await page.locator("#add-item-type-feature").isChecked(), "project opener did not adopt its feature type default");
+      });
+    });
+
+    await test("AddItemModal retains a failed-save draft and missing-feature error across renders (#463)", async () => {
+      await withAddItemDraft(async ({ project: draftProject, first, second }) => {
+        const draft = taskDraft(second.id);
+        await fillAddDraft(draft);
+        // A concurrent actor removes the chosen feature through the real API while editing.
+        await api("DELETE", `/api/features/${second.id}`);
+        await page.locator('[data-testid="add-item-create-button"]').click();
+        const error = page.locator('[data-testid="add-item-modal"] [role="alert"]');
+        await error.waitFor({ state: "visible" });
+        const expectedError = `Feature ${second.id} not found.`;
+        assert((await error.innerText()).trim() === expectedError, "failed save did not explain the missing feature");
+        await assertAddDraft(draft);
+        await rerenderAddItem("failed-save");
+        await assertAddDraft(draft);
+        assert(await error.isVisible() && (await error.innerText()).trim() === expectedError,
+          "parent render discarded the actionable save error");
+        const board = await api("GET", `/api/projects/${draftProject.id}/board`);
+        assert(Object.values(board).flat().length === 0, "failed save silently created a task in another feature");
+
+        await page.locator('[data-testid="add-item-cancel-button"]').click();
+        await page.locator('[data-testid="add-item-modal"]').waitFor({ state: "hidden" });
+        await page.locator('[data-testid="add-task-Review-button"]').click();
+        await page.locator("#add-item-name").waitFor({ state: "visible" });
+        await assertAddDraft({ name: "", description: "", feature: String(first.id), status: "3", priority: "1" });
+        assert(await error.count() === 0, "fresh column open retained a failed save error");
+      });
+    });
+    // END AddItemModal draft regression (#463).
 
     // ── Regression guard: cards inside a column render in SortOrder sequence ──
     // ProjectView orders cards through the canonical effective/raw-rank/Id rule, and that sort lives
@@ -2590,6 +2754,13 @@ async function main() {
         page.locator(promoteModal),
       );
 
+      // Visible DOM precedes the async OnAfterRender/initDialog focus transfer. Wait for the
+      // real transfer, without moving focus ourselves; missing focus wiring still fails here.
+      await page.waitForFunction(
+        selector => document.querySelector(selector)?.contains(document.activeElement),
+        promoteModal, { timeout: 5000 },
+      );
+
       const promoteOpen = await probeDialogFocus(page, promoteModal);
       // Load-bearing precondition. Clicking the opener FOCUSED it, so "focus is on the opener after
       // close" is also true of a dialog that never took focus in the first place. Focus has to be
@@ -2631,8 +2802,10 @@ async function main() {
 
       await page.goto(`${baseUrl}/project/${proj.id}`);
       await page.locator(card).waitFor({ state: "visible" });
-      await page.locator(`[data-testid="${openerTestid}"]`).click();
-      await page.locator(panel).waitFor({ state: "visible" });
+      await clickUntil(
+        () => page.locator(`[data-testid="${openerTestid}"]`).click(),
+        page.locator(panel),
+      );
 
       const opened = await probeDialogFocus(page, panel);
       assert(opened.count >= 2,
@@ -3284,11 +3457,12 @@ async function main() {
     // real board starts with these six lines, and the whole point of the issue is what a HUMAN sees
     // when they do.
     const syncIssueUrl = "https://github.com/joelfuller2016/KanbanFlow-v2/issues/357";
+    const syncPullRequestUrl = "https://github.com/joelfuller2016/KanbanFlow-v2/pull/506";
     const syncBlock = [
       "<!-- kanbanflow-sync -->",
       `**Issue:** ${syncIssueUrl}`,
       "**State:** OPEN · **Milestone:** M4: UI / UX Polish · **Labels:** bug, ui",
-      "**Open PR:** none",
+      `**Open PR:** ${syncPullRequestUrl}`,
       "**Synced:** 2026-08-02T21:14:07.482Z",
       "<!-- /kanbanflow-sync -->",
       "",
@@ -3330,6 +3504,106 @@ async function main() {
       name: `E2E synced description ${stamp}`,
       status: "Todo",
       description: `${syncBlock}\n## Summary\n\nA real **body** with a [named link](https://example.com/docs).`,
+    });
+    // Deliberately differs from the #357 URL embedded in mutable Markdown above. If a future
+    // regression starts scraping prose again, this browser assertion must fail instead of passing
+    // because the text and durable row happened to agree.
+    const durableIssueUrl = "https://github.com/joelfuller2016/KanbanFlow-v2/issues/336";
+    await api("PUT", `/api/tasks/${syncedTask.id}/external-work-item-links/github`, {
+      provider: "GitHub",
+      repositoryExternalId: `R_e2e_${stamp}`,
+      repositoryOwner: "joelfuller2016",
+      repositoryName: "KanbanFlow-v2",
+      externalNodeId: `I_e2e_${stamp}`,
+      externalNumber: 336,
+      url: durableIssueUrl,
+      actor: "ui-e2e",
+    });
+
+    const nonTaskSyncBlock = [
+      "<!-- kanbanflow-sync -->",
+      "**Issue:** https://github.com/joelfuller2016/KanbanFlow-v2/issues/336",
+      "**State:** OPEN · **Milestone:** M1 · **Labels:** ui",
+      "**Open PR:** https://github.com/joelfuller2016/KanbanFlow-v2/pull/506",
+      "**Synced:** 2026-08-30T23:00:00.000Z",
+      "<!-- /kanbanflow-sync -->",
+    ].join("\n");
+    const nonTaskProject = await api("POST", "/api/projects", {
+      name: `E2E non-task GitHub controls ${stamp}`,
+      description: nonTaskSyncBlock,
+    });
+    const nonTaskFeature = await api("POST", `/api/projects/${nonTaskProject.id}/features`, {
+      name: `E2E non-task feature ${stamp}`,
+      description: nonTaskSyncBlock,
+    });
+
+    await test("GitHub controls stay hidden for Project and Feature edit modes (#336 review)", async () => {
+      await page.goto(`${baseUrl}/project/${nonTaskProject.id}`);
+      await clickUntil(
+        () => page.locator('[data-testid="edit-project-button"]').click(),
+        page.locator('[data-testid="edit-item-modal"]'),
+      );
+      assert(await page.locator('[data-testid="edit-item-github-link"]').count() === 0,
+        "Project edit rendered a GitHub issue control");
+      assert(await page.locator('[data-testid="edit-item-github-pr-link"]').count() === 0,
+        "Project description produced a GitHub PR control");
+      // Navigate between modes instead of relying on modal-close animation timing; the next
+      // assertion is about a freshly opened Feature modal, not retained component state.
+      await page.goto(`${baseUrl}/project/${nonTaskProject.id}`);
+
+      await clickUntil(
+        () => page.locator(`[data-testid="outline-feature-${nonTaskFeature.id}"]`).click(),
+        page.locator('[data-testid="edit-item-modal"]'),
+      );
+      assert(await page.locator('[data-testid="edit-item-github-link"]').count() === 0,
+        "Feature edit rendered a GitHub issue control");
+      assert(await page.locator('[data-testid="edit-item-github-pr-link"]').count() === 0,
+        "Feature description produced a GitHub PR control");
+      await page.goto(`${baseUrl}/project/${proj.id}`);
+    });
+
+    await test("Durable GitHub issue identity renders on card, detail, and edit surfaces (#336)", async () => {
+      await page.goto(`${baseUrl}/project/${proj.id}`);
+      const expectedLabel = "Open GitHub issue #336 for joelfuller2016/KanbanFlow-v2 in a new tab";
+      const assertIssueControl = async (locator, surface) => {
+        await locator.waitFor({ state: "visible" });
+        assert((await locator.innerText()).trim() === "#336", `${surface} badge did not render #336`);
+        assert(await locator.getAttribute("href") === durableIssueUrl, `${surface} badge href is not canonical`);
+        assert(await locator.getAttribute("target") === "_blank", `${surface} badge must open a new tab`);
+        assert(await locator.getAttribute("rel") === "noopener noreferrer", `${surface} badge lacks opener isolation`);
+        assert(await locator.getAttribute("aria-label") === expectedLabel, `${surface} badge lacks repository context`);
+      };
+
+      await assertIssueControl(
+        page.locator(`[data-testid="board-card-${syncedTask.id}-github-link"]`),
+        "board card",
+      );
+      await clickUntil(
+        () => page.locator(`[data-testid="board-card-${syncedTask.id}-title"]`).click(),
+        page.locator('[data-testid="task-detail-panel"]'),
+      );
+      await assertIssueControl(page.locator('[data-testid="task-detail-github-link"]'), "task detail");
+
+      await page.goto(`${baseUrl}/project/${proj.id}`);
+      await clickUntil(
+        () => page.locator(`[data-testid="outline-task-${syncedTask.id}"]`).click(),
+        page.locator('[data-testid="edit-item-modal"]'),
+      );
+      await assertIssueControl(page.locator('[data-testid="edit-item-github-link"]'), "edit modal");
+      const pullRequestControl = page.locator('[data-testid="edit-item-github-pr-link"]');
+      await pullRequestControl.waitFor({ state: "visible" });
+      assert((await pullRequestControl.innerText()).trim() === "PR #506 ↗",
+        "edit modal pull request control did not render PR #506");
+      assert(await pullRequestControl.getAttribute("href") === syncPullRequestUrl,
+        "edit modal pull request control href is not canonical");
+      assert(await pullRequestControl.getAttribute("target") === "_blank",
+        "edit modal pull request control must open a new tab");
+      assert(await pullRequestControl.getAttribute("rel") === "noopener noreferrer",
+        "edit modal pull request control lacks opener isolation");
+      assert(await pullRequestControl.getAttribute("aria-label")
+        === "Open GitHub pull request #506 for joelfuller2016/KanbanFlow-v2 in a new tab",
+      "edit modal pull request control lacks repository context");
+      await page.locator('[data-testid="edit-item-cancel-button"]').click();
     });
 
     await test("Task description renders markdown in read mode, one click opens the raw source (#357)", async () => {
@@ -3515,8 +3789,14 @@ async function main() {
         }, { once: true });
       });
       await page.keyboard.press("Enter");
+      // SCOPED to the detail panel's read box. An unscoped `document.querySelector` was safe only
+      // while the panel held the sole link to this issue; board cards now render their own
+      // `a[href=".../issues/357"]` for a mirrored task, and `<KanbanBoard>` precedes
+      // `<TaskDetailPanel>` in document order (ProjectView.razor), so the unscoped query returned
+      // the CARD's link - which this test never instruments - and waited out its full timeout.
       await page.waitForFunction((href) =>
-        document.querySelector(`a[href="${href}"]`)?.dataset.e2eActivated === "true", syncIssueUrl);
+        document.querySelector(`[data-testid="task-detail-description-read"] a[href="${href}"]`)
+          ?.dataset.e2eActivated === "true", syncIssueUrl);
       await sleep(600); // let a regressed Blazor click bubble complete before the negative check
       assert(await page.locator('[data-testid="task-detail-description-edit"]').count() === 0,
         "Enter on a rendered link bubbled to the wrapper and opened the description editor");
@@ -3607,6 +3887,9 @@ async function main() {
         // against the viewport or size it beyond the task panel that owns the description.
         const layoutProbe = read.getByText(layoutProbeText, { exact: true });
         await layoutProbe.waitFor({ state: "visible" });
+        // Long descriptions live inside a scrolling panel. Measure the paragraph after bringing
+        // it into view; an ordinary offscreen paragraph is not escaped or viewport-positioned.
+        await layoutProbe.scrollIntoViewIfNeeded();
         const geometry = await layoutProbe.evaluate((el) => {
           const probeRect = el.getBoundingClientRect();
           const panelRect = el.closest('[data-testid="task-detail-panel"]').getBoundingClientRect();

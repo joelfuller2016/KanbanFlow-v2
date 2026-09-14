@@ -15,6 +15,7 @@ public static class ApiEndpoints
         app.MapProjectEndpoints();
         app.MapFeatureEndpoints();
         app.MapTaskEndpoints();
+        app.MapExternalWorkItemEndpoints();
         app.MapTaskDependencyEndpoints();
         app.MapSubtaskEndpoints();
         app.MapAcceptanceCriterionEndpoints();
@@ -146,6 +147,9 @@ public static class ApiEndpoints
                 .Include(p => p.Features)
                     .ThenInclude(f => f.Tasks)
                         .ThenInclude(t => t.Comments)
+                .Include(p => p.Features)
+                    .ThenInclude(f => f.Tasks)
+                        .ThenInclude(t => t.ExternalLinks)
                 .Include(p => p.Requirements)
                     .ThenInclude(r => r.Feature)
                 .Include(p => p.Requirements)
@@ -253,6 +257,7 @@ public static class ApiEndpoints
                     task.CreatedAt,
                     task.UpdatedAt,
                     task.CompletedAt,
+                    ExternalLinks = MapExternalWorkItemLinks(task.ExternalLinks),
                     IsBlocked = unfinishedBlockers.Count > 0,
                     BlockedByUnfinishedTasks = unfinishedBlockers.Count > 0,
                     Dependencies = dependencies.Select(MapDependencyContext),
@@ -563,6 +568,10 @@ public static class ApiEndpoints
             catch (Services.ProjectNotFoundException)
             {
                 return Results.NotFound(new { message = $"Project {id} not found." });
+            }
+            catch (Services.ExternalWorkItemConflictException ex)
+            {
+                return MapExternalWorkItemConflict(ex);
             }
         });
     }
@@ -925,7 +934,9 @@ public static class ApiEndpoints
         {
             var feature = await db.Features
                 .Include(f => f.Tasks)
+                    .ThenInclude(t => t.ExternalLinks)
                 .Include(f => f.ChildFeatures)
+                .AsSplitQuery()
                 .AsNoTracking()
                 .FirstOrDefaultAsync(f => f.Id == id);
 
@@ -958,7 +969,8 @@ public static class ApiEndpoints
                         t.SortOrder,
                         t.CreatedAt,
                         t.UpdatedAt,
-                        t.CompletedAt
+                        t.CompletedAt,
+                        ExternalLinks = MapExternalWorkItemLinks(t.ExternalLinks)
                     }),
                 ChildFeatures = feature.ChildFeatures.OrderBy(c => c.SortOrder).Select(c => new
                 {
@@ -1082,16 +1094,36 @@ public static class ApiEndpoints
         // DELETE /api/features/{id} — cascade delete
         app.MapDelete("/api/features/{id:int}", async (int id, AppDbContext db, CancellationToken ct) =>
         {
-            await using var transaction = await db.Database.BeginTransactionAsync(ct);
-            var exists = await db.Features.AnyAsync(f => f.Id == id, ct);
-            if (!exists)
-                return Results.NotFound(new { message = $"Feature {id} not found." });
-
-            await KanbanFlow.Services.ProjectGraphDeleter.DeleteFeatureTreeAsync(db, id, ct);
-            await db.SaveChangesWithAuditAsync(ct: ct);
-            await transaction.CommitAsync(ct);
-            return Results.NoContent();
+            try
+            {
+                return await DeleteFeatureAsync(id, db, ct);
+            }
+            catch (Services.ExternalWorkItemConflictException ex)
+            {
+                return MapExternalWorkItemConflict(ex);
+            }
         });
+    }
+
+    /// <summary>
+    /// Executes the production feature-delete transaction. Kept as a named handler so the
+    /// guard/read/cascade boundary can be exercised directly with file-backed SQLite races.
+    /// </summary>
+    internal static async Task<IResult> DeleteFeatureAsync(
+        int id,
+        AppDbContext db,
+        CancellationToken ct = default)
+    {
+        // Serialize the nonterminal-operation guard and graph removal with PrepareAsync.
+        await using var tx = await db.Database.BeginTransactionAsync(ct);
+        var exists = await db.Features.AnyAsync(f => f.Id == id, ct);
+        if (!exists)
+            return Results.NotFound(new { message = $"Feature {id} not found." });
+
+        await KanbanFlow.Services.ProjectGraphDeleter.DeleteFeatureTreeAsync(db, id, ct);
+        await db.SaveChangesWithAuditAsync(ct: ct);
+        await tx.CommitAsync(ct);
+        return Results.NoContent();
     }
 
     // ── Task Endpoints ─────────────────────────────────────────────────
@@ -1109,6 +1141,7 @@ public static class ApiEndpoints
                 .Where(t => t.FeatureId == featureId)
                 .Include(t => t.Subtasks)
                 .Include(t => t.AcceptanceCriteria)
+                .Include(t => t.ExternalLinks)
                 .AsSplitQuery() // #157: avoid the tasks x subtasks x criteria cartesian blow-up
                 .AsNoTracking()
                 .ToListAsync();
@@ -1129,6 +1162,7 @@ public static class ApiEndpoints
                 .Include(t => t.Feature)
                 .Include(t => t.Subtasks)
                 .Include(t => t.AcceptanceCriteria)
+                .Include(t => t.ExternalLinks)
                 .AsSplitQuery() // #157: avoid the tasks x subtasks x criteria cartesian blow-up
                 .AsNoTracking()
                 .ToListAsync();
@@ -1159,7 +1193,8 @@ public static class ApiEndpoints
                 SubtaskCount = t.Subtasks.Count,
                 SubtaskDoneCount = t.Subtasks.Count(s => s.Completed),
                 AcceptanceCriteriaCount = t.AcceptanceCriteria.Count,
-                AcceptanceCriteriaDoneCount = t.AcceptanceCriteria.Count(c => c.Completed)
+                AcceptanceCriteriaDoneCount = t.AcceptanceCriteria.Count(c => c.Completed),
+                ExternalLinks = MapExternalWorkItemLinks(t.ExternalLinks)
             }));
         });
 
@@ -1175,6 +1210,7 @@ public static class ApiEndpoints
                 .Include(t => t.Feature)
                 .Include(t => t.Subtasks)
                 .Include(t => t.AcceptanceCriteria)
+                .Include(t => t.ExternalLinks)
                 .AsSplitQuery() // #157: avoid the tasks x subtasks x criteria cartesian blow-up
                 .AsNoTracking()
                 .ToListAsync();
@@ -1204,7 +1240,8 @@ public static class ApiEndpoints
                             SubtaskCount = t.Subtasks.Count,
                             SubtaskDoneCount = t.Subtasks.Count(s => s.Completed),
                             AcceptanceCriteriaCount = t.AcceptanceCriteria.Count,
-                            AcceptanceCriteriaDoneCount = t.AcceptanceCriteria.Count(c => c.Completed)
+                            AcceptanceCriteriaDoneCount = t.AcceptanceCriteria.Count(c => c.Completed),
+                            ExternalLinks = MapExternalWorkItemLinks(t.ExternalLinks)
                         })
                         .ToList()
                 );
@@ -1219,6 +1256,8 @@ public static class ApiEndpoints
                 .Include(t => t.Feature)
                 .Include(t => t.Subtasks.OrderBy(s => s.SortOrder))
                 .Include(t => t.AcceptanceCriteria.OrderBy(c => c.SortOrder).ThenBy(c => c.Id))
+                .Include(t => t.ExternalLinks)
+                .AsSplitQuery()
                 .AsNoTracking()
                 .FirstOrDefaultAsync(t => t.Id == id);
 
@@ -1241,6 +1280,7 @@ public static class ApiEndpoints
                 task.CreatedAt,
                 task.UpdatedAt,
                 task.CompletedAt,
+                ExternalLinks = MapExternalWorkItemLinks(task.ExternalLinks),
                 Subtasks = task.Subtasks.Select(s => new
                 {
                     s.Id,
@@ -1272,6 +1312,7 @@ public static class ApiEndpoints
                 .Include(t => t.Feature).ThenInclude(f => f.Project)
                 .Include(t => t.AcceptanceCriteria.OrderBy(c => c.SortOrder).ThenBy(c => c.Id))
                 .Include(t => t.Subtasks.OrderBy(s => s.SortOrder).ThenBy(s => s.Id))
+                .Include(t => t.ExternalLinks)
                 .AsSplitQuery()
                 .AsNoTracking()
                 .FirstOrDefaultAsync(t => t.Id == id);
@@ -1415,7 +1456,8 @@ public static class ApiEndpoints
                     task.SortOrder,
                     task.CreatedAt,
                     task.UpdatedAt,
-                    task.CompletedAt
+                    task.CompletedAt,
+                    ExternalLinks = MapExternalWorkItemLinks(task.ExternalLinks)
                 },
                 Feature = new
                 {
@@ -1682,6 +1724,10 @@ public static class ApiEndpoints
             {
                 return Results.NotFound(new { message = $"Task {id} not found." });
             }
+            catch (Services.ExternalWorkItemConflictException ex)
+            {
+                return MapExternalWorkItemConflict(ex);
+            }
         });
 
         // PATCH /api/tasks/{id}/status — change status only
@@ -1770,6 +1816,342 @@ public static class ApiEndpoints
                 });
             }
         });
+    }
+
+    // ── External Work Item Endpoints (#336) ──────────────────────────
+
+    private static void MapExternalWorkItemEndpoints(this WebApplication app)
+    {
+        // Immutable node identity survives repository transfers. Sync consults this global lookup
+        // before creating a task so a transferred issue can never be projected twice; projectId
+        // tells the caller whether an in-project metadata refresh is safe or relocation is needed.
+        app.MapGet("/api/external-work-item-links/github/by-node", async (
+            string? externalNodeId,
+            AppDbContext db,
+            CancellationToken ct) =>
+            await ExecuteExternalWorkItemEndpointAsync(async () =>
+            {
+                RequireText(externalNodeId, "ExternalNodeId");
+                var link = await db.ExternalWorkItemLinks
+                    .Include(candidate => candidate.Task)
+                    .ThenInclude(task => task.Feature)
+                    .AsNoTracking()
+                    .SingleOrDefaultAsync(candidate =>
+                        candidate.Provider == ExternalProvider.GitHub &&
+                        candidate.State == ExternalLinkState.Active &&
+                        candidate.ExternalNodeId == externalNodeId!.Trim(),
+                        ct);
+                if (link is null)
+                {
+                    return Results.NotFound(new
+                    {
+                        message = $"No active GitHub link exists for node '{externalNodeId!.Trim()}'.",
+                        externalNodeId = externalNodeId.Trim()
+                    });
+                }
+
+                return Results.Ok(new ExternalWorkItemNodeLookupResponse(
+                    link.Task.Feature.ProjectId,
+                    MapExternalWorkItemLink(link)));
+            }));
+
+        // Includes quarantined candidates: this is the project-level review surface as well as
+        // the authoritative list used by sync. Consumers must inspect State rather than guessing
+        // identity from a task title or description.
+        app.MapGet("/api/projects/{projectId:int}/external-work-item-links", async (
+            int projectId,
+            AppDbContext db,
+            CancellationToken ct) =>
+        {
+            if (!await db.Projects.AnyAsync(project => project.Id == projectId, ct))
+                return Results.NotFound(new { message = $"Project {projectId} not found." });
+
+            var links = await db.ExternalWorkItemLinks
+                .Where(link => link.Task.Feature.ProjectId == projectId)
+                .OrderBy(link => link.TaskId)
+                .ThenBy(link => link.Provider)
+                .ThenBy(link => link.Id)
+                .AsNoTracking()
+                .ToListAsync(ct);
+
+            return Results.Ok(MapExternalWorkItemLinks(links));
+        });
+
+        app.MapPost("/api/features/{featureId:int}/external-work-item-projections/github",
+            ProjectInboundGitHubIssueEndpointAsync)
+            .WithSummary("Atomically project a verified GitHub issue into one board task.")
+            .Produces<ExternalWorkItemProjectionResponse>(StatusCodes.Status201Created)
+            .Produces<ExternalWorkItemProjectionResponse>(StatusCodes.Status200OK)
+            .Produces(StatusCodes.Status400BadRequest)
+            .Produces(StatusCodes.Status404NotFound)
+            .Produces(StatusCodes.Status409Conflict)
+            .Produces(StatusCodes.Status422UnprocessableEntity);
+
+        // A verified link is an explicit PUT because (TaskId, Provider) names one durable
+        // identity. RegisterVerifiedLinkAsync owns idempotency, uniqueness and ActivityEvent audit.
+        app.MapPut("/api/tasks/{taskId:int}/external-work-item-links/github", async (
+            int taskId,
+            RegisterExternalWorkItemLinkDto? dto,
+            Services.IExternalWorkItemService service,
+            CancellationToken ct) =>
+            await ExecuteExternalWorkItemEndpointAsync(async () =>
+            {
+                if (dto is null)
+                    return Results.BadRequest(new { message = "Request body is required." });
+
+                var provider = ParseExternalProvider(dto.Provider);
+                RequireGitHubRoute(provider);
+                ValidateVerifiedGitHubIssue(
+                    dto.RepositoryExternalId,
+                    dto.RepositoryOwner,
+                    dto.RepositoryName,
+                    dto.ExternalNodeId,
+                    dto.ExternalNumber,
+                    dto.Url);
+
+                var link = await service.RegisterVerifiedLinkAsync(
+                    new Services.RegisterExternalWorkItemLinkRequest(
+                        taskId,
+                        provider,
+                        dto.RepositoryExternalId!,
+                        dto.RepositoryOwner!,
+                        dto.RepositoryName!,
+                        dto.ExternalNodeId!,
+                        dto.ExternalNumber!.Value,
+                        dto.Url!),
+                    dto.Actor,
+                    ct);
+
+                return Results.Ok(MapExternalWorkItemLink(link));
+            }));
+
+        // Ambiguous legacy candidates are persisted for review, never promoted from mutable text.
+        app.MapPost("/api/tasks/{taskId:int}/external-work-item-quarantines/github", async (
+            int taskId,
+            QuarantineExternalWorkItemDto? dto,
+            Services.IExternalWorkItemService service,
+            CancellationToken ct) =>
+            await ExecuteExternalWorkItemEndpointAsync(async () =>
+            {
+                if (dto is null)
+                    return Results.BadRequest(new { message = "Request body is required." });
+
+                var provider = ParseExternalProvider(dto.Provider);
+                RequireGitHubRoute(provider);
+                RequireText(dto.RepositoryExternalId, "RepositoryExternalId");
+                RequireText(dto.RepositoryOwner, "RepositoryOwner");
+                RequireText(dto.RepositoryName, "RepositoryName");
+                RequireText(dto.Reason, "Reason");
+                if (dto.CandidateNumber is <= 0)
+                    throw new Services.ValidationException("CandidateNumber must be positive when supplied.");
+                if (dto.CandidateUrl is not null)
+                    ValidateGitHubIssueUrl(dto.CandidateUrl, dto.CandidateNumber);
+
+                var link = await service.QuarantineAsync(
+                    new Services.QuarantineExternalWorkItemRequest(
+                        taskId,
+                        provider,
+                        dto.RepositoryExternalId!,
+                        dto.RepositoryOwner!,
+                        dto.RepositoryName!,
+                        dto.CandidateNumber,
+                        dto.CandidateUrl,
+                        dto.Reason!),
+                    dto.Actor,
+                    ct);
+
+                return Results.Ok(MapExternalWorkItemLink(link));
+            }));
+
+        // Persist/freeze the exact request before any GitHub call. The response intentionally
+        // returns Operation.Body verbatim because it contains the server-generated recovery marker.
+        app.MapPost("/api/tasks/{taskId:int}/external-write-operations", async (
+            int taskId,
+            PrepareExternalWriteOperationDto? dto,
+            Services.IExternalWorkItemService service,
+            CancellationToken ct) =>
+            await ExecuteExternalWorkItemEndpointAsync(async () =>
+            {
+                if (dto is null)
+                    return Results.BadRequest(new { message = "Request body is required." });
+
+                var provider = ParseExternalProvider(dto.Provider);
+                RequireText(dto.RepositoryExternalId, "RepositoryExternalId");
+                RequireText(dto.RepositoryOwner, "RepositoryOwner");
+                RequireText(dto.RepositoryName, "RepositoryName");
+                RequireText(dto.Title, "Title");
+                if (dto.Body is null)
+                    throw new Services.ValidationException("Body is required.");
+                if (!dto.ExpectedTaskUpdatedAt.HasValue || dto.ExpectedTaskUpdatedAt.Value == default)
+                    throw new Services.ValidationException("ExpectedTaskUpdatedAt is required.");
+
+                var lease = await service.PrepareAsync(
+                    new Services.PrepareExternalWriteRequest(
+                        taskId,
+                        provider,
+                        dto.RepositoryExternalId!,
+                        dto.RepositoryOwner!,
+                        dto.RepositoryName!,
+                        dto.Title!,
+                        dto.Body,
+                        dto.MilestoneTitle,
+                        dto.Label,
+                        dto.ExpectedTaskUpdatedAt!.Value),
+                    ct);
+
+                return Results.Created(
+                    $"/api/external-write-operations/{lease.Operation.OperationId:D}",
+                    MapExternalWriteLease(lease));
+            }));
+
+        app.MapGet("/api/external-write-operations/{operationId:guid}", async (
+            Guid operationId,
+            Services.IExternalWorkItemService service,
+            CancellationToken ct) =>
+            await ExecuteExternalWorkItemEndpointAsync(async () =>
+            {
+                var operation = await service.GetOperationAsync(operationId, ct);
+                if (operation is null)
+                    throw new Services.ExternalWriteOperationNotFoundException(operationId);
+
+                return Results.Ok(MapExternalWriteOperation(operation));
+            }));
+
+        app.MapPost("/api/external-write-operations/{operationId:guid}/resume", async (
+            Guid operationId,
+            Services.IExternalWorkItemService service,
+            CancellationToken ct) =>
+            await ExecuteExternalWorkItemEndpointAsync(async () =>
+                Results.Ok(MapExternalWriteLease(await service.ResumeAsync(operationId, ct)))));
+
+        app.MapPost("/api/external-write-operations/{operationId:guid}/dispatch", async (
+            Guid operationId,
+            ExternalWriteLeaseDto? dto,
+            Services.IExternalWorkItemService service,
+            CancellationToken ct) =>
+            await ExecuteExternalWorkItemEndpointAsync(async () =>
+            {
+                if (dto is null)
+                    return Results.BadRequest(new { message = "Request body is required." });
+
+                RequireText(dto.LeaseToken, "LeaseToken");
+                var hasManualRetryEvidence =
+                    dto.ConfirmationOperationId.HasValue ||
+                    dto.ExpectedAttemptCount.HasValue ||
+                    dto.ScanComplete.HasValue ||
+                    dto.ObservedMatchCount.HasValue ||
+                    dto.ObservedRawTargetOccurrenceCount.HasValue ||
+                    dto.ScanCompletedAt.HasValue;
+                var evidence = hasManualRetryEvidence
+                    ? new Services.ManualRetryDispatchEvidence(
+                        dto.ConfirmationOperationId ?? Guid.Empty,
+                        dto.ExpectedAttemptCount ?? 0,
+                        dto.ScanComplete ?? false,
+                        dto.ObservedMatchCount ?? -1,
+                        dto.ObservedRawTargetOccurrenceCount ?? -1,
+                        dto.ScanCompletedAt ?? default)
+                    : null;
+                var operation = await service.MarkDispatchedAsync(
+                    operationId,
+                    dto.LeaseToken!,
+                    evidence,
+                    ct);
+                return Results.Ok(MapExternalWriteOperation(operation));
+            }));
+
+        app.MapPost("/api/external-write-operations/{operationId:guid}/finalize", async (
+            Guid operationId,
+            FinalizeExternalWriteOperationDto? dto,
+            Services.IExternalWorkItemService service,
+            CancellationToken ct) =>
+            await ExecuteExternalWorkItemEndpointAsync(async () =>
+            {
+                if (dto is null)
+                    return Results.BadRequest(new { message = "Request body is required." });
+
+                RequireText(dto.RepositoryExternalId, "RepositoryExternalId");
+                RequireText(dto.RepositoryOwner, "RepositoryOwner");
+                RequireText(dto.RepositoryName, "RepositoryName");
+                RequireText(dto.ExternalNodeId, "ExternalNodeId");
+                if (dto.ExternalNumber is not > 0)
+                    throw new Services.ValidationException("ExternalNumber must be positive.");
+                ValidateGitHubIssueUrl(
+                    dto.Url,
+                    dto.ExternalNumber,
+                    dto.RepositoryOwner,
+                    dto.RepositoryName);
+
+                var link = await service.FinalizeAsync(
+                    new Services.FinalizeExternalWriteRequest(
+                        operationId,
+                        string.IsNullOrWhiteSpace(dto.LeaseToken) ? null : dto.LeaseToken.Trim(),
+                        dto.RepositoryExternalId!,
+                        dto.RepositoryOwner!,
+                        dto.RepositoryName!,
+                        dto.ExternalNodeId!,
+                        dto.ExternalNumber.Value,
+                        dto.Url!),
+                    dto.Actor,
+                    ct);
+
+                return Results.Ok(MapExternalWorkItemLink(link));
+            }));
+
+        app.MapPost("/api/external-write-operations/{operationId:guid}/failure", async (
+            Guid operationId,
+            ExternalWriteFailureDto? dto,
+            Services.IExternalWorkItemService service,
+            CancellationToken ct) =>
+            await ExecuteExternalWorkItemEndpointAsync(async () =>
+            {
+                if (dto is null)
+                    return Results.BadRequest(new { message = "Request body is required." });
+
+                RequireText(dto.LeaseToken, "LeaseToken");
+                RequireText(dto.Error, "Error");
+                if (!EnumParse.TryParseDefined<Services.ExternalWriteFailureKind>(dto.Kind, out var kind))
+                {
+                    throw new Services.ValidationException(
+                        $"Invalid failure kind: {dto.Kind}. Valid values: " +
+                        string.Join(", ", Enum.GetNames<Services.ExternalWriteFailureKind>()));
+                }
+
+                var operation = await service.RecordFailureAsync(
+                    operationId,
+                    dto.LeaseToken!,
+                    kind,
+                    dto.Error!,
+                    ct);
+                return Results.Ok(MapExternalWriteOperation(operation));
+            }));
+
+        // GitHub exposes no issue-create idempotency key. A complete negative scan therefore
+        // remains an operator risk decision, never an automatic state downgrade. This endpoint
+        // records that decision only; a separate resume invocation is required before creation.
+        app.MapPost("/api/external-write-operations/{operationId:guid}/authorize-ambiguous-retry", async (
+            Guid operationId,
+            AuthorizeAmbiguousExternalWriteRetryDto? dto,
+            Services.IExternalWorkItemService service,
+            CancellationToken ct) =>
+            await ExecuteExternalWorkItemEndpointAsync(async () =>
+            {
+                if (dto is null)
+                    return Results.BadRequest(new { message = "Request body is required." });
+
+                var operation = await service.AuthorizeAmbiguousRetryAsync(
+                    new Services.AuthorizeAmbiguousExternalWriteRetryRequest(
+                        operationId,
+                        dto.ConfirmationOperationId ?? Guid.Empty,
+                        dto.ExpectedAttemptCount ?? 0,
+                        dto.ScanComplete ?? false,
+                        dto.ObservedMatchCount ?? -1,
+                        dto.ObservedRawTargetOccurrenceCount ?? -1,
+                        dto.ScanCompletedAt ?? default,
+                        dto.Actor ?? string.Empty,
+                        dto.Reason ?? string.Empty),
+                    ct);
+                return Results.Ok(MapExternalWriteOperation(operation));
+            }));
     }
 
     // ── Task Dependency Endpoints ─────────────────────────────────────
@@ -2600,8 +2982,251 @@ public static class ApiEndpoints
         SubtaskCount = t.Subtasks.Count,
         SubtaskDoneCount = t.Subtasks.Count(s => s.Completed),
         AcceptanceCriteriaCount = t.AcceptanceCriteria.Count,
-        AcceptanceCriteriaDoneCount = t.AcceptanceCriteria.Count(c => c.Completed)
+        AcceptanceCriteriaDoneCount = t.AcceptanceCriteria.Count(c => c.Completed),
+        ExternalLinks = MapExternalWorkItemLinks(t.ExternalLinks)
     };
+
+    /// <summary>
+    /// Stable, structured projection used by every task-shaped REST payload. Mutable task text is
+    /// deliberately absent: external identity comes only from these durable rows (#336).
+    /// </summary>
+    internal static IReadOnlyList<ExternalWorkItemLinkResponse> MapExternalWorkItemLinks(
+        IEnumerable<ExternalWorkItemLink> links) =>
+        links
+            .OrderBy(link => link.Provider)
+            .ThenBy(link => link.Id)
+            .Select(link => new ExternalWorkItemLinkResponse(
+                link.Id,
+                link.TaskId,
+                link.Provider.ToString(),
+                link.State.ToString(),
+                link.RepositoryExternalId,
+                link.RepositoryOwner,
+                link.RepositoryName,
+                link.ExternalNodeId,
+                link.ExternalNumber,
+                link.Url,
+                link.QuarantineReason,
+                AsUtc(link.CreatedAt),
+                AsUtc(link.UpdatedAt)))
+            .ToList();
+
+    private static ExternalWorkItemLinkResponse MapExternalWorkItemLink(ExternalWorkItemLink link) =>
+        MapExternalWorkItemLinks([link])[0];
+
+    private static ExternalWriteLeaseResponse MapExternalWriteLease(
+        Services.ExternalWriteLeaseResult lease) =>
+        new(MapExternalWriteOperation(lease.Operation), lease.LeaseToken, lease.SafeToCreate);
+
+    internal static ExternalWriteOperationResponse MapExternalWriteOperation(
+        ExternalWriteOperation operation) =>
+        new(
+            operation.OperationId,
+            operation.TaskId,
+            operation.ProjectId,
+            operation.Provider.ToString(),
+            operation.RepositoryExternalId,
+            operation.RepositoryOwner,
+            operation.RepositoryName,
+            operation.Title,
+            operation.Body,
+            operation.MilestoneTitle,
+            operation.Label,
+            operation.RequestHash,
+            AsUtc(operation.ExpectedTaskUpdatedAt),
+            operation.State.ToString(),
+            AsUtc(operation.LeaseExpiresAt),
+            operation.AttemptCount,
+            AsUtc(operation.LastAttemptAt),
+            AsUtc(operation.DispatchedAt),
+            operation.LastError,
+            operation.ResultingExternalNodeId,
+            operation.ResultingExternalNumber,
+            operation.ResultingUrl,
+            AsUtc(operation.CreatedAt),
+            AsUtc(operation.UpdatedAt),
+            AsUtc(operation.CompletedAt));
+
+    // SQLite restores DateTime values with Kind=Unspecified even though every external-write
+    // timestamp is stored as UTC. Stamp that contract at the JSON boundary so JavaScript,
+    // PowerShell, and other offset-aware clients never reinterpret a lease in local time.
+    private static DateTime AsUtc(DateTime value) => value.Kind switch
+    {
+        DateTimeKind.Utc => value,
+        DateTimeKind.Local => value.ToUniversalTime(),
+        _ => DateTime.SpecifyKind(value, DateTimeKind.Utc)
+    };
+
+    private static DateTime? AsUtc(DateTime? value) =>
+        value.HasValue ? AsUtc(value.Value) : null;
+
+    internal static Task<IResult> ProjectInboundGitHubIssueEndpointAsync(
+        int featureId,
+        ProjectInboundGitHubIssueDto? dto,
+        Services.IExternalWorkItemService service,
+        CancellationToken ct) => ExecuteExternalWorkItemEndpointAsync(async () =>
+        {
+            if (dto is null)
+                return Results.BadRequest(new { message = "Request body is required." });
+            var result = await service.ProjectInboundGitHubIssueAsync(
+                ToInboundGitHubIssueRequest(featureId, dto), dto.Actor, ct);
+            var response = MapExternalWorkItemProjection(result);
+            return result.Created
+                ? Results.Created($"/api/tasks/{result.Task.Id}", response)
+                : Results.Ok(response);
+        });
+
+    internal static Services.ProjectInboundGitHubIssueRequest ToInboundGitHubIssueRequest(
+        int featureId, ProjectInboundGitHubIssueDto dto)
+    {
+        ValidateVerifiedGitHubIssue(dto.RepositoryExternalId, dto.RepositoryOwner,
+            dto.RepositoryName, dto.ExternalNodeId, dto.ExternalNumber, dto.Url);
+        WorkStatus? status = null;
+        TaskPriority? priority = null;
+        if (dto.Status is not null)
+        {
+            if (!EnumParse.TryParseDefined<WorkStatus>(dto.Status, out var parsed))
+                throw new Services.ValidationException($"Invalid status: {dto.Status}.");
+            status = parsed;
+        }
+        if (dto.Priority is not null)
+        {
+            if (!EnumParse.TryParseDefined<TaskPriority>(dto.Priority, out var parsed))
+                throw new Services.ValidationException($"Invalid priority: {dto.Priority}.");
+            priority = parsed;
+        }
+        return new(new Services.TaskCreate(featureId, dto.Name!, dto.Description, status,
+            priority, dto.Assignee, dto.SortOrder), dto.RepositoryExternalId!, dto.RepositoryOwner!,
+            dto.RepositoryName!, dto.ExternalNodeId!, dto.ExternalNumber!.Value, dto.Url!);
+    }
+
+    internal static ExternalWorkItemProjectionResponse MapExternalWorkItemProjection(
+        Services.ExternalWorkItemProjectionResult result) => new(
+            new ProjectedTaskResponse(result.Task.Id, result.Task.FeatureId, result.Task.Name,
+                result.Task.Description, result.Task.Status.ToString(), result.Task.Priority.ToString(),
+                result.Task.Assignee, result.Task.SortOrder),
+            MapExternalWorkItemLink(result.Link), result.Created);
+
+    internal static async Task<IResult> ExecuteExternalWorkItemEndpointAsync(
+        Func<Task<IResult>> action)
+    {
+        try
+        {
+            return await action();
+        }
+        catch (Services.TaskNotFoundException ex)
+        {
+            return Results.NotFound(new { message = ex.Message, taskId = ex.TaskId });
+        }
+        catch (Services.FeatureNotFoundException ex)
+        {
+            return Results.NotFound(new { message = ex.Message, featureId = ex.FeatureId });
+        }
+        catch (Services.ExternalWriteOperationNotFoundException ex)
+        {
+            return Results.NotFound(new { message = ex.Message, operationId = ex.OperationId });
+        }
+        catch (Services.ExternalWorkItemConflictException ex)
+        {
+            return MapExternalWorkItemConflict(ex);
+        }
+        catch (Services.ValidationException ex)
+        {
+            return Results.UnprocessableEntity(new { message = ex.Message });
+        }
+    }
+
+    private static IResult MapExternalWorkItemConflict(
+        Services.ExternalWorkItemConflictException ex) =>
+        Results.Conflict(new
+        {
+            message = ex.Message,
+            conflictCode = ex.ConflictCode,
+            ex.TaskId,
+            provider = ex.Provider?.ToString(),
+            ex.OperationId,
+            operationState = ex.OperationState?.ToString(),
+            LeaseExpiresAt = AsUtc(ex.LeaseExpiresAt)
+        });
+
+    internal static ExternalProvider ParseExternalProvider(string? value)
+    {
+        var candidate = string.IsNullOrWhiteSpace(value)
+            ? nameof(ExternalProvider.GitHub)
+            : value.Trim();
+
+        if (!EnumParse.TryParseDefined<ExternalProvider>(candidate, out var provider))
+        {
+            throw new Services.ValidationException(
+                $"Invalid provider: {value}. Valid values: {string.Join(", ", Enum.GetNames<ExternalProvider>())}");
+        }
+
+        return provider;
+    }
+
+    private static void RequireGitHubRoute(ExternalProvider provider)
+    {
+        if (provider != ExternalProvider.GitHub)
+            throw new Services.ValidationException("The /github route requires provider GitHub.");
+    }
+
+    private static void ValidateVerifiedGitHubIssue(
+        string? repositoryExternalId,
+        string? repositoryOwner,
+        string? repositoryName,
+        string? externalNodeId,
+        int? externalNumber,
+        string? url)
+    {
+        RequireText(repositoryExternalId, "RepositoryExternalId");
+        RequireText(repositoryOwner, "RepositoryOwner");
+        RequireText(repositoryName, "RepositoryName");
+        RequireText(externalNodeId, "ExternalNodeId");
+        if (externalNumber is not > 0)
+            throw new Services.ValidationException("ExternalNumber must be positive.");
+
+        ValidateGitHubIssueUrl(url, externalNumber, repositoryOwner, repositoryName);
+    }
+
+    internal static void ValidateGitHubIssueUrl(
+        string? value,
+        int? expectedNumber = null,
+        string? expectedOwner = null,
+        string? expectedRepository = null)
+    {
+        RequireText(value, "Url");
+        if (!Uri.TryCreate(value, UriKind.Absolute, out var uri)
+            || !string.Equals(uri.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase)
+            || !string.Equals(uri.Host, "github.com", StringComparison.OrdinalIgnoreCase)
+            || !uri.IsDefaultPort
+            || !string.IsNullOrEmpty(uri.UserInfo)
+            || !string.IsNullOrEmpty(uri.Query)
+            || !string.IsNullOrEmpty(uri.Fragment))
+        {
+            throw new Services.ValidationException("Url must be an absolute https://github.com issue URL.");
+        }
+
+        var segments = uri.AbsolutePath
+            .Split('/', StringSplitOptions.RemoveEmptyEntries)
+            .Select(Uri.UnescapeDataString)
+            .ToArray();
+        if (segments.Length != 4
+            || !string.Equals(segments[2], "issues", StringComparison.OrdinalIgnoreCase)
+            || !int.TryParse(segments[3], out var actualNumber)
+            || actualNumber <= 0
+            || expectedNumber.HasValue && actualNumber != expectedNumber.Value
+            || expectedOwner is not null && !string.Equals(segments[0], expectedOwner.Trim(), StringComparison.OrdinalIgnoreCase)
+            || expectedRepository is not null && !string.Equals(segments[1], expectedRepository.Trim(), StringComparison.OrdinalIgnoreCase))
+        {
+            throw new Services.ValidationException("Url must match the supplied GitHub owner, repository, and issue number.");
+        }
+    }
+
+    private static void RequireText(string? value, string field)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            throw new Services.ValidationException($"{field} is required.");
+    }
 
     // Idea list/single/create/update projection. Field set deliberately matches
     // IdeaService.IdeaActivitySnapshot so REST output and audit snapshots stay aligned.
@@ -2788,6 +3413,146 @@ public record TaskDto(
     string? Assignee,
     double? SortOrder,
     string? Actor = null);
+
+/// <summary>Complete task content and verified immutable identity for atomic inbound projection.</summary>
+public sealed record ProjectInboundGitHubIssueDto(
+    string? Name,
+    string? RepositoryExternalId,
+    string? RepositoryOwner,
+    string? RepositoryName,
+    string? ExternalNodeId,
+    int? ExternalNumber,
+    string? Url,
+    string? Description = null,
+    string? Status = null,
+    string? Priority = null,
+    string? Assignee = null,
+    double? SortOrder = null,
+    string? Actor = null);
+
+/// <summary>Current task fields returned without exposing tracked navigation graphs.</summary>
+public sealed record ProjectedTaskResponse(int Id, int FeatureId, string Name, string? Description,
+    string Status, string Priority, string? Assignee, double SortOrder);
+
+/// <summary>One durable projection; Created is false for an unchanged idempotent replay.</summary>
+public sealed record ExternalWorkItemProjectionResponse(
+    ProjectedTaskResponse Task, ExternalWorkItemLinkResponse Link, bool Created);
+
+public sealed record RegisterExternalWorkItemLinkDto(
+    string? Provider,
+    string? RepositoryExternalId,
+    string? RepositoryOwner,
+    string? RepositoryName,
+    string? ExternalNodeId,
+    int? ExternalNumber,
+    string? Url,
+    string? Actor = null);
+
+public sealed record QuarantineExternalWorkItemDto(
+    string? Provider,
+    string? RepositoryExternalId,
+    string? RepositoryOwner,
+    string? RepositoryName,
+    int? CandidateNumber,
+    string? CandidateUrl,
+    string? Reason,
+    string? Actor = null);
+
+public sealed record PrepareExternalWriteOperationDto(
+    string? Provider,
+    string? RepositoryExternalId,
+    string? RepositoryOwner,
+    string? RepositoryName,
+    string? Title,
+    string? Body,
+    string? MilestoneTitle,
+    string? Label,
+    DateTime? ExpectedTaskUpdatedAt);
+
+public sealed record ExternalWriteLeaseDto(
+    string? LeaseToken,
+    Guid? ConfirmationOperationId = null,
+    int? ExpectedAttemptCount = null,
+    bool? ScanComplete = null,
+    int? ObservedMatchCount = null,
+    int? ObservedRawTargetOccurrenceCount = null,
+    DateTimeOffset? ScanCompletedAt = null);
+
+public sealed record FinalizeExternalWriteOperationDto(
+    string? LeaseToken,
+    string? RepositoryExternalId,
+    string? RepositoryOwner,
+    string? RepositoryName,
+    string? ExternalNodeId,
+    int? ExternalNumber,
+    string? Url,
+    string? Actor = null);
+
+public sealed record ExternalWriteFailureDto(
+    string? LeaseToken,
+    string? Kind,
+    string? Error);
+
+public sealed record AuthorizeAmbiguousExternalWriteRetryDto(
+    Guid? ConfirmationOperationId,
+    int? ExpectedAttemptCount,
+    bool? ScanComplete,
+    int? ObservedMatchCount,
+    int? ObservedRawTargetOccurrenceCount,
+    DateTimeOffset? ScanCompletedAt,
+    string? Actor,
+    string? Reason);
+
+public sealed record ExternalWorkItemLinkResponse(
+    int Id,
+    int TaskId,
+    string Provider,
+    string State,
+    string RepositoryExternalId,
+    string RepositoryOwner,
+    string RepositoryName,
+    string? ExternalNodeId,
+    int? ExternalNumber,
+    string? Url,
+    string? QuarantineReason,
+    DateTime CreatedAt,
+    DateTime UpdatedAt);
+
+public sealed record ExternalWorkItemNodeLookupResponse(
+    int ProjectId,
+    ExternalWorkItemLinkResponse Link);
+
+public sealed record ExternalWriteLeaseResponse(
+    ExternalWriteOperationResponse Operation,
+    string LeaseToken,
+    bool SafeToCreate);
+
+public sealed record ExternalWriteOperationResponse(
+    Guid OperationId,
+    int TaskId,
+    int ProjectId,
+    string Provider,
+    string RepositoryExternalId,
+    string RepositoryOwner,
+    string RepositoryName,
+    string Title,
+    string Body,
+    string? MilestoneTitle,
+    string? Label,
+    string RequestHash,
+    DateTime ExpectedTaskUpdatedAt,
+    string State,
+    DateTime? LeaseExpiresAt,
+    int AttemptCount,
+    DateTime? LastAttemptAt,
+    DateTime? DispatchedAt,
+    string? LastError,
+    string? ResultingExternalNodeId,
+    int? ResultingExternalNumber,
+    string? ResultingUrl,
+    DateTime CreatedAt,
+    DateTime UpdatedAt,
+    DateTime? CompletedAt);
 
 /// <param name="OverrideReason">
 /// Optional. When non-blank, permits a move to <c>Done</c> that the Definition-of-Done gate would

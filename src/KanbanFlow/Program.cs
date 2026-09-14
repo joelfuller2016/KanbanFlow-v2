@@ -59,6 +59,9 @@ builder.Services.AddScoped<ITaskService>(sp =>
 });
 // Dependency graph mutations (#414): cycle validation and insertion share one transaction.
 builder.Services.AddScoped<ITaskDependencyService, TaskDependencyService>();
+// Durable GitHub issue identity + resumable outbound-create journal (#336). GitHub I/O remains in
+// portfolio-sync; this service owns SQLite leases, uniqueness and ActivityEvent auditing.
+builder.Services.AddScoped<IExternalWorkItemService, ExternalWorkItemService>();
 // Ideas inbox service (#180) — same single-audit-boundary rule as ITaskService.
 builder.Services.AddScoped<IIdeaService, IdeaService>();
 // Bi-temporal memory store (#221) — same single-audit-boundary rule.
@@ -188,6 +191,7 @@ using (var scope = app.Services.CreateScope())
     WorkflowSchema.EnsureTables(db);
     SchemaPatcher.EnsureMemoryTables(db);
     SchemaPatcher.EnsureMemoryFtsTable(db);
+    SchemaPatcher.EnsureExternalWorkItemTables(db);
     SeedData.Initialize(db);
 }
 

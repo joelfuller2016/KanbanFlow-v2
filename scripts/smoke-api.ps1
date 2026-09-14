@@ -26,6 +26,26 @@ function Invoke-SmokeDelete([string]$Path) {
     Invoke-WebRequest -Method Delete -Uri "$BaseUrl$Path" -TimeoutSec 5 -UseBasicParsing
 }
 
+function Assert-SmokeJsonLiteralFailure(
+    [ValidateNotNullOrEmpty()][string]$Method,
+    [ValidateNotNullOrEmpty()][string]$Path,
+    [ValidateNotNullOrEmpty()][string]$Body,
+    [ValidateNotNullOrEmpty()][int[]]$ExpectedStatusCodes,
+    [ValidateNotNullOrEmpty()][string]$Message
+) {
+    Write-Host "$($Method.ToUpperInvariant()) $Path (expecting literal-body failure)"
+    try {
+        Invoke-WebRequest -Method $Method -Uri "$BaseUrl$Path" -ContentType "application/json" -Body $Body -TimeoutSec 5 -UseBasicParsing -ErrorAction Stop | Out-Null
+    }
+    catch {
+        $statusCode = [int]$_.Exception.Response.StatusCode
+        if ($ExpectedStatusCodes -contains $statusCode) { return }
+        throw "$Message Expected HTTP $($ExpectedStatusCodes -join '/') but got $statusCode. $($_.Exception.Message)"
+    }
+
+    throw "$Message Expected HTTP failure but request succeeded."
+}
+
 function Assert-SmokePostFailure([string]$Path, $Body, [int[]]$ExpectedStatusCodes, [string]$Message) {
     Write-Host "POST $Path (expecting failure)"
     try {
@@ -178,6 +198,36 @@ try {
     Assert-Truthy $projects "GET /api/projects did not return a response before timeout."
     Assert-Truthy ($projects.Count -gt 0) "GET /api/projects returned no seeded projects."
 
+    # /api/admin/health must answer a question that CAN be wrong (#498). It previously returned a
+    # hardcoded status with no database opened, so there was no state of the system in which it
+    # said anything but "ok" and nothing here was worth asserting.
+    #
+    # This harness hands the app a database path that does not exist yet, so the app creates the
+    # board it then serves -- and the CORRECT answer is "degraded", reason created-at-startup, even
+    # though seeding leaves a project in it. Asserting that is what proves the endpoint is not a
+    # constant; asserting db.path is what proves it opened the file this harness meant.
+    $health = Invoke-SmokeGet "/api/admin/health"
+    foreach ($field in @("status", "app", "startedAtUtc", "checkedAtUtc", "runtime", "openApiUrl")) {
+        Assert-Truthy ($health.PSObject.Properties.Name -contains $field) "GET /api/admin/health lost the '$field' field."
+    }
+    Assert-Truthy ($null -ne $health.db) "GET /api/admin/health did not report a db object."
+    Assert-Truthy ($health.db.status -eq "ok") "GET /api/admin/health could not read the database: $($health.db.error)"
+    Assert-Truthy (
+        [System.IO.Path]::GetFullPath([string]$health.db.path) -eq [System.IO.Path]::GetFullPath($dbPath)
+    ) "GET /api/admin/health opened '$($health.db.path)', not the '$dbPath' this run pinned."
+    Assert-Truthy ($health.db.projects -gt 0) "GET /api/admin/health reported an empty board after seeding."
+    Assert-Truthy ($health.status -eq "degraded") "GET /api/admin/health said '$($health.status)' for a board this run created; it must not report ok."
+    Assert-Truthy ($health.db.reasons -contains "created-at-startup") "GET /api/admin/health did not name created-at-startup as the reason."
+
+    # The file's own facts must be in the CONTRACT, not merely computed internally (#498 review).
+    # They are the caller's half of the diagnosis -- the comparison that catches a launcher which
+    # SUCCESSFULLY restored the seed onto a wrong path is "is db.sizeBytes the size of the seed I
+    # ship?", and only the caller has the seed. This run creates its own database, so there was no
+    # file to stat and the three are legitimately null; presence is the contract, value is not.
+    foreach ($fact in @("createdAtUtc", "lastWriteUtc", "sizeBytes")) {
+        Assert-Truthy ($health.db.PSObject.Properties.Name -contains $fact) "GET /api/admin/health does not report db.$fact."
+    }
+
     $projectId = $projects[0].id
     Write-Host "Using seeded project id $projectId"
 
@@ -203,6 +253,17 @@ try {
     $tasks = Invoke-SmokeGet "/api/projects/$projectId/tasks"
     Assert-Truthy ($tasks.Count -gt 0) "GET /api/projects/$projectId/tasks returned no seeded tasks."
     $taskId = $tasks[0].id
+
+    # A literal JSON null binds reference DTOs as null. Every external-work-item handler must
+    # return a stable client error before dereferencing the request (#336 review regression gate).
+    $nullOperationId = [Guid]::Empty.ToString("D")
+    Assert-SmokeJsonLiteralFailure -Method "Put" -Path "/api/tasks/$taskId/external-work-item-links/github" -Body "null" -ExpectedStatusCodes @(400) -Message "Verified-link null body validation failed."
+    Assert-SmokeJsonLiteralFailure -Method "Post" -Path "/api/tasks/$taskId/external-work-item-quarantines/github" -Body "null" -ExpectedStatusCodes @(400) -Message "Quarantine null body validation failed."
+    Assert-SmokeJsonLiteralFailure -Method "Post" -Path "/api/tasks/$taskId/external-write-operations" -Body "null" -ExpectedStatusCodes @(400) -Message "Prepare null body validation failed."
+    Assert-SmokeJsonLiteralFailure -Method "Post" -Path "/api/external-write-operations/$nullOperationId/dispatch" -Body "null" -ExpectedStatusCodes @(400) -Message "Dispatch null body validation failed."
+    Assert-SmokeJsonLiteralFailure -Method "Post" -Path "/api/external-write-operations/$nullOperationId/finalize" -Body "null" -ExpectedStatusCodes @(400) -Message "Finalize null body validation failed."
+    Assert-SmokeJsonLiteralFailure -Method "Post" -Path "/api/external-write-operations/$nullOperationId/failure" -Body "null" -ExpectedStatusCodes @(400) -Message "Failure null body validation failed."
+    Assert-SmokeJsonLiteralFailure -Method "Post" -Path "/api/external-write-operations/$nullOperationId/authorize-ambiguous-retry" -Body "null" -ExpectedStatusCodes @(400) -Message "Retry-authorization null body validation failed."
 
     $handoffText = "API smoke typed handoff $([Guid]::NewGuid().ToString("N"))"
     $handoff = Invoke-SmokeJson "Post" "/api/tasks/$taskId/comments" @{ text = $handoffText; author = "api-smoke"; type = "Handoff" }

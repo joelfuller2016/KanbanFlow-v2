@@ -134,6 +134,7 @@ public static class ChangeAudit
         if (entry.Entity is TaskItem && entry.State == EntityState.Added) return false;
         if (entry.Entity is TaskComment && entry.State != EntityState.Deleted) return false;
         return entry.Entity is Project or Feature or TaskItem or Subtask or AcceptanceCriterion or Requirement or TaskDependency or TaskComment
+            || (entry.Entity is ExternalWorkItemLink && entry.State == EntityState.Deleted)
             || (entry.Entity is Idea && entry.State == EntityState.Modified && entry.Property("PromotedProjectId").IsModified)
             || (entry.State == EntityState.Deleted && entry.Metadata.ClrType.Namespace == "KanbanFlow.Models.Workflows")
             || (entry.Entity is Models.Workflows.WorkRequest && entry.State == EntityState.Modified &&
@@ -156,7 +157,8 @@ public static class ChangeAudit
     private static async Task<AuditContext> ContextAsync(AppDbContext db, string type, Dictionary<string, object?> values,
         Dictionary<string, object?>? before, CancellationToken ct)
     {
-        var taskId = type == "Task" ? Int(values, "id") : Int(values, "taskItemId");
+        var taskId = type == "Task" ? Int(values, "id")
+            : type == nameof(ExternalWorkItemLink) ? Int(values, "taskId") : Int(values, "taskItemId");
         var previousTaskId = before is null ? null : Int(before, "taskItemId");
         var relatedTaskId = Int(values, "dependsOnTaskItemId") ?? (previousTaskId != taskId ? previousTaskId : null);
         taskId ??= previousTaskId;

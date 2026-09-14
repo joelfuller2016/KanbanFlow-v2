@@ -2,6 +2,10 @@
 
 This record lets the user and agents follow the current repository review, repair and merge cycle in the existing KanbanFlow app. It continues [the unified workflow plan](central-project-board-implementation.md), with a separate maintenance request in Project 2 so the original feature request and its human checks remain intact.
 
+## September 13 follow-up
+
+The current request is to obtain CodeRabbit reviews, fix PR findings and commit. Merge and deployment are outside this follow-up. [The TC-509 run](../test-cases/509-unified-workflow/runs/2026-09-13-pr511-coderabbit.md) records the current PR #511 integration and remaining verification limits; Project 2 task 189 holds its progress in the running board.
+
 ## Original request
 
 > /gsd So continue through the issues/PR, complete a code code review and fix any issues you find, If its an issue that doesnt have a PR then build the feature and work through the list, the cycle back trhough. Test everything, build ouot the issues into PRs on what you think is more improtant

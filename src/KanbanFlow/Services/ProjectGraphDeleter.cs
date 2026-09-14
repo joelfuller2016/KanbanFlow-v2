@@ -89,6 +89,8 @@ internal static class ProjectGraphDeleter
             .ToListAsync(ct);
         var taskIds = tasks.Select(t => t.Id).ToList();
 
+        await EnsureNoNonTerminalExternalWritesAsync(db, taskIds, ct);
+
         var requirements = await db.Requirements
             .Where(r => (r.FeatureId.HasValue && featureIds.Contains(r.FeatureId.Value)) ||
                         (r.TaskItemId.HasValue && taskIds.Contains(r.TaskItemId.Value)))
@@ -184,6 +186,10 @@ internal static class ProjectGraphDeleter
     // Load cascades and SetNull effects explicitly so their prior values enter the durable audit.
     public static async Task DeleteTaskLinksAsync(AppDbContext db, List<int> taskIds, CancellationToken ct = default)
     {
+        // Load durable links before the database cascade so their complete deletion
+        // snapshots join the same audit transaction as the task graph.
+        db.ExternalWorkItemLinks.RemoveRange(await db.ExternalWorkItemLinks
+            .Where(link => taskIds.Contains(link.TaskId)).ToListAsync(ct));
         db.TaskComments.RemoveRange(await db.TaskComments.Where(c => taskIds.Contains(c.TaskItemId)).ToListAsync(ct));
         db.TaskDependencies.RemoveRange(await db.TaskDependencies
             .Where(d => taskIds.Contains(d.TaskItemId) || taskIds.Contains(d.DependsOnTaskItemId)).ToListAsync(ct));
@@ -201,6 +207,39 @@ internal static class ProjectGraphDeleter
             .Include(r => r.WorkItems).ThenInclude(w => w.Evidence).ToListAsync(ct);
         // EF now knows every cascading row; DetectChanges exposes those deletions to ChangeAudit.
         db.WorkRequests.RemoveRange(requests);
+    }
+
+    /// <summary>
+    /// A task cannot disappear while an issue create may still be in flight. The journal has no
+    /// task FK so its audit evidence survives deletion, but finalization needs the originating task
+    /// to exist. Call this before every task/feature/project graph removal (#336).
+    /// </summary>
+    public static async Task EnsureNoNonTerminalExternalWritesAsync(
+        AppDbContext db,
+        IReadOnlyCollection<int> taskIds,
+        CancellationToken ct = default)
+    {
+        if (taskIds.Count == 0) return;
+
+        var operation = await db.ExternalWriteOperations
+            .AsNoTracking()
+            .Where(operation => taskIds.Contains(operation.TaskId) &&
+                operation.State != ExternalWriteState.Completed &&
+                operation.State != ExternalWriteState.DefinitiveFailure)
+            .OrderBy(operation => operation.Id)
+            .FirstOrDefaultAsync(ct);
+
+        if (operation is null) return;
+
+        throw new ExternalWorkItemConflictException(
+            "external-operation-blocks-delete",
+            $"Task {operation.TaskId} cannot be deleted while external write operation " +
+            $"{operation.OperationId:D} is {operation.State}.",
+            operation.TaskId,
+            operation.Provider,
+            operation.OperationId,
+            operation.State,
+            operation.LeaseExpiresAt);
     }
 
     /// <summary>Removes all acceptance criteria belonging to <paramref name="taskIds"/>.</summary>

@@ -555,6 +555,12 @@ else
             deletingProject = null;
             await LoadProjects();
         }
+        catch (ExternalWorkItemConflictException ex)
+        {
+            // This is actionable, durable state rather than a transient delete failure. Keep the
+            // modal open and tell the operator which write operation must be reconciled first.
+            deleteError = ex.Message;
+        }
         catch (Exception)
         {
             deleteError = "Delete failed. Please retry.";

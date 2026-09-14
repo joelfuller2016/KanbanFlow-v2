@@ -3,6 +3,39 @@ using Microsoft.Data.Sqlite;
 namespace KanbanFlow.Data;
 
 /// <summary>
+/// What the database file looked like at the instant its path was resolved — that is, BEFORE
+/// <c>EnsureCreated()</c>, the <c>Ensure*</c> patchers or <c>SeedData</c> can touch it (#498).
+/// </summary>
+/// <remarks>
+/// <para>These are three free bytes of evidence from one <c>stat</c>, and they are the only thing
+/// that survives a launcher which <em>successfully</em> restored the committed seed onto the wrong
+/// path: the board then exists and is not empty, so neither
+/// <see cref="DbPathResolution.Existed"/> nor a row count can call it wrong. They are facts, not
+/// verdicts — <c>/api/admin/health</c> turns two of them into <c>degraded</c> reasons and reports
+/// all three so the caller can compare them against whatever it knows (the size of the committed
+/// seed, for instance, which the application itself does not ship and cannot read).</para>
+///
+/// <para><b>What they cannot tell you.</b> Writing real data to the wrong board erases the copy
+/// signature on disk — the write puts its last-write time after creation. This captured snapshot
+/// stays unchanged, so the reported last-write reason clears only after a restart reads the new
+/// facts. The creation-time signal is not on that clock: a write never changes
+/// a creation time, so it expires only when a start happens more than 15 minutes after the file was
+/// made. Either way, once both have gone nothing inside the application can distinguish the wrong
+/// board from the right one. They also cannot separate a mis-restored seed from a user deliberately
+/// restoring their own backup; the two are byte-for-byte the same event.</para>
+/// </remarks>
+/// <param name="CreatedAtUtc">
+/// The file's creation time. On Windows a delete-and-recreate of the same name within roughly 15
+/// seconds can have the ORIGINAL creation time preserved by NTFS file tunnelling, so a board
+/// replaced in place may report a creation time older than the file actually is. On Linux this can
+/// fall back to a value the filesystem did not really record; the fallbacks are low, not high, so
+/// they cost a detection rather than inventing one.
+/// </param>
+/// <param name="LastWriteUtc">The file's last-write time, as found.</param>
+/// <param name="SizeBytes">The file's length in bytes, as found.</param>
+public sealed record DbFileSnapshot(DateTime CreatedAtUtc, DateTime LastWriteUtc, long SizeBytes);
+
+/// <summary>
 /// The outcome of resolving which SQLite file the application will open.
 /// </summary>
 /// <param name="Path">The absolute path of the database that will be opened.</param>
@@ -17,11 +50,19 @@ namespace KanbanFlow.Data;
 /// order. Non-empty means two real databases exist and only one is in use — the exact situation
 /// that reads to a user as "my data is gone" (#354). Reported, never enforced: no roadblocks.
 /// </param>
+/// <param name="Snapshot">
+/// The file's own facts as found at resolution time. Normally non-null exactly when
+/// <see cref="Existed"/> is true, but <see cref="DbPathResolver.Stat"/> can return
+/// <c>(true, null)</c> when the file disappears or becomes inaccessible between the existence
+/// check and the stat — so callers must not assume the two agree. The checks that read this
+/// simply do not fire when it is null.
+/// </param>
 public sealed record DbPathResolution(
     string Path,
     string Source,
     bool Existed,
-    IReadOnlyList<string> ShadowedPaths);
+    IReadOnlyList<string> ShadowedPaths,
+    DbFileSnapshot? Snapshot = null);
 
 /// <summary>
 /// Single source of truth for <em>which</em> database file KanbanFlow opens (#354).
@@ -129,7 +170,27 @@ public static class DbPathResolver
                 : Path.GetFullPath(currentDirectory);
             var configured = Path.GetFullPath(configuredPath, basePath);
             EnsureParentDirectory(configured);
-            return new DbPathResolution(configured, SourceEnvironment, File.Exists(configured), []);
+            var (configuredExisted, configuredSnapshot) = Stat(configured);
+
+            // An override does NOT mean there is only one board (#498 review). This branch used to
+            // hardcode the shadow list empty, and since every production start pins
+            // KANBANFLOW_DB_PATH (the launcher always sets it; the scheduled task pins -DbPath), the
+            // list was ALWAYS empty in the deployed configuration — a reported condition that could
+            // not occur. It is now populated the same way the probe branch populates it, from the
+            // same candidate directories.
+            //
+            // BE CLEAR ABOUT WHAT THIS DOES NOT CATCH: these are the application's OWN anchors. The
+            // board a mis-resolved launcher abandons lives at the LAUNCHER's default location, which
+            // is derived from a shell variable this process cannot re-derive without becoming a
+            // second, disagreeing implementation of the launcher's rule — the exact drift class this
+            // type exists to prevent (#354). So the motivating scenario's real board is still not
+            // named here; db.path plus the file facts are what surface that one.
+            return new DbPathResolution(
+                configured,
+                SourceEnvironment,
+                configuredExisted,
+                OtherExistingBoards(configured, [currentDirectory, contentRootPath, appDirectory], pathComparer),
+                configuredSnapshot);
         }
 
         // 2. Otherwise look for a database that already exists, in a fixed order. The launch
@@ -160,14 +221,76 @@ public static class DbPathResolver
         }
 
         var existing = candidates.Where(File.Exists).ToList();
-        if (existing.Count > 0)
-            return new DbPathResolution(existing[0], SourceProbe, true, existing.Skip(1).ToList());
+        for (int i = 0; i < existing.Count; i++)
+        {
+            var (existed, probedSnapshot) = Stat(existing[i]);
+            if (existed)
+                return new DbPathResolution(
+                    existing[i], SourceProbe, true, existing.Skip(i + 1).ToList(), probedSnapshot);
+        }
 
         // 3. Nothing exists anywhere: create at the application's own directory, so a fresh install
         //    lands in one deterministic place no matter which directory it was started from.
         var fallback = Path.GetFullPath(Path.Combine(appDirectory, FileName));
         EnsureParentDirectory(fallback);
-        return new DbPathResolution(fallback, SourceDefault, false, []);
+        return new DbPathResolution(fallback, SourceDefault, false, [], null);
+    }
+
+    /// <summary>
+    /// Stat the resolved database ONCE: whether it is there, and — if it is — what it looked like.
+    /// </summary>
+    /// <remarks>
+    /// One <see cref="FileInfo"/>, deliberately. Its properties are served from a single cached
+    /// stat, so the facts inside a returned snapshot describe the same instant and cannot straddle
+    /// a concurrent <c>Copy-Item</c>.
+    /// <para>That is narrower than "existence and facts always agree", and the gap is still open:
+    /// the catch below returns <c>(true, null)</c> — a file that existed but has no facts — from a
+    /// SINGLE call, so <see cref="DbPathResolution.Existed"/> true does not imply a non-null
+    /// snapshot and every reader must null-check. Both call sites now take the <c>Existed</c> this
+    /// returns rather than hardcoding it, which closes the other route to that state; the
+    /// unreadable-file case remains, tracked as
+    /// <see href="https://github.com/joelfuller2016/KanbanFlow-v2/issues/513">#513</see>.</para>
+    /// </remarks>
+    private static (bool Existed, DbFileSnapshot? Snapshot) Stat(string path)
+    {
+        var info = new FileInfo(path);
+        if (!info.Exists)
+            return (false, null);
+
+        try
+        {
+            return (true, new DbFileSnapshot(info.CreationTimeUtc, info.LastWriteTimeUtc, info.Length));
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            // This runs during bootstrap, before logging exists; a stat that cannot be completed
+            // must degrade to "no facts", never take the process down. The file is still there.
+            return (true, null);
+        }
+    }
+
+    /// <summary>
+    /// Every candidate directory that ALSO holds a <see cref="FileName"/>, excluding the one that
+    /// was actually opened — the #354 "my data is gone" presentation. Reported, never enforced.
+    /// </summary>
+    private static List<string> OtherExistingBoards(
+        string openedPath, IReadOnlyList<string?> directories, StringComparer pathComparer)
+    {
+        var others = new List<string>();
+        foreach (var directory in directories)
+        {
+            if (string.IsNullOrWhiteSpace(directory))
+                continue;
+
+            var candidate = Path.GetFullPath(Path.Combine(directory, FileName));
+            if (pathComparer.Equals(candidate, openedPath) || others.Contains(candidate, pathComparer))
+                continue;
+
+            if (File.Exists(candidate))
+                others.Add(candidate);
+        }
+
+        return others;
     }
 
     /// <summary>

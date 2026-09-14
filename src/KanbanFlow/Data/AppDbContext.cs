@@ -38,6 +38,8 @@ public class AppDbContext : DbContext
     public DbSet<MemoryNode> MemoryNodes => Set<MemoryNode>();
     public DbSet<Observation> Observations => Set<Observation>();
     public DbSet<MemoryRelation> MemoryRelations => Set<MemoryRelation>();
+    public DbSet<ExternalWorkItemLink> ExternalWorkItemLinks => Set<ExternalWorkItemLink>();
+    public DbSet<ExternalWriteOperation> ExternalWriteOperations => Set<ExternalWriteOperation>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -59,6 +61,26 @@ public class AppDbContext : DbContext
             e.HasMany(t => t.AcceptanceCriteria).WithOne(c => c.TaskItem).HasForeignKey(c => c.TaskItemId).OnDelete(DeleteBehavior.Cascade);
             e.HasMany(t => t.Dependencies).WithOne(d => d.TaskItem).HasForeignKey(d => d.TaskItemId).OnDelete(DeleteBehavior.Cascade);
             e.HasMany(t => t.BlockingDependencies).WithOne(d => d.DependsOnTaskItem).HasForeignKey(d => d.DependsOnTaskItemId).OnDelete(DeleteBehavior.Cascade);
+            e.HasMany(t => t.ExternalLinks).WithOne(l => l.Task).HasForeignKey(l => l.TaskId).OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<ExternalWorkItemLink>(e =>
+        {
+            e.HasIndex(l => new { l.Provider, l.ExternalNodeId })
+                .IsUnique()
+                .HasFilter("\"ExternalNodeId\" IS NOT NULL");
+            e.HasIndex(l => new { l.TaskId, l.Provider }).IsUnique();
+            e.HasIndex(l => new { l.Provider, l.RepositoryExternalId, l.ExternalNumber })
+                .IsUnique()
+                .HasFilter("\"State\" = 0 AND \"ExternalNumber\" IS NOT NULL");
+        });
+
+        modelBuilder.Entity<ExternalWriteOperation>(e =>
+        {
+            e.HasIndex(o => o.OperationId).IsUnique();
+            // One journal for the lifetime of a task/provider pair. Failed operations are resumed,
+            // never replaced with a second marker that could create a duplicate remote issue.
+            e.HasIndex(o => new { o.TaskId, o.Provider }).IsUnique();
         });
 
         modelBuilder.Entity<Subtask>(e =>
