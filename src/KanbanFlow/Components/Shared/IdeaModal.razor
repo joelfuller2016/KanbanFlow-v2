@@ -119,7 +119,7 @@
             <div class="modal-footer">
                 <button type="button" class="btn btn-secondary btn-sm" @onclick="Close" data-testid="idea-cancel-button">Cancel</button>
                 <button type="button" class="btn btn-primary btn-sm" @onclick="SaveIdea"
-                        data-testid="idea-save-button" disabled="@(isSaving || string.IsNullOrWhiteSpace(title))">
+                        data-testid="idea-save-button" disabled="@(isSaving || isLoading || string.IsNullOrWhiteSpace(title))">
                     @if (isSaving)
                     {
                         <span class="spinner-border spinner-border-sm me-1" role="status" aria-hidden="true"></span>
@@ -166,11 +166,24 @@
     private bool isSaving;
 
     private bool wasOpen;
+    private bool isLoading;
+    private int? loadedIdeaId;
+    private int loadGeneration;
+    private CancellationTokenSource editCancellation = new();
+    private bool disposed;
 
     protected override async Task OnParametersSetAsync()
     {
-        if (IsOpen && !wasOpen)
+        if (disposed) return;
+        if (!IsOpen) { ++loadGeneration; editCancellation.Cancel(); loadedIdeaId = null; expectedWorkflowVersion = null; }
+        if (IsOpen && (!wasOpen || loadedIdeaId != EditIdeaId))
         {
+            var generation = ++loadGeneration;
+            editCancellation.Cancel(); editCancellation.Dispose(); editCancellation = new();
+            wasOpen = true;
+            isLoading = false;
+            loadedIdeaId = EditIdeaId;
+            ResetFields();
             // Modal just opened — reset transient UI state.
             errorMessage = null;
             showTitleRequired = false;
@@ -178,10 +191,13 @@
 
             if (EditIdeaId is int id)
             {
-                // Edit: always reload the idea's fields on open so a previously cancelled edit
-                // can't leave stale values; the !wasOpen guard already prevents reloads while
-                // the modal stays open.
-                await LoadIdea(id);
+                // Keep fields, identity and version from one load. A target switch reloads
+                // even when the parent keeps the modal open.
+                isLoading = true;
+                var ct = editCancellation.Token;
+                try { await LoadIdea(id, generation, ct); }
+                catch (OperationCanceledException) when (ct.IsCancellationRequested) { }
+                finally { if (generation == loadGeneration) isLoading = false; }
             }
             else
             {
@@ -205,9 +221,10 @@
         isPromoted = false;
     }
 
-    private async Task LoadIdea(int id)
+    private async Task LoadIdea(int id, int generation, CancellationToken ct)
     {
-        var idea = await IdeaSvc.GetByIdAsync(id);
+        var idea = await IdeaSvc.GetByIdAsync(id, ct);
+        if (!IsOpen || EditIdeaId != id || generation != loadGeneration) return;
         if (idea is null)
         {
             errorMessage = "This idea no longer exists.";
@@ -254,6 +271,11 @@
 
     private async Task SaveIdea()
     {
+        if (disposed || isSaving || isLoading || !IsOpen || loadedIdeaId != EditIdeaId) return;
+        var generation = loadGeneration;
+        var ideaId = loadedIdeaId;
+        var ct = editCancellation.Token;
+        if (ideaId is not null && expectedWorkflowVersion is null) return;
         if (string.IsNullOrWhiteSpace(title))
         {
             showTitleRequired = true;
@@ -269,11 +291,11 @@
             if (IsNew)
             {
                 await IdeaSvc.CreateAsync(
-                    new IdeaCreate(title.Trim(), body, plan, tags, SelectedPriority), actor: "User");
+                    new IdeaCreate(title.Trim(), body, plan, tags, SelectedPriority), actor: "User", ct: ct);
             }
             else
             {
-                await IdeaSvc.UpdateAsync(EditIdeaId!.Value,
+                await IdeaSvc.UpdateAsync(ideaId!.Value,
                     new IdeaUpdate(
                         Title: title.Trim(),
                         Body: body,
@@ -282,29 +304,31 @@
                         Tags: tags,
                         Priority: SelectedPriority,
                         ExpectedWorkflowVersion: expectedWorkflowVersion),
-                    actor: "User");
+                    actor: "User", ct: ct);
             }
 
+            if (generation != loadGeneration || !IsOpen || EditIdeaId != ideaId) return;
             await OnSaved.InvokeAsync();
-            await OnClose.InvokeAsync();
+            if (generation == loadGeneration && IsOpen && EditIdeaId == ideaId) await OnClose.InvokeAsync();
         }
-        catch (ValidationException ex)
+        catch (ValidationException ex) when (generation == loadGeneration)
         {
             errorMessage = ex.Message;
         }
-        catch (IdeaNotFoundException)
+        catch (IdeaNotFoundException) when (generation == loadGeneration)
         {
             errorMessage = "This idea no longer exists. Close and refresh the list.";
         }
         catch (Exception ex)
         {
+            if (generation != loadGeneration) return;
             // Surface unexpected failures (e.g. DbUpdateException, SQLite busy) inline rather
             // than letting them escape the @onclick handler and tear down the Blazor circuit.
             errorMessage = $"Save failed: {ex.Message}";
         }
         finally
         {
-            isSaving = false;
+            if (generation == loadGeneration) isSaving = false;
         }
     }
 
@@ -344,6 +368,9 @@
 
     public async ValueTask DisposeAsync()
     {
+        disposed = true;
+        ++loadGeneration;
+        editCancellation.Cancel(); editCancellation.Dispose();
         if (_dialogInited)
             await SafeDestroyDialogAsync();
         _selfRef?.Dispose();

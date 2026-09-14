@@ -23,22 +23,43 @@ try {
 }
 let nextId = 0;
 const pending = new Map();
+let wrapperFailure;
+function failWrapper(error) {
+  wrapperFailure ??= error;
+  for (const waiting of pending.values()) { clearTimeout(waiting.timeout); waiting.reject(wrapperFailure); }
+  pending.clear();
+}
+wrapper.on('error', failWrapper);
+wrapper.stdin.on('error', failWrapper);
+wrapper.stdout.on('error', failWrapper);
+wrapper.on('exit', (code, signal) => {
+  if (!completed) failWrapper(new Error(`Workflow wrapper exited before completion (${signal ?? code}).`));
+});
 const lines = createInterface({ input: wrapper.stdout });
 lines.on('line', line => {
-  const message = JSON.parse(line); const waiting = pending.get(message.id);
+  let message;
+  try { message = JSON.parse(line); }
+  catch (error) { failWrapper(new Error(`Invalid workflow wrapper JSON: ${error.message}`)); return; }
+  if (!message || typeof message !== 'object' || Array.isArray(message)) {
+    failWrapper(new Error('Invalid workflow wrapper response.')); return;
+  }
+  const waiting = pending.get(message.id);
   if (!waiting) return;
   pending.delete(message.id); clearTimeout(waiting.timeout);
   if (message.error) waiting.reject(new Error(message.error.message)); else waiting.resolve(message.result);
 });
 function stdio(method, params) {
+  if (wrapperFailure) return Promise.reject(wrapperFailure);
   const id = ++nextId;
   return new Promise((resolve, reject) => {
     const timeout = setTimeout(() => { pending.delete(id); reject(new Error(`Timed out: ${method}`)); }, 20000);
     pending.set(id, { resolve, reject, timeout });
-    wrapper.stdin.write(JSON.stringify({ jsonrpc: '2.0', id, method, params }) + '\n');
+    try { wrapper.stdin.write(JSON.stringify({ jsonrpc: '2.0', id, method, params }) + '\n', error => { if (error) failWrapper(error); }); }
+    catch (error) { failWrapper(error); }
   });
 }
 async function native(method, params) {
+  if (wrapperFailure) throw wrapperFailure;
   const response = await fetch(`${base}/mcp`, { method: 'POST', headers: { 'Content-Type': 'application/json',
     Accept: 'application/json, text/event-stream', 'MCP-Protocol-Version': '2025-06-18' },
     body: JSON.stringify({ jsonrpc: '2.0', id: ++nextId, method, params }), signal: AbortSignal.timeout(20000) });
@@ -59,9 +80,17 @@ const command = (transport, input) => call(transport, 'workflow_command', { inpu
 let completed = false;
 let result;
 let failure;
+let interruption;
+let finalRecord = Promise.resolve();
+const recordFinal = (state, details) => finalRecord = finalRecord.then(() => recordSmokeRun(run, state, details));
 const interrupted = signal => {
+  if (interruption) return;
+  interruption = signal;
+  const recorded = recordFinal('interrupted', { signal });
   wrapper.kill();
-  recordSmokeRun(run, 'interrupted', { signal }).finally(() => process.exit(signal === 'SIGINT' ? 130 : 143));
+  recorded.then(() => process.exit(signal === 'SIGINT' ? 130 : 143), error => {
+    process.stderr.write(`Could not record interrupted run: ${error.message}\n`); process.exit(1);
+  });
 };
 const onInt = () => interrupted('SIGINT');
 const onTerm = () => interrupted('SIGTERM');
@@ -122,6 +151,7 @@ try {
   for (const waiting of pending.values()) clearTimeout(waiting.timeout);
   lines.close(); wrapper.stdin.end(); wrapper.kill();
   process.removeListener('SIGINT', onInt); process.removeListener('SIGTERM', onTerm);
-  await recordSmokeRun(run, completed ? 'passed' : 'failed', { result, failure });
+  if (!interruption) await recordFinal(completed ? 'passed' : 'failed', { result, failure });
+  else await finalRecord;
 }
-console.log(JSON.stringify(result, null, 2));
+if (!interruption) console.log(JSON.stringify(result, null, 2));

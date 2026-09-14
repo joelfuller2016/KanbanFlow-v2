@@ -150,3 +150,46 @@ test('CLI proves the accepted instance before wrapper startup and records a star
   assert.match(recorded.failure, /Injected startup failure/);
   assert.ok((await readFile(f.run.databasePath)).length > 0);
 });
+
+for (const mode of ['error', 'invalid-json', 'exit', 'interrupt']) {
+  test(`CLI records ${mode} from the asynchronous wrapper lifecycle`, async t => {
+    const f = await fixture(t, true);
+    const hook = path.join(path.dirname(f.run.manifestPath), 'lifecycle.mjs');
+    await writeFile(hook, `
+      import childProcess from 'node:child_process';
+      import { syncBuiltinESMExports } from 'node:module';
+      import { EventEmitter } from 'node:events';
+      import { PassThrough, Writable } from 'node:stream';
+      childProcess.spawn = () => {
+        const child = new EventEmitter();
+        child.stdout = new PassThrough();
+        child.stdin = new Writable({ write(chunk, encoding, callback) {
+          callback();
+          setImmediate(() => {
+            const mode = ${JSON.stringify(mode)};
+            if (mode === 'error') child.emit('error', new Error('Injected async ENOENT'));
+            if (mode === 'invalid-json') child.stdout.write('not a JSON response\\n');
+            if (mode === 'exit') child.emit('exit', 2, null);
+            if (mode === 'interrupt') process.emit('SIGINT');
+          });
+        } });
+        child.kill = () => { child.stdout.end(); child.emit('exit', null, 'SIGTERM'); return true; };
+        return child;
+      };
+      syncBuiltinESMExports();
+      globalThis.fetch = async (url, options) => {
+        if (options.method !== 'GET') throw new Error('No application mutations are permitted in this fixture');
+        return { ok: true, json: async () => (${JSON.stringify(f.health)}) };
+      };
+    `);
+    const child = spawnSync(process.execPath, ['--import', pathToFileURL(hook).href, path.join(root, 'scripts/smoke-workflow.mjs'), base, '--instance', f.run.manifestPath],
+      { windowsHide: true, encoding: 'utf8', timeout: 10000 });
+    assert.notEqual(child.status, 0);
+    assert.equal(child.error, undefined);
+    const recorded = JSON.parse(await readFile(f.run.manifestPath, 'utf8'));
+    assert.equal(recorded.state, mode === 'interrupt' ? 'interrupted' : 'failed', child.stderr);
+    if (mode === 'interrupt') assert.equal(recorded.signal, 'SIGINT');
+    else assert.match(recorded.failure, mode === 'error' ? /async ENOENT/ : mode === 'exit' ? /exited before completion/ : /Invalid workflow wrapper JSON/);
+    assert.ok((await readFile(f.run.databasePath)).length > 0);
+  });
+}

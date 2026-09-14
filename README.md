@@ -21,7 +21,7 @@
 | **Log book** | [`docs/BACKLOG.md`](docs/BACKLOG.md) — the authoritative record of what happened |
 | **Deep detail** | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) |
 
-Workflow surface counts and the full .NET/script suites were checked on September 6, 2026; other inventories retain their existing baseline. The commands that produced
+The 1,563 .NET and 348 script totals were verified on September 14, 2026 at source `7703cbd3f317` ([run record](docs/test-cases/509-unified-workflow/runs/2026-09-14-7703cbd3f317.md)). Native/wrapper source inventories are 36/54; September 6 transport discovery measured 33/54, not the current live surface. Other inventories retain their existing baseline. The commands that produced
 them are in [Surfaces, verified](#surfaces-verified) — run them yourself; do not trust the
 table alone.
 

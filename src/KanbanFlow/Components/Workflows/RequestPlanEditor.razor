@@ -21,16 +21,16 @@
                 <details class="alert alert-info"><summary>Current board fields differ from this draft · review before saving</summary>
                     <strong>@boardTask.Name</strong><MarkdownContent Markdown="@boardTask.Description" />
                     <div>@boardTask.Priority · @(boardTask.Assignee ?? "Unassigned")</div>
-                    <ul>@foreach (var check in boardTask.AcceptanceCriteria) { <li>@check.Text</li> }</ul>
+                    <ul>@foreach (var check in boardTask.AcceptanceCriteria) { <li @key="check.Id">@check.Text</li> }</ul>
                     <button type="button" class="btn btn-sm btn-outline-primary" @onclick="() => CopyBoardFields(draft, boardTask)">Copy current board fields into draft</button>
                 </details>
             }
             <div class="row g-2 mb-2">
                 <div class="col-md-6"><label class="form-label" for="repo-@draft.Id">Repository</label><select id="repo-@draft.Id" class="form-select" @bind="draft.RepositoryId">
-                    <option value="">No code repository</option>@foreach (var repository in Context.Repositories) { <option value="@repository.Id">@repository.Name</option> }
+                    <option value="">No code repository</option>@foreach (var repository in Context.Repositories) { <option @key="repository.Id" value="@repository.Id">@repository.Name</option> }
                 </select></div>
                 <div class="col-md-3"><label class="form-label" for="priority-@draft.Id">Priority</label><select id="priority-@draft.Id" class="form-select" @bind="draft.Priority">
-                    @foreach (var priority in Enum.GetValues<TaskPriority>()) { <option value="@priority">@priority</option> }
+                    @foreach (var priority in Enum.GetValues<TaskPriority>()) { <option @key="priority" value="@priority">@priority</option> }
                 </select></div>
                 <div class="col-md-3"><label class="form-label" for="assignee-@draft.Id">Assignee</label><input id="assignee-@draft.Id" class="form-control" @bind="draft.Assignee" maxlength="200" /></div>
             </div>
@@ -41,7 +41,7 @@
                 <div class="fw-semibold small">Depends on</div>
                 @foreach (var other in drafts.Where(d => d.Id != draft.Id))
                 {
-                    <label class="d-block"><input type="checkbox" checked="@draft.Dependencies.Contains(other.Id)" @onchange="e => Dependency(draft, other.Id, e)" /> @(string.IsNullOrWhiteSpace(other.Title) ? "Untitled task" : other.Title)</label>
+                    <label @key="other.Id" class="d-block"><input type="checkbox" checked="@draft.Dependencies.Contains(other.Id)" @onchange="e => Dependency(draft, other.Id, e)" /> @(string.IsNullOrWhiteSpace(other.Title) ? "Untitled task" : other.Title)</label>
                 }
             }
             @if (!Context.Tasks.Any(t => t.DraftId == draft.Id)) { <button type="button" class="btn btn-sm btn-outline-danger mt-2" @onclick="() => Remove(draft)">Remove draft</button> }
@@ -64,13 +64,13 @@
 }
 @if (Context.Tasks.Count > 0)
 {
-    <ul class="list-group mt-3">@foreach (var task in Context.Tasks) { <li class="list-group-item d-flex justify-content-between"><a href="@task.Url">#@task.TaskId @task.Name</a><span>@task.Status</span></li> }</ul>
+    <ul class="list-group mt-3">@foreach (var task in Context.Tasks) { <li @key="task.TaskId" class="list-group-item d-flex justify-content-between"><a href="@task.Url">#@task.TaskId @task.Name</a><span>@task.Status</span></li> }</ul>
 }
 <details class="mt-3"><summary>Plan history (@Context.Plans.Count)</summary>
     @foreach (var historicalPlan in Context.Plans.Reverse())
     {
-        <details class="mt-2"><summary>Version @historicalPlan.Number · @(historicalPlan.PublishedAt is null ? "draft" : "published") · @historicalPlan.CreatedAt.ToLocalTime().ToString("g")</summary>
-            @foreach (var task in historicalPlan.Tasks) { <article class="border-top p-2"><strong>@task.Title</strong><MarkdownContent Markdown="@($"{task.Description}\n\nChecks: {task.Acceptance}\n\nFiles: {task.FileReferences}")" /></article> }
+        <details @key="historicalPlan.Id" class="mt-2"><summary>Version @historicalPlan.Number · @(historicalPlan.PublishedAt is null ? "draft" : "published") · @historicalPlan.CreatedAt.ToLocalTime().ToString("g")</summary>
+            @foreach (var task in historicalPlan.Tasks) { <article @key="task.Id" class="border-top p-2"><strong>@task.Title</strong><MarkdownContent Markdown="@($"{task.Description}\n\nChecks: {task.Acceptance}\n\nFiles: {task.FileReferences}")" /></article> }
         </details>
     }
 </details>

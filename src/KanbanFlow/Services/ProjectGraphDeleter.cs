@@ -36,13 +36,13 @@ internal static class ProjectGraphDeleter
         var projectFeatureIds = await db.Features
             .Where(f => f.ProjectId == projectId)
             .Select(f => f.Id)
-            .ToListAsync(ct);
+            .ToListAsync(ct).ConfigureAwait(false);
 
-        await DeleteFeatureTreesAsync(db, projectFeatureIds, ct);
+        await DeleteFeatureTreesAsync(db, projectFeatureIds, ct).ConfigureAwait(false);
 
         var requirements = await db.Requirements
             .Where(r => r.ProjectId == projectId)
-            .ToListAsync(ct);
+            .ToListAsync(ct).ConfigureAwait(false);
         db.Requirements.RemoveRange(requirements);
         db.ProjectRepositories.RemoveRange(await db.ProjectRepositories.Where(r => r.ProjectId == projectId).ToListAsync(ct).ConfigureAwait(false));
         foreach (var request in await db.WorkRequests.Where(r => r.ProjectId == projectId).ToListAsync(ct).ConfigureAwait(false))
@@ -54,7 +54,7 @@ internal static class ProjectGraphDeleter
     /// <summary>Deletes a single feature subtree (root + all descendants and their tasks/children).</summary>
     public static async Task DeleteFeatureTreeAsync(AppDbContext db, int rootFeatureId, CancellationToken ct = default)
     {
-        await DeleteFeatureTreesAsync(db, [rootFeatureId], ct);
+        await DeleteFeatureTreesAsync(db, [rootFeatureId], ct).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -66,7 +66,7 @@ internal static class ProjectGraphDeleter
     {
         if (rootFeatureIds.Count == 0) return;
 
-        var allFeatures = await db.Features.ToListAsync(ct);
+        var allFeatures = await db.Features.ToListAsync(ct).ConfigureAwait(false);
         var featureIds = new HashSet<int>();
 
         void CollectFeatureAndChildren(int featureId)
@@ -86,15 +86,15 @@ internal static class ProjectGraphDeleter
 
         var tasks = await db.Tasks
             .Where(t => featureIds.Contains(t.FeatureId))
-            .ToListAsync(ct);
+            .ToListAsync(ct).ConfigureAwait(false);
         var taskIds = tasks.Select(t => t.Id).ToList();
 
-        await EnsureNoNonTerminalExternalWritesAsync(db, taskIds, ct);
+        await EnsureNoNonTerminalExternalWritesAsync(db, taskIds, ct).ConfigureAwait(false);
 
         var requirements = await db.Requirements
             .Where(r => (r.FeatureId.HasValue && featureIds.Contains(r.FeatureId.Value)) ||
                         (r.TaskItemId.HasValue && taskIds.Contains(r.TaskItemId.Value)))
-            .ToListAsync(ct);
+            .ToListAsync(ct).ConfigureAwait(false);
 
         foreach (var requirement in requirements)
         {
@@ -106,14 +106,14 @@ internal static class ProjectGraphDeleter
 
         if (taskIds.Count > 0)
         {
-            await DeleteSubtasksForTasksAsync(db, taskIds, ct);
-            await DeleteAcceptanceCriteriaForTasksAsync(db, taskIds, ct);
+            await DeleteSubtasksForTasksAsync(db, taskIds, ct).ConfigureAwait(false);
+            await DeleteAcceptanceCriteriaForTasksAsync(db, taskIds, ct).ConfigureAwait(false);
 
-            await DeleteTaskLinksAsync(db, taskIds, ct);
+            await DeleteTaskLinksAsync(db, taskIds, ct).ConfigureAwait(false);
             db.Tasks.RemoveRange(tasks);
         }
 
-        foreach (var request in await db.WorkRequests.Where(r => r.FeatureId != null && featureIds.Contains(r.FeatureId.Value)).ToListAsync(ct))
+        foreach (var request in await db.WorkRequests.Where(r => r.FeatureId != null && featureIds.Contains(r.FeatureId.Value)).ToListAsync(ct).ConfigureAwait(false))
             request.FeatureId = null;
 
         // Features are self-referential Restrict, so remove the deepest first. Depth is memoized
@@ -131,12 +131,12 @@ internal static class ProjectGraphDeleter
     /// <summary>Deletes a single subtask subtree (root + descendants), leaf-first, within its owning task.</summary>
     public static async Task DeleteSubtaskTreeAsync(AppDbContext db, int rootSubtaskId, CancellationToken ct = default)
     {
-        var root = await db.Subtasks.FindAsync([rootSubtaskId], ct);
+        var root = await db.Subtasks.FindAsync([rootSubtaskId], ct).ConfigureAwait(false);
         if (root is null) return;
 
         var allSubtasksForTask = await db.Subtasks
             .Where(s => s.TaskItemId == root.TaskItemId)
-            .ToListAsync(ct);
+            .ToListAsync(ct).ConfigureAwait(false);
 
         var subtaskIds = new HashSet<int>();
         CollectSubtaskAndChildren(rootSubtaskId, allSubtasksForTask, subtaskIds);
@@ -164,7 +164,7 @@ internal static class ProjectGraphDeleter
 
         var subtasks = await db.Subtasks
             .Where(s => taskIds.Contains(s.TaskItemId))
-            .ToListAsync(ct);
+            .ToListAsync(ct).ConfigureAwait(false);
         if (subtasks.Count == 0) return;
 
         // Build id -> parentSubtaskId once (O(n)), then memoize each node's depth so the ordering is
@@ -189,13 +189,13 @@ internal static class ProjectGraphDeleter
         // Load durable links before the database cascade so their complete deletion
         // snapshots join the same audit transaction as the task graph.
         db.ExternalWorkItemLinks.RemoveRange(await db.ExternalWorkItemLinks
-            .Where(link => taskIds.Contains(link.TaskId)).ToListAsync(ct));
-        db.TaskComments.RemoveRange(await db.TaskComments.Where(c => taskIds.Contains(c.TaskItemId)).ToListAsync(ct));
+            .Where(link => taskIds.Contains(link.TaskId)).ToListAsync(ct).ConfigureAwait(false));
+        db.TaskComments.RemoveRange(await db.TaskComments.Where(c => taskIds.Contains(c.TaskItemId)).ToListAsync(ct).ConfigureAwait(false));
         db.TaskDependencies.RemoveRange(await db.TaskDependencies
-            .Where(d => taskIds.Contains(d.TaskItemId) || taskIds.Contains(d.DependsOnTaskItemId)).ToListAsync(ct));
-        foreach (var requirement in await db.Requirements.Where(r => r.TaskItemId != null && taskIds.Contains(r.TaskItemId.Value)).ToListAsync(ct))
+            .Where(d => taskIds.Contains(d.TaskItemId) || taskIds.Contains(d.DependsOnTaskItemId)).ToListAsync(ct).ConfigureAwait(false));
+        foreach (var requirement in await db.Requirements.Where(r => r.TaskItemId != null && taskIds.Contains(r.TaskItemId.Value)).ToListAsync(ct).ConfigureAwait(false))
             requirement.TaskItemId = null;
-        var mappings = await db.PlannedTasks.Include(w => w.Evidence).Where(w => taskIds.Contains(w.TaskItemId)).ToListAsync(ct);
+        var mappings = await db.PlannedTasks.Include(w => w.Evidence).Where(w => taskIds.Contains(w.TaskItemId)).ToListAsync(ct).ConfigureAwait(false);
         db.TaskEvidence.RemoveRange(mappings.SelectMany(w => w.Evidence));
         db.PlannedTasks.RemoveRange(mappings);
     }
@@ -204,7 +204,7 @@ internal static class ProjectGraphDeleter
     {
         var requests = await db.WorkRequests.AsSplitQuery().Where(r => r.IdeaId == ideaId)
             .Include(r => r.Messages).Include(r => r.Briefs).Include(r => r.Plans).Include(r => r.Results)
-            .Include(r => r.WorkItems).ThenInclude(w => w.Evidence).ToListAsync(ct);
+            .Include(r => r.WorkItems).ThenInclude(w => w.Evidence).ToListAsync(ct).ConfigureAwait(false);
         // EF now knows every cascading row; DetectChanges exposes those deletions to ChangeAudit.
         db.WorkRequests.RemoveRange(requests);
     }
@@ -227,7 +227,7 @@ internal static class ProjectGraphDeleter
                 operation.State != ExternalWriteState.Completed &&
                 operation.State != ExternalWriteState.DefinitiveFailure)
             .OrderBy(operation => operation.Id)
-            .FirstOrDefaultAsync(ct);
+            .FirstOrDefaultAsync(ct).ConfigureAwait(false);
 
         if (operation is null) return;
 
@@ -249,7 +249,7 @@ internal static class ProjectGraphDeleter
 
         var criteria = await db.AcceptanceCriteria
             .Where(c => taskIds.Contains(c.TaskItemId))
-            .ToListAsync(ct);
+            .ToListAsync(ct).ConfigureAwait(false);
 
         db.AcceptanceCriteria.RemoveRange(criteria);
     }

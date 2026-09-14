@@ -75,6 +75,13 @@ public sealed class DefinitionOfDoneTransactionTests
         {
             var sql = command.CommandText;
 
+            if (sql.Contains("ActivityEvents", StringComparison.OrdinalIgnoreCase)
+                && sql.TrimStart().StartsWith("INSERT", StringComparison.OrdinalIgnoreCase))
+            {
+                lock (_lock) _observations.Add(("AuditInsert", command.Transaction));
+                return;
+            }
+
             // The gate's read: any SELECT against AcceptanceCriteria.
             if (sql.Contains("AcceptanceCriteria", StringComparison.OrdinalIgnoreCase)
                 && sql.TrimStart().StartsWith("SELECT", StringComparison.OrdinalIgnoreCase))
@@ -230,7 +237,7 @@ public sealed class DefinitionOfDoneTransactionTests
         var reads = probe.Observations.Where(o => o.Kind == "TaskRead").ToArray();
         Assert.NotEmpty(reads);
         Assert.Null(reads[0].Tx);
-        Assert.Contains(reads, r => r.Tx is not null);
+        AssertAuditedWriteUsesReservedReadTransaction(probe);
 
         // ...and the gate never touched AcceptanceCriteria, so there was nothing to serialize.
         Assert.DoesNotContain(probe.Observations, o => o.Kind == "CriteriaRead");
@@ -253,9 +260,23 @@ public sealed class DefinitionOfDoneTransactionTests
         var reads = probe.Observations.Where(o => o.Kind == "TaskRead").ToArray();
         Assert.NotEmpty(reads);
         Assert.Null(reads[0].Tx);
-        Assert.Contains(reads, r => r.Tx is not null);
+        AssertAuditedWriteUsesReservedReadTransaction(probe);
         Assert.DoesNotContain(probe.Observations, o => o.Kind == "CriteriaRead");
         Assert.Contains(probe.Observations, o => o.Kind == "TaskUpdate");
+    }
+
+    private static void AssertAuditedWriteUsesReservedReadTransaction(GateSpanProbe probe)
+    {
+        var reads = probe.Observations.Where(o => o.Kind == "TaskRead" && o.Tx is not null).ToArray();
+        var writes = probe.Observations.Where(o => o.Kind == "TaskUpdate").ToArray();
+        var audits = probe.Observations.Where(o => o.Kind == "AuditInsert").ToArray();
+        Assert.NotEmpty(reads);
+        Assert.NotEmpty(writes);
+        Assert.NotEmpty(audits);
+        var transaction = reads[0].Tx;
+        Assert.All(reads, read => Assert.Same(transaction, read.Tx));
+        Assert.All(writes, write => Assert.Same(transaction, write.Tx));
+        Assert.All(audits, audit => Assert.Same(transaction, audit.Tx));
     }
 
     /// <summary>Drag-to-Done through MoveOnBoardAsync also runs the DoD gate inside the same transaction, so the board path cannot bypass it either.</summary>

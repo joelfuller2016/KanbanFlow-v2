@@ -119,20 +119,24 @@
     private ElementReference itemsElement;
     private ProjectOutlineInterop? interop;
     private int appliedRevealRequest;
+    private readonly CancellationTokenSource revealCancellation = new();
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
         if (appliedRevealRequest == RevealRequest) return;
         appliedRevealRequest = RevealRequest;
         interop ??= new ProjectOutlineInterop(JS);
-        try { await interop.RevealAsync(itemsElement, RevealRequest, FocusSelection); }
+        try { await interop.RevealAsync(itemsElement, RevealRequest, FocusSelection, revealCancellation.Token); }
+        catch (OperationCanceledException) when (revealCancellation.IsCancellationRequested) { }
         catch (JSDisconnectedException) { }
         catch (ObjectDisposedException) { }
     }
 
     public async ValueTask DisposeAsync()
     {
-        if (interop is not null) await interop.DisposeAsync();
+        revealCancellation.Cancel();
+        try { if (interop is not null) await interop.DisposeAsync(); }
+        finally { revealCancellation.Dispose(); }
     }
 
     private bool IsSelected(OutlineItemKind kind, int id) => Selection == new OutlineItem(kind, id);

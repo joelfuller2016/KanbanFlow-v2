@@ -24,14 +24,9 @@ export async function verifyAuditTransports(base, call, native, stdio) {
   const requirement = await rest(`/api/projects/${project.id}/requirements`, 'POST', { text: 'Audit requirement', taskItemId: task.id });
   const dependency = await rest(`/api/tasks/${task.id}/dependencies`, 'POST', { dependsOnTaskItemId: blocker.id });
   const readAll = async (transport, name, args) => {
-    const events = []; let beforeId; let total;
-    do {
-      const page = await call(transport, name, { ...args, limit: 2, ...(transport === stdio ? { includePage: true } : {}), ...(beforeId ? { beforeId } : {}) });
-      total ??= page.total; events.push(...page.items); beforeId = page.nextBeforeId;
-    } while (beforeId);
-    assert.equal(events.length, total);
-    assert.equal(new Set(events.map(e => e.id)).size, total, 'Paging duplicated or omitted events');
-    return events;
+    return readActivityPages(beforeId => call(transport, name, {
+      ...args, limit: 2, ...(transport === stdio ? { includePage: true } : {}), ...(beforeId ? { beforeId } : {})
+    }));
   };
   const nativeEvents = await readAll(native, 'list_task_activity', { taskId: task.id });
   const wrapperEvents = await readAll(stdio, 'list_task_activity', { taskId: task.id });
@@ -61,4 +56,29 @@ export async function verifyAuditTransports(base, call, native, stdio) {
   const last = await call(native, 'list_project_activity', { projectId: project.id, beforeId: history.at(-1).id });
   assert.equal(last.items.length, 0); assert.equal(last.total, history.length);
   return { projectId: project.id, retainedEvents: history.length, nativeAndStdioPaging: true, cascadingDeletes: true };
+}
+
+// Cursors identify time-ordered rows; IDs need not decrease after historical imports.
+export async function readActivityPages(readPage, maxPages = 10000) {
+  const events = [], cursors = new Set(), ids = new Set();
+  let beforeId, total;
+  for (let pageNumber = 0; pageNumber < maxPages; pageNumber++) {
+    const page = await readPage(beforeId);
+    assert.ok(Number.isInteger(page.total) && page.total >= 0, 'Invalid activity total');
+    total ??= page.total;
+    assert.equal(page.total, total, 'Activity changed during paging verification');
+    for (const event of page.items) {
+      assert.ok(!ids.has(event.id), 'Paging duplicated an event');
+      ids.add(event.id); events.push(event);
+    }
+    const next = page.nextBeforeId;
+    if (next == null) {
+      assert.equal(events.length, total, 'Paging omitted events');
+      return events;
+    }
+    assert.ok(page.items.length > 0, 'Activity cursor continued without any events');
+    assert.ok(Number.isInteger(next) && next > 0 && !cursors.has(next), 'Activity cursor did not advance');
+    cursors.add(next); beforeId = next;
+  }
+  throw new Error(`Activity paging exceeded ${maxPages} pages`);
 }

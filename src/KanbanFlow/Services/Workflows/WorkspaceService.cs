@@ -12,6 +12,36 @@ public sealed partial class WorkspaceService(IDbContextFactory<AppDbContext> fac
 {
     private static readonly JsonSerializerOptions AuditJson = new(JsonSerializerDefaults.Web);
     public static string Hash<T>(T payload) => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(JsonSerializer.Serialize(payload))));
+
+    // Receipt identity ignores JSON object property order. Persisted evidence/scope hashes
+    // deliberately keep their existing format so an upgrade does not invalidate old results.
+    private static string ReceiptHash<T>(T payload)
+    {
+        using var stream = new MemoryStream();
+        using (var writer = new Utf8JsonWriter(stream)) WriteCanonical(writer, JsonSerializer.SerializeToElement(payload));
+        return Convert.ToHexString(SHA256.HashData(stream.ToArray()));
+    }
+
+    private static void WriteCanonical(Utf8JsonWriter writer, JsonElement value)
+    {
+        if (value.ValueKind == JsonValueKind.Object)
+        {
+            writer.WriteStartObject();
+            foreach (var property in value.EnumerateObject().OrderBy(p => p.Name, StringComparer.Ordinal))
+            {
+                writer.WritePropertyName(property.Name);
+                WriteCanonical(writer, property.Value);
+            }
+            writer.WriteEndObject();
+        }
+        else if (value.ValueKind == JsonValueKind.Array)
+        {
+            writer.WriteStartArray();
+            foreach (var item in value.EnumerateArray()) WriteCanonical(writer, item);
+            writer.WriteEndArray();
+        }
+        else value.WriteTo(writer);
+    }
     public static TaskDraft[] Drafts(PlanVersion? plan) => plan is null ? [] : JsonSerializer.Deserialize<TaskDraft[]>(plan.DraftJson)!;
 
     public async Task<List<ProjectSummary>> ProjectsAsync(CancellationToken ct = default)
@@ -171,14 +201,16 @@ public sealed partial class WorkspaceService(IDbContextFactory<AppDbContext> fac
     {
         Required(actor, "Actor", 200);
         Required(key, "Operation key", 100);
-        var hash = Hash(payload);
+        var hash = ReceiptHash(payload);
         await using var db = await factory.CreateDbContextAsync(ct);
         // Microsoft.Data.Sqlite uses BEGIN IMMEDIATE: graph reads and writes share the writer reservation.
         await using var transaction = await db.Database.BeginTransactionAsync(ct);
         var receipt = await db.WorkflowReceipts.SingleOrDefaultAsync(r => r.Actor == actor && r.Operation == operation && r.Key == key, ct);
         if (receipt is not null)
         {
-            if (receipt.PayloadHash != hash) throw new WorkflowException("conflict", "This operation key was already used for different content.");
+            // Retain exact-payload retries for receipts written before canonical hashing.
+            if (receipt.PayloadHash != hash && receipt.PayloadHash != Hash(payload))
+                throw new WorkflowException("conflict", "This operation key was already used for different content.");
             return JsonSerializer.Deserialize<T>(receipt.ResultJson)!;
         }
         var result = await write(db);

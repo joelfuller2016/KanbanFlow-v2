@@ -1,6 +1,6 @@
 # Native in-process MCP server
 
-September 6, 2026 update: actual transport discovery returns **33 native tools** and **54 wrapper tools**. [Request workflows](request-workflow.md#mcp-and-rest-reference) add four shared tools in `WorkspaceMcpTools`; native task reads now include comments and native field updates use the existing task service. The historical prototype notes below explain the original implementation, not its current inventory.
+Historical September 6, 2026 transport discovery returned **33 native tools** and **54 wrapper tools**. Current source declares **36 native tools** (32 in `KanbanMcpTools`, four in `WorkspaceMcpTools`) and 54 wrapper tools. The September 14 verification did not rerun live discovery, so these source counts are not a fresh transport result. [Request workflows](request-workflow.md#mcp-and-rest-reference) add four shared tools in `WorkspaceMcpTools`; native task reads now include comments and native field updates use the existing task service. The historical prototype notes below explain the original implementation, not its current inventory.
 
 This documents the prototype that hosts an **MCP server inside the same ASP.NET Core
 process** as the REST API and Blazor UI — proving we can eventually retire the Node.js

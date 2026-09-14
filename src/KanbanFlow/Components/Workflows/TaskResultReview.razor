@@ -17,7 +17,7 @@
             {
                 @foreach (var criterion in Task.AcceptanceCriteria)
                 {
-                    <label class="d-block"><input type="checkbox" checked="@confirmed.Contains((evidence.Id, criterion.Id))" @onchange="e => Confirm(evidence.Id, criterion.Id, e)" /> I reviewed: @criterion.Text</label>
+                    <label @key="(evidence.Id, criterion.Id)" class="d-block"><input type="checkbox" checked="@confirmed.Contains((evidence.Id, criterion.Id))" @onchange="e => Confirm(evidence.Id, criterion.Id, e)" /> I reviewed: @criterion.Text</label>
                 }
                 <button class="btn btn-success mt-2" @onclick="() => Accept(evidence.Id)" disabled="@(!Task.AcceptanceCriteria.All(c => confirmed.Contains((evidence.Id, c.Id))))">Accept result and mark Done</button>
             }
@@ -31,7 +31,12 @@
     private string summary = "", checks = "", source = "";
     private readonly HashSet<(Guid, int)> confirmed = [];
     private void Confirm(Guid evidence, int criterion, ChangeEventArgs e) { if (e.Value is true) confirmed.Add((evidence, criterion)); else confirmed.Remove((evidence, criterion)); }
-    private System.Threading.Tasks.Task Report() => OnSubmit.InvokeAsync(new WorkflowSubmission(new() { Operation = "report_result", ItemId = Task.Id, ExpectedVersion = Version, Evidence = new(summary, checks, source) }));
+    private async System.Threading.Tasks.Task Report()
+    {
+        var submission = new WorkflowSubmission(new() { Operation = "report_result", ItemId = Task.Id, ExpectedVersion = Version, Evidence = new(summary, checks, source) });
+        await OnSubmit.InvokeAsync(submission);
+        if (submission.Succeeded) summary = checks = source = "";
+    }
     private System.Threading.Tasks.Task Accept(Guid id) => OnSubmit.InvokeAsync(new WorkflowSubmission(new() { Operation = "accept_result", ItemId = Task.Id, EvidenceId = id, ExpectedVersion = Version,
         CheckedCriterionIds = Task.AcceptanceCriteria.Where(c => confirmed.Contains((id, c.Id))).Select(c => c.Id).ToArray() }));
 }

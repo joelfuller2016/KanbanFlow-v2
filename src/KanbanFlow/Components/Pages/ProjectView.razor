@@ -778,8 +778,11 @@ else
     private int CountOpenAiTasks() => aiContext?.Tasks.Count(t => t.Status != "Done") ?? 0;
 
     private int historyRefreshToken;
+    private int projectLoadGeneration;
     private async Task LoadProject()
     {
+        var generation = ++projectLoadGeneration;
+        var projectId = Id;
         try
         {
             using var db = await DbFactory.CreateDbContextAsync(_cts.Token);
@@ -804,17 +807,20 @@ else
                 .Include(p => p.Requirements)
                     .ThenInclude(r => r.TaskItem)
                 .AsSplitQuery()
-                .FirstOrDefaultAsync(p => p.Id == Id, _cts.Token);
+                .FirstOrDefaultAsync(p => p.Id == projectId, _cts.Token);
 
-            if (_cts.IsCancellationRequested) return;
+            if (_cts.IsCancellationRequested || generation != projectLoadGeneration || Id != projectId) return;
 
             if (loaded is null)
             {
+                project = null;
+                allTasks = [];
                 notFound = true;
                 return;
             }
 
             project = loaded;
+            notFound = false;
             historyRefreshToken++;
             allTasks = project.Features.SelectMany(f => f.Tasks).ToList();
             // Re-narrow after EVERY reload. A drag, a done-toggle, an edit and a delete all end in
@@ -836,7 +842,8 @@ else
         }
         catch (Exception ex)
         {
-            loadError = ex.Message;
+            if (!_cts.IsCancellationRequested && generation == projectLoadGeneration && Id == projectId)
+                loadError = ex.Message;
         }
     }
 
