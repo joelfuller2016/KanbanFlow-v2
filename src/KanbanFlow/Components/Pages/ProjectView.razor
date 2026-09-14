@@ -572,6 +572,8 @@ else
     private string? aiPanelError;
     private AiProjectContext? aiContext;
     private List<AiTaskRecommendation> aiNextTasks = [];
+    private CancellationTokenSource? aiLoadCancellation;
+    private int aiLoadGeneration;
 
     // Requirements are compact by default so the board is visible sooner.
     private bool requirementsExpanded;
@@ -619,9 +621,7 @@ else
             notFound = false;
             loadError = null;
             moveError = null;
-            aiPanelOpen = false;
-            aiContext = null;
-            aiNextTasks = [];
+            CloseAiPanel();
             requirementsExpanded = false;
             deepLinkApplied = false;
             sortablesInitialized = false;
@@ -717,25 +717,28 @@ else
 
     private async Task ShowProjectContextAsync()
     {
-        await LoadAiPanelAsync("Project Context", async client =>
-        {
-            aiContext = await client.GetFromJsonAsync<AiProjectContext>(Nav.ToAbsoluteUri($"/api/projects/{Id}/context"), _cts.Token);
-            aiNextTasks = [];
-        });
+        await LoadAiPanelAsync("Project Context",
+            (client, projectId, ct) => client.GetFromJsonAsync<AiProjectContext>(Nav.ToAbsoluteUri($"/api/projects/{projectId}/context"), ct),
+            context => aiContext = context);
     }
 
     private async Task ShowNextTasksAsync()
     {
-        await LoadAiPanelAsync("Next Tasks", async client =>
-        {
-            var response = await client.GetFromJsonAsync<AiNextTasksResponse>(Nav.ToAbsoluteUri($"/api/projects/{Id}/next-tasks"), _cts.Token);
-            aiNextTasks = response?.Recommendations ?? [];
-            aiContext = null;
-        });
+        await LoadAiPanelAsync("Next Tasks",
+            (client, projectId, ct) => client.GetFromJsonAsync<AiNextTasksResponse>(Nav.ToAbsoluteUri($"/api/projects/{projectId}/next-tasks"), ct),
+            response => aiNextTasks = response?.Recommendations ?? []);
     }
 
-    private async Task LoadAiPanelAsync(string title, Func<HttpClient, Task> load)
+    private async Task LoadAiPanelAsync<T>(string title, Func<HttpClient, int, CancellationToken, Task<T>> load, Action<T> apply)
     {
+        if (_cts.IsCancellationRequested) return;
+        CancelAiLoad();
+        var generation = aiLoadGeneration;
+        var projectId = Id;
+        aiLoadCancellation = CancellationTokenSource.CreateLinkedTokenSource(_cts.Token);
+        var ct = aiLoadCancellation.Token;
+        bool IsCurrent() => !ct.IsCancellationRequested && generation == aiLoadGeneration && Id == projectId;
+
         aiPanelTitle = title;
         aiControlsExpanded = true;
         aiPanelOpen = true;
@@ -751,24 +754,35 @@ else
             // BaseAddress is needed. Disposing the wrapper is safe; the pooled handler
             // is owned by the factory and survives.
             using var client = HttpClientFactory.CreateClient();
-            await load(client);
+            var result = await load(client, projectId, ct);
+            if (IsCurrent()) apply(result);
         }
-        catch (OperationCanceledException)
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
-            // Component disposed during load - expected
+            // Route change, panel close, newer action or component disposal.
         }
         catch (Exception ex)
         {
-            aiPanelError = ex.Message;
+            if (IsCurrent()) aiPanelError = ex.Message;
         }
         finally
         {
-            aiLoading = false;
+            if (IsCurrent()) aiLoading = false;
         }
+    }
+
+    private void CancelAiLoad()
+    {
+        ++aiLoadGeneration;
+        aiLoadCancellation?.Cancel();
+        aiLoadCancellation?.Dispose();
+        aiLoadCancellation = null;
+        aiLoading = false;
     }
 
     private void CloseAiPanel()
     {
+        CancelAiLoad();
         aiPanelOpen = false;
         aiPanelError = null;
         aiContext = null;
@@ -1237,6 +1251,7 @@ else
 
     public async ValueTask DisposeAsync()
     {
+        CancelAiLoad();
         _cts.Cancel();
         _cts.Dispose();
 

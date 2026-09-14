@@ -197,6 +197,13 @@
                 var ct = editCancellation.Token;
                 try { await LoadIdea(id, generation, ct); }
                 catch (OperationCanceledException) when (ct.IsCancellationRequested) { }
+                catch (Exception ex)
+                {
+                    // Superseded loads may also fail after cancellation. Observe their
+                    // exceptions without replacing the current idea's error or draft.
+                    if (!disposed && !ct.IsCancellationRequested && generation == loadGeneration && IsOpen && EditIdeaId == id)
+                        errorMessage = $"Load failed: {ex.Message}";
+                }
                 finally { if (generation == loadGeneration) isLoading = false; }
             }
             else

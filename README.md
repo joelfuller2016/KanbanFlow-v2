@@ -16,7 +16,7 @@
 | **Stack** | .NET 10 · Blazor Server · SQLite (EF Core 10) · Minimal APIs · Node 18+ for the MCP wrapper |
 | **Surfaces** | 6 UI routes · 77 REST endpoints · 36 native MCP tools · 54 Node-wrapper MCP tools |
 | **Sync** | GitHub → board projection, plus one explicit additive board → GitHub issue-create path. Preview is the default; live create requires `--allow-write --task <id>` and a durable journal. No edit/close/delete path — see [Who owns what](#who-owns-what) |
-| **Tests** | 1,567 xUnit · 56 in-app integration · existing Playwright scenarios · 358 script tests · workflow transport/browser verification — [all local, no CI](#deliberate-non-features) |
+| **Tests** | Verified: 1,567 xUnit and 358 script tests. HTTP/native/stdio-to-application integration, full browser checks and human UI acceptance remain unverified — [all local, no CI](#deliberate-non-features) |
 | **Runs at** | `http://127.0.0.1:5123` — localhost only, no auth, no Docker, no cloud |
 | **Log book** | [`docs/BACKLOG.md`](docs/BACKLOG.md) — the authoritative record of what happened |
 | **Deep detail** | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) |
