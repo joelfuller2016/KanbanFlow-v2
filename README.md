@@ -16,7 +16,7 @@
 | **Stack** | .NET 10 · Blazor Server · SQLite (EF Core 10) · Minimal APIs · Node 18+ for the MCP wrapper |
 | **Surfaces** | 6 UI routes · 77 REST endpoints · 36 native MCP tools · 54 Node-wrapper MCP tools |
 | **Sync** | GitHub → board projection, plus one explicit additive board → GitHub issue-create path. Preview is the default; live create requires `--allow-write --task <id>` and a durable journal. No edit/close/delete path — see [Who owns what](#who-owns-what) |
-| **Tests** | 1,554 xUnit · 56 in-app integration · existing Playwright scenarios · 321 script tests · workflow transport/browser verification — [all local, no CI](#deliberate-non-features) |
+| **Tests** | 1,563 xUnit · 56 in-app integration · existing Playwright scenarios · 348 script tests · workflow transport/browser verification — [all local, no CI](#deliberate-non-features) |
 | **Runs at** | `http://127.0.0.1:5123` — localhost only, no auth, no Docker, no cloud |
 | **Log book** | [`docs/BACKLOG.md`](docs/BACKLOG.md) — the authoritative record of what happened |
 | **Deep detail** | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) |
@@ -725,10 +725,10 @@ the command beside it — not copied from the previous README, and not copied fr
 | Node-wrapper MCP tools | 54 | Actual stdio `tools/list`; see `scripts/smoke-workflow.mjs` |
 | Blazor routes | 6 | `grep -rn '@page' src/KanbanFlow/Components/ \| sort -u` → `/`, `/Error`, `/ideas`, `/memory`, `/project/{Id:int}`, `/settings` |
 | Razor components | 38 | `find src/KanbanFlow/Components -name '*.razor' \| wc -l` |
-| xUnit tests | 1,541 | `dotnet test tests/KanbanFlow.Tests` |
+| xUnit tests | 1,563 | `dotnet test tests/KanbanFlow.Tests` |
 | In-app integration tests | 56 | `grep -c 'results.Add(await RunTest' src/KanbanFlow/Services/TestRunnerService.cs` (28 API + 22 service + 6 UI) |
 | Playwright e2e scenarios | See scenario registry | `npm run test:ui` (requires a running verification app) |
-| Script unit tests (`scripts/*.mjs`) | 314 | `npm run test:scripts` |
+| Script unit tests (`scripts/*.mjs`) | 348 | `npm run test:scripts` |
 
 Historical inventory corrections from the original README revision: **53 → 60** endpoints (both memory
 endpoints and `GET /api/tasks/{id}/context` were missing from the route list entirely);
