@@ -38,7 +38,7 @@
 
     private void LoadProjectName(string uri)
     {
-        var relativePath = Nav.ToBaseRelativePath(uri);
+        var relativePath = Nav.ToBaseRelativePath(uri).Split('?', '#')[0];
         if (relativePath.StartsWith("project/", StringComparison.OrdinalIgnoreCase))
         {
             var idPart = relativePath["project/".Length..];
