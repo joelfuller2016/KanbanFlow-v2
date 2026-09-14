@@ -1,7 +1,7 @@
 <h3 class="h5">Updates and decisions</h3>
 <form @onsubmit="Save" @onsubmit:preventDefault class="mb-3">
     <label for="message-kind" class="form-label">Type</label><select id="message-kind" class="form-select mb-2" @bind="kind">
-        @foreach (var value in kinds) { <option value="@value">@value</option> }
+        @foreach (var value in kinds) { <option @key="value" value="@value">@value</option> }
     </select>
     <label for="request-message" class="form-label">Message</label><textarea id="request-message" class="form-control mb-2" rows="3" @bind="text" maxlength="50000" required></textarea>
     <button class="btn btn-primary">Add update</button>

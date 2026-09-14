@@ -742,6 +742,10 @@ public static class KanbanMcpTools
         {
             throw new McpException($"Idea {ideaId} not found.");
         }
+        catch (KanbanFlow.Models.Workflows.WorkflowException ex)
+        {
+            throw new McpException($"{ex.Code}: {ex.Message}");
+        }
         catch (ValidationException ex)
         {
             throw new McpException(ex.Message);
@@ -766,6 +770,10 @@ public static class KanbanMcpTools
         catch (IdeaNotFoundException)
         {
             throw new McpException($"Idea {ideaId} not found.");
+        }
+        catch (KanbanFlow.Models.Workflows.WorkflowException ex)
+        {
+            throw new McpException($"{ex.Code}: {ex.Message}");
         }
         catch (ValidationException ex)
         {

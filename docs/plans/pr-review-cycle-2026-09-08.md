@@ -8,9 +8,11 @@ The current request is to obtain CodeRabbit reviews, fix PR findings and commit.
 
 ## Original request
 
+The remaining sections preserve the September 8 scope and results; the September 13 scope above controls this follow-up.
+
 > /gsd So continue through the issues/PR, complete a code code review and fix any issues you find, If its an issue that doesnt have a PR then build the feature and work through the list, the cycle back trhough. Test everything, build ouot the issues into PRs on what you think is more improtant
 
-The earlier merge instruction remains active: review every PR, determine merge order, merge when green and mergeable, then cycle through the remaining PRs.
+The following merge instruction was active for the September 8 cycle only; it is historical and does not apply to the September 13 follow-up: review every PR, determine merge order, merge when green and mergeable, then cycle through the remaining PRs.
 
 ## Refined brief and acceptance
 

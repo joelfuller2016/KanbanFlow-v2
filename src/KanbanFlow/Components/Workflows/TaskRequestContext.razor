@@ -1,3 +1,4 @@
+@implements IDisposable
 @inject WorkspaceService Workflow
 @if (context is not null && task is not null)
 {
@@ -16,16 +17,33 @@
 @code {
     [Parameter] public int TaskId { get; set; }
     private int loadedId;
+    private CancellationTokenSource? loadCancellation;
+    private bool disposed;
     private WorkflowContext? context;
     private WorkflowTaskContext? task;
-    protected override async Task OnParametersSetAsync() { if (loadedId != TaskId) { loadedId = TaskId; await Load(); } }
+    protected override async Task OnParametersSetAsync()
+    {
+        if (loadedId != TaskId) { loadedId = TaskId; context = null; task = null; await Load(); }
+    }
     private async Task Load()
     {
+        if (disposed) return;
+        loadCancellation?.Cancel(); loadCancellation?.Dispose();
+        var source = loadCancellation = new CancellationTokenSource();
+        var ct = source.Token;
         var id = TaskId;
-        var request = await Workflow.GetForTaskAsync(id);
-        if (id != TaskId) return;
-        context = request is null ? null : await Workflow.ContextAsync(request.Id);
-        if (id != TaskId) return;
-        task = context?.Tasks.FirstOrDefault(t => t.TaskId == id);
+        try
+        {
+            var request = await Workflow.GetForTaskAsync(id, ct);
+            var loaded = request is null ? null : await Workflow.ContextAsync(request.Id, ct);
+            if (ct.IsCancellationRequested || disposed || id != TaskId) return;
+            context = loaded;
+            task = context?.Tasks.FirstOrDefault(t => t.TaskId == id);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { }
+    }
+    public void Dispose()
+    {
+        disposed = true; loadCancellation?.Cancel(); loadCancellation?.Dispose();
     }
 }

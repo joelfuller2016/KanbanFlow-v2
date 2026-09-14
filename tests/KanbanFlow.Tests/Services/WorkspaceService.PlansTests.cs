@@ -36,7 +36,8 @@ public sealed partial class WorkspaceServiceTests
     {
         using var f = new WorkflowSqliteTestFactory();
         var request = await f.BriefedAsync();
-        await RejectAsync("invalid", () => f.Service.SavePlanAsync(request.Id, request.Version, drafts, Actor, invalidCase));
+        var error = await RejectAsync("invalid", () => f.Service.SavePlanAsync(request.Id, request.Version, drafts, Actor, invalidCase));
+        if (invalidCase == "null-plan") Assert.Equal("The task list is required.", error.Message);
         var after = await f.LoadAsync(request.Id);
         Assert.Empty(after.Plans);
         Assert.Empty(after.WorkItems);

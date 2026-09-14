@@ -50,8 +50,10 @@ public sealed partial class WorkspaceService
 
         public string PublicationHash(int taskId)
         {
+            var stateHash = StateHash(taskId);
+            RequireCompleteTaskState(stateHash);
             var task = tasks[taskId];
-            return Hash(new { Scope = StateHash(taskId), task.Priority, task.Assignee, task.Status, task.UpdatedAt,
+            return Hash(new { Scope = stateHash, task.Priority, task.Assignee, task.Status, task.UpdatedAt,
                 Checks = task.AcceptanceCriteria.OrderBy(c => c.Id).Select(c => c.Completed) });
         }
 

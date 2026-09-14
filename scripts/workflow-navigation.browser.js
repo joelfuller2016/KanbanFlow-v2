@@ -55,6 +55,15 @@ async page => {
     await panel.getByLabel('Edit task name ' + name, { exact: true }).waitFor();
     assert((await panel.locator('#task-detail-title').innerText()).includes(name), 'Wrong task opened.');
   }
+  async function staysClosed(message) {
+    await panel.waitFor({ state: 'hidden', timeout: 2000 });
+    // A negative check must span Blazor's asynchronous navigation/render work.
+    // An immediate hidden result alone also succeeds before a delayed regression opens it.
+    for (let sample = 0; sample < 10; sample++) {
+      await page.waitForTimeout(50);
+      assert(!(await panel.isVisible()), message);
+    }
+  }
   async function closeTask() {
     await page.getByTestId('task-detail-close-button').click();
     await panel.waitFor({ state: 'hidden' });
@@ -73,14 +82,14 @@ async page => {
   await workspace.getByRole('button', { name: 'Refresh saved details', exact: true }).click();
   await filter.fill('verification');
   await page.waitForURL(url => url.searchParams.get('q') === 'verification');
-  assert(!(await panel.isVisible()), 'An unchanged task query re-opened a dismissed panel.');
+  await staysClosed('An unchanged task query re-opened a dismissed panel.');
   let query = await currentQuery();
   assert(query.task === String(taskA.taskId) && query.request === context.id, 'Filter removed task or request context.');
   await page.getByRole('button', { name: 'Clear filters', exact: true }).click();
   await page.waitForURL(url => !url.searchParams.has('q'));
   query = await currentQuery();
   assert(query.task === String(taskA.taskId) && query.request === context.id, 'Clear removed task or request context.');
-  assert(!(await panel.isVisible()), 'Clear re-opened a dismissed panel.');
+  await staysClosed('Clear re-opened a dismissed panel.');
 
   await workspace.getByRole('button', { name: 'Updates', exact: true }).click();
   await follow('Open task B', taskB.id);
@@ -95,9 +104,9 @@ async page => {
   await showTask(taskA.name);
   await closeTask();
   await follow('Unknown task', 2147483647);
-  assert(!(await panel.isVisible()), 'Unknown task opened a panel.');
+  await staysClosed('Unknown task opened a panel.');
   await follow('Task from another project', foreignTaskId);
-  assert(!(await panel.isVisible()), 'Cross-project task opened a panel.');
+  await staysClosed('Cross-project task opened a panel.');
   await follow('Return to request', null);
   await workspace.getByRole('button', { name: 'Brief', exact: true }).click();
   const draft = 'Retain this unsaved brief when the filter URL changes.';

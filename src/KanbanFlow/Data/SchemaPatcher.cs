@@ -16,7 +16,7 @@ namespace KanbanFlow.Data;
 /// </summary>
 public static class SchemaPatcher
 {
-    /// <summary>Add historical task links without rewriting existing audit rows.</summary>
+    /// <summary>Add historical links and recover keys while leaving saved snapshots unchanged.</summary>
     public static void EnsureActivityContextColumns(DbConnection connection)
     {
         var columns = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -38,6 +38,25 @@ public static class SchemaPatcher
             index.CommandText = $"CREATE INDEX IF NOT EXISTS IX_ActivityEvents_{name}_CreatedAt ON ActivityEvents ({name}, CreatedAt)";
             index.ExecuteNonQuery();
         }
+        if (!columns.Contains("EntityKey"))
+        {
+            using var alter = connection.CreateCommand();
+            alter.CommandText = "ALTER TABLE ActivityEvents ADD COLUMN EntityKey TEXT NULL";
+            alter.ExecuteNonQuery();
+        }
+        using var keys = connection.CreateCommand();
+        keys.CommandText = """
+            CREATE INDEX IF NOT EXISTS IX_ActivityEvents_EntityType_EntityKey_CreatedAt
+            ON ActivityEvents (EntityType, EntityKey, CreatedAt);
+            UPDATE ActivityEvents SET EntityKey = COALESCE(
+                CASE WHEN EntityType = 'WorkRequest' AND json_valid(AfterJson)
+                    THEN NULLIF(CAST(json_extract(AfterJson, '$.requestId') AS TEXT), '00000000-0000-0000-0000-000000000000') END,
+                CASE WHEN json_valid(BeforeJson) THEN CAST(json_extract(BeforeJson, '$.id') AS TEXT) END,
+                CASE WHEN json_valid(AfterJson) THEN CAST(json_extract(AfterJson, '$.id') AS TEXT) END,
+                CASE WHEN EntityType = 'WorkRequest' AND EntityId <> 0 THEN CAST(EntityId AS TEXT) END)
+            WHERE EntityKey IS NULL AND (EntityId = 0 OR EntityType = 'WorkRequest');
+            """;
+        keys.ExecuteNonQuery();
     }
 
     /// <summary>

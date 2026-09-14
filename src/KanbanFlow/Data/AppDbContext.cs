@@ -113,6 +113,7 @@ public class AppDbContext : DbContext
             e.Ignore(a => a.Project);
             e.HasIndex(a => new { a.ProjectId, a.CreatedAt });
             e.HasIndex(a => new { a.EntityType, a.EntityId, a.CreatedAt });
+            e.HasIndex(a => new { a.EntityType, a.EntityKey, a.CreatedAt });
             e.HasIndex(a => new { a.TaskId, a.CreatedAt });
             e.HasIndex(a => new { a.RelatedTaskId, a.CreatedAt });
         });

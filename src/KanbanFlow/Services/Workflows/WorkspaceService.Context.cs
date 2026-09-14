@@ -22,7 +22,10 @@ public sealed partial class WorkspaceService
         foreach (var item in request.WorkItems)
         {
             hashes[item.TaskItemId] = taskSnapshot.StateHash(item.TaskItemId);
-            editTokens[item.TaskItemId] = taskSnapshot.PublicationHash(item.TaskItemId);
+            // Keep corrupt legacy history readable, but never mint a valid edit token
+            // for an incomplete dependency graph. Plan mutations reject this sentinel.
+            editTokens[item.TaskItemId] = hashes[item.TaskItemId] == MissingTaskStateHash
+                ? MissingTaskStateHash : taskSnapshot.PublicationHash(item.TaskItemId);
         }
         var contextHash = ConclusionHash(request, hashes);
         var repositories = await RepositoriesAsync(request.ProjectId, ct);

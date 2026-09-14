@@ -213,9 +213,8 @@ public sealed class DefinitionOfDoneTransactionTests
     }
 
     /// <summary>
-    /// The write lock is scoped to Done-bound transitions. SQLite permits a single pending writer,
-    /// so locking on every status change or every field edit would make unrelated work queue behind
-    /// any other writer for a gate that never runs. A non-Done transition must not take it.
+    /// Non-Done transitions load the entity without a transaction and never read acceptance
+    /// criteria. They still reserve the SQLite writer for the later atomic audit write.
     /// </summary>
     [Fact]
     public async Task NonDoneTransition_ReservesWriterForAuditWithoutRunningDoneGate()
@@ -240,7 +239,7 @@ public sealed class DefinitionOfDoneTransactionTests
         Assert.Contains(probe.Observations, o => o.Kind == "TaskUpdate");
     }
 
-    /// <summary>A field-only edit must not take the writer lock either — see <see cref="UpdateAsync"/>.</summary>
+    /// <summary>A field-only edit loads without a transaction, skips acceptance criteria, then reserves the writer for its atomic audit.</summary>
     [Fact]
     public async Task UpdateAsync_FieldEdit_ReservesWriterForAuditWithoutRunningDoneGate()
     {

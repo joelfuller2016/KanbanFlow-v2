@@ -192,6 +192,14 @@ The outline follow-up at `829ab2ca5ba28c0d5f76759240623ec944f40334` passed a fre
 
 ## Complete content
 
+Activity history accepts `entityType` with either `entityId` (the existing integer identity) or
+`entityKey` (the canonical string key) on `GET /api/projects/{id}/activity` and
+`GET /api/tasks/{id}/activity`. A type alone returns every matching entity in that scope.
+Use the returned `entityKey` to read a particular workflow record by its complete GUID or long
+ID. For example, `/api/projects/12/activity?entityType=WorkRequest&entityKey=<request-guid>&includePage=true`
+returns that request's retained events. Existing integer filters and activity cursors remain
+supported. Schema upgrade fills keys from existing snapshots without changing their full text.
+
 Complete request, task and result text must remain readable in the same board and MCP. The
 [full-content sync and recovery guide](GITHUB-SYNC.md#complete-content-and-legacy-recovery)
 owns the preservation rules, repair command, limits and recovery procedure. TC-509's

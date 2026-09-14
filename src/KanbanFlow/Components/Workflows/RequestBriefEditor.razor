@@ -18,7 +18,7 @@
 <details class="mt-3"><summary>Brief history (@Context.Briefs.Count)</summary>
     @foreach (var brief in Context.Briefs.Reverse())
     {
-        <article class="border-top py-2"><strong>Revision @brief.Number · @brief.Author</strong>
+        <article @key="brief.Id" class="border-top py-2"><strong>Revision @brief.Number · @brief.Author</strong>
             <MarkdownContent Markdown="@($"{brief.Outcome}\n\nScope: {brief.Scope}\n\nConstraints: {brief.Constraints}\n\nAcceptance: {brief.Acceptance}")" />
         </article>
     }

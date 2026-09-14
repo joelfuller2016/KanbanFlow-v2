@@ -55,6 +55,7 @@
                     <path fill-rule="evenodd" d="M4.646 1.646a.5.5 0 0 1 .708 0l6 6a.5.5 0 0 1 0 .708l-6 6a.5.5 0 0 1-.708-.708L10.293 8 4.646 2.354a.5.5 0 0 1 0-.708" />
                 </svg>
             </button>
+        </div>
         <button type="button"
                 class="btn btn-sm btn-primary d-flex align-items-center justify-content-center gap-2 w-100"
                 @onclick="() => OnOpenAddProject.InvokeAsync()"
@@ -66,7 +67,6 @@
             </svg>
             <span>Add Feature / Task</span>
         </button>
-        </div>
     </div>
 
     <div class="project-outline-items" data-testid="outline-items" data-reveal-request="@RevealRequest" @ref="itemsElement">
@@ -164,7 +164,7 @@
         var hasChildren = childFeatures.Count > 0 || feature.Tasks.Count > 0;
         var progressPct = totalCount > 0 ? (int)(100.0 * doneCount / totalCount) : 0;
 
-        <div class="@RowClass(OutlineItemKind.Feature, feature.Id)" style="border-left: 4px solid @GetDepthColor(depth); cursor: pointer;"
+        <div @key="feature.Id" class="@RowClass(OutlineItemKind.Feature, feature.Id)" style="border-left: 4px solid @GetDepthColor(depth); cursor: pointer;"
              data-testid="outline-feature-@feature.Id" @onclick="() => OnOpenEditFeature.InvokeAsync(feature)">
             <div class="card-body p-2">
                 <div class="d-flex align-items-center">
@@ -319,7 +319,7 @@
         var children = parentTask.Subtasks.Where(s => s.ParentSubtaskId == subtask.Id).OrderBy(s => s.SortOrder).ToList();
         var hasChildren = children.Count > 0;
 
-        <div class="@RowClass(OutlineItemKind.Subtask, subtask.Id)" style="border-left: 4px solid @GetDepthColor(depth); @(subtask.Completed ? "opacity: 0.6;" : "") cursor: pointer;"
+        <div @key="subtask.Id" class="@RowClass(OutlineItemKind.Subtask, subtask.Id)" style="border-left: 4px solid @GetDepthColor(depth); @(subtask.Completed ? "opacity: 0.6;" : "") cursor: pointer;"
              data-testid="outline-subtask-@subtask.Id" @onclick="() => OnOpenSubtask.InvokeAsync(subtask)">
             <div class="card-body p-2">
                 <div class="d-flex align-items-center">
@@ -347,7 +347,7 @@
                             class="btn btn-link text-reset text-decoration-none text-start p-0 flex-grow-1 text-truncate small @(subtask.Completed ? "text-decoration-line-through text-muted" : "")"
                             @onclick="() => OnOpenSubtask.InvokeAsync(subtask)"
                             @onclick:stopPropagation="true"
-                            aria-label="Open parent task details for @subtask.Text" aria-current="@Current(OutlineItemKind.Subtask, subtask.Id)"
+                                aria-label="Open subtask details for @subtask.Text" aria-current="@Current(OutlineItemKind.Subtask, subtask.Id)"
                             title="@subtask.Text">@subtask.Text</button>
                     <button type="button" class="outline-action-btn ms-auto"
                             @onclick="() => OnOpenAddSubtaskChild.InvokeAsync(subtask)"

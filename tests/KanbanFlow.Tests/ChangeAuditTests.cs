@@ -55,7 +55,11 @@ public class ChangeAuditTests
             }
         }
 
-        if (failAudit) await Assert.ThrowsAnyAsync<Exception>(DeleteAsync);
+        if (failAudit)
+        {
+            var error = await Assert.ThrowsAsync<SqliteException>(DeleteAsync);
+            Assert.Contains("forced external deletion audit failure", error.Message);
+        }
         else await DeleteAsync();
 
         await using var verify = factory.CreateDbContext();

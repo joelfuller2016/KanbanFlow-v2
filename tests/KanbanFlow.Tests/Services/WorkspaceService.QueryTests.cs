@@ -49,6 +49,7 @@ public sealed class WorkspaceQueryTests(ITestOutputHelper output)
             evidence.Id, item.Task.AcceptanceCriteria.Select(c => c.Id).ToArray(), Actor, "missing-accept"));
         var context = (await factory.Service.ContextAsync(request.Id))!;
         Assert.False(context.Tasks.Single(t => t.Id == item.Id).Evidence.Single().Current);
+        Assert.Equal("missing-task", context.Tasks.Single(t => t.Id == item.Id).EditToken);
         var after = await factory.LoadAsync(request.Id);
         var task = after.WorkItems.Single(t => t.Id == item.Id);
         Assert.Equal(WorkStatus.Todo, task.Task.Status);
@@ -56,6 +57,69 @@ public sealed class WorkspaceQueryTests(ITestOutputHelper output)
         Assert.Null(task.Evidence.Single().AcceptedAt);
         Assert.Equal(request.Version, after.Version);
         Assert.False(await db.WorkflowReceipts.AnyAsync(r => r.Key == "missing-report" || r.Key == "missing-accept"));
+    }
+
+    [Fact]
+    public async Task SaveAndPublish_RejectIncompleteDependencyGraphWithoutChangingPlanOrTasks()
+    {
+        using var factory = new WorkflowSqliteTestFactory();
+        var prerequisite = Draft("Prerequisite");
+        var root = Draft("Root", prerequisite.Id);
+        var request = await factory.PublishedAsync(prerequisite, root);
+        var context = (await factory.Service.ContextAsync(request.Id))!;
+        var revised = new[] { prerequisite, root with { Description = "Revised scope" } };
+        var saved = await factory.Service.SavePlanAsync(request.Id, request.Version, revised, Actor, "valid-replan",
+            expectedTaskStates: context.Tasks.ToDictionary(t => t.TaskId, t => t.EditToken));
+        request = await factory.LoadAsync(request.Id);
+        var rootId = request.WorkItems.Single(t => t.DraftId == root.Id).TaskItemId;
+        await using (var corrupt = factory.CreateDbContext())
+        {
+            await corrupt.Database.OpenConnectionAsync();
+            await corrupt.Database.ExecuteSqlRawAsync("PRAGMA foreign_keys = OFF");
+            await corrupt.Database.ExecuteSqlInterpolatedAsync($"UPDATE TaskDependencies SET DependsOnTaskItemId = {int.MaxValue} WHERE TaskItemId = {rootId}");
+        }
+        var read = (await factory.Service.ContextAsync(request.Id))!;
+        var invalid = await RejectAsync("invalid", () => factory.Service.SavePlanAsync(request.Id, saved.Version, revised, Actor, "invalid-replan",
+            expectedTaskStates: read.Tasks.ToDictionary(t => t.TaskId, t => t.EditToken)));
+        Assert.Contains("missing task", invalid.Message);
+        await RejectAsync("invalid", () => factory.Service.PublishPlanAsync(request.Id, saved.Version,
+            request.Plans.MaxBy(p => p.Number)!.Id, Actor, "invalid-publish"));
+        var after = await factory.LoadAsync(request.Id);
+        Assert.Equal(saved.Version, after.Version);
+        Assert.Equal(2, after.Plans.Count);
+        Assert.Null(after.Plans.MaxBy(p => p.Number)!.PublishedAt);
+        Assert.Equal(root.Description, after.WorkItems.Single(t => t.TaskItemId == rootId).Task.Description);
+        await using var db = factory.CreateDbContext();
+        Assert.False(await db.WorkflowReceipts.AnyAsync(r => r.Key == "invalid-replan" || r.Key == "invalid-publish"));
+    }
+
+    [Theory]
+    [InlineData(12)]
+    [InlineData(100)]
+    public async Task RepublishManyChangedTasks_BatchesDependencyCleanup(int count)
+    {
+        var counter = new QueryCounter();
+        using var factory = new WorkflowSqliteTestFactory(counter);
+        var drafts = Enumerable.Range(0, count).Select(i => Draft($"Task {i}")).ToArray();
+        for (var i = 1; i < count; i++) drafts[i] = drafts[i] with { Dependencies = [drafts[i - 1].Id] };
+        var request = await factory.PublishedAsync(drafts);
+        var read = (await factory.Service.ContextAsync(request.Id))!;
+        var revised = drafts.Select(d => d with { Description = "Reviewed new scope" }).ToArray();
+        var saved = await factory.Service.SavePlanAsync(request.Id, request.Version, revised, Actor, "replan-all",
+            expectedTaskStates: read.Tasks.ToDictionary(t => t.TaskId, t => t.EditToken));
+        request = await factory.LoadAsync(request.Id);
+        counter.Reset();
+        await factory.Service.PublishPlanAsync(request.Id, saved.Version, request.Plans.MaxBy(p => p.Number)!.Id, Actor, "republish-all");
+        // Other domain mutations have their own reads. This is the direct cleanup query
+        // (not an Include/recursive graph read), which must run once for the whole set.
+        var dependencyReads = counter.Reads.Where(sql => sql.Contains("FROM \"TaskDependencies\" AS")
+            && !sql.Contains("JOIN", StringComparison.OrdinalIgnoreCase)
+            && sql.IndexOf("WHERE", StringComparison.Ordinal) is var where && where >= 0
+            && sql[where..].Contains("\"TaskItemId\"", StringComparison.Ordinal)).ToArray();
+        Assert.Single(dependencyReads);
+        var after = await factory.LoadAsync(request.Id);
+        Assert.All(after.WorkItems, t => Assert.Equal("Reviewed new scope", t.Task.Description));
+        Assert.Equal(count - 1, after.WorkItems.Sum(t => t.Task.Dependencies.Count));
     }
 
     [Fact]

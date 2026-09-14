@@ -31,18 +31,25 @@ public sealed class RepositoryPathsTests
     public void Resolve_RejectsPathsOutsideRootOrWithoutExistingGitMetadata(string invalidCase)
     {
         using var f = new WorkflowSqliteTestFactory();
-        var nongit = Path.Combine(f.ScratchDirectory, "not-git");
+        var root = Path.Combine(f.ScratchDirectory, "workspace");
+        Directory.CreateDirectory(Path.Combine(root, ".git"));
+        Directory.CreateDirectory(Path.Combine(root + "-sibling", ".git"));
+        Directory.CreateDirectory(Path.Combine(f.ScratchDirectory, "outside", ".git"));
+        var nongit = Path.Combine(root, "not-git");
         Directory.CreateDirectory(nongit);
         var candidate = invalidCase switch
         {
             "relative" => "relative/repository",
-            "missing" => Path.Combine(f.ScratchDirectory, "missing"),
+            "missing" => Path.Combine(root, "missing"),
             "not-git" => nongit,
-            "root-itself" => f.ScratchDirectory,
-            "sibling-prefix" => f.ScratchDirectory + "-sibling",
-            _ => Path.Combine(f.ScratchDirectory, "..", "outside")
+            "root-itself" => root,
+            "sibling-prefix" => root + "-sibling",
+            _ => Path.Combine(root, "..", "outside")
         };
-        Assert.Equal("invalid", Assert.Throws<WorkflowException>(() => RepositoryPaths.Resolve(candidate, f.ScratchDirectory)).Code);
+        var error = Assert.Throws<WorkflowException>(() => RepositoryPaths.Resolve(candidate, root));
+        Assert.Equal("invalid", error.Code);
+        if (invalidCase is "root-itself" or "sibling-prefix" or "parent-escape")
+            Assert.Equal("The selected path must stay inside the configured workspace root.", error.Message);
     }
 
     [Theory]

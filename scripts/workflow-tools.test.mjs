@@ -112,7 +112,7 @@ for (const [name, args, expected] of [
     const response = await h.send("tools/call", { name, arguments: args });
     assert.equal(response.error, undefined);
     assert.deepEqual(JSON.parse(response.result.content[0].text), expected);
-    assert.deepEqual(response.result.structuredContent, expected);
+    assert.deepEqual(response.result.structuredContent, Array.isArray(expected) ? undefined : expected);
     assert.equal(h.received.length, 1);
     const forwarded = h.received[0];
     assert.equal(forwarded.method, "POST");
@@ -120,6 +120,18 @@ for (const [name, args, expected] of [
     assert.equal(forwarded.headers["mcp-protocol-version"], "2025-06-18");
     assert.equal(forwarded.rpc.method, "tools/call");
     assert.deepEqual(forwarded.rpc.params, { name, arguments: args });
+  });
+}
+
+for (const expected of [null, [1, { full: "text" }], "value", 42, false, { full: "object" }]) {
+  test(`wrapper returns valid MCP content for ${JSON.stringify(expected)}`, async t => {
+    const h = await harness(t, () => ({ message: { result: { content: [{ type: "text", text: JSON.stringify(expected) }] } } }));
+    const response = await h.send("tools/call", { name: "get_request_context", arguments: { requestId } });
+    assert.equal(response.error, undefined);
+    assert.deepEqual(JSON.parse(response.result.content[0].text), expected);
+    if (expected !== null && typeof expected === "object" && !Array.isArray(expected))
+      assert.deepEqual(response.result.structuredContent, expected);
+    else assert.equal(Object.hasOwn(response.result, "structuredContent"), false);
   });
 }
 

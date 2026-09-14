@@ -1,3 +1,4 @@
+@implements IDisposable
 @inject WorkspaceService Workflow
 @inject WorkflowOptions Options
 
@@ -9,9 +10,9 @@
             @if (IdeaId is null)
             {
                 <div class="flex-grow-1"><label class="form-label" for="workflow-select">Request</label>
-                    <select id="workflow-select" class="form-select" value="@current?.Id" @onchange="SelectRequest">
+                    <select id="workflow-select" class="form-select" value="@current?.Id" disabled="@busy" @onchange="SelectRequest">
                         <option value="">Choose a request</option>
-                        @foreach (var request in requests) { <option value="@request.Id">@request.Title · @request.DoneCount/@request.TaskCount done @(request.Archived ? "(archived)" : "")</option> }
+                        @foreach (var request in requests) { <option @key="request.Id" value="@request.Id">@request.Title · @request.DoneCount/@request.TaskCount done @(request.Archived ? "(archived)" : "")</option> }
                     </select>
                 </div>
                 <button class="btn btn-outline-primary" @onclick="() => creating = !creating">New request</button>
@@ -46,7 +47,7 @@
                 <div class="d-flex gap-2 mb-3 align-items-end">
                     <div class="flex-grow-1"><label for="request-project" class="form-label">Project</label><select id="request-project" class="form-select" @bind="attachProject">
                         <option value="0">Choose an existing project</option>
-                        @foreach (var project in projects) { <option value="@project.Id">@project.Name</option> }
+                        @foreach (var project in projects) { <option @key="project.Id" value="@project.Id">@project.Name</option> }
                     </select></div>
                     <button class="btn btn-outline-primary" @onclick="Attach" disabled="@(busy || attachProject == 0)">Promote into project</button>
                     <button class="btn btn-outline-primary" @onclick="CreateProject" disabled="@busy">Create project from request</button>
@@ -76,11 +77,18 @@
     private string? error, notice;
     private int attachProject;
     private int _refreshGen;
+    private CancellationTokenSource scopeCancellation = new();
+    private CancellationTokenSource? readCancellation;
+    private bool disposed;
 
     protected override async Task OnParametersSetAsync()
     {
         var scope = (ProjectId, IdeaId, RequestId);
-        if (!initialized || loaded != scope) { initialized = true; loaded = scope; current = null; await Refresh(); }
+        if (!initialized || loaded != scope)
+        {
+            scopeCancellation.Cancel(); scopeCancellation.Dispose(); scopeCancellation = new();
+            initialized = true; loaded = scope; current = null; await Refresh();
+        }
     }
     protected override void OnAfterRender(bool firstRender)
     {
@@ -94,42 +102,70 @@
     private async Task Refresh()
     {
         var gen = ++_refreshGen;
+        var ct = BeginRead();
         try
         {
-            var reqs = await Workflow.RequestsAsync(ProjectId);
-            var projs = await Workflow.ProjectsAsync();
+            var reqs = await Workflow.RequestsAsync(ProjectId, ct);
+            var projs = await Workflow.ProjectsAsync(ct);
             var id = current?.Id ?? RequestId;
-            if (IdeaId is int ideaId) id = (await Workflow.GetForIdeaAsync(ideaId))?.Id;
-            var ctx = id is Guid requestId ? await Workflow.ContextAsync(requestId) : null;
+            if (IdeaId is int ideaId) id = (await Workflow.GetForIdeaAsync(ideaId, ct))?.Id;
+            var ctx = id is Guid requestId ? await Workflow.ContextAsync(requestId, ct) : null;
             if (ctx is not null && ProjectId is int projectId && ctx.ProjectId != projectId) ctx = null;
             if (gen != _refreshGen) return;
             requests = reqs; projects = projs; current = ctx;
             error = null;
         }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { }
         catch (Exception ex) when (ex is WorkflowException or InvalidOperationException) { if (gen == _refreshGen) error = ex.Message; }
     }
     private async Task SelectRequest(ChangeEventArgs e)
     {
-        current = Guid.TryParse(e.Value?.ToString(), out var id) ? await Workflow.ContextAsync(id) : null;
-        error = notice = null;
+        var gen = ++_refreshGen;
+        var ct = BeginRead();
+        try
+        {
+            var context = Guid.TryParse(e.Value?.ToString(), out var id) ? await Workflow.ContextAsync(id, ct) : null;
+            if (gen != _refreshGen || disposed) return;
+            current = context;
+            error = notice = null;
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { }
+        catch (WorkflowException ex) { if (gen == _refreshGen) error = ex.Message; }
+    }
+    private CancellationToken BeginRead()
+    {
+        readCancellation?.Cancel(); readCancellation?.Dispose();
+        readCancellation = CancellationTokenSource.CreateLinkedTokenSource(scopeCancellation.Token);
+        return readCancellation.Token;
+    }
+    public void Dispose()
+    {
+        disposed = true; ++_refreshGen;
+        scopeCancellation.Cancel(); readCancellation?.Cancel();
+        readCancellation?.Dispose(); scopeCancellation.Dispose();
     }
     private async Task Submit(WorkflowSubmission submission)
     {
         if (busy) return;
         busy = true; error = notice = null;
+        var ct = scopeCancellation.Token;
         try
         {
             var command = submission.Command;
             command.Actor = actor; command.Key = string.IsNullOrEmpty(command.Key) ? Guid.NewGuid().ToString() : command.Key;
             command.RequestId ??= current?.Id; command.ExpectedVersion ??= current?.Version;
-            var result = await Workflow.ExecuteAsync(command, Options);
-            if (result.RequestId is Guid id) current = await Workflow.ContextAsync(id);
+            var result = await Workflow.ExecuteAsync(command, Options, ct);
+            var updated = result.RequestId is Guid id ? await Workflow.ContextAsync(id, ct) : current;
+            ct.ThrowIfCancellationRequested();
+            current = updated;
             await Refresh();
+            ct.ThrowIfCancellationRequested();
             submission.Succeeded = true; submission.Version = result.Version; submission.Context = current; notice = "Saved to this board.";
             await OnChanged.InvokeAsync();
         }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { }
         catch (Exception ex) when (ex is WorkflowException or ValidationException or DefinitionOfDoneNotMetException or ProjectNotFoundException or IdeaNotFoundException)
-        { error = ex.Message; }
+        { if (!ct.IsCancellationRequested) error = ex.Message; }
         finally { busy = false; }
     }
     private async Task Capture()
@@ -143,11 +179,14 @@
     private Task Archive() => Submit(new(new() { Operation = "archive", Archived = !current!.Archived }));
     private async Task CreateProject()
     {
+        var ct = scopeCancellation.Token;
         try
         {
-            var id = await Workflow.CreateProjectAsync(current!.Title, actor, $"request-project-{current.Id}");
+            var id = await Workflow.CreateProjectAsync(current!.Title, actor, $"request-project-{current.Id}", ct);
+            ct.ThrowIfCancellationRequested();
             attachProject = id; await Attach();
         }
-        catch (WorkflowException ex) { error = ex.Message; }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { }
+        catch (WorkflowException ex) { if (!ct.IsCancellationRequested) error = ex.Message; }
     }
 }

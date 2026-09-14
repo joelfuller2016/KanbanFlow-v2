@@ -236,6 +236,16 @@ test("content restoration honors immutable repository and task identity before a
   assert.equal(valid.getTask().name, "Human renamed title");
 });
 
+test("content restoration recovers an omitted header after sync removed the issue number from its title", async () => {
+  const description = "<!-- kanbanflow-sync -->\n**Issue:** (provenance omitted: header exceeded description budget)\n<!-- /kanbanflow-sync -->";
+  const link = { id: 1, taskId: 7, provider: "GitHub", state: "Active",
+    repositoryExternalId: "R_restore", externalNodeId: "I_488", externalNumber: 488 };
+  const io = fixture({ taskChanges: { name: "Plain synced title", description, externalLinks: [link] } });
+  await restoreContent("owner/repository", { dryRun: false, actor: "repair" }, io);
+  assert.equal(bodyOf(io.getTask().description), io.source.body);
+  assert.equal(io.getTask().name, "Plain synced title");
+});
+
 test("content restoration refuses ambiguous provenance and newly quarantined links", async () => {
   const initial = legacy(`old\n\n${FOOTER}`);
   for (const description of [

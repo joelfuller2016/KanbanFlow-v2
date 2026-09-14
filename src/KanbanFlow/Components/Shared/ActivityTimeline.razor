@@ -127,7 +127,7 @@
                         @if (entry.BeforeDetails is not null || entry.AfterDetails is not null)
                         {
                             <details class="small mt-1" data-testid="activity-saved-details">
-                                <summary>Saved details</summary>
+                                <summary aria-label="Saved details for @entry.Subject, @entry.Badge, event @entry.SourceId">Saved details</summary>
                                 @if (entry.BeforeDetails is not null)
                                 {
                                     <div class="fw-semibold">Before</div>
@@ -177,6 +177,7 @@
     [Parameter] public int? ProjectId { get; set; }
     [Parameter] public string? EntityType { get; set; }
     [Parameter] public int? EntityId { get; set; }
+    [Parameter] public string? EntityKey { get; set; }
 
     /// <summary>
     /// Comments, owned by the parent (both parents already load and mutate them — e.g. an
@@ -219,11 +220,12 @@
     // Guards against a stale in-flight load overwriting a newer one when the user opens task A
     // then immediately task B.
     private int loadVersion;
-    private (int? Task, int? Project, string? Type, int? Entity)? loadedScope;
+    private CancellationTokenSource? loadCancellation;
+    private (int? Task, int? Project, string? Type, int? Entity, string? Key)? loadedScope;
 
     protected override void OnParametersSet()
     {
-        var scope = (Task: TaskId, Project: ProjectId, Type: EntityType, Entity: EntityId);
+        var scope = (Task: TaskId, Project: ProjectId, Type: EntityType, Entity: EntityId, Key: EntityKey);
 
         if (scope != loadedScope || RefreshToken != loadedRefreshToken)
         {
@@ -246,10 +248,12 @@
             events = [];
             totalEvents = 0;
             loadFailed = false;
-            if (scope.Task is > 0 || scope.Project is > 0 || scope.Entity is > 0)
+            if (scope.Task is > 0 || scope.Project is > 0 || scope.Entity is > 0 || scope.Type is not null || scope.Key is not null)
                 _ = LoadEventsAsync(scope, ++loadVersion);
             else
-                loadVersion++;
+            {
+                loadVersion++; loadCancellation?.Cancel();
+            }
         }
 
         // The merge itself is pure and cheap — rebuild every parameter set so an optimistically
@@ -259,17 +263,21 @@
 
     private int loadedRefreshToken = -1;
 
-    private async Task LoadEventsAsync((int? Task, int? Project, string? Type, int? Entity) scope, int version)
+    private async Task LoadEventsAsync((int? Task, int? Project, string? Type, int? Entity, string? Key) scope, int version)
     {
+        if (disposed) return;
+        loadCancellation?.Cancel(); loadCancellation?.Dispose();
+        var source = loadCancellation = new CancellationTokenSource();
+        var ct = source.Token;
         try
         {
-            await using var db = await DbFactory.CreateDbContextAsync();
-            var query = ActivityLogReader.Query(db, scope.Project, scope.Task, scope.Type, scope.Entity);
+            await using var db = await DbFactory.CreateDbContextAsync(ct);
+            var query = ActivityLogReader.Query(db, scope.Project, scope.Task, scope.Type, scope.Entity, scope.Key);
 
             // The total is what makes the "showing N of M" boundary honest — without it the panel
             // cannot tell a complete history from a truncated one, and would claim completeness
             // it does not have.
-            var total = await query.CountAsync();
+            var total = await query.CountAsync(ct);
 
             // Same predicate the REST surface serves at GET /api/tasks/{id}/activity
             // (ApiEndpoints.cs:522-540), with an Id tiebreak: ordering by CreatedAt ALONE is
@@ -280,12 +288,13 @@
                 .OrderByDescending(e => e.CreatedAt)
                 .ThenByDescending(e => e.Id)
                 .Take(eventLimit)
-                .ToListAsync();
+                .ToListAsync(ct);
 
             if (version != loadVersion) return;   // superseded by a newer open
             events = loaded;
             totalEvents = total;
         }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { return; }
         catch (Exception ex)
         {
             if (version != loadVersion) return;
@@ -310,7 +319,10 @@
 
     private bool disposed;
 
-    public void Dispose() => disposed = true;
+    public void Dispose()
+    {
+        disposed = true; ++loadVersion; loadCancellation?.Cancel(); loadCancellation?.Dispose();
+    }
 
     /// <summary>
     /// Raises the audit-event window and re-reads. Offset-style paging by a growing take: this

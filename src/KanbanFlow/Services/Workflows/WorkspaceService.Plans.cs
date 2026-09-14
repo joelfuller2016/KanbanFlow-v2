@@ -101,9 +101,10 @@ public sealed partial class WorkspaceService
             await InvalidateDependentsAsync(db, request, changed.Select(w => w.TaskItemId).Where(taskId => taskId != 0).ToHashSet(), actor, ct);
             // IDs become available here; the surrounding transaction still owns every write and receipt.
             await db.SaveChangesWithAuditAsync(actor, ct);
-            foreach (var item in changed)
+            var changedIds = changed.Select(item => item.TaskItemId).ToArray();
+            if (changedIds.Length > 0)
             {
-                var oldEdges = await db.TaskDependencies.Where(d => d.TaskItemId == item.TaskItemId).ToListAsync(ct);
+                var oldEdges = await db.TaskDependencies.Where(d => changedIds.Contains(d.TaskItemId)).ToListAsync(ct);
                 db.TaskDependencies.RemoveRange(oldEdges);
             }
             await db.SaveChangesWithAuditAsync(actor, ct);
@@ -127,7 +128,8 @@ public sealed partial class WorkspaceService
 
     public static void ValidatePlan(TaskDraft[]? drafts)
     {
-        if (drafts is null || drafts.Length > 100) throw Invalid("A plan supports up to 100 tasks.");
+        if (drafts is null) throw Invalid("The task list is required.");
+        if (drafts.Length > 100) throw Invalid("A plan supports up to 100 tasks.");
         if (drafts.Any(d => d is null || d.Id == Guid.Empty) || drafts.Select(d => d.Id).Distinct().Count() != drafts.Length)
             throw Invalid("Each task draft needs a distinct non-empty identity.");
         var lookup = drafts.ToDictionary(d => d.Id);

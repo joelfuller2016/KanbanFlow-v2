@@ -247,6 +247,27 @@ public sealed partial class WorkspaceServiceTests
     }
 
     [Fact]
+    public async Task Requests_BelowCap_KeepsAllActiveRequestsAheadOfNewerArchivedRequest()
+    {
+        using var f = new WorkflowSqliteTestFactory();
+        var now = f.Clock.GetUtcNow().UtcDateTime;
+        var rows = Enumerable.Range(0, 4).Select(i => new WorkRequest
+        {
+            Title = $"Request {i}", Idea = new Idea { Title = $"Request {i}" },
+            Archived = i == 3, CreatedAt = now, UpdatedAt = now.AddMinutes(i)
+        }).ToArray();
+        await using (var db = f.CreateDbContext())
+        {
+            db.WorkRequests.AddRange(rows);
+            await db.SaveChangesAsync();
+        }
+        var listed = await f.Service.RequestsAsync();
+        Assert.Equal(new[] { rows[2].Id, rows[1].Id, rows[0].Id, rows[3].Id }, listed.Select(r => r.Id));
+        Assert.All(listed.Take(3), r => Assert.False(r.Archived));
+        Assert.True(listed[^1].Archived);
+    }
+
+    [Fact]
     public async Task AttachProject_CannotMovePublishedTasksToAnotherProject()
     {
         using var f = new WorkflowSqliteTestFactory();

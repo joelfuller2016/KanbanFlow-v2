@@ -144,7 +144,7 @@ to hand-edit.
 
 #231 tracks retiring the Node stdio wrapper (`scripts/mcp-server.mjs`) in favour of the
 in-process native `/mcp` server. **Until that cutover the Node wrapper remains the production
-tool surface** — currently **50 tools** (11 read + 10 authoring + 5 subtask + 5 acceptance-criterion
+tool surface** — **50 tools before the workflow additions, now 54 tools** (11 read + 10 authoring + 5 subtask + 5 acceptance-criterion
 + 3 dependency + 2 activity + 5 idea + 9 knowledge-graph).
 
 > Historical counts elsewhere are stale: this file's "41-tool surface" (above) and some issues'

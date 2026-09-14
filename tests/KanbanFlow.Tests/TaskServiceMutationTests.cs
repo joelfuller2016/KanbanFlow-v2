@@ -348,7 +348,8 @@ public sealed class TaskServiceMutationTests
         Assert.Equal(0, await db.ActivityEvents.CountAsync(e => e.EventType == "TaskClaimRenewed"));
         var heartbeat = await db.ActivityEvents.SingleAsync(e => e.EventType == "TaskClaimHeartbeat");
         Assert.Equal("alice", heartbeat.Actor);
-        Assert.Contains("claimedAt", heartbeat.BeforeJson!);
+        using var heartbeatBefore = System.Text.Json.JsonDocument.Parse(heartbeat.BeforeJson!);
+        Assert.Equal(firstClaimedAt, heartbeatBefore.RootElement.GetProperty("claimedAt").GetDateTime());
     }
 
     [Fact]
@@ -563,7 +564,7 @@ public sealed class TaskServiceMutationTests
         Assert.DoesNotContain("SortOrder", note.Text);
     }
 
-    // #88 guard: a SortOrder-only update saves the row + bumps UpdatedAt but writes ZERO audit.
+    // A SortOrder-only update persists its rank change and a TaskReordered audit event.
     [Fact]
     public async Task Update_SortOrderOnlyChange_PersistsWithReorderAudit()
     {
@@ -585,7 +586,8 @@ public sealed class TaskServiceMutationTests
         var reordered = await db.ActivityEvents.SingleAsync(e => e.EntityId == taskId);
         Assert.Equal("TaskReordered", reordered.EventType);
         Assert.Equal("svc-test", reordered.Actor);
-        Assert.Contains("sortOrder", reordered.BeforeJson!);
+        using var reorderBefore = System.Text.Json.JsonDocument.Parse(reordered.BeforeJson!);
+        Assert.Equal(5d, reorderBefore.RootElement.GetProperty("sortOrder").GetDouble());
         Assert.Equal(0, await db.TaskComments.CountAsync(c => c.TaskItemId == taskId));
     }
 

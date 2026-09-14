@@ -6,6 +6,8 @@ public class ActivityEvent
     public int ProjectId { get; set; }
     public required string EntityType { get; set; }
     public int EntityId { get; set; }
+    // Canonical key for Guid/long workflow records; EntityId remains the legacy integer surface.
+    public string? EntityKey { get; set; }
     // Historical context only: no FKs, so child history survives task deletion/reassignment.
     public int? TaskId { get; set; }
     public int? RelatedTaskId { get; set; }

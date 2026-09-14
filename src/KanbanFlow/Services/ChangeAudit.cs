@@ -1,3 +1,5 @@
+using System.Globalization;
+using System.Reflection;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using KanbanFlow.Data;
@@ -34,12 +36,13 @@ public static class ChangeAudit
 
         try
         {
+            var persisted = await ReadPersistedValuesAsync(db, entries, ct);
             var pending = new List<Pending>();
             foreach (var entry in entries)
             {
                 var state = entry.State;
                 var type = entry.Entity is TaskItem ? "Task" : entry.Metadata.ClrType.Name;
-                var beforeValues = state == EntityState.Added ? null : await entry.GetDatabaseValuesAsync(ct);
+                var beforeValues = persisted.GetValueOrDefault(entry);
                 if (state != EntityState.Added && beforeValues is null) continue; // the normal save reports the stale write
                 var before = beforeValues is null ? null : Snapshot(beforeValues);
                 var after = state == EntityState.Deleted ? null : before is null ? Snapshot(entry.CurrentValues) : new Dictionary<string, object?>(before);
@@ -61,15 +64,17 @@ public static class ChangeAudit
                 var id = entry.Property("Id").CurrentValue;
                 // Established Task/Idea/etc. services retain their semantic event and comment
                 // contracts. Their event already describes this write; do not add a duplicate.
-                var semanticEvents = id is int intId ? db.ChangeTracker.Entries<ActivityEvent>().Where(e => e.State == EntityState.Added &&
-                    e.Entity.EntityType == type && e.Entity.EntityId == intId &&
-                    e.Entity.EventType != "TaskCommentAdded" && e.Entity.EventType != "TaskDoneOverridden").ToList() : [];
+                var entityKey = EntityKey(id!);
+                var semanticEvents = db.ChangeTracker.Entries<ActivityEvent>().Where(e => e.State == EntityState.Added &&
+                    e.Entity.EntityType == type && (e.Entity.EntityKey == entityKey || (id is int intId && e.Entity.EntityId == intId)) &&
+                    e.Entity.EventType != "TaskCommentAdded" && e.Entity.EventType != "TaskDoneOverridden").ToList();
                 if (semanticEvents.Count > 0)
                 {
                     // Keep the semantic contract, but reconcile it with persisted values. An
                     // ordinary edit may have read before another client changed an untouched field.
                     foreach (var semantic in semanticEvents)
                     {
+                        semantic.Entity.EntityKey = entityKey;
                         semantic.Entity.BeforeJson = Reconcile(semantic.Entity.BeforeJson, before);
                         semantic.Entity.AfterJson = Reconcile(semantic.Entity.AfterJson, after);
                         if (string.IsNullOrWhiteSpace(semantic.Entity.Actor)) semantic.Entity.Actor = attribution;
@@ -77,21 +82,25 @@ public static class ChangeAudit
                     continue;
                 }
 
-                var context = await ContextAsync(db, type, after ?? before!, before, ct);
-                pending.Add(new(entry, state, type, before, after, context));
+                pending.Add(new(entry, state, type, before, after));
             }
+
+            var contexts = await ContextLookup.LoadAsync(db, pending.SelectMany(p => new[] { p.Before, p.After }), ct);
 
             // Keep entity states unaccepted until BOTH the data and its audit rows commit.
             // Raw parameterized inserts avoid a second SaveChanges resubmitting pending entities.
             var affected = await db.SaveChangesAsync(acceptAllChangesOnSuccess: false, ct);
+            var addedContexts = await ContextLookup.LoadAsync(db, pending.Where(p => p.State == EntityState.Added)
+                .Select(p => Snapshot(p.Entry.CurrentValues)), ct);
             foreach (var change in pending)
             {
                 var after = change.After;
                 if (change.State == EntityState.Added) after = Snapshot(change.Entry.CurrentValues);
                 var values = after ?? change.Before!;
                 var id = values["id"] is int intId ? intId : 0;
-                var context = change.State == EntityState.Added
-                    ? await ContextAsync(db, change.Type, values, null, ct) : change.Context;
+                var entityKey = EntityKey(values["id"]!);
+                var context = (change.State == EntityState.Added ? addedContexts : contexts)
+                    .Resolve(change.Type, values, change.Before);
                 var action = change.State switch { EntityState.Added => "Created", EntityState.Deleted => "Deleted", _ => "Updated" };
                 var eventType = change.Type == "Task" && change.State == EntityState.Modified &&
                     change.Before!.Any(p => p.Key == "sortOrder" && !Equals(p.Value, after![p.Key])) ? "TaskReordered" : change.Type + action;
@@ -101,8 +110,8 @@ public static class ChangeAudit
                 var afterJson = after is null ? null : JsonSerializer.Serialize(after, Json);
                 var now = DateTime.UtcNow;
                 await db.Database.ExecuteSqlInterpolatedAsync($"""
-                    INSERT INTO ActivityEvents (ProjectId, EntityType, EntityId, TaskId, RelatedTaskId, Actor, EventType, BeforeJson, AfterJson, Message, CreatedAt)
-                    VALUES ({context.ProjectId}, {change.Type}, {id}, {context.TaskId}, {context.RelatedTaskId}, {attribution}, {eventType}, {beforeJson}, {afterJson}, {message}, {now})
+                    INSERT INTO ActivityEvents (ProjectId, EntityType, EntityId, EntityKey, TaskId, RelatedTaskId, Actor, EventType, BeforeJson, AfterJson, Message, CreatedAt)
+                    VALUES ({context.ProjectId}, {change.Type}, {id}, {entityKey}, {context.TaskId}, {context.RelatedTaskId}, {attribution}, {eventType}, {beforeJson}, {afterJson}, {message}, {now})
                     """, ct);
             }
             if (owned is not null) await owned.CommitAsync(ct);
@@ -154,35 +163,95 @@ public static class ChangeAudit
     private static string Key(string name) => JsonNamingPolicy.CamelCase.ConvertName(name);
     private static int? Int(Dictionary<string, object?> values, string key) => values.GetValueOrDefault(key) is int id && id > 0 ? id : null;
 
-    private static async Task<AuditContext> ContextAsync(AppDbContext db, string type, Dictionary<string, object?> values,
-        Dictionary<string, object?>? before, CancellationToken ct)
+    private static string EntityKey(object id) => id is Guid guid ? guid.ToString("D")
+        : Convert.ToString(id, CultureInfo.InvariantCulture)!;
+
+    private static readonly MethodInfo ReadBatchMethod = typeof(ChangeAudit).GetMethod(nameof(ReadBatchAsync), BindingFlags.NonPublic | BindingFlags.Static)!;
+
+    // Read fresh values once per entity type, inside the writer transaction. Using tracked
+    // originals for deletes would silently record stale data when another editor saved first.
+    private static async Task<Dictionary<EntityEntry, PropertyValues>> ReadPersistedValuesAsync(
+        AppDbContext db, IEnumerable<EntityEntry> entries, CancellationToken ct)
     {
-        var taskId = type == "Task" ? Int(values, "id")
-            : type == nameof(ExternalWorkItemLink) ? Int(values, "taskId") : Int(values, "taskItemId");
-        var previousTaskId = before is null ? null : Int(before, "taskItemId");
-        var relatedTaskId = Int(values, "dependsOnTaskItemId") ?? (previousTaskId != taskId ? previousTaskId : null);
-        taskId ??= previousTaskId;
-        var projectId = type == "Project" ? Int(values, "id") : Int(values, "projectId");
-        if (projectId is null && before is not null) projectId = Int(before, "projectId");
-        if (type == "Idea") projectId = Int(values, "promotedProjectId") ?? (before is null ? null : Int(before, "promotedProjectId"));
-        var featureId = type == "Feature" ? Int(values, "id") : Int(values, "featureId");
-        if (projectId is null && taskId is int task)
-            projectId = await db.Tasks.Where(t => t.Id == task).Select(t => (int?)t.Feature.ProjectId).FirstOrDefaultAsync(ct);
-        if (projectId is null && featureId is int feature)
-            projectId = await db.Features.Where(f => f.Id == feature).Select(f => (int?)f.ProjectId).FirstOrDefaultAsync(ct);
-        if (projectId is null && values.GetValueOrDefault("requestId") is Guid requestId)
-            projectId = await db.WorkRequests.Where(r => r.Id == requestId).Select(r => r.ProjectId).FirstOrDefaultAsync(ct);
-        if (type == "TaskEvidence" && values.GetValueOrDefault("workItemId") is Guid workItemId)
+        var result = new Dictionary<EntityEntry, PropertyValues>();
+        foreach (var group in entries.Where(e => e.State != EntityState.Added).GroupBy(e => e.Metadata))
         {
-            var parent = await db.PlannedTasks.Where(w => w.Id == workItemId)
-                .Select(w => new { w.TaskItemId, ProjectId = w.Task.Feature.ProjectId }).FirstOrDefaultAsync(ct);
-            taskId = parent?.TaskItemId;
-            projectId = parent?.ProjectId;
+            var batch = group.ToArray();
+            var read = ReadBatchMethod.MakeGenericMethod(group.Key.ClrType, group.Key.FindProperty("Id")!.ClrType);
+            var values = await (Task<Dictionary<object, PropertyValues>>)read.Invoke(null, [db, batch, ct])!;
+            foreach (var entry in batch)
+                if (values.TryGetValue(entry.Property("Id").CurrentValue!, out var snapshot)) result.Add(entry, snapshot);
         }
-        return new(projectId ?? 0, taskId, relatedTaskId);
+        return result;
+    }
+
+    private static async Task<Dictionary<object, PropertyValues>> ReadBatchAsync<TEntity, TKey>(
+        AppDbContext db, EntityEntry[] entries, CancellationToken ct) where TEntity : class where TKey : notnull
+    {
+        var keys = entries.Select(e => (TKey)e.Property("Id").CurrentValue!).Distinct().ToArray();
+        var rows = await db.Set<TEntity>().AsNoTracking().Where(e => keys.Contains(EF.Property<TKey>(e, "Id"))).ToListAsync(ct);
+        return rows.Select(e => db.Entry(e).CurrentValues).ToDictionary(v => v["Id"]!, v => v);
+    }
+
+    private sealed class ContextLookup
+    {
+        private readonly Dictionary<int, int?> tasks = [];
+        private readonly Dictionary<int, int?> features = [];
+        private readonly Dictionary<Guid, int?> requests = [];
+        private readonly Dictionary<Guid, AuditContext> workItems = [];
+
+        public static async Task<ContextLookup> LoadAsync(AppDbContext db, IEnumerable<Dictionary<string, object?>?> snapshots, CancellationToken ct)
+        {
+            var values = snapshots.OfType<Dictionary<string, object?>>().ToArray();
+            var taskIds = values.SelectMany(v => new[] { Int(v, "taskItemId"), Int(v, "taskId") }).OfType<int>().Distinct().ToArray();
+            var featureIds = values.Select(v => Int(v, "featureId")).OfType<int>().Distinct().ToArray();
+            var requestIds = values.Select(v => v.GetValueOrDefault("requestId")).OfType<Guid>().Distinct().ToArray();
+            var workItemIds = values.Select(v => v.GetValueOrDefault("workItemId")).OfType<Guid>().Distinct().ToArray();
+            var lookup = new ContextLookup();
+            if (taskIds.Length > 0)
+                foreach (var row in await db.Tasks.Where(t => taskIds.Contains(t.Id)).Select(t => new { t.Id, t.Feature.ProjectId }).ToListAsync(ct))
+                    lookup.tasks.Add(row.Id, row.ProjectId);
+            if (featureIds.Length > 0)
+                foreach (var row in await db.Features.Where(f => featureIds.Contains(f.Id)).Select(f => new { f.Id, f.ProjectId }).ToListAsync(ct))
+                    lookup.features.Add(row.Id, row.ProjectId);
+            if (requestIds.Length > 0)
+                foreach (var row in await db.WorkRequests.Where(r => requestIds.Contains(r.Id)).Select(r => new { r.Id, r.ProjectId }).ToListAsync(ct))
+                    lookup.requests.Add(row.Id, row.ProjectId);
+            if (workItemIds.Length > 0)
+                foreach (var row in await db.PlannedTasks.Where(w => workItemIds.Contains(w.Id))
+                    .Select(w => new { w.Id, w.TaskItemId, w.Task.Feature.ProjectId }).ToListAsync(ct))
+                    lookup.workItems.Add(row.Id, new(row.ProjectId, row.TaskItemId, null));
+            return lookup;
+        }
+
+        public AuditContext Resolve(string type, Dictionary<string, object?> values, Dictionary<string, object?>? before)
+        {
+            var taskId = type == "Task" ? Int(values, "id")
+                : type == nameof(ExternalWorkItemLink) ? Int(values, "taskId") : Int(values, "taskItemId");
+            var previousTaskId = before is null ? null : Int(before, "taskItemId");
+            var relatedTaskId = Int(values, "dependsOnTaskItemId") ?? (previousTaskId != taskId ? previousTaskId : null);
+            taskId ??= previousTaskId;
+            var projectId = type == "Project" ? Int(values, "id") : Int(values, "projectId");
+            if (projectId is null && before is not null) projectId = Int(before, "projectId");
+            if (type == "Idea") projectId = Int(values, "promotedProjectId") ?? (before is null ? null : Int(before, "promotedProjectId"));
+            var featureId = type == "Feature" ? Int(values, "id") : Int(values, "featureId");
+            if (projectId is null && taskId is int task)
+                projectId = tasks.GetValueOrDefault(task);
+            if (projectId is null && featureId is int feature)
+                projectId = features.GetValueOrDefault(feature);
+            if (projectId is null && values.GetValueOrDefault("requestId") is Guid requestId)
+                projectId = requests.GetValueOrDefault(requestId);
+            if (type == "TaskEvidence" && values.GetValueOrDefault("workItemId") is Guid workItemId)
+            {
+                var parent = workItems.GetValueOrDefault(workItemId);
+                taskId = parent?.TaskId;
+                projectId = parent?.ProjectId;
+            }
+            return new(projectId ?? 0, taskId, relatedTaskId);
+        }
     }
 
     private sealed record AuditContext(int ProjectId, int? TaskId, int? RelatedTaskId);
     private sealed record Pending(EntityEntry Entry, EntityState State, string Type, Dictionary<string, object?>? Before,
-        Dictionary<string, object?>? After, AuditContext Context);
+        Dictionary<string, object?>? After);
 }

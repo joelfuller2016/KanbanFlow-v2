@@ -196,7 +196,9 @@ public sealed partial class WorkspaceService(IDbContextFactory<AppDbContext> fac
 
     private void Audit(AppDbContext db, int? projectId, Guid requestId, string actor, string action, int entityId) =>
         db.ActivityEvents.Add(new ActivityEvent { ProjectId = projectId ?? 0, EntityType = "WorkRequest", EntityId = entityId,
-            EventType = action, Actor = actor, AfterJson = JsonSerializer.Serialize(new { requestId }), CreatedAt = Now });
+            EntityKey = requestId == Guid.Empty ? entityId.ToString(System.Globalization.CultureInfo.InvariantCulture) : requestId.ToString("D"),
+            EventType = action, Actor = actor,
+            AfterJson = JsonSerializer.Serialize(new { requestId }), CreatedAt = Now });
 
     public static string Required(string? value, string field, int max)
     {

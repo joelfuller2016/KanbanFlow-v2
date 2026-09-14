@@ -1544,7 +1544,8 @@ async function restoreContent(repo, args, {
     if (!source && !(stub && ["marker", "node"].includes(link.linkedBy))) {
       throw new Error(`Task ${task.id}: a title-only source needs a durable matching project marker; no content was changed.`);
     }
-    const number = source ? source.number : issueNumberFromTaskName(task.name);
+    const durableNumber = activeGithubLink(task, repoIdentity.externalId, projectLinks)?.externalNumber;
+    const number = source ? source.number : (durableNumber ?? issueNumberFromTaskName(task.name));
     const issue = byNumber.get(number);
     if (!issue) throw new Error(`Task ${task.id}: full GitHub issue ${number ?? "identity"} is unavailable; no content was changed.`);
     validateIdentity(task, issue, projectLinks);

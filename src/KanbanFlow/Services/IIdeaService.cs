@@ -69,9 +69,16 @@ public interface IIdeaService
     /// Plan → Goals, Body+Plan → Readme), set <see cref="IdeaStatus.Promoted"/> +
     /// <see cref="Idea.PromotedProjectId"/>, and emit audit events for both the idea
     /// (<c>IdeaPromoted</c>) and the new project (<c>ProjectCreatedFromIdea</c>).
+    /// When an existing project is supplied, reuse it without mapping idea fields or emitting
+    /// ProjectCreatedFromIdea. Repeating promotion to the same project returns the existing result.
     /// </summary>
+    /// <param name="ideaId">The idea to promote.</param>
+    /// <param name="actor">Audit attribution.</param>
+    /// <param name="existingProjectId">An existing project to reuse, or null to create a project.</param>
+    /// <param name="ct">Cancels the operation before its transaction commits.</param>
     /// <exception cref="IdeaNotFoundException">The idea does not exist.</exception>
-    /// <exception cref="ValidationException">The idea is already promoted.</exception>
+    /// <exception cref="ProjectNotFoundException">The supplied target project does not exist.</exception>
+    /// <exception cref="ValidationException">The idea is already promoted to a different project.</exception>
     Task<IdeaPromoteResult> PromoteAsync(int ideaId, string? actor, int? existingProjectId = null, CancellationToken ct = default);
 }
 
