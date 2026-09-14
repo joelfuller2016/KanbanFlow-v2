@@ -2,7 +2,7 @@
 
 For the project owner, reviewers and connected AI clients. Owner: repository maintainer. Reviewed September 7, 2026 on Windows, PowerShell 7, .NET 10 and Playwright CLI. [Issue #509](https://github.com/joelfuller2016/KanbanFlow-v2/issues/509) owns the plan; [PR #511](https://github.com/joelfuller2016/KanbanFlow-v2/pull/511) owns this implementation. Measured results belong in this case's `runs/` directory.
 
-The [September 14 PR review corrections](runs/2026-09-14-440c0ed07e51.md) records current-base conflict repairs, audit/content regressions, local verification and the blocked HTTP/browser checks.
+The [September 14 PR review record](runs/2026-09-14-440c0ed07e51.md) records current-base conflict repairs, audit/content regressions, local verification and the blocked HTTP/browser checks.
 
 The [September 8 dependency-read and result-integrity run](runs/2026-09-08-3a07aa855551.md) records the review-cycle repair, old/new query measurements, missing-dependency refusal, and rebuilt API/MCP/browser results.
 
@@ -33,6 +33,66 @@ sequenceDiagram
 ```
 
 Every client arrow is an explicit MCP call. The current PR does not launch Codex, automatically read decisions, interrupt running work, or provide authenticated reviewer identities. Caller attribution and a saved message do not prove agent delivery. The future runner must implement those controls on these same records.
+
+## Acceptance source mappings
+
+These links are pinned to application source `440c0ed07e51`. Each A/F case below maps to its implementing files; the executable checks and dated evidence remain in their acceptance sections. V01-V10 are proposed work: their links identify existing extension points, not a claim that the proposed controls are implemented or tested. F06 backup/restart measurements still require the actual operational record.
+
+| Cases | Source responsibility | Source files |
+|---|---|---|
+| A1-A4 | Decision capture, versions, acknowledgement, publication and retained evidence | [WorkspaceService.cs][source-workflow], [WorkspaceService.Plans.cs][source-plans], [WorkspaceService.Results.cs][source-results], [RequestConversation.razor][source-conversation], [RequestWorkspace.razor][source-request] |
+| A5-A6 | Selection/draft preservation, original/history disclosure and narrow request views | [RequestWorkspace.razor][source-request], [RequestBriefEditor.razor][source-brief], [RequestDetails.razor][source-details], [ProjectView.razor][source-board], [WorkflowRecords.cs][source-records] |
+| A7 | Native, REST and stdio workflow contracts | [WorkspaceMcpTools.cs][source-workflow-mcp], [WorkflowEndpoints.cs][source-workflow-api], [workflow-tools.mjs][source-wrapper-tools], [mcp-server.mjs][source-wrapper] |
+| A8-A9 | Task deep links, panel closure and preserved query context | [ProjectView.razor][source-board], [TaskDetailPanel.razor][source-panel], [kanbanflow.js][source-board-js] |
+| A10-A12 | Task-panel sizing, drafts, keyboard controls and focus | [TaskDetailPanel.razor][source-panel], [TaskDetailPanel.razor.css][source-panel-css], [kanbanflow.js][source-board-js] |
+| A13-A16 | Outline selection, history, scoped reveal, removal and project changes | [ProjectView.razor.cs][source-history], [ProjectView.razor][source-board], [ProjectOutline.razor][source-outline], [ProjectOutline.razor.css][source-outline-css], [ProjectOutline.razor.js][source-outline-js], [ProjectOutlineInterop.cs][source-outline-interop] |
+| A17-A18 | Audited editor saves and visible before/after history | [ChangeAudit.cs][source-audit], [ActivityTimeline.razor][source-activity-ui], [TaskDetailPanel.razor][source-panel], [EditItemModal.razor][source-edit] |
+| A19-A20 | Paged activity transports and retained deletion snapshots | [ActivityLogReader.cs][source-activity], [KanbanMcpTools.cs][source-native], [ApiEndpoints.cs][source-api], [mcp-server.mjs][source-wrapper], [ProjectGraphDeleter.cs][source-delete] |
+| A21-A22 | Atomic/savepoint audit persistence, semantic deduplication and legacy schema adoption | [ChangeAudit.cs][source-audit], [AppDbContext.cs][source-db], [SchemaPatcher.cs][source-schema] |
+| F01-F02 | Complete import text and conservative, repeatable recovery | [portfolio-sync.mjs][source-sync] |
+| F03-F04 | Exact service/editor saves, large input limits and complete audit values | [TaskService.cs][source-tasks], [TaskDetailPanel.razor][source-panel], [EditableMarkdown.razor][source-markdown], [Program.cs][source-program], [ChangeAudit.cs][source-audit] |
+| F05 | Complete content through REST/native/stdio | [ApiEndpoints.cs][source-api], [KanbanMcpTools.cs][source-native], [mcp-server.mjs][source-wrapper] |
+| F06 | Recovery and audit implementation; backup/restart/count evidence remains an operational run result | [portfolio-sync.mjs][source-sync], [ChangeAudit.cs][source-audit] |
+| V01-V06 | Proposed outline layout, resize, peek, pin and navigation/drag work: existing files to extend, not delivered controls | [ProjectOutline.razor][source-outline], [ProjectOutline.razor.css][source-outline-css], [ProjectOutline.razor.js][source-outline-js], [ProjectView.razor.cs][source-history], [ProjectView.razor][source-board], [TaskDetailPanel.razor][source-panel] |
+| V07-V09 | Proposed progress/context/decision presentation: existing shared context and request paths to extend | [WorkspaceService.Context.cs][source-context], [TaskRequestContext.razor][source-task-context], [RequestWorkspace.razor][source-request], [RequestConversation.razor][source-conversation], [WorkspaceMcpTools.cs][source-workflow-mcp] |
+| V10 | Proposed cross-cutting preservation checks over existing viewing and mutation paths | [ProjectView.razor][source-board], [TaskService.cs][source-tasks], [WorkspaceService.cs][source-workflow], [ChangeAudit.cs][source-audit] |
+
+[source-workflow]: https://github.com/joelfuller2016/KanbanFlow-v2/blob/440c0ed07e51ffb19cb9636d938683017c5e3a7f/src/KanbanFlow/Services/Workflows/WorkspaceService.cs
+[source-plans]: https://github.com/joelfuller2016/KanbanFlow-v2/blob/440c0ed07e51ffb19cb9636d938683017c5e3a7f/src/KanbanFlow/Services/Workflows/WorkspaceService.Plans.cs
+[source-results]: https://github.com/joelfuller2016/KanbanFlow-v2/blob/440c0ed07e51ffb19cb9636d938683017c5e3a7f/src/KanbanFlow/Services/Workflows/WorkspaceService.Results.cs
+[source-context]: https://github.com/joelfuller2016/KanbanFlow-v2/blob/440c0ed07e51ffb19cb9636d938683017c5e3a7f/src/KanbanFlow/Services/Workflows/WorkspaceService.Context.cs
+[source-request]: https://github.com/joelfuller2016/KanbanFlow-v2/blob/440c0ed07e51ffb19cb9636d938683017c5e3a7f/src/KanbanFlow/Components/Workflows/RequestWorkspace.razor
+[source-conversation]: https://github.com/joelfuller2016/KanbanFlow-v2/blob/440c0ed07e51ffb19cb9636d938683017c5e3a7f/src/KanbanFlow/Components/Workflows/RequestConversation.razor
+[source-brief]: https://github.com/joelfuller2016/KanbanFlow-v2/blob/440c0ed07e51ffb19cb9636d938683017c5e3a7f/src/KanbanFlow/Components/Workflows/RequestBriefEditor.razor
+[source-details]: https://github.com/joelfuller2016/KanbanFlow-v2/blob/440c0ed07e51ffb19cb9636d938683017c5e3a7f/src/KanbanFlow/Components/Workflows/RequestDetails.razor
+[source-board]: https://github.com/joelfuller2016/KanbanFlow-v2/blob/440c0ed07e51ffb19cb9636d938683017c5e3a7f/src/KanbanFlow/Components/Pages/ProjectView.razor
+[source-records]: https://github.com/joelfuller2016/KanbanFlow-v2/blob/440c0ed07e51ffb19cb9636d938683017c5e3a7f/src/KanbanFlow/Models/Workflows/WorkflowRecords.cs
+[source-workflow-mcp]: https://github.com/joelfuller2016/KanbanFlow-v2/blob/440c0ed07e51ffb19cb9636d938683017c5e3a7f/src/KanbanFlow/Mcp/WorkspaceMcpTools.cs
+[source-workflow-api]: https://github.com/joelfuller2016/KanbanFlow-v2/blob/440c0ed07e51ffb19cb9636d938683017c5e3a7f/src/KanbanFlow/WorkflowEndpoints.cs
+[source-wrapper-tools]: https://github.com/joelfuller2016/KanbanFlow-v2/blob/440c0ed07e51ffb19cb9636d938683017c5e3a7f/scripts/workflow-tools.mjs
+[source-wrapper]: https://github.com/joelfuller2016/KanbanFlow-v2/blob/440c0ed07e51ffb19cb9636d938683017c5e3a7f/scripts/mcp-server.mjs
+[source-panel]: https://github.com/joelfuller2016/KanbanFlow-v2/blob/440c0ed07e51ffb19cb9636d938683017c5e3a7f/src/KanbanFlow/Components/Shared/TaskDetailPanel.razor
+[source-panel-css]: https://github.com/joelfuller2016/KanbanFlow-v2/blob/440c0ed07e51ffb19cb9636d938683017c5e3a7f/src/KanbanFlow/Components/Shared/TaskDetailPanel.razor.css
+[source-board-js]: https://github.com/joelfuller2016/KanbanFlow-v2/blob/440c0ed07e51ffb19cb9636d938683017c5e3a7f/src/KanbanFlow/wwwroot/js/kanbanflow.js
+[source-history]: https://github.com/joelfuller2016/KanbanFlow-v2/blob/440c0ed07e51ffb19cb9636d938683017c5e3a7f/src/KanbanFlow/Components/Pages/ProjectView.razor.cs
+[source-outline]: https://github.com/joelfuller2016/KanbanFlow-v2/blob/440c0ed07e51ffb19cb9636d938683017c5e3a7f/src/KanbanFlow/Components/Shared/ProjectOutline.razor
+[source-outline-css]: https://github.com/joelfuller2016/KanbanFlow-v2/blob/440c0ed07e51ffb19cb9636d938683017c5e3a7f/src/KanbanFlow/Components/Shared/ProjectOutline.razor.css
+[source-outline-js]: https://github.com/joelfuller2016/KanbanFlow-v2/blob/440c0ed07e51ffb19cb9636d938683017c5e3a7f/src/KanbanFlow/Components/Shared/ProjectOutline.razor.js
+[source-outline-interop]: https://github.com/joelfuller2016/KanbanFlow-v2/blob/440c0ed07e51ffb19cb9636d938683017c5e3a7f/src/KanbanFlow/Components/Shared/ProjectOutlineInterop.cs
+[source-audit]: https://github.com/joelfuller2016/KanbanFlow-v2/blob/440c0ed07e51ffb19cb9636d938683017c5e3a7f/src/KanbanFlow/Services/ChangeAudit.cs
+[source-activity-ui]: https://github.com/joelfuller2016/KanbanFlow-v2/blob/440c0ed07e51ffb19cb9636d938683017c5e3a7f/src/KanbanFlow/Components/Shared/ActivityTimeline.razor
+[source-edit]: https://github.com/joelfuller2016/KanbanFlow-v2/blob/440c0ed07e51ffb19cb9636d938683017c5e3a7f/src/KanbanFlow/Components/Shared/EditItemModal.razor
+[source-activity]: https://github.com/joelfuller2016/KanbanFlow-v2/blob/440c0ed07e51ffb19cb9636d938683017c5e3a7f/src/KanbanFlow/Services/ActivityLogReader.cs
+[source-native]: https://github.com/joelfuller2016/KanbanFlow-v2/blob/440c0ed07e51ffb19cb9636d938683017c5e3a7f/src/KanbanFlow/Mcp/KanbanMcpTools.cs
+[source-api]: https://github.com/joelfuller2016/KanbanFlow-v2/blob/440c0ed07e51ffb19cb9636d938683017c5e3a7f/src/KanbanFlow/ApiEndpoints.cs
+[source-delete]: https://github.com/joelfuller2016/KanbanFlow-v2/blob/440c0ed07e51ffb19cb9636d938683017c5e3a7f/src/KanbanFlow/Services/ProjectGraphDeleter.cs
+[source-schema]: https://github.com/joelfuller2016/KanbanFlow-v2/blob/440c0ed07e51ffb19cb9636d938683017c5e3a7f/src/KanbanFlow/Data/SchemaPatcher.cs
+[source-db]: https://github.com/joelfuller2016/KanbanFlow-v2/blob/440c0ed07e51ffb19cb9636d938683017c5e3a7f/src/KanbanFlow/Data/AppDbContext.cs
+[source-sync]: https://github.com/joelfuller2016/KanbanFlow-v2/blob/440c0ed07e51ffb19cb9636d938683017c5e3a7f/scripts/portfolio-sync.mjs
+[source-tasks]: https://github.com/joelfuller2016/KanbanFlow-v2/blob/440c0ed07e51ffb19cb9636d938683017c5e3a7f/src/KanbanFlow/Services/TaskService.cs
+[source-markdown]: https://github.com/joelfuller2016/KanbanFlow-v2/blob/440c0ed07e51ffb19cb9636d938683017c5e3a7f/src/KanbanFlow/Components/Shared/EditableMarkdown.razor
+[source-program]: https://github.com/joelfuller2016/KanbanFlow-v2/blob/440c0ed07e51ffb19cb9636d938683017c5e3a7f/src/KanbanFlow/Program.cs
+[source-task-context]: https://github.com/joelfuller2016/KanbanFlow-v2/blob/440c0ed07e51ffb19cb9636d938683017c5e3a7f/src/KanbanFlow/Components/Workflows/TaskRequestContext.razor
 
 ## Automated acceptance checks
 
