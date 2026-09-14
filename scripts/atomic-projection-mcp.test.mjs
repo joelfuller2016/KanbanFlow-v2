@@ -11,7 +11,7 @@ async function withTransport(status, response, check) {
   const api = createServer(async (req, res) => {
     let raw = "";
     for await (const chunk of req) raw += chunk;
-    requests.push({ method: req.method, url: req.url, body: JSON.parse(raw) });
+    requests.push({ method: req.method, url: req.url, body: raw ? JSON.parse(raw) : null, headers: req.headers });
     res.writeHead(status, { "Content-Type": "application/json" });
     res.end(JSON.stringify(response));
   });
@@ -68,6 +68,34 @@ const args = {
   repositoryOwner: "octo", repositoryName: "board", externalNodeId: "I_issue",
   externalNumber: 42, url: "https://github.com/octo/board/issues/42", description,
 };
+
+for (const [actor, header] of [['Agent \u03a9', 'mcp-agent'], ['agent\r\nlabel', 'mcp-agent'], ['   ', 'mcp-agent'], ['  operator  ', 'operator']]) {
+  test(`stdio REST actor header is safe while JSON retains ${JSON.stringify(actor)}`, async () => {
+    await withTransport(200, { id: 7 }, async (rpc, requests) => {
+      const result = await rpc('tools/call', { name: 'project_github_issue', arguments: { ...args, actor } });
+      assert.equal(result.error, undefined);
+      assert.equal(requests.length, 1);
+      assert.equal(requests[0].headers['x-kanbanflow-actor'], header);
+      // Header normalization must not rewrite caller-authored JSON.
+      assert.equal(requests[0].body.actor, actor);
+    });
+  });
+}
+
+test('stdio idea edits require and forward the version from the original read', async () => {
+  await withTransport(200, { id: 7, workflowVersion: 6 }, async (rpc, requests) => {
+    const missing = await rpc('tools/call', { name: 'update_idea', arguments: { ideaId: 7, body: 'stale draft' } });
+    assert.ok(missing.error);
+    assert.equal(requests.length, 0);
+    const result = await rpc('tools/call', { name: 'update_idea', arguments: { ideaId: 7, body: 'new draft', expectedWorkflowVersion: 5 } });
+    assert.equal(result.error, undefined);
+    assert.equal(requests.length, 1);
+    assert.equal(requests[0].method, 'PATCH');
+    assert.equal(requests[0].body.expectedWorkflowVersion, 5);
+    assert.equal(requests[0].body.body, 'new draft');
+    assert.equal(JSON.parse(result.result.content[0].text).workflowVersion, 6);
+  });
+});
 
 test("stdio project_github_issue exposes one compound call and preserves complete content", async () => {
   const projected = { task: { id: 7, featureId: 10, name: args.name, description }, link: { id: 8, taskId: 7, externalNodeId: "I_issue" }, created: true };

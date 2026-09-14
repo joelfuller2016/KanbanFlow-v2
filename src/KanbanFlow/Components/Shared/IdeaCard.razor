@@ -77,7 +77,7 @@
                          EmptyText="No details yet." />
 
         <div class="mt-auto pt-3">
-            <a class="d-block small mb-2" href="@($"/ideas?idea={Idea.Id}")" data-testid="idea-request-link-@Idea.Id">Request &amp; plan</a>
+            <a class="d-block small mb-2" href="@($"/ideas?idea={Idea.Id}")" aria-label="Request and plan for @Idea.Title" data-testid="idea-request-link-@Idea.Id">Request &amp; plan</a>
             <div class="d-flex flex-wrap align-items-center gap-2">
                 @* Exactly ONE filled badge per card, and it is priority. Priority is nullable on an
                    Idea (unlike TaskItem) — no badge when unset; the left border falls back to the

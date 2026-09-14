@@ -35,6 +35,10 @@ public class Idea
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
     public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
 
+    /// <summary>Version read with these fields; pass it as ExpectedWorkflowVersion when editing. Zero identifies an uncaptured legacy idea.</summary>
+    [System.ComponentModel.DataAnnotations.Schema.NotMapped]
+    public int WorkflowVersion { get; set; }
+
     public Project? PromotedProject { get; set; }
 }
 

@@ -138,6 +138,7 @@ REST adds `GET /api/workflows/`, `GET /api/workflows/{requestId}`, `GET /api/wor
 ## Conflict, evidence and recovery rules
 
 - Publication, task/criterion/dependency creation, normal audit and retry receipt commit together. A failure rolls everything back. Updating a draft keeps its published task identity. Published tasks cannot simply disappear from a revised plan.
+- Idea create/get/list responses include `workflowVersion` read with the idea fields. Every `PATCH /api/ideas/{id}` and `update_idea` call must send `expectedWorkflowVersion` from that original read, including no-op edits. The modal carries the same token. Omission/negative values are invalid (REST 422); a stale version is a conflict (REST 409 / MCP error) with no data or audit mutation. Legacy uncaptured ideas expose version 0. Reload and reconcile drafts after a conflict; never fetch a new token only to replay stale fields.
 - A context's task `editToken` values and fields come from one consistent SQLite snapshot. Carry those tokens through `save_plan` as `taskBaselines`; normal board edits during the editing window cause a conflict before saving. Publication then checks the saved baseline again before replacing a task specification. Reload the task, explicitly combine the work in the plan, and save a revised plan. The editor shows differences from current board fields and offers an explicit reviewed rebase; ordinary refresh does not silently replace tokens or draft text.
 - Dependency validation examines the resulting persisted graph, including edges added through ordinary board tools. A cycle is rejected inside the same transaction.
 - A report binds to the task scope when submitted: current specification plus actual task description, criteria/subtask definitions and transitive dependency scope/completion. Subsequent scope edits make it historical, including edits outside the plan editor. The checked code reference remains the caller's assertion; file content and a remote commit are not independently inspected by this feature.
@@ -159,11 +160,23 @@ pwsh -File scripts/start-kanbanflow.ps1
 
 Before opening an older database with the new build, stop its owning process and create a SQLite-consistent backup (the SQLite backup API, or copy the main/WAL/SHM files together while stopped). Confirm startup's database path. The additive upgrade preserves prior rows and memory search; reopening the same upgraded database is supported. If startup fails, retain the logs and backup, resolve the error and retry; do not overwrite the existing board with a new seed.
 
-For a disposable verification instance, publish into an ignored `_sandbox` directory, set `KANBANFLOW_DB_PATH` to a disposable database there, and use another port. The recorded walkthrough used port 5126. It does not replace the normal board. Run the transport harness against that instance:
+Prepare a unique smoke manifest **before** starting a disposable verification instance (#522). Preparation creates only an owned directory and manifest, never a database or server:
 
 ```powershell
-node scripts/smoke-workflow.mjs http://127.0.0.1:5126
+$smokeRun = node scripts/workflow-smoke-instance.mjs prepare http://127.0.0.1:5126 | ConvertFrom-Json
+$smokeRun.manifestPath
+$smokeRun.databasePath
 ```
+
+Publish the review source into an ignored `_sandbox` directory. In the separate process used to start that published app, set `KANBANFLOW_DB_PATH` to the manifest's exact `databasePath`, and bind the manifest's exact loopback URL. The database must not exist before startup. Do not copy the normal database into this directory. Once the new app is ready, run:
+
+```powershell
+node scripts/smoke-workflow.mjs $smokeRun.baseUrl --instance $smokeRun.manifestPath
+```
+
+Before starting its stdio wrapper or issuing any mutation, the harness checks the origin, owned paths and read-only `/api/admin/health` identity. It requires an explicit environment database path, a database created by this fresh process after manifest preparation, and a matching actual path. Missing/invalid manifests, reused runs, port 5123, remote origins, symlinks/junctions/hardlinks and mismatched databases are refused. It never launches an app itself.
+
+Each manifest is single-use. `run.lock` prevents reuse; `run.json` records running/passed/failed/interrupted state and results when available. SIGINT/SIGTERM stops only the harness wrapper and retains the app/database for inspection. Abrupt termination can leave the run marked running; preserve its lock and evidence, inspect the owned process, and prepare a new instance for another run. After inspection, stop only the disposable app you started. Cleanup is manual and limited to the recorded run directory after its database is closed; neither preparation nor the harness deletes databases.
 
 The harness creates a labeled test project and leaves it for browser inspection. It exercises actual native and stdio `tools/list`/`tools/call`, schema parity, exact capture, retry/conflict handling, brief/plan/publication, real task identity, comments, stale-result rejection and REST parity. It prints the board/task links. Open the printed board link and follow steps 2–8 above; use the existing task editor to change a status, then read it through MCP. Stop only the verification process you started.
 

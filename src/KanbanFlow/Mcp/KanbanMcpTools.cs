@@ -49,6 +49,7 @@ public static class KanbanMcpTools
     public static async Task<TaskDetailResult> UpdateTask(ITaskService service, int taskId, TaskUpdate update,
         string? actor = null, CancellationToken cancellationToken = default)
     {
+        if (update is null) throw new McpException("An update payload is required.");
         try
         {
             var task = await service.UpdateAsync(taskId, update, NormalizeActor(actor), cancellationToken);
@@ -727,6 +728,7 @@ public static class KanbanMcpTools
         [Description("New comma-separated tags, or omit.")] string? tags = null,
         [Description("New priority: Low | Medium | High | Critical (case-insensitive), or omit.")] string? priority = null,
         [Description("Optional actor label recorded in the audit trail (default 'mcp-agent').")] string? actor = null,
+        [Description("Required: workflowVersion from the idea read you are editing. Reload after a conflict; never fetch a new version just to replay stale fields.")] int? expectedWorkflowVersion = null,
         CancellationToken cancellationToken = default)
     {
         var parsedStatus = ParseIdeaStatus(status);
@@ -734,7 +736,7 @@ public static class KanbanMcpTools
         try
         {
             var idea = await ideaService.UpdateAsync(
-                ideaId, new IdeaUpdate(title, body, plan, parsedStatus, tags, parsedPriority),
+                ideaId, new IdeaUpdate(title, body, plan, parsedStatus, tags, parsedPriority, expectedWorkflowVersion),
                 NormalizeActor(actor), cancellationToken);
             return MapIdea(idea);
         }
@@ -1325,7 +1327,7 @@ public static class KanbanMcpTools
     // Enums → strings via .ToString()/?.ToString(); the repo has no JsonStringEnumConverter.
     private static IdeaResult MapIdea(Idea idea) => new(
         idea.Id, idea.Title, idea.Body, idea.Plan, idea.Status.ToString(), idea.Tags,
-        idea.Priority?.ToString(), idea.PromotedProjectId, idea.CreatedAt, idea.UpdatedAt);
+        idea.Priority?.ToString(), idea.PromotedProjectId, idea.CreatedAt, idea.UpdatedAt, idea.WorkflowVersion);
 }
 
 // ── Response DTOs (records → serialised to JSON by the MCP SDK) ────────────────────
@@ -1345,7 +1347,7 @@ public sealed record TaskCommentResult(int Id, int TaskItemId, string Text, stri
 public sealed record TaskClaimResult(int Id, string Name, string? ClaimedBy, DateTime? ClaimedAt, string Message);
 
 // ── Idea inbox DTOs (#180 Phase 3) — IdeaResult mirrors the REST MapIdea field set ──
-public sealed record IdeaResult(int Id, string Title, string? Body, string? Plan, string Status, string? Tags, string? Priority, int? PromotedProjectId, DateTime CreatedAt, DateTime UpdatedAt);
+public sealed record IdeaResult(int Id, string Title, string? Body, string? Plan, string Status, string? Tags, string? Priority, int? PromotedProjectId, DateTime CreatedAt, DateTime UpdatedAt, int WorkflowVersion);
 public sealed record IdeaPromotionResult(int IdeaId, int ProjectId, string Message);
 
 // ── Knowledge-graph memory DTOs (#224) — serialized camelCase by the MCP SDK, so the JSON matches

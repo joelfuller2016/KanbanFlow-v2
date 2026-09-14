@@ -88,7 +88,7 @@
             Acceptance = d.Acceptance, RepositoryId = d.RepositoryId, Files = d.FileReferences, Priority = d.Priority, Assignee = d.Assignee, Dependencies = d.Dependencies.ToHashSet() }).ToList();
     }
     private void Rebase() { version = Context.Version; taskBaselines = Context.Tasks.ToDictionary(t => t.TaskId, t => t.EditToken); }
-    private static bool Differs(EditableTask draft, WorkflowTaskContext task) => draft.Title.Trim() != task.Name || draft.Description.Trim() != (task.Description ?? "")
+    private static bool Differs(EditableTask draft, WorkflowTaskContext task) => draft.Title.Trim() != task.Name || draft.Description != (task.Description ?? "")
         || draft.Acceptance.Trim() != string.Join('\n', task.AcceptanceCriteria.Select(c => c.Text)) || draft.Priority.ToString() != task.Priority || draft.Assignee.Trim() != (task.Assignee ?? "");
     private static void CopyBoardFields(EditableTask draft, WorkflowTaskContext task)
     {

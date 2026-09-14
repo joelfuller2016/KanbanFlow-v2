@@ -707,7 +707,8 @@ public static class ApiEndpoints
                     Plan: dto.Plan,
                     Status: status,
                     Tags: dto.Tags,
-                    Priority: priority);
+                    Priority: priority,
+                    ExpectedWorkflowVersion: dto.ExpectedWorkflowVersion);
                 var idea = await ideaSvc.UpdateAsync(id, update, dto.Actor, ct);
 
                 return Results.Ok(MapIdea(idea));
@@ -3242,7 +3243,8 @@ public static class ApiEndpoints
         priority = idea.Priority?.ToString(),   // nullable enum
         idea.PromotedProjectId,
         idea.CreatedAt,
-        idea.UpdatedAt
+        idea.UpdatedAt,
+        idea.WorkflowVersion
     };
 
     // Memory node projection (#224). Enums → strings (no JsonStringEnumConverter in this repo);
@@ -3617,7 +3619,7 @@ public record TaskDependencyDto(int? TaskItemId, int? BlockedTaskId, int? Depend
 // convention — accept the enum as a string and parse it manually.
 public record IdeaCreateDto(string Title, string? Body, string? Plan, string? Tags, string? Priority, string? Actor);
 
-public record IdeaUpdateDto(string? Title, string? Body, string? Plan, string? Status, string? Tags, string? Priority, string? Actor);
+public record IdeaUpdateDto(string? Title, string? Body, string? Plan, string? Status, string? Tags, string? Priority, string? Actor, int? ExpectedWorkflowVersion = null);
 
 public record IdeaPromoteDto(string? Actor);
 

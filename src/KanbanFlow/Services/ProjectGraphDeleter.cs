@@ -44,10 +44,10 @@ internal static class ProjectGraphDeleter
             .Where(r => r.ProjectId == projectId)
             .ToListAsync(ct);
         db.Requirements.RemoveRange(requirements);
-        db.ProjectRepositories.RemoveRange(await db.ProjectRepositories.Where(r => r.ProjectId == projectId).ToListAsync(ct));
-        foreach (var request in await db.WorkRequests.Where(r => r.ProjectId == projectId).ToListAsync(ct))
+        db.ProjectRepositories.RemoveRange(await db.ProjectRepositories.Where(r => r.ProjectId == projectId).ToListAsync(ct).ConfigureAwait(false));
+        foreach (var request in await db.WorkRequests.Where(r => r.ProjectId == projectId).ToListAsync(ct).ConfigureAwait(false))
             request.ProjectId = null;
-        foreach (var idea in await db.Ideas.Where(i => i.PromotedProjectId == projectId).ToListAsync(ct))
+        foreach (var idea in await db.Ideas.Where(i => i.PromotedProjectId == projectId).ToListAsync(ct).ConfigureAwait(false))
             idea.PromotedProjectId = null;
     }
 

@@ -12,6 +12,49 @@ namespace KanbanFlow.Tests.Services.Workflows;
 public sealed class WorkspaceMcpToolsTests
 {
     [Fact]
+    public async Task NativeTaskUpdate_RejectsNullWithoutChangingData()
+    {
+        using var f = new WorkflowSqliteTestFactory();
+        var request = await f.PublishedAsync(Draft());
+        var taskId = request.WorkItems.Single().TaskItemId;
+        var before = await f.Service.ContextAsync(request.Id);
+        await using var db = f.CreateDbContext();
+        var events = await db.ActivityEvents.CountAsync();
+        var error = await Assert.ThrowsAsync<McpException>(() => KanbanMcpTools.UpdateTask(new TaskService(f), taskId, null!));
+        Assert.Contains("update payload is required", error.Message);
+        var after = await f.Service.ContextAsync(request.Id);
+        Assert.NotNull(before);
+        Assert.NotNull(after);
+        Assert.Equal(before.Tasks.Single().EditToken, after.Tasks.Single().EditToken);
+        Assert.Equal(events, await db.ActivityEvents.CountAsync());
+    }
+
+    [Fact]
+    public async Task ProjectAndRepositoryAudit_HaveDistinctEntitiesAndKeepOperationPayloads()
+    {
+        using var f = new WorkflowSqliteTestFactory();
+        var project = await f.Service.CreateProjectAsync("Audited project", "human", Key());
+        var path = Path.Combine(f.ScratchDirectory, "audited-repository");
+        Directory.CreateDirectory(Path.Combine(path, ".git"));
+        var repository = await f.Service.RegisterRepositoryAsync(project, "Repository", path,
+            f.ScratchDirectory, "human", Key());
+        await using var db = f.CreateDbContext();
+        foreach (var (type, id, eventType, operation) in new[] {
+            ("Project", project, "WorkspaceProjectCreated", "project.create"),
+            ("ProjectRepository", repository, "WorkspaceRepositoryRegistered", "repository.register") })
+        {
+            var page = await ActivityLogReader.ReadAsync(db, entityType: type, entityId: id);
+            var audit = Assert.Single(page.Items, e => e.EventType == eventType);
+            Assert.Equal(id.ToString(System.Globalization.CultureInfo.InvariantCulture), audit.EntityKey);
+            using var json = System.Text.Json.JsonDocument.Parse(audit.AfterJson!);
+            Assert.Equal(operation, json.RootElement.GetProperty("operation").GetString());
+            Assert.Equal(System.Text.Json.JsonValueKind.Object, json.RootElement.GetProperty("payload").ValueKind);
+            Assert.True(json.RootElement.TryGetProperty("result", out _));
+        }
+        Assert.Empty((await ActivityLogReader.ReadAsync(db, entityType: "WorkRequest")).Items);
+    }
+
+    [Fact]
     public async Task NativeReplanCommand_ForwardsReadTokensAndRejectsStaleTaskState()
     {
         using var f = new WorkflowSqliteTestFactory();
@@ -64,7 +107,7 @@ public sealed class WorkspaceMcpToolsTests
         Assert.Equal(context.Id, Assert.Single(await WorkspaceMcpTools.ListRequests(f.Service)).Id);
 
         // Existing human idea edits and service calls contribute to that same workflow.
-        await new IdeaService(f).UpdateAsync(context.IdeaId, new IdeaUpdate(Body: "Human clarified the visible idea notes"), "human");
+        await new IdeaService(f).UpdateAsync(context.IdeaId, new IdeaUpdate(Body: "Human clarified the visible idea notes", ExpectedWorkflowVersion: context.Version), "human");
         context = await WorkspaceMcpTools.GetRequestContext(f.Service, context.Id);
         Assert.Contains(context.Messages, m => m.Source == "idea-edit" && m.Author == "human");
         await f.Service.SaveBriefAsync(context.Id, context.Version, Brief("Human approved outcome"), "human", "human-brief");

@@ -8,11 +8,19 @@ import { fileURLToPath } from 'node:url';
 import { workflowTools } from './workflow-tools.mjs';
 import { verifyAuditTransports } from './audit-transport-checks.mjs';
 import { verifyFullContentTransports } from './full-content-transport-checks.mjs';
+import { claimSmokeRun, recordSmokeRun, validateSmokeInstance } from './workflow-smoke-instance.mjs';
 
-const base = process.argv[2];
-if (!base) throw new Error('Usage: node scripts/smoke-workflow.mjs http://127.0.0.1:5126 (disposable board)');
-const wrapper = spawn(process.execPath, [fileURLToPath(new URL('./mcp-server.mjs', import.meta.url))],
-  { env: { ...process.env, KANBANFLOW_API_URL: base, KANBANFLOW_USAGE_LOG: 'off' }, stdio: ['pipe', 'pipe', 'inherit'] });
+const run = await validateSmokeInstance(process.argv[2], process.argv[3] === '--instance' && process.argv.length === 5 ? process.argv[4] : null);
+const base = run.baseUrl;
+await claimSmokeRun(run);
+let wrapper;
+try {
+  wrapper = spawn(process.execPath, [fileURLToPath(new URL('./mcp-server.mjs', import.meta.url))],
+    { windowsHide: true, env: { ...process.env, KANBANFLOW_API_URL: base, KANBANFLOW_USAGE_LOG: 'off' }, stdio: ['pipe', 'pipe', 'inherit'] });
+} catch (error) {
+  await recordSmokeRun(run, 'failed', { failure: error.message });
+  throw error;
+}
 let nextId = 0;
 const pending = new Map();
 const lines = createInterface({ input: wrapper.stdout });
@@ -48,6 +56,16 @@ function unpack(result) {
 const call = async (transport, name, args) => unpack(await transport('tools/call', { name, arguments: args }));
 const actor = 'workflow-smoke';
 const command = (transport, input) => call(transport, 'workflow_command', { input: { actor, key: randomUUID(), ...input } });
+let completed = false;
+let result;
+let failure;
+const interrupted = signal => {
+  wrapper.kill();
+  recordSmokeRun(run, 'interrupted', { signal }).finally(() => process.exit(signal === 'SIGINT' ? 130 : 143));
+};
+const onInt = () => interrupted('SIGINT');
+const onTerm = () => interrupted('SIGTERM');
+process.once('SIGINT', onInt); process.once('SIGTERM', onTerm);
 try {
   await stdio('initialize', { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: actor, version: '1' } });
   wrapper.stdin.write(JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' }) + '\n');
@@ -93,10 +111,17 @@ try {
   assert.equal((await rest.json()).tasks[0].taskId, task.taskId);
   const audit = await verifyAuditTransports(base, call, native, stdio);
   const fullContent = await verifyFullContentTransports(base, call, native, stdio);
-  console.log(JSON.stringify({ passed: true, audit, fullContent, nativeTools: nativeList.tools.length, wrapperTools: wrapperList.tools.length,
+  result = { passed: true, audit, fullContent, nativeTools: nativeList.tools.length, wrapperTools: wrapperList.tools.length,
     requestId: id, ideaId: context.ideaId, projectId: context.projectId, taskId: task.taskId,
-    boardUrl: `${base}${context.boardUrl}`, taskUrl: `${base}${task.url}` }, null, 2));
+    boardUrl: `${base}${context.boardUrl}`, taskUrl: `${base}${task.url}` };
+  completed = true;
+} catch (error) {
+  failure = error.message;
+  throw error;
 } finally {
   for (const waiting of pending.values()) clearTimeout(waiting.timeout);
   lines.close(); wrapper.stdin.end(); wrapper.kill();
+  process.removeListener('SIGINT', onInt); process.removeListener('SIGTERM', onTerm);
+  await recordSmokeRun(run, completed ? 'passed' : 'failed', { result, failure });
 }
+console.log(JSON.stringify(result, null, 2));

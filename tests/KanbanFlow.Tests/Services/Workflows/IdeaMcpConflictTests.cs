@@ -23,7 +23,7 @@ public sealed class IdeaMcpConflictTests
         var error = await Assert.ThrowsAsync<McpException>(async () =>
         {
             if (promote) await KanbanMcpTools.PromoteIdea(service, idea.Id);
-            else await KanbanMcpTools.UpdateIdea(service, idea.Id, title: "Changed title");
+            else await KanbanMcpTools.UpdateIdea(service, idea.Id, title: "Changed title", expectedWorkflowVersion: idea.WorkflowVersion);
         });
 
         Assert.StartsWith("conflict: This idea was modified by another client", error.Message);

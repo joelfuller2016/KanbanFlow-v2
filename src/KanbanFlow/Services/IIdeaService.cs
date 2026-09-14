@@ -37,7 +37,9 @@ public interface IIdeaService
     /// <summary>
     /// Update mutable fields. <c>null</c> properties on <paramref name="dto"/> mean
     /// "leave unchanged". Idempotent when nothing actually changes (no event written).
-    /// Validates title/status/priority. Emits an <c>IdeaUpdated</c> event when a field changed.
+    /// Validates title/status/priority. ExpectedWorkflowVersion must match the version returned
+    /// with the original read; missing versions are invalid and stale versions are conflicts.
+    /// Emits an <c>IdeaUpdated</c> event when a field changed.
     /// </summary>
     /// <exception cref="IdeaNotFoundException">The idea does not exist.</exception>
     /// <exception cref="ValidationException">
@@ -97,7 +99,8 @@ public sealed record IdeaUpdate(
     string? Plan = null,
     IdeaStatus? Status = null,
     string? Tags = null,
-    TaskPriority? Priority = null);
+    TaskPriority? Priority = null,
+    int? ExpectedWorkflowVersion = null);
 
 /// <summary>Result of <see cref="IIdeaService.PromoteAsync"/>: the source idea and the created project.</summary>
 public sealed record IdeaPromoteResult(int IdeaId, int ProjectId);

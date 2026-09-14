@@ -125,6 +125,7 @@
         try
         {
             var context = Guid.TryParse(e.Value?.ToString(), out var id) ? await Workflow.ContextAsync(id, ct) : null;
+            if (context is not null && ProjectId is int projectId && context.ProjectId != projectId) context = null;
             if (gen != _refreshGen || disposed) return;
             current = context;
             error = notice = null;

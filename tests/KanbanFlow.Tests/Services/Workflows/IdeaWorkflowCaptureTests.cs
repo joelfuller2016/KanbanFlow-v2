@@ -27,13 +27,13 @@ public sealed class IdeaWorkflowCaptureTests
             "priority" => new IdeaUpdate(Priority: TaskPriority.Critical),
             _ => new IdeaUpdate(Status: IdeaStatus.Triaging)
         };
-        await ideas.UpdateAsync(idea.Id, update, "human");
+        await ideas.UpdateAsync(idea.Id, update with { ExpectedWorkflowVersion = before.Version }, "human");
         var after = (await f.Service.GetForIdeaAsync(idea.Id))!;
         Assert.Equal(before.Id, after.Id);
         Assert.Equal(before.Version + 1, after.Version);
         Assert.Equal("Exact original", Assert.Single(after.Messages).Text);
         await RejectAsync("conflict", () => f.Service.SaveBriefAsync(after.Id, before.Version, Brief(), "agent", "stale-edit"));
-        await ideas.UpdateAsync(idea.Id, update, "human");
+        await ideas.UpdateAsync(idea.Id, update with { ExpectedWorkflowVersion = after.Version }, "human");
         Assert.Equal(after.Version, (await f.Service.GetForIdeaAsync(idea.Id))!.Version);
         await using var db = f.CreateDbContext();
         Assert.Equal(1, await db.ActivityEvents.CountAsync(a => a.EventType == "IdeaUpdated"));
@@ -47,7 +47,7 @@ public sealed class IdeaWorkflowCaptureTests
         var request = await f.PublishedAsync(Draft());
         await f.Service.ArchiveAsync(request.Id, request.Version, true, "human", "archive");
         var archived = await f.LoadAsync(request.Id);
-        await new IdeaService(f).UpdateAsync(request.IdeaId, new IdeaUpdate(Title: "Renamed historical idea"), "human");
+        await new IdeaService(f).UpdateAsync(request.IdeaId, new IdeaUpdate(Title: "Renamed historical idea", ExpectedWorkflowVersion: archived.Version), "human");
         var after = await f.LoadAsync(request.Id);
         Assert.True(after.Archived);
         Assert.Equal("Renamed historical idea", after.Title);
@@ -154,7 +154,7 @@ public sealed class IdeaWorkflowCaptureTests
         var plan = request.Plans.Single();
         var taskId = request.WorkItems.Single().TaskItemId;
         await new IdeaService(f).UpdateAsync(request.IdeaId,
-            new IdeaUpdate(Title: "Improved title", Body: "  Revised notes  ", Plan: "New brainstorming, not an adopted task plan"), "human-editor");
+            new IdeaUpdate(Title: "Improved title", Body: "  Revised notes  ", Plan: "New brainstorming, not an adopted task plan", ExpectedWorkflowVersion: request.Version), "human-editor");
 
         var after = await f.Service.GetForIdeaAsync(request.IdeaId);
         Assert.NotNull(after);

@@ -147,6 +147,7 @@
 
     private bool IsNew => EditIdeaId is null;
 
+    private int? expectedWorkflowVersion;
     private string? title;
     private string? body;
     private string? plan;
@@ -194,6 +195,7 @@
 
     private void ResetFields()
     {
+        expectedWorkflowVersion = null;
         title = null;
         body = null;
         plan = null;
@@ -212,6 +214,7 @@
             StateHasChanged();
             return;
         }
+        expectedWorkflowVersion = idea.WorkflowVersion;
         title = idea.Title;
         body = idea.Body;
         plan = idea.Plan;
@@ -277,7 +280,8 @@
                         Plan: plan,
                         Status: SelectedStatus,
                         Tags: tags,
-                        Priority: SelectedPriority),
+                        Priority: SelectedPriority,
+                        ExpectedWorkflowVersion: expectedWorkflowVersion),
                     actor: "User");
             }
 

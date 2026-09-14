@@ -93,12 +93,14 @@ export async function verifyNullableTextUpdates({ callTool, restJson, apiBaseUrl
             const key = `${entity.kind}.${field}.${testCase.name}`;
             await check(`${transport}.${key}`, async () => {
               const restArgs = entity.name === undefined ? {} : { name: entity.name };
+              const initialVersion = entity.kind === "Idea" ? { expectedWorkflowVersion: (await restJson(entity.path)).workflowVersion } : {};
               await restJson(entity.path, {
-                method: entity.method, body: { ...restArgs, [field]: testCase.initial }
+                method: entity.method, body: { ...restArgs, ...initialVersion, [field]: testCase.initial }
               });
               const before = await restJson(entity.path);
               const priorEvents = new Set((await activity(entity)).map(event => event.id));
-              const payload = "value" in testCase ? { [field]: testCase.value } : testCase.payload;
+              const payload = { ...("value" in testCase ? { [field]: testCase.value } : testCase.payload),
+                ...(entity.kind === "Idea" ? { expectedWorkflowVersion: before.workflowVersion } : {}) };
               if (transport === "rest") {
                 await restJson(entity.path, { method: entity.method, body: { ...restArgs, ...payload } });
               } else if (transport === "stdio") {

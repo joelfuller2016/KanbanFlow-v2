@@ -87,7 +87,8 @@ public sealed class IdeaService(IDbContextFactory<AppDbContext> dbFactory) : IId
         // without its IdeaCreated event.
 
         db.Ideas.Add(idea);
-        Workflows.IdeaWorkflowCapture.Add(db, idea, string.IsNullOrWhiteSpace(dto.Body) ? dto.Title : dto.Body, actor, source);
+        var workflow = Workflows.IdeaWorkflowCapture.Add(db, idea, string.IsNullOrWhiteSpace(dto.Body) ? dto.Title : dto.Body, actor, source);
+        idea.WorkflowVersion = workflow.Version;
         await db.SaveChangesAsync(ct);
 
         AddActivityEvent(
@@ -102,7 +103,18 @@ public sealed class IdeaService(IDbContextFactory<AppDbContext> dbFactory) : IId
     public async Task<Idea?> GetByIdAsync(int ideaId, CancellationToken ct = default)
     {
         await using var db = await dbFactory.CreateDbContextAsync(ct);
-        return await db.Ideas.AsNoTracking().FirstOrDefaultAsync(i => i.Id == ideaId, ct);
+        var row = await WithVersion(db, db.Ideas.AsNoTracking().Where(i => i.Id == ideaId)).FirstOrDefaultAsync(ct);
+        return row?.WithVersion();
+    }
+
+    // One SQL statement keeps the fields and concurrency token in the same snapshot, also for lists.
+    private static IQueryable<VersionedIdea> WithVersion(AppDbContext db, IQueryable<Idea> query) =>
+        query.Select(i => new VersionedIdea(i, db.WorkRequests.Where(r => r.IdeaId == i.Id)
+            .Select(r => (int?)r.Version).SingleOrDefault() ?? 0));
+
+    private sealed record VersionedIdea(Idea Idea, int Version)
+    {
+        public Idea WithVersion() { Idea.WorkflowVersion = Version; return Idea; }
     }
 
     public async Task<IReadOnlyList<Idea>> ListAsync(
@@ -130,12 +142,13 @@ public sealed class IdeaService(IDbContextFactory<AppDbContext> dbFactory) : IId
                 i.Title.ToLower().Contains(s) || (i.Body != null && i.Body.ToLower().Contains(s)));
         }
 
-        return await query
+        var rows = await WithVersion(db, query
             .OrderByDescending(i => i.CreatedAt)
             .ThenByDescending(i => i.Id)
             .Skip(skip)
-            .Take(take)
+            .Take(take))
             .ToListAsync(ct);
+        return rows.Select(row => row.WithVersion()).ToList();
     }
 
     public async Task<Idea> UpdateAsync(int ideaId, IdeaUpdate dto, string? actor, CancellationToken ct = default)
@@ -143,11 +156,13 @@ public sealed class IdeaService(IDbContextFactory<AppDbContext> dbFactory) : IId
         ArgumentNullException.ThrowIfNull(dto);
 
         await using var db = await dbFactory.CreateDbContextAsync(ct);
+        await using var transaction = await db.Database.BeginTransactionAsync(ct);
         var idea = await db.Ideas.FirstOrDefaultAsync(i => i.Id == ideaId, ct);
         if (idea is null)
             throw new IdeaNotFoundException(ideaId);
 
         var before = IdeaActivitySnapshot(idea);
+        var originalTitle = idea.Title;
         var originalBody = idea.Body;
         var originalPlan = idea.Plan;
         var changed = false;
@@ -194,11 +209,16 @@ public sealed class IdeaService(IDbContextFactory<AppDbContext> dbFactory) : IId
             if (idea.Priority != dto.Priority.Value) { idea.Priority = dto.Priority.Value; changed = true; }
         }
 
+        if (dto.ExpectedWorkflowVersion is not int expectedVersion || expectedVersion < 0)
+            throw new ValidationException("ExpectedWorkflowVersion is required. Read the idea and send its workflowVersion with your edit.");
+        var workflow = await db.WorkRequests.Include(r => r.Messages).SingleOrDefaultAsync(r => r.IdeaId == ideaId, ct);
+        idea.WorkflowVersion = workflow?.Version ?? 0;
+        if (expectedVersion != idea.WorkflowVersion)
+            throw new WorkflowException("conflict", "This idea was modified by another client. Reload before saving again.");
         if (!changed)
             return idea; // idempotent: nothing to persist, no audit noise
 
-        var workflow = await db.WorkRequests.Include(r => r.Messages).SingleOrDefaultAsync(r => r.IdeaId == ideaId, ct)
-            ?? Workflows.IdeaWorkflowCapture.Add(db, idea, originalBody ?? idea.Title, actor, "legacy", exact: false);
+        workflow ??= Workflows.IdeaWorkflowCapture.Add(db, idea, originalBody ?? originalTitle, actor, "legacy", exact: false);
         workflow.Title = idea.Title;
         // Promotion is terminal for ideas; archiving its workflow is an independent action.
         // A routine title/notes edit must not restore an explicitly archived promoted request.
@@ -217,11 +237,13 @@ public sealed class IdeaService(IDbContextFactory<AppDbContext> dbFactory) : IId
         try
         {
             await db.SaveChangesAsync(ct);
+            await transaction.CommitAsync(ct);
         }
         catch (DbUpdateConcurrencyException)
         {
             throw new WorkflowException("conflict", "This idea was modified by another client. Reload before saving again.");
         }
+        idea.WorkflowVersion = workflow.Version;
         return idea;
     }
 

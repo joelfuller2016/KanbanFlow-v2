@@ -200,7 +200,7 @@ public sealed class WorkflowCrossSurfaceRegressionTests
         request = await f.LoadAsync(request.Id);
         var resultId = request.Results.Single().Id;
         Assert.True((await f.Service.ContextAsync(request.Id))!.Results.Single().Current);
-        if (change == "idea-body") await new IdeaService(f).UpdateAsync(request.IdeaId, new IdeaUpdate(Body: "Human changed the requested outcome"), "human");
+        if (change == "idea-body") await new IdeaService(f).UpdateAsync(request.IdeaId, new IdeaUpdate(Body: "Human changed the requested outcome", ExpectedWorkflowVersion: request.Version), "human");
         else await f.Service.AddMessageAsync(request.Id, request.Version, change, "Human changed the requested outcome", "human", "changed-intent");
         request = await f.LoadAsync(request.Id);
         var context = await WorkspaceMcpTools.GetRequestContext(f.Service, request.Id);

@@ -641,6 +641,7 @@ const tools = [
       type: "object",
       properties: {
         ideaId: { type: "integer", minimum: 1, description: "Idea id to update." },
+        expectedWorkflowVersion: { type: "integer", minimum: 0, description: "workflowVersion from the original get_idea/list_ideas read. Reload after a conflict before editing again." },
         title: { type: "string", description: "New title (≤500 chars)." },
         body: { type: ["string", "null"], description: "Markdown body: omit or null to preserve, empty/whitespace to clear, non-empty text to replace." },
         plan: { type: ["string", "null"], description: "Markdown plan: omit or null to preserve, empty/whitespace to clear, non-empty text to replace." },
@@ -660,7 +661,7 @@ const tools = [
         },
         actor: { type: "string", description: "Optional actor label recorded in the audit trail." }
       },
-      required: ["ideaId"]
+      required: ["ideaId", "expectedWorkflowVersion"]
     }
   },
   {
@@ -1332,7 +1333,8 @@ async function callTool(toolName, args) {
       if (limit !== undefined) params.set("limit", limit);
       if (beforeId !== undefined) params.set("beforeId", beforeId);
       if (includePage !== undefined) params.set("includePage", includePage);
-      const query = params.size ? `?${params}` : "";
+      const encoded = params.toString();
+      const query = encoded ? `?${encoded}` : "";
       return restJson(`/api/projects/${projectId}/activity${query}`);
     }
     case "list_task_activity": {
@@ -1344,7 +1346,8 @@ async function callTool(toolName, args) {
       if (limit !== undefined) params.set("limit", limit);
       if (beforeId !== undefined) params.set("beforeId", beforeId);
       if (includePage !== undefined) params.set("includePage", includePage);
-      const query = params.size ? `?${params}` : "";
+      const encoded = params.toString();
+      const query = encoded ? `?${encoded}` : "";
       return restJson(`/api/tasks/${taskId}/activity${query}`);
     }
 
@@ -1399,6 +1402,7 @@ async function callTool(toolName, args) {
       return restJson(`/api/ideas/${requiredInt(args, "ideaId", { min: 1 })}`, {
         method: "PATCH",
         body: {
+          expectedWorkflowVersion: requiredInt(args, "expectedWorkflowVersion", { min: 0 }),
           title: optionalNonEmptyString(args, "title"),
           body: optionalString(args, "body"),
           plan: optionalString(args, "plan"),
@@ -1559,12 +1563,18 @@ function optionalCommentType(args) {
   return args.type;
 }
 
+function auditHeaderActor(actor) {
+  const value = typeof actor === "string" ? actor.trim() : "";
+  // Fetch headers are ByteStrings and reject controls. Keep the full authored actor in JSON.
+  return value && !/[\x00-\x1f\x7f-\x9f\u0100-\uffff]/.test(value) ? value : "mcp-agent";
+}
+
 async function restJson(path, options = {}) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), restTimeoutMs);
   const requestOptions = {
     method: options.method || "GET",
-    headers: { Accept: "application/json", "X-KanbanFlow-Actor": options.body?.actor || "mcp-agent" },
+    headers: { Accept: "application/json", "X-KanbanFlow-Actor": auditHeaderActor(options.body?.actor) },
     signal: controller.signal
   };
 

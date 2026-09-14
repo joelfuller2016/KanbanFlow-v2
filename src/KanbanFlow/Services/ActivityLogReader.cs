@@ -36,15 +36,15 @@ public static class ActivityLogReader
         string? entityType = null, int? entityId = null, string? entityKey = null)
     {
         var query = Query(db, projectId, taskId, entityType, entityId, entityKey);
-        var total = await query.CountAsync(ct);
+        var total = await query.CountAsync(ct).ConfigureAwait(false);
         if (beforeId is int cursor)
         {
-            var anchor = await query.SingleOrDefaultAsync(e => e.Id == cursor, ct)
+            var anchor = await query.SingleOrDefaultAsync(e => e.Id == cursor, ct).ConfigureAwait(false)
                 ?? throw new ValidationException("The activity cursor does not belong to this history.");
             query = query.Where(e => e.CreatedAt < anchor.CreatedAt || (e.CreatedAt == anchor.CreatedAt && e.Id < cursor));
         }
         var take = Math.Clamp(limit ?? 100, 1, 500);
-        var rows = await query.OrderByDescending(e => e.CreatedAt).ThenByDescending(e => e.Id).Take(take + 1).ToListAsync(ct);
+        var rows = await query.OrderByDescending(e => e.CreatedAt).ThenByDescending(e => e.Id).Take(take + 1).ToListAsync(ct).ConfigureAwait(false);
         var hasMore = rows.Count > take;
         if (hasMore) rows.RemoveAt(rows.Count - 1);
         return new(rows, total, hasMore ? rows[^1].Id : null);

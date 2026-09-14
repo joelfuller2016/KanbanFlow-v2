@@ -1,7 +1,7 @@
 <nav class="d-flex flex-wrap gap-1 mb-3" aria-label="Request sections">
     @foreach (var section in sections)
     {
-        <button type="button" class="btn btn-sm @(tab == section ? "btn-primary" : "btn-outline-primary")" aria-pressed="@(tab == section)" @onclick="() => Open(section)">@(section)</button>
+        <button @key="section" type="button" class="btn btn-sm @(tab == section ? "btn-primary" : "btn-outline-primary")" aria-pressed="@(tab == section)" @onclick="() => Open(section)">@(section)</button>
     }
 </nav>
 @if (tab == "Original")
@@ -9,8 +9,10 @@
     <h3 class="h5">Actual user request</h3>
     @foreach (var message in Context.Messages.Where(m => m.Kind == "original"))
     {
-        <div class="small text-muted mb-2">@message.Author · @message.CreatedAt.ToLocalTime().ToString("g") · @message.Source</div>
-        <pre class="border rounded bg-white p-3" style="white-space:pre-wrap; font-family:inherit">@message.Text</pre>
+        <div @key="message.Id">
+            <div class="small text-muted mb-2">@message.Author · @message.CreatedAt.ToLocalTime().ToString("g") · @message.Source</div>
+            <pre class="border rounded bg-white p-3" style="white-space:pre-wrap; font-family:inherit">@message.Text</pre>
+        </div>
     }
     <p class="small text-muted">The original stays intact. Add clarification in Updates, then save a new brief or plan revision.</p>
 }

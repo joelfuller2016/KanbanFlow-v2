@@ -1172,7 +1172,7 @@ public sealed class TaskService(
                         + (previousClaimedAt is { } staleSince
                             ? $"(claim was {(now - staleSince).TotalHours:0.##}h old; TTL {_claimTtl.TotalHours:0.##}h)"
                             : $"(claim had no timestamp; TTL {_claimTtl.TotalHours:0.##}h)"));
-                    await db.SaveChangesWithAuditAsync(actor, ct);
+                    await db.SaveChangesWithAuditAsync(trimmedActor, ct);
                 }
 
                 else

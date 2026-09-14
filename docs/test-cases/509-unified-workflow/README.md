@@ -2,7 +2,7 @@
 
 For the project owner, reviewers and connected AI clients. Owner: repository maintainer. Reviewed September 7, 2026 on Windows, PowerShell 7, .NET 10 and Playwright CLI. [Issue #509](https://github.com/joelfuller2016/KanbanFlow-v2/issues/509) owns the plan; [PR #511](https://github.com/joelfuller2016/KanbanFlow-v2/pull/511) owns this implementation. Measured results belong in this case's `runs/` directory.
 
-The [September 13 PR integration review](runs/2026-09-13-pr511-coderabbit.md) records current-base conflict repairs, audit/content regressions, local verification and the blocked HTTP/browser checks.
+The [September 13 PR integration review](runs/2026-09-13-a95c1ea03603.md) records current-base conflict repairs, audit/content regressions, local verification and the blocked HTTP/browser checks.
 
 The [September 8 dependency-read and result-integrity run](runs/2026-09-08-3a07aa855551.md) records the review-cycle repair, old/new query measurements, missing-dependency refusal, and rebuilt API/MCP/browser results.
 
@@ -55,11 +55,11 @@ Every client arrow is an explicit MCP call. The current PR does not launch Codex
 | A15 | The outline header stays fixed while its item area scrolls, without moving the board/page. Keyboard history controls and 390px reveal/focus remain usable. |
 | A16 | Removed items are skipped, a removed current item loses its highlight, and another project cannot inherit old selection/history. Navigation leaves workflow versions, task tokens and ordinary task data unchanged. Real outline drag still preserves task membership/status and anchors around subtask siblings. |
 
-Executables: [outline-navigation.browser.js](../../../scripts/outline-navigation.browser.js), [task-detail-display.browser.js](../../../scripts/task-detail-display.browser.js), [workflow-human-steering.browser.js](../../../scripts/workflow-human-steering.browser.js), [workflow-navigation.browser.js](../../../scripts/workflow-navigation.browser.js) and [smoke-workflow.mjs](../../../scripts/smoke-workflow.mjs). The latter creates a labeled single-task fixture. The browser cases refuse normal port 5123 and require the fixture's title and original-message provenance before writing.
+Executables: [outline-navigation.browser.js](../../../scripts/outline-navigation.browser.js), [task-detail-display.browser.js](../../../scripts/task-detail-display.browser.js), [workflow-human-steering.browser.js](../../../scripts/workflow-human-steering.browser.js), [workflow-navigation.browser.js](../../../scripts/workflow-navigation.browser.js) and [smoke-workflow.mjs](../../../scripts/smoke-workflow.mjs). The latter requires a single-use manifest and verifies the actual disposable database through read-only health before starting its wrapper or making writes, then creates a labeled single-task fixture. The browser cases refuse normal port 5123 and require the fixture's title and original-message provenance before writing.
 
 1. **Rebuild the current PR.** From the repository root, run the quality gate and script suite. Record the source revision and actual exits. Rebuild after source changes; do not reuse stale test binaries.
 2. **Start a disposable instance.** Use a fresh ignored database and published output, for example on port 5126. Confirm the database path in startup logs. On failure, retain the log and fix that instance; do not replace the normal board.
-3. **Create the transport fixture.** Run `node scripts/smoke-workflow.mjs http://127.0.0.1:5126`. Expect `passed: true` and printed request/board/task IDs. This checks real native and stdio transports and leaves the fixture for the browser.
+3. **Create the transport fixture.** Prepare and start a fresh instance as described in the [operating guide](../../request-workflow.md#verification-and-local-operation), then run `node scripts/smoke-workflow.mjs $smokeRun.baseUrl --instance $smokeRun.manifestPath` in PowerShell. Expect `passed: true` and printed request/board/task IDs. This checks real native and stdio transports and leaves the fixture for the browser.
 4. **Run the browser case.** Open the printed URL using a named Playwright CLI session. Run from an ignored working directory, so screenshots and CLI logs remain local. Expect exit 0; an assertion failure is a failed case even when earlier checks passed.
 
    ```powershell

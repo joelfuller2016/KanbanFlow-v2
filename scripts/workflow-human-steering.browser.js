@@ -30,6 +30,8 @@ async page => {
   assert(original?.source === 'transport-smoke', 'Refusing a non-smoke request.');
   const taskId = context.tasks[0].taskId;
   const draftId = context.tasks[0].draftId;
+  const evidenceIds = context.tasks[0].evidence.map(e => e.id);
+  assert(evidenceIds.length > 0, "The smoke fixture must contain evidence before steering.");
   let operation = 0;
   async function command(input) {
     const receipt = await mcp('workflow_command', { input: {
@@ -103,6 +105,7 @@ async page => {
   assert(context.tasks[0].acceptanceCriteria.map(c => c.text).join('\n') === acceptance, 'Decision was not applied to actual criteria.');
   assert(context.needsBriefReview === false && context.briefs.length === priorBriefCount + 1, 'Revised brief did not acknowledge intent.');
   assert(context.messages.find(m => m.kind === 'original').text === original.text, 'Replanning rewrote the original.');
+  assert(evidenceIds.every(id => context.tasks[0].evidence.some(e => e.id === id)), 'Replanning lost earlier evidence.');
   assert(context.tasks[0].evidence.every(e => !e.current), 'Old reported evidence still covers changed scope.');
 
   const filter = page.getByPlaceholder('Search name or description...');

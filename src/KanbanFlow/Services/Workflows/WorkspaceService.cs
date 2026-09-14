@@ -71,7 +71,7 @@ public sealed partial class WorkspaceService(IDbContextFactory<AppDbContext> fac
             var project = new Project { Name = Required(name, "Project name", 200).Trim(), CreatedAt = Now, UpdatedAt = Now };
             db.Projects.Add(project);
             await db.SaveChangesWithAuditAsync(actor, ct);
-            Audit(db, project.Id, Guid.Empty, actor, "WorkspaceProjectCreated", project.Id);
+            Audit(db, project.Id, Guid.Empty, actor, "WorkspaceProjectCreated", project.Id, "Project");
             return project.Id;
         }, ct);
 
@@ -86,7 +86,7 @@ public sealed partial class WorkspaceService(IDbContextFactory<AppDbContext> fac
             var repository = new ProjectRepository { ProjectId = projectId, Name = Required(name, "Repository name", 120).Trim(), LocalPath = resolved };
             db.ProjectRepositories.Add(repository);
             await db.SaveChangesWithAuditAsync(actor, ct);
-            Audit(db, projectId, Guid.Empty, actor, "WorkspaceRepositoryRegistered", repository.Id);
+            Audit(db, projectId, Guid.Empty, actor, "WorkspaceRepositoryRegistered", repository.Id, "ProjectRepository");
             return repository.Id;
         }, ct);
 
@@ -182,7 +182,7 @@ public sealed partial class WorkspaceService(IDbContextFactory<AppDbContext> fac
             return JsonSerializer.Deserialize<T>(receipt.ResultJson)!;
         }
         var result = await write(db);
-        foreach (var audit in db.ActivityEvents.Local.Where(e => db.Entry(e).State == EntityState.Added && e.EntityType == "WorkRequest"))
+        foreach (var audit in db.ActivityEvents.Local.Where(e => db.Entry(e).State == EntityState.Added && (e.EntityType == "WorkRequest" || e.EventType == "WorkspaceProjectCreated" || e.EventType == "WorkspaceRepositoryRegistered")))
         {
             var original = JsonSerializer.Deserialize<JsonElement>(audit.AfterJson ?? "{}");
             audit.AfterJson = JsonSerializer.Serialize(new { requestId = original.GetProperty("requestId"), operation, payload, result }, AuditJson);
@@ -194,8 +194,8 @@ public sealed partial class WorkspaceService(IDbContextFactory<AppDbContext> fac
         return result;
     }
 
-    private void Audit(AppDbContext db, int? projectId, Guid requestId, string actor, string action, int entityId) =>
-        db.ActivityEvents.Add(new ActivityEvent { ProjectId = projectId ?? 0, EntityType = "WorkRequest", EntityId = entityId,
+    private void Audit(AppDbContext db, int? projectId, Guid requestId, string actor, string action, int entityId, string entityType = "WorkRequest") =>
+        db.ActivityEvents.Add(new ActivityEvent { ProjectId = projectId ?? 0, EntityType = entityType, EntityId = entityId,
             EntityKey = requestId == Guid.Empty ? entityId.ToString(System.Globalization.CultureInfo.InvariantCulture) : requestId.ToString("D"),
             EventType = action, Actor = actor,
             AfterJson = JsonSerializer.Serialize(new { requestId }), CreatedAt = Now });

@@ -239,7 +239,7 @@
                    refused toggle leaves Status unchanged, Blazor emits no DOM update, and the
                    user's click stands on a task that is not Done. *@
                 <div class="@RowClass(OutlineItemKind.Task, task.Id)" @key="(task.Id, CheckboxResetToken)"
-                     style="border-left: 4px solid @GetDepthColor(depth + 1); @(taskIsDone ? "opacity: 0.6;" : "") cursor: pointer;"
+                     style="border-left: 4px solid @GetDepthColor(depth + 1); @(taskIsDone && !IsSelected(OutlineItemKind.Task, task.Id) ? "opacity: 0.6;" : "") cursor: pointer;"
                      data-testid="outline-task-@task.Id" data-task-id="@task.Id"
                      @onclick="() => OnOpenEditTask.InvokeAsync(task)">
                     <div class="card-body p-2">
@@ -319,7 +319,7 @@
         var children = parentTask.Subtasks.Where(s => s.ParentSubtaskId == subtask.Id).OrderBy(s => s.SortOrder).ToList();
         var hasChildren = children.Count > 0;
 
-        <div @key="subtask.Id" class="@RowClass(OutlineItemKind.Subtask, subtask.Id)" style="border-left: 4px solid @GetDepthColor(depth); @(subtask.Completed ? "opacity: 0.6;" : "") cursor: pointer;"
+        <div @key="subtask.Id" class="@RowClass(OutlineItemKind.Subtask, subtask.Id)" style="border-left: 4px solid @GetDepthColor(depth); @(subtask.Completed && !IsSelected(OutlineItemKind.Subtask, subtask.Id) ? "opacity: 0.6;" : "") cursor: pointer;"
              data-testid="outline-subtask-@subtask.Id" @onclick="() => OnOpenSubtask.InvokeAsync(subtask)">
             <div class="card-body p-2">
                 <div class="d-flex align-items-center">
