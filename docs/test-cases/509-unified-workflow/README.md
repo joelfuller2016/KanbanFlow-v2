@@ -2,7 +2,7 @@
 
 For the project owner, reviewers and connected AI clients. Owner: repository maintainer. Reviewed September 7, 2026 on Windows, PowerShell 7, .NET 10 and Playwright CLI. [Issue #509](https://github.com/joelfuller2016/KanbanFlow-v2/issues/509) owns the plan; [PR #511](https://github.com/joelfuller2016/KanbanFlow-v2/pull/511) owns this implementation. Measured results belong in this case's `runs/` directory.
 
-The [September 14 PR review corrections](runs/2026-09-14-7703cbd3f317.md) records current-base conflict repairs, audit/content regressions, local verification and the blocked HTTP/browser checks.
+The [September 14 PR review corrections](runs/2026-09-14-9fe16aaa1b04.md) records current-base conflict repairs, audit/content regressions, local verification and the blocked HTTP/browser checks.
 
 The [September 8 dependency-read and result-integrity run](runs/2026-09-08-3a07aa855551.md) records the review-cycle repair, old/new query measurements, missing-dependency refusal, and rebuilt API/MCP/browser results.
 
