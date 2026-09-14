@@ -3,9 +3,16 @@
 @inject IDbContextFactory<AppDbContext> DbFactory
 @inject NavigationManager Nav
 
+<a class="project-skip-link visually-hidden-focusable" href="@ProjectContentHref" data-enhance-nav="false"
+   data-project-skip-target="board-filter-search" data-testid="skip-to-board-search">Skip to board search</a>
+<a class="project-skip-link visually-hidden-focusable" href="@ProjectContentHref" data-enhance-nav="false"
+   data-project-skip-target="kanban-board-heading" data-testid="skip-to-board-cards">Skip to board cards</a>
+
 <NavMenu ProjectName="@projectName" />
 
-@Body
+<main id="project-content" tabindex="-1" aria-label="Project workspace">
+    @Body
+</main>
 
 <div id="blazor-error-ui" data-nosnippet>
     An unhandled error has occurred.
@@ -15,6 +22,7 @@
 
 @code {
     private string? projectName;
+    private string ProjectContentHref => Nav.Uri.Split('#')[0] + "#project-content";
 
     protected override void OnInitialized()
     {

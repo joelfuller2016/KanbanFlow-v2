@@ -1676,3 +1676,32 @@ h1:focus {
         padding: .2rem .4rem;
     }
 }
+
+/* Keyboard bypass links are out of flow so they never shrink the board canvas. */
+.project-skip-link:focus {
+    position: fixed;
+    top: .5rem;
+    left: .5rem;
+    z-index: 1080;
+    max-width: calc(100vw - 1rem);
+    padding: .75rem 1rem;
+    border-radius: .25rem;
+    color: var(--bs-body-color);
+    background: var(--bs-body-bg);
+    outline: 2px solid var(--bs-primary);
+    outline-offset: 2px;
+}
+
+#kanban-board-heading:focus-visible,
+#project-content:focus-visible {
+    outline: 2px solid var(--bs-primary);
+    outline-offset: -2px;
+}
+
+@media (forced-colors: active) {
+    .project-skip-link:focus,
+    #kanban-board-heading:focus-visible,
+    #project-content:focus-visible {
+        outline-color: Highlight;
+    }
+}
