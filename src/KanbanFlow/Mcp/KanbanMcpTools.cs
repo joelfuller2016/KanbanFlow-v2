@@ -81,11 +81,13 @@ public static class KanbanMcpTools
             .ToList();
     }
 
+    /// <summary>Loads authoritative project context and a chronological page of current project memory.</summary>
     [McpServerTool(Name = "get_project_context")]
-    [Description("Load authoritative KanbanFlow project docs, features, tasks and current project memory before planning. Memory is limited to the newest 200 nodes; MemoryTruncated indicates more. Keep the configured server identity with returned references; do not copy project decisions into another memory store.")]
+    [Description("Load authoritative KanbanFlow project docs, features, tasks and current project memory before planning. Memory is ordered newest first by creation time, then id, with up to 200 nodes per page. Pass MemoryNextCursor as memoryCursor on the next call for the same project until it is null. Keep the configured server identity with returned references; do not copy project decisions into another memory store.")]
     public static async Task<ProjectContext> GetProjectContext(
         IDbContextFactory<AppDbContext> dbFactory,
         [Description("The project id (from list_projects).")] int projectId,
+        [Description("MemoryNextCursor from the previous response for this project; omit for the newest page.")] string? memoryCursor = null,
         CancellationToken cancellationToken = default)
     {
         await using var db = await dbFactory.CreateDbContextAsync(cancellationToken);
@@ -118,11 +120,30 @@ public static class KanbanMcpTools
             .ToList();
 
         var scopeKey = projectId.ToString(System.Globalization.CultureInfo.InvariantCulture);
-        var memory = await db.MemoryNodes.AsNoTracking()
+        var memoryQuery = db.MemoryNodes.AsNoTracking()
             .Where(m => m.Scope == MemoryScope.Project && m.ScopeKey == scopeKey &&
-                        m.ValidTo == null && m.SupersededById == null)
-            .OrderByDescending(m => m.Id)
-            .Select(m => new { m.Id, m.Type, m.Content, m.Source, m.ValidFrom })
+                        m.ValidTo == null && m.SupersededById == null);
+        if (memoryCursor is not null)
+        {
+            // Carry the sort values themselves so deleting or retiring the boundary node
+            // does not invalidate continuation. Bind the cursor to its project as well.
+            var parts = memoryCursor.Split(':');
+            var culture = System.Globalization.CultureInfo.InvariantCulture;
+            var style = System.Globalization.NumberStyles.None;
+            if (parts.Length != 3 ||
+                !int.TryParse(parts[0], style, culture, out var cursorProjectId) || cursorProjectId != projectId ||
+                !long.TryParse(parts[1], style, culture, out var ticks) || ticks > DateTime.MaxValue.Ticks ||
+                !int.TryParse(parts[2], style, culture, out var cursorId) || cursorId <= 0)
+                throw new McpException("Invalid memoryCursor. Use MemoryNextCursor from a previous get_project_context response for this project, or omit it to restart.");
+
+            var createdAt = new DateTime(ticks, DateTimeKind.Utc);
+            memoryQuery = memoryQuery.Where(m => m.CreatedAt < createdAt ||
+                (m.CreatedAt == createdAt && m.Id < cursorId));
+        }
+
+        var memory = await memoryQuery
+            .OrderByDescending(m => m.CreatedAt).ThenByDescending(m => m.Id)
+            .Select(m => new { m.Id, m.Type, m.Content, m.Source, m.ValidFrom, m.CreatedAt })
             .Take(201)
             .ToListAsync(cancellationToken);
 
@@ -132,7 +153,10 @@ public static class KanbanMcpTools
         {
             Memory = memory.Take(200).Select(m => new ProjectMemoryContext(
                 m.Id, $"MemoryNode:{m.Id}", m.Type.ToString(), m.Content, m.Source, m.ValidFrom)).ToList(),
-            MemoryTruncated = memory.Count > 200
+            MemoryTruncated = memory.Count > 200,
+            MemoryNextCursor = memory.Count > 200
+                ? FormattableString.Invariant($"{projectId}:{memory[199].CreatedAt.Ticks}:{memory[199].Id}")
+                : null
         };
     }
 
@@ -1291,13 +1315,16 @@ public static class KanbanMcpTools
 public sealed record ProjectSummary(int Id, string Name, string? Description, string? Goals, int FeatureCount, int TaskCount);
 public sealed record FeatureNode(int Id, int? ParentFeatureId, string Name, string? Description);
 public sealed record TaskNode(int Id, int FeatureId, string Name, string Status, string Priority, string? Assignee, string? ClaimedBy);
+/// <summary>Project records and one memory page; use MemoryNextCursor to retrieve remaining current memory.</summary>
 public sealed record ProjectContext(int Id, string Name, string? Description, string? Goals, string? Readme, IReadOnlyList<FeatureNode> Features, IReadOnlyList<TaskNode> Tasks)
 {
     public string Authority => "KanbanFlow";
     public string Reference => $"Project:{Id}";
     public IReadOnlyList<ProjectMemoryContext> Memory { get; init; } = [];
     public bool MemoryTruncated { get; init; }
+    public string? MemoryNextCursor { get; init; }
 }
+/// <summary>A complete current memory version with its stable reference and source metadata.</summary>
 public sealed record ProjectMemoryContext(int Id, string Reference, string Type, string Content, string? Source, DateTime ValidFrom);
 public sealed record ChecklistItem(int Id, string Text, bool Completed);
 public sealed record TaskDetail(int Id, int FeatureId, string Name, string? Description, string Status, string Priority, string? Assignee, string? ClaimedBy, IReadOnlyList<ChecklistItem> AcceptanceCriteria, IReadOnlyList<ChecklistItem> Subtasks, IReadOnlyList<int> DependsOnTaskIds);

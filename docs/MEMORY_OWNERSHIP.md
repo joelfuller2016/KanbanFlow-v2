@@ -4,8 +4,19 @@ KanbanFlow owns project tasks, decisions, requirements and project knowledge.
 The existing `get_project_context` MCP tool is the entry point for agents. It now
 returns current project memory with the project docs, features and tasks. It
 excludes retired versions, other projects and personal/agent/session namespaces.
-The newest 200 nodes are returned; `MemoryTruncated` tells the caller to continue
-through scoped memory retrieval rather than assume the project has no more facts.
+Each page contains up to 200 complete nodes, ordered by `CreatedAt` descending,
+then `Id` descending. When `MemoryTruncated` is true, call `get_project_context`
+again with the same `projectId` and `memoryCursor` set to the returned
+`MemoryNextCursor`. Append the returned `Memory` entries and repeat until
+`MemoryNextCursor` is null (`MemoryTruncated` is then false). Omit `memoryCursor`
+to restart from the newest page. Treat cursor strings as opaque and project-specific.
+
+Continuation uses creation time and ID, so deleting the previous boundary node
+or inserting newer nodes does not shift later pages. Each call reads current
+records, not a frozen snapshot: retirement removes a node from subsequent reads,
+and concurrent backdated inserts may appear later. Reload from the first page
+before a new task to pick up newly created versions. Project docs, features and
+tasks are included on every call.
 
 | Data | Owner | Other components |
 | --- | --- | --- |
