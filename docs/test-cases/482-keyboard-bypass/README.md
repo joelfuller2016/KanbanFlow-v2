@@ -66,3 +66,5 @@ The [full run record](runs/2026-09-14-f39c404e992a.md) is pinned to implementati
 
 
 The [PR review follow-up](runs/2026-09-14-pr523-review.md) records later corrections and their actual verification. The standalone `node scripts/verify-project-skip-links.mjs` check uses Chromium with the real module/styles and a small DOM fixture; it starts no Kanban server and exercises no database. It complements the [full application scenario](../../../scripts/project-skip-navigation.browser.mjs), whose rerun remains pending for that follow-up.
+
+Latest review correction: [breadcrumb load generation at 37050d83b18c](runs/2026-09-14-37050d83b18c.md), with the rerun canonical gate and explicit pending application/browser verification.
