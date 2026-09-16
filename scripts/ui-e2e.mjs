@@ -14,6 +14,7 @@
 // the done-checkbox path — both re-group the card into the destination column.
 
 import { chromium } from "playwright";
+import { projectSkipNavigation } from "./project-skip-navigation.browser.mjs";
 import { spawn, execSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -799,6 +800,9 @@ async function main() {
       await page.locator('[data-testid="memory-map-privacy-note"]').getByText("Explicit records only.", { exact: true })
         .waitFor({ state: "visible" });
     });
+
+    await test("Project keyboard bypass reaches search and cards without traversing the outline (#482)",
+      () => projectSkipNavigation(page, api));
 
     // ── Scenario A: create a project through the Home "New Project" modal ──
     const modalProjectName = `E2E Modal ${stamp}`;

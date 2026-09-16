@@ -1,0 +1,102 @@
+{
+  "sourceCommit": "f39c404e992a88093a07407054006c4ae14d9a3d",
+  "scope": "Historical execution logs from the original PR author; not rerun during the September 13 follow-up.",
+  "sanitization": "Replaced local profile/worktree/artifact roots and recognized credential fields. Preserved complete logs, including failed/intermittent runs.",
+  "files": [
+    {
+      "file": "final-verify.log",
+      "bytes": 296668,
+      "sha256": "e505b7431be667a3a6b5e51b6f484b932a3f952bf32b0b8f37a2fca82c5bfd9b"
+    },
+    {
+      "file": "final-scripts.log",
+      "bytes": 26839,
+      "sha256": "707ade3d88a54f9060f2cae0d2b51a658b2fa0b768e55fd6b62c77bebcbc7229"
+    },
+    {
+      "file": "final-ui-rerun.log",
+      "bytes": 5196,
+      "sha256": "c00bec2a7e0acc18ff451dad00c1cbe4028f8fcee25212b45a2af74d022c388c"
+    },
+    {
+      "file": "api-smoke-offline.log",
+      "bytes": 4256,
+      "sha256": "f3cd917d90f182d9aae6ad63f7d770793423bfe08eee666f80ec53736d8f5eb8"
+    },
+    {
+      "file": "final-framing.log",
+      "bytes": 599,
+      "sha256": "44dab745043311639badc89e97eae2f628bceb527e48bb0d5982353f932cacc3"
+    },
+    {
+      "file": "final-mcp-integration.log",
+      "bytes": 22579,
+      "sha256": "d6b543aa7acd25edc00ebca88520841e600f7c782af55e0bb00230261e3be95e"
+    },
+    {
+      "file": "baseline-ui.log",
+      "bytes": 5028,
+      "sha256": "2ddff593137758b40e33eea23a8a2756e32871b8a0c96bcf361dc011abd9cdc4"
+    },
+    {
+      "file": "baseline-verify.log",
+      "bytes": 30,
+      "sha256": "016a799b3bdcf18ed4b28f999bea2a16cf25709f20d59e78556513446a518cb1"
+    },
+    {
+      "file": "red-ui.log",
+      "bytes": 5217,
+      "sha256": "93120de2a68e1ace6cc86910fb2d2534c36d45a7853031379202d4bfedf30bf2"
+    },
+    {
+      "file": "fallback-red.log",
+      "bytes": 714,
+      "sha256": "27faffb13d799060f7811a7abc8d7fd08a0d378e274f38604535352a3ad0d8f5"
+    },
+    {
+      "file": "fallback-green.log",
+      "bytes": 100,
+      "sha256": "7add91dd9d8f647d1e260db79482599f830ae688d39ad977ed8d419928ddf630"
+    },
+    {
+      "file": "green-ui.log",
+      "bytes": 5171,
+      "sha256": "0f8b1dede49c09ffec115dc1326eec88784763322fa092f112569c443ca9a2b9"
+    },
+    {
+      "file": "final-ui.log",
+      "bytes": 5285,
+      "sha256": "463bc8f471b2d7a174fbc5fe3cd0a91f9e96bb53e5a58e620f1b4098ebfaeea6"
+    },
+    {
+      "file": "final-ui-repeat.log",
+      "bytes": 5132,
+      "sha256": "1a41b0ff27248838f819ab829392deb0648633dc9d240eaf0b261cd04598f0fd"
+    },
+    {
+      "file": "api-smoke.log",
+      "bytes": 4425,
+      "sha256": "17855cec3901b723745fa434014c11c26ac9490371ad15d6638c414d90b53bd2"
+    },
+    {
+      "file": "independent-verdict.json",
+      "bytes": 2243,
+      "sha256": "a2c92135b7f5699bca65afa5c08dfdc0d8fe582042d64ec88c1455a9ec4331ab"
+    },
+    {
+      "file": "independent-final-verdict.json",
+      "bytes": 600,
+      "sha256": "00891c046d41dee1d5dfeaa7cbf3976acb9610f78b2f64e7b706cabdc0b7c57a"
+    },
+    {
+      "file": "ad-hoc-verification.md",
+      "bytes": 1809,
+      "sha256": "acdfc62648d1af8bedee64ee02d0757812c2466f1ccd9cc7d3ef37187b933c02"
+    },
+    {
+      "file": "latest-focused.log",
+      "bytes": 451,
+      "sha256": "b094352fc0521968979f83fc0d70096f4e771c16d645841ca16e9d7730c6ad0f"
+    }
+  ]
+}

@@ -8,6 +8,7 @@ that case's `runs/` directory records what was actually executed at one immutabl
 
 | ID | Feature | Stable case | Latest recorded run | Status |
 |---|---|---|---|---|
+| TC-482 (partial) | Board keyboard bypass | [Case](482-keyboard-bypass/README.md) | [2026-09-14 · `f39c404e992a`](482-keyboard-bypass/runs/2026-09-14-f39c404e992a.md) | Full gates passed with documented offline profile/timing caveats; roving outline and human acceptance remain |
 | TC-507 | Atomic inbound GitHub projection | [Case](507-atomic-github-projection/README.md) | [2026-09-09 · `f6b83bb52240`](507-atomic-github-projection/runs/2026-09-09-f6b83bb52240.md) | Integrated API/MCP and UI passed; human feedback remains |
 | TC-481 | Card legibility and accurate GitHub links | [Case](481-card-legibility/README.md) | [2026-09-09 · `cd8e4ce699e6`](481-card-legibility/runs/2026-09-09-cd8e4ce699e6.md) | Integrated source and three engines passed; human density/usability review pending |
 | TC-462 | MCP nullable text clears | [Case](462-mcp-empty-clears/README.md) | [2026-09-08 · `f3dc411c4e9e`](462-mcp-empty-clears/runs/2026-09-08-f3dc411c4e9e.md) | Passed real transports, checklist validation and SSE review repairs |
