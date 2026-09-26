@@ -8,7 +8,7 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="coverlet.collector" Version="6.0.4" />
+    <PackageReference Include="coverlet.collector" Version="10.0.1" />
     <PackageReference Include="Microsoft.Extensions.TimeProvider.Testing" Version="10.10.0" />
     <!-- EF Core Sqlite (incl. Microsoft.Data.Sqlite) flows transitively from the
          KanbanFlow ProjectReference, so it always matches the app's version. Do NOT
