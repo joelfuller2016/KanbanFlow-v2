@@ -171,6 +171,8 @@ $previousLlmTimeout = $env:KANBANFLOW_LLM_TIMEOUT_MS
 try {
     Write-Host "Building KanbanFlow..."
     dotnet build $resolvedProjectPath --nologo
+    # A failed build leaves the previous DLL in bin/, and `dotnet run --no-build` below would smoke-test it (#558).
+    if ($LASTEXITCODE -ne 0) { throw "dotnet build failed (exit $LASTEXITCODE); refusing to smoke-test a stale build." }
 
     Write-Host "Starting KanbanFlow with a fresh SQLite DB in $runDir..."
     Write-Host "Using API smoke base URL $BaseUrl"
