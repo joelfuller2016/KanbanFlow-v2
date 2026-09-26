@@ -77,7 +77,7 @@ reviews:
         - Enforce nullable reference types; flag possible null deref and missing guard clauses.
         - async/await: no `async void` (except event handlers); no `.Result` / `.Wait()` / `.GetAwaiter().GetResult()` (deadlock/blocking); thread CancellationToken; ConfigureAwait(false) in library code.
         - DI lifetimes: no captive dependencies (singleton capturing scoped/transient); register with the correct lifetime.
-        - EF Core: no N+1; AsNoTracking for read-only queries; avoid client-side evaluation of large sets; parameterized queries only; schema changes via migrations, NOT manual SQL/DDL.
+        - EF Core: no N+1; AsNoTracking for read-only queries; avoid client-side evaluation of large sets; parameterized queries only. This repository uses EnsureCreated plus additive SchemaPatcher/WorkflowSchema upgrades, without an EF migration baseline. Require idempotent upgrades, fresh/existing-database tests and matching EF mappings; do not add unapplied EF migrations alongside this startup path.
         - IDisposable / IAsyncDisposable: dispose owned resources; prefer `using`.
         - Validate all external/API input; never trust client data. Flag SQL injection, path traversal, SSRF, deserialization, and secret leakage.
         - Robust exception handling; never silently swallow exceptions.
