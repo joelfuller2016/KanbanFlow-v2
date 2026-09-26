@@ -292,6 +292,131 @@ public static class SchemaPatcher
         transaction.Commit();
     }
 
+    /// <summary>
+    /// Ensure the schema added by bd1c855 ("recursive nesting for features and subtasks") exists on
+    /// databases created before it: the <c>Projects.Readme</c>, <c>Features.ParentFeatureId</c> and
+    /// <c>Subtasks.ParentSubtaskId</c> columns and the <c>Requirements</c> and <c>TaskComments</c>
+    /// tables. That commit shipped without a patcher, and EnsureCreated() is a no-op on an existing
+    /// database, so a board created before it answered <c>GET /api/projects</c> with a 500 ("no such
+    /// column: p.Readme"). No-op on non-SQLite providers.
+    /// </summary>
+    public static void EnsureNestingSchema(AppDbContext db)
+    {
+        ArgumentNullException.ThrowIfNull(db);
+
+        if (!db.Database.IsSqlite())
+            return;
+
+        db.Database.OpenConnection();
+        Exception? patchException = null;
+        try
+        {
+            EnsureNestingSchema(db.Database.GetDbConnection());
+        }
+        catch (Exception ex)
+        {
+            patchException = ex;
+            throw;
+        }
+        finally
+        {
+            try
+            {
+                db.Database.CloseConnection();
+            }
+            catch when (patchException is not null)
+            {
+                // Preserve the patch failure; cleanup is best-effort only on failure path.
+            }
+        }
+    }
+
+    /// <summary>
+    /// Connection-level worker for <see cref="EnsureNestingSchema(AppDbContext)"/>. Column types,
+    /// nullability, foreign keys (with their ON DELETE behavior) and index names match what
+    /// <see cref="AppDbContext"/>.EnsureCreated() produces, so a patched database and a fresh one
+    /// converge. An added column lands at the end of its table (SQLite <c>ALTER TABLE ADD COLUMN</c>),
+    /// which EF does not depend on. Every statement is idempotent and no existing row is modified.
+    /// </summary>
+    public static void EnsureNestingSchema(DbConnection connection)
+    {
+        ArgumentNullException.ThrowIfNull(connection);
+
+        using var transaction = connection.BeginTransaction();
+
+        AddColumnIfMissing(connection, transaction, "Projects", "Readme", "TEXT NULL");
+        AddColumnIfMissing(connection, transaction, "Features", "ParentFeatureId",
+            "INTEGER NULL REFERENCES Features (Id) ON DELETE RESTRICT");
+        AddColumnIfMissing(connection, transaction, "Subtasks", "ParentSubtaskId",
+            "INTEGER NULL REFERENCES Subtasks (Id) ON DELETE RESTRICT");
+
+        Execute(connection, transaction, """
+            CREATE TABLE IF NOT EXISTS Requirements (
+                Id INTEGER NOT NULL CONSTRAINT PK_Requirements PRIMARY KEY AUTOINCREMENT,
+                ProjectId INTEGER NOT NULL,
+                Text TEXT NOT NULL,
+                Description TEXT NULL,
+                Priority INTEGER NOT NULL,
+                Status INTEGER NOT NULL,
+                FeatureId INTEGER NULL,
+                TaskItemId INTEGER NULL,
+                SortOrder INTEGER NOT NULL,
+                CreatedAt TEXT NOT NULL,
+                UpdatedAt TEXT NOT NULL,
+                CONSTRAINT FK_Requirements_Features_FeatureId FOREIGN KEY (FeatureId)
+                    REFERENCES Features (Id) ON DELETE SET NULL,
+                CONSTRAINT FK_Requirements_Projects_ProjectId FOREIGN KEY (ProjectId)
+                    REFERENCES Projects (Id) ON DELETE CASCADE,
+                CONSTRAINT FK_Requirements_Tasks_TaskItemId FOREIGN KEY (TaskItemId)
+                    REFERENCES Tasks (Id) ON DELETE SET NULL
+            )
+            """);
+
+        Execute(connection, transaction, """
+            CREATE TABLE IF NOT EXISTS TaskComments (
+                Id INTEGER NOT NULL CONSTRAINT PK_TaskComments PRIMARY KEY AUTOINCREMENT,
+                TaskItemId INTEGER NOT NULL,
+                Text TEXT NOT NULL,
+                Author TEXT NULL,
+                Type INTEGER NOT NULL,
+                CreatedAt TEXT NOT NULL,
+                CONSTRAINT FK_TaskComments_Tasks_TaskItemId FOREIGN KEY (TaskItemId)
+                    REFERENCES Tasks (Id) ON DELETE CASCADE
+            )
+            """);
+
+        Execute(connection, transaction, "CREATE INDEX IF NOT EXISTS IX_Features_ParentFeatureId ON Features (ParentFeatureId)");
+        Execute(connection, transaction, "CREATE INDEX IF NOT EXISTS IX_Subtasks_ParentSubtaskId ON Subtasks (ParentSubtaskId)");
+        Execute(connection, transaction, "CREATE INDEX IF NOT EXISTS IX_Requirements_FeatureId ON Requirements (FeatureId)");
+        Execute(connection, transaction, "CREATE INDEX IF NOT EXISTS IX_Requirements_ProjectId ON Requirements (ProjectId)");
+        Execute(connection, transaction, "CREATE INDEX IF NOT EXISTS IX_Requirements_TaskItemId ON Requirements (TaskItemId)");
+        Execute(connection, transaction, "CREATE INDEX IF NOT EXISTS IX_TaskComments_TaskItemId ON TaskComments (TaskItemId)");
+
+        transaction.Commit();
+    }
+
+    /// <summary>
+    /// Adds <paramref name="column"/> to <paramref name="table"/> unless <c>PRAGMA table_info</c>
+    /// already lists it, so the patch is a no-op on fresh and already-patched databases.
+    /// </summary>
+    private static void AddColumnIfMissing(
+        DbConnection connection, DbTransaction transaction, string table, string column, string definition)
+    {
+        using (var probe = connection.CreateCommand())
+        {
+            probe.Transaction = transaction;
+            probe.CommandText = $"PRAGMA table_info('{table}')";
+            using var reader = probe.ExecuteReader();
+            while (reader.Read())
+            {
+                if (string.Equals(reader.GetString(1), column, StringComparison.OrdinalIgnoreCase))
+                    return;
+            }
+        }
+
+        Execute(connection, transaction, $"ALTER TABLE {table} ADD COLUMN {column} {definition}");
+    }
+
     private static void Execute(DbConnection connection, DbTransaction transaction, string sql)
     {
         using var command = connection.CreateCommand();
