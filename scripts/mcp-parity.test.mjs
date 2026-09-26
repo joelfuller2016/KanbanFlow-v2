@@ -132,6 +132,13 @@ test("stdio delete_task defaults actor to mcp-agent when omitted (F3)", async ()
   });
 });
 
+test("stdio delete_task treats a whitespace-only actor as absent (F3)", async () => {
+  await withTransport(204, undefined, async (rpc, requests) => {
+    await callTool(rpc, "delete_task", { taskId: 8, actor: "   " });
+    assert.equal(queryOf(requests[0].url).get("actor"), "mcp-agent");
+  });
+});
+
 // ── F4: idea-tool actor defaults ────────────────────────────────────────────
 
 test("stdio create_idea defaults actor to mcp-agent when omitted (F4)", async () => {
@@ -164,12 +171,42 @@ test("stdio update_idea defaults actor to mcp-agent when omitted (F4)", async ()
   });
 });
 
+// Each handler trims on its own line, so whitespace handling and explicit forwarding are proven per
+// tool: a default-only test cannot tell "defaults when omitted" from "always sends mcp-agent".
+test("stdio update_idea treats a whitespace-only actor as absent (F4)", async () => {
+  await withTransport(200, { id: 1 }, async (rpc, requests) => {
+    await callTool(rpc, "update_idea", { ideaId: 1, priority: "Low", expectedWorkflowVersion: 0, actor: "   " });
+    assert.equal(requests[0].body.actor, "mcp-agent");
+  });
+});
+
+test("stdio update_idea forwards an explicit actor unchanged (F4 control)", async () => {
+  await withTransport(200, { id: 1 }, async (rpc, requests) => {
+    await callTool(rpc, "update_idea", { ideaId: 1, priority: "Low", expectedWorkflowVersion: 0, actor: "explicit-actor" });
+    assert.equal(requests[0].body.actor, "explicit-actor");
+  });
+});
+
 // promote_idea was left "PLAUSIBLE — NOT SHOWN" by the review (same code shape, not independently
 // driven live). This is the first live exercise of it.
 test("stdio promote_idea defaults actor to mcp-agent when omitted (F4)", async () => {
   await withTransport(200, { ideaId: 1, projectId: 2 }, async (rpc, requests) => {
     await callTool(rpc, "promote_idea", { ideaId: 1 });
     assert.equal(requests[0].body.actor, "mcp-agent");
+  });
+});
+
+test("stdio promote_idea treats a whitespace-only actor as absent (F4)", async () => {
+  await withTransport(200, { ideaId: 1, projectId: 2 }, async (rpc, requests) => {
+    await callTool(rpc, "promote_idea", { ideaId: 1, actor: "   " });
+    assert.equal(requests[0].body.actor, "mcp-agent");
+  });
+});
+
+test("stdio promote_idea forwards an explicit actor unchanged (F4 control)", async () => {
+  await withTransport(200, { ideaId: 1, projectId: 2 }, async (rpc, requests) => {
+    await callTool(rpc, "promote_idea", { ideaId: 1, actor: "explicit-actor" });
+    assert.equal(requests[0].body.actor, "explicit-actor");
   });
 });
 
@@ -257,6 +294,18 @@ test("stdio list_ideas passes an in-range limit through unchanged (F5 boundary)"
     assert.equal(queryOf(requests[2].url).get("limit"), "1", "one below min must clamp to min exactly");
     await callTool(rpc, "list_ideas", { limit: 501 });
     assert.equal(queryOf(requests[3].url).get("limit"), "500", "one above max must clamp to max exactly");
+  });
+});
+
+// list_ideas shares optionalClampedInt with get_next_tasks; this pins that its call site actually goes
+// through the Int32 guard rather than a plain clamp.
+test("stdio list_ideas rejects a limit one past either Int32 bound instead of clamping it (F5)", async () => {
+  await withTransport(200, [], async (rpc, requests) => {
+    for (const limit of [2147483648, -2147483649]) {
+      const call = await rpc("tools/call", { name: "list_ideas", arguments: { limit } });
+      assert.equal(call.error?.code, -32602, `limit ${limit}: expected a -32602 rejection, got: ${JSON.stringify(call)}`);
+    }
+    assert.equal(requests.length, 0, "a limit one past either Int32 bound must never reach REST");
   });
 });
 
