@@ -9,6 +9,17 @@ AI-generated and may not actually work — verify the logic, don't trust the pro
 These are owner-wide defaults. Apply the sections that match this repo's actual stack; ignore
 the rest.
 
+## Repo-specific overrides (KanbanFlow-v2) — these win over the generic rules below
+- **Schema evolution is `EnsureCreated()` plus additive, idempotent `Ensure*` startup patchers
+  (`SchemaPatcher`; open PR #511 adds a `WorkflowSchema` patcher in the same family), not EF
+  migrations** (owner decision:
+  https://github.com/joelfuller2016/KanbanFlow-v2/issues/86#issuecomment-4529784971;
+  `docs/issue-quality-checklist.md`). Do not ask for migrations; review a new patcher for
+  idempotency, fresh/existing-database safety, and matching EF mappings instead.
+- **Open access by design** (#169/#170): no auth, CORS lock, loopback pin, HTTPS or rate limiting.
+  Do not request them.
+- **No GitHub Actions** — the gate is `scripts/verify.ps1` (`docs/ci-without-actions.md`).
+
 ## Review priorities (in order)
 1. **Correctness** — does the change do what it claims? Trace logic and edge cases.
 2. **Security** — injection, XSS, auth/authz, CORS, secret leakage, unsafe deserialization.
@@ -28,7 +39,9 @@ the rest.
 - async: no `async void` (except event handlers); no `.Result` / `.Wait()` /
   `.GetAwaiter().GetResult()`; thread `CancellationToken`; `ConfigureAwait(false)` in libraries.
 - DI: correct lifetimes; no captive dependencies (singleton holding scoped/transient).
-- EF Core: no N+1; `AsNoTracking()` for reads; parameterized; schema via migrations, not manual SQL.
+- EF Core: no N+1; `AsNoTracking()` for reads; parameterized. Schema via `EnsureCreated()` +
+  additive, idempotent `Ensure*`/`SchemaPatcher` upgrades, not EF migrations (see repo-specific
+  overrides above) — require idempotent upgrades and matching EF mappings.
 - Dispose owned `IDisposable` / `IAsyncDisposable`.
 - Blazor: no blocking I/O in `OnInitialized`; dispose subscriptions; treat `[Parameter]` as
   immutable; sanitize `MarkupString` / raw HTML; ARIA + keyboard + focus handling; `@key` in loops.
