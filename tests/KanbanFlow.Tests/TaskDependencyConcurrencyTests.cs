@@ -311,7 +311,10 @@ public sealed class TaskDependencyConcurrencyTests
         TaskDependencyCreate firstRequest,
         TaskDependencyCreate secondRequest)
     {
-        using var watchdog = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        // Must exceed SqliteFileTestFactory's busy timeout: a genuine stall then surfaces as a
+        // SqliteException (SQLITE_BUSY) inside RaceOutcome.Error, not an ambiguous watchdog cancellation.
+        using var watchdog = new CancellationTokenSource(
+            TimeSpan.FromSeconds(SqliteFileTestFactory.DefaultBusyTimeoutSeconds * 2));
         rendezvous.Arm();
         spanProbe.Arm();
 
