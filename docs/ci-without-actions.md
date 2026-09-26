@@ -14,6 +14,13 @@ reverting to the vulnerable `AngleSharp` with the suppression deleted fails the 
 `error NU1902` in both projects (exit 1, 2 errors). Close those by **bumping the dependency**, never
 by adding an audit suppression — see
 [reviews/2026-08-02-anglesharp-cve-suppression-removal.md](reviews/2026-08-02-anglesharp-cve-suppression-removal.md) (#320).
+This gate never runs `npm audit`, and Dependabot alerts and security updates are disabled for
+this repository (`gh api repos/.../vulnerability-alerts` → 404; `gh api repos/.../dependabot/alerts`
+→ 403 "Dependabot alerts are disabled for this repository"; `gh api repos/.../automated-security-fixes`
+→ `{"enabled":false}`), so nothing reports npm advisories (Playwright or any future `scripts`/e2e
+dependency). Dependabot's weekly npm version-update PRs still deliver newer releases — security
+fixes included — but don't mark which bumps are security fixes. Enabling Dependabot alerts is an
+owner-side repository setting that, like version updates, uses no Actions minutes.
 
 ## Verify the current checkout
 
