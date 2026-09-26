@@ -23,8 +23,10 @@ public sealed class ExternalWorkItemProjectionTests
         var feature = await SeedFeature(factory);
         var service = new ExternalWorkItemService(factory);
         var request = Request(feature);
-        // Must exceed SqliteFileTestFactory's busy timeout so a genuine stall surfaces as a
-        // SqliteException (SQLITE_BUSY), not an ambiguous watchdog cancellation (see
+        // Must exceed SqliteFileTestFactory's busy timeout so a stall inside SQLite's own busy-wait
+        // surfaces as a SqliteException (SQLITE_BUSY); a stall in
+        // PauseFirstTaskSave.SavingChangesAsync's own wait (bounded only by this same token) still
+        // ends in a cancellation, just with 2x the busy timeout's headroom before it fires (see
         // TaskDependencyConcurrencyTests.RaceAsync).
         using var watchdog = new CancellationTokenSource(
             TimeSpan.FromSeconds(SqliteFileTestFactory.DefaultBusyTimeoutSeconds * 2));
