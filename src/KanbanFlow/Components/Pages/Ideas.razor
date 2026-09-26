@@ -603,7 +603,7 @@ else
         {
             // In-process through IIdeaService, NOT the HTTP API: the service is the single audit
             // boundary (#88) and writes the IdeaUpdated ActivityEvent for this mutation.
-            await IdeaSvc.UpdateAsync(idea.Id, new IdeaUpdate(Status: target), actor: "User", _cts.Token);
+            await IdeaSvc.UpdateAsync(idea.Id, new IdeaUpdate(Status: target, ExpectedWorkflowVersion: idea.WorkflowVersion), actor: "User", _cts.Token);
 
             // Archived/Rejected are live drop targets that render as 3rem rails, so a card dropped into
             // one lands somewhere the user cannot see it — the gesture succeeds and looks like it did
