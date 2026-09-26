@@ -17,7 +17,7 @@ public sealed class ExternalWorkItemConcurrencyTests
     [Fact]
     public async Task ConcurrentFileSqlitePrepare_OneWins_OneGetsDeterministicConflict()
     {
-        using var factory = new SqliteFileTestFactory(commandTimeoutSeconds: 30);
+        using var factory = new SqliteFileTestFactory(commandTimeoutSeconds: SqliteFileTestFactory.DefaultBusyTimeoutSeconds);
         var task = await SeedTaskAsync(factory);
         var service = new ExternalWorkItemService(
             factory,
@@ -36,7 +36,12 @@ public sealed class ExternalWorkItemConcurrencyTests
             task.UpdatedAt);
 
         var start = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        using var watchdog = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        // Must exceed the factory's busy timeout so a stall inside SQLite's own busy-wait surfaces
+        // as a SqliteException (SQLITE_BUSY); a stall anywhere else in this race (bounded only by
+        // this same token) still ends in a cancellation, just with 2x the busy timeout's headroom
+        // before it fires (see TaskDependencyConcurrencyTests.RaceAsync).
+        using var watchdog = new CancellationTokenSource(
+            TimeSpan.FromSeconds(SqliteFileTestFactory.DefaultBusyTimeoutSeconds * 2));
         var first = Task.Run(async () =>
         {
             await start.Task.WaitAsync(watchdog.Token);
@@ -63,7 +68,7 @@ public sealed class ExternalWorkItemConcurrencyTests
     [Fact]
     public async Task ConcurrentManualRetryAuthorizations_ConvergeToOneAuditEvent()
     {
-        using var factory = new SqliteFileTestFactory(commandTimeoutSeconds: 30);
+        using var factory = new SqliteFileTestFactory(commandTimeoutSeconds: SqliteFileTestFactory.DefaultBusyTimeoutSeconds);
         var task = await SeedTaskAsync(factory);
         var clock = new FakeTimeProvider(new DateTimeOffset(task.UpdatedAt, TimeSpan.Zero));
         var service = new ExternalWorkItemService(factory, clock, TimeSpan.FromSeconds(2));
@@ -98,7 +103,12 @@ public sealed class ExternalWorkItemConcurrencyTests
             "prior process stopped; accept delayed visibility risk");
 
         var start = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        using var watchdog = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        // Must exceed the factory's busy timeout so a stall inside SQLite's own busy-wait surfaces
+        // as a SqliteException (SQLITE_BUSY); a stall anywhere else in this race (bounded only by
+        // this same token) still ends in a cancellation, just with 2x the busy timeout's headroom
+        // before it fires (see TaskDependencyConcurrencyTests.RaceAsync).
+        using var watchdog = new CancellationTokenSource(
+            TimeSpan.FromSeconds(SqliteFileTestFactory.DefaultBusyTimeoutSeconds * 2));
         var first = Task.Run(async () =>
         {
             await start.Task.WaitAsync(watchdog.Token);
@@ -129,7 +139,7 @@ public sealed class ExternalWorkItemConcurrencyTests
     public async Task ConcurrentPrepareAndDelete_ProduceOnlySerializedValidOutcome(
         ConcurrentDeleteScope deleteScope)
     {
-        using var factory = new SqliteFileTestFactory(commandTimeoutSeconds: 30);
+        using var factory = new SqliteFileTestFactory(commandTimeoutSeconds: SqliteFileTestFactory.DefaultBusyTimeoutSeconds);
         var task = await SeedTaskAsync(factory);
         var externalService = new ExternalWorkItemService(
             factory,
@@ -149,7 +159,12 @@ public sealed class ExternalWorkItemConcurrencyTests
             task.UpdatedAt);
 
         var start = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        using var watchdog = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+        // Must exceed the factory's busy timeout so a stall inside SQLite's own busy-wait surfaces
+        // as a SqliteException (SQLITE_BUSY); a stall anywhere else in this race (bounded only by
+        // this same token) still ends in a cancellation, just with 2x the busy timeout's headroom
+        // before it fires (see TaskDependencyConcurrencyTests.RaceAsync).
+        using var watchdog = new CancellationTokenSource(
+            TimeSpan.FromSeconds(SqliteFileTestFactory.DefaultBusyTimeoutSeconds * 2));
         var prepareTask = Task.Run(async () =>
         {
             await start.Task.WaitAsync(watchdog.Token);

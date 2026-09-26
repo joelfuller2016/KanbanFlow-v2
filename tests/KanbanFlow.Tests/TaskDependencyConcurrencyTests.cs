@@ -311,7 +311,13 @@ public sealed class TaskDependencyConcurrencyTests
         TaskDependencyCreate firstRequest,
         TaskDependencyCreate secondRequest)
     {
-        using var watchdog = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        // Must exceed the busy timeout so a stall inside SQLite's own busy-wait surfaces as a
+        // SqliteException (SQLITE_BUSY) inside RaceOutcome.Error; a stall in
+        // ImmediateTransactionRendezvous.TransactionStartedAsync's own wait (bounded only by this
+        // same token) still ends in a cancellation, just with 2x the busy timeout's headroom
+        // before it fires.
+        using var watchdog = new CancellationTokenSource(
+            TimeSpan.FromSeconds(SqliteFileTestFactory.DefaultBusyTimeoutSeconds * 2));
         rendezvous.Arm();
         spanProbe.Arm();
 
