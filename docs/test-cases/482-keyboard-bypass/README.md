@@ -56,7 +56,7 @@ node scripts/framing-ab.mjs all
 
 MCP smoke requires an explicitly booted disposable app: set `KANBANFLOW_API_URL` to that instance and run `node scripts/smoke-mcp.mjs <fixture-project-id>`. Discover/create the fixture project; do not assume production project 1 or point this mutation suite at the installed app. Run `/api/admin/run-tests?suite=all` only on that disposable instance.
 
-Optional embedding calls may exceed smoke-api's five-second client budget if the configured provider is slow/unavailable. For the offline/fail-soft profile, explicitly use an unreachable loopback embedding endpoint and a bounded `KANBANFLOW_LLM_TIMEOUT_MS`; record that configuration. It proves keyword fallback and validation, not a live provider's success path.
+`scripts/smoke-api.ps1` pins the offline/fail-soft embedding profile itself (#548): its app gets the unreachable loopback endpoint `ZEROROUTER_URL=http://127.0.0.1:9/v1` and `KANBANFLOW_LLM_TIMEOUT_MS=250`, both restored afterwards, and `GET /api/admin/embed-ping` asserts that the app resolved that URL. It proves keyword fallback and validation, not a live provider's success path. `-UseConfiguredEmbeddings` opts out and keeps this machine's embedding configuration, where a slow/unavailable provider can exceed the smoke's five-second client budget; record that configuration.
 
 ## Red/green discipline
 
