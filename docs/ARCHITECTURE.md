@@ -675,10 +675,11 @@ curl http://127.0.0.1:5123/api/admin/llm-ping
 ### Embeddings (`IEmbeddingService`, #219)
 
 Identical text is embedded once (content-hash cache); batches are deduped and chunked. After a
-provider-level failure (unreachable, timed out, or a 5xx) embedding calls fail soft without calling
-the provider until a failure cooldown ends, so a down ZeroRouter costs one slow call per window
-instead of one per memory search (#549). `embed-ping` always calls the provider, and a success ends
-the cooldown at once. Reuses the URL / key / timeout above and adds:
+provider-level failure (unreachable, timed out, or a 5xx), embedding calls that miss the cache fail
+soft without calling the provider until a failure cooldown ends, so a down ZeroRouter costs one slow
+call per window instead of one per memory search (#549). Cache hits are checked first and still
+succeed. `embed-ping` always calls the provider, and a success ends the cooldown at once. Reuses the
+URL / key / timeout above and adds:
 
 | Variable | Default | Purpose |
 |---|---|---|

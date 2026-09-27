@@ -358,8 +358,10 @@ public static class AdminEndpoints
         // default it embeds only nodes still missing a vector (EmbeddingBlob == null); force=true
         // re-embeds every current node (e.g. after an embed-model change). Each node's content is
         // embedded via IEmbeddingService and persisted through MemoryService.SetEmbeddingAsync (one
-        // MemoryEmbedded audit event per node, #88). Fail-soft like embed-ping: when ZeroRouter is
-        // down each embed returns ok:false and is counted as failed — the batch never crashes. A node
+        // MemoryEmbedded audit event per node, #88). Fail-soft: when ZeroRouter is down each embed
+        // returns ok:false and is counted as failed — the batch never crashes. Unlike embed-ping it
+        // does NOT bypass the failure cooldown (#549): inside the window each node fails soft at once,
+        // with no provider call, and the tally counts it as failed without saying why. A node
         // superseded/deleted mid-run is counted as skipped. No auth by charter (open-access). Returns
         // a per-run tally { embedded, skipped, failed, ftsReindexed, model }. After re-embedding it
         // also rebuilds the FTS5 keyword index (#223) from the current nodes — the reconciler that

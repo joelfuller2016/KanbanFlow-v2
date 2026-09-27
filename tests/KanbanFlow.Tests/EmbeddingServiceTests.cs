@@ -290,7 +290,7 @@ public sealed class EmbeddingServiceTests
         // #262 — this test used to be flaky, and the flake was self-inflicted. The old version raced a
         // REAL 30ms per-attempt timeout against a 2-second watchdog inside the fake. Under full-suite
         // parallelism the thread pool starved the 30ms CTS, the watchdog won, and it threw a
-        // TimeoutException — which IsTransient (EmbeddingService.cs:398-411, `_ => false`) classifies
+        // TimeoutException — which IsTransient (EmbeddingService.cs:406-419, `_ => false`) classifies
         // as NON-transient. So the watchdog short-circuited the very retry this test exists to verify,
         // and the assertion failed on the watchdog's message instead of "timed out".
         //
@@ -525,6 +525,35 @@ public sealed class EmbeddingServiceTests
     }
 
     [Fact]
+    public async Task EmbedAsync_Cooldown_HonoursTimestampFrequency()
+    {
+        // The deadline converts FailureCooldownMs to timestamp units with the TimeProvider's own
+        // TimestampFrequency. The other window tests run at 10 MHz (FakeTimeProvider, SteppableClock's
+        // default, and Stopwatch.Frequency on Windows), where a timestamp unit and a TimeSpan tick are
+        // the same length, so none of them could tell the two apart. At 1 GHz (Stopwatch.Frequency on
+        // Linux) a deadline counted in ticks would end the window 100 times early. Pinned 1 ms either
+        // side, as in EmbedAsync_AfterCooldown_CallsProviderAgain.
+        var clock = new SteppableClock(unitsPerTick: 100);         // 1 GHz
+        var fake = new FakeEmbeddingGenerator((_, _, _) => throw SdkTransportFailure());
+        var service = NewService(
+            fake,
+            new EmbeddingOptions { Model = "test-embed-model", TimeoutMs = 5_000, FailureCooldownMs = 10_000 },
+            timeProvider: clock);
+
+        await service.EmbedAsync("ping", CancellationToken.None);  // refused ⇒ cooldown starts
+        clock.Advance(TimeSpan.FromMilliseconds(9_999));
+        var inside = await service.EmbedAsync("ping", CancellationToken.None);
+        Assert.Contains("cooling down", inside.Error);
+        Assert.Equal(1, fake.CallCount);                           // still inside the window
+
+        clock.Advance(TimeSpan.FromMilliseconds(2));               // FailureCooldownMs + 1
+        var after = await service.EmbedAsync("ping", CancellationToken.None);
+
+        Assert.Contains("actively refused", after.Error);          // a real attempt: the window ended on time
+        Assert.Equal(2, fake.CallCount);
+    }
+
+    [Fact]
     public async Task Probe_BypassesCooldown_AndSuccessClearsIt()
     {
         // embed-ping must report LIVE provider state: inside the window the probe still makes a real
@@ -651,6 +680,57 @@ public sealed class EmbeddingServiceTests
 
         Assert.True(next.Ok);            // reached the provider: the cancel started no cooldown
         Assert.Equal(2, fake.CallCount);
+    }
+
+    [Fact]
+    public async Task EmbedAsync_CancelledToken_InsideCooldown_Throws()
+    {
+        // Caller cancellation propagates inside the failure cooldown exactly as it does outside it
+        // (EmbedAsync_CallerCancellation_Throws_NotSwallowedIntoResult): the window's early return must
+        // not turn a cancelled call into a fail-soft "cooling down" result, which IEmbeddingService's
+        // contract forbids.
+        var fake = new FakeEmbeddingGenerator((_, _, _) => throw SdkTransportFailure());
+        var service = NewService(fake, timeProvider: new FakeTimeProvider());
+        await service.EmbedAsync("ping", CancellationToken.None);                 // refused ⇒ cooldown starts
+        var skipped = await service.EmbedAsync("pong", CancellationToken.None);
+        Assert.Contains("cooling down", skipped.Error);                            // the window is open
+        using var cts = new CancellationTokenSource();
+        await cts.CancelAsync();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => service.EmbedAsync("pong", cts.Token));
+        Assert.Equal(1, fake.CallCount);
+    }
+
+    [Fact]
+    public async Task EmbedBatchAsync_CancelledToken_InsideCooldown_Throws()
+    {
+        // The batch twin: every chunk checks the caller's token before the cooldown can fail it soft.
+        var fake = new FakeEmbeddingGenerator((_, _, _) => throw SdkTransportFailure());
+        var service = NewService(fake, timeProvider: new FakeTimeProvider());
+        await service.EmbedAsync("ping", CancellationToken.None);                 // refused ⇒ cooldown starts
+        var skipped = await service.EmbedBatchAsync(new[] { "a", "b" }, CancellationToken.None);
+        Assert.All(skipped, r => Assert.Contains("cooling down", r.Error));       // the window is open
+        using var cts = new CancellationTokenSource();
+        await cts.CancelAsync();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => service.EmbedBatchAsync(new[] { "a", "b" }, cts.Token));
+        Assert.Equal(1, fake.CallCount);
+    }
+
+    [Fact]
+    public async Task EmbedBatchAsync_CancelledToken_OutsideCooldown_Throws()
+    {
+        // The control for the test above: with no window running, a cancelled batch throws before any
+        // chunk reaches the provider.
+        var fake = new FakeEmbeddingGenerator((_, _, _) => throw SdkTransportFailure());
+        var service = NewService(fake, timeProvider: new FakeTimeProvider());
+        using var cts = new CancellationTokenSource();
+        await cts.CancelAsync();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => service.EmbedBatchAsync(new[] { "a", "b" }, cts.Token));
+        Assert.Equal(0, fake.CallCount);
     }
 
     [Fact]
@@ -925,23 +1005,25 @@ public sealed class EmbeddingServiceTests
     /// <summary>
     /// A <see cref="TimeProvider"/> whose wall clock can be stepped without moving its monotonic
     /// timestamp, the way NTP or a manual change steps a real clock; <see cref="Advance"/> moves both,
-    /// like real time passing. Its timers are the base class's real ones, which no test here waits on.
+    /// like real time passing. <paramref name="unitsPerTick"/> timestamp units make one
+    /// <see cref="TimeSpan"/> tick: 1 is 10 MHz, 100 is 1 GHz. Its timers are the base class's real
+    /// ones, which no test here waits on.
     /// </summary>
-    private sealed class SteppableClock : TimeProvider
+    private sealed class SteppableClock(long unitsPerTick = 1) : TimeProvider
     {
         private DateTimeOffset _utcNow = new(2026, 1, 1, 0, 0, 0, TimeSpan.Zero);
-        private long _timestamp = TimeSpan.TicksPerDay; // any positive start, as a real one has
+        private long _timestamp = TimeSpan.TicksPerDay * unitsPerTick; // any positive start, as a real one has
 
         public override DateTimeOffset GetUtcNow() => _utcNow;
 
         public override long GetTimestamp() => _timestamp;
 
-        public override long TimestampFrequency => TimeSpan.TicksPerSecond;
+        public override long TimestampFrequency => TimeSpan.TicksPerSecond * unitsPerTick;
 
         public void Advance(TimeSpan by)
         {
             _utcNow += by;
-            _timestamp += by.Ticks;
+            _timestamp += by.Ticks * unitsPerTick;
         }
 
         public void StepWallClock(TimeSpan by) => _utcNow += by;

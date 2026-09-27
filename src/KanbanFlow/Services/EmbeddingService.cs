@@ -127,6 +127,10 @@ public sealed class EmbeddingService : IEmbeddingService
             // result) and a defensive copy so the caller can't mutate the cached array.
             return EmbedResult.Success(Clone(cached.Vector), cached.Model);
 
+        // Honour caller cancellation before the cooldown check below: its early return would turn a
+        // cancelled call into a fail-soft result, and GenerateAsync's own check never runs on that path.
+        ct.ThrowIfCancellationRequested();
+
         // Inside the failure cooldown the provider was just seen down: fail soft now rather than pay
         // the same refused-connect or timeout wait again (#549). The probe skips this check so
         // embed-ping always reports live provider state.
@@ -197,6 +201,10 @@ public sealed class EmbeddingService : IEmbeddingService
         var errorByKey = new Dictionary<string, string>(StringComparer.Ordinal);
         for (var start = 0; start < missOrder.Count; start += _config.MaxBatchSize)
         {
+            // Honour caller cancellation first, as GenerateAsync does: the cooldown check below would
+            // otherwise fail a cancelled chunk soft instead of letting the cancellation propagate.
+            ct.ThrowIfCancellationRequested();
+
             var chunkKeys = missOrder.GetRange(start, Math.Min(_config.MaxBatchSize, missOrder.Count - start));
 
             // Inside the failure cooldown (#549) the chunk fails soft without a provider call. Checked
