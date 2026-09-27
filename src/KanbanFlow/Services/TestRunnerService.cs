@@ -1644,8 +1644,8 @@ public sealed class TestRunnerService(
     /// request token. That holds whichever way the route saves. <c>POST /api/projects</c> and the feature
     /// create save with no token at all; <c>POST /api/ideas</c>, promote and the task create pass the
     /// request's token into their save, and an abort of the request would cancel that save part-way.
-    /// <c>HttpClient.Timeout</c> or a transport failure can still end the request before its id is read,
-    /// which is exactly the window <see cref="SweepRunMarkerAsync"/> covers.
+    /// <c>HttpClient.Timeout</c> or a transport failure can still end the request before its id is read;
+    /// <see cref="SweepRunMarkerAsync"/> covers that window, best-effort.
     /// </summary>
     /// <remarks>
     /// Without this pre-check (#541), a cancelled suite still closed its own race, but it
@@ -1658,9 +1658,10 @@ public sealed class TestRunnerService(
     /// That counts only the API suite's top-level <c>POST /api/projects</c> and <c>POST /api/ideas</c>,
     /// not the feature and task creates, nor promote. Each can pay up to <c>HttpClient.Timeout</c> (10s)
     /// if the server is slow, before its own DELETE (another 10s ceiling). One check here, before ANY
-    /// of them, is what stops the creates. The suite itself keeps going: <see cref="RunTest"/> still
-    /// swallows each exception, so every remaining test runs and fails at its first token check, but
-    /// none of them sends another create.
+    /// of them, is what stops the creates. The suite does not stop at once: <see cref="RunTest"/> still
+    /// swallows each exception, so the remaining wrapped tests keep running, failing at their first token
+    /// check, until a create outside any <see cref="RunTest"/> wrapper throws out of the suite; none of them
+    /// sends another create.
     /// </remarks>
     private static Task<HttpResponseMessage> PostCreateAsync(HttpClient http, string route, object body, CancellationToken ct)
     {
@@ -1733,8 +1734,8 @@ public sealed class TestRunnerService(
     /// cannot cut a create off part-way or fire the server's request token, whichever way
     /// the route saves (<c>POST /api/projects</c> and the feature create pass no token to their save,
     /// <c>ApiEndpoints.cs:492</c> and <c>:1034</c>; the task create passes the request's token). Racing
-    /// <paramref name="ct"/> against a create only risked losing the id of a row the server may already
-    /// have written. <see cref="PostCreateAsync"/> instead checks
+    /// <paramref name="ct"/> against a create risked losing the id of a row the server may already have
+    /// written. <see cref="PostCreateAsync"/> instead checks
     /// <paramref name="ct"/> BEFORE each send, so cancellation never abandons a create that has
     /// already started, and each id is already captured by the time the next check can fire: once
     /// <c>pid</c> is known, the catch below deletes it with <see cref="CancellationToken.None"/> and
@@ -1943,7 +1944,7 @@ public sealed class TestRunnerService(
     /// exactly as they are for every other cleanup path in this file.
     /// </summary>
     /// <remarks>
-    /// <para><b>Safety.</b> A row is deleted only if its Name/Title is EXACTLY a fixture's
+    /// <para><b>Safety.</b> A row is deleted only if its Name/Title is EXACTLY a registered fixture shape
     /// (<see cref="IsFixtureProjectName"/> / <see cref="IsFixtureIdeaTitle"/>): the SQL <c>Contains</c>
     /// below only fetches candidates, and a real row that quotes a fixture's name, or begins with one
     /// and goes on, is fetched and then left alone. <paramref name="runMarker"/> is minted fresh per run
@@ -1952,13 +1953,14 @@ public sealed class TestRunnerService(
     /// past or concurrent, do not match. <paramref name="preExistingProjectIds"/> is a second,
     /// independent guard for projects: a project that existed before this run started is skipped even
     /// if its name matches. Ideas need no such snapshot: an idea that existed before this run started
-    /// cannot carry the marker, which the run mints only as it starts.</para>
-    /// <para><b>Residual.</b> A real row created DURING the run whose Name/Title is exactly a
-    /// fixture's is indistinguishable from one by name, and would be deleted. The pre-existing snapshot
-    /// confines this to rows created during the run, but cannot protect those, because their ids are new;
-    /// only the marker bounds it. Such a name carries this
-    /// run's freshly minted 60-bit marker, which appears nowhere but in this run's own fixtures, so short
-    /// of someone copying a fixture's name while the run is in progress, a real row cannot have one.</para>
+    /// would need a 60-bit coincidence to carry the marker, which the run mints as it starts.</para>
+    /// <para><b>Residual.</b> A real row created DURING the run whose Name/Title is exactly a registered
+    /// fixture shape is indistinguishable from a fixture by name, and would be deleted. For projects, the
+    /// pre-existing snapshot confines this to rows created during the run, but cannot protect those,
+    /// because their ids are new; only the marker bounds it. Such a name carries this run's freshly
+    /// minted 60-bit marker, which appears nowhere but in this run's own fixtures, so short of someone
+    /// copying a fixture's name while the run is in progress (or a 60-bit coincidence), a real row will
+    /// not have one.</para>
     /// <para><b>Expected to find nothing.</b> On a run where no create or cleanup DELETE fails, every
     /// fixture is already deleted by its own try/finally before this runs, so the sweep matches zero
     /// rows — it exists purely for the residual cases those try/finally blocks cannot reach.</para>

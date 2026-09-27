@@ -75,8 +75,9 @@ public sealed class TestRunnerServiceCancellationTests
         // capture), and RunTest swallows that post-capture throw into a failed TestResult. So once ct
         // fired, RunApiTestsAsync kept walking every remaining create-first test, sending a REAL
         // create (CancellationToken.None, unconditional) and issuing a REAL delete for each. With the
-        // check, every remaining test still runs (RunTest still swallows each exception) and fails at
-        // its first token check, but none of them sends another create — which is what this counts.
+        // check, the remaining wrapped tests still run (RunTest still swallows each exception), failing at
+        // their first token check, until the scratch-project setup's create, outside any RunTest wrapper,
+        // throws out of the suite; none of them sends another create, which is what this counts.
         //
         // Cancelling ct is deferred until AFTER the suite's first real request completes — not done
         // upfront — because RunApiTestsAsync's OWN setup (the preExistingProjectIds snapshot) is
@@ -330,10 +331,10 @@ public sealed class TestRunnerServiceCancellationTests
 
             // (3) Negative control for the second, structural guard: a project whose name is EXACTLY
             // a fixture's, but which is listed as pre-existing, must still survive. Real fixtures are
-            // never pre-existing by construction (the marker is minted after the snapshot), so this
-            // can only happen if the marker itself were somehow reused — the exclusion must hold even
-            // then. Its name is a genuine NewName fixture name, so the pre-existing guard is the only
-            // thing that can save it.
+            // never pre-existing by construction (they are created after the snapshot is taken), so it
+            // takes a reused marker (or a 60-bit coincidence) for this to happen — the exclusion must
+            // hold even then. Its name is a genuine NewName fixture name, so the pre-existing guard is
+            // the only thing that can save it.
             var preExistingButMarked = new Project { Name = TestRunnerService.NewName("Test", marker) };
             db.Projects.Add(preExistingButMarked);
             await db.SaveChangesAsync();
@@ -441,8 +442,10 @@ public sealed class TestRunnerServiceCancellationTests
     {
         // #541: the sweep matches a fixture's Name/Title EXACTLY, so any server-side normalization (a
         // trim, a truncation, a promote that decorates the name) would silently un-sweep that fixture.
-        // Every registered shape is created through the real routes and read back FROM THE DATABASE; the
-        // predicate runs on what was stored, never on the string that was sent.
+        // Each registered prefix and literal is created through the real routes the way the runner creates
+        // it (projects for the project prefixes, ideas for the idea prefix and the literals, plus the
+        // promoted project) and read back FROM THE DATABASE; the predicate runs on what was stored, never
+        // on the string that was sent.
         await using var host = await ApiHost.StartAsync();
         var http = host.RealClient;
         var marker = TestRunnerService.NewRunMarker();
@@ -640,8 +643,8 @@ public sealed class TestRunnerServiceCancellationTests
             .ToList();
         Assert.True(dead.Count == 0,
             $"registered but never produced by TestRunnerService.cs: {string.Join(", ", dead)}. Remove it: " +
-            "the sweep deletes every name the registry accepts, so an entry the runner never produces only " +
-            "widens what it would delete.");
+            "the sweep tries to delete every run-created row whose name the registry accepts, so an entry the " +
+            "runner never produces only widens what it would delete.");
 
         Assert.True(violations.Count == 0,
             "TestRunnerService.cs builds a name from runMarker that the sweep's registry does not cover: " +
@@ -751,7 +754,7 @@ public sealed class TestRunnerServiceCancellationTests
         Assert.Equal(1, stub.Calls);
     }
 
-    /// <summary>The own host the refusal theory builds its handlers for: the stub answers there, and only there.</summary>
+    /// <summary>The own host the refusal theory builds its handlers for: the only address their guard lets through to the stub.</summary>
     private static readonly Uri StubHost = new("http://127.0.0.1:80");
 
     /// <summary>The named transport handler, wrapped around <paramref name="inner"/> instead of a real socket handler.</summary>
@@ -968,7 +971,7 @@ public sealed class TestRunnerServiceCancellationTests
         /// <summary>An ordinary, non-faulting client for setup/cleanup calls a test makes directly.</summary>
         public HttpClient RealClient { get; }
 
-        /// <summary>This host's own base address — the only one the transport handlers will send to.</summary>
+        /// <summary>This host's own base address — the only address a transport handler built with it will send to.</summary>
         public Uri BaseAddress => RealClient.BaseAddress!;
 
         public IDbContextFactory<AppDbContext> DbFactory => _app.Services.GetRequiredService<IDbContextFactory<AppDbContext>>();
