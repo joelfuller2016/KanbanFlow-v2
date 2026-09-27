@@ -26,14 +26,14 @@ public sealed class TestRunnerService(
     /// <param name="ct">A cancellation token that can be used to cancel the test run.</param>
     /// <returns>A TestSuiteResult named "API" containing each TestResult and the total elapsed milliseconds.</returns>
     /// <remarks>
-    /// The method snapshots existing project IDs at start to avoid affecting pre-existing projects, executes multiple isolated API tests (creating and deleting scratch projects as needed), and performs a best-effort cleanup after completion using CancellationToken.None: a per-run-marker sweep for any fixture whose id was never learned because cancellation struck while its own create response was being read (#150 AC#2), followed by the orphaned-ActivityEvent purge. Cleanup errors are swallowed so they do not mask test failures or cancellations.
+    /// The method snapshots existing project IDs at start to avoid affecting pre-existing projects, executes multiple isolated API tests (creating and deleting scratch projects as needed), and performs a best-effort cleanup after completion using CancellationToken.None: a per-run-marker sweep for any fixture whose id was never learned because its create failed for a reason unrelated to ct (HttpClient.Timeout, transport reset, server error) before the id was captured, or whose known-id DELETE failed (#150 AC#2, #541), followed by the orphaned-ActivityEvent purge. Cleanup errors are swallowed so they do not mask test failures or cancellations.
     /// </remarks>
     public async Task<TestSuiteResult> RunApiTestsAsync(CancellationToken ct = default)
     {
         var runStart = DateTime.UtcNow;
         // Per-run marker embedded in every fixture Name/Title this run creates (see NewName);
-        // lets SweepRunMarkerAsync find one even when cancellation struck before its id was ever
-        // learned (#150 AC#2).
+        // lets SweepRunMarkerAsync find a fixture whose create timed out or failed in transport
+        // before its id was learned, or whose known-id delete failed (#150 AC#2, #541).
         var runMarker = NewRunMarker();
         // Snapshot the projects that already exist at run start. The runner uses the live DB,
         // so a user could delete a real, pre-existing project mid-run; excluding these ids from
@@ -481,9 +481,9 @@ public sealed class TestRunnerService(
                 int? ideaId = null;
                 try
                 {
-                    // Marker-tagged (see runMarker): if cancellation strikes while THIS create's own
-                    // response is being read, ideaId below is never assigned and this finally cannot
-                    // clean up by id — SweepRunMarkerAsync is what finds a leak like that (#150 AC#2).
+                    // Marker-tagged (see runMarker): if THIS create's response is never received
+                    // (timeout, transport failure), ideaId below is never assigned and this finally
+                    // cannot clean up by id — SweepRunMarkerAsync is what finds a leak like that (#150 AC#2, #541).
                     var title = $"{runMarker} Round-trip idea";
                     var create = await PostCreateAsync(http, "/api/ideas",
                         new { title, body = "the body", plan = "the plan", tags = "ai,backend", priority = TaskPriority.High.ToString() }, ct);
@@ -806,14 +806,14 @@ public sealed class TestRunnerService(
     /// <summary>
     /// Execute the UI test suite against the running application.
     /// </summary>
-    /// <param name="ct">Cancellation token to stop test execution; cleanup is still attempted using <see cref="CancellationToken.None"/> so orphaned test artifacts — including a fixture whose id was never learned because the cancellation itself struck mid-create (#150 AC#2) — are purged even on cancellation.</param>
+    /// <param name="ct">Cancellation token to stop test execution; cleanup is still attempted using <see cref="CancellationToken.None"/> so orphaned test artifacts — including a fixture whose id was never learned because its create failed before the id was captured (#150 AC#2, #541) — are purged even on cancellation.</param>
     /// <returns>A <see cref="TestSuiteResult"/> containing the individual test results and the total elapsed milliseconds for the UI suite.</returns>
     public async Task<TestSuiteResult> RunUiTestsAsync(CancellationToken ct = default)
     {
         var runStart = DateTime.UtcNow;
         // Per-run marker embedded in every fixture Name/Title this run creates (see NewName);
-        // lets SweepRunMarkerAsync find one even when cancellation struck before its id was ever
-        // learned (#150 AC#2).
+        // lets SweepRunMarkerAsync find a fixture whose create timed out or failed in transport
+        // before its id was learned, or whose known-id delete failed (#150 AC#2, #541).
         var runMarker = NewRunMarker();
         // Snapshot the projects that already exist at run start. The runner uses the live DB,
         // so a user could delete a real, pre-existing project mid-run; excluding these ids from
@@ -1031,14 +1031,14 @@ public sealed class TestRunnerService(
     /// <param name="ct">A cancellation token that can be used to cancel the test run.</param>
     /// <returns>A TestSuiteResult containing the suite name ("Service"), the list of individual test results, and the total elapsed milliseconds.</returns>
     /// <remarks>
-    /// The method creates isolated scratch data for each test, verifies persistence and activity audit rows, and performs a best-effort cleanup of orphaned test artifacts after the run: a per-run-marker sweep for any fixture whose id was never learned due to the cancellation itself (#150 AC#2), then the orphaned-ActivityEvent purge. Cleanup is attempted with CancellationToken.None and any cleanup exceptions are swallowed to avoid masking test failures or cancellations.
+    /// The method creates isolated scratch data for each test, verifies persistence and activity audit rows, and performs a best-effort cleanup of orphaned test artifacts after the run: a per-run-marker sweep for any fixture whose id was never learned because its create failed before the id was captured, or whose known-id DELETE failed (#150 AC#2, #541), then the orphaned-ActivityEvent purge. Cleanup is attempted with CancellationToken.None and any cleanup exceptions are swallowed to avoid masking test failures or cancellations.
     /// </remarks>
     public async Task<TestSuiteResult> RunServiceTestsAsync(CancellationToken ct = default)
     {
         var runStart = DateTime.UtcNow;
         // Per-run marker embedded in every fixture Name/Title this run creates (see NewName);
-        // lets SweepRunMarkerAsync find one even when cancellation struck before its id was ever
-        // learned (#150 AC#2).
+        // lets SweepRunMarkerAsync find a fixture whose create timed out or failed in transport
+        // before its id was learned, or whose known-id delete failed (#150 AC#2, #541).
         var runMarker = NewRunMarker();
         // Snapshot the projects that already exist at run start. The runner uses the live DB,
         // so a user could delete a real, pre-existing project mid-run; excluding these ids from
@@ -1838,12 +1838,35 @@ public sealed class TestRunnerService(
     }
 
     /// <summary>
+    /// True when <paramref name="name"/> has EXACTLY the shape a fixture this run created would have
+    /// for <paramref name="marker"/> — not merely a name that happens to mention or quote one. A real
+    /// row named e.g. "Please rename Test-{marker}-a1b2c3d4 to something better" contains the marker
+    /// as a substring but is not a fixture; matching only the literal formats <see cref="NewName"/>
+    /// and this class's idea-literal titles actually produce is what keeps such a row safe.
+    /// </summary>
+    // internal, not private — TestRunnerServiceCancellationTests pins this hand-maintained prefix
+    // list against every prefix the file actually passes to NewName (#541), so it must be
+    // directly callable rather than exercised only indirectly through SweepRunMarkerAsync.
+    internal static bool IsFixtureProjectName(string name, string marker) =>
+        name.StartsWith($"Test-{marker}-", StringComparison.Ordinal) ||
+        name.StartsWith($"Test-Project-{marker}-", StringComparison.Ordinal) ||
+        name.StartsWith($"UiHome-{marker}-", StringComparison.Ordinal) ||
+        // Promoted-idea projects: PromoteAsync sets Project.Name = idea.Title, which is one of the
+        // marker-prefixed literal titles below — not a NewName shape, so no trailing "-".
+        name.StartsWith($"{marker} ", StringComparison.Ordinal);
+
+    /// <summary>Same idea as <see cref="IsFixtureProjectName"/>, for the two shapes idea titles use.</summary>
+    internal static bool IsFixtureIdeaTitle(string title, string marker) =>
+        title.StartsWith($"UiIdea-{marker}-", StringComparison.Ordinal) ||
+        title.StartsWith($"{marker} ", StringComparison.Ordinal);
+
+    /// <summary>
     /// End-of-run safety net for the residual cases <see cref="CreateProjectFeatureTaskAsync"/> (and
     /// the other marker-tagged fixture sites in this class) cannot close by catching around an id: a
     /// create that fails for a reason unrelated to the caller's token — <c>HttpClient.Timeout</c> (10s
     /// default), a transport reset, or a server-side error — before its id is captured, or a known-id
     /// DELETE that itself fails. No id is ever recorded for the row in either case, so nothing in this
-    /// class can target a DELETE at it by id (#150 AC#2). Every fixture this run creates carries
+    /// class can target a DELETE at it by id (#150 AC#2, #541). Every fixture this run creates carries
     /// <paramref name="runMarker"/> in its Name/Title instead (see <see cref="NewName"/>), so this
     /// queries the live DB for that marker directly — no id needed — and deletes what it finds through
     /// the same REST routes normal cleanup uses, so cascade delete and audit-event emission stay
@@ -1879,29 +1902,6 @@ public sealed class TestRunnerService(
     /// suite itself was cancelled — matches <see cref="TryCleanupAsync"/>'s own rule and this file's
     /// existing <c>catch (Exception ex) { logger.LogWarning(...) }</c> convention for that.</para>
     /// </remarks>
-    /// <summary>
-    /// True when <paramref name="name"/> has EXACTLY the shape a fixture this run created would have
-    /// for <paramref name="marker"/> — not merely a name that happens to mention or quote one. A real
-    /// row named e.g. "Please rename Test-{marker}-a1b2c3d4 to something better" contains the marker
-    /// as a substring but is not a fixture; matching only the literal formats <see cref="NewName"/>
-    /// and this class's idea-literal titles actually produce is what keeps such a row safe.
-    /// </summary>
-    // internal, not private — TestRunnerServiceCancellationTests pins this hand-maintained prefix
-    // list against every prefix the file actually passes to NewName (#541), so it must be
-    // directly callable rather than exercised only indirectly through SweepRunMarkerAsync.
-    internal static bool IsFixtureProjectName(string name, string marker) =>
-        name.StartsWith($"Test-{marker}-", StringComparison.Ordinal) ||
-        name.StartsWith($"Test-Project-{marker}-", StringComparison.Ordinal) ||
-        name.StartsWith($"UiHome-{marker}-", StringComparison.Ordinal) ||
-        // Promoted-idea projects: PromoteAsync sets Project.Name = idea.Title, which is one of the
-        // marker-prefixed literal titles below — not a NewName shape, so no trailing "-".
-        name.StartsWith($"{marker} ", StringComparison.Ordinal);
-
-    /// <summary>Same idea as <see cref="IsFixtureProjectName"/>, for the two shapes idea titles use.</summary>
-    internal static bool IsFixtureIdeaTitle(string title, string marker) =>
-        title.StartsWith($"UiIdea-{marker}-", StringComparison.Ordinal) ||
-        title.StartsWith($"{marker} ", StringComparison.Ordinal);
-
     internal async Task SweepRunMarkerAsync(HttpClient http, string runMarker, IReadOnlyCollection<int> preExistingProjectIds)
     {
         try

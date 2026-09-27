@@ -16,12 +16,12 @@ using Microsoft.Extensions.Logging.Abstractions;
 namespace KanbanFlow.Tests;
 
 /// <summary>
-/// Real HTTP + real SQLite tests for the fixture-leak-on-cancel defect (F1 / issue #150 AC#2):
-/// <c>TestRunnerService</c>'s scratch Project/Feature/Task/Idea fixtures bind every POST and every
-/// response read to the CALLER's cancellation token. A disconnect mid-fixture (an aborted
-/// <c>POST /api/admin/run-tests</c>) can therefore commit a real row server-side that the runner's own
-/// code never learns the id of, so no <c>finally</c> anywhere in <c>TestRunnerService</c> can target it
-/// with a DELETE.
+/// Real HTTP + real SQLite tests for the fixture-leak-on-cancel defect (F1 / issue #150 AC#2, #541):
+/// <c>TestRunnerService</c>'s scratch Project/Feature/Task/Idea fixture creates use
+/// <c>CancellationToken.None</c> so a caller-token cancellation can no longer abort a response read
+/// mid-flight, but an <c>HttpClient.Timeout</c>, transport reset, or server error before the id is
+/// captured can still leave a committed row whose id the runner never learned — no <c>finally</c>
+/// in <c>TestRunnerService</c> can target such a row with a DELETE by id.
 ///
 /// <para>These boot a REAL Kestrel host (like <see cref="AdminHealthEndpointTests"/>'s <c>HealthHost</c>)
 /// with <see cref="ApiEndpoints.MapApiEndpoints"/> mapped over a real SQLite file, and drive
@@ -142,7 +142,8 @@ public sealed class TestRunnerServiceCancellationTests
             // keeps waiting for the real response, so `run` cannot possibly finish until we release
             // it below — the delay wins instead. Racing a bounded delay against `run` is what tells
             // the two apart without hard-coding which behavior is "the" behavior.
-            await Task.WhenAny(run, Task.Delay(TimeSpan.FromSeconds(2)));
+            var first = await Task.WhenAny(run, Task.Delay(TimeSpan.FromSeconds(2)));
+            Assert.NotSame(run, first); // post-fix: the None-bound create must still be waiting on the blocked server save
         }
         finally
         {
