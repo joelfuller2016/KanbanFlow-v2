@@ -128,10 +128,12 @@ Write: `create_project`/`update_project`, `create_feature`/`update_feature`/`del
 `claim_task`/`release_task`, subtask + acceptance-criterion + dependency CRUD,
 `add_task_comment`.
 
-> The **native in-process server** currently exposes a curated subset
-> (`list_projects`, `get_project_context`, `get_next_tasks`, `get_task`,
-> `update_task_status`); the **Node wrapper** exposes the full surface. Always confirm
-> with `tools/list` / `/openapi/v1.json` rather than assuming a tool exists.
+> The **native in-process server** exposes most of the surface — including writes, ideas, and
+> knowledge-graph tools — NOT the curated 5-tool subset once documented here; verify the current
+> count yourself with `grep -c 'McpServerTool(Name' src/KanbanFlow/Mcp/KanbanMcpTools.cs` if you
+> need one. The **Node wrapper** exposes the full surface. Always confirm with `tools/list` /
+> `/openapi/v1.json` rather than assuming a tool exists OR trusting a count written here — both
+> surfaces grow independently and any hardcoded number goes stale the moment either does.
 
 ## Gotchas
 

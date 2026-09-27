@@ -121,7 +121,7 @@ const tools = [
       type: "object",
       properties: {
         projectId: { type: "integer", description: "Project id to inspect." },
-        limit: { type: "integer", minimum: 1, maximum: 50, description: "Optional maximum number of recommendations (1–50). Matches the REST clamp (#151) and the native tool." }
+        limit: { type: "integer", description: "Optional maximum number of recommendations (clamped to 1-50). Matches the REST clamp (#151) and the native tool." }
       },
       required: ["projectId"]
     }
@@ -309,7 +309,8 @@ const tools = [
           description: "Optional initial priority. Defaults to Low."
         },
         assignee: { type: "string", description: "Optional free-text assignee label." },
-        sortOrder: { type: "number", description: "Optional finite task rank within the column; may be fractional." }
+        sortOrder: { type: "number", description: "Optional finite task rank within the column; may be fractional." },
+        actor: { type: "string", description: "Optional actor label recorded in the audit trail (default 'mcp-agent')." }
       },
       required: ["featureId", "name"]
     }
@@ -345,14 +346,15 @@ const tools = [
     inputSchema: {
       type: "object",
       properties: {
-        taskId: { type: "integer", minimum: 1, description: "Task id to delete." }
+        taskId: { type: "integer", minimum: 1, description: "Task id to delete." },
+        actor: { type: "string", description: "Optional actor label recorded in the audit trail (default 'mcp-agent')." }
       },
       required: ["taskId"]
     }
   },
   {
     name: "reassign_task",
-    description: "Reassign a task to a different feature (typically in the same project). NOTE: project-boundary enforcement is a known gap (#83); the API today permits cross-project moves.",
+    description: "Reassign a task to a different feature (typically in the same project). Project-boundary enforcement (#83) rejects a cross-project move with a 422.",
     inputSchema: {
       type: "object",
       properties: {
@@ -612,7 +614,7 @@ const tools = [
         },
         tag: { type: "string", description: "Optional case-insensitive tag substring filter." },
         q: { type: "string", description: "Optional case-insensitive search across title + body." },
-        limit: { type: "integer", minimum: 1, maximum: 500, description: "Optional max results." },
+        limit: { type: "integer", description: "Optional max results (clamped to 1-500)." },
         offset: { type: "integer", minimum: 0, description: "Optional offset for paging." }
       }
     }
@@ -814,7 +816,7 @@ const tools = [
   },
   {
     name: "read_graph",
-    description: "Read the entire knowledge-graph memory: every current entity and the relations between them (capped at the first 1000 entities).",
+    description: "Read the entire knowledge-graph memory: every current entity and the relations between them (capped at the first 900 entities).",
     inputSchema: {
       type: "object",
       properties: {
@@ -1083,7 +1085,9 @@ async function callTool(toolName, args) {
       return restJson(`/api/projects/${requiredInt(args, "projectId")}/context`);
     case "get_next_tasks": {
       const projectId = requiredInt(args, "projectId");
-      const limit = optionalInt(args, "limit", { min: 1, max: 50 });
+      // Clamped, not rejected: matches TaskRanking.cs's Math.Clamp(limit, 1, 50), which both REST
+      // and the native tool run through (F5 parity fix).
+      const limit = optionalClampedInt(args, "limit", { min: 1, max: 50 });
       const query = limit === undefined ? "" : `?limit=${encodeURIComponent(limit)}`;
       return restJson(`/api/projects/${projectId}/next-tasks${query}`);
     }
@@ -1196,7 +1200,9 @@ async function callTool(toolName, args) {
           status: optionalString(args, "status"),
           priority: optionalString(args, "priority"),
           assignee: optionalNonEmptyString(args, "assignee"),
-          sortOrder: optionalFiniteNumber(args, "sortOrder")
+          sortOrder: optionalFiniteNumber(args, "sortOrder"),
+          // Actor is optional and defaults to "mcp-agent", mirroring the native tool (F2 parity fix).
+          actor: optionalString(args, "actor")?.trim() || "mcp-agent"
         }
       });
     case "update_task":
@@ -1215,8 +1221,13 @@ async function callTool(toolName, args) {
           sortOrder: optionalFiniteNumber(args, "sortOrder")
         }
       });
-    case "delete_task":
-      return restJson(`/api/tasks/${requiredInt(args, "taskId", { min: 1 })}`, { method: "DELETE" });
+    case "delete_task": {
+      // Actor is optional and defaults to "mcp-agent", mirroring the native tool (F3 parity fix).
+      // Forwarded as a query parameter, not a body: DELETE request bodies are commonly dropped by
+      // HTTP clients and intermediate proxies (see the same choice on the REST route itself).
+      const actor = optionalString(args, "actor")?.trim() || "mcp-agent";
+      return restJson(`/api/tasks/${requiredInt(args, "taskId", { min: 1 })}?actor=${encodeURIComponent(actor)}`, { method: "DELETE" });
+    }
     case "reassign_task":
       return restJson(`/api/tasks/${requiredInt(args, "taskId", { min: 1 })}/feature`, {
         method: "PATCH",
@@ -1339,7 +1350,8 @@ async function callTool(toolName, args) {
           plan: optionalNonEmptyString(args, "plan"),
           tags: optionalNonEmptyString(args, "tags"),
           priority: optionalString(args, "priority"),
-          actor: optionalNonEmptyString(args, "actor")
+          // Actor is optional and defaults to "mcp-agent", mirroring the native tool (F4 parity fix).
+          actor: optionalString(args, "actor")?.trim() || "mcp-agent"
         }
       });
     case "list_ideas": {
@@ -1352,7 +1364,8 @@ async function callTool(toolName, args) {
       if (tag !== undefined) params.set("tag", tag);
       const q = optionalNonEmptyString(args, "q");
       if (q !== undefined) params.set("q", q);
-      const limit = optionalInt(args, "limit", { min: 1, max: 500 });
+      // Clamped, not rejected: matches IdeaService.cs's Math.Clamp(limit, 1, 500) (F5 parity fix).
+      const limit = optionalClampedInt(args, "limit", { min: 1, max: 500 });
       if (limit !== undefined) params.set("limit", String(limit));
       const offset = optionalInt(args, "offset", { min: 0 });
       if (offset !== undefined) params.set("offset", String(offset));
@@ -1381,13 +1394,15 @@ async function callTool(toolName, args) {
           status: optionalString(args, "status"),
           tags: optionalString(args, "tags"),
           priority: optionalString(args, "priority"),
-          actor: optionalNonEmptyString(args, "actor")
+          // Actor is optional and defaults to "mcp-agent", mirroring the native tool (F4 parity fix).
+          actor: optionalString(args, "actor")?.trim() || "mcp-agent"
         }
       });
     case "promote_idea":
       return restJson(`/api/ideas/${requiredInt(args, "ideaId", { min: 1 })}/promote`, {
         method: "POST",
-        body: { actor: optionalNonEmptyString(args, "actor") }
+        // Actor is optional and defaults to "mcp-agent", mirroring the native tool (F4 parity fix).
+        body: { actor: optionalString(args, "actor")?.trim() || "mcp-agent" }
       });
 
     // ── Knowledge-graph memory tools (#224) — forwarded to the native MCP server ──
@@ -1631,6 +1646,31 @@ function optionalInt(args, name, { min = undefined, max = undefined } = {}) {
   if (args[name] === undefined || args[name] === null) return undefined;
   const value = coerceInt(args[name], name);
   assertIntRange(value, name, min, max);
+  return value;
+}
+
+// Like optionalInt, but an out-of-range value is CLAMPED rather than rejected (-32602 is reserved
+// for a value that isn't an integer at all; coerceInt above still enforces that). This mirrors the
+// Math.Clamp the REST/native side already applies downstream (TaskRanking.cs, IdeaService.cs) —
+// the wrapper was rejecting what those callees would have silently clamped anyway (F5 parity fix).
+//
+// coerceInt's own strictness only guarantees a SAFE integer (up to 2^53) — wider than the Int32
+// both downstream paths actually bind. Without the check below, a value like 3000000000 would
+// clamp "successfully" to `max` here, while native's `int` parameter fails to bind it and REST's
+// `int?` query binding answers 400 — three different outcomes for the same nonsensical input, the
+// exact drift this fix exists to close. Reject it the same way coerceInt rejects a non-integer,
+// BEFORE it ever reaches the min/max clamp.
+const INT32_MIN = -2147483648;
+const INT32_MAX = 2147483647;
+
+function optionalClampedInt(args, name, { min = undefined, max = undefined } = {}) {
+  if (args[name] === undefined || args[name] === null) return undefined;
+  const value = coerceInt(args[name], name);
+  if (value < INT32_MIN || value > INT32_MAX) {
+    throw new McpError(-32602, `${name} must fit in a 32-bit integer.`);
+  }
+  if (min !== undefined && value < min) return min;
+  if (max !== undefined && value > max) return max;
   return value;
 }
 

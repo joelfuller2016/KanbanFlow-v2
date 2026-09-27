@@ -173,7 +173,7 @@ The machine-readable source of truth is the OpenAPI document at `/openapi/v1.jso
 |---|---|
 | `/api/features/{id}` | `GET` · `PUT` · `DELETE` |
 | `/api/features/{id}/tasks` | `GET` · `POST` |
-| `/api/tasks/{id}` | `GET` · `PUT` · `DELETE` |
+| `/api/tasks/{id}` | `GET` · `PUT` · `DELETE` — `DELETE` takes an optional `?actor=` (omitted or blank records a `null` actor) |
 | `/api/tasks/{id}/context` | `GET` — one-call agent bundle (criteria + subtasks + deps + comments + activity) |
 | `/api/tasks/{id}/status` | `PATCH` |
 | `/api/tasks/{id}/feature` | `PATCH` — reassign to another feature |
