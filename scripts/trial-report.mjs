@@ -432,20 +432,6 @@ export function isOutsideAllRoots(cwd, roots) {
 }
 
 /**
- * True when `a` and `b` name the SAME directory: equality, never containment. Same path semantics
- * as `isOutsideRepo` (see `pathFlavor`), so on win32 it ignores case, `\` versus `/`, and a
- * trailing separator, since there those all spell one directory. An unrecorded path matches
- * nothing. Signal 4 folds in a confirmed clone cwd with this rather than as a root, because what
- * git confirmed is that one directory, not the tree under it (see the note at signal 4).
- */
-export function isSamePath(a, b) {
-  if (typeof a !== "string" || a.length === 0) return false;
-  if (typeof b !== "string" || b.length === 0) return false;
-  const p = pathFlavor(a, b);
-  return p.relative(p.resolve(a), p.resolve(b)) === "";
-}
-
-/**
  * Run one git plumbing command against `cwd`, scrubbed of any inherited GIT_* override so the
  * ANSWER is actually about `cwd` (see GIT_ENV_SCRUB_KEYS above). Exported, and takes `env` as an
  * option, purely so a test can inject a contaminated environment (a fake `GIT_DIR`) without
@@ -585,8 +571,9 @@ export function isLocalPathRemote(rawUrl) {
 }
 
 // Hard cap on how many DISTINCT cwds `withConfirmedCloneRoots` will run git against. "Bounded" is
-// load-bearing, not a nicety: each candidate costs `rev-parse` + `remote` + one `get-url` per
-// configured remote (ordinarily 1–2, but not fixed — every remote is checked, not only `origin`)
+// load-bearing, not a nicety: each candidate costs `rev-parse` + `remote` + TWO `get-url` calls per
+// configured remote (`--all` for every fetch URL and `--push --all` for every push URL; ordinarily
+// 1–2 remotes, but not fixed — every remote is checked, not only `origin`)
 // + at most one `rev-list`, each at GIT_TIMEOUT_MS, and this function is fed straight from the
 // usage log, a file this report does not control the size or contents of. This caps the number of
 // DISTINCT DIRECTORIES probed; it does not cap how many remotes any one of them may have — a
@@ -600,47 +587,58 @@ const MAX_CLONE_PROBES = 50;
  * already maps those back to their main checkout), but a second, independent clone with no git-
  * level link to it, such as this review fleet's own `SCRATCH/kf` sandbox.
  *
- * VETO RULE (deliberate design decision, not an oversight): a candidate with ANY network remote
- * that matches none of the main root's is a DIFFERENT project, and is never confirmed, whatever
- * else it matches. Only a candidate that survives that veto can be confirmed, by (a) a network
- * remote normalizing to one of the main root's, which is proof on its own, or — when it has no
- * network remote at all — (b) a shared initial commit (`git rev-list --max-parents=0 HEAD`). The
- * veto binds BOTH paths. A fork or a renamed derivative shares history with the original up to
- * the point it diverged, so root commit alone cannot tell it apart from a genuine clone; and the
- * ordinary fork layout — `origin` the fork, `upstream` the original — carries a MATCHING remote
- * as well, so a match alone cannot either: it shows the checkout knows this repository, not that
- * it is it. (The veto used to run only after a match had already confirmed, so it guarded path
- * (b) alone and such a fork was folded in as inside.) A candidate with a network remote pointing
- * anywhere else is a REAL, DIFFERENT project someone may be doing unrelated work in. Every remote
- * is checked (`git remote`, then `get-url` per name), not only `origin`: a derivative can rename
- * `origin` to anything and add its own under a different name (`derivNoOrigin` in this repo's own
- * test fixtures) — checking one fixed name would miss exactly that. A candidate with local-path-
- * only remotes, or none at all, has nothing to veto with, so root commit alone still confirms it.
- * The price, paid on purpose: a genuine clone that ALSO carries some other project's remote is
- * vetoed too, and reads as outside exactly as it would on master.
+ * VETO RULE (deliberate design decision, not an oversight): a candidate with ANY network URL — any
+ * fetch or push URL of any of its remotes — that matches none of the main root's is a DIFFERENT
+ * project, and is never confirmed, whatever else it matches. Only a candidate that survives that
+ * veto can be confirmed, by (a) a remote's FETCH url normalizing to one of the main root's, which is
+ * proof on its own, or — when no fetch url names a network project — (b) a shared initial commit
+ * (`git rev-list --max-parents=0 HEAD`). The veto reads every url and the match only fetch urls, on
+ * purpose (see `networkRemotesOf`): a match on where a checkout pushes would confirm a repository
+ * with unrelated history. The veto binds BOTH paths. A fork or a renamed derivative shares history
+ * with the original up to the point it diverged, so root commit alone cannot tell it apart from a
+ * genuine clone; and the ordinary fork layout — `origin` the fork, `upstream` the original —
+ * carries a MATCHING remote as well, so a match alone cannot either: it shows the checkout knows
+ * this repository, not that it is it. (The veto used to run only after a match had already
+ * confirmed, so it guarded path (b) alone and such a fork was folded in as inside.) A candidate
+ * with a network URL pointing anywhere else is a REAL, DIFFERENT project someone may be doing
+ * unrelated work in. Every remote is checked (`git remote`, then two `get-url` reads per name), not
+ * only `origin`: a derivative can rename `origin` to anything and add its own under a different
+ * name (`derivNoOrigin` in this repo's own test fixtures) — checking one fixed name would miss
+ * exactly that. And every URL OF each remote is checked, not only its first: a fork kept as ONE
+ * remote names this repository where a single `get-url` looks — the first fetch url — and the fork
+ * where it does not: a push url (`set-url --push`, or a `pushInsteadOf` rewrite) or a second url
+ * (`set-url --add`). Reading one url per remote confirmed both shapes as clones. See
+ * `CANDIDATE_URL_READS` for the reads, and for why the main root is read on its fetch url alone. A
+ * candidate with local-path-only remotes, or none at all, has nothing to veto with, so root commit
+ * alone still confirms it. The price, paid on purpose: a genuine clone that ALSO carries some other
+ * project's URL — as another remote, a push url or an extra url — is vetoed too, and reads as
+ * outside exactly as it would on master.
  *
  * FAILS CLOSED ON PURPOSE, in every direction: an inconclusive remote check — `git remote` itself
- * fails, or any single named remote's `get-url` fails — is NOT read as "no remote" (that would let
- * a transient failure launder a fork past the veto); the WHOLE candidate is left unconfirmed. An
- * alias, an IP literal, or any other host-spelling this function cannot resolve to a real hostname
- * still counts as a "network remote that doesn't match" if it doesn't textually match main's own,
- * so it still vetoes — such a clone reads as outside, exactly as it would on master, rather than
- * being guessed into "the same repository". (If main's own remotes cannot be read either, no
- * network remote can ever match `mainNetworkRemotes` — empty — so any candidate with a network remote of
- * its own is vetoed and only a local-path-only or remote-less candidate can still confirm.) None of
- * this can ever make signal 4 MORE likely to hide genuine outside use than master already does —
- * this function only ever ADDS an entry to `confirmed`, and only on the strongest proof available
- * — PROVIDED the caller folds in exactly the cwds it confirmed and nothing wider (see Returns).
+ * fails, or either `get-url` read of any named remote fails — is NOT read as "no remote" (that
+ * would let a transient failure launder a fork past the veto); the WHOLE candidate is left
+ * unconfirmed. An alias, an IP literal, or any other host-spelling this function cannot resolve to
+ * a real hostname still counts as a "network remote that doesn't match" if it doesn't textually
+ * match main's own, so it still vetoes — such a clone reads as outside, exactly as it would on
+ * master, rather than being guessed into "the same repository". (If main's own remotes cannot be
+ * read either, no network remote can ever match `mainNetworkRemotes` — empty — so any candidate
+ * with a network remote of its own is vetoed and only a local-path-only or remote-less candidate
+ * can still confirm.) None of this can ever make signal 4 MORE likely to hide genuine outside use
+ * than master already does — this function only ever ADDS an entry to `confirmed`, and only on the
+ * strongest proof available — PROVIDED the caller folds in exactly the cwds it confirmed and
+ * nothing wider (see Returns).
  *
  * Returns `{ confirmed, probed, capped }`: `confirmed` maps each proven cwd to the toplevel git
  * resolved it to, `probed` is how many distinct cwds were actually run through git, and `capped`
- * says whether `MAX_CLONE_PROBES` cut the list short. What is proven is the KEY — that exact cwd —
- * so the key is what a caller folds in, by exact path (`isSamePath`); the toplevel is context, never
- * a root. It used to be folded in as an extra prefix root, which was wrong in both directions: a
- * toplevel also covers any repository NESTED inside the clone's tree, which this function may just
- * have REJECTED, so genuine outside use scored inside; and git resolves a junction or symlink, so a
- * cwd reached through one has the link's TARGET as its toplevel — not a prefix of the cwd at all —
- * and a confirmed clone scored outside while being reported as folded in.
+ * says whether `MAX_CLONE_PROBES` cut the list short. What is proven is the KEY — that exact cwd
+ * string — so the key is what a caller folds in, by EXACT STRING: never as a root for the tree
+ * beneath it, and never case-folded or re-spelled (see the note at signal 4 for why not even that).
+ * The toplevel is context, never a root. It used to be folded in as an extra prefix root, which was
+ * wrong in both directions: a toplevel also covers any repository NESTED inside the clone's tree,
+ * which this function may just have REJECTED, so genuine outside use scored inside; and git
+ * resolves a junction or symlink, so a cwd reached through one has the link's TARGET as its
+ * toplevel — not a prefix of the cwd at all — and a confirmed clone scored outside while being
+ * reported as folded in.
  */
 export function withConfirmedCloneRoots(cwds, roots, { git = gitOutput } = {}) {
   const mainRoots = (Array.isArray(roots) ? roots : []).filter(r => typeof r === "string" && r.length > 0);
@@ -663,36 +661,66 @@ export function withConfirmedCloneRoots(cwds, roots, { git = gitOutput } = {}) {
     return out ? new Set(out.split(/\r?\n/).map(s => s.trim()).filter(Boolean)) : null;
   };
 
+  // Which `git remote get-url` reads each remote is judged on — the flags before the remote's name.
+  // The FIRST read must be a fetch read: its first line is the remote's fetch url (with several
+  // `url`s, git fetches from the first and pushes to them all).
+  //
+  // A CANDIDATE is read on EVERY url of every remote: `--all` lists every fetch url and
+  // `--push --all` every push url. One plain read answers with the first fetch url only, which is
+  // exactly where a fork kept as ONE remote names this repository; the fork itself sits in the push
+  // url (`set-url --push`, or a `pushInsteadOf` rewrite) or in a second url (`set-url --add`), and
+  // that single read confirmed both shapes as clones. git expands `insteadOf` in both reads and
+  // `pushInsteadOf` in the push one, so what is compared is what git itself would contact.
+  //
+  // The MAIN root is read on its FETCH url alone — plain `get-url`. Its other urls and its push urls
+  // are places it pushes TO; counting them as its identity would let a checkout of its push target or
+  // of a mirror match it, confirming what this fingerprint never accepted before — the one direction
+  // a change here must not move anything.
+  const CANDIDATE_URL_READS = [["--all"], ["--push", "--all"]];
+  const MAIN_URL_READS = [[]];
+
   /**
-   * Every one of `cwd`'s configured remotes, normalized and filtered to network ones only (a
-   * local-path remote cannot veto anything — see `isLocalPathRemote`). `inconclusive: true` means
-   * the remote listing OR a named remote's URL could not be read — NOT "no remote"; the caller must
+   * The network urls of `cwd`'s configured remotes, normalized, in two sets (a local-path url
+   * names no network project and cannot veto or match anything — see `isLocalPathRemote`):
+   * `everyUrl`, every url any of the `urlReads` returned for any remote — what the VETO is judged
+   * on; and `fetchUrls`, each remote's fetch url alone — the first line of the first read — which is
+   * all a MATCH may rest on. The two differ on purpose. A match found only in a push url or a later
+   * url is where the checkout sends work, not what it was cloned from: counting it as proof would
+   * confirm a repository with unrelated history whose only link to this one is where it pushes,
+   * which the root-commit check used to keep out. `inconclusive: true` means the remote listing OR
+   * any one of those reads, for any remote, could not be read — NOT "no remote"; the caller must
    * treat that as unconfirmable, never as an absent remote (#5c — a failed `get-url` used to read
    * as `null`, which the old gate treated exactly like "no remote configured" and confirmed the
-   * candidate anyway).
+   * candidate anyway). A push read that fails while the fetch read succeeded is just as
+   * inconclusive: the url it could not read is where a fork would hide.
    */
-  const networkRemotesOf = cwd => {
+  const networkRemotesOf = (cwd, urlReads) => {
     let names;
     try {
       const out = git(["remote"], cwd);
       names = out ? out.split(/\r?\n/).map(s => s.trim()).filter(Boolean) : [];
     } catch {
-      return { networkRemotes: new Set(), inconclusive: true };
+      return { everyUrl: new Set(), fetchUrls: new Set(), inconclusive: true };
     }
-    const networkRemotes = new Set();
+    const network = rawUrl => (isLocalPathRemote(rawUrl) ? null : normalizeRemoteUrl(rawUrl));
+    const everyUrl = new Set();
+    const fetchUrls = new Set();
     for (const name of names) {
-      let rawUrl;
+      let reads;
       try {
-        rawUrl = git(["remote", "get-url", name], cwd);
+        reads = urlReads.map(flags =>
+          git(["remote", "get-url", ...flags, name], cwd).split(/\r?\n/).map(u => u.trim()).filter(Boolean));
       } catch {
-        return { networkRemotes: new Set(), inconclusive: true };
+        return { everyUrl: new Set(), fetchUrls: new Set(), inconclusive: true };
       }
-      if (!isLocalPathRemote(rawUrl)) {
-        const normalized = normalizeRemoteUrl(rawUrl);
-        if (normalized) networkRemotes.add(normalized);
+      const fetchUrl = reads[0].length > 0 ? network(reads[0][0]) : null;
+      if (fetchUrl) fetchUrls.add(fetchUrl);
+      for (const rawUrl of reads.flat()) {
+        const normalized = network(rawUrl);
+        if (normalized) everyUrl.add(normalized);
       }
     }
-    return { networkRemotes, inconclusive: false };
+    return { everyUrl, fetchUrls, inconclusive: false };
   };
 
   // Fingerprint the main root(s) ONCE, outside the per-candidate loop — repeating this per
@@ -705,7 +733,7 @@ export function withConfirmedCloneRoots(cwds, roots, { git = gitOutput } = {}) {
   const mainNetworkRemotes = new Set();
   for (const main of mainRoots) {
     for (const c of rootCommitsOf(main) ?? []) mainRootCommits.add(c);
-    for (const r of networkRemotesOf(main).networkRemotes) mainNetworkRemotes.add(r);
+    for (const r of networkRemotesOf(main, MAIN_URL_READS).fetchUrls) mainNetworkRemotes.add(r);
   }
 
   const confirmed = new Map();
@@ -716,22 +744,25 @@ export function withConfirmedCloneRoots(cwds, roots, { git = gitOutput } = {}) {
     if (!toplevel) continue;
     const resolvedTop = path.resolve(toplevel);
 
-    const { networkRemotes, inconclusive } = networkRemotesOf(resolvedTop);
+    const { everyUrl, fetchUrls, inconclusive } = networkRemotesOf(resolvedTop, CANDIDATE_URL_READS);
     if (inconclusive) continue; // #5c: fails closed — not "no remote", just unconfirmable.
 
-    // Rule (A), the VETO, checked FIRST so it binds both paths below: ANY network remote matching
-    // none of main's — a fork, a renamed derivative, or a fork that also carries main's own URL as
-    // a second remote — makes this a different project, whatever else it matches.
-    if ([...networkRemotes].some(r => !mainNetworkRemotes.has(r))) continue;
+    // Rule (A), the VETO, checked FIRST so it binds both paths below: ANY network url — any fetch or
+    // push url of any remote — matching none of main's makes this a different project, whatever
+    // else it matches: a fork, a renamed derivative, a fork that also carries main's own URL as a
+    // second remote, or a fork kept as one remote that fetches from main and pushes to itself.
+    if ([...everyUrl].some(r => !mainNetworkRemotes.has(r))) continue;
 
-    // Path (a): a network remote matching main is proof on its own, regardless of root commit.
-    if ([...networkRemotes].some(r => mainNetworkRemotes.has(r))) {
+    // Path (a): a remote's FETCH url matching main is proof on its own, regardless of root commit —
+    // but only a fetch url (see `networkRemotesOf`): a match on a push url or a later url is not.
+    if ([...fetchUrls].some(r => mainNetworkRemotes.has(r))) {
       confirmed.set(cwd, resolvedTop);
       continue;
     }
 
-    // Path (b): only a candidate with NO network remote at all — local-path-only, or none — gets
-    // this far, so there is nothing to veto with and nothing to match; a shared root commit confirms.
+    // Path (b): only a candidate whose fetch urls name no network project — local-path-only, or no
+    // remote at all — gets this far (any other network url it carries matched main, or the veto
+    // would have fired), so nothing here is proof on its own; a shared root commit confirms.
     const commits = rootCommitsOf(resolvedTop);
     if (commits && mainRootCommits.size > 0 && [...commits].some(c => mainRootCommits.has(c))) {
       confirmed.set(cwd, resolvedTop);
@@ -1015,9 +1046,9 @@ export function summarize({
   // Cwds that git has POSITIVELY confirmed (see `withConfirmedCloneRoots`) are separate clones of
   // one of `repoRoots`, not a different project — computed in main() (git and the log both live
   // there) and handed in as plain strings so `summarize` stays pure. Folded into signal 4's outside
-  // check only, and each by EXACT PATH (`isSamePath`), never as a prefix root: these are the proven
-  // cwds themselves, not the toplevels they resolved to (see signal 4 for why that matters; the
-  // parameter's name predates the distinction). It is not part of `roots`/`repoRootSource`
+  // check only, and each by EXACT STRING, never as a prefix root: these are the proven cwds
+  // themselves, as recorded, not the toplevels they resolved to (see signal 4 for why that matters;
+  // the parameter's name predates the distinction). It is not part of `roots`/`repoRootSource`
   // provenance, which describes the PRIMARY boundary, not this supplementary allowlist.
   cloneRoots = [],
   // The OUTCOME of main()'s `withConfirmedCloneRoots` probing pass this run — how many distinct
@@ -1474,12 +1505,18 @@ export function summarize({
   // ── Signal 4: board consulted from outside KanbanFlow-v2/ ─────────────────────────────────
   // A confirmed clone cwd counts as inside HERE ONLY — `confirmedCloneCwds` is not part of `roots`
   // itself, so it never affects `availability.repoRoot`/provenance — and only AS ITSELF: a row is
-  // folded in when its cwd IS one of them (`isSamePath`), never because it sits somewhere beneath
-  // one. Folding in each confirmed cwd's toplevel as a prefix root, as this once did, scored a
-  // repository NESTED inside a confirmed clone as inside although the clone check had REJECTED it,
+  // folded in when its cwd IS one of them, string for string, never because it sits somewhere
+  // beneath one. Folding in each confirmed cwd's toplevel as a prefix root, as this once did, scored
+  // a repository NESTED inside a confirmed clone as inside although the clone check had REJECTED it,
   // and it missed a clone whose recorded cwd is a junction onto it, since git names the junction's
-  // target as the toplevel. What exact matching costs, and the caveat says so: a cwd the probe cap
-  // left unchecked stays outside even when it sits inside a clone that was confirmed.
+  // target as the toplevel. Not even a case-insensitive comparison: in a per-directory
+  // case-SENSITIVE NTFS directory, `cs\KF` and `cs\kf` are two different directories, and folding
+  // in by a path comparison scored the rejected one as inside because its sibling was confirmed.
+  // Exact strings lose nothing below the probe cap — candidates are de-duplicated and probed by
+  // exact string, so every spelling the log recorded is checked itself. What they cost, and the
+  // caveat says so: a cwd the cap left unchecked stays outside, even when it sits inside, or merely
+  // re-spells, a cwd that was confirmed. And the caveat and the NOTE list these same strings, so the
+  // disclosure and the scoring cannot disagree.
   const outsideSessions = new Map();
   for (const row of windowRows) {
     // Successful calls only, for signal 1's reason: a call that never reached the board is not the
@@ -1487,7 +1524,7 @@ export function summarize({
     // behind this signal's ADOPT.
     if (row.outcome !== "ok") continue;
     if (!isOutsideAllRoots(row.cwd, roots)) continue;
-    if (confirmedCloneCwds.some(cwd => isSamePath(row.cwd, cwd))) continue;
+    if (confirmedCloneCwds.includes(row.cwd)) continue;
     // All distinct cwds, for the same reason signal 1 collects them: this list is the evidence the
     // reader adjudicates on, and one session can call from several directories.
     const entry = outsideSessions.get(row.session) ?? { session: row.session, cwds: [], calls: 0 };
@@ -1505,13 +1542,15 @@ export function summarize({
     // A `git clone` of this SAME repo (not a `git worktree add`) has no ancestry link git can see,
     // so without this check it reads as outside and pure review/test traffic from a throwaway
     // clone (e.g. a review fleet's own sandbox) scores as adopt evidence. The count and the list
-    // are of CWDS — exactly the directories the loop above folds in — never the clones' toplevels,
-    // so what this sentence names and what the signal scores cannot disagree.
+    // are the confirmed CWD STRINGS — exactly the strings the loop above folds in, compared as
+    // strings — never the clones' toplevels, so what this sentence names and what the signal scores
+    // cannot disagree.
     (confirmedCloneCwds.length > 0
       ? ` ${confirmedCloneCwds.length} outside cwd(s) were confirmed as separate clones of it (by a ` +
-        "network remote, under any remote name, matching any of this repository's own network " +
-        "remotes, or by sharing its initial commit), not a different project, and were folded in as " +
-        `inside, each by its exact path (never as a root for the tree beneath it): ${confirmedCloneCwds.join(", ")}.`
+        "remote's fetch URL matching this repository's own, with no fetch or push URL of any remote, " +
+        "under any remote name, naming anything else — or by sharing its initial commit), not a " +
+        "different project, and were folded in as inside, each exactly as recorded (never as a root " +
+        `for the tree beneath it): ${confirmedCloneCwds.join(", ")}.`
       : "") +
     (cloneProbeCapped
       ? ` CLONE CONFIRMATION CAPPED THIS RUN: only ${cloneProbe.probed} of ${cloneProbe.candidates} ` +
@@ -1524,20 +1563,23 @@ export function summarize({
     // clone this check cannot POSITIVELY confirm still reads as outside, exactly as it would on
     // master, rather than being guessed into "the same repository". The last sentence states the
     // veto itself, because it is the one exclusion a reader could mistake for a bug: a fork whose
-    // `upstream` matches this repository is outside on purpose.
+    // `upstream`, or whose own fetch url, matches this repository is outside on purpose.
     " A clone this check cannot confirm — its directory no longer exists, git is unavailable, a call " +
     "exceeded GIT_TIMEOUT_MS, it was left unprobed by the cap above (and that includes a cwd INSIDE a " +
-    "clone that was confirmed: a cwd is folded in only when that exact cwd was itself checked, never " +
-    "because it sits beneath one that was), its remote listing or a remote's URL could not be read " +
+    "clone that was confirmed, or one that merely spells a confirmed cwd differently: a cwd is folded " +
+    "in only when that exact cwd string was itself checked, never because it sits beneath, or " +
+    "resembles, one that was), its remote listing or a remote's URL could not be read " +
     "(an inconclusive check is never assumed to mean 'no remote'), or it is a " +
     "GENUINELY THE SAME REPOSITORY but reached via an alias, an IP literal, or another host-spelling " +
     "this check cannot resolve to a matching hostname (e.g. an SSH config alias, or GitHub's " +
     "ssh.github.com:443 endpoint) — still reads as outside, exactly as it would on master, so a " +
     "single outside session should be checked against its own cwd before being read as adoption " +
-    "evidence. By design, a checkout with ANY network remote that matches none of this repository's " +
-    "reads as a different project even when another of its remotes does match: the ordinary fork " +
-    "layout (origin the fork, upstream this repository) stays outside as the fork it is, and so does " +
-    "a genuine clone that also carries some other project's remote.";
+    "evidence. By design, a checkout with ANY network URL that matches none of this repository's — " +
+    "every fetch and push URL of every remote is checked — reads as a different project even when " +
+    "another of its URLs does match: the ordinary fork layout (origin the fork, upstream this " +
+    "repository) stays outside as the fork it is, so does a fork kept as a single remote (fetching " +
+    "from this repository while pushing to the fork, or carrying the fork as a second URL), and so " +
+    "does a genuine clone that also carries some other project's URL.";
 
   const signal4 = gate({
     id: 4,
@@ -1987,14 +2029,14 @@ async function main(argv) {
       cloneRoots = [...new Set(confirmed.keys())];
       cloneProbe = { probed, capped: cloneCapped, candidates: distinctOutsideCwds.length };
       if (confirmed.size > 0) {
-        // Lists exactly the cwds signal 4 folds in, so this NOTE and the scoring cannot disagree —
-        // as they did when it listed toplevels: a clone reached through a junction was named here
-        // as folded in while signal 4 still scored its cwd outside.
+        // Lists exactly the cwd strings signal 4 folds in — it folds in by exact string — so this
+        // NOTE and the scoring cannot disagree, as they did when it listed toplevels: a clone reached
+        // through a junction was named here as folded in while signal 4 still scored its cwd outside.
         console.error(
-          `NOTE: ${confirmed.size} of ${distinctOutsideCwds.length} outside cwd(s) confirmed (by a network ` +
-          `remote, under any remote name, matching any of this repository's own, or by initial commit) as ` +
-          `separate clones of this repository, not a different project — folded into signal 4 as inside, ` +
-          `each by its exact path: ${cloneRoots.join(", ")}\n`
+          `NOTE: ${confirmed.size} of ${distinctOutsideCwds.length} outside cwd(s) confirmed (by a remote's fetch ` +
+          `URL matching this repository's own, with no fetch or push URL of any remote, under any remote name, ` +
+          `naming anything else — or by initial commit) as separate clones of this repository, not a ` +
+          `different project — folded into signal 4 as inside, each exactly as recorded: ${cloneRoots.join(", ")}\n`
         );
       }
       if (cloneCapped) {

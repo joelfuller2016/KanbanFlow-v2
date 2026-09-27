@@ -19,7 +19,7 @@ import { spawn, spawnSync, execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 import {
-  parseRows, isOutsideRepo, isOutsideAllRoots, isSamePath, statusAfter, summarize, renderReport, parseArgs,
+  parseRows, isOutsideRepo, isOutsideAllRoots, statusAfter, summarize, renderReport, parseArgs,
   pathFlavor, asUtcIso, normalizeEvent, normalizeTaskId, readLogGenerations, resolveRepoRoots,
   fetchActivity, ActivityHttpError, dedupeRows, buildIdentityBridge, aliasesOf, normalizeActor,
   WRITE_TOOLS, MUTATING_TOOLS, normalizeRemoteUrl, withConfirmedCloneRoots, gitOutput, isLocalPathRemote,
@@ -445,21 +445,6 @@ test("a cwd on a DIFFERENT DRIVE is outside, and an unrecorded cwd is not", () =
   assert.equal(isOutsideRepo(REPO, undefined), false, "no root to compare against measures nothing");
 });
 
-test("isSamePath is EQUALITY, never containment — spelled the win32 way, it ignores case and separators", () => {
-  // Signal 4 folds a confirmed clone cwd in with this, so containment here would reopen the defect it
-  // closes: a directory beneath a confirmed cwd is NOT that cwd, and may be a repository the clone
-  // check rejected.
-  assert.equal(isSamePath(REPO, REPO), true);
-  assert.equal(isSamePath(REPO.toLowerCase(), `${REPO.replace(/\\/g, "/")}/`), true, "case, separator and a trailing slash spell one directory");
-  assert.equal(isSamePath(`${REPO}\\vendor-other`, REPO), false, "a directory BENEATH a cwd is not that cwd");
-  assert.equal(isSamePath(REPO, `${REPO}\\vendor-other`), false, "nor the other way round");
-  assert.equal(isSamePath(`${REPO}-scratch`, REPO), false, "a shared name prefix is not the same directory");
-  assert.equal(isSamePath("D:\\Users\\Owner\\Documents\\Claude\\KanbanFlow-v2", REPO), false, "another drive is another directory");
-  assert.equal(isSamePath("/home/joel/Repo", "/home/joel/repo"), false, "POSIX paths stay case-sensitive");
-  assert.equal(isSamePath(undefined, REPO), false, "an unrecorded path matches nothing");
-  assert.equal(isSamePath("", ""), false);
-});
-
 // --- 5. Repo root comes from git, not from where this script happens to live ----------------
 
 const fakeGit = table => args => {
@@ -636,11 +621,20 @@ test("resolveRepoRoots really can drive git — the injected fake is not the onl
 // argument, so a same-repo comparison could not help but match and the test would pass even with
 // the comparison deleted. `fakeGitByCwd` is keyed on cwd first, so a wrong or missing cwd argument
 // throws "unexpected", not a silently-reused fixture.
+//
+// A table written one URL per remote (`remote get-url <name>`) still answers the `--all` and
+// `--push --all` reads a candidate now gets: with no key of their own, both fall back to the plain
+// entry — exactly what git reports for a remote with one `url` and no `pushurl`, whose only URL is
+// both where it fetches from and where it pushes to. A table that spells a `--all` or `--push --all`
+// key out is answered from it, and a remote with no entry at all still throws, so an inconclusive
+// read stays inconclusive.
 const fakeGitByCwd = table => (args, cwd) => {
   const key = args.join(" ");
   const forCwd = table[cwd];
-  if (!forCwd || !(key in forCwd)) throw new Error(`unexpected: git -C ${cwd} ${key}`);
-  return forCwd[key];
+  const plain = key.replace(/^remote get-url (?:--push )?--all /, "remote get-url ");
+  const hit = !forCwd ? null : key in forCwd ? key : plain in forCwd ? plain : null;
+  if (hit === null) throw new Error(`unexpected: git -C ${cwd} ${key}`);
+  return forCwd[hit];
 };
 
 test("a git clone of THIS repo is confirmed by its root commit and folded in as inside", () => {
@@ -839,6 +833,113 @@ test("a fork that ALSO carries this repo's URL (origin = the fork, upstream = th
   assert.deepEqual([...confirmed.keys()], [plainCloneCwd], "a clone whose only remote is this repo's own URL still confirms");
 });
 
+test("a fork kept as ONE remote is vetoed too — every fetch AND push URL of a remote is checked, not only the first", () => {
+  // `git remote get-url <name>` answers with ONE url: the first fetch URL. A fork kept as a single
+  // remote names this repository there and the fork somewhere else, so reading only that one URL
+  // confirmed both of these as clones:
+  //   triangular — fetches from this repository, pushes to the fork (`git remote set-url --push`);
+  //   secondUrl  — this repository first, the fork added as a second url (`git remote set-url --add`).
+  // The keys below are what real git answers for those two configurations.
+  const mainRoot = path.resolve("C:\\real\\KanbanFlow-v2");
+  const MAIN = "https://github.com/joel/kanbanflow-v2.git";
+  const FORK = "https://github.com/alice/kanbanflow-v2.git";
+  const triangularCwd = path.resolve("C:\\scratch\\triangular");
+  const secondUrlCwd = path.resolve("C:\\scratch\\second-url");
+  const plainCloneCwd = path.resolve("C:\\scratch\\plain-clone");
+  const git = fakeGitByCwd({
+    [mainRoot]: { "remote": "origin", "rev-list --max-parents=0 HEAD": "aaa111", "remote get-url origin": MAIN },
+    [triangularCwd]: {
+      "remote": "origin",
+      "rev-parse --show-toplevel": triangularCwd,
+      "rev-list --max-parents=0 HEAD": "aaa111",
+      "remote get-url origin": MAIN,
+      "remote get-url --all origin": MAIN,
+      "remote get-url --push --all origin": FORK
+    },
+    [secondUrlCwd]: {
+      "remote": "origin",
+      "rev-parse --show-toplevel": secondUrlCwd,
+      "rev-list --max-parents=0 HEAD": "aaa111",
+      "remote get-url origin": MAIN,
+      "remote get-url --all origin": `${MAIN}\n${FORK}`,
+      "remote get-url --push --all origin": `${MAIN}\n${FORK}`
+    },
+    // The control: one url, no pushurl — its only URL is this repository's, fetch and push alike.
+    [plainCloneCwd]: { "remote": "origin", "rev-parse --show-toplevel": plainCloneCwd, "remote get-url origin": MAIN }
+  });
+  const { confirmed } = withConfirmedCloneRoots([triangularCwd, secondUrlCwd, plainCloneCwd], [mainRoot], { git });
+  assert.deepEqual([...confirmed.keys()], [plainCloneCwd],
+    "the fork's URL vetoes wherever the remote carries it — as a push URL or a second URL — and the plain clone still confirms");
+});
+
+test("a match on a PUSH url or a later url is not proof — unrelated history that merely pushes here stays outside", () => {
+  // The veto reads every url; a MATCH may rest only on a remote's fetch url (its first url, the one
+  // git fetches from). Matching on every url would confirm both candidates below: their fetch url is
+  // a local path, their history is unrelated to this repository's, and the only thing tying them to
+  // it is where they push — the root-commit check is what used to keep them out, and still must.
+  const mainRoot = path.resolve("C:\\real\\KanbanFlow-v2");
+  const MAIN = "https://github.com/joel/kanbanflow-v2.git";
+  const LOCAL = "C:\\some\\local\\path";
+  const pushesHere = path.resolve("C:\\scratch\\unrelated-pushes-here");
+  const secondUrlHere = path.resolve("C:\\scratch\\unrelated-second-url-here");
+  const localCloneThatPushesHere = path.resolve("C:\\scratch\\local-clone-pushes-here");
+  const git = fakeGitByCwd({
+    [mainRoot]: { "remote": "origin", "rev-list --max-parents=0 HEAD": "aaa111", "remote get-url origin": MAIN },
+    // Each table answers all three reads the way git does: plain `get-url` is the first url.
+    [pushesHere]: {
+      "remote": "origin", "rev-parse --show-toplevel": pushesHere, "rev-list --max-parents=0 HEAD": "zzz999",
+      "remote get-url origin": LOCAL, "remote get-url --all origin": LOCAL, "remote get-url --push --all origin": MAIN
+    },
+    [secondUrlHere]: {
+      "remote": "origin", "rev-parse --show-toplevel": secondUrlHere, "rev-list --max-parents=0 HEAD": "zzz999",
+      "remote get-url origin": LOCAL, "remote get-url --all origin": `${LOCAL}\n${MAIN}`, "remote get-url --push --all origin": `${LOCAL}\n${MAIN}`
+    },
+    // The control: the same shape as `pushesHere`, but with THIS repository's history — the root-
+    // commit path still confirms it, so the push url is neither proof nor an obstacle.
+    [localCloneThatPushesHere]: {
+      "remote": "origin", "rev-parse --show-toplevel": localCloneThatPushesHere, "rev-list --max-parents=0 HEAD": "aaa111",
+      "remote get-url origin": LOCAL, "remote get-url --all origin": LOCAL, "remote get-url --push --all origin": MAIN
+    }
+  });
+  const { confirmed } = withConfirmedCloneRoots([pushesHere, secondUrlHere, localCloneThatPushesHere], [mainRoot], { git });
+  assert.deepEqual([...confirmed.keys()], [localCloneThatPushesHere],
+    "only the candidate with this repository's history confirms; a match on where the others push is not proof");
+});
+
+test("the MAIN root is matched on its FETCH urls only — where main pushes, or mirrors to, is never proof of a clone", () => {
+  // git fetches from a remote's FIRST url only; a pushurl, and any url after the first, are places
+  // main PUSHES to. Counting those as main's identity would widen what a candidate can match: a
+  // checkout of main's push target, or of a mirror it pushes to, would be confirmed as a clone of
+  // this repository, which the fingerprint never accepted before. So main contributes its fetch
+  // urls alone, and a candidate whose only URL is either of those stays outside.
+  const MAIN = "https://github.com/joel/kanbanflow-v2.git";
+  const PUSH_TARGET = "https://github.com/alice/kanbanflow-v2.git";
+  const MIRROR = "https://mirror.example.invalid/joel/kanbanflow-v2.git";
+  const mainPushes = path.resolve("C:\\real\\main-with-pushurl");
+  const mainMirrors = path.resolve("C:\\real\\main-with-second-url");
+  const pushTargetCheckout = path.resolve("C:\\scratch\\push-target-checkout");
+  const mirrorCheckout = path.resolve("C:\\scratch\\mirror-checkout");
+  const plainCloneCwd = path.resolve("C:\\scratch\\plain-clone");
+  const candidate = (cwd, url) => ({ "remote": "origin", "rev-parse --show-toplevel": cwd, "rev-list --max-parents=0 HEAD": "aaa111", "remote get-url origin": url });
+  const git = fakeGitByCwd({
+    [mainPushes]: {
+      "remote": "origin", "rev-list --max-parents=0 HEAD": "aaa111",
+      "remote get-url origin": MAIN, "remote get-url --all origin": MAIN, "remote get-url --push --all origin": PUSH_TARGET
+    },
+    [mainMirrors]: {
+      "remote": "origin", "rev-list --max-parents=0 HEAD": "aaa111",
+      "remote get-url origin": MAIN, "remote get-url --all origin": `${MAIN}\n${MIRROR}`, "remote get-url --push --all origin": `${MAIN}\n${MIRROR}`
+    },
+    [pushTargetCheckout]: candidate(pushTargetCheckout, PUSH_TARGET),
+    [mirrorCheckout]: candidate(mirrorCheckout, MIRROR),
+    [plainCloneCwd]: candidate(plainCloneCwd, MAIN)
+  });
+  const pushed = withConfirmedCloneRoots([pushTargetCheckout, plainCloneCwd], [mainPushes], { git }).confirmed;
+  assert.deepEqual([...pushed.keys()], [plainCloneCwd], "main's pushurl is not something a candidate can match");
+  const mirrored = withConfirmedCloneRoots([mirrorCheckout, plainCloneCwd], [mainMirrors], { git }).confirmed;
+  assert.deepEqual([...mirrored.keys()], [plainCloneCwd], "nor is a url after main's first, which git only pushes to");
+});
+
 test("#5c: an inconclusive remote check is NOT read as 'no remote' — it must not launder a fork past the veto", () => {
   // The reviewer's own M3b mutation: a `remote get-url` call that merely FAILS (a transient error,
   // not "no such remote") used to read as `rawRemote === null`, exactly like a genuine no-remote
@@ -872,6 +973,30 @@ test("#5c: an inconclusive remote check is NOT read as 'no remote' — it must n
   assert.equal(confirmed.size, 0, "a failed remote-URL read must leave BOTH candidates unconfirmed, not fall through to root commit");
 });
 
+test("a PUSH-url read that fails is inconclusive too — even when the fetch read answered with this repository's URL", () => {
+  // A candidate is read twice per remote, fetch urls and push urls. Only the push read fails here, and
+  // it is exactly the read that would have named a fork kept as one remote; reading its failure as
+  // "no push url" would confirm on the fetch url alone. The fetch read failing on its own is the same.
+  const mainRoot = path.resolve("C:\\real\\KanbanFlow-v2");
+  const MAIN = "https://github.com/joel/kanbanflow-v2.git";
+  const pushReadFails = path.resolve("C:\\scratch\\push-read-fails");
+  const fetchReadFails = path.resolve("C:\\scratch\\fetch-read-fails");
+  const git = fakeGitByCwd({
+    [mainRoot]: { "remote": "origin", "rev-list --max-parents=0 HEAD": "aaa111", "remote get-url origin": MAIN },
+    // No plain entry, so the fallback cannot answer: only the read spelled out here succeeds.
+    [pushReadFails]: {
+      "remote": "origin", "rev-parse --show-toplevel": pushReadFails, "rev-list --max-parents=0 HEAD": "aaa111",
+      "remote get-url --all origin": MAIN
+    },
+    [fetchReadFails]: {
+      "remote": "origin", "rev-parse --show-toplevel": fetchReadFails, "rev-list --max-parents=0 HEAD": "aaa111",
+      "remote get-url --push --all origin": MAIN
+    }
+  });
+  const { confirmed } = withConfirmedCloneRoots([pushReadFails, fetchReadFails], [mainRoot], { git });
+  assert.equal(confirmed.size, 0, "either read failing leaves the candidate unconfirmed — inconclusive, never 'no url'");
+});
+
 // A fixture builder that makes several directories runs BEFORE its caller's `try` exists — the
 // `cleanup` it returns is what that `finally` would call — so a step that throws part-way through
 // construction must remove what it already made itself, or nothing ever will: every directory made
@@ -890,7 +1015,7 @@ function buildInto(build) {
   }
 }
 
-// Fifteen real repositories covering every remote-classification shape rule (A) addresses, built
+// Twenty real repositories covering every remote-classification shape rule (A) addresses, built
 // fresh in os.tmpdir() every run, never read from a machine-specific fixture directory: this is the
 // same key an earlier version of this test read from one, self-contained now instead — this test
 // creates every repo itself, needs no external fixture directory, and works identically in any
@@ -935,6 +1060,27 @@ function buildRuleAFixture() {
     // and the non-matching origin still vetoes — on the remote-match path, not only the root-commit one.
     const forkWithUpstream = cloneWithRemote("https://example.invalid/alice/repo.git");
     gitOutput(["remote", "add", "upstream", "https://example.invalid/org/repo.git"], forkWithUpstream);
+    // A fork kept as ONE remote, which a single `get-url` — the first fetch URL only — never sees:
+    //   triangular: fetches from a, pushes to the fork (`set-url --push`);
+    //   secondUrl: a's URL first, the fork added as a second url (`set-url --add`), pushed to as well;
+    //   reverseTriangular: fetches from the fork, pushes to a — caught by the fetch read, not the push;
+    //   pushInsteadOfFork: one plain url, a's own, but `pushInsteadOf` rewrites every push to the
+    //     fork — git expands that for a push read, so the veto sees the fork where git would push.
+    const triangular = cloneWithRemote("https://example.invalid/org/repo.git");
+    gitOutput(["remote", "set-url", "--push", "origin", "https://example.invalid/alice/repo.git"], triangular);
+    const secondUrl = cloneWithRemote("https://example.invalid/org/repo.git");
+    gitOutput(["remote", "set-url", "--add", "origin", "https://example.invalid/alice/repo.git"], secondUrl);
+    const reverseTriangular = cloneWithRemote("https://example.invalid/alice/repo.git");
+    gitOutput(["remote", "set-url", "--push", "origin", "https://example.invalid/org/repo.git"], reverseTriangular);
+    const pushInsteadOfFork = cloneWithRemote("https://example.invalid/org/repo.git");
+    gitOutput(["config", "url.https://example.invalid/alice/.pushInsteadOf", "https://example.invalid/org/"], pushInsteadOfFork);
+    // EVERY url, not only the ones git would contact — a policy choice, locked in on purpose: the fork
+    // is a second url that git neither fetches from (it fetches from the first url only) nor pushes to
+    // (the pushurl pins pushes to a), and it still vetoes. A fork named anywhere in a remote's
+    // configuration reads as a fork, which fails closed.
+    const secondUrlPushPinned = cloneWithRemote("https://example.invalid/org/repo.git");
+    gitOutput(["remote", "set-url", "--add", "origin", "https://example.invalid/alice/repo.git"], secondUrlPushPinned);
+    gitOutput(["remote", "set-url", "--push", "origin", "https://example.invalid/org/repo.git"], secondUrlPushPinned);
 
     // --- OUTSIDE: genuinely unrelated (its own history) -------------------------------------------
     const unrelated = make();
@@ -949,6 +1095,7 @@ function buildRuleAFixture() {
     return {
       a, localClone, fileUrlClone, sameRepoHttps, sameRepoScpNoUser, sameRepoSshPort,
       forkHttps, forkIPv4, forkSingleLabel, forkSshAlias, aliasSpelledSameRepo, derivNoOrigin, forkWithUpstream,
+      triangular, secondUrl, reverseTriangular, pushInsteadOfFork, secondUrlPushPinned,
       unrelated, unrelatedNoRemote
     };
   });
@@ -960,17 +1107,21 @@ test("rule (A), rebuilt fresh in os.tmpdir(): the exact confirm/outside partitio
     const confirmedKeys = ["localClone", "fileUrlClone", "sameRepoHttps", "sameRepoScpNoUser", "sameRepoSshPort"];
     const outsideKeys = [
       "forkHttps", "forkIPv4", "forkSingleLabel", "forkSshAlias", "aliasSpelledSameRepo",
-      "derivNoOrigin", "forkWithUpstream", "unrelated", "unrelatedNoRemote"
+      "derivNoOrigin", "forkWithUpstream", "triangular", "secondUrl", "reverseTriangular",
+      "pushInsteadOfFork", "secondUrlPushPinned", "unrelated", "unrelatedNoRemote"
     ];
     const candidates = [...confirmedKeys, ...outsideKeys].map(k => fx[k]);
     const { confirmed } = withConfirmedCloneRoots(candidates, [fx.a]);
 
-    for (const key of confirmedKeys) {
-      assert.ok(confirmed.has(fx[key]), `${key} must be CONFIRMED (shares a's history; remote is local or matches)`);
-    }
-    for (const key of outsideKeys) {
-      assert.ok(!confirmed.has(fx[key]), `${key} must stay OUTSIDE (vetoed by a non-matching/unresolvable network remote, or genuinely unrelated)`);
-    }
+    // Every misplaced key is collected BEFORE asserting, so one failing run names them all: a loop of
+    // asserts stops at the first, and hides every other misclassification behind it.
+    const misplaced = [
+      ...confirmedKeys.filter(key => !confirmed.has(fx[key]))
+        .map(key => `${key} must be CONFIRMED (shares a's history; remote is local or matches)`),
+      ...outsideKeys.filter(key => confirmed.has(fx[key]))
+        .map(key => `${key} must stay OUTSIDE (vetoed by a non-matching/unresolvable network remote, or genuinely unrelated)`)
+    ];
+    assert.deepEqual(misplaced, [], "the confirm/outside partition must be exact");
     assert.equal(confirmed.size, confirmedKeys.length, "no unexpected extra confirmations");
   } finally {
     fx.cleanup();
@@ -1388,7 +1539,8 @@ test("CLI integration: --repo-root a separates a clone (b) from a different proj
 // reached through a junction: git reports the junction's TARGET as the toplevel, which is not a
 // prefix of the cwd the log recorded, so the run said the cwd was folded in as inside and still
 // scored it outside. Neither shows up in `summarize` alone, which folds in whatever it is handed,
-// so both run end to end: the real CLI, real git, a real log.
+// so both run end to end: the real CLI, real git, a real log. The last test here pins the other
+// half of "its own cwd": its own STRING, exactly as recorded, never a case-insensitive match.
 
 test("a repository NESTED inside a confirmed clone, and rejected on its own, stays outside", () => {
   const base = tmp();
@@ -1471,6 +1623,40 @@ test("a clone reached through a JUNCTION is scored inside, and the disclosure na
     if (link?.isSymbolicLink()) fs.unlinkSync(J);
     fs.rmSync(base, { recursive: true, force: true });
   }
+});
+
+test("a confirmed cwd folds in by its EXACT string — a sibling that differs only in case, rejected on its own, stays outside", () => {
+  // In a per-directory case-SENSITIVE NTFS directory (`fsutil file setCaseSensitiveInfo`), `cs\KF`
+  // and `cs\kf` are two different directories. A case-insensitive path comparison folded in the
+  // rejected one because its sibling was confirmed, and the caveat — naming only the confirmed one —
+  // then disagreed with the scoring. Exact string costs nothing below the probe cap: candidates are
+  // de-duplicated and probed by exact string, so every spelling the log recorded is checked itself.
+  const mainRoot = path.resolve("C:\\real\\KanbanFlow-v2");
+  const confirmedCwd = path.resolve("C:\\cs\\KF");
+  const siblingCwd = path.resolve("C:\\cs\\kf");
+  const git = fakeGitByCwd({
+    [mainRoot]: { "remote": "origin", "rev-list --max-parents=0 HEAD": "aaa111", "remote get-url origin": "https://github.com/joel/kanbanflow-v2.git" },
+    // KF: a genuine clone — no remote at all, and this repository's root commit.
+    [confirmedCwd]: { "remote": "", "rev-parse --show-toplevel": confirmedCwd, "rev-list --max-parents=0 HEAD": "aaa111" },
+    // kf: an unrelated repository — its own history, and another project's remote.
+    [siblingCwd]: {
+      "remote": "origin", "rev-parse --show-toplevel": siblingCwd, "rev-list --max-parents=0 HEAD": "zzz999",
+      "remote get-url origin": "https://github.com/someone/other.git"
+    }
+  });
+  const { confirmed } = withConfirmedCloneRoots([confirmedCwd, siblingCwd], [mainRoot], { git });
+  assert.deepEqual([...confirmed.keys()], [confirmedCwd], "fixture sanity: KF confirms and kf is rejected");
+
+  const s4 = find(summarize({
+    rows: [row({ session: "review-sandbox", cwd: confirmedCwd }), row({ session: "genuinely-external", cwd: siblingCwd })],
+    repoRoots: [mainRoot], repoRootSource: "git", cloneRoots: [...confirmed.keys()]
+  }), 4);
+  assert.deepEqual(s4.detail.map(d => d.session), ["genuinely-external"],
+    "only the exact confirmed string folds in; the sibling that differs only in case was rejected and stays outside");
+  assert.equal(s4.verdict, "ADOPT");
+  // The disclosure names exactly the strings that were folded in: KF, and not kf.
+  assert.match(s4.caveat, new RegExp(escapeRe(confirmedCwd)));
+  assert.doesNotMatch(s4.caveat, new RegExp(escapeRe(siblingCwd)));
 });
 
 // --- 6. Reading a Done transition ---------------------------------------------------------
