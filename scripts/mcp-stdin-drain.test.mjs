@@ -88,11 +88,12 @@ function writeLine(child, message) {
 
 // The wrapper's own drain deadline (restTimeoutMs + margin) must make it exit unassisted; this is
 // an independent, generous OUTER bound so a broken fix fails this test fast instead of hanging the
-// whole suite.
+// whole suite. It waits for "close", not "exit": Node documents that the child's stdio streams
+// might still be open when "exit" fires, and the callers assert on what stdout and stderr carried.
 async function waitForExit(child, ms) {
   let timer;
   const timedOut = new Promise(resolve => { timer = setTimeout(() => resolve(true), ms); });
-  const exited = once(child, "exit").then(([code, signal]) => ({ code, signal }));
+  const exited = once(child, "close").then(([code, signal]) => ({ code, signal }));
   const result = await Promise.race([exited, timedOut]);
   clearTimeout(timer);
   if (result === true) {
@@ -219,7 +220,12 @@ function cpuTimeMs(pid) {
   }
 }
 
-test("stdin left open with both stdout and stderr dead does not spin the CPU", async () => {
+// cpuTimeMs runs `powershell`, Windows PowerShell's executable; other platforms don't have it (even
+// PowerShell 7 installs as `pwsh`), so every sample there would be null and the test would fail for
+// want of an instrument, not because the wrapper spins.
+test("stdin left open with both stdout and stderr dead does not spin the CPU", {
+  skip: process.platform !== "win32" && "samples the child's CPU time with `powershell` (Windows PowerShell), which non-Windows hosts don't have",
+}, async () => {
   // Distinct from the test above: stdin here is NEVER ended, so the drain logic is not even in
   // play — this is a pre-existing bug on unmodified master itself. Measured directly against
   // isolated copies of both: 1589e43 shows a ~1234ms CPU delta, 92200b7 (before the
