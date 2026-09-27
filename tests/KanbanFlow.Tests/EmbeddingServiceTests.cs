@@ -48,8 +48,9 @@ public sealed class EmbeddingServiceTests
 
     // The shape a refused connect REALLY takes (#549), copied from the app log of a run with nothing
     // on :5256: System.ClientModel's HttpClientPipelineTransport wraps the HttpRequestException in a
-    // ClientResultException that has no response (Status 0). The SDK never surfaces the bare
-    // HttpRequestException the older transport tests throw.
+    // ClientResultException that has no response (Status 0). For a refused connect the SDK does not
+    // surface the bare HttpRequestException the older transport tests throw
+    // (EmbeddingServiceSdkShapeTests.RefusedConnect_IsNotRetried_AndStartsCooldown pins that).
     private const string RefusedMessage =
         "No connection could be made because the target machine actively refused it. (localhost:5256)";
 
@@ -254,9 +255,9 @@ public sealed class EmbeddingServiceTests
     [Fact]
     public async Task EmbedAsync_TransientTransportError_RetriesOnce_ThenFailsSoft()
     {
-        // A BARE HttpRequestException is still transient. The SDK never throws this shape directly (it
-        // wraps it, see SdkTransportFailure), so the production-shape guard is
-        // EmbedAsync_SdkWrappedTransportFailure_FailsSoftWithoutRetry, not this test (#549).
+        // A BARE HttpRequestException is still transient. For a refused connect the SDK does not throw
+        // this shape directly (it wraps it, see SdkTransportFailure), so the production-shape guard for
+        // a dead router is EmbedAsync_SdkWrappedTransportFailure_FailsSoftWithoutRetry, not this test (#549).
         var fake = new FakeEmbeddingGenerator((_, _, _) => throw new HttpRequestException("connection refused"));
         var service = NewService(fake);
 
@@ -577,6 +578,43 @@ public sealed class EmbeddingServiceTests
         Assert.True(probeUp.Ok);
         Assert.True(next.Ok);                                                 // the probe's success ended the cooldown
         Assert.Equal(4, fake.CallCount);
+    }
+
+    [Fact]
+    public async Task EmbedAsync_InFlightSuccess_EndsCooldown()
+    {
+        // The non-probe half of the test above: ANY provider success ends the window, not only a
+        // probe's. Inside the window EmbedAsync skips the provider, so the success has to come from a
+        // call already in flight when the window opens: "slow" is inside the generator when "trip" is
+        // refused, and completes afterwards. The next call must then reach the provider.
+        using var slowEntered = new SemaphoreSlim(0);
+        var releaseSlow = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var fake = new FakeEmbeddingGenerator(async (inputs, _, token) =>
+        {
+            if (inputs[0] == "trip")
+                throw SdkTransportFailure();
+            if (inputs[0] == "slow")
+            {
+                slowEntered.Release();
+                await releaseSlow.Task.WaitAsync(token); // held until the window is open
+            }
+            return new GeneratedEmbeddings<Embedding<float>>(inputs.Select(Canned));
+        });
+        var service = NewService(fake, timeProvider: new FakeTimeProvider());
+
+        var slow = service.EmbedAsync("slow", CancellationToken.None);            // in flight before the trip
+        Assert.True(await slowEntered.WaitAsync(HangGuard), "slow never reached the generator");
+        await service.EmbedAsync("trip", CancellationToken.None);                 // refused ⇒ cooldown starts
+        var inside = await service.EmbedAsync("inside", CancellationToken.None);
+        Assert.Contains("cooling down", inside.Error);                             // the window is open
+        var callsBefore = fake.CallCount;
+
+        releaseSlow.SetResult();
+        Assert.True((await slow).Ok);                                              // a NON-probe success...
+        var next = await service.EmbedAsync("next", CancellationToken.None);
+
+        Assert.True(next.Ok);                                                      // ...ended the window
+        Assert.Equal(callsBefore + 1, fake.CallCount);                             // "next" reached the provider
     }
 
     [Fact]
