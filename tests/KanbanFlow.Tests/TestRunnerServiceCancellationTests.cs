@@ -1,5 +1,6 @@
 using System.Net;
 using System.Net.Http.Json;
+using System.Text.Json;
 using System.Text.RegularExpressions;
 using KanbanFlow.Data;
 using KanbanFlow.Models;
@@ -17,9 +18,11 @@ namespace KanbanFlow.Tests;
 
 /// <summary>
 /// Real HTTP + real SQLite tests for the fixture-leak-on-cancel defect (F1 / issue #150 AC#2, #541):
-/// <c>TestRunnerService</c>'s scratch Project/Feature/Task/Idea fixture creates use
-/// <c>CancellationToken.None</c> so a caller-token cancellation can no longer abort a response read
-/// mid-flight, but an <c>HttpClient.Timeout</c>, transport reset, or server error before the id is
+/// <c>TestRunnerService</c>'s tracked fixture creates — every project and idea it expects to create, and
+/// the scratch project's feature and task — use <c>CancellationToken.None</c>, so a caller-token
+/// cancellation can no longer abort a response read mid-flight (child rows a test adds under a scratch
+/// project stay bound to the caller's token: cascade delete removes them with it), but an
+/// <c>HttpClient.Timeout</c>, transport reset, or server error before the id is
 /// captured can still leave a committed row whose id the runner never learned — no <c>finally</c>
 /// in <c>TestRunnerService</c> can target such a row with a DELETE by id.
 ///
@@ -28,8 +31,9 @@ namespace KanbanFlow.Tests;
 /// <see cref="TestRunnerService"/> with a real <see cref="HttpClient"/> whose transport is wrapped in
 /// <see cref="FaultInjectingHandler"/>. That handler lets the REAL request reach the REAL server (so the
 /// server-side commit genuinely happens, exactly as rev-api's raw-socket <c>abort_run.py</c> proved
-/// against a live instance) and only then throws — deterministically reproducing "the caller's token
-/// fired after the server committed but before the response was read" instead of racing a real clock.
+/// against a live instance) and only then throws — deterministically reproducing a create whose response
+/// is lost after the server committed it (before the fix, the caller's token firing mid-read did exactly
+/// that; since it, a timeout or a transport reset still can) instead of racing a real clock.
 /// A real race (a raw-socket abort at a wall-clock delay) is what proves the bug exists on a live
 /// process; it cannot be the regression test itself because it cannot be made to land on one exact
 /// line reliably on every run. This handler is that same fault, made to land on a chosen line every
@@ -41,7 +45,7 @@ public sealed class TestRunnerServiceCancellationTests
     public async Task CreateProjectFeatureTaskAsync_HappyPath_NameCarriesRunMarker_AndCleansUpNormally()
     {
         await using var host = await ApiHost.StartAsync();
-        var runner = host.NewRunner(new FaultInjectingHandler(_ => false, faultOnNthMatch: 0));
+        var runner = host.NewRunner(new FaultInjectingHandler(host.BaseAddress, _ => false, faultOnNthMatch: 0));
         const string marker = "kftestHAPPYPATH0000001";
 
         var (pid, fid, tid) = await runner.CreateProjectFeatureTaskAsync(host.RealClient, marker, CancellationToken.None);
@@ -70,8 +74,9 @@ public sealed class TestRunnerServiceCancellationTests
         // before a create's SEND — only after (via ThrowIfCancellationRequested placed AFTER id
         // capture), and RunTest swallows that post-capture throw into a failed TestResult. So once ct
         // fired, RunApiTestsAsync kept walking every remaining create-first test, sending a REAL
-        // create (CancellationToken.None, unconditional) and issuing a REAL delete for each — instead
-        // of stopping.
+        // create (CancellationToken.None, unconditional) and issuing a REAL delete for each. With the
+        // check, every remaining test still runs (RunTest still swallows each exception) and fails at
+        // its first token check, but none of them sends another create — which is what this counts.
         //
         // Cancelling ct is deferred until AFTER the suite's first real request completes — not done
         // upfront — because RunApiTestsAsync's OWN setup (the preExistingProjectIds snapshot) is
@@ -85,11 +90,12 @@ public sealed class TestRunnerServiceCancellationTests
         // looks at it can throw before ever reaching the wire, so an attempt-count includes sends
         // that never happened.
         var cts = new CancellationTokenSource();
+        await using var host = await ApiHost.StartAsync();
         var counter = new CancelAfterFirstThenCountCreatesHandler(
+            host.BaseAddress,
             cts,
             req => req.Method == HttpMethod.Post &&
                    (req.RequestUri!.AbsolutePath == "/api/projects" || req.RequestUri.AbsolutePath == "/api/ideas"));
-        await using var host = await ApiHost.StartAsync();
         var runner = host.NewRunner(counter);
 
         // Deliberately not asserting HOW the method finishes: whether it throws depends on which
@@ -121,7 +127,7 @@ public sealed class TestRunnerServiceCancellationTests
         var interceptor = new BlockFirstMatchingProjectSaveInterceptor("Test-Project-");
         await using var host = await ApiHost.StartAsync(interceptor);
         // No transport fault here — this race is entirely server-side.
-        var runner = host.NewRunner(new FaultInjectingHandler(_ => false, faultOnNthMatch: 0));
+        var runner = host.NewRunner(new FaultInjectingHandler(host.BaseAddress, _ => false, faultOnNthMatch: 0));
         using var cts = new CancellationTokenSource();
 
         var run = runner.RunApiTestsAsync(cts.Token); // not awaited — the server-side block starts inside it
@@ -140,8 +146,7 @@ public sealed class TestRunnerServiceCancellationTests
             // RunApiTestsAsync's own cleanup runs (and finds nothing yet) well inside this window —
             // `run` completes on its own. Post-fix: the client's CancellationToken.None-bound create
             // keeps waiting for the real response, so `run` cannot possibly finish until we release
-            // it below — the delay wins instead. Racing a bounded delay against `run` is what tells
-            // the two apart without hard-coding which behavior is "the" behavior.
+            // it below — the delay wins instead. Which of the two finishes first is what tells them apart.
             var first = await Task.WhenAny(run, Task.Delay(TimeSpan.FromSeconds(2)));
             Assert.NotSame(run, first); // post-fix: the None-bound create must still be waiting on the blocked server save
         }
@@ -165,7 +170,7 @@ public sealed class TestRunnerServiceCancellationTests
     }
 
     [Fact]
-    public async Task CreateProjectFeatureTaskAsync_DeletesTheProject_WhenCancelledAfterFeatureCreateCommits()
+    public async Task CreateProjectFeatureTaskAsync_DeletesTheProject_WhenTheFeatureCreateResponseIsLost()
     {
         // Drives CreateProjectFeatureTaskAsync DIRECTLY — never through RunApiTestsAsync — so this
         // isolates the HELPER's own catch/delete from SweepRunMarkerAsync's blanket end-of-run
@@ -174,14 +179,12 @@ public sealed class TestRunnerServiceCancellationTests
         // feature-creation POST; the project POST just above it succeeds normally, so pid IS known
         // by the time this fires. That is exactly the window the helper's own try/catch closes by
         // deleting the already-known project id.
-        // NOTE post-option-a: this call passes CancellationToken.None as ct, so nothing here is
-        // actually testing "the caller's token fired" — every fixture-create now uses
-        // CancellationToken.None regardless, per CreateProjectFeatureTaskAsync's own remarks. The
-        // thrown exception below is FaultInjectingHandler's simulated TRANSPORT failure (the
-        // residual window that remains once ct can no longer strike a create directly), not a
-        // cancellation. The name is kept because the drafts filed against this fix already cite it.
+        // No token is cancelled here: ct is CancellationToken.None, and the exception below is
+        // FaultInjectingHandler's simulated transport failure — the feature create commits server-side
+        // and its response is lost, the residual window left once ct can no longer strike a create.
         await using var host = await ApiHost.StartAsync();
         var handler = new FaultInjectingHandler(
+            host.BaseAddress,
             req => req.Method == HttpMethod.Post && req.RequestUri!.AbsolutePath.StartsWith("/api/projects/", StringComparison.Ordinal)
                                                   && req.RequestUri.AbsolutePath.EndsWith("/features", StringComparison.Ordinal),
             faultOnNthMatch: 1);
@@ -199,18 +202,17 @@ public sealed class TestRunnerServiceCancellationTests
     }
 
     [Fact]
-    public async Task RunApiTestsAsync_LeavesNoOrphanedProject_WhenCancelledAfterFeatureCreateCommits()
+    public async Task RunApiTestsAsync_LeavesNoOrphanedProject_WhenAFeatureCreateResponseIsLost()
     {
         // The same fault point as the direct helper test above, but driven through the full suite
         // this time — end-to-end confirmation that the helper fix and the outer sweep compose
         // correctly (either one alone is enough here; the direct test above is what actually proves
         // the helper's own catch is what does it, since this path lets the sweep cover for it too).
-        // NOTE post-option-a: cts.Token is never cancelled anywhere in this test — every fixture-
-        // create now uses CancellationToken.None regardless, so this is FaultInjectingHandler's
-        // simulated TRANSPORT failure after the id is known, not a cancellation. Name kept because
-        // the drafts filed against this fix already cite it.
+        // cts.Token is never cancelled here: this is FaultInjectingHandler's simulated transport
+        // failure after the project id is known — the feature create's response is lost.
         await using var host = await ApiHost.StartAsync();
         var handler = new FaultInjectingHandler(
+            host.BaseAddress,
             req => req.Method == HttpMethod.Post && req.RequestUri!.AbsolutePath.StartsWith("/api/projects/", StringComparison.Ordinal)
                                                   && req.RequestUri.AbsolutePath.EndsWith("/features", StringComparison.Ordinal),
             faultOnNthMatch: 1);
@@ -225,7 +227,7 @@ public sealed class TestRunnerServiceCancellationTests
     }
 
     [Fact]
-    public async Task RunApiTestsAsync_SweepFindsAndDeletesTheProject_WhenCancelledDuringTheProjectsOwnCreateResponse()
+    public async Task RunApiTestsAsync_SweepFindsAndDeletesTheProject_WhenTheProjectsOwnCreateResponseIsLost()
     {
         // Faults the 3rd POST to exactly "/api/projects": #1 is the "Create + delete project" test,
         // #2 is the "empty name" 422 test (no row committed), #3 is CreateProjectFeatureTaskAsync's
@@ -237,13 +239,13 @@ public sealed class TestRunnerServiceCancellationTests
         // wrong and this fired on POST #1 instead (which IS RunTest-wrapped), the exception would be
         // swallowed into a failed TestResult, RunApiTestsAsync would return normally, and the
         // ThrowsAsync below would itself fail — the pin is self-verifying every time this test runs.
-        // NOTE post-option-a: cts.Token is never cancelled anywhere in this test — this POST already
-        // uses CancellationToken.None, so what's faulted here is FaultInjectingHandler's simulated
-        // TRANSPORT failure during the create, before pid is captured — the residual window that
-        // remains once ct itself can no longer strike a create directly (SweepRunMarkerAsync's own
-        // backstop, not a cancellation).
+        // cts.Token is never cancelled here: the project create's response is lost to
+        // FaultInjectingHandler's simulated transport failure before pid is captured — the residual
+        // window left once ct can no longer strike a create, and the one SweepRunMarkerAsync's
+        // best-effort sweep exists for.
         await using var host = await ApiHost.StartAsync();
         var handler = new FaultInjectingHandler(
+            host.BaseAddress,
             req => req.Method == HttpMethod.Post && req.RequestUri!.AbsolutePath == "/api/projects",
             faultOnNthMatch: 3);
         var runner = host.NewRunner(handler);
@@ -281,6 +283,7 @@ public sealed class TestRunnerServiceCancellationTests
         await using var host = await ApiHost.StartAsync();
         using var cts = new CancellationTokenSource();
         var handler = new FaultInjectingHandler(
+            host.BaseAddress,
             req => req.Method == HttpMethod.Post && req.RequestUri!.AbsolutePath == "/api/projects",
             faultOnNthMatch: 1,
             cancelBeforeThrow: cts);
@@ -300,7 +303,7 @@ public sealed class TestRunnerServiceCancellationTests
     public async Task SweepRunMarkerAsync_DeletesOnlyMarkedNonPreExistingRows_LeavesEverythingElseAlone()
     {
         await using var host = await ApiHost.StartAsync();
-        var runner = host.NewRunner(new FaultInjectingHandler(_ => false, faultOnNthMatch: 0));
+        var runner = host.NewRunner(new FaultInjectingHandler(host.BaseAddress, _ => false, faultOnNthMatch: 0));
         const string marker = "kftestSWEEPUNITTEST0001";
 
         const string otherMarker = "kftestOTHERRUN00000000";
@@ -325,17 +328,18 @@ public sealed class TestRunnerServiceCancellationTests
             controlProjectId = control.Id;
             otherRunProjectId = otherRun.Id;
 
-            // (3) Paranoid negative control for the second, structural guard: a project that DOES
-            // contain the marker string but is listed as pre-existing must still survive. Real
-            // fixtures are never pre-existing by construction (the marker is minted after the
-            // snapshot), so this can only happen if the marker itself were somehow reused — the
-            // exclusion must hold even then.
-            var preExistingButMarked = new Project { Name = $"Coincidentally-{marker}-named" };
+            // (3) Negative control for the second, structural guard: a project whose name is EXACTLY
+            // a fixture's, but which is listed as pre-existing, must still survive. Real fixtures are
+            // never pre-existing by construction (the marker is minted after the snapshot), so this
+            // can only happen if the marker itself were somehow reused — the exclusion must hold even
+            // then. Its name is a genuine NewName fixture name, so the pre-existing guard is the only
+            // thing that can save it.
+            var preExistingButMarked = new Project { Name = TestRunnerService.NewName("Test", marker) };
             db.Projects.Add(preExistingButMarked);
             await db.SaveChangesAsync();
             preExistingButMarkedProjectId = preExistingButMarked.Id;
 
-            var leakedIdea = new Idea { Title = $"{marker} some idea" };
+            var leakedIdea = new Idea { Title = $"{marker} Round-trip idea" }; // a registered literal title
             var controlIdea = new Idea { Title = "Real user idea" };
             var otherRunIdea = new Idea { Title = $"{otherMarker} idea" };
             db.Ideas.AddRange(leakedIdea, controlIdea, otherRunIdea);
@@ -365,7 +369,7 @@ public sealed class TestRunnerServiceCancellationTests
         // IsFixtureProjectName/IsFixtureIdeaTitle require the exact shape a fixture actually has;
         // this is what proves a merely-quoting row survives (fails today against Contains alone).
         await using var host = await ApiHost.StartAsync();
-        var runner = host.NewRunner(new FaultInjectingHandler(_ => false, faultOnNthMatch: 0));
+        var runner = host.NewRunner(new FaultInjectingHandler(host.BaseAddress, _ => false, faultOnNthMatch: 0));
         const string marker = "kftestQUOTINGROW00000001";
 
         int quotingProjectId, quotingIdeaId;
@@ -388,14 +392,141 @@ public sealed class TestRunnerServiceCancellationTests
     }
 
     [Fact]
+    public async Task SweepRunMarkerAsync_DeletesExactFixtureNames_ButNotRealRowsThatBeginWithOne()
+    {
+        // #541: a predicate that checks only a fixture name's PREFIX also deletes a real row created
+        // during the run whose name begins with a fixture's full name and goes on. Both groups below
+        // are seeded after the pre-existing snapshot, so only the exact-shape check stands between the
+        // second group and the sweep. The first group is the positive control: a predicate that
+        // rejected everything would leave it behind, and fail here too.
+        await using var host = await ApiHost.StartAsync();
+        var runner = host.NewRunner(new FaultInjectingHandler(host.BaseAddress, _ => false, faultOnNthMatch: 0));
+        var marker = TestRunnerService.NewRunMarker();
+
+        List<int> preExisting;
+        await using (var db = await host.DbFactory.CreateDbContextAsync())
+            preExisting = await db.Projects.Select(p => p.Id).ToListAsync();
+
+        // (i) One genuine fixture of each kind; (ii) a real row that begins with each one's full name.
+        var fixtureProjects = TestRunnerService.FixtureProjectPrefixes
+            .Select(prefix => TestRunnerService.NewName(prefix, marker))
+            .Append($"{marker} to promote")
+            .ToList();
+        var fixtureIdeas = new List<string> { TestRunnerService.NewName("UiIdea", marker), $"{marker} Round-trip idea" };
+        var realProjects = fixtureProjects.Select(name => name + " notes").ToList();
+        var realIdeas = fixtureIdeas.Select(title => title + " (copy)").ToList();
+
+        await using (var db = await host.DbFactory.CreateDbContextAsync())
+        {
+            db.Projects.AddRange(fixtureProjects.Concat(realProjects).Select(name => new Project { Name = name }));
+            db.Ideas.AddRange(fixtureIdeas.Concat(realIdeas).Select(title => new Idea { Title = title }));
+            await db.SaveChangesAsync();
+        }
+
+        await runner.SweepRunMarkerAsync(host.RealClient, marker, preExisting);
+
+        await using var verify = await host.DbFactory.CreateDbContextAsync();
+        var projects = await verify.Projects.Select(p => p.Name).ToListAsync();
+        var ideas = await verify.Ideas.Select(i => i.Title).ToListAsync();
+        var deletedRealRows = realProjects.Except(projects).Concat(realIdeas.Except(ideas)).ToList();
+        Assert.True(deletedRealRows.Count == 0,
+            $"the sweep deleted real rows that only BEGIN with a fixture's name: {string.Join("; ", deletedRealRows)}");
+        var survivingFixtures = fixtureProjects.Intersect(projects).Concat(fixtureIdeas.Intersect(ideas)).ToList();
+        Assert.True(survivingFixtures.Count == 0,
+            $"the sweep left genuine fixtures behind: {string.Join("; ", survivingFixtures)}");
+    }
+
+    [Fact]
+    public async Task EveryRegisteredFixtureShape_SurvivesTheRealApi_AndIsStillRecognizedWhenReadBack()
+    {
+        // #541: the sweep matches a fixture's Name/Title EXACTLY, so any server-side normalization (a
+        // trim, a truncation, a promote that decorates the name) would silently un-sweep that fixture.
+        // Every registered shape is created through the real routes and read back FROM THE DATABASE; the
+        // predicate runs on what was stored, never on the string that was sent.
+        await using var host = await ApiHost.StartAsync();
+        var http = host.RealClient;
+        var marker = TestRunnerService.NewRunMarker();
+        var unrecognized = new List<string>();
+
+        async Task<int> CreatedIdAsync(Task<HttpResponseMessage> send)
+        {
+            using var response = await send;
+            Assert.Equal(HttpStatusCode.Created, response.StatusCode);
+            return (await response.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("id").GetInt32();
+        }
+
+        async Task CheckProjectAsync(string what, int projectId)
+        {
+            await using var db = await host.DbFactory.CreateDbContextAsync();
+            var stored = (await db.Projects.SingleAsync(p => p.Id == projectId)).Name;
+            if (!TestRunnerService.IsFixtureProjectName(stored, marker))
+                unrecognized.Add($"{what}: project stored as '{stored}'");
+        }
+
+        async Task CheckIdeaAsync(string what, int ideaId)
+        {
+            await using var db = await host.DbFactory.CreateDbContextAsync();
+            var stored = (await db.Ideas.SingleAsync(i => i.Id == ideaId)).Title;
+            if (!TestRunnerService.IsFixtureIdeaTitle(stored, marker))
+                unrecognized.Add($"{what}: idea stored as '{stored}'");
+        }
+
+        foreach (var prefix in TestRunnerService.FixtureProjectPrefixes)
+            await CheckProjectAsync($"NewName(\"{prefix}\")", await CreatedIdAsync(
+                http.PostAsJsonAsync("/api/projects", new { name = TestRunnerService.NewName(prefix, marker) })));
+        foreach (var prefix in TestRunnerService.FixtureIdeaPrefixes)
+            await CheckIdeaAsync($"NewName(\"{prefix}\")", await CreatedIdAsync(
+                http.PostAsJsonAsync("/api/ideas", new { title = TestRunnerService.NewName(prefix, marker) })));
+        foreach (var literal in TestRunnerService.FixtureLiterals)
+            await CheckIdeaAsync($"\"{literal}\"", await CreatedIdAsync(
+                http.PostAsJsonAsync("/api/ideas", new { title = $"{marker} {literal}" })));
+
+        // The two titles the runner reaches only by PATCH: the stored value after the rename is what counts.
+        foreach (var (original, renamed) in new[] { ("before rename", "renamed"), ("audit idea", "audit idea (edited)") })
+        {
+            var ideaId = await CreatedIdAsync(http.PostAsJsonAsync("/api/ideas", new { title = $"{marker} {original}" }));
+            using var patch = await http.PatchAsJsonAsync($"/api/ideas/{ideaId}", new { title = $"{marker} {renamed}" });
+            Assert.Equal(HttpStatusCode.OK, patch.StatusCode);
+            await CheckIdeaAsync($"\"{original}\" PATCHed to \"{renamed}\"", ideaId);
+        }
+
+        // The promoted project: PromoteAsync names it after the idea, as the runner's promote test does.
+        var ideaToPromote = await CreatedIdAsync(
+            http.PostAsJsonAsync("/api/ideas", new { title = $"{marker} to promote", body = "b", plan = "p" }));
+        using (var promote = await http.PostAsJsonAsync($"/api/ideas/{ideaToPromote}/promote", new { actor = "test-runner" }))
+        {
+            Assert.Equal(HttpStatusCode.OK, promote.StatusCode);
+            var projectId = (await promote.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("projectId").GetInt32();
+            await CheckProjectAsync("the project promoted from \"to promote\"", projectId);
+        }
+
+        // "blank enum" exactly as the runner sends it, with a blank priority. Measured here rather than
+        // assumed: it is rejected before any row is written, so it never commits one.
+        async Task<int> BlankEnumRowsAsync()
+        {
+            await using var db = await host.DbFactory.CreateDbContextAsync();
+            return await db.Ideas.CountAsync(i => i.Title == $"{marker} blank enum");
+        }
+
+        var blankEnumRowsBefore = await BlankEnumRowsAsync();
+        using (var blank = await http.PostAsJsonAsync("/api/ideas", new { title = $"{marker} blank enum", priority = " " }))
+            Assert.Equal(HttpStatusCode.UnprocessableEntity, blank.StatusCode);
+        Assert.Equal(blankEnumRowsBefore, await BlankEnumRowsAsync());
+
+        Assert.True(unrecognized.Count == 0,
+            $"a registered fixture shape is no longer recognized once stored: {string.Join("; ", unrecognized)}. " +
+            "The server (or NewName) changed what is written, and the sweep would silently stop finding that fixture.");
+    }
+
+    [Fact]
     public void IsFixtureShapeChecks_RecognizeEveryPrefixNewNameActuallyProduces()
     {
-        // #541: pins the hand-maintained shape lists in IsFixtureProjectName/
-        // IsFixtureIdeaTitle against every prefix the file ACTUALLY passes to NewName, by reading
-        // the real source rather than hand-listing prefixes here a second time. A future
-        // NewName("SomeNewPrefix", ...) call site added without a matching shape in either function
-        // fails this test — that drift is exactly what would make SweepRunMarkerAsync silently stop
-        // covering that fixture's residual-window leaks.
+        // #541: pins the registered prefixes (TestRunnerService.FixtureProjectPrefixes/
+        // FixtureIdeaPrefixes) against every prefix the file ACTUALLY passes to NewName, by reading
+        // the real source rather than hand-listing prefixes here a second time, and runs each through
+        // the real NewName and the sweep's own predicates. A future NewName("SomeNewPrefix", ...) call
+        // site added without registering its prefix fails this test — that drift is exactly what would
+        // make SweepRunMarkerAsync silently stop covering that fixture's residual-window leaks.
         var source = RepositorySource.Read("src/KanbanFlow/Services/TestRunnerService.cs");
         // The patterns below allow whitespace before "(" (NewName ("X", ...) is still a call), so
         // full-line comments are blanked first: prose such as "passes to NewName (#541)" is not one.
@@ -433,21 +564,98 @@ public sealed class TestRunnerServiceCancellationTests
         const string marker = "kftestN4PIN00000000001";
         foreach (var prefix in prefixes)
         {
-            var produced = $"{prefix}-{marker}-a1b2c3d4"; // NewName's own "{prefix}-{marker}-{hex}" format
+            var produced = TestRunnerService.NewName(prefix, marker); // the real producer, not a copy of its format
             var recognized = TestRunnerService.IsFixtureProjectName(produced, marker)
                            || TestRunnerService.IsFixtureIdeaTitle(produced, marker);
             Assert.True(recognized,
                 $"NewName(\"{prefix}\", ...) produces '{produced}', which neither IsFixtureProjectName " +
                 "nor IsFixtureIdeaTitle recognizes — SweepRunMarkerAsync would silently stop finding " +
-                "this fixture's residual-window leaks. Add its shape to whichever function matches.");
+                "this fixture's residual-window leaks. Register the prefix in FixtureProjectPrefixes or " +
+                "FixtureIdeaPrefixes.");
         }
+    }
+
+    [Fact]
+    public void EveryUseOfRunMarker_IsARegisteredFixtureShape_OrAKnownPassThrough()
+    {
+        // #541: SweepRunMarkerAsync deletes a row only when its Name/Title is EXACTLY a registered
+        // fixture shape (TestRunnerService.FixtureProjectPrefixes/FixtureIdeaPrefixes/FixtureLiterals),
+        // so every name this file builds from runMarker must be one — an unregistered one would leak past
+        // the sweep unseen. This accounts for EVERY use of runMarker in the source: a use it does not
+        // recognize fails rather than being skipped, so a concatenation, a string.Format, or a differently
+        // shaped interpolation cannot slip past a pattern that never looked for it.
+        var source = RepositorySource.Read("src/KanbanFlow/Services/TestRunnerService.cs");
+        var code = Regex.Replace(source, @"^[ \t]*//.*$", "", RegexOptions.Multiline); // doc and line comments
+        var registeredPrefixes = TestRunnerService.FixtureProjectPrefixes
+            .Concat(TestRunnerService.FixtureIdeaPrefixes)
+            .ToHashSet(StringComparer.Ordinal);
+        var registeredLiterals = TestRunnerService.FixtureLiterals.ToHashSet(StringComparer.Ordinal);
+
+        var uses = Regex.Matches(code, @"\brunMarker\b").Select(m => m.Index).ToList();
+        var accountedFor = new HashSet<int>();
+        int LineOf(int index) => code[..index].Count(c => c == '\n') + 1;
+        MatchCollection Account(string pattern)
+        {
+            var matches = Regex.Matches(code, pattern);
+            foreach (Match m in matches)
+                accountedFor.UnionWith(uses.Where(i => i >= m.Index && i < m.Index + m.Length));
+            return matches;
+        }
+
+        // The constructions: each must carry a registered prefix or literal.
+        var newNameCalls = Account(@"\bNewName\s*\(\s*""(?<value>[^""\\]*)""\s*,\s*runMarker\s*\)");
+        var literalTitles = Account(@"\$""\{runMarker\} (?<value>[^""{}\\]*)""");
+        var violations = newNameCalls
+            .Where(m => !registeredPrefixes.Contains(m.Groups["value"].Value))
+            .Select(m => $"line {LineOf(m.Index)}: unregistered NewName prefix \"{m.Groups["value"].Value}\"")
+            .Concat(literalTitles
+                .Where(m => !registeredLiterals.Contains(m.Groups["value"].Value))
+                .Select(m => $"line {LineOf(m.Index)}: unregistered literal title \"{m.Groups["value"].Value}\""))
+            .ToList();
+
+        // Every other use this file is known to make: NewName's own definition (the one producer of the
+        // {prefix}-{marker}-{hex} shape), the declarations, pass-throughs to the helpers that carry it
+        // on, and the sweep's reads — its candidate filter, its shape checks and its log arguments.
+        Account(@"\$""\{prefix\}-\{runMarker\}-\{Guid\.NewGuid\(\):N\}""\[\.\.\(prefix\.Length \+ runMarker\.Length \+ 10\)\]");
+        Account(@"\bvar\s+runMarker\s*=\s*NewRunMarker\(\)\s*;");
+        Account(@"\bstring\s+runMarker\b");
+        Account(@"\b(?:CreateProjectFeatureTaskAsync|RunEndOfSuiteCleanupAsync|SweepRunMarkerAsync)\s*\(\s*http\s*,\s*runMarker\s*,");
+        Account(@"\.Contains\(\s*runMarker\s*\)");
+        Account(@"\bIsFixture(?:ProjectName|IdeaTitle)\(\s*\w+\.\w+\s*,\s*runMarker\s*\)");
+        Account(@"\blogger\.Log\w+\((?>[^()]+|\((?<depth>)|\)(?<-depth>))*(?(depth)(?!))\)");
+
+        var lines = code.Split('\n');
+        violations.AddRange(uses.Where(i => !accountedFor.Contains(i)).Select(i =>
+            $"line {LineOf(i)}: unrecognized use of runMarker: {lines[LineOf(i) - 1].Trim()}"));
+
+        // NON-VACUITY: the patterns really read this file (at least the 4 NewName calls and 11 literal
+        // titles it is known to build), and every registry entry is one it actually produces.
+        Assert.True(newNameCalls.Count >= 4 && literalTitles.Count >= 11,
+            $"found only {newNameCalls.Count} NewName call(s) and {literalTitles.Count} literal title(s) built " +
+            "from runMarker, fewer than TestRunnerService.cs is known to have: the patterns no longer read it.");
+        var producedPrefixes = newNameCalls.Select(m => m.Groups["value"].Value).ToHashSet(StringComparer.Ordinal);
+        var producedLiterals = literalTitles.Select(m => m.Groups["value"].Value).ToHashSet(StringComparer.Ordinal);
+        var dead = registeredPrefixes.Where(p => !producedPrefixes.Contains(p))
+            .Concat(registeredLiterals.Where(l => !producedLiterals.Contains(l)))
+            .ToList();
+        Assert.True(dead.Count == 0,
+            $"registered but never produced by TestRunnerService.cs: {string.Join(", ", dead)}. Remove it, " +
+            "so the sweep accepts no fixture name this runner cannot create.");
+
+        Assert.True(violations.Count == 0,
+            "TestRunnerService.cs builds a name from runMarker that the sweep's registry does not cover: " +
+            $"{string.Join("; ", violations)}. " +
+            "Use NewName with a prefix registered in FixtureProjectPrefixes or FixtureIdeaPrefixes, or " +
+            "$\"{runMarker} <literal>\" with the literal registered in FixtureLiterals.");
     }
 
     [Fact]
     public void EveryPostNotBoundToTheCallersToken_IsPostCreateAsyncsOwnSend()
     {
-        // #541 pin. Every fixture create sends with CancellationToken.None (see
-        // PostCreateAsync's remarks), so HttpClient no longer refuses one by itself once ct has fired:
+        // #541 pin. Every tracked fixture create — each project and idea, and the scratch project's
+        // feature and task — sends with CancellationToken.None (see PostCreateAsync's remarks); the child
+        // rows a test adds under a scratch project stay bound to ct, and go with their project by cascade
+        // delete. A None-bound send is one HttpClient no longer refuses by itself once ct has fired:
         // PostCreateAsync's check just before the send is the only thing that does, so a POST that is
         // neither bound to ct nor PostCreateAsync's own goes out regardless. The behaviour test above
         // cannot see such a site. It drives only RunApiTestsAsync, and once ct fires that throws at
@@ -489,15 +697,17 @@ public sealed class TestRunnerServiceCancellationTests
         Assert.True(bypasses.Count == 0,
             $"TestRunnerService.cs sends a POST not bound to ct outside PostCreateAsync: {string.Join("; ", bypasses)}. "
             + "It skips PostCreateAsync's pre-send check, so a cancelled suite keeps sending it (and its DELETE) "
-            + "to the live database instead of stopping (#541). Send a create through PostCreateAsync; "
+            + "to the live database instead of sending no further create (#541). Send a create through PostCreateAsync; "
             + "bind any other POST to ct.");
     }
 
     /// <summary>
     /// What each transport handler below must refuse: the three ports the user's real app and other
     /// sandboxes may be bound to (<c>http://127.0.0.1:5123</c> is exactly <c>TestRunnerService.GetBaseUrl</c>'s
-    /// fallback), and a non-loopback host. Written out rather than read from <see cref="ForbiddenPorts"/>,
-    /// so deleting a port from that list fails this test instead of quietly shrinking it.
+    /// fallback), a non-loopback host, and a loopback port that is neither forbidden nor the handler's own
+    /// host (5402) — own-host-only means exactly that. Written out rather than read from
+    /// <see cref="ForbiddenPorts"/>, so deleting a port from that list fails this test instead of quietly
+    /// shrinking it.
     /// </summary>
     public static TheoryData<string, string> RefusedDestinations()
     {
@@ -508,6 +718,7 @@ public sealed class TestRunnerServiceCancellationTests
             data.Add(handler, "http://127.0.0.1:5148/api/projects");
             data.Add(handler, "http://127.0.0.1:5198/api/projects");
             data.Add(handler, "http://example.invalid/api/projects");
+            data.Add(handler, "http://127.0.0.1:5402/api/projects");
         }
 
         return data;
@@ -526,23 +737,27 @@ public sealed class TestRunnerServiceCancellationTests
         using var cts = new CancellationTokenSource();
         using var client = new HttpClient(Wrap(handler, stub, cts));
 
-        var refused = await Assert.ThrowsAsync<InvalidOperationException>(
-            () => client.PostAsJsonAsync(url, new { name = "never sent" }));
-        Assert.Contains("refused to send", refused.Message, StringComparison.Ordinal);
+        var refused = await Record.ExceptionAsync(() => client.PostAsJsonAsync(url, new { name = "never sent" }));
+        Assert.True(refused is InvalidOperationException && refused.Message.Contains("refused to send", StringComparison.Ordinal),
+            $"{handler} did not refuse {url} ({refused?.GetType().Name ?? "no exception"}); " +
+            $"the inner handler was reached {stub.Calls} time(s).");
         Assert.Equal(0, stub.Calls);
 
-        // NON-VACUITY: the same handler over the same stub does pass this test's own kind of address
-        // through, so the 0 above is the refusal, not a stub that never counts or a handler that
-        // refuses everything.
+        // NON-VACUITY: the same handler over the same stub does pass its own host's address (the
+        // stub's http://127.0.0.1:80) through, so the 0 above is the refusal, not a stub that never
+        // counts or a handler that refuses everything.
         using var allowed = await client.PostAsJsonAsync("http://127.0.0.1/api/projects", new { name = "stub only" });
         Assert.Equal(1, stub.Calls);
     }
 
+    /// <summary>The own host the refusal theory builds its handlers for: the stub answers there, and only there.</summary>
+    private static readonly Uri StubHost = new("http://127.0.0.1:80");
+
     /// <summary>The named transport handler, wrapped around <paramref name="inner"/> instead of a real socket handler.</summary>
     private static DelegatingHandler Wrap(string handler, HttpMessageHandler inner, CancellationTokenSource cts) => handler switch
     {
-        nameof(CancelAfterFirstThenCountCreatesHandler) => new CancelAfterFirstThenCountCreatesHandler(cts, _ => false, inner),
-        nameof(FaultInjectingHandler) => new FaultInjectingHandler(_ => false, faultOnNthMatch: 0, inner: inner),
+        nameof(CancelAfterFirstThenCountCreatesHandler) => new CancelAfterFirstThenCountCreatesHandler(StubHost, cts, _ => false, inner),
+        nameof(FaultInjectingHandler) => new FaultInjectingHandler(StubHost, _ => false, faultOnNthMatch: 0, inner: inner),
         _ => throw new ArgumentOutOfRangeException(nameof(handler), handler, "not a transport handler in this file"),
     };
 
@@ -553,15 +768,23 @@ public sealed class TestRunnerServiceCancellationTests
     private static readonly int[] ForbiddenPorts = [5123, 5148, 5198];
 
     /// <summary>
-    /// The refusal both transport handlers below make before sending anything: this test's own
-    /// loopback host only, so never a non-loopback address and never one of <see cref="ForbiddenPorts"/>.
-    /// One copy, so the two cannot drift apart on what they refuse.
+    /// The refusal both transport handlers below make before sending anything: the request must go to
+    /// <paramref name="ownHost"/> — the test host's own base address — with exactly its scheme, host and
+    /// port, and be loopback; a port in <see cref="ForbiddenPorts"/> is refused even then, as defence in
+    /// depth. HttpClient resolves a relative request URI against its BaseAddress before any handler sees
+    /// it, so one that is still relative, or missing, is refused too. One copy, so the two handlers
+    /// cannot drift apart on what they refuse.
     /// </summary>
-    private static void RefuseUnlessOwnLoopbackHost(HttpRequestMessage request, string handlerName)
+    private static void RefuseUnlessOwnLoopbackHost(HttpRequestMessage request, Uri ownHost, string handlerName)
     {
-        if (request.RequestUri is { IsLoopback: false } || (request.RequestUri is { } u && Array.IndexOf(ForbiddenPorts, u.Port) >= 0))
+        var uri = request.RequestUri;
+        if (uri is null || !uri.IsAbsoluteUri || !uri.IsLoopback
+            || !string.Equals(uri.Scheme, ownHost.Scheme, StringComparison.OrdinalIgnoreCase)
+            || !string.Equals(uri.Host, ownHost.Host, StringComparison.OrdinalIgnoreCase)
+            || uri.Port != ownHost.Port
+            || Array.IndexOf(ForbiddenPorts, uri.Port) >= 0)
             throw new InvalidOperationException(
-                $"{handlerName} refused to send to {request.RequestUri} — must stay on this test's own loopback host.");
+                $"{handlerName} refused to send to {uri} — must stay on this test's own host {ownHost}.");
     }
 
     /// <summary>
@@ -572,11 +795,12 @@ public sealed class TestRunnerServiceCancellationTests
     /// attempted": letting the real request go through (rather than intercepting it) and gating on
     /// the STATUS CODE is what makes the count trustworthy, since a request whose token is already
     /// cancelled by the time HttpClient looks at it can throw before ever writing a byte to the wire,
-    /// which would make an attempt-count include sends that never happened. <paramref name="inner"/>
+    /// which would make an attempt-count include sends that never happened. It sends only to
+    /// <paramref name="ownHost"/> (see <see cref="RefuseUnlessOwnLoopbackHost"/>). <paramref name="inner"/>
     /// defaults to a real <see cref="SocketsHttpHandler"/>; only the refusal test swaps in a stub.
     /// </summary>
     private sealed class CancelAfterFirstThenCountCreatesHandler(
-        CancellationTokenSource cts, Func<HttpRequestMessage, bool> match, HttpMessageHandler? inner = null)
+        Uri ownHost, CancellationTokenSource cts, Func<HttpRequestMessage, bool> match, HttpMessageHandler? inner = null)
         : DelegatingHandler(inner ?? new SocketsHttpHandler())
     {
         private bool _cancelled;
@@ -585,7 +809,7 @@ public sealed class TestRunnerServiceCancellationTests
 
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
-            RefuseUnlessOwnLoopbackHost(request, nameof(CancelAfterFirstThenCountCreatesHandler));
+            RefuseUnlessOwnLoopbackHost(request, ownHost, nameof(CancelAfterFirstThenCountCreatesHandler));
 
             var response = await base.SendAsync(request, cancellationToken);
 
@@ -604,19 +828,21 @@ public sealed class TestRunnerServiceCancellationTests
     }
 
     /// <summary>
-    /// Simulates "the caller's token fired after the server committed but before the response was
-    /// handed back": lets the REAL request reach the REAL server (so any server-side effect genuinely
-    /// happens), then — only on the configured Nth request matching <paramref name="match"/> —
+    /// Simulates a create whose response is lost after the server committed it — before #541's fix, the
+    /// caller's token firing mid-read; since it, a timeout or a transport reset: lets the REAL request
+    /// reach the REAL server (so any server-side effect genuinely happens), then — only on the
+    /// configured Nth request matching <paramref name="match"/> —
     /// discards the real response and throws instead of returning it. When <paramref name="cancelBeforeThrow"/>
     /// is supplied, it is cancelled first, so every LATER call on the same token fails fast for real —
     /// matching F1's own account of a live abort ("every subsequent test in the loop fails fast on its
     /// own first ct-bound await with nothing yet sent, so at most one leak per aborted connection")
     /// instead of letting the rest of the suite run to completion behind a fault that only fires once.
+    /// It sends only to <paramref name="ownHost"/> (see <see cref="RefuseUnlessOwnLoopbackHost"/>).
     /// <paramref name="inner"/> defaults to a real <see cref="SocketsHttpHandler"/>; only the refusal
     /// test swaps in a stub.
     /// </summary>
     private sealed class FaultInjectingHandler(
-        Func<HttpRequestMessage, bool> match, int faultOnNthMatch, CancellationTokenSource? cancelBeforeThrow = null,
+        Uri ownHost, Func<HttpRequestMessage, bool> match, int faultOnNthMatch, CancellationTokenSource? cancelBeforeThrow = null,
         HttpMessageHandler? inner = null)
         : DelegatingHandler(inner ?? new SocketsHttpHandler())
     {
@@ -624,7 +850,7 @@ public sealed class TestRunnerServiceCancellationTests
 
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
-            RefuseUnlessOwnLoopbackHost(request, nameof(FaultInjectingHandler));
+            RefuseUnlessOwnLoopbackHost(request, ownHost, nameof(FaultInjectingHandler));
 
             var response = await base.SendAsync(request, cancellationToken);
 
@@ -739,6 +965,9 @@ public sealed class TestRunnerServiceCancellationTests
 
         /// <summary>An ordinary, non-faulting client for setup/cleanup calls a test makes directly.</summary>
         public HttpClient RealClient { get; }
+
+        /// <summary>This host's own base address — the only one the transport handlers will send to.</summary>
+        public Uri BaseAddress => RealClient.BaseAddress!;
 
         public IDbContextFactory<AppDbContext> DbFactory => _app.Services.GetRequiredService<IDbContextFactory<AppDbContext>>();
 

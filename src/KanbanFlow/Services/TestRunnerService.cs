@@ -31,7 +31,7 @@ public sealed class TestRunnerService(
     public async Task<TestSuiteResult> RunApiTestsAsync(CancellationToken ct = default)
     {
         var runStart = DateTime.UtcNow;
-        // Per-run marker embedded in every fixture Name/Title this run creates (see NewName);
+        // Per-run marker embedded in the Name/Title of every project and idea this run creates (see NewName);
         // lets SweepRunMarkerAsync find a fixture whose create timed out or failed in transport
         // before its id was learned, or whose known-id delete failed (#150 AC#2, #541).
         var runMarker = NewRunMarker();
@@ -531,8 +531,9 @@ public sealed class TestRunnerService(
                 try
                 {
                     // Marker-tagged titles (see runMarker doc on CreateProjectFeatureTaskAsync) so a
-                    // create cancelled before idA/idB below is assigned is still found by
-                    // SweepRunMarkerAsync. "kanban" stays intact in titleA for the ?q= assertion below.
+                    // create that fails before idA/idB below is assigned (a timeout, a transport reset,
+                    // a server error) is still found by SweepRunMarkerAsync. "kanban" stays intact in
+                    // titleA for the ?q= assertion below.
                     var titleA = $"{runMarker} alpha kanban";
                     var titleB = $"{runMarker} beta";
                     var ra = await PostCreateAsync(http, "/api/ideas",
@@ -811,7 +812,7 @@ public sealed class TestRunnerService(
     public async Task<TestSuiteResult> RunUiTestsAsync(CancellationToken ct = default)
     {
         var runStart = DateTime.UtcNow;
-        // Per-run marker embedded in every fixture Name/Title this run creates (see NewName);
+        // Per-run marker embedded in the Name/Title of every project and idea this run creates (see NewName);
         // lets SweepRunMarkerAsync find a fixture whose create timed out or failed in transport
         // before its id was learned, or whose known-id delete failed (#150 AC#2, #541).
         var runMarker = NewRunMarker();
@@ -1036,7 +1037,7 @@ public sealed class TestRunnerService(
     public async Task<TestSuiteResult> RunServiceTestsAsync(CancellationToken ct = default)
     {
         var runStart = DateTime.UtcNow;
-        // Per-run marker embedded in every fixture Name/Title this run creates (see NewName);
+        // Per-run marker embedded in the Name/Title of every project and idea this run creates (see NewName);
         // lets SweepRunMarkerAsync find a fixture whose create timed out or failed in transport
         // before its id was learned, or whose known-id delete failed (#150 AC#2, #541).
         var runMarker = NewRunMarker();
@@ -1623,7 +1624,13 @@ public sealed class TestRunnerService(
         }
     }
 
-    private static string NewName(string prefix, string runMarker) =>
+    /// <summary>
+    /// A fixture name: <c>{prefix}-{runMarker}-</c> followed by exactly 8 lowercase hex characters of a
+    /// fresh <see cref="Guid"/> — the shape <see cref="IsFixtureProjectName"/> and
+    /// <see cref="IsFixtureIdeaTitle"/> accept, and nothing longer.
+    /// </summary>
+    // internal, not private: TestRunnerServiceCancellationTests round-trips its real output through the API.
+    internal static string NewName(string prefix, string runMarker) =>
         $"{prefix}-{runMarker}-{Guid.NewGuid():N}"[..(prefix.Length + runMarker.Length + 10)];
 
     /// <summary>
@@ -1632,8 +1639,11 @@ public sealed class TestRunnerService(
     /// here can never reopen the race #541's review found (a cancellation landing WHILE a create is
     /// in flight, after CancellationToken.None already committed to sending it). The send and its
     /// caller's later read both still use <see cref="CancellationToken.None"/> unconditionally once
-    /// started, for the same reason as always: the server commits this write on its own schedule
-    /// (<c>SaveChangesAsync</c> with no token) regardless of what happens to the connection afterward.
+    /// started: a send bound to <see cref="CancellationToken.None"/> never aborts its own request, so the
+    /// server's request token never fires on the caller's account, and the create completes with its id
+    /// read back. That holds whichever way the route saves. <c>POST /api/projects</c> and the feature
+    /// create save with no token at all; <c>POST /api/ideas</c>, promote and the task create pass the
+    /// request's token into their save, and an abort of the request would cancel that save part-way.
     /// </summary>
     /// <remarks>
     /// Without this pre-check (#541), a cancelled suite still closed its own race, but it
@@ -1645,8 +1655,10 @@ public sealed class TestRunnerService(
     /// <c>TestRunnerServiceCancellationTests.RunApiTestsAsync_SendsNoFurtherCreates_OnceTheCallerHasAlreadyCancelled</c>.
     /// That counts only the API suite's top-level <c>POST /api/projects</c> and <c>POST /api/ideas</c>,
     /// not the feature and task creates, nor promote. Each can pay up to <c>HttpClient.Timeout</c> (10s)
-    /// if the server is slow, before its own DELETE (another 10s ceiling) — one check here, before ANY
-    /// of them, is what makes cancellation actually mean "stop now."
+    /// if the server is slow, before its own DELETE (another 10s ceiling). One check here, before ANY
+    /// of them, is what stops the creates. The suite itself keeps going: <see cref="RunTest"/> still
+    /// swallows each exception, so every remaining test runs and fails at its first token check, but
+    /// none of them sends another create.
     /// </remarks>
     private static Task<HttpResponseMessage> PostCreateAsync(HttpClient http, string route, object body, CancellationToken ct)
     {
@@ -1659,11 +1671,12 @@ public sealed class TestRunnerService(
     /// threaded (never stored on <c>this</c> — see <see cref="CreateProjectFeatureTaskAsync"/>'s
     /// remarks) into every fixture name/title that run creates via <see cref="NewName"/>. 16 hex
     /// characters of a fresh <see cref="Guid"/> gives 60 bits of entropy (one of the 16 is the fixed
-    /// v4 version nibble, not random) behind the fixed "kftest" tag — together something no real user
-    /// would ever type and something no two runs, concurrent or not, can ever share, which is what
+    /// v4 version nibble, not random) behind the fixed "kftest" tag — together something a real user
+    /// will not type by chance and two runs, concurrent or not, will not share by chance, which is what
     /// lets <see cref="SweepRunMarkerAsync"/> query the live DB for it safely.
     /// </summary>
-    private static string NewRunMarker() => "kftest" + Guid.NewGuid().ToString("N")[..16];
+    // internal, not private: TestRunnerServiceCancellationTests mints real markers for its round-trip test.
+    internal static string NewRunMarker() => "kftest" + Guid.NewGuid().ToString("N")[..16];
 
     /// <summary>
     /// Asserts that a task renders as a board card (<c>data-testid="board-card-{taskId}"</c>) inside the
@@ -1712,11 +1725,14 @@ public sealed class TestRunnerService(
     /// day a future caller runs two suites concurrently on one instance. A parameter cannot.
     /// </summary>
     /// <remarks>
-    /// Every create POST and its response read below use <see cref="CancellationToken.None"/>, never
-    /// <paramref name="ct"/> — <c>POST /api/projects</c> commits via <c>SaveChangesAsync</c> with no
-    /// token at all (<c>ApiEndpoints.cs:492</c>), so the SERVER cannot cancel its own write regardless
-    /// of what the caller does; racing <paramref name="ct"/> against that only risked losing the id
-    /// to a row that was becoming permanent either way. <see cref="PostCreateAsync"/> instead checks
+    /// Every create POST below (project, feature, task) and its response read use
+    /// <see cref="CancellationToken.None"/>, never <paramref name="ct"/>: a send bound to
+    /// <see cref="CancellationToken.None"/> never aborts its own request, so the server's request token
+    /// never fires on the caller's account and the create completes with its id read back, whichever way
+    /// the route saves (<c>POST /api/projects</c> and the feature create pass no token to their save,
+    /// <c>ApiEndpoints.cs:492</c> and <c>:1034</c>; the task create passes the request's token). Racing
+    /// <paramref name="ct"/> against a create only risked losing the id of a row the server may already
+    /// have written. <see cref="PostCreateAsync"/> instead checks
     /// <paramref name="ct"/> BEFORE each send, so cancellation never abandons a create that has
     /// already started, and each id is already captured by the time the next check can fire: once
     /// <c>pid</c> is known, the catch below deletes it with <see cref="CancellationToken.None"/> and
@@ -1731,14 +1747,14 @@ public sealed class TestRunnerService(
     // fault-injecting HttpClient (InternalsVisibleTo is set — see ProjectView.razor for precedent).
     internal async Task<(int ProjectId, int FeatureId, int TaskId)> CreateProjectFeatureTaskAsync(HttpClient http, string runMarker, CancellationToken ct)
     {
-        // CancellationToken.None for every fixture-create POST and its response read (independent
-        // review of this fix's first version): POST /api/projects (ApiEndpoints.cs:492) commits via
-        // SaveChangesAsync with NO token, so the server cannot cancel its own write — it commits
-        // regardless of what the caller's ct does. Racing ct against that meant the id could still be
-        // lost even though the row was becoming permanent regardless. Now PostCreateAsync checks the
-        // caller's ct BEFORE each send, and the send and its read use CancellationToken.None, so
-        // cancellation never abandons a create that has already started, and each id is already
-        // captured by the time the next check can fire.
+        // CancellationToken.None for each create POST below and its response read (independent review
+        // of this fix's first version): a send bound to CancellationToken.None never aborts its own
+        // request, so the caller's ct can no longer cut a create off part-way. Racing ct against the
+        // create meant its id could be lost while the row still landed — POST /api/projects
+        // (ApiEndpoints.cs:492) saves with no token at all, so it commits regardless. Now
+        // PostCreateAsync checks the caller's ct BEFORE each send, and the send and its read use
+        // CancellationToken.None, so cancellation never abandons a create that has already started,
+        // and each id is already captured by the time the next check can fire.
         var p = await PostCreateAsync(http, "/api/projects", new { name = NewName("Test", runMarker) }, ct);
         var pBody = await p.Content.ReadFromJsonAsync<JsonElement>(Json, CancellationToken.None);
         var pid = pBody.GetProperty("id").GetInt32();
@@ -1838,27 +1854,75 @@ public sealed class TestRunnerService(
     }
 
     /// <summary>
-    /// True when <paramref name="name"/> has EXACTLY the shape a fixture this run created would have
-    /// for <paramref name="marker"/> — not merely a name that happens to mention or quote one. A real
-    /// row named e.g. "Please rename Test-{marker}-a1b2c3d4 to something better" contains the marker
-    /// as a substring but is not a fixture; matching only the literal formats <see cref="NewName"/>
-    /// and this class's idea-literal titles actually produce is what keeps such a row safe.
+    /// The prefixes this class passes to <see cref="NewName"/> for a PROJECT fixture. See
+    /// <see cref="IsFixtureProjectName"/> for the exact names they produce.
     /// </summary>
-    // internal, not private — TestRunnerServiceCancellationTests pins this hand-maintained prefix
-    // list against every prefix the file actually passes to NewName (#541), so it must be
-    // directly callable rather than exercised only indirectly through SweepRunMarkerAsync.
-    internal static bool IsFixtureProjectName(string name, string marker) =>
-        name.StartsWith($"Test-{marker}-", StringComparison.Ordinal) ||
-        name.StartsWith($"Test-Project-{marker}-", StringComparison.Ordinal) ||
-        name.StartsWith($"UiHome-{marker}-", StringComparison.Ordinal) ||
-        // Promoted-idea projects: PromoteAsync sets Project.Name = idea.Title, which is one of the
-        // marker-prefixed literal titles below — not a NewName shape, so no trailing "-".
-        name.StartsWith($"{marker} ", StringComparison.Ordinal);
+    // internal, not private (this and the two registries below): TestRunnerServiceCancellationTests pins
+    // them against every name this file builds from runMarker, and round-trips each shape through the API.
+    internal static readonly string[] FixtureProjectPrefixes = ["Test", "Test-Project", "UiHome"];
 
-    /// <summary>Same idea as <see cref="IsFixtureProjectName"/>, for the two shapes idea titles use.</summary>
+    /// <summary>The prefixes this class passes to <see cref="NewName"/> for an IDEA fixture.</summary>
+    internal static readonly string[] FixtureIdeaPrefixes = ["UiIdea"];
+
+    /// <summary>
+    /// Every text this class puts after <c>"{marker} "</c> in an idea title, including the titles a PATCH
+    /// renames an idea to, and "blank enum", whose POST is expected to be rejected (registered anyway, in
+    /// case it ever commits a row). <c>PromoteAsync</c> copies an idea's title onto the project it creates,
+    /// so "to promote" is a project fixture's name as well.
+    /// </summary>
+    internal static readonly string[] FixtureLiterals =
+    [
+        "Round-trip idea", "alpha kanban", "beta", "before rename", "renamed", "to delete", "to promote",
+        "audit idea", "audit idea (edited)", "blank enum", "blank enum patch target",
+    ];
+
+    /// <summary>
+    /// True when <paramref name="name"/> is EXACTLY the name of a project fixture this run created for
+    /// <paramref name="marker"/>: <see cref="NewName"/>'s <c>{prefix}-{marker}-{8 lowercase hex}</c> for a
+    /// prefix in <see cref="FixtureProjectPrefixes"/>, or <c>{marker} {literal}</c> for a literal in
+    /// <see cref="FixtureLiterals"/>, with nothing before or after it (ordinal). A real row that merely
+    /// quotes a fixture's name ("Please rename Test-{marker}-a1b2c3d4 to something better"), or begins
+    /// with one and goes on ("Test-{marker}-a1b2c3d4 notes"), is not one.
+    /// </summary>
+    internal static bool IsFixtureProjectName(string name, string marker) =>
+        IsNewNameShape(name, marker, FixtureProjectPrefixes) || IsLiteralShape(name, marker);
+
+    /// <summary>
+    /// Same as <see cref="IsFixtureProjectName"/> for an idea title: exactly
+    /// <c>{prefix}-{marker}-{8 lowercase hex}</c> for a prefix in <see cref="FixtureIdeaPrefixes"/>, or
+    /// exactly <c>{marker} {literal}</c>.
+    /// </summary>
     internal static bool IsFixtureIdeaTitle(string title, string marker) =>
-        title.StartsWith($"UiIdea-{marker}-", StringComparison.Ordinal) ||
-        title.StartsWith($"{marker} ", StringComparison.Ordinal);
+        IsNewNameShape(title, marker, FixtureIdeaPrefixes) || IsLiteralShape(title, marker);
+
+    private static bool IsNewNameShape(string value, string marker, string[] prefixes)
+    {
+        foreach (var prefix in prefixes)
+        {
+            var head = $"{prefix}-{marker}-";
+            if (value.Length != head.Length + 8 || !value.StartsWith(head, StringComparison.Ordinal))
+                continue;
+
+            var allLowerHex = true;
+            foreach (var c in value.AsSpan(head.Length))
+                allLowerHex &= char.IsAsciiHexDigitLower(c);
+            if (allLowerHex)
+                return true;
+        }
+
+        return false;
+    }
+
+    private static bool IsLiteralShape(string value, string marker)
+    {
+        foreach (var literal in FixtureLiterals)
+        {
+            if (string.Equals(value, $"{marker} {literal}", StringComparison.Ordinal))
+                return true;
+        }
+
+        return false;
+    }
 
     /// <summary>
     /// End-of-run safety net for the residual cases <see cref="CreateProjectFeatureTaskAsync"/> (and
@@ -1866,29 +1930,33 @@ public sealed class TestRunnerService(
     /// create that fails for a reason unrelated to the caller's token — <c>HttpClient.Timeout</c> (10s
     /// default), a transport reset, or a server-side error — before its id is captured, or a known-id
     /// DELETE that itself fails. No id is ever recorded for the row in either case, so nothing in this
-    /// class can target a DELETE at it by id (#150 AC#2, #541). Every fixture this run creates carries
-    /// <paramref name="runMarker"/> in its Name/Title instead (see <see cref="NewName"/>), so this
+    /// class can target a DELETE at it by id (#150 AC#2, #541). Every project and idea this run creates
+    /// carries <paramref name="runMarker"/> in its Name/Title instead (see <see cref="NewName"/>; a
+    /// feature, task or other child row goes with its project by cascade delete), so this
     /// queries the live DB for that marker directly — no id needed — and deletes what it finds through
     /// the same REST routes normal cleanup uses, so cascade delete and audit-event emission stay
     /// exactly as they are for every other cleanup path in this file.
     /// </summary>
     /// <remarks>
-    /// <para><b>Safety.</b> <paramref name="runMarker"/> is minted fresh per run by
-    /// <see cref="NewRunMarker"/> — 60 bits of fresh <see cref="Guid"/> entropy (16 hex characters,
-    /// one of which is the fixed v4 version nibble) behind a "kftest" tag no real project/idea name
-    /// would organically contain — so a match cannot land on a different run's fixtures (past or
-    /// concurrent) or a real user's data by coincidence. <paramref name="preExistingProjectIds"/> is
-    /// checked as a second, independent, structural guard on top of that: even a marker match is
-    /// skipped for a project id that existed before this run started, so this can only ever delete a
-    /// row THIS run itself created. Ideas have no equivalent pre-existing exclusion because the marker
-    /// match alone is already this specific — see the Open Questions in the issue this ships with for
-    /// the accepted default there. On top of the marker itself, <see cref="IsFixtureProjectName"/> /
-    /// <see cref="IsFixtureIdeaTitle"/> require the EXACT shape a fixture's Name/Title has — a real row
-    /// that merely quotes or mentions the marker as a substring is fetched as a candidate but then
-    /// rejected, never deleted.</para>
-    /// <para><b>Expected to find nothing.</b> On an uncancelled run every fixture is already deleted
-    /// by its own try/finally before this runs, so this sweep matches zero rows on every clean run —
-    /// it exists purely for the residual cases those try/finally blocks cannot reach.</para>
+    /// <para><b>Safety.</b> A row is deleted only if its Name/Title is EXACTLY a fixture's
+    /// (<see cref="IsFixtureProjectName"/> / <see cref="IsFixtureIdeaTitle"/>): the SQL <c>Contains</c>
+    /// below only fetches candidates, and a real row that quotes a fixture's name, or begins with one
+    /// and goes on, is fetched and then left alone. <paramref name="runMarker"/> is minted fresh per run
+    /// by <see cref="NewRunMarker"/> — 60 bits of fresh <see cref="Guid"/> entropy (16 hex characters,
+    /// one of which is the fixed v4 version nibble) behind a "kftest" tag — so another run's fixtures,
+    /// past or concurrent, do not match. <paramref name="preExistingProjectIds"/> is a second,
+    /// independent guard for projects: a project that existed before this run started is skipped even
+    /// if its name matches. Ideas need no such snapshot: an idea that existed before this run started
+    /// cannot carry the marker, which the run mints only as it starts.</para>
+    /// <para><b>Residual.</b> A real row created DURING the run whose Name/Title is exactly a
+    /// fixture's is indistinguishable from one by name, and would be deleted. The pre-existing snapshot
+    /// confines this to rows created during the run, but cannot protect those, because their ids are new;
+    /// only the marker bounds it. Such a name carries this
+    /// run's freshly minted 60-bit marker, which appears nowhere but in this run's own fixtures, so short
+    /// of someone copying a fixture's name while the run is in progress, a real row cannot have one.</para>
+    /// <para><b>Expected to find nothing.</b> On a run where no create or cleanup DELETE fails, every
+    /// fixture is already deleted by its own try/finally before this runs, so the sweep matches zero
+    /// rows — it exists purely for the residual cases those try/finally blocks cannot reach.</para>
     /// <para><b>Ordering.</b> Callers MUST run this before <see cref="TestAuditCleanup.PurgeOrphanedSinceAsync"/>
     /// in the same <c>finally</c>, not after: the purge only removes an ActivityEvent once its project
     /// no longer exists, so if it ran first, a leaked project's events would still be attached to a
@@ -1908,9 +1976,9 @@ public sealed class TestRunnerService(
         {
             await using var db = await dbFactory.CreateDbContextAsync(CancellationToken.None);
 
-            // Fetch broadly (SQL Contains — SQLite does that filtering), then narrow to the exact
-            // fixture shapes client-side via IsFixtureProjectName/IsFixtureIdeaTitle: see their
-            // remarks for why Contains alone would also match a row that merely quotes the marker.
+            // Fetch broadly (SQL Contains — SQLite does that filtering), then keep only the exact
+            // fixture shapes client-side via IsFixtureProjectName/IsFixtureIdeaTitle: Contains alone
+            // would also match a row that quotes the marker, or begins with a fixture's name and goes on.
             var projectCandidates = await db.Projects
                 .Where(p => p.Name.Contains(runMarker) && !preExistingProjectIds.Contains(p.Id))
                 .Select(p => new { p.Id, p.Name })
