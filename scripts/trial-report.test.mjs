@@ -1343,12 +1343,12 @@ test("the probe pass has a 60 s budget — once it is spent the pass stops, the 
   const table = { [mainRoot]: { "remote": "origin", "rev-list --max-parents=0 HEAD": "aaa111", "remote get-url origin": MAIN } };
   for (const c of cands) table[c] = { "remote": "origin", "rev-parse --show-toplevel": c, "remote get-url origin": MAIN };
   // Main's fingerprint takes 3 calls and each candidate 4 (all confirm on path (a)). The clock stands
-  // still for main and the first four candidates, then reads `later`.
-  const run = later => {
+  // still for the first `after` calls — main and four candidates, by default — then reads `later`.
+  const run = (later, after = 3 + 4 * 4) => {
     const fake = fakeGitByCwd(table);
     let calls = 0;
     const git = (args, cwd) => { calls++; return fake(args, cwd); };
-    const now = () => (calls >= 3 + 4 * 4 ? later : 0);
+    const now = () => (calls >= after ? later : 0);
     return { ...withConfirmedCloneRoots(cands, [mainRoot], { git, now }), calls };
   };
   const spent = run(60_001);
@@ -1361,6 +1361,14 @@ test("the probe pass has a 60 s budget — once it is spent the pass stops, the 
   const onTime = run(60_000);
   assert.equal(onTime.budgetSpent, false);
   assert.equal(onTime.probed, 10);
+  // Part-way through a probe: the deadline passes after candidate 5's second call. The budget is
+  // checked at every call, not only between candidates, so its third call is refused; the refusal
+  // leaves candidate 5 inconclusive, so it confirms nothing, counts as unprobed, and no git call
+  // follows it.
+  const cut = run(60_001, 3 + 4 * 4 + 2);
+  assert.equal(cut.calls, 3 + 4 * 4 + 2, "no call after the deadline, not even the rest of the probe it fell in");
+  assert.equal(cut.probed, 4);
+  assert.deepEqual([...cut.confirmed.keys()], cands.slice(0, 4), "the candidate cut short confirmed nothing");
   const s4 = find(summarize({
     rows: [row({ session: "late", cwd: cands[9] })], repoRoots: [mainRoot], repoRootSource: "git",
     cloneRoots: [...spent.confirmed.keys()],
