@@ -15,18 +15,36 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import http from "node:http";
-import { spawn, spawnSync } from "node:child_process";
+import { spawn, spawnSync, execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 import {
   parseRows, isOutsideRepo, isOutsideAllRoots, statusAfter, summarize, renderReport, parseArgs,
   pathFlavor, asUtcIso, normalizeEvent, normalizeTaskId, readLogGenerations, resolveRepoRoots,
   fetchActivity, ActivityHttpError, dedupeRows, buildIdentityBridge, aliasesOf, normalizeActor,
-  WRITE_TOOLS, MUTATING_TOOLS
+  WRITE_TOOLS, MUTATING_TOOLS, normalizeRemoteUrl, withConfirmedCloneRoots, gitOutput, isLocalPathRemote,
+  selectRowsInWindow, selectCloneCandidates
 } from "./trial-report.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO = "C:\\Users\\Owner\\Documents\\Claude\\KanbanFlow-v2";
+
+// This file's own worktree HEAD must be EXACTLY unchanged after this run. Several tests below
+// `git init`/`clone`/`commit` inside throwaway os.tmpdir() directories, and this run may itself be
+// invoked with a leaked GIT_DIR from whatever launched it — if either of those ever bled into this
+// checkout instead of staying confined to the tmpdir being built, the test at the end of this file
+// (searching for "this worktree's own HEAD is unchanged") is the one place that would catch it,
+// rather than a stray commit or index change surfacing silently in `git status` later.
+//
+// A plain top-level constant, not a `before`/`after` hook: measured directly, node:test's top-level
+// `after()` in THIS file (153 tests, several async, several spawning real child processes) silently
+// dropped an assertion failure inside it — no ✖, no altered `fail` count, exit 0 — even though the
+// hook body demonstrably ran (confirmed with a temporary console.error) and computed mismatched
+// values. An isolated single-test file reproduced the hook mechanism correctly, so the failure mode
+// is specific to this file's scale/shape, not proof the mechanism is reliable here. A plain
+// module-load-time constant, checked in an ordinary `test(...)` at the end of the file, uses
+// exactly the assertion path already proven trustworthy by every other test in this file.
+const HEAD_AT_MODULE_LOAD = execFileSync("git", ["rev-parse", "HEAD"], { cwd: HERE, encoding: "utf8" }).trim();
 const row = (over = {}) => ({
   ts: "2026-09-01T10:00:00.000Z", session: "s1", tool: "get_next_tasks",
   cwd: REPO, outcome: "ok", ms: 5, ...over
@@ -586,6 +604,699 @@ test("resolveRepoRoots really can drive git — the injected fake is not the onl
   assert.equal(real.source, "git", "this test file lives in a git repo");
   assert.ok(real.roots.length >= 1);
   assert.equal(isOutsideAllRoots(HERE, real.roots), false, "the directory git was asked about is inside the repo git named");
+});
+
+// --- 5b. A separate CLONE of this repo (not a linked worktree) must not read as outside -----
+//
+// resolveRepoRoots's ancestry walk (section 5, above) maps a `git worktree add` back to its main
+// checkout because git can SEE that link (`--git-common-dir`). A `git clone` — a second, fully
+// independent repository, such as a review fleet's throwaway sandbox — has none: its own
+// `--git-common-dir` points at ITS OWN `.git`, with zero relation to the source repo. Without the
+// check below, that clone's cwd reads as "outside KanbanFlow-v2/" and pure code-review or test
+// traffic gets counted as signal 4's adopt evidence. This really happened: a reviewer's own
+// sandbox wrote rows with a throwaway-clone cwd into the real usage log.
+//
+// `fakeGit` above is keyed ONLY on `args.join(" ")` and ignores which directory git was asked
+// about — reused here it would hand every cwd the SAME table entry regardless of the `cwd`
+// argument, so a same-repo comparison could not help but match and the test would pass even with
+// the comparison deleted. `fakeGitByCwd` is keyed on cwd first, so a wrong or missing cwd argument
+// throws "unexpected", not a silently-reused fixture.
+const fakeGitByCwd = table => (args, cwd) => {
+  const key = args.join(" ");
+  const forCwd = table[cwd];
+  if (!forCwd || !(key in forCwd)) throw new Error(`unexpected: git -C ${cwd} ${key}`);
+  return forCwd[key];
+};
+
+test("a git clone of THIS repo is confirmed by its root commit and folded in as inside", () => {
+  const mainRoot = path.resolve("C:\\real\\KanbanFlow-v2");
+  const cloneCwd = path.resolve("C:\\scratch\\clone");
+  const otherCwd = path.resolve("C:\\other-project");
+  const git = fakeGitByCwd({
+    [mainRoot]: {
+      "remote": "origin",
+      "rev-list --max-parents=0 HEAD": "aaa111",
+      "remote get-url origin": "https://github.com/joel/kanbanflow-v2.git"
+    },
+    // Root commit matches the main root's. Every remote is listed FIRST now (`git remote`, #5b) —
+    // this cwd's listing is EMPTY (a real no-remote repo: `git remote` succeeds with no output, it
+    // does not fail), so there is nothing to veto with, and the root-commit path is what confirms
+    // here, exactly the case a no-remote local clone hits in practice.
+    [cloneCwd]: {
+      "remote": "",
+      "rev-parse --show-toplevel": cloneCwd,
+      "rev-list --max-parents=0 HEAD": "aaa111"
+    },
+    // A genuinely different repo: neither root commit nor remote matches. Must stay outside.
+    [otherCwd]: {
+      "remote": "origin",
+      "rev-parse --show-toplevel": otherCwd,
+      "rev-list --max-parents=0 HEAD": "zzz999",
+      "remote get-url origin": "https://github.com/someone/other.git"
+    }
+  });
+
+  const { confirmed, probed, capped } = withConfirmedCloneRoots([cloneCwd, otherCwd], [mainRoot], { git });
+  assert.equal(capped, false);
+  assert.equal(probed, 2);
+  assert.deepEqual([...confirmed.keys()], [cloneCwd], "only the confirmed clone is returned");
+  assert.equal(confirmed.get(cloneCwd), cloneCwd);
+
+  // End to end: folding the confirmed root into `cloneRoots` must remove exactly that session from
+  // signal 4's outside evidence, and no others.
+  const rows = [
+    row({ session: "review-sandbox", cwd: cloneCwd }),
+    row({ session: "genuinely-external", cwd: otherCwd })
+  ];
+  const s4 = find(summarize({
+    rows, repoRoots: [mainRoot], repoRootSource: "git", cloneRoots: [...confirmed.values()]
+  }), 4);
+  assert.equal(s4.detail.length, 1, "the confirmed clone must not count as outside evidence");
+  assert.equal(s4.detail[0].session, "genuinely-external");
+  assert.match(s4.caveat, /confirmed/i);
+  assert.match(s4.caveat, new RegExp(cloneCwd.replace(/\\/g, "\\\\")), "the caveat names which cwd was reclassified");
+});
+
+test("a shared root commit does NOT confirm a fork or renamed derivative pushed to a different network remote", () => {
+  // A fork keeps the original's history up to the point it diverged, so root commits still match —
+  // but it is genuinely different work someone is doing elsewhere, not this repository. A remote
+  // naming a DIFFERENT network project is real evidence a bare root-commit match would discard.
+  const mainRoot = path.resolve("C:\\real\\KanbanFlow-v2");
+  const forkCwd = path.resolve("C:\\scratch\\someone-elses-fork");
+  const git = fakeGitByCwd({
+    [mainRoot]: {
+      "remote": "origin",
+      "rev-list --max-parents=0 HEAD": "aaa111",
+      "remote get-url origin": "https://github.com/joel/kanbanflow-v2.git"
+    },
+    [forkCwd]: {
+      "remote": "origin",
+      "rev-parse --show-toplevel": forkCwd,
+      "rev-list --max-parents=0 HEAD": "aaa111", // SAME root commit: shared history from before the fork
+      "remote get-url origin": "https://github.com/someone-else/kanbanflow-v2-fork.git" // DIFFERENT project
+    }
+  });
+  const { confirmed } = withConfirmedCloneRoots([forkCwd], [mainRoot], { git });
+  assert.equal(confirmed.size, 0, "shared history does not make a fork the same project once it has its own network remote");
+});
+
+test("a root-commit match is still trusted when the candidate's remote is a LOCAL path, not a network project", () => {
+  // `git clone C:\...\KanbanFlow-v2 kf` (this review fleet's own pattern) leaves the clone's remote
+  // pointing at the source's local path, not at any network project — that contradicts nothing
+  // about the shared root commit, so it must not be treated the same as a genuinely different fork.
+  const mainRoot = path.resolve("C:\\real\\KanbanFlow-v2");
+  const localCloneCwd = path.resolve("C:\\scratch\\local-clone");
+  const git = fakeGitByCwd({
+    [mainRoot]: {
+      "remote": "origin",
+      "rev-list --max-parents=0 HEAD": "aaa111",
+      "remote get-url origin": "https://github.com/joel/kanbanflow-v2.git"
+    },
+    [localCloneCwd]: {
+      "remote": "origin",
+      "rev-parse --show-toplevel": localCloneCwd,
+      "rev-list --max-parents=0 HEAD": "aaa111", // shared history
+      "remote get-url origin": "C:\\Users\\repo\\dev\\KanbanFlow-v2" // a LOCAL PATH, not a network remote
+    }
+  });
+  const { confirmed } = withConfirmedCloneRoots([localCloneCwd], [mainRoot], { git });
+  assert.equal(confirmed.size, 1, "a local-path remote does not contradict the shared root commit");
+});
+
+test("isLocalPathRemote tells a local path apart from a network remote, per git's own rule", () => {
+  assert.equal(isLocalPathRemote("C:\\Users\\joel.fuller\\repo"), true, "a dot LATER in a local path is not a host");
+  assert.equal(isLocalPathRemote("C:/Users/repo"), true, "forward-slash Windows path");
+  assert.equal(isLocalPathRemote("/home/joel/repo"), true, "absolute POSIX path");
+  assert.equal(isLocalPathRemote("\\\\server\\share\\repo"), true, "UNC path");
+  assert.equal(isLocalPathRemote("./relative/repo"), true);
+  assert.equal(isLocalPathRemote("https://github.com/x/y.git"), false);
+  assert.equal(isLocalPathRemote("ssh://git@github.com/x/y"), false);
+  // file:// is git's own exception: it spells a path as a URL, but it is still a path, not a
+  // network project — the earlier version of this function got this backwards (round-3 finding N1).
+  assert.equal(isLocalPathRemote("file:///home/joel/repo"), true, "file:// names a local path");
+  assert.equal(isLocalPathRemote("git@github.com:x/y.git"), false, "scp shorthand with userinfo");
+  assert.equal(isLocalPathRemote("github.com:x/y.git"), false, "scp shorthand WITHOUT userinfo is still network");
+  // The three shapes the earlier TLD-guessing rule got wrong (N1): an IPv4 host, a single-label
+  // host, and an SSH config alias all lack a dotted letters-only suffix, but are still legitimate
+  // scp hosts — none of them is a Windows drive letter, so none of them is local.
+  assert.equal(isLocalPathRemote("git@192.168.1.10:alice/repo.git"), false, "an IPv4 host is still network");
+  assert.equal(isLocalPathRemote("gitserver:alice/repo.git"), false, "a single-label host is still network");
+  assert.equal(isLocalPathRemote("git@example-work:alice/repo.git"), false, "an SSH config alias is still network");
+  assert.equal(isLocalPathRemote(null), false);
+  assert.equal(isLocalPathRemote(""), false);
+});
+
+test("normalizeRemoteUrl folds scp WITHOUT a userinfo and an ssh:// port to the same key as https", () => {
+  // Round-3 findings N1/N2: example.invalid:org/repo (bare scp, no user@) and
+  // ssh://git@example.invalid:22/org/repo (an explicit port) must normalize identically to the
+  // plain https form — this repo's own review fleet, and a real fork check, both depend on it.
+  const https = normalizeRemoteUrl("https://example.invalid/org/repo.git");
+  assert.equal(normalizeRemoteUrl("example.invalid:org/repo.git"), https);
+  assert.equal(normalizeRemoteUrl("ssh://git@example.invalid:22/org/repo.git"), https);
+  // A scheme must never be misparsed as a bare scp host — the naive fix for the line above.
+  assert.notEqual(normalizeRemoteUrl("https://example.invalid/org/repo.git"), "https/" + "/example.invalid/org/repo");
+  // ssh.github.com:443 (GitHub's over-443 SSH endpoint) is a DIFFERENT host from github.com, so it
+  // must NOT normalize the same as a plain github.com remote — see the caveat's gap list.
+  assert.notEqual(normalizeRemoteUrl("ssh://git@ssh.github.com:443/x/y.git"), normalizeRemoteUrl("https://github.com/x/y.git"));
+});
+
+test("#5b: EVERY remote is checked, not only origin — a renamed origin plus a new network remote still vetoes", () => {
+  // A derivative can rename `origin` to anything (here `upstream`, pointing back at the TRUE main
+  // root) and add its OWN remote under a different name (`github`, a genuinely different project).
+  // Checking only a fixed name ("origin") would see nothing here and wrongly fall through to
+  // root-commit, which WOULD match (shared history) — exactly the false confirmation rule (A)
+  // exists to prevent. This mirrors this repo's own real fixture, `derivNoOrigin`.
+  const mainRoot = path.resolve("C:\\real\\KanbanFlow-v2");
+  const derivCwd = path.resolve("C:\\scratch\\derivative-no-origin");
+  const git = fakeGitByCwd({
+    [mainRoot]: {
+      "remote": "origin",
+      "rev-list --max-parents=0 HEAD": "aaa111",
+      "remote get-url origin": "https://github.com/joel/kanbanflow-v2.git"
+    },
+    [derivCwd]: {
+      "remote": "github\nupstream", // two remotes, NEITHER named "origin"
+      "rev-parse --show-toplevel": derivCwd,
+      "rev-list --max-parents=0 HEAD": "aaa111", // shared history with main
+      "remote get-url github": "https://github.com/alice/derivative.git", // a DIFFERENT project
+      "remote get-url upstream": "C:\\real\\KanbanFlow-v2" // points at main itself, but doesn't matter
+    }
+  });
+  const { confirmed } = withConfirmedCloneRoots([derivCwd], [mainRoot], { git });
+  assert.equal(confirmed.size, 0, "the OTHER network remote (github) vetoes, even though upstream points at main and history matches");
+});
+
+test("#5c: an inconclusive remote check is NOT read as 'no remote' — it must not launder a fork past the veto", () => {
+  // The reviewer's own M3b mutation: a `remote get-url` call that merely FAILS (a transient error,
+  // not "no such remote") used to read as `rawRemote === null`, exactly like a genuine no-remote
+  // clone, and root commit then confirmed a fork it should have vetoed. Fails closed now: the WHOLE
+  // candidate is left unconfirmed, whether the failure happens on a fork-shaped repo or a
+  // genuinely local one — "inconclusive" must mean inconclusive, not "assume local".
+  const mainRoot = path.resolve("C:\\real\\KanbanFlow-v2");
+  const forkWithFlakyRemote = path.resolve("C:\\scratch\\fork-flaky-remote");
+  const localWithFlakyRemote = path.resolve("C:\\scratch\\local-flaky-remote");
+  const git = fakeGitByCwd({
+    [mainRoot]: {
+      "remote": "origin",
+      "rev-list --max-parents=0 HEAD": "aaa111",
+      "remote get-url origin": "https://github.com/joel/kanbanflow-v2.git"
+    },
+    [forkWithFlakyRemote]: {
+      "remote": "origin", // the LISTING succeeds...
+      "rev-parse --show-toplevel": forkWithFlakyRemote,
+      "rev-list --max-parents=0 HEAD": "aaa111" // shared history — would confirm if this read as "no remote"
+      // ...but "remote get-url origin" has NO entry, so the fake throws: the URL read fails.
+    },
+    [localWithFlakyRemote]: {
+      "remote": "origin",
+      "rev-parse --show-toplevel": localWithFlakyRemote,
+      "rev-list --max-parents=0 HEAD": "aaa111"
+      // Same shape: the listing succeeds, the URL read fails. A genuinely local clone must ALSO
+      // stay unconfirmed here — inconclusive is inconclusive regardless of what it might have been.
+    }
+  });
+  const { confirmed } = withConfirmedCloneRoots([forkWithFlakyRemote, localWithFlakyRemote], [mainRoot], { git });
+  assert.equal(confirmed.size, 0, "a failed remote-URL read must leave BOTH candidates unconfirmed, not fall through to root commit");
+});
+
+// Twelve real repositories covering every remote-classification shape rule (A) addresses, built
+// fresh in os.tmpdir() every run, never read from a machine-specific fixture directory: this is the
+// same key an earlier version of this test read from one, self-contained now instead — this test
+// creates every repo itself, needs no external fixture directory, and works identically in any
+// future session.
+function buildRuleAFixture() {
+  const dirs = [];
+  const make = () => { const d = tmp(); dirs.push(d); return d; };
+  const cloneWithRemote = (remoteUrl, srcOrigin = "origin") => {
+    const dir = make();
+    gitOutput(["clone", "-q", a, dir], a);
+    if (remoteUrl !== undefined) gitOutput(["remote", "set-url", srcOrigin, remoteUrl], dir);
+    return dir;
+  };
+
+  const a = make();
+  initRealRepo(a, "a.txt");
+  gitOutput(["remote", "add", "origin", "https://example.invalid/org/repo.git"], a);
+
+  // --- CONFIRMED: shares a's root commit, and either the remote is local or matches a's ---------
+  const localClone = cloneWithRemote(); // origin left as-is: git clone sets it to a's own local path
+  const fileUrlClone = make();
+  gitOutput(["clone", "-q", `file:///${a.replace(/\\/g, "/")}`, fileUrlClone], a); // needs N1
+  const sameRepoScpNoUser = cloneWithRemote("example.invalid:org/repo.git"); // needs N2
+  const sameRepoSshPort = cloneWithRemote("ssh://git@example.invalid:22/org/repo.git"); // needs N2
+
+  // --- OUTSIDE: shares a's root commit, but a network remote vetoes it (rule A) ------------------
+  const forkHttps = cloneWithRemote("https://example.invalid/alice/repo.git");
+  const forkIPv4 = cloneWithRemote("git@192.168.1.10:alice/repo.git"); // needs N1
+  const forkSingleLabel = cloneWithRemote("gitserver:alice/repo.git"); // needs N1
+  const forkSshAlias = cloneWithRemote("git@example-work:alice/repo.git"); // needs N1
+  // The deliberately-accepted gap, locked in rather than left to chance: SAME org/repo path as a,
+  // but reached via an SSH config alias this file cannot resolve to a real hostname. Rule (A) does
+  // not try to resolve it — an unresolvable alias is still "a network remote that doesn't match",
+  // so it still vetoes, and this genuinely-same-repository clone still reads as outside.
+  const aliasSpelledSameRepo = cloneWithRemote("git@example-work:org/repo.git");
+  const derivNoOrigin = make();
+  gitOutput(["clone", "-q", "--origin", "upstream", a, derivNoOrigin], a); // origin renamed away
+  gitOutput(["remote", "add", "github", "https://example.invalid/alice/derivative.git"], derivNoOrigin);
+
+  // --- OUTSIDE: genuinely unrelated (its own history, its own remote) ----------------------------
+  const unrelated = make();
+  initRealRepo(unrelated, "unrelated.txt");
+  gitOutput(["remote", "add", "origin", "https://example.invalid/other/thing.git"], unrelated);
+
+  return {
+    a, localClone, fileUrlClone, sameRepoScpNoUser, sameRepoSshPort,
+    forkHttps, forkIPv4, forkSingleLabel, forkSshAlias, aliasSpelledSameRepo, derivNoOrigin, unrelated,
+    cleanup: () => { for (const d of dirs) fs.rmSync(d, { recursive: true, force: true }); }
+  };
+}
+
+test("rule (A), rebuilt fresh in os.tmpdir(): the exact confirm/outside partition across all remote shapes", () => {
+  const fx = buildRuleAFixture();
+  try {
+    const confirmedKeys = ["localClone", "fileUrlClone", "sameRepoScpNoUser", "sameRepoSshPort"];
+    const outsideKeys = [
+      "forkHttps", "forkIPv4", "forkSingleLabel", "forkSshAlias", "aliasSpelledSameRepo",
+      "derivNoOrigin", "unrelated"
+    ];
+    const candidates = [...confirmedKeys, ...outsideKeys].map(k => fx[k]);
+    const { confirmed } = withConfirmedCloneRoots(candidates, [fx.a]);
+
+    for (const key of confirmedKeys) {
+      assert.ok(confirmed.has(fx[key]), `${key} must be CONFIRMED (shares a's history; remote is local or matches)`);
+    }
+    for (const key of outsideKeys) {
+      assert.ok(!confirmed.has(fx[key]), `${key} must stay OUTSIDE (vetoed by a non-matching/unresolvable network remote, or genuinely unrelated)`);
+    }
+    assert.equal(confirmed.size, confirmedKeys.length, "no unexpected extra confirmations");
+  } finally {
+    fx.cleanup();
+  }
+});
+
+test("a real fork (forkHttps) whose remote listing merely FAILS is not confirmed — #5c against real git", () => {
+  // The reviewer's own suggestion: real git cannot easily be made to fail on just one call, so a
+  // real fixture (genuine shared history, a genuine fork-shaped remote) is combined with an
+  // injected `git` that fails ONLY the remote-related calls for that one cwd, delegating every
+  // other call (rev-parse, rev-list, and the MAIN root's own remote fingerprinting) to real git.
+  const fx = buildRuleAFixture();
+  try {
+    const flakyGit = (args, cwd) => {
+      if (path.resolve(cwd) === path.resolve(fx.forkHttps) && args[0] === "remote") {
+        throw new Error("simulated transient failure reading forkHttps's remotes");
+      }
+      return gitOutput(args, cwd);
+    };
+    const { confirmed } = withConfirmedCloneRoots([fx.forkHttps], [fx.a], { git: flakyGit });
+    assert.equal(confirmed.size, 0, "an inconclusive remote read must not fall through to root-commit confirmation");
+  } finally {
+    fx.cleanup();
+  }
+});
+
+test("a shallow clone (no shared root commit) is still confirmed via a normalized origin remote", () => {
+  const mainRoot = path.resolve("C:\\real\\KanbanFlow-v2");
+  const shallowCwd = path.resolve("C:\\scratch\\kf-shallow");
+  const git = fakeGitByCwd({
+    [mainRoot]: {
+      "remote": "origin",
+      "rev-list --max-parents=0 HEAD": "aaa111",
+      "remote get-url origin": "https://github.com/joel/kanbanflow-v2.git"
+    },
+    [shallowCwd]: {
+      "remote": "origin",
+      "rev-parse --show-toplevel": shallowCwd,
+      // A shallow clone's only "root" is its fetch boundary, not the true initial commit.
+      "rev-list --max-parents=0 HEAD": "shallow-boundary-commit-not-the-real-root",
+      // Same repo, different case / scheme / trailing .git — must still normalize equal.
+      "remote get-url origin": "git@github.com:joel/KanbanFlow-v2.git"
+    }
+  });
+  const { confirmed } = withConfirmedCloneRoots([shallowCwd], [mainRoot], { git });
+  assert.deepEqual([...confirmed.keys()], [shallowCwd]);
+});
+
+test("normalizeRemoteUrl folds case, a trailing .git, and https/ssh/scp syntax to the same key", () => {
+  const forms = [
+    "https://github.com/Joel/KanbanFlow-v2.git",
+    "https://github.com/joel/kanbanflow-v2",
+    "git@github.com:joel/kanbanflow-v2.git",
+    "ssh://git@github.com/joel/kanbanflow-v2/"
+  ];
+  const normalized = new Set(forms.map(normalizeRemoteUrl));
+  assert.equal(normalized.size, 1, `all four forms must normalize identically, got ${JSON.stringify([...normalized])}`);
+  assert.notEqual(normalizeRemoteUrl("https://github.com/joel/OTHER-repo.git"), [...normalized][0]);
+  assert.equal(normalizeRemoteUrl(null), null);
+  assert.equal(normalizeRemoteUrl(""), null);
+  assert.equal(normalizeRemoteUrl(undefined), null);
+});
+
+test("clone confirmation FAILS CLOSED: a cwd git cannot examine stays counted as outside", () => {
+  // No fixture at all for `goneCwd` — every call the fake receives for it throws, standing in for
+  // "the directory no longer exists", "git is not installed", or any other inconclusive failure.
+  const mainRoot = path.resolve("C:\\real\\KanbanFlow-v2");
+  const goneCwd = path.resolve("C:\\scratch\\deleted-worktree");
+  const git = fakeGitByCwd({ [mainRoot]: { "rev-list --max-parents=0 HEAD": "aaa111" } });
+
+  const { confirmed, probed } = withConfirmedCloneRoots([goneCwd], [mainRoot], { git });
+  assert.equal(confirmed.size, 0, "an inconclusive check must not confirm a clone");
+  assert.equal(probed, 1);
+
+  const s4 = find(summarize({ rows: [row({ cwd: goneCwd })], repoRoots: [mainRoot], repoRootSource: "git", cloneRoots: [] }), 4);
+  assert.equal(s4.detail.length, 1, "unconfirmed stays outside, exactly as before this check existed");
+});
+
+test("clone confirmation is bounded — a large distinct-cwd count is capped, not probed without limit", () => {
+  const mainRoot = path.resolve("C:\\real\\KanbanFlow-v2");
+  const many = Array.from({ length: 60 }, (_, i) => path.resolve(`C:\\scratch\\wt${i}`));
+  const table = { [mainRoot]: { "rev-list --max-parents=0 HEAD": "aaa111" } };
+  for (const c of many) table[c] = { "rev-parse --show-toplevel": c, "rev-list --max-parents=0 HEAD": "aaa111" };
+
+  const { confirmed, probed, capped } = withConfirmedCloneRoots(many, [mainRoot], { git: fakeGitByCwd(table) });
+  assert.equal(capped, true);
+  assert.ok(probed < many.length, "the cap must actually stop short of probing every distinct cwd");
+  assert.ok(confirmed.size <= probed);
+});
+
+test("clone confirmation is skipped entirely with no roots — nothing to compare a clone against", () => {
+  const { confirmed, probed, capped } = withConfirmedCloneRoots(["C:\\anything"], [], { git: () => { throw new Error("must not be called"); } });
+  assert.equal(confirmed.size, 0);
+  assert.equal(probed, 0);
+  assert.equal(capped, false);
+});
+
+test("signal 4's git-sourced caveat always discloses the clone-confirmation limitation, even when none were found", () => {
+  // The gap is standing, not conditional on this run having found one: a clone whose directory is
+  // gone, whose git is unavailable, or that is shallow with a rewritten origin cannot be confirmed
+  // and still reads as outside, so the reader must be told every run, not only the runs that hit it.
+  const s4 = find(summarize({
+    rows: [row()], repoRoots: [path.resolve("C:\\repo")], repoRootSource: "git", cloneRoots: []
+  }), 4);
+  assert.match(s4.caveat, /clone/i);
+  assert.doesNotMatch(s4.caveat, /confirmed as/i, "nothing was confirmed this run, so it must not claim otherwise");
+  // A no-remote clone DOES confirm (via root commit) — see withConfirmedCloneRoots — so listing "no
+  // remote configured" as a reason confirmation could FAIL was false. The real remaining gaps named
+  // instead: a call can exceed GIT_TIMEOUT_MS, and the probe cap can leave a stale candidate unprobed.
+  assert.doesNotMatch(s4.caveat, /no remote configured/i);
+  assert.match(s4.caveat, /GIT_TIMEOUT_MS/);
+  assert.match(s4.caveat, /cap/i);
+  // Round-3, rule (A): the residual this file's own veto rule accepts on purpose — a genuinely
+  // same-repo clone reached via an alias, an IP literal, or another host-spelling this check
+  // cannot resolve to a matching hostname — must be named, not silently assumed away.
+  assert.match(s4.caveat, /alias/i);
+  assert.match(s4.caveat, /ip literal|IP\b/);
+});
+
+test("signal 4's caveat and sources.cloneProbeCapped disclose a clone-probe cap hit, with counts", () => {
+  const s = summarize({
+    rows: [row()], repoRoots: [path.resolve("C:\\repo")], repoRootSource: "git",
+    cloneRoots: [], cloneProbe: { probed: 50, capped: true, candidates: 73 }
+  });
+  assert.equal(s.sources.cloneProbeCapped, true);
+  const s4 = find(s, 4);
+  assert.match(s4.caveat, /CAPPED THIS RUN/);
+  assert.match(s4.caveat, /50 of 73/);
+});
+
+test("sources.cloneProbeCapped is false, with no cap sentence, when nothing was capped (or nothing probed at all)", () => {
+  const noProbe = summarize({ rows: [row()], repoRoots: [path.resolve("C:\\repo")], repoRootSource: "git" });
+  assert.equal(noProbe.sources.cloneProbeCapped, false, "cloneProbe defaults to null: no probing ran, so nothing is capped");
+  assert.doesNotMatch(find(noProbe, 4).caveat, /CAPPED THIS RUN/);
+
+  const notCapped = summarize({
+    rows: [row()], repoRoots: [path.resolve("C:\\repo")], repoRootSource: "git",
+    cloneProbe: { probed: 3, capped: false, candidates: 3 }
+  });
+  assert.equal(notCapped.sources.cloneProbeCapped, false);
+  assert.doesNotMatch(find(notCapped, 4).caveat, /CAPPED THIS RUN/);
+});
+
+test("an explicit --repo-root override gets the SAME clone-confirmation disclosure as a git-resolved root", () => {
+  // main() runs the clone check whenever repoRootSource !== "fallback", which includes "override"
+  // — an operator who named the root by hand still deserves to know a cwd was reclassified.
+  const cwd = path.resolve("C:\\scratch\\confirmed-clone");
+  const s4 = find(summarize({
+    rows: [row({ cwd })], repoRoots: [path.resolve("C:\\repo")], repoRootSource: "override", cloneRoots: [cwd]
+  }), 4);
+  assert.equal(s4.detail.length, 0, "the confirmed clone must not count as outside under override sourcing either");
+  assert.match(s4.caveat, /confirmed as separate clones/i);
+  assert.match(s4.caveat, new RegExp(cwd.replace(/\\/g, "\\\\")));
+});
+
+// A shared fixture of four distinct REAL repositories, each confirmable (or not) by a DIFFERENT
+// one of withConfirmedCloneRoots's checks — used by both the unit-level real-git test below and
+// the CLI-level integration test in section 5e. Replaces an earlier real-git test that compared
+// this worktree with itself: same config, same object store, so it could not have caught a broken
+// fingerprint (measured: a broken rev-list alone still passed it).
+//
+//   a — the main root. Its own origin is a fake network URL (remote add/get-url are local metadata
+//       only; nothing here ever makes a network call).
+//   b — `git clone a b`, then `remote remove origin`: confirmable ONLY by root commit — no remote
+//       at all, this review fleet's own `SCRATCH/kf` pattern once cloned and re-pointed.
+//   c — its OWN unrelated init/commit, its OWN different network origin: confirmable by NEITHER
+//       check. A genuinely different project.
+//   d — its OWN unrelated init/commit (root commit does NOT match a's), but its origin is set to
+//       a's OWN origin URL: confirmable ONLY by remote.
+function buildCloneFixture() {
+  const a = tmp(); const b = tmp(); const c = tmp(); const d = tmp();
+  initRealRepo(a, "a.txt");
+  gitOutput(["remote", "add", "origin", "https://example.invalid/org/repo.git"], a);
+
+  gitOutput(["clone", "-q", a, b]);
+  gitOutput(["remote", "remove", "origin"], b);
+
+  initRealRepo(c, "c.txt");
+  gitOutput(["remote", "add", "origin", "https://example.invalid/other/thing.git"], c);
+
+  initRealRepo(d, "d.txt");
+  gitOutput(["remote", "add", "origin", "https://example.invalid/org/repo.git"], d);
+
+  return {
+    a, b, c, d,
+    cleanup: () => { for (const dir of [a, b, c, d]) fs.rmSync(dir, { recursive: true, force: true }); }
+  };
+}
+
+test("withConfirmedCloneRoots really can drive git — root-commit-only, remote-only, and a real rejection", () => {
+  const { a, b, c, d, cleanup } = buildCloneFixture();
+  try {
+    const { confirmed, probed } = withConfirmedCloneRoots([b, c, d], [a]);
+    assert.equal(probed, 3);
+    assert.equal(confirmed.get(b), path.resolve(b), "b: no remote at all, confirmed by shared root commit alone");
+    assert.equal(confirmed.get(d), path.resolve(d), "d: different root commit, confirmed by its matching remote alone");
+    assert.equal(confirmed.has(c), false, "c: different root commit AND different remote — genuinely a different project");
+    assert.equal(confirmed.size, 2);
+  } finally {
+    cleanup();
+  }
+});
+
+// --- 5c. Real git: a leaked GIT_DIR must not contaminate ANY answer ------------------------
+//
+// A pre-commit hook (or any git-invoking tool) commonly exports GIT_DIR/GIT_WORK_TREE/etc for its
+// OWN children. This process inherits them like any other child process unless gitOutput scrubs
+// them. Measured for real on this machine (git 2.55.0.windows.3): with GIT_DIR pointed at repo A,
+// `git -C B rev-list --max-parents=0 HEAD` returns A's root commit, not B's — so B, a genuinely
+// unrelated repo, would misread as sharing A's history. For signal 4 that is the FORBIDDEN
+// direction: every candidate would "confirm" as a clone and REVERT on genuine outside use.
+//
+// These tests use REAL git via the imported `gitOutput`, not the fake — its own environment
+// handling is exactly what a fake cannot prove. Contamination is injected via an EXPLICIT `env`
+// object handed to `gitOutput`/`withConfirmedCloneRoots`/`resolveRepoRoots` — NEVER by mutating
+// `process.env` itself. (Measured directly, Node v24.20.0: this file's own tests actually run
+// SEQUENTIALLY, not concurrently — that is not the reason. The real reason is that several tests
+// spawn the real CLI with `...process.env` spread into the child, so a global mutation here would
+// leak into every later test in the same process for the rest of this run, however this file is
+// eventually run, and fail them for a reason nobody would trace back to this section.) Fixture
+// setup itself goes through `gitOutput` too, so it is protected by the SAME scrub being proven,
+// not by a second, separately-written one that could drift from the real one.
+
+function initRealRepo(dir, filename) {
+  fs.writeFileSync(path.join(dir, filename), filename);
+  gitOutput(["init", "-q"], dir);
+  gitOutput(["add", filename], dir);
+  // -c commit.gpgsign=false / core.hooksPath= / --no-verify: a contributor's global git config can
+  // have commit signing or a hooksPath configured (this repo's own CLAUDE.md documents exactly
+  // that risk for git hooks). Any of those can prompt, shell out, or simply run slowly on an
+  // unrelated temp repo — inside GIT_TIMEOUT_MS (5s), that reads as "git is unavailable" and turns
+  // an unrelated local config difference into a flaky test.
+  gitOutput(
+    [
+      "-c", "user.email=trial-report-test@example.com", "-c", "user.name=trial-report-test",
+      "-c", "commit.gpgsign=false", "-c", "core.hooksPath=",
+      "commit", "-q", "--no-verify", "-m", "init"
+    ],
+    dir
+  );
+}
+
+const leakedGitDirEnv = repoDir => ({
+  ...process.env,
+  GIT_DIR: path.join(repoDir, ".git"),
+  GIT_INDEX_FILE: path.join(repoDir, ".git", "index")
+});
+
+test("gitOutput scrubs a leaked GIT_DIR/GIT_INDEX_FILE — the answer is about cwd, not the leaked repo", () => {
+  const a = tmp(); const b = tmp();
+  try {
+    initRealRepo(a, "a.txt");
+    initRealRepo(b, "b.txt");
+    const bRootClean = gitOutput(["rev-list", "--max-parents=0", "HEAD"], b);
+    assert.notEqual(gitOutput(["rev-list", "--max-parents=0", "HEAD"], a), bRootClean,
+      "fixture sanity: a and b must have unrelated histories for this test to mean anything");
+
+    const bRootContaminated = gitOutput(["rev-list", "--max-parents=0", "HEAD"], b, { env: leakedGitDirEnv(a) });
+    assert.equal(bRootContaminated, bRootClean,
+      "a leaked GIT_DIR must be scrubbed before asking about b, not silently answer with a's history");
+
+    const bToplevel = gitOutput(["rev-parse", "--show-toplevel"], b, { env: leakedGitDirEnv(a) });
+    assert.equal(path.resolve(bToplevel), path.resolve(b));
+  } finally {
+    fs.rmSync(a, { recursive: true, force: true });
+    fs.rmSync(b, { recursive: true, force: true });
+  }
+});
+
+test("withConfirmedCloneRoots is not fooled by a leaked GIT_DIR — the forbidden direction", () => {
+  // The actual danger for signal 4, not just gitOutput in isolation: under contamination, a
+  // GENUINELY UNRELATED directory must not "confirm" as a clone of the main root just because
+  // every git call silently answered from the leaked repo instead of the one actually asked about.
+  const a = tmp(); const b = tmp();
+  try {
+    initRealRepo(a, "a.txt");
+    initRealRepo(b, "b.txt");
+    const leakingGit = (args, cwd) => gitOutput(args, cwd, { env: leakedGitDirEnv(a) });
+    const { confirmed } = withConfirmedCloneRoots([b], [a], { git: leakingGit });
+    assert.equal(confirmed.size, 0,
+      "b is a genuinely different, unrelated repo; a leaked GIT_DIR must not make it read as a's clone");
+  } finally {
+    fs.rmSync(a, { recursive: true, force: true });
+    fs.rmSync(b, { recursive: true, force: true });
+  }
+});
+
+test("resolveRepoRoots is not fooled by a leaked GIT_DIR either — same scrub, shared by both callers", () => {
+  const a = tmp(); const hook = tmp();
+  try {
+    initRealRepo(a, "a.txt");
+    initRealRepo(hook, "hook.txt");
+    const leakingGit = (args, cwd) => gitOutput(args, cwd, { env: leakedGitDirEnv(hook) });
+    const { roots, source } = resolveRepoRoots(null, { cwd: a, git: leakingGit });
+    assert.equal(source, "git");
+    assert.deepEqual(roots, [path.resolve(a)], "roots must reflect a, not the leaked hook repo");
+  } finally {
+    fs.rmSync(a, { recursive: true, force: true });
+    fs.rmSync(hook, { recursive: true, force: true });
+  }
+});
+
+// --- 5d. Which candidates main() probes, and in what order (bounded-probe-budget priority) --
+
+test("selectCloneCandidates excludes rows outside --since, with no usable session/ts, or already inside roots", () => {
+  const roots = [path.resolve("C:\\real")];
+  const inWindow = row({ session: "a", ts: "2026-09-10T00:00:00.000Z", cwd: path.resolve("C:\\outside\\a") });
+  const beforeWindow = row({ session: "b", ts: "2026-09-01T00:00:00.000Z", cwd: path.resolve("C:\\outside\\b") });
+  const noSession = row({ session: "", ts: "2026-09-10T00:00:00.000Z", cwd: path.resolve("C:\\outside\\c") });
+  const badTs = row({ session: "d", ts: "not-a-date", cwd: path.resolve("C:\\outside\\d") });
+  const alreadyInside = row({ session: "e", ts: "2026-09-10T00:00:00.000Z", cwd: path.resolve("C:\\real\\src") });
+  const failed = row({ session: "f", ts: "2026-09-10T00:00:00.000Z", cwd: path.resolve("C:\\outside\\f"), outcome: "error" });
+  const cutoff = Date.parse("2026-09-05T00:00:00.000Z");
+  const candidates = selectCloneCandidates(
+    [inWindow, beforeWindow, noSession, badTs, alreadyInside, failed], cutoff, roots);
+  assert.deepEqual(candidates, [path.resolve("C:\\outside\\a")], "only the valid, in-window, outside, successful row survives");
+});
+
+test("selectCloneCandidates orders NEWEST FIRST, so a downstream probe cap drops the STALEST candidates, never a live one", () => {
+  // The defect this fixes: candidates used to come from the whole log in FILE order (append-only,
+  // so oldest first in practice). With 50+ distinct stale cwds ahead of it, a live in-window clone
+  // landed past MAX_CLONE_PROBES and was never probed at all — reading as outside for no reason but
+  // where it happened to sort, not because it could not be confirmed.
+  const roots = [path.resolve("C:\\real")];
+  const stale = Array.from({ length: 51 }, (_, i) =>
+    row({ session: `stale-${i}`, ts: `2026-01-01T00:00:${String(i).padStart(2, "0")}.000Z`, cwd: path.resolve(`C:\\outside\\stale-${i}`) }));
+  const live = row({ session: "live", ts: "2026-09-20T00:00:00.000Z", cwd: path.resolve("C:\\outside\\live") });
+  const rows = [...stale, live]; // live appended LAST, exactly as an append-only log would hold it
+  const candidates = selectCloneCandidates(rows, null, roots);
+  assert.equal(candidates.length, 52, "selectCloneCandidates itself does not cap — that stays withConfirmedCloneRoots's job");
+  assert.equal(candidates[0], path.resolve("C:\\outside\\live"), "the newest candidate must sort FIRST, not land at index 51+");
+});
+
+test("selectCloneCandidates deduplicates by cwd — one entry per distinct cwd, in newest-occurrence order", () => {
+  const roots = [path.resolve("C:\\real")];
+  const repeated = path.resolve("C:\\outside\\repeat");
+  const other = path.resolve("C:\\outside\\other");
+  const rows = [
+    row({ session: "a", ts: "2026-09-01T00:00:00.000Z", cwd: repeated }),
+    row({ session: "b", ts: "2026-09-20T00:00:00.000Z", cwd: repeated }), // same cwd, later call
+    row({ session: "c", ts: "2026-09-10T00:00:00.000Z", cwd: other })
+  ];
+  assert.deepEqual(selectCloneCandidates(rows, null, roots), [repeated, other]);
+});
+
+// --- 5e. End to end: the real CLI, real repos, real log, a scrubbed env ---------------------
+
+test("CLI integration: --repo-root a separates a clone (b) from a different project (c), --since excludes a stale clone (e)", () => {
+  // main()'s own wiring has NO other test: removing it entirely still left every prior test green,
+  // because every CLI-spawning test's fixture cwd does not exist on disk (fakeGitByCwd/plain string
+  // fixtures never touch the filesystem). This spawns the REAL trial-report.mjs against a REAL log
+  // and REAL repositories, so the wiring itself — not just the pure functions it calls — is proven.
+  const { a, b, c, cleanup } = buildCloneFixture();
+  // A second, genuine clone of a — confirmable exactly like b — but its ONLY row predates --since.
+  // selectCloneCandidates (finding #2, prior commit) must exclude it from the git-probing candidate
+  // set entirely, so it is never even ASKED about, let alone confirmed and folded in: it must not
+  // appear in stderr's NOTE or the JSON caveat's "folded in" list.
+  const e = tmp();
+  gitOutput(["clone", "-q", a, e], a);
+  const dir = tmp();
+  const log = path.join(dir, "mcp-usage.jsonl");
+  try {
+    const since = "2026-09-10T00:00:00.000Z";
+    fs.writeFileSync(log, [
+      JSON.stringify(row({ session: "stale-clone", cwd: e, ts: "2026-09-01T00:00:00.000Z" })), // BEFORE --since
+      JSON.stringify(row({ session: "review-sandbox", cwd: b, ts: "2026-09-15T00:00:00.000Z" })), // in window
+      JSON.stringify(row({ session: "genuinely-external", cwd: c, ts: "2026-09-15T00:00:00.000Z" })) // in window
+    ].join("\n") + "\n");
+
+    // Scrubbed of any leaked GIT_DIR/GIT_INDEX_FILE this test's OWN environment might carry — this
+    // test's result must be about a/b/c/e, not about wherever the outer process happens to point
+    // those variables. (gitOutput scrubs internally regardless — section 5c — this is belt-and-
+    // braces for the TEST's own reliability, independent of that fix.)
+    const env = { ...process.env, KANBANFLOW_USAGE_LOG: log, KANBANFLOW_API_URL: "http://127.0.0.1:1" };
+    for (const key of [
+      "GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR",
+      "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_NAMESPACE", "GIT_PREFIX"
+    ]) delete env[key];
+
+    const result = spawnSync(
+      process.execPath, [path.join(HERE, "trial-report.mjs"), "--repo-root", a, "--since", since, "--json"],
+      { encoding: "utf8", env }
+    );
+    // The activity port is dead (127.0.0.1:1) on purpose, matching the existing dead-port tests
+    // elsewhere in this file: signals 2/3 are UNMEASURED, so overall is INCOMPLETE and the CLI
+    // exits 1 — that is correct, not a failure of THIS test. Signal 4 needs only the log, not the
+    // activity trail, so it is unaffected and still scored.
+    assert.equal(result.status, 1, `expected INCOMPLETE (activity port is dead); got:\n${result.stdout}\n${result.stderr}`);
+
+    const summary = JSON.parse(result.stdout);
+    const s4 = summary.signals.find(s => s.id === 4);
+    assert.equal(s4.detail.length, 1, "only the genuinely different, IN-WINDOW project (c) counts as outside");
+    assert.equal(s4.detail[0].session, "genuinely-external");
+    assert.match(result.stderr, new RegExp(b.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")), "stderr must name b as a confirmed clone");
+
+    const eEscaped = new RegExp(e.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+    assert.doesNotMatch(result.stderr, eEscaped, "e is out of window — it must never be probed, let alone named as confirmed");
+    assert.doesNotMatch(s4.caveat, eEscaped, "the caveat's folded-in list must not name a candidate --since excluded from probing");
+
+    // Probe counts (probed/capped/candidates), threaded through cloneProbe into the JSON output —
+    // only b and c were ever candidates; e was excluded (by --since, finding #2) before either was
+    // probed, so the count is 2, not 3.
+    assert.deepEqual(summary.sources.cloneProbe, { probed: 2, capped: false, candidates: 2 });
+    assert.equal(summary.sources.cloneProbeCapped, false);
+  } finally {
+    cleanup();
+    fs.rmSync(e, { recursive: true, force: true });
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 // --- 6. Reading a Done transition ---------------------------------------------------------
@@ -1462,7 +2173,10 @@ test("with both sources down, the report is INCOMPLETE — never the all-REVERT 
   assert.deepEqual(summary.signals.map(s => s.verdict), ["UNMEASURED", "UNMEASURED", "UNMEASURED", "UNMEASURED"]);
   assert.equal(summary.overall.verdict, "INCOMPLETE");
   assert.notEqual(summary.overall.verdict, "REVERT");
-  assert.deepEqual(summary.sources, { log: false, activity: false, activityTruncated: false, activityCapped: false, repoRootTrusted: true });
+  assert.deepEqual(summary.sources, {
+    log: false, activity: false, activityTruncated: false, activityCapped: false,
+    repoRootTrusted: true, cloneProbeCapped: false, cloneProbe: null
+  });
 });
 
 test("fetchActivity treats an HTTP error as UNAVAILABLE rather than as no events", async () => {
@@ -1636,7 +2350,10 @@ test("the git call is bounded too — the same unbounded-blocking shape", () => 
   // a network path or against a held index lock — hanging the run before a single signal is
   // computed. There is no seam to inject a hanging git through, so this guards the wiring itself.
   const source = fs.readFileSync(path.join(HERE, "trial-report.mjs"), "utf8");
-  const call = source.slice(source.indexOf("function gitOutput"), source.indexOf("function gitOutput") + 600);
+  // 900, not 600: the env-scrub fix (a leaked GIT_DIR/GIT_INDEX_FILE must not contaminate a git
+  // call — see section 5c) added the `env` option and its own doc comment ahead of the timeout
+  // comment, pushing both matches further into the function than the old window covered.
+  const call = source.slice(source.indexOf("function gitOutput"), source.indexOf("function gitOutput") + 900);
   assert.match(call, /execFileSync\(/);
   assert.match(call, /timeout: GIT_TIMEOUT_MS/, "the git call must pass a timeout");
   assert.match(source, /const GIT_TIMEOUT_MS = 5_000;/);
@@ -2077,4 +2794,15 @@ test("a row with no session is malformed, and cannot become a participant", () =
     repoRootSource: "git", sources: { log: true, activity: true } }).signals.find(s => s.id === 1);
   assert.equal(s1.value, 2, "two real sessions, not three");
   assert.notEqual(s1.verdict, "ADOPT", "a phantom session must not carry the >= 3 threshold");
+});
+
+// Placed LAST on purpose: node:test runs this file's tests sequentially (measured directly, not
+// assumed — see section 5c), so by the time this runs, every real-git test above (initRealRepo,
+// buildCloneFixture, buildRuleAFixture, gitOutput's own env-scrub tests) has already run to
+// completion, each in its own os.tmpdir() directory, each with its own cleanup. This worktree's own
+// HEAD must be untouched by every one of them.
+test("this worktree's own HEAD is unchanged after every real-git test above", () => {
+  const headNow = execFileSync("git", ["rev-parse", "HEAD"], { cwd: HERE, encoding: "utf8" }).trim();
+  assert.equal(headNow, HEAD_AT_MODULE_LOAD,
+    "this worktree's own HEAD must not move during a run that builds real git repos elsewhere");
 });
