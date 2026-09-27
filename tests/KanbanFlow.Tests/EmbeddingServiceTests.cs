@@ -1151,8 +1151,8 @@ public sealed class EmbeddingServiceTests
 
     /// <summary>
     /// A logger that keeps every entry's level and formatted message, so a test can count what the
-    /// service logged. The repo has no logger-capture idiom (every other test passes
-    /// <see cref="NullLogger{T}"/>), so it lives here, next to the one test that needs it.
+    /// service logged. The repo has no logger-capture idiom, so it lives here, next to the one test
+    /// that needs it.
     /// </summary>
     private sealed class CapturingLogger : ILogger<EmbeddingService>
     {
