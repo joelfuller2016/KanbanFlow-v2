@@ -1015,7 +1015,7 @@ function buildInto(build) {
   }
 }
 
-// Twenty real repositories covering every remote-classification shape rule (A) addresses, built
+// Twenty-three real repositories covering every remote-classification shape rule (A) addresses, built
 // fresh in os.tmpdir() every run, never read from a machine-specific fixture directory: this is the
 // same key an earlier version of this test read from one, self-contained now instead — this test
 // creates every repo itself, needs no external fixture directory, and works identically in any
@@ -1032,6 +1032,10 @@ function buildRuleAFixture() {
     const a = make();
     initRealRepo(a, "a.txt");
     gitOutput(["remote", "add", "origin", "https://example.invalid/org/repo.git"], a);
+    // a's origin carries a SECOND url as well. git fetches from the first url only, so a is matched on
+    // that first url alone; `mainSecondUrlOnly` below, whose only remote is this second url, must stay
+    // outside, exactly as it did before every url was read.
+    gitOutput(["remote", "set-url", "--add", "origin", "https://mirror.example.invalid/org/repo.git"], a);
 
     // --- CONFIRMED: shares a's root commit, and either the remote is local or matches a's ---------
     const localClone = cloneWithRemote(); // origin left as-is: git clone sets it to a's own local path
@@ -1042,6 +1046,11 @@ function buildRuleAFixture() {
     const sameRepoHttps = cloneWithRemote("https://example.invalid/org/repo.git");
     const sameRepoScpNoUser = cloneWithRemote("example.invalid:org/repo.git"); // needs N2
     const sameRepoSshPort = cloneWithRemote("ssh://git@example.invalid:22/org/repo.git"); // needs N2
+    // A genuine clone that fetches from a's local path and PUSHES to a's own URL. Its fetch url names no
+    // network project, so it takes the root-commit path — decided on its fetch urls, never on every
+    // url — and a's history confirms it: the push url is neither proof nor an obstacle.
+    const localClonePushesToA = cloneWithRemote();
+    gitOutput(["remote", "set-url", "--push", "origin", "https://example.invalid/org/repo.git"], localClonePushesToA);
 
     // --- OUTSIDE: shares a's root commit, but a network remote vetoes it (rule A) ------------------
     const forkHttps = cloneWithRemote("https://example.invalid/alice/repo.git");
@@ -1081,6 +1090,9 @@ function buildRuleAFixture() {
     const secondUrlPushPinned = cloneWithRemote("https://example.invalid/org/repo.git");
     gitOutput(["remote", "set-url", "--add", "origin", "https://example.invalid/alice/repo.git"], secondUrlPushPinned);
     gitOutput(["remote", "set-url", "--push", "origin", "https://example.invalid/org/repo.git"], secondUrlPushPinned);
+    // Its only remote is a's SECOND url, one a never fetches from. Main is matched on its first url
+    // alone, so this is a different URL, and it vetoes — as it did when only one url was read.
+    const mainSecondUrlOnly = cloneWithRemote("https://mirror.example.invalid/org/repo.git");
 
     // --- OUTSIDE: genuinely unrelated (its own history) -------------------------------------------
     const unrelated = make();
@@ -1091,12 +1103,19 @@ function buildRuleAFixture() {
     // was caught by a single test elsewhere, and only incidentally.
     const unrelatedNoRemote = make();
     initRealRepo(unrelatedNoRemote, "unrelated-no-remote.txt");
+    // Its own history; fetches from a's local path and PUSHES to a's own URL. A match on where it pushes
+    // is not proof, so it takes the root-commit path like any local-only checkout — and its history is
+    // not a's. Matching on every url, instead of on fetch urls, confirms exactly this one.
+    const unrelatedPushesToA = make();
+    initRealRepo(unrelatedPushesToA, "unrelated-pushes-to-a.txt");
+    gitOutput(["remote", "add", "origin", a], unrelatedPushesToA);
+    gitOutput(["remote", "set-url", "--push", "origin", "https://example.invalid/org/repo.git"], unrelatedPushesToA);
 
     return {
-      a, localClone, fileUrlClone, sameRepoHttps, sameRepoScpNoUser, sameRepoSshPort,
+      a, localClone, fileUrlClone, sameRepoHttps, sameRepoScpNoUser, sameRepoSshPort, localClonePushesToA,
       forkHttps, forkIPv4, forkSingleLabel, forkSshAlias, aliasSpelledSameRepo, derivNoOrigin, forkWithUpstream,
-      triangular, secondUrl, reverseTriangular, pushInsteadOfFork, secondUrlPushPinned,
-      unrelated, unrelatedNoRemote
+      triangular, secondUrl, reverseTriangular, pushInsteadOfFork, secondUrlPushPinned, mainSecondUrlOnly,
+      unrelated, unrelatedNoRemote, unrelatedPushesToA
     };
   });
 }
@@ -1104,11 +1123,14 @@ function buildRuleAFixture() {
 test("rule (A), rebuilt fresh in os.tmpdir(): the exact confirm/outside partition across all remote shapes", () => {
   const fx = buildRuleAFixture();
   try {
-    const confirmedKeys = ["localClone", "fileUrlClone", "sameRepoHttps", "sameRepoScpNoUser", "sameRepoSshPort"];
+    const confirmedKeys = [
+      "localClone", "fileUrlClone", "sameRepoHttps", "sameRepoScpNoUser", "sameRepoSshPort", "localClonePushesToA"
+    ];
     const outsideKeys = [
       "forkHttps", "forkIPv4", "forkSingleLabel", "forkSshAlias", "aliasSpelledSameRepo",
       "derivNoOrigin", "forkWithUpstream", "triangular", "secondUrl", "reverseTriangular",
-      "pushInsteadOfFork", "secondUrlPushPinned", "unrelated", "unrelatedNoRemote"
+      "pushInsteadOfFork", "secondUrlPushPinned", "mainSecondUrlOnly", "unrelated", "unrelatedNoRemote",
+      "unrelatedPushesToA"
     ];
     const candidates = [...confirmedKeys, ...outsideKeys].map(k => fx[k]);
     const { confirmed } = withConfirmedCloneRoots(candidates, [fx.a]);
