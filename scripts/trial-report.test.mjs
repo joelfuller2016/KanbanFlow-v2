@@ -23,6 +23,7 @@ import {
   pathFlavor, asUtcIso, normalizeEvent, normalizeTaskId, readLogGenerations, resolveRepoRoots,
   fetchActivity, ActivityHttpError, dedupeRows, buildIdentityBridge, aliasesOf, normalizeActor,
   WRITE_TOOLS, MUTATING_TOOLS, normalizeRemoteUrl, withConfirmedCloneRoots, gitOutput, isLocalPathRemote,
+  scrubGitEnv, gitEnvScrub,
   selectRowsInWindow, selectCloneCandidates
 } from "./trial-report.mjs";
 
@@ -1564,6 +1565,110 @@ test("resolveRepoRoots is not fooled by a leaked GIT_DIR either — same scrub, 
     fs.rmSync(a, { recursive: true, force: true });
     fs.rmSync(hook, { recursive: true, force: true });
   }
+});
+
+test("no inherited variable from git's local-environment list changes what the clone check answers", () => {
+  // One row per class of variable `git rev-parse --local-env-vars` lists, each injected through the
+  // `env` option and compared with the answer a clean environment gives. The first four used to
+  // CONFIRM a repository that is not a clone of a; the last two used to HIDE one that is.
+  const commitFile = (dir, file) => {
+    fs.writeFileSync(path.join(dir, file), file);
+    gitOutput(["add", file], dir);
+    gitOutput(["-c", "user.email=trial-report-test@example.com", "-c", "user.name=trial-report-test",
+      "-c", "commit.gpgsign=false", "-c", "core.hooksPath=", "commit", "-q", "--no-verify", "-m", file], dir);
+  };
+  const fx = buildInto(make => {
+    const a = make();
+    initRealRepo(a, "a.txt");
+    gitOutput(["remote", "add", "origin", "https://example.invalid/org/repo.git"], a);
+    const A0 = gitOutput(["rev-list", "--max-parents=0", "HEAD"], a);
+    // A clone of a (so a's commits are in its object store) checked out on an ORPHAN branch with a
+    // root of its own: unrelated history, a local-path remote, and so decided by root commit.
+    const orphan = file => {
+      const dir = make();
+      gitOutput(["clone", "-q", a, dir], a);
+      gitOutput(["checkout", "-q", "--orphan", "own"], dir);
+      gitOutput(["rm", "-q", "-rf", "--cached", "."], dir);
+      commitFile(dir, file);
+      return { dir, root: gitOutput(["rev-list", "--max-parents=0", "HEAD"], dir) };
+    };
+    const graftOnto = (dir, root) => gitOutput(["-c", "user.email=trial-report-test@example.com", "-c",
+      "user.name=trial-report-test", "replace", "--graft", root, A0], dir);
+
+    const fork = make();
+    gitOutput(["clone", "-q", a, fork], a);
+    gitOutput(["remote", "set-url", "origin", "https://example.invalid/alice/repo.git"], fork);
+    // An inherited graft file that gives the orphan root a as its parent.
+    const grafted = orphan("g.txt");
+    const graftFile = path.join(make(), "grafts");
+    fs.writeFileSync(graftFile, `${grafted.root} ${A0}\n`);
+    // A replace ref grafting the orphan onto a, kept where git only looks if told to.
+    const hidden = orphan("r.txt");
+    graftOnto(hidden.dir, hidden.root);
+    const replacement = gitOutput(["rev-parse", `refs/replace/${hidden.root}`], hidden.dir);
+    gitOutput(["update-ref", `refs/hidden-replace/${hidden.root}`, replacement], hidden.dir);
+    gitOutput(["update-ref", "-d", `refs/replace/${hidden.root}`], hidden.dir);
+    // A repository whose OWN refs/replace graft it onto a: its answer is a's root, unless an
+    // inherited GIT_NO_REPLACE_OBJECTS hides that.
+    const ownReplace = orphan("c.txt");
+    graftOnto(ownReplace.dir, ownReplace.root);
+    // A genuine clone with one commit of its own; an inherited shallow file cut at that commit hides
+    // a's root from it and from nothing else.
+    const shallow = make();
+    gitOutput(["clone", "-q", a, shallow], a);
+    commitFile(shallow, "s.txt");
+    const shallowFile = path.join(make(), "shallow");
+    fs.writeFileSync(shallowFile, `${gitOutput(["rev-parse", "HEAD"], shallow)}\n`);
+    return { a, fork, grafted: grafted.dir, graftFile, hidden: hidden.dir, ownReplace: ownReplace.dir, shallow, shallowFile };
+  });
+  try {
+    const rows = [
+      { name: "GIT_CONFIG_PARAMETERS", cwd: fx.fork, clean: false,
+        env: { GIT_CONFIG_PARAMETERS: "'url.https://example.invalid/org/.insteadof'='https://example.invalid/alice/'" } },
+      { name: "GIT_CONFIG_COUNT/KEY_0/VALUE_0", cwd: fx.fork, clean: false,
+        env: { GIT_CONFIG_COUNT: "1", GIT_CONFIG_KEY_0: "url.https://example.invalid/org/.insteadOf", GIT_CONFIG_VALUE_0: "https://example.invalid/alice/" } },
+      { name: "GIT_GRAFT_FILE", cwd: fx.grafted, clean: false, env: { GIT_GRAFT_FILE: fx.graftFile } },
+      { name: "GIT_REPLACE_REF_BASE", cwd: fx.hidden, clean: false, env: { GIT_REPLACE_REF_BASE: "refs/hidden-replace/" } },
+      { name: "GIT_NO_REPLACE_OBJECTS", cwd: fx.ownReplace, clean: true, env: { GIT_NO_REPLACE_OBJECTS: "1" } },
+      { name: "GIT_SHALLOW_FILE", cwd: fx.shallow, clean: true, env: { GIT_SHALLOW_FILE: fx.shallowFile } }
+    ];
+    const wrong = [];
+    for (const r of rows) {
+      const inherited = (args, cwd) => gitOutput(args, cwd, { env: { ...process.env, ...r.env } });
+      const clean = withConfirmedCloneRoots([r.cwd], [fx.a]).confirmed.has(r.cwd);
+      const underIt = withConfirmedCloneRoots([r.cwd], [fx.a], { git: inherited }).confirmed.has(r.cwd);
+      if (clean !== r.clean) wrong.push(`${r.name}: fixture sanity — a clean environment confirmed=${clean}, expected ${r.clean}`);
+      if (underIt !== clean) wrong.push(`${r.name}: inherited, confirmed=${underIt}; clean, confirmed=${clean}`);
+    }
+    assert.deepEqual(wrong, [], "an inherited local-environment variable changed the clone check's answer");
+  } finally {
+    fx.cleanup();
+  }
+});
+
+test("scrubGitEnv drops every variable git lists, and GIT_CONFIG_KEY_<n>/VALUE_<n>, in any case, and keeps the rest", () => {
+  const scrubbed = scrubGitEnv({
+    PATH: "p", GIT_EDITOR: "e", HOME: "h",
+    Git_Dir: "leak", GIT_CONFIG: "c", GIT_CONFIG_PARAMETERS: "x", GIT_CONFIG_COUNT: "1",
+    GIT_CONFIG_KEY_0: "k", git_config_value_0: "v", GIT_GRAFT_FILE: "g", GIT_REPLACE_REF_BASE: "r",
+    GIT_NO_REPLACE_OBJECTS: "1", GIT_SHALLOW_FILE: "s", GIT_IMPLICIT_WORK_TREE: "0", GIT_NAMESPACE: "n"
+  });
+  // Windows reads environment names case-insensitively, so `Git_Dir` reaches git as GIT_DIR.
+  assert.deepEqual(scrubbed, { PATH: "p", GIT_EDITOR: "e", HOME: "h" });
+});
+
+test("gitEnvScrub reads git's own list once, and falls back to the static copy, saying so, when that read fails", () => {
+  const live = gitEnvScrub();
+  assert.equal(live.source, "git");
+  for (const key of ["GIT_DIR", "GIT_CONFIG_PARAMETERS", "GIT_CONFIG_COUNT", "GIT_GRAFT_FILE", "GIT_REPLACE_REF_BASE",
+    "GIT_NO_REPLACE_OBJECTS", "GIT_SHALLOW_FILE"]) assert.ok(live.keys.includes(key), `${key} is on the list`);
+  assert.equal(gitEnvScrub(), live, "read once: every later call answers from the first read");
+  const future = gitEnvScrub({ run: () => "GIT_SOME_FUTURE_VARIABLE\nGIT_DIR\n" });
+  assert.ok(future.keys.includes("GIT_SOME_FUTURE_VARIABLE"), "a name only git's list carries is scrubbed too");
+  assert.ok(future.keys.includes("GIT_NAMESPACE"), "and the static copy always is");
+  const failed = gitEnvScrub({ run: () => { throw new Error("git could not run"); } });
+  assert.equal(failed.source, "fallback");
+  assert.ok(failed.keys.includes("GIT_CONFIG_PARAMETERS"), "the fallback still covers config injection");
 });
 
 // --- 5d. Which candidates main() probes, and in what order (bounded-probe-budget priority) --
