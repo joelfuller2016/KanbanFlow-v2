@@ -15,7 +15,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import http from "node:http";
-import { spawn, spawnSync, execFileSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 import {
@@ -45,7 +45,18 @@ const REPO = "C:\\Users\\Owner\\Documents\\Claude\\KanbanFlow-v2";
 // is specific to this file's scale/shape, not proof the mechanism is reliable here. A plain
 // module-load-time constant, checked in an ordinary `test(...)` at the end of the file, uses
 // exactly the assertion path already proven trustworthy by every other test in this file.
-const HEAD_AT_MODULE_LOAD = execFileSync("git", ["rev-parse", "HEAD"], { cwd: HERE, encoding: "utf8" }).trim();
+//
+// Read through the scrubbed `gitOutput`, like every other git call in this file. A raw
+// `execFileSync("git", …)` inherits a leaked GIT_DIR and snapshots THAT repository's HEAD, at load
+// and again at the end, so the guard would watch the wrong repository and pass. A read that fails
+// (git missing, or this file outside any checkout) leaves no snapshot; the last test then skips,
+// instead of the import failing and taking every test in the file down with it.
+let HEAD_AT_MODULE_LOAD = null;
+try {
+  HEAD_AT_MODULE_LOAD = gitOutput(["rev-parse", "HEAD"], HERE);
+} catch {
+  // No snapshot: see the last test.
+}
 const row = (over = {}) => ({
   ts: "2026-09-01T10:00:00.000Z", session: "s1", tool: "get_next_tasks",
   cwd: REPO, outcome: "ok", ms: 5, ...over
@@ -3438,8 +3449,12 @@ test("a row with no session is malformed, and cannot become a participant", () =
 // buildCloneFixture, buildRuleAFixture, gitOutput's own env-scrub tests) has already run to
 // completion, each in its own os.tmpdir() directory, each with its own cleanup. This worktree's own
 // HEAD must be untouched by every one of them.
-test("this worktree's own HEAD is unchanged after every real-git test above", () => {
-  const headNow = execFileSync("git", ["rev-parse", "HEAD"], { cwd: HERE, encoding: "utf8" }).trim();
+test("this worktree's own HEAD is unchanged after every real-git test above", t => {
+  if (HEAD_AT_MODULE_LOAD === null) {
+    t.skip("no HEAD snapshot: git could not read this file's checkout when the file loaded");
+    return;
+  }
+  const headNow = gitOutput(["rev-parse", "HEAD"], HERE);
   assert.equal(headNow, HEAD_AT_MODULE_LOAD,
     "this worktree's own HEAD must not move during a run that builds real git repos elsewhere");
 });
