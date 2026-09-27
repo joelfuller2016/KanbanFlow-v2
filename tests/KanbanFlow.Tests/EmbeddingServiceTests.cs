@@ -734,6 +734,58 @@ public sealed class EmbeddingServiceTests
     }
 
     [Fact]
+    public async Task EmbedAsync_CancelledToken_CacheHit_InsideCooldown_ReturnsCachedSuccess()
+    {
+        // The cancellation check sits after the cache lookup, not at method entry. A cache hit never
+        // reached GenerateAsync's check, so it has always been returned for a cancelled token, and the
+        // cooldown must not change that.
+        var providerUp = true;
+        var fake = new FakeEmbeddingGenerator((inputs, _, _) =>
+            providerUp ? CannedBatch(inputs) : throw SdkTransportFailure());
+        var service = NewService(fake, timeProvider: new FakeTimeProvider());
+        var cached = await service.EmbedAsync("cached", CancellationToken.None); // provider up ⇒ cached
+        providerUp = false;
+        await service.EmbedAsync("ping", CancellationToken.None);                // refused ⇒ cooldown starts
+        var skipped = await service.EmbedAsync("pong", CancellationToken.None);
+        Assert.Contains("cooling down", skipped.Error);                           // the window is open
+        var callsBefore = fake.CallCount;
+        using var cts = new CancellationTokenSource();
+        await cts.CancelAsync();
+
+        var hit = await service.EmbedAsync("cached", cts.Token);
+
+        Assert.True(hit.Ok);
+        Assert.Equal(cached.Vector, hit.Vector);
+        Assert.Equal(callsBefore, fake.CallCount);                                // no provider call
+    }
+
+    [Fact]
+    public async Task EmbedBatchAsync_CancelledToken_AllHits_InsideCooldown_ReturnsCachedSuccesses()
+    {
+        // The batch twin: the check is inside the chunk loop, not at method entry, so a batch in which
+        // every text is cached, and so no chunk is sent, is returned for a cancelled token as it always was.
+        var providerUp = true;
+        var fake = new FakeEmbeddingGenerator((inputs, _, _) =>
+            providerUp ? CannedBatch(inputs) : throw SdkTransportFailure());
+        var service = NewService(fake, timeProvider: new FakeTimeProvider());
+        var cached = await service.EmbedBatchAsync(new[] { "a", "b" }, CancellationToken.None); // provider up ⇒ cached
+        providerUp = false;
+        await service.EmbedAsync("ping", CancellationToken.None);                  // refused ⇒ cooldown starts
+        var skipped = await service.EmbedAsync("pong", CancellationToken.None);
+        Assert.Contains("cooling down", skipped.Error);                             // the window is open
+        var callsBefore = fake.CallCount;
+        using var cts = new CancellationTokenSource();
+        await cts.CancelAsync();
+
+        var hits = await service.EmbedBatchAsync(new[] { "a", "b" }, cts.Token);
+
+        Assert.All(hits, r => Assert.True(r.Ok));
+        Assert.Equal(cached[0].Vector, hits[0].Vector);
+        Assert.Equal(cached[1].Vector, hits[1].Vector);
+        Assert.Equal(callsBefore, fake.CallCount);                                  // no provider call
+    }
+
+    [Fact]
     public async Task EmbedBatchAsync_WithinCooldown_ServesCacheHits_AndSparesLaterChunks()
     {
         // EmbedBatchAsync honours the same window, checked per chunk: the chunk that trips the cooldown
