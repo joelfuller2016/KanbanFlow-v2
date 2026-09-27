@@ -587,10 +587,19 @@ export function isLocalPathRemote(rawUrl) {
 // URL; ordinarily 1–2 remotes, but not fixed — every remote is checked, not only `origin`)
 // + at most one `rev-list`, each at GIT_TIMEOUT_MS, and this function is fed straight from the
 // usage log, a file this report does not control the size or contents of. This caps the number of
-// DISTINCT DIRECTORIES probed; it does not cap how many remotes any one of them may have — a
-// realistic repo has very few. A trial window's session count is ordinarily far below this cap;
-// hitting it is disclosed by the caller rather than silently probing forever.
+// DISTINCT DIRECTORIES probed; the two bounds below cap the rest. A trial window's session count is
+// ordinarily far below this cap; hitting it is disclosed by the caller rather than silently probing
+// forever.
 const MAX_CLONE_PROBES = 50;
+
+// The rest of the work, bounded too, because the usage log can name a repository with any number
+// of remotes, and every git call may take up to GIT_TIMEOUT_MS. A candidate whose `git remote`
+// lists more than MAX_REMOTES_PER_CANDIDATE is left inconclusive before a single url of it is read.
+// PROBE_BUDGET_MS is one deadline for the whole pass, the main root's fingerprint included, checked
+// before every git call, so a pass stops within one call of it. Both fail closed: whatever either
+// leaves unread stays outside, and the caveat and the NOTE say how many.
+const MAX_REMOTES_PER_CANDIDATE = 16;
+const PROBE_BUDGET_MS = 60_000;
 
 /**
  * Of the DISTINCT `cwds` that read as outside `roots`, which are actually a separate `git clone`
@@ -641,31 +650,47 @@ const MAX_CLONE_PROBES = 50;
  * strongest proof available, and leaves everything it cannot prove outside, as on master —
  * PROVIDED the caller folds in exactly the cwds it confirmed and nothing wider (see Returns).
  *
- * Returns `{ confirmed, probed, capped }`: `confirmed` maps each proven cwd to the toplevel git
- * resolved it to, `probed` is how many distinct cwds were actually run through git, and `capped`
- * says whether `MAX_CLONE_PROBES` cut the list short. What is proven is the KEY — that exact cwd
- * string — so the key is what a caller folds in, by EXACT STRING: never as a root for the tree
- * beneath it, and never case-folded or re-spelled (see the note at signal 4 for why not even that).
- * The toplevel is context, never a root. It used to be folded in as an extra prefix root, which was
+ * Returns `{ confirmed, probed, capped, budgetSpent, tooManyRemotes }`: `confirmed` maps each
+ * proven cwd to the toplevel git resolved it to; `probed` is how many distinct cwds were probed to
+ * the end; `capped` says whether any distinct cwd was left unprobed, by `MAX_CLONE_PROBES` or by
+ * `PROBE_BUDGET_MS`; `budgetSpent` says whether the budget was the one that ran out; and
+ * `tooManyRemotes` counts the probed cwds left inconclusive for listing more than
+ * `MAX_REMOTES_PER_CANDIDATE` remotes. `now` (milliseconds, `performance.now` by default) is the
+ * budget's clock, an option so a test can run the deadline without waiting for it. What is proven
+ * is the KEY — that exact cwd string — so the key is what a caller folds in, by EXACT STRING: never
+ * as a root for the tree beneath it, and never case-folded or re-spelled (see the note at signal 4
+ * for why not even that). The toplevel is context, never a root. It used to be folded in as an
+ * extra prefix root, which was
  * wrong in both directions: a toplevel also covers any repository NESTED inside the clone's tree,
  * which this function may just have REJECTED, so genuine outside use scored inside; and git
  * resolves a junction or symlink, so a cwd reached through one has the link's TARGET as its
  * toplevel — not a prefix of the cwd at all — and a confirmed clone scored outside while being
  * reported as folded in.
  */
-export function withConfirmedCloneRoots(cwds, roots, { git = gitOutput } = {}) {
+export function withConfirmedCloneRoots(cwds, roots, { git = gitOutput, now = () => performance.now() } = {}) {
   const mainRoots = (Array.isArray(roots) ? roots : []).filter(r => typeof r === "string" && r.length > 0);
   const distinct = [...new Set((Array.isArray(cwds) ? cwds : []).filter(c => typeof c === "string" && c.length > 0))];
-  if (mainRoots.length === 0 || distinct.length === 0) return { confirmed: new Map(), probed: 0, capped: false };
+  if (mainRoots.length === 0 || distinct.length === 0) {
+    return { confirmed: new Map(), probed: 0, capped: false, budgetSpent: false, tooManyRemotes: 0 };
+  }
 
   const probeList = distinct.slice(0, MAX_CLONE_PROBES);
-  const capped = probeList.length < distinct.length;
 
+  // PROBE_BUDGET_MS, enforced at every git call: once the deadline has passed, `call` refuses, and a
+  // refused call fails like any other git failure here — inconclusive — so the candidate it belonged
+  // to confirms nothing.
+  const deadline = now() + PROBE_BUDGET_MS;
+  let budgetSpent = false;
+  const outOfBudget = () => budgetSpent || (budgetSpent = now() > deadline);
   // Every git call here answers a question about a SPECIFIC directory — a candidate cwd, or one of
   // the main roots — never about the process's own cwd, for the same reason `gitOutput`'s callers
   // always pass one explicitly: this report can run from anywhere.
+  const call = (args, cwd) => {
+    if (outOfBudget()) throw new Error(`clone probe budget of ${PROBE_BUDGET_MS} ms spent`);
+    return git(args, cwd);
+  };
   const safeGit = (args, cwd) => {
-    try { return git(args, cwd); } catch { return null; } // Inconclusive, not fatal — see the doc comment above.
+    try { return call(args, cwd); } catch { return null; } // Inconclusive, not fatal — see the doc comment above.
   };
   const rootCommitsOf = cwd => {
     const out = safeGit(["rev-list", "--max-parents=0", "HEAD"], cwd);
@@ -708,16 +733,19 @@ export function withConfirmedCloneRoots(cwds, roots, { git = gitOutput } = {}) {
    * treat that as unconfirmable, never as an absent remote (#5c — a failed `get-url` used to read
    * as `null`, which the old gate treated exactly like "no remote configured" and confirmed the
    * candidate anyway). A push read that fails while the fetch read succeeded is just as
-   * inconclusive: the url it could not read is where a fork would hide.
+   * inconclusive: the url it could not read is where a fork would hide. More remote names than
+   * `maxRemotes` is inconclusive too, with `tooManyRemotes: true`, decided from the listing alone,
+   * before any url is read.
    */
-  const networkRemotesOf = (cwd, urlReads) => {
+  const networkRemotesOf = (cwd, urlReads, maxRemotes = Infinity) => {
     let names;
     try {
-      const out = git(["remote"], cwd);
+      const out = call(["remote"], cwd);
       names = out ? out.split(/\r?\n/).map(s => s.trim()).filter(Boolean) : [];
     } catch {
       return { everyUrl: new Set(), fetchUrls: new Set(), inconclusive: true };
     }
+    if (names.length > maxRemotes) return { everyUrl: new Set(), fetchUrls: new Set(), inconclusive: true, tooManyRemotes: true };
     const network = rawUrl => (isLocalPathRemote(rawUrl) ? null : normalizeRemoteUrl(rawUrl));
     const everyUrl = new Set();
     const fetchUrls = new Set();
@@ -725,7 +753,7 @@ export function withConfirmedCloneRoots(cwds, roots, { git = gitOutput } = {}) {
       let reads;
       try {
         reads = urlReads.map(flags =>
-          git(["remote", "get-url", ...flags, name], cwd).split(/\r?\n/).map(u => u.trim()).filter(Boolean));
+          call(["remote", "get-url", ...flags, name], cwd).split(/\r?\n/).map(u => u.trim()).filter(Boolean));
       } catch {
         return { everyUrl: new Set(), fetchUrls: new Set(), inconclusive: true };
       }
@@ -753,27 +781,30 @@ export function withConfirmedCloneRoots(cwds, roots, { git = gitOutput } = {}) {
   }
 
   const confirmed = new Map();
-  for (const cwd of probeList) {
+  let tooManyRemotes = 0;
+  const probe = cwd => {
     // Gates "is this even a repo git can see", and names the repository whose remotes and history
     // are checked below. It is NOT what gets folded in — the cwd is (see Returns above).
     const toplevel = safeGit(["rev-parse", "--show-toplevel"], cwd);
-    if (!toplevel) continue;
+    if (!toplevel) return;
     const resolvedTop = path.resolve(toplevel);
 
-    const { everyUrl, fetchUrls, inconclusive } = networkRemotesOf(resolvedTop, CANDIDATE_URL_READS);
-    if (inconclusive) continue; // #5c: fails closed — not "no remote", just unconfirmable.
+    const remotes = networkRemotesOf(resolvedTop, CANDIDATE_URL_READS, MAX_REMOTES_PER_CANDIDATE);
+    const { everyUrl, fetchUrls, inconclusive } = remotes;
+    if (remotes.tooManyRemotes) tooManyRemotes++;
+    if (inconclusive) return; // #5c: fails closed — not "no remote", just unconfirmable.
 
     // Rule (A), the VETO, checked FIRST so it binds both paths below: ANY network url — any fetch or
     // push url of any remote — matching none of main's makes this a different project, whatever
     // else it matches: a fork, a renamed derivative, a fork that also carries main's own URL as a
     // second remote, or a fork kept as one remote that fetches from main and pushes to itself.
-    if ([...everyUrl].some(r => !mainNetworkRemotes.has(r))) continue;
+    if ([...everyUrl].some(r => !mainNetworkRemotes.has(r))) return;
 
     // Path (a): a remote's FETCH url matching main is proof on its own, regardless of root commit —
     // but only a fetch url (see `networkRemotesOf`): a match on a push url or a later url is not.
     if ([...fetchUrls].some(r => mainNetworkRemotes.has(r))) {
       confirmed.set(cwd, resolvedTop);
-      continue;
+      return;
     }
 
     // Path (b): only a candidate whose fetch urls name no network project — local-path-only, or no
@@ -783,9 +814,46 @@ export function withConfirmedCloneRoots(cwds, roots, { git = gitOutput } = {}) {
     if (commits && mainRootCommits.size > 0 && [...commits].some(c => mainRootCommits.has(c))) {
       confirmed.set(cwd, resolvedTop);
     }
+  };
+
+  let probed = 0;
+  for (const cwd of probeList) {
+    if (outOfBudget()) break;
+    probe(cwd);
+    // The budget ran out part-way through this probe. The refused call left it unconfirmed — a probe
+    // confirms only after its last call has answered — so it counts as unprobed, like the rest.
+    if (budgetSpent) break;
+    probed++;
   }
 
-  return { confirmed, probed: probeList.length, capped };
+  return { confirmed, probed, capped: probed < distinct.length, budgetSpent, tooManyRemotes };
+}
+
+/**
+ * What the clone probe's bounds left unread this run, in the words both signal 4's caveat and
+ * main()'s NOTE print, so the two cannot drift apart. `probe` is main()'s `cloneProbe` —
+ * withConfirmedCloneRoots' counts plus `candidates`, how many distinct outside cwds there were. ""
+ * when no bound was hit (or no probing ran).
+ */
+export function describeCloneProbeLimits(probe) {
+  if (!probe) return "";
+  const out = [];
+  if (probe.capped) {
+    const unprobed = probe.candidates - probe.probed;
+    const why = probe.budgetSpent ? `its ${PROBE_BUDGET_MS / 1000} s time budget ran out` : `at ${MAX_CLONE_PROBES} candidates`;
+    out.push(
+      `CLONE CONFIRMATION CAPPED THIS RUN (${why}): only ${probe.probed} of ${probe.candidates} distinct outside ` +
+      `cwd(s) were checked (newest first) — capped: ${unprobed} candidate(s) unprobed, all OLDER than the ` +
+      "checked ones, left counted as outside without being checked."
+    );
+  }
+  if (probe.tooManyRemotes > 0) {
+    out.push(
+      `${probe.tooManyRemotes} checked cwd(s) listed more than ${MAX_REMOTES_PER_CANDIDATE} remotes and were left ` +
+      "unconfirmed, counted as outside, without their urls being read."
+    );
+  }
+  return out.join(" ");
 }
 
 /** The work status a TaskStatusChanged event landed on, or null when it cannot be read. */
@@ -1068,11 +1136,13 @@ export function summarize({
   // provenance, which describes the PRIMARY boundary, not this supplementary allowlist.
   cloneRoots = [],
   // The OUTCOME of main()'s `withConfirmedCloneRoots` probing pass this run — how many distinct
-  // outside cwds were actually checked, how many existed before `MAX_CLONE_PROBES` cut the list
-  // short, and whether it did. Disclosure only: it changes no signal's verdict, only the honesty of
-  // signal 4's caveat and `sources.cloneProbeCapped` in the JSON output. `null` (the default, and
-  // what every direct `summarize` caller — every test below — gets) means "no probing was run",
-  // which is simply not disclosed rather than reported as a cap that never happened.
+  // outside cwds were actually checked, how many there were in all (`candidates`), whether a bound
+  // left some unprobed (`capped`, with `budgetSpent` when it was the time budget), and how many
+  // were left inconclusive for listing too many remotes. Disclosure only: it changes no signal's
+  // verdict, only the honesty of signal 4's caveat and `sources.cloneProbe*` in the JSON output.
+  // `null` (the default, and what every direct `summarize` caller — every test below — gets) means
+  // "no probing was run", which is simply not disclosed rather than reported as a cap that never
+  // happened.
   cloneProbe = null,
   since = null,
   // `truncated` means HARMFULLY truncated — a full page whose oldest event is still inside the
@@ -1554,6 +1624,7 @@ export function summarize({
   // rather than duplicated per branch so an operator using --repo-root gets the same honesty about
   // what was and wasn't checked as the git-resolved path does.
   const cloneProbeCapped = Boolean(cloneProbe?.capped);
+  const cloneProbeLimits = describeCloneProbeLimits(cloneProbe);
   const cloneCaveat = repoRootSource === "fallback" ? "" :
     // A `git clone` of this SAME repo (not a `git worktree add`) has no ancestry link git can see,
     // so without this check it reads as outside and pure review/test traffic from a throwaway
@@ -1568,11 +1639,7 @@ export function summarize({
         "different project, and were folded in as inside, each exactly as recorded (never as a root " +
         `for the tree beneath it): ${confirmedCloneCwds.join(", ")}.`
       : "") +
-    (cloneProbeCapped
-      ? ` CLONE CONFIRMATION CAPPED THIS RUN: only ${cloneProbe.probed} of ${cloneProbe.candidates} ` +
-        "distinct outside cwd(s) were checked (newest first) — the rest, all OLDER, were left counted " +
-        "as outside without being checked."
-      : "") +
+    (cloneProbeLimits ? ` ${cloneProbeLimits}` : "") +
     // A no-remote clone is NOT in this list: it confirms fine via root commit alone (see
     // withConfirmedCloneRoots). What's left, honestly, is what root commit and remote together
     // cannot rule out, PLUS the deliberate fail-closed residual rule (A) accepts on purpose: a
@@ -1581,7 +1648,8 @@ export function summarize({
     // veto itself, because it is the one exclusion a reader could mistake for a bug: a fork whose
     // `upstream`, or whose own fetch url, matches this repository is outside on purpose.
     " A clone this check cannot confirm — its directory no longer exists, git is unavailable, a call " +
-    "exceeded GIT_TIMEOUT_MS, it was left unprobed by the cap above (and that includes a cwd INSIDE a " +
+    "exceeded GIT_TIMEOUT_MS, it listed more remotes than the check reads, it was left unprobed by " +
+    "the cap or the time budget above (and that includes a cwd INSIDE a " +
     "clone that was confirmed, or one that merely spells a confirmed cwd differently: a cwd is folded " +
     "in only when that exact cwd string was itself checked, never because it sits beneath, or " +
     "resembles, one that was), its remote listing or a remote's URL could not be read " +
@@ -1673,12 +1741,15 @@ export function summarize({
       activityCapped: capped.length > 0,
       repoRootTrusted: availability.repoRoot.ok,
       cloneProbeCapped,
-      // The full { probed, capped, candidates } main() measured this run, not just the boolean
-      // above — exposed so an operator (or a test) can see the actual counts without parsing them
-      // back out of caveat prose, which only mentions them at all when capped is true. `null` when
-      // no probing ran (cloneProbe was never passed in — every direct `summarize` caller not opting
-      // into it, e.g. every fixture-based test in this file).
-      cloneProbe: cloneProbe && { probed: cloneProbe.probed, capped: cloneProbeCapped, candidates: cloneProbe.candidates }
+      // The full { probed, capped, candidates, budgetSpent, tooManyRemotes } main() measured this
+      // run, not just the boolean above — exposed so an operator (or a test) can see the actual
+      // counts without parsing them back out of caveat prose, which only mentions them at all when a
+      // bound was hit. `null` when no probing ran (cloneProbe was never passed in — every direct
+      // `summarize` caller not opting into it, e.g. every fixture-based test in this file).
+      cloneProbe: cloneProbe && {
+        probed: cloneProbe.probed, capped: cloneProbeCapped, candidates: cloneProbe.candidates,
+        budgetSpent: Boolean(cloneProbe.budgetSpent), tooManyRemotes: cloneProbe.tooManyRemotes ?? 0
+      }
     },
     repoRoots: roots,
     repoRootSource,
@@ -2038,12 +2109,13 @@ async function main(argv) {
       // activity-page-capped project list from `fetchActivity`, used a few lines below in the
       // `summarize()` call) — a `const` this name would shadow only inside this block, harmlessly,
       // but a reader skimming past the shadow could easily mix the two up.
-      const { confirmed, probed, capped: cloneCapped } = withConfirmedCloneRoots(distinctOutsideCwds, repoRoots.slice(0, 1));
+      const { confirmed, probed, capped: cloneCapped, budgetSpent, tooManyRemotes } =
+        withConfirmedCloneRoots(distinctOutsideCwds, repoRoots.slice(0, 1));
       // The confirmed CWDS — the map's keys — never the toplevels they resolved to: a toplevel as a
       // prefix root also covers a nested repository the check rejected, and misses a cwd reached
       // through a junction (see withConfirmedCloneRoots's Returns, and the note at signal 4).
       cloneRoots = [...new Set(confirmed.keys())];
-      cloneProbe = { probed, capped: cloneCapped, candidates: distinctOutsideCwds.length };
+      cloneProbe = { probed, capped: cloneCapped, candidates: distinctOutsideCwds.length, budgetSpent, tooManyRemotes };
       if (confirmed.size > 0) {
         // Lists exactly the cwd strings signal 4 folds in — it folds in by exact string — so this
         // NOTE and the scoring cannot disagree, as they did when it listed toplevels: a clone reached
@@ -2055,13 +2127,9 @@ async function main(argv) {
           `different project — folded into signal 4 as inside, each exactly as recorded: ${cloneRoots.join(", ")}\n`
         );
       }
-      if (cloneCapped) {
-        console.error(
-          `NOTE: clone confirmation checked only ${probed} of ${distinctOutsideCwds.length} distinct outside ` +
-          "cwd(s) this run (capped, newest first) — the rest, all OLDER, were left counted as outside " +
-          "without being checked.\n"
-        );
-      }
+      // The same words signal 4's caveat carries (see describeCloneProbeLimits).
+      const limits = describeCloneProbeLimits(cloneProbe);
+      if (limits) console.error(`NOTE: ${limits}\n`);
     }
   }
 

@@ -1269,6 +1269,86 @@ test("clone confirmation is bounded — a large distinct-cwd count is capped, no
   assert.ok(confirmed.size <= probed);
 });
 
+test("a candidate listing MORE than 16 remotes is left inconclusive before any of its urls is read — 16 are still read", () => {
+  // MAX_CLONE_PROBES caps directories, not the remotes behind one: a single logged cwd can name a
+  // repository with any number of remotes, at two `get-url` reads each. Past 16, the candidate fails
+  // closed from its `git remote` listing alone.
+  const mainRoot = path.resolve("C:\\real\\KanbanFlow-v2");
+  const MAIN = "https://github.com/joel/kanbanflow-v2.git";
+  // Every remote names this repository, so without the bound each candidate would confirm.
+  const withRemotes = (cwd, n) => {
+    const t = {
+      "rev-parse --show-toplevel": cwd, "rev-list --max-parents=0 HEAD": "aaa111",
+      "remote": Array.from({ length: n }, (_, i) => `r${i}`).join("\n")
+    };
+    for (let i = 0; i < n; i++) t[`remote get-url r${i}`] = MAIN;
+    return t;
+  };
+  const seventeen = path.resolve("C:\\scratch\\seventeen-remotes");
+  const sixteen = path.resolve("C:\\scratch\\sixteen-remotes");
+  const fake = fakeGitByCwd({
+    [mainRoot]: { "remote": "origin", "rev-list --max-parents=0 HEAD": "aaa111", "remote get-url origin": MAIN },
+    [seventeen]: withRemotes(seventeen, 17),
+    [sixteen]: withRemotes(sixteen, 16)
+  });
+  const urlReads = new Map();
+  const git = (args, cwd) => {
+    if (args[0] === "remote" && args[1] === "get-url") urlReads.set(cwd, (urlReads.get(cwd) ?? 0) + 1);
+    return fake(args, cwd);
+  };
+  const result = withConfirmedCloneRoots([seventeen, sixteen], [mainRoot], { git });
+  assert.deepEqual([...result.confirmed.keys()], [sixteen], "17 remotes: inconclusive, so outside; 16: read and confirmed");
+  assert.equal(urlReads.get(seventeen) ?? 0, 0, "not one url of the 17-remote candidate was read");
+  assert.equal(urlReads.get(sixteen), 32, "16 remotes, two reads each");
+  assert.equal(result.tooManyRemotes, 1);
+  assert.equal(result.probed, 2, "both were probed; the 17-remote one ended at its listing");
+  const s4 = find(summarize({
+    rows: [row({ session: "many", cwd: seventeen })], repoRoots: [mainRoot], repoRootSource: "git",
+    cloneRoots: [...result.confirmed.keys()],
+    cloneProbe: { ...result, confirmed: undefined, candidates: 2 }
+  }), 4);
+  assert.equal(s4.detail.length, 1, "the 17-remote candidate counts as outside");
+  assert.match(s4.caveat, /1 checked cwd\(s\) listed more than 16 remotes/);
+});
+
+test("the probe pass has a 60 s budget — once it is spent the pass stops, the rest stay outside, and the caveat says so", () => {
+  // A cwd on a hung mount makes each git call wait out GIT_TIMEOUT_MS, and fifty such cwds block the
+  // report for minutes before a single signal is computed. The clock is injected, so the deadline
+  // is exercised without waiting for it.
+  const mainRoot = path.resolve("C:\\real\\KanbanFlow-v2");
+  const MAIN = "https://github.com/joel/kanbanflow-v2.git";
+  const cands = Array.from({ length: 10 }, (_, i) => path.resolve(`C:\\scratch\\slow${i}`));
+  const table = { [mainRoot]: { "remote": "origin", "rev-list --max-parents=0 HEAD": "aaa111", "remote get-url origin": MAIN } };
+  for (const c of cands) table[c] = { "remote": "origin", "rev-parse --show-toplevel": c, "remote get-url origin": MAIN };
+  // Main's fingerprint takes 3 calls and each candidate 4 (all confirm on path (a)). The clock stands
+  // still for main and the first four candidates, then reads `later`.
+  const run = later => {
+    const fake = fakeGitByCwd(table);
+    let calls = 0;
+    const git = (args, cwd) => { calls++; return fake(args, cwd); };
+    const now = () => (calls >= 3 + 4 * 4 ? later : 0);
+    return { ...withConfirmedCloneRoots(cands, [mainRoot], { git, now }), calls };
+  };
+  const spent = run(60_001);
+  assert.equal(spent.budgetSpent, true);
+  assert.equal(spent.probed, 4);
+  assert.deepEqual([...spent.confirmed.keys()], cands.slice(0, 4), "what was probed before the deadline still counts");
+  assert.equal(spent.capped, true);
+  assert.equal(spent.calls, 3 + 4 * 4, "no git call was made once the budget was spent");
+  // Exactly on the deadline is still inside it, so the budget is 60 s, not less.
+  const onTime = run(60_000);
+  assert.equal(onTime.budgetSpent, false);
+  assert.equal(onTime.probed, 10);
+  const s4 = find(summarize({
+    rows: [row({ session: "late", cwd: cands[9] })], repoRoots: [mainRoot], repoRootSource: "git",
+    cloneRoots: [...spent.confirmed.keys()],
+    cloneProbe: { ...spent, confirmed: undefined, candidates: cands.length }
+  }), 4);
+  assert.match(s4.caveat, /CLONE CONFIRMATION CAPPED THIS RUN \(its 60 s time budget ran out\)/);
+  assert.match(s4.caveat, /capped: 6 candidate\(s\) unprobed/);
+  assert.equal(s4.detail.length, 1, "an unprobed candidate stays outside");
+});
+
 test("clone confirmation is skipped entirely with no roots — nothing to compare a clone against", () => {
   const { confirmed, probed, capped } = withConfirmedCloneRoots(["C:\\anything"], [], { git: () => { throw new Error("must not be called"); } });
   assert.equal(confirmed.size, 0);
@@ -1581,10 +1661,39 @@ test("CLI integration: --repo-root a separates a clone (b) from a different proj
     // Probe counts (probed/capped/candidates), threaded through cloneProbe into the JSON output —
     // only b and c were ever candidates; e was excluded (by --since, finding #2) before either was
     // probed, so the count is 2, not 3.
-    assert.deepEqual(summary.sources.cloneProbe, { probed: 2, capped: false, candidates: 2 });
+    assert.deepEqual(summary.sources.cloneProbe, { probed: 2, capped: false, candidates: 2, budgetSpent: false, tooManyRemotes: 0 });
     assert.equal(summary.sources.cloneProbeCapped, false);
   } finally {
     cleanup();
+  }
+});
+
+test("CLI integration: a checkout listing 17 remotes stays outside, and both the NOTE and the caveat say why", () => {
+  // Real git, the real CLI: the per-candidate remote bound, end to end. Every one of the 17 remotes
+  // names a's own URL, so the bound — not a veto — is what keeps this checkout outside.
+  const fx = buildInto(make => {
+    const a = make();
+    initRealRepo(a, "a.txt");
+    gitOutput(["remote", "add", "origin", "https://example.invalid/org/repo.git"], a);
+    const many = make();
+    gitOutput(["clone", "-q", a, many], a);
+    gitOutput(["remote", "set-url", "origin", "https://example.invalid/org/repo.git"], many);
+    for (let i = 1; i <= 16; i++) gitOutput(["remote", "add", `r${i}`, "https://example.invalid/org/repo.git"], many);
+    return { a, many, log: path.join(make(), "mcp-usage.jsonl") };
+  });
+  try {
+    assert.equal(gitOutput(["remote"], fx.many).split(/\r?\n/).length, 17, "fixture sanity: 17 remotes");
+    fs.writeFileSync(fx.log, JSON.stringify(row({ session: "many-remotes", cwd: fx.many, ts: "2026-09-15T00:00:00.000Z" })) + "\n");
+    const result = runCliJson(fx.log, fx.a);
+    assert.equal(result.status, 1, `expected INCOMPLETE (activity port is dead); got:\n${result.stdout}\n${result.stderr}`);
+    const summary = JSON.parse(result.stdout);
+    const s4 = summary.signals.find(s => s.id === 4);
+    assert.deepEqual(s4.detail.map(d => d.session), ["many-remotes"], "17 remotes: inconclusive, so outside");
+    assert.match(result.stderr, /NOTE: 1 checked cwd\(s\) listed more than 16 remotes/);
+    assert.match(s4.caveat, /1 checked cwd\(s\) listed more than 16 remotes/);
+    assert.equal(summary.sources.cloneProbe.tooManyRemotes, 1);
+  } finally {
+    fx.cleanup();
   }
 });
 
