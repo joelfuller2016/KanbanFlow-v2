@@ -639,8 +639,9 @@ public sealed class TestRunnerServiceCancellationTests
             .Concat(registeredLiterals.Where(l => !producedLiterals.Contains(l)))
             .ToList();
         Assert.True(dead.Count == 0,
-            $"registered but never produced by TestRunnerService.cs: {string.Join(", ", dead)}. Remove it, " +
-            "so the sweep accepts no fixture name this runner cannot create.");
+            $"registered but never produced by TestRunnerService.cs: {string.Join(", ", dead)}. Remove it: " +
+            "the sweep deletes every name the registry accepts, so an entry the runner never produces only " +
+            "widens what it would delete.");
 
         Assert.True(violations.Count == 0,
             "TestRunnerService.cs builds a name from runMarker that the sweep's registry does not cover: " +
@@ -858,9 +859,10 @@ public sealed class TestRunnerServiceCancellationTests
             {
                 response.Dispose();
                 cancelBeforeThrow?.Cancel();
+                // TaskCanceledException because that is what HttpClient throws when HttpClient.Timeout fires.
                 throw new TaskCanceledException(
-                    $"simulated: caller's token fired after {request.Method} {request.RequestUri} " +
-                    "committed server-side, before the response was read");
+                    $"simulated transport failure: the response to {request.Method} {request.RequestUri} " +
+                    "was lost after the server committed it, before it was read");
             }
 
             return response;

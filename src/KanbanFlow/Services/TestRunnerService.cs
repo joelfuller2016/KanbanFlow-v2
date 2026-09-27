@@ -1639,11 +1639,13 @@ public sealed class TestRunnerService(
     /// here can never reopen the race #541's review found (a cancellation landing WHILE a create is
     /// in flight, after CancellationToken.None already committed to sending it). The send and its
     /// caller's later read both still use <see cref="CancellationToken.None"/> unconditionally once
-    /// started: a send bound to <see cref="CancellationToken.None"/> never aborts its own request, so the
-    /// server's request token never fires on the caller's account, and the create completes with its id
-    /// read back. That holds whichever way the route saves. <c>POST /api/projects</c> and the feature
+    /// started: a send bound to <see cref="CancellationToken.None"/> is never aborted by the CALLER's
+    /// cancellation, so the caller cancelling can neither cut a create off part-way nor fire the server's
+    /// request token. That holds whichever way the route saves. <c>POST /api/projects</c> and the feature
     /// create save with no token at all; <c>POST /api/ideas</c>, promote and the task create pass the
     /// request's token into their save, and an abort of the request would cancel that save part-way.
+    /// <c>HttpClient.Timeout</c> or a transport failure can still end the request before its id is read,
+    /// which is exactly the window <see cref="SweepRunMarkerAsync"/> covers.
     /// </summary>
     /// <remarks>
     /// Without this pre-check (#541), a cancelled suite still closed its own race, but it
@@ -1727,8 +1729,8 @@ public sealed class TestRunnerService(
     /// <remarks>
     /// Every create POST below (project, feature, task) and its response read use
     /// <see cref="CancellationToken.None"/>, never <paramref name="ct"/>: a send bound to
-    /// <see cref="CancellationToken.None"/> never aborts its own request, so the server's request token
-    /// never fires on the caller's account and the create completes with its id read back, whichever way
+    /// <see cref="CancellationToken.None"/> is never aborted by the caller's cancellation, so the caller
+    /// cannot cut a create off part-way or fire the server's request token, whichever way
     /// the route saves (<c>POST /api/projects</c> and the feature create pass no token to their save,
     /// <c>ApiEndpoints.cs:492</c> and <c>:1034</c>; the task create passes the request's token). Racing
     /// <paramref name="ct"/> against a create only risked losing the id of a row the server may already
@@ -1748,9 +1750,10 @@ public sealed class TestRunnerService(
     internal async Task<(int ProjectId, int FeatureId, int TaskId)> CreateProjectFeatureTaskAsync(HttpClient http, string runMarker, CancellationToken ct)
     {
         // CancellationToken.None for each create POST below and its response read (independent review
-        // of this fix's first version): a send bound to CancellationToken.None never aborts its own
-        // request, so the caller's ct can no longer cut a create off part-way. Racing ct against the
-        // create meant its id could be lost while the row still landed — POST /api/projects
+        // of this fix's first version): a send bound to CancellationToken.None is never aborted by the
+        // caller's ct, so ct can no longer cut a create off part-way (HttpClient.Timeout or a transport
+        // failure still can, before the id is read: the window SweepRunMarkerAsync covers). Racing ct
+        // against the create meant its id could be lost while the row still landed — POST /api/projects
         // (ApiEndpoints.cs:492) saves with no token at all, so it commits regardless. Now
         // PostCreateAsync checks the caller's ct BEFORE each send, and the send and its read use
         // CancellationToken.None, so cancellation never abandons a create that has already started,
@@ -1877,10 +1880,12 @@ public sealed class TestRunnerService(
     ];
 
     /// <summary>
-    /// True when <paramref name="name"/> is EXACTLY the name of a project fixture this run created for
-    /// <paramref name="marker"/>: <see cref="NewName"/>'s <c>{prefix}-{marker}-{8 lowercase hex}</c> for a
-    /// prefix in <see cref="FixtureProjectPrefixes"/>, or <c>{marker} {literal}</c> for a literal in
-    /// <see cref="FixtureLiterals"/>, with nothing before or after it (ordinal). A real row that merely
+    /// True when <paramref name="name"/> is EXACTLY one of the names the sweep treats as a project
+    /// fixture's for <paramref name="marker"/>: <see cref="NewName"/>'s
+    /// <c>{prefix}-{marker}-{8 lowercase hex}</c> for a prefix in <see cref="FixtureProjectPrefixes"/>, or
+    /// <c>{marker} {literal}</c> for ANY literal in <see cref="FixtureLiterals"/> (only
+    /// <c>"{marker} to promote"</c> ever becomes a project's name, through promote, but every registered
+    /// literal is accepted), with nothing before or after it (ordinal). A real row that merely
     /// quotes a fixture's name ("Please rename Test-{marker}-a1b2c3d4 to something better"), or begins
     /// with one and goes on ("Test-{marker}-a1b2c3d4 notes"), is not one.
     /// </summary>
