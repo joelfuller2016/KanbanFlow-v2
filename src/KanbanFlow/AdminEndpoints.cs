@@ -331,13 +331,16 @@ public static class AdminEndpoints
         // a trivial (per-call unique) string through IEmbeddingService and reports the outcome +
         // resulting vector length. A unique string is used deliberately so the probe always exercises
         // the live provider — a cached constant would report a stale ok:true even after ZeroRouter
-        // went down. ALWAYS returns 200: when ZeroRouter is down/misconfigured it reports
-        // { ok: false, error } (fail-soft), so the probe itself proves the no-crash contract. url +
-        // model are surfaced for diagnostics (open-access: nothing is secret; the key is not echoed here).
+        // went down. For the same reason it goes through ProbeAsync, which skips the failure cooldown
+        // (#549): inside that window the probe still makes a real provider call and reports its real
+        // latency, and a success ends the cooldown at once. ALWAYS returns 200: when ZeroRouter is
+        // down/misconfigured it reports { ok: false, error } (fail-soft), so the probe itself proves
+        // the no-crash contract. url + model are surfaced for diagnostics (open-access: nothing is
+        // secret; the key is not echoed here).
         app.MapGet("/api/admin/embed-ping", async (IEmbeddingService embeddings, EmbeddingOptions options, CancellationToken ct) =>
         {
             var stopwatch = Stopwatch.StartNew();
-            var result = await embeddings.EmbedAsync($"embed-ping {Guid.NewGuid():N}", ct);
+            var result = await embeddings.ProbeAsync($"embed-ping {Guid.NewGuid():N}", ct);
             stopwatch.Stop();
 
             return Results.Ok(new

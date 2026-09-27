@@ -31,6 +31,14 @@ public sealed record EmbeddingOptions
     /// </summary>
     public const int DefaultMaxBatchSize = 256;
 
+    /// <summary>
+    /// Default failure cooldown (#549). After a provider-level failure (unreachable, timed out, or a
+    /// 5xx) embedding calls fail soft without calling the provider for this long, so a down ZeroRouter
+    /// costs one slow call per window instead of one per memory search; override via
+    /// <c>KANBANFLOW_EMBED_COOLDOWN_MS</c>.
+    /// </summary>
+    public const int DefaultFailureCooldownMs = 30_000;
+
     /// <summary>OpenAI-compatible base URL (includes <c>/v1</c>); shared with <see cref="LlmOptions"/>.</summary>
     public string BaseUrl { get; init; } = LlmOptions.DefaultBaseUrl;
 
@@ -55,6 +63,12 @@ public sealed record EmbeddingOptions
     public int MaxBatchSize { get; init; } = DefaultMaxBatchSize;
 
     /// <summary>
+    /// Failure cooldown, in milliseconds (see <see cref="DefaultFailureCooldownMs"/>). <c>0</c> disables
+    /// it, so every call goes to the provider as before #549.
+    /// </summary>
+    public int FailureCooldownMs { get; init; } = DefaultFailureCooldownMs;
+
+    /// <summary>
     /// Build options from environment variables, falling back to the <c>Default*</c> constants.
     /// URL / key / timeout are bound by <see cref="LlmOptions.FromEnvironment"/> (so embeddings and
     /// chat always agree on the endpoint), then these embedding-specific vars are layered on:
@@ -62,6 +76,7 @@ public sealed record EmbeddingOptions
     ///   <item><description>Model: <c>KANBANFLOW_EMBED_MODEL</c></description></item>
     ///   <item><description>Dimensions (optional, &gt; 0): <c>KANBANFLOW_EMBED_DIMENSIONS</c></description></item>
     ///   <item><description>Batch cap (optional, &gt; 0): <c>KANBANFLOW_EMBED_BATCH_SIZE</c></description></item>
+    ///   <item><description>Failure cooldown in ms (optional, &gt;= 0; 0 disables): <c>KANBANFLOW_EMBED_COOLDOWN_MS</c></description></item>
     /// </list>
     /// <paramref name="getEnv"/> is injected (rather than reading <see cref="Environment"/> directly)
     /// so the binding is unit-testable without mutating shared process state.
@@ -103,6 +118,16 @@ public sealed record EmbeddingOptions
             && batchSize > 0)
         {
             options = options with { MaxBatchSize = batchSize };
+        }
+
+        // Unlike dimensions and batch size above, 0 is a real setting here (it disables the cooldown),
+        // so only a negative or unparseable value falls back to the default.
+        var rawCooldown = Read("KANBANFLOW_EMBED_COOLDOWN_MS");
+        if (rawCooldown is not null
+            && int.TryParse(rawCooldown, NumberStyles.Integer, CultureInfo.InvariantCulture, out var cooldownMs)
+            && cooldownMs >= 0)
+        {
+            options = options with { FailureCooldownMs = cooldownMs };
         }
 
         return options;

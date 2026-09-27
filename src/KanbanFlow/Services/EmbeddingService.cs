@@ -11,16 +11,18 @@ namespace KanbanFlow.Services;
 /// <c>IEmbeddingGenerator&lt;string, Embedding&lt;float&gt;&gt;</c> (built from the OpenAI connector
 /// pointed at ZeroRouter — see <c>Program.cs</c>). It adds a content-hash cache (identical text is
 /// embedded once), batch dedup + provider-safe chunking, a per-attempt timeout with a single retry
-/// on transient transport failures, and maps any provider failure to a typed
-/// <see cref="EmbedResult"/> rather than throwing (#219). Stateless apart from the cache and
-/// thread-safe, so it is registered as a singleton.
+/// on transient transport failures, a failure cooldown so a down provider does not charge every call
+/// its full failure wait (#549), and maps any provider failure to a typed
+/// <see cref="EmbedResult"/> rather than throwing (#219). Stateless apart from the cache and the
+/// cooldown timestamp, and thread-safe, so it is registered as a singleton.
 /// </summary>
 public sealed class EmbeddingService : IEmbeddingService
 {
     // 1 initial attempt + 1 retry. The retry only fires for transient failures (see IsTransient).
     // Mirrors LlmClient's policy (#218) so chat + embeddings behave identically against a flaky
     // provider; the helper set (IsTransient/Describe/Unwrap) is duplicated rather than shared to
-    // keep #219 from refactoring the merged, tested #218 surface.
+    // keep #219 from refactoring the merged, tested #218 surface. The failure cooldown (#549) is
+    // embeddings-only; LlmClient keeps its own policy.
     private const int MaxAttempts = 2;
 
     /// <summary>Default cap on the number of cached vectors before oldest-first eviction kicks in.</summary>
@@ -30,9 +32,17 @@ public sealed class EmbeddingService : IEmbeddingService
     private readonly EmbeddingOptions _config;
     private readonly ILogger<EmbeddingService> _logger;
     // TimeProvider.System in production; a FakeTimeProvider in tests so the per-attempt timeout is
-    // deterministic rather than a wall-clock race the thread pool can lose under load (#262).
+    // deterministic rather than a wall-clock race the thread pool can lose under load (#262). Its
+    // monotonic timestamp is also the failure cooldown's clock (#549).
     private readonly TimeProvider _timeProvider;
     private readonly EmbeddingGenerationOptions? _generationOptions;
+
+    // Failure cooldown (#549): the _timeProvider.GetTimestamp() value until which provider calls are
+    // skipped because the provider was just unreachable, timed out or returned a 5xx; 0 = none. A
+    // monotonic timestamp rather than the wall clock, so a clock stepped by NTP or by hand can neither
+    // stretch the window nor cut it short. One long, read and written with Interlocked, so the hot
+    // path takes no lock.
+    private long _unavailableUntilTimestamp;
 
     // Bounded, thread-safe content-hash → (vector + provider-reported model) cache. The dictionary
     // keeps reads lock-free on the hot path; the parallel queue records insertion order so we can
@@ -50,7 +60,7 @@ public sealed class EmbeddingService : IEmbeddingService
     /// Production constructor used by DI.
     /// </summary>
     /// <param name="generator">Underlying embedding generator (the OpenAI connector pointed at ZeroRouter).</param>
-    /// <param name="config">Connection + model settings; <see cref="EmbeddingOptions.TimeoutMs"/> and <see cref="EmbeddingOptions.MaxBatchSize"/> must be &gt; 0.</param>
+    /// <param name="config">Connection + model settings; <see cref="EmbeddingOptions.TimeoutMs"/> and <see cref="EmbeddingOptions.MaxBatchSize"/> must be &gt; 0, <see cref="EmbeddingOptions.FailureCooldownMs"/> &gt;= 0.</param>
     /// <param name="logger">Logger for transient-retry and fail-soft diagnostics.</param>
     public EmbeddingService(
         IEmbeddingGenerator<string, Embedding<float>> generator,
@@ -62,7 +72,8 @@ public sealed class EmbeddingService : IEmbeddingService
 
     // Test seam (InternalsVisibleTo = KanbanFlow.Tests): lets a test pick a tiny cache capacity to
     // prove eviction is real without embedding thousands of strings, and supply a fake TimeProvider
-    // so the per-attempt timeout fires deterministically instead of racing the wall clock (#262).
+    // so the per-attempt timeout fires deterministically instead of racing the wall clock (#262) and
+    // the failure cooldown (#549) ends exactly when the test advances the clock past it.
     internal EmbeddingService(
         IEmbeddingGenerator<string, Embedding<float>> generator,
         EmbeddingOptions config,
@@ -90,11 +101,20 @@ public sealed class EmbeddingService : IEmbeddingService
             throw new ArgumentException("TimeoutMs must be greater than zero.", nameof(config));
         if (config.MaxBatchSize <= 0)
             throw new ArgumentException("MaxBatchSize must be greater than zero.", nameof(config));
+        if (config.FailureCooldownMs < 0)
+            throw new ArgumentException("FailureCooldownMs must not be negative.", nameof(config));
         return config;
     }
 
     /// <inheritdoc />
-    public async Task<EmbedResult> EmbedAsync(string text, CancellationToken ct = default)
+    public Task<EmbedResult> EmbedAsync(string text, CancellationToken ct = default) =>
+        EmbedCoreAsync(text, bypassCooldown: false, ct);
+
+    /// <inheritdoc />
+    public Task<EmbedResult> ProbeAsync(string text, CancellationToken ct = default) =>
+        EmbedCoreAsync(text, bypassCooldown: true, ct);
+
+    private async Task<EmbedResult> EmbedCoreAsync(string text, bool bypassCooldown, CancellationToken ct)
     {
         // Reject blank input locally (fail fast) rather than wasting a remote no-op on empty text —
         // mirrors LlmClient's user-prompt guard.
@@ -106,6 +126,12 @@ public sealed class EmbeddingService : IEmbeddingService
             // Return the provider-reported model the hit was stored with (consistent with a fresh
             // result) and a defensive copy so the caller can't mutate the cached array.
             return EmbedResult.Success(Clone(cached.Vector), cached.Model);
+
+        // Inside the failure cooldown the provider was just seen down: fail soft now rather than pay
+        // the same refused-connect or timeout wait again (#549). The probe skips this check so
+        // embed-ping always reports live provider state.
+        if (!bypassCooldown && CooldownError() is { } coolingDown)
+            return EmbedResult.Failure(coolingDown, _config.Model);
 
         var outcome = await GenerateAsync(new[] { text }, ct).ConfigureAwait(false);
         if (!outcome.Ok)
@@ -172,6 +198,16 @@ public sealed class EmbeddingService : IEmbeddingService
         for (var start = 0; start < missOrder.Count; start += _config.MaxBatchSize)
         {
             var chunkKeys = missOrder.GetRange(start, Math.Min(_config.MaxBatchSize, missOrder.Count - start));
+
+            // Inside the failure cooldown (#549) the chunk fails soft without a provider call. Checked
+            // per chunk, so a chunk whose failure starts the cooldown spares the chunks after it.
+            if (CooldownError() is { } coolingDown)
+            {
+                foreach (var chunkKey in chunkKeys)
+                    errorByKey[chunkKey] = coolingDown;
+                continue;
+            }
+
             var chunkTexts = new string[chunkKeys.Count];
             for (var j = 0; j < chunkKeys.Count; j++)
                 chunkTexts[j] = missTextByKey[chunkKeys[j]];
@@ -248,6 +284,10 @@ public sealed class EmbeddingService : IEmbeddingService
                     vectors[i] = generated[i].Vector.ToArray();
                     model ??= generated[i].ModelId;
                 }
+
+                // Any success proves the provider is back, so end a running failure cooldown now
+                // rather than when it expires (#549); this is how a successful embed-ping clears it.
+                Interlocked.Exchange(ref _unavailableUntilTimestamp, 0);
                 return GenerateOutcome.Succeed(vectors, model ?? _config.Model);
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested)
@@ -266,6 +306,10 @@ public sealed class EmbeddingService : IEmbeddingService
             {
                 // Non-transient, or the final attempt failed: fail soft with a typed result.
                 _logger.LogWarning(ex, "Embedding failed (model {Model}); returning fail-soft result.", _config.Model);
+                // A provider that could not be reached or could not serve starts the failure cooldown,
+                // so the calls behind this one fail fast instead of each paying the same wait (#549).
+                if (IsProviderUnavailable(ex))
+                    StartCooldown();
                 return GenerateOutcome.Fail(Describe(ex), _config.Model);
             }
         }
@@ -307,6 +351,45 @@ public sealed class EmbeddingService : IEmbeddingService
     private static float[] Clone(float[] vector) => (float[])vector.Clone();
 
     /// <summary>
+    /// Start (or extend) the failure cooldown after a provider-unavailable failure (#549): until it
+    /// ends, <see cref="EmbedAsync"/> and <see cref="EmbedBatchAsync"/> fail soft without calling the
+    /// provider. Logged once per window, not per call: a failure that lands inside a window already
+    /// running (a concurrent call, or the probe) extends it silently.
+    /// </summary>
+    private void StartCooldown()
+    {
+        if (_config.FailureCooldownMs == 0)
+            return; // disabled: every call goes to the provider, as before #549
+
+        // The deadline is on the monotonic timestamp; the wall clock only renders it for the log.
+        var now = _timeProvider.GetTimestamp();
+        var until = now + _config.FailureCooldownMs * _timeProvider.TimestampFrequency / 1000;
+        var previous = Interlocked.Exchange(ref _unavailableUntilTimestamp, until);
+        if (previous <= now)
+        {
+            _logger.LogWarning(
+                "Embedding provider unavailable; cooling down until {Until:O}. Embedding calls fail soft without calling the provider for {CooldownMs} ms.",
+                _timeProvider.GetUtcNow().AddMilliseconds(_config.FailureCooldownMs), _config.FailureCooldownMs);
+        }
+    }
+
+    /// <summary>
+    /// The fail-soft error for a call made inside the failure cooldown, which must not call the
+    /// provider, or <c>null</c> when no cooldown is running (#549). A lock-free read of one long.
+    /// </summary>
+    private string? CooldownError()
+    {
+        var until = Interlocked.Read(ref _unavailableUntilTimestamp);
+        var now = _timeProvider.GetTimestamp();
+        if (now >= until)
+            return null;
+
+        // Decided on the monotonic timestamp above; the wall clock only renders the end for the reader.
+        var endsAt = _timeProvider.GetUtcNow() + _timeProvider.GetElapsedTime(now, until);
+        return $"Embedding provider unavailable; cooling down until {endsAt:O}.";
+    }
+
+    /// <summary>
     /// Transient = worth a single retry: a request timeout, a raw transport exception, or a 5xx from
     /// the provider. NOT transient (fail fast): a 4xx (bad model / malformed request) and a
     /// <see cref="ClientResultException"/> with <c>Status == 0</c> (no HTTP response — connection
@@ -317,10 +400,25 @@ public sealed class EmbeddingService : IEmbeddingService
         HttpRequestException => true,
         // Our per-attempt timeout surfaces as a cancellation here (caller-cancel is caught earlier).
         OperationCanceledException => true,
+        // The SDK's own transport failure: a request that got no HTTP response, its
+        // HttpRequestException wrapped by the pipeline. It is what a refused connect to a down router
+        // really throws. Deliberately not retried: a retry doubles a refused-connect cost (~4 s on
+        // Windows) that the failure cooldown already bounds, so IsProviderUnavailable sends it there (#549).
+        ClientResultException { InnerException: HttpRequestException } => false,
         ClientResultException { Status: >= 500 } => true,
         ClientResultException => false,
         _ => false,
     };
+
+    /// <summary>
+    /// Provider-unavailable = the provider could not be reached or could not serve the request: every
+    /// transient failure (a transport failure, our timeout, a 5xx) plus the SDK's wrapped transport
+    /// failure, which <see cref="IsTransient"/> deliberately does not retry. Starts the failure
+    /// cooldown (#549). NOT unavailable: a 4xx or a local error, where the provider answered (or was
+    /// never the problem) and asking again is cheap.
+    /// </summary>
+    private static bool IsProviderUnavailable(Exception ex) =>
+        IsTransient(ex) || Unwrap(ex) is ClientResultException { InnerException: HttpRequestException };
 
     /// <summary>Human-readable, log-safe description of a provider failure for <see cref="EmbedResult.Error"/>.</summary>
     private static string Describe(Exception? ex) => (ex is null ? null : Unwrap(ex)) switch
