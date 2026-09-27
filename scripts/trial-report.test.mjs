@@ -72,6 +72,10 @@ const overrideEvent = (entityId, over = {}) => ({
 });
 const find = (summary, id) => summary.signals.find(s => s.id === id);
 const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), "kbf-trial-"));
+// git reports physical paths (`--show-toplevel` resolves a symlink or junction anywhere in the path),
+// and path.resolve does not. Real-git tests compare a git-reported path with a fixture path through
+// this, on BOTH sides, so a temp directory reached through a link still compares equal.
+const real = p => fs.realpathSync(p);
 
 // A `fetch` stand-in. Real shape: `.ok`, `.status`, `.json()` — the three things the production
 // code now checks, because a 500 with a JSON error body used to read as "no events".
@@ -1470,8 +1474,8 @@ test("withConfirmedCloneRoots really can drive git — root-commit-only, remote-
   try {
     const { confirmed, probed } = withConfirmedCloneRoots([b, c, d], [a]);
     assert.equal(probed, 3);
-    assert.equal(confirmed.get(b), path.resolve(b), "b: no remote at all, confirmed by shared root commit alone");
-    assert.equal(confirmed.get(d), path.resolve(d), "d: different root commit, confirmed by its matching remote alone");
+    assert.equal(real(confirmed.get(b)), real(b), "b: no remote at all, confirmed by shared root commit alone");
+    assert.equal(real(confirmed.get(d)), real(d), "d: different root commit, confirmed by its matching remote alone");
     assert.equal(confirmed.has(c), false, "c: different root commit AND different remote — genuinely a different project");
     assert.equal(confirmed.size, 2);
   } finally {
@@ -1538,7 +1542,7 @@ test("gitOutput scrubs a leaked GIT_DIR/GIT_INDEX_FILE — the answer is about c
       "a leaked GIT_DIR must be scrubbed before asking about b, not silently answer with a's history");
 
     const bToplevel = gitOutput(["rev-parse", "--show-toplevel"], b, { env: leakedGitDirEnv(a) });
-    assert.equal(path.resolve(bToplevel), path.resolve(b));
+    assert.equal(real(bToplevel), real(b));
   } finally {
     fs.rmSync(a, { recursive: true, force: true });
     fs.rmSync(b, { recursive: true, force: true });
@@ -1571,7 +1575,9 @@ test("resolveRepoRoots is not fooled by a leaked GIT_DIR either — same scrub, 
     const leakingGit = (args, cwd) => gitOutput(args, cwd, { env: leakedGitDirEnv(hook) });
     const { roots, source } = resolveRepoRoots(null, { cwd: a, git: leakingGit });
     assert.equal(source, "git");
-    assert.deepEqual(roots, [path.resolve(a)], "roots must reflect a, not the leaked hook repo");
+    // Normalized, then de-duplicated: through a link, --show-toplevel (physical) and the parent of
+    // --git-common-dir (resolved against the cwd as given) are two spellings of one directory.
+    assert.deepEqual([...new Set(roots.map(real))], [real(a)], "roots must reflect a, not the leaked hook repo");
   } finally {
     fs.rmSync(a, { recursive: true, force: true });
     fs.rmSync(hook, { recursive: true, force: true });
@@ -1848,7 +1854,7 @@ test("a repository NESTED inside a confirmed clone, and rejected on its own, sta
     gitOutput(["remote", "add", "origin", "https://example.invalid/other/thing.git"], nested);
     // Fixture sanity: git must see vendor-other as its OWN repository. A plain subdirectory of X would
     // rightly confirm through X, and this test would then prove nothing.
-    assert.equal(path.resolve(gitOutput(["rev-parse", "--show-toplevel"], nested)), path.resolve(nested));
+    assert.equal(real(gitOutput(["rev-parse", "--show-toplevel"], nested)), real(nested));
 
     const log = path.join(base, "mcp-usage.jsonl");
     fs.writeFileSync(log, [
@@ -1889,7 +1895,11 @@ test("a clone reached through a JUNCTION is scored inside, and the disclosure na
     assert.ok(fs.lstatSync(J).isSymbolicLink(), "J must be a junction, not a copy of X");
     // Fixture sanity: git resolves the junction, so J's toplevel is X — the shape that let a toplevel
     // fold-in miss the cwd the log actually recorded.
-    assert.equal(path.resolve(gitOutput(["rev-parse", "--show-toplevel"], J)), path.resolve(X));
+    const jTop = gitOutput(["rev-parse", "--show-toplevel"], J);
+    assert.equal(real(jTop), real(X));
+    // Physical paths on both sides would pass even if git reported J itself; the spelling it
+    // reports is what shows it resolved the junction.
+    assert.notEqual(path.resolve(jTop), path.resolve(J), "git reports the junction's target, not the junction");
 
     const log = path.join(base, "mcp-usage.jsonl");
     fs.writeFileSync(log, JSON.stringify(row({ session: "review-sandbox-via-junction", cwd: J, ts: "2026-09-15T10:00:00.000Z" })) + "\n");
