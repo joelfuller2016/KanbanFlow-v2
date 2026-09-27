@@ -1257,16 +1257,22 @@ test("clone confirmation FAILS CLOSED: a cwd git cannot examine stays counted as
   assert.equal(s4.detail.length, 1, "unconfirmed stays outside, exactly as before this check existed");
 });
 
-test("clone confirmation is bounded — a large distinct-cwd count is capped, not probed without limit", () => {
+test("clone confirmation is bounded — exactly the first 50 distinct cwds, in the order given, are probed", () => {
   const mainRoot = path.resolve("C:\\real\\KanbanFlow-v2");
   const many = Array.from({ length: 60 }, (_, i) => path.resolve(`C:\\scratch\\wt${i}`));
-  const table = { [mainRoot]: { "rev-list --max-parents=0 HEAD": "aaa111" } };
-  for (const c of many) table[c] = { "rev-parse --show-toplevel": c, "rev-list --max-parents=0 HEAD": "aaa111" };
+  // Every candidate is confirmable (no remote at all, and this repository's root commit), so each one
+  // left unconfirmed was left unprobed, not rejected: the confirmed set IS the probed set. Without a
+  // `remote` answer every candidate was inconclusive, and the old assertions held for any cap.
+  const table = { [mainRoot]: { "remote": "", "rev-list --max-parents=0 HEAD": "aaa111" } };
+  for (const c of many) table[c] = { "remote": "", "rev-parse --show-toplevel": c, "rev-list --max-parents=0 HEAD": "aaa111" };
 
   const { confirmed, probed, capped } = withConfirmedCloneRoots(many, [mainRoot], { git: fakeGitByCwd(table) });
+  // 50 is MAX_CLONE_PROBES, written out so a changed cap fails here instead of passing silently.
+  assert.equal(probed, 50);
   assert.equal(capped, true);
-  assert.ok(probed < many.length, "the cap must actually stop short of probing every distinct cwd");
-  assert.ok(confirmed.size <= probed);
+  // The FIRST 50 of the list: main() hands the candidates over newest first (selectCloneCandidates),
+  // so the cap drops the oldest.
+  assert.deepEqual([...confirmed.keys()], many.slice(0, 50));
 });
 
 test("a candidate listing MORE than 16 remotes is left inconclusive before any of its urls is read — 16 are still read", () => {
