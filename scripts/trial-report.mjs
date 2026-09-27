@@ -572,8 +572,8 @@ export function isLocalPathRemote(rawUrl) {
 
 // Hard cap on how many DISTINCT cwds `withConfirmedCloneRoots` will run git against. "Bounded" is
 // load-bearing, not a nicety: each candidate costs `rev-parse` + `remote` + TWO `get-url` calls per
-// configured remote (`--all` for every fetch URL and `--push --all` for every push URL; ordinarily
-// 1–2 remotes, but not fixed — every remote is checked, not only `origin`)
+// configured remote (`--all` for every `url` it is configured with, `--push --all` for every push
+// URL; ordinarily 1–2 remotes, but not fixed — every remote is checked, not only `origin`)
 // + at most one `rev-list`, each at GIT_TIMEOUT_MS, and this function is fed straight from the
 // usage log, a file this report does not control the size or contents of. This caps the number of
 // DISTINCT DIRECTORIES probed; it does not cap how many remotes any one of them may have — a
@@ -605,9 +605,10 @@ const MAX_CLONE_PROBES = 50;
  * only `origin`: a derivative can rename `origin` to anything and add its own under a different
  * name (`derivNoOrigin` in this repo's own test fixtures) — checking one fixed name would miss
  * exactly that. And every URL OF each remote is checked, not only its first: a fork kept as ONE
- * remote names this repository where a single `get-url` looks — the first fetch url — and the fork
- * where it does not: a push url (`set-url --push`, or a `pushInsteadOf` rewrite) or a second url
- * (`set-url --add`). Reading one url per remote confirmed both shapes as clones. See
+ * remote can name this repository where a single `get-url` looks — the first fetch url — and the
+ * fork where it does not: a push url (`set-url --push`, or a `pushInsteadOf` rewrite) or a second
+ * url (`set-url --add`). Reading one url per remote confirmed both of those shapes as clones (a
+ * fork kept as one remote that names ITSELF there, and pushes here, was vetoed even then). See
  * `CANDIDATE_URL_READS` for the reads, and for why the main root is read on its fetch url alone. A
  * candidate with local-path-only remotes, or none at all, has nothing to veto with, so root commit
  * alone still confirms it. The price, paid on purpose: a genuine clone that ALSO carries some other
@@ -623,10 +624,11 @@ const MAX_CLONE_PROBES = 50;
  * master, rather than being guessed into "the same repository". (If main's own remotes cannot be
  * read either, no network remote can ever match `mainNetworkRemotes` — empty — so any candidate
  * with a network remote of its own is vetoed and only a local-path-only or remote-less candidate
- * can still confirm.) None of this can ever make signal 4 MORE likely to hide genuine outside use
- * than master already does — this function only ever ADDS an entry to `confirmed`, and only on the
- * strongest proof available — PROVIDED the caller folds in exactly the cwds it confirmed and
- * nothing wider (see Returns).
+ * can still confirm.) What it confirms can still be wrong: a genuine clone of this repository that
+ * someone reuses for unrelated work is confirmed, and its sessions then score as inside. The
+ * safeguard is how little it confirms: it only ever ADDS an entry to `confirmed`, only on the
+ * strongest proof available, and leaves everything it cannot prove outside, as on master —
+ * PROVIDED the caller folds in exactly the cwds it confirmed and nothing wider (see Returns).
  *
  * Returns `{ confirmed, probed, capped }`: `confirmed` maps each proven cwd to the toplevel git
  * resolved it to, `probed` is how many distinct cwds were actually run through git, and `capped`
@@ -663,19 +665,22 @@ export function withConfirmedCloneRoots(cwds, roots, { git = gitOutput } = {}) {
 
   // Which `git remote get-url` reads each remote is judged on — the flags before the remote's name.
   // The FIRST read must be a fetch read: its first line is the remote's fetch url (with several
-  // `url`s, git fetches from the first and pushes to them all).
+  // `url`s, git fetches from the first; it pushes to them all only while no `pushurl` is set, and
+  // with one it pushes to the `pushurl` alone).
   //
-  // A CANDIDATE is read on EVERY url of every remote: `--all` lists every fetch url and
-  // `--push --all` every push url. One plain read answers with the first fetch url only, which is
-  // exactly where a fork kept as ONE remote names this repository; the fork itself sits in the push
-  // url (`set-url --push`, or a `pushInsteadOf` rewrite) or in a second url (`set-url --add`), and
-  // that single read confirmed both shapes as clones. git expands `insteadOf` in both reads and
-  // `pushInsteadOf` in the push one, so what is compared is what git itself would contact.
+  // A CANDIDATE is read on EVERY url of every remote: `--all` lists every `url` and `--push --all`
+  // every push url. One plain read answers with the first fetch url only, which is where a fork kept
+  // as ONE remote can name this repository while the fork itself sits in the push url (`set-url
+  // --push`, or a `pushInsteadOf` rewrite) or in a second url (`set-url --add`); that single read
+  // confirmed both shapes as clones. git expands `insteadOf` in both reads and `pushInsteadOf` in the
+  // push one, so each url is compared as git spells it after rewriting — and every one counts, even
+  // a url git would never contact (a second `url` while a `pushurl` pins pushes elsewhere: see
+  // `secondUrlPushPinned` in the tests), which fails closed.
   //
   // The MAIN root is read on its FETCH url alone — plain `get-url`. Its other urls and its push urls
-  // are places it pushes TO; counting them as its identity would let a checkout of its push target or
-  // of a mirror match it, confirming what this fingerprint never accepted before — the one direction
-  // a change here must not move anything.
+  // are never where it fetches from — at most where it pushes TO; counting them as its identity would
+  // let a checkout of its push target or of a mirror match it, confirming what this fingerprint never
+  // accepted before — the one direction a change here must not move anything.
   const CANDIDATE_URL_READS = [["--all"], ["--push", "--all"]];
   const MAIN_URL_READS = [[]];
 
@@ -1513,7 +1518,7 @@ export function summarize({
   // case-SENSITIVE NTFS directory, `cs\KF` and `cs\kf` are two different directories, and folding
   // in by a path comparison scored the rejected one as inside because its sibling was confirmed.
   // Exact strings lose nothing below the probe cap — candidates are de-duplicated and probed by
-  // exact string, so every spelling the log recorded is checked itself. What they cost, and the
+  // exact string, so every spelling signal 4 scores is checked itself. What they cost, and the
   // caveat says so: a cwd the cap left unchecked stays outside, even when it sits inside, or merely
   // re-spells, a cwd that was confirmed. And the caveat and the NOTE list these same strings, so the
   // disclosure and the scoring cannot disagree.
@@ -1547,8 +1552,8 @@ export function summarize({
     // cannot disagree.
     (confirmedCloneCwds.length > 0
       ? ` ${confirmedCloneCwds.length} outside cwd(s) were confirmed as separate clones of it (by a ` +
-        "remote's fetch URL matching this repository's own, with no fetch or push URL of any remote, " +
-        "under any remote name, naming anything else — or by sharing its initial commit), not a " +
+        "remote's fetch URL matching this repository's own, with no NETWORK fetch or push URL of any " +
+        "remote, under any remote name, naming anything else — or by sharing its initial commit), not a " +
         "different project, and were folded in as inside, each exactly as recorded (never as a root " +
         `for the tree beneath it): ${confirmedCloneCwds.join(", ")}.`
       : "") +
@@ -2034,8 +2039,8 @@ async function main(argv) {
         // through a junction was named here as folded in while signal 4 still scored its cwd outside.
         console.error(
           `NOTE: ${confirmed.size} of ${distinctOutsideCwds.length} outside cwd(s) confirmed (by a remote's fetch ` +
-          `URL matching this repository's own, with no fetch or push URL of any remote, under any remote name, ` +
-          `naming anything else — or by initial commit) as separate clones of this repository, not a ` +
+          `URL matching this repository's own, with no NETWORK fetch or push URL of any remote, under any remote ` +
+          `name, naming anything else — or by initial commit) as separate clones of this repository, not a ` +
           `different project — folded into signal 4 as inside, each exactly as recorded: ${cloneRoots.join(", ")}\n`
         );
       }

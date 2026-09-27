@@ -907,11 +907,12 @@ test("a match on a PUSH url or a later url is not proof — unrelated history th
 });
 
 test("the MAIN root is matched on its FETCH urls only — where main pushes, or mirrors to, is never proof of a clone", () => {
-  // git fetches from a remote's FIRST url only; a pushurl, and any url after the first, are places
-  // main PUSHES to. Counting those as main's identity would widen what a candidate can match: a
-  // checkout of main's push target, or of a mirror it pushes to, would be confirmed as a clone of
-  // this repository, which the fingerprint never accepted before. So main contributes its fetch
-  // urls alone, and a candidate whose only URL is either of those stays outside.
+  // git fetches from a remote's FIRST url only; a pushurl, and any url after the first, are never
+  // where main fetches from (a url after the first is pushed to only while no pushurl is set).
+  // Counting those as main's identity would widen what a candidate can match: a checkout of main's
+  // push target, or of a mirror it pushes to, would be confirmed as a clone of this repository,
+  // which the fingerprint never accepted before. So main contributes its fetch urls alone, and a
+  // candidate whose only URL is either of those stays outside.
   const MAIN = "https://github.com/joel/kanbanflow-v2.git";
   const PUSH_TARGET = "https://github.com/alice/kanbanflow-v2.git";
   const MIRROR = "https://mirror.example.invalid/joel/kanbanflow-v2.git";
@@ -1015,7 +1016,7 @@ function buildInto(build) {
   }
 }
 
-// Twenty-three real repositories covering every remote-classification shape rule (A) addresses, built
+// Twenty-four real repositories covering every remote-classification shape rule (A) addresses, built
 // fresh in os.tmpdir() every run, never read from a machine-specific fixture directory: this is the
 // same key an earlier version of this test read from one, self-contained now instead — this test
 // creates every repo itself, needs no external fixture directory, and works identically in any
@@ -1069,12 +1070,17 @@ function buildRuleAFixture() {
     // and the non-matching origin still vetoes — on the remote-match path, not only the root-commit one.
     const forkWithUpstream = cloneWithRemote("https://example.invalid/alice/repo.git");
     gitOutput(["remote", "add", "upstream", "https://example.invalid/org/repo.git"], forkWithUpstream);
-    // A fork kept as ONE remote, which a single `get-url` — the first fetch URL only — never sees:
+    // A fork kept as ONE remote. A single `get-url` reads the first fetch URL only; that misses the
+    // fork in triangular, secondUrl and pushInsteadOfFork, and catches it in the other two:
     //   triangular: fetches from a, pushes to the fork (`set-url --push`);
     //   secondUrl: a's URL first, the fork added as a second url (`set-url --add`), pushed to as well;
     //   reverseTriangular: fetches from the fork, pushes to a — caught by the fetch read, not the push;
     //   pushInsteadOfFork: one plain url, a's own, but `pushInsteadOf` rewrites every push to the
-    //     fork — git expands that for a push read, so the veto sees the fork where git would push.
+    //     fork — git expands that for a push read, so the veto sees the fork where git would push;
+    //   insteadOfFork: one plain url, a's own, but `insteadOf` rewrites it to the fork for fetch and
+    //     push alike — git expands that in every read, a plain one included, so every read sees the
+    //     fork. Its raw `remote.origin.url` still names a: read around git's rewriting, it would
+    //     confirm.
     const triangular = cloneWithRemote("https://example.invalid/org/repo.git");
     gitOutput(["remote", "set-url", "--push", "origin", "https://example.invalid/alice/repo.git"], triangular);
     const secondUrl = cloneWithRemote("https://example.invalid/org/repo.git");
@@ -1083,6 +1089,8 @@ function buildRuleAFixture() {
     gitOutput(["remote", "set-url", "--push", "origin", "https://example.invalid/org/repo.git"], reverseTriangular);
     const pushInsteadOfFork = cloneWithRemote("https://example.invalid/org/repo.git");
     gitOutput(["config", "url.https://example.invalid/alice/.pushInsteadOf", "https://example.invalid/org/"], pushInsteadOfFork);
+    const insteadOfFork = cloneWithRemote("https://example.invalid/org/repo.git");
+    gitOutput(["config", "url.https://example.invalid/alice/.insteadOf", "https://example.invalid/org/"], insteadOfFork);
     // EVERY url, not only the ones git would contact — a policy choice, locked in on purpose: the fork
     // is a second url that git neither fetches from (it fetches from the first url only) nor pushes to
     // (the pushurl pins pushes to a), and it still vetoes. A fork named anywhere in a remote's
@@ -1114,8 +1122,8 @@ function buildRuleAFixture() {
     return {
       a, localClone, fileUrlClone, sameRepoHttps, sameRepoScpNoUser, sameRepoSshPort, localClonePushesToA,
       forkHttps, forkIPv4, forkSingleLabel, forkSshAlias, aliasSpelledSameRepo, derivNoOrigin, forkWithUpstream,
-      triangular, secondUrl, reverseTriangular, pushInsteadOfFork, secondUrlPushPinned, mainSecondUrlOnly,
-      unrelated, unrelatedNoRemote, unrelatedPushesToA
+      triangular, secondUrl, reverseTriangular, pushInsteadOfFork, insteadOfFork, secondUrlPushPinned,
+      mainSecondUrlOnly, unrelated, unrelatedNoRemote, unrelatedPushesToA
     };
   });
 }
@@ -1129,8 +1137,8 @@ test("rule (A), rebuilt fresh in os.tmpdir(): the exact confirm/outside partitio
     const outsideKeys = [
       "forkHttps", "forkIPv4", "forkSingleLabel", "forkSshAlias", "aliasSpelledSameRepo",
       "derivNoOrigin", "forkWithUpstream", "triangular", "secondUrl", "reverseTriangular",
-      "pushInsteadOfFork", "secondUrlPushPinned", "mainSecondUrlOnly", "unrelated", "unrelatedNoRemote",
-      "unrelatedPushesToA"
+      "pushInsteadOfFork", "insteadOfFork", "secondUrlPushPinned", "mainSecondUrlOnly", "unrelated",
+      "unrelatedNoRemote", "unrelatedPushesToA"
     ];
     const candidates = [...confirmedKeys, ...outsideKeys].map(k => fx[k]);
     const { confirmed } = withConfirmedCloneRoots(candidates, [fx.a]);
@@ -1652,7 +1660,7 @@ test("a confirmed cwd folds in by its EXACT string — a sibling that differs on
   // and `cs\kf` are two different directories. A case-insensitive path comparison folded in the
   // rejected one because its sibling was confirmed, and the caveat — naming only the confirmed one —
   // then disagreed with the scoring. Exact string costs nothing below the probe cap: candidates are
-  // de-duplicated and probed by exact string, so every spelling the log recorded is checked itself.
+  // de-duplicated and probed by exact string, so every spelling signal 4 scores is checked itself.
   const mainRoot = path.resolve("C:\\real\\KanbanFlow-v2");
   const confirmedCwd = path.resolve("C:\\cs\\KF");
   const siblingCwd = path.resolve("C:\\cs\\kf");
