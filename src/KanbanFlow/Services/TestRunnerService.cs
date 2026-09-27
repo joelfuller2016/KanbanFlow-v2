@@ -1660,8 +1660,8 @@ public sealed class TestRunnerService(
     /// if the server is slow, before its own DELETE (another 10s ceiling). One check here, before ANY
     /// of them, is what stops the creates. The suite does not stop at once: <see cref="RunTest"/> still
     /// swallows each exception, so the remaining wrapped tests keep running, failing at their first token
-    /// check, until a create outside any <see cref="RunTest"/> wrapper throws out of the suite; none of them
-    /// sends another create.
+    /// check, until the suite ends; in the API suite, if ct fired before its scratch-project setup, that
+    /// setup's create throws out first. None of them sends another create.
     /// </remarks>
     private static Task<HttpResponseMessage> PostCreateAsync(HttpClient http, string route, object body, CancellationToken ct)
     {
