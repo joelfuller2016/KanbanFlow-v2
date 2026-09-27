@@ -1,6 +1,7 @@
 using System.ClientModel;
 using KanbanFlow.Services;
 using Microsoft.Extensions.AI;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Time.Testing;
 
@@ -28,13 +29,14 @@ public sealed class EmbeddingServiceTests
         IEmbeddingGenerator<string, Embedding<float>> generator,
         EmbeddingOptions? config = null,
         int? capacity = null,
-        TimeProvider? timeProvider = null)
+        TimeProvider? timeProvider = null,
+        ILogger<EmbeddingService>? logger = null)
     {
         config ??= new EmbeddingOptions { Model = "test-embed-model", TimeoutMs = 5_000 };
         // capacity 0 ⇒ the service falls back to its own DefaultCacheCapacity (EmbeddingService.cs:87),
         // so the default path stays identical without duplicating the constant here.
         return new EmbeddingService(
-            generator, config, NullLogger<EmbeddingService>.Instance,
+            generator, config, logger ?? NullLogger<EmbeddingService>.Instance,
             capacity ?? 0, timeProvider);
     }
 
@@ -481,6 +483,34 @@ public sealed class EmbeddingServiceTests
         var rearmed = await service.EmbedAsync("ping", CancellationToken.None);
         Assert.Contains("cooling down", rearmed.Error);            // the failed retry opened a new window
         Assert.Equal(2, fake.CallCount);
+    }
+
+    [Fact]
+    public async Task EmbedAsync_CooldownWarning_IsLoggedOncePerWindow()
+    {
+        // StartCooldown logs its "cooling down" warning only when a failure opens a NEW window. A
+        // failure inside a running window extends it silently: here a probe, the one call that still
+        // reaches the provider inside the window. A failure after the window has run out opens a new
+        // window and logs again.
+        var time = new FakeTimeProvider();
+        var logger = new CapturingLogger();
+        var fake = new FakeEmbeddingGenerator((_, _, _) => throw SdkTransportFailure());
+        var service = NewService(
+            fake,
+            new EmbeddingOptions { Model = "test-embed-model", TimeoutMs = 5_000, FailureCooldownMs = 10_000 },
+            timeProvider: time,
+            logger: logger);
+
+        await service.EmbedAsync("ping", CancellationToken.None);          // refused ⇒ the window opens
+        var probe = await service.ProbeAsync("probe", CancellationToken.None);
+        Assert.Contains("actively refused", probe.Error);                   // a real failure inside the window...
+        Assert.Equal(2, fake.CallCount);
+        Assert.Equal(1, logger.WarningsContaining("cooling down"));        // ...extended it without a second warning
+
+        time.Advance(TimeSpan.FromMilliseconds(10_001));                    // FailureCooldownMs + 1: the window has run out
+        await service.EmbedAsync("pong", CancellationToken.None);           // refused again ⇒ a new window
+        Assert.Equal(3, fake.CallCount);
+        Assert.Equal(2, logger.WarningsContaining("cooling down"));        // ...and one warning for it
     }
 
     [Fact]
@@ -1117,5 +1147,32 @@ public sealed class EmbeddingServiceTests
         }
 
         public void StepWallClock(TimeSpan by) => _utcNow += by;
+    }
+
+    /// <summary>
+    /// A logger that keeps every entry's level and formatted message, so a test can count what the
+    /// service logged. The repo has no logger-capture idiom (every other test passes
+    /// <see cref="NullLogger{T}"/>), so it lives here, next to the one test that needs it.
+    /// </summary>
+    private sealed class CapturingLogger : ILogger<EmbeddingService>
+    {
+        private readonly List<(LogLevel Level, string Message)> _entries = new();
+
+        public int WarningsContaining(string fragment)
+        {
+            lock (_entries)
+                return _entries.Count(e => e.Level == LogLevel.Warning && e.Message.Contains(fragment, StringComparison.Ordinal));
+        }
+
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(
+            LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
+        {
+            lock (_entries)
+                _entries.Add((logLevel, formatter(state, exception)));
+        }
     }
 }
