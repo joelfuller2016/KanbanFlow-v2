@@ -62,9 +62,13 @@ const GIT_TIMEOUT_MS = 5_000;
 // clone of the main root, and signal 4 would score REVERT on genuine outside use, the one outcome
 // its own header says a measurement must never produce from contaminated input. The same
 // contamination also affects `resolveRepoRoots` on unpatched master: run this script from a linked
-// worktree whose hook set `GIT_DIR`, `--show-toplevel` itself can resolve to a subdirectory under
-// that GIT_DIR instead of the actual working tree — a second, independent false-ADOPT path this
-// scrub closes as a side effect, not just the clone-confirmation one it was written for.
+// worktree whose hook set `GIT_DIR`, and `--show-toplevel` answers with the directory git was ASKED
+// FROM instead of the top of the working tree, because git takes the current directory as the top
+// when `GIT_DIR` is set without `GIT_WORK_TREE` (measured, same git: with `GIT_DIR=<repo>/.git`,
+// `git -C <repo>/scripts rev-parse --show-toplevel` returns `<repo>/scripts`). `resolveRepoRoots`
+// asks from this script's own directory, so roots[0] becomes `scripts/` rather than the checkout —
+// a second, independent false-ADOPT path this scrub closes as a side effect, not just the
+// clone-confirmation one it was written for.
 const GIT_ENV_SCRUB_KEYS = [
   "GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR",
   "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_NAMESPACE", "GIT_PREFIX"
@@ -428,6 +432,20 @@ export function isOutsideAllRoots(cwd, roots) {
 }
 
 /**
+ * True when `a` and `b` name the SAME directory: equality, never containment. Same path semantics
+ * as `isOutsideRepo` (see `pathFlavor`), so on win32 it ignores case, `\` versus `/`, and a
+ * trailing separator, since there those all spell one directory. An unrecorded path matches
+ * nothing. Signal 4 folds in a confirmed clone cwd with this rather than as a root, because what
+ * git confirmed is that one directory, not the tree under it (see the note at signal 4).
+ */
+export function isSamePath(a, b) {
+  if (typeof a !== "string" || a.length === 0) return false;
+  if (typeof b !== "string" || b.length === 0) return false;
+  const p = pathFlavor(a, b);
+  return p.relative(p.resolve(a), p.resolve(b)) === "";
+}
+
+/**
  * Run one git plumbing command against `cwd`, scrubbed of any inherited GIT_* override so the
  * ANSWER is actually about `cwd` (see GIT_ENV_SCRUB_KEYS above). Exported, and takes `env` as an
  * option, purely so a test can inject a contaminated environment (a fake `GIT_DIR`) without
@@ -582,18 +600,24 @@ const MAX_CLONE_PROBES = 50;
  * already maps those back to their main checkout), but a second, independent clone with no git-
  * level link to it, such as this review fleet's own `SCRATCH/kf` sandbox.
  *
- * VETO RULE (deliberate design decision, not an oversight): a candidate is confirmed by (a) ANY of
- * its network remotes normalizing to one of the main root's, which is proof on its own, or,
- * failing that, (b) a shared initial commit (`git rev-list --max-parents=0 HEAD`) — but ONLY when
- * NONE of the candidate's OTHER remotes name a network project that does NOT match. A fork or a
- * renamed derivative shares history with the original up to the point it diverged, so root commit
- * alone cannot tell it apart from a genuine clone — a candidate with a network remote pointing
- * anywhere else is a REAL, DIFFERENT project someone may be doing unrelated work in, and that
- * possibility VETOES the root-commit path entirely. Every remote is checked (`git remote`, then
- * `get-url` per name), not only `origin`: a derivative can rename `origin` to anything and add its
- * own under a different name (`derivNoOrigin` in this repo's own test fixtures) — checking one
- * fixed name would miss exactly that. A candidate with local-path-only remotes, or none at all,
- * has nothing to veto with, so root commit alone still confirms it.
+ * VETO RULE (deliberate design decision, not an oversight): a candidate with ANY network remote
+ * that matches none of the main root's is a DIFFERENT project, and is never confirmed, whatever
+ * else it matches. Only a candidate that survives that veto can be confirmed, by (a) a network
+ * remote normalizing to one of the main root's, which is proof on its own, or — when it has no
+ * network remote at all — (b) a shared initial commit (`git rev-list --max-parents=0 HEAD`). The
+ * veto binds BOTH paths. A fork or a renamed derivative shares history with the original up to
+ * the point it diverged, so root commit alone cannot tell it apart from a genuine clone; and the
+ * ordinary fork layout — `origin` the fork, `upstream` the original — carries a MATCHING remote
+ * as well, so a match alone cannot either: it shows the checkout knows this repository, not that
+ * it is it. (The veto used to run only after a match had already confirmed, so it guarded path
+ * (b) alone and such a fork was folded in as inside.) A candidate with a network remote pointing
+ * anywhere else is a REAL, DIFFERENT project someone may be doing unrelated work in. Every remote
+ * is checked (`git remote`, then `get-url` per name), not only `origin`: a derivative can rename
+ * `origin` to anything and add its own under a different name (`derivNoOrigin` in this repo's own
+ * test fixtures) — checking one fixed name would miss exactly that. A candidate with local-path-
+ * only remotes, or none at all, has nothing to veto with, so root commit alone still confirms it.
+ * The price, paid on purpose: a genuine clone that ALSO carries some other project's remote is
+ * vetoed too, and reads as outside exactly as it would on master.
  *
  * FAILS CLOSED ON PURPOSE, in every direction: an inconclusive remote check — `git remote` itself
  * fails, or any single named remote's `get-url` fails — is NOT read as "no remote" (that would let
@@ -605,12 +629,18 @@ const MAX_CLONE_PROBES = 50;
  * network remote can ever match `mainNetworkRemotes` — empty — so any candidate with a network remote of
  * its own is vetoed and only a local-path-only or remote-less candidate can still confirm.) None of
  * this can ever make signal 4 MORE likely to hide genuine outside use than master already does —
- * this function only ever ADDS an entry to `confirmed`, and only on the strongest proof available.
+ * this function only ever ADDS an entry to `confirmed`, and only on the strongest proof available
+ * — PROVIDED the caller folds in exactly the cwds it confirmed and nothing wider (see Returns).
  *
- * Returns `{ confirmed, probed, capped }`: `confirmed` maps each proven cwd to ITS OWN toplevel
- * (fold that in as an extra root — the cwd is trivially inside its own toplevel, so nothing about
- * `isOutsideRepo` itself needs to change), `probed` is how many distinct cwds were actually run
- * through git, and `capped` says whether `MAX_CLONE_PROBES` cut the list short.
+ * Returns `{ confirmed, probed, capped }`: `confirmed` maps each proven cwd to the toplevel git
+ * resolved it to, `probed` is how many distinct cwds were actually run through git, and `capped`
+ * says whether `MAX_CLONE_PROBES` cut the list short. What is proven is the KEY — that exact cwd —
+ * so the key is what a caller folds in, by exact path (`isSamePath`); the toplevel is context, never
+ * a root. It used to be folded in as an extra prefix root, which was wrong in both directions: a
+ * toplevel also covers any repository NESTED inside the clone's tree, which this function may just
+ * have REJECTED, so genuine outside use scored inside; and git resolves a junction or symlink, so a
+ * cwd reached through one has the link's TARGET as its toplevel — not a prefix of the cwd at all —
+ * and a confirmed clone scored outside while being reported as folded in.
  */
 export function withConfirmedCloneRoots(cwds, roots, { git = gitOutput } = {}) {
   const mainRoots = (Array.isArray(roots) ? roots : []).filter(r => typeof r === "string" && r.length > 0);
@@ -680,7 +710,8 @@ export function withConfirmedCloneRoots(cwds, roots, { git = gitOutput } = {}) {
 
   const confirmed = new Map();
   for (const cwd of probeList) {
-    // Gates "is this even a repo git can see" and, on success, IS the root to fold in.
+    // Gates "is this even a repo git can see", and names the repository whose remotes and history
+    // are checked below. It is NOT what gets folded in — the cwd is (see Returns above).
     const toplevel = safeGit(["rev-parse", "--show-toplevel"], cwd);
     if (!toplevel) continue;
     const resolvedTop = path.resolve(toplevel);
@@ -688,16 +719,19 @@ export function withConfirmedCloneRoots(cwds, roots, { git = gitOutput } = {}) {
     const { networkRemotes, inconclusive } = networkRemotesOf(resolvedTop);
     if (inconclusive) continue; // #5c: fails closed — not "no remote", just unconfirmable.
 
-    // Any network remote matching main is proof on its own, regardless of root commit.
+    // Rule (A), the VETO, checked FIRST so it binds both paths below: ANY network remote matching
+    // none of main's — a fork, a renamed derivative, or a fork that also carries main's own URL as
+    // a second remote — makes this a different project, whatever else it matches.
+    if ([...networkRemotes].some(r => !mainNetworkRemotes.has(r))) continue;
+
+    // Path (a): a network remote matching main is proof on its own, regardless of root commit.
     if ([...networkRemotes].some(r => mainNetworkRemotes.has(r))) {
       confirmed.set(cwd, resolvedTop);
       continue;
     }
 
-    // Rule (A): ANY OTHER network remote — a fork, a renamed derivative — VETOES the root-commit
-    // path. Only a candidate with local-path-only remotes, or none at all, reaches it.
-    if (networkRemotes.size > 0) continue;
-
+    // Path (b): only a candidate with NO network remote at all — local-path-only, or none — gets
+    // this far, so there is nothing to veto with and nothing to match; a shared root commit confirms.
     const commits = rootCommitsOf(resolvedTop);
     if (commits && mainRootCommits.size > 0 && [...commits].some(c => mainRootCommits.has(c))) {
       confirmed.set(cwd, resolvedTop);
@@ -981,8 +1015,10 @@ export function summarize({
   // Cwds that git has POSITIVELY confirmed (see `withConfirmedCloneRoots`) are separate clones of
   // one of `repoRoots`, not a different project — computed in main() (git and the log both live
   // there) and handed in as plain strings so `summarize` stays pure. Folded into signal 4's outside
-  // check only; it is not part of `roots`/`repoRootSource` provenance, which describes the PRIMARY
-  // boundary, not this supplementary allowlist.
+  // check only, and each by EXACT PATH (`isSamePath`), never as a prefix root: these are the proven
+  // cwds themselves, not the toplevels they resolved to (see signal 4 for why that matters; the
+  // parameter's name predates the distinction). It is not part of `roots`/`repoRootSource`
+  // provenance, which describes the PRIMARY boundary, not this supplementary allowlist.
   cloneRoots = [],
   // The OUTCOME of main()'s `withConfirmedCloneRoots` probing pass this run — how many distinct
   // outside cwds were actually checked, how many existed before `MAX_CLONE_PROBES` cut the list
@@ -1023,7 +1059,7 @@ export function summarize({
 
   const roots = (Array.isArray(repoRoots) ? repoRoots : repoRoot === undefined || repoRoot === null ? [] : [repoRoot])
     .filter(r => typeof r === "string" && r.length > 0);
-  const confirmedCloneRoots = (Array.isArray(cloneRoots) ? cloneRoots : []).filter(r => typeof r === "string" && r.length > 0);
+  const confirmedCloneCwds = (Array.isArray(cloneRoots) ? cloneRoots : []).filter(r => typeof r === "string" && r.length > 0);
 
   const allEvents = events.map(normalizeEvent);
 
@@ -1436,16 +1472,22 @@ export function summarize({
   }, ["activity", "activityComplete"]);
 
   // ── Signal 4: board consulted from outside KanbanFlow-v2/ ─────────────────────────────────
-  // `confirmedCloneRoots` counts as inside HERE ONLY — it is not part of `roots` itself, so it
-  // never affects `availability.repoRoot`/provenance, only which cwds this signal treats as inside.
-  const outsideRoots = [...roots, ...confirmedCloneRoots];
+  // A confirmed clone cwd counts as inside HERE ONLY — `confirmedCloneCwds` is not part of `roots`
+  // itself, so it never affects `availability.repoRoot`/provenance — and only AS ITSELF: a row is
+  // folded in when its cwd IS one of them (`isSamePath`), never because it sits somewhere beneath
+  // one. Folding in each confirmed cwd's toplevel as a prefix root, as this once did, scored a
+  // repository NESTED inside a confirmed clone as inside although the clone check had REJECTED it,
+  // and it missed a clone whose recorded cwd is a junction onto it, since git names the junction's
+  // target as the toplevel. What exact matching costs, and the caveat says so: a cwd the probe cap
+  // left unchecked stays outside even when it sits inside a clone that was confirmed.
   const outsideSessions = new Map();
   for (const row of windowRows) {
     // Successful calls only, for signal 1's reason: a call that never reached the board is not the
     // board being consulted from anywhere. Live, one dead-port session supplied 2 of the 5 calls
     // behind this signal's ADOPT.
     if (row.outcome !== "ok") continue;
-    if (!isOutsideAllRoots(row.cwd, outsideRoots)) continue;
+    if (!isOutsideAllRoots(row.cwd, roots)) continue;
+    if (confirmedCloneCwds.some(cwd => isSamePath(row.cwd, cwd))) continue;
     // All distinct cwds, for the same reason signal 1 collects them: this list is the evidence the
     // reader adjudicates on, and one session can call from several directories.
     const entry = outsideSessions.get(row.session) ?? { session: row.session, cwds: [], calls: 0 };
@@ -1462,13 +1504,14 @@ export function summarize({
   const cloneCaveat = repoRootSource === "fallback" ? "" :
     // A `git clone` of this SAME repo (not a `git worktree add`) has no ancestry link git can see,
     // so without this check it reads as outside and pure review/test traffic from a throwaway
-    // clone (e.g. a review fleet's own sandbox) scores as adopt evidence. `confirmedCloneRoots` is a
-    // count of distinct ROOTS (toplevels), not of cwds — two candidate cwds can resolve to the same
-    // clone's toplevel, so this number can be smaller than how many cwds were actually reclassified.
-    (confirmedCloneRoots.length > 0
-      ? ` ${confirmedCloneRoots.length} distinct root(s) that would otherwise read as outside were ` +
-        "confirmed as separate clones of it (by this repository's origin remote or its initial " +
-        `commit), not a different project, and were folded in as inside: ${confirmedCloneRoots.join(", ")}.`
+    // clone (e.g. a review fleet's own sandbox) scores as adopt evidence. The count and the list
+    // are of CWDS — exactly the directories the loop above folds in — never the clones' toplevels,
+    // so what this sentence names and what the signal scores cannot disagree.
+    (confirmedCloneCwds.length > 0
+      ? ` ${confirmedCloneCwds.length} outside cwd(s) were confirmed as separate clones of it (by a ` +
+        "network remote, under any remote name, matching any of this repository's own network " +
+        "remotes, or by sharing its initial commit), not a different project, and were folded in as " +
+        `inside, each by its exact path (never as a root for the tree beneath it): ${confirmedCloneCwds.join(", ")}.`
       : "") +
     (cloneProbeCapped
       ? ` CLONE CONFIRMATION CAPPED THIS RUN: only ${cloneProbe.probed} of ${cloneProbe.candidates} ` +
@@ -1479,15 +1522,22 @@ export function summarize({
     // withConfirmedCloneRoots). What's left, honestly, is what root commit and remote together
     // cannot rule out, PLUS the deliberate fail-closed residual rule (A) accepts on purpose: a
     // clone this check cannot POSITIVELY confirm still reads as outside, exactly as it would on
-    // master, rather than being guessed into "the same repository".
+    // master, rather than being guessed into "the same repository". The last sentence states the
+    // veto itself, because it is the one exclusion a reader could mistake for a bug: a fork whose
+    // `upstream` matches this repository is outside on purpose.
     " A clone this check cannot confirm — its directory no longer exists, git is unavailable, a call " +
-    "exceeded GIT_TIMEOUT_MS, it was left unprobed by the cap above, its remote listing or a remote's " +
-    "URL could not be read (an inconclusive check is never assumed to mean 'no remote'), or it is a " +
+    "exceeded GIT_TIMEOUT_MS, it was left unprobed by the cap above (and that includes a cwd INSIDE a " +
+    "clone that was confirmed: a cwd is folded in only when that exact cwd was itself checked, never " +
+    "because it sits beneath one that was), its remote listing or a remote's URL could not be read " +
+    "(an inconclusive check is never assumed to mean 'no remote'), or it is a " +
     "GENUINELY THE SAME REPOSITORY but reached via an alias, an IP literal, or another host-spelling " +
     "this check cannot resolve to a matching hostname (e.g. an SSH config alias, or GitHub's " +
     "ssh.github.com:443 endpoint) — still reads as outside, exactly as it would on master, so a " +
     "single outside session should be checked against its own cwd before being read as adoption " +
-    "evidence.";
+    "evidence. By design, a checkout with ANY network remote that matches none of this repository's " +
+    "reads as a different project even when another of its remotes does match: the ordinary fork " +
+    "layout (origin the fork, upstream this repository) stays outside as the fork it is, and so does " +
+    "a genuine clone that also carries some other project's remote.";
 
   const signal4 = gate({
     id: 4,
@@ -1925,22 +1975,26 @@ async function main(argv) {
       // to, via --git-common-dir — which is not necessarily this script's own directory tree; this
       // report must not run git AGAINST that second path just to fingerprint it. This costs nothing
       // in practice: linked worktrees of one repo share a single object store and .git/config, so
-      // repoRoots[0]'s origin remote and initial commit are the same ones repoRoots[1] would report.
+      // repoRoots[0]'s remotes and initial commit are the same ones repoRoots[1] would report.
       // Named `cloneCapped`, not `capped`: this function already has an OUTER `capped` (the
       // activity-page-capped project list from `fetchActivity`, used a few lines below in the
       // `summarize()` call) — a `const` this name would shadow only inside this block, harmlessly,
       // but a reader skimming past the shadow could easily mix the two up.
       const { confirmed, probed, capped: cloneCapped } = withConfirmedCloneRoots(distinctOutsideCwds, repoRoots.slice(0, 1));
-      cloneRoots = [...new Set(confirmed.values())];
+      // The confirmed CWDS — the map's keys — never the toplevels they resolved to: a toplevel as a
+      // prefix root also covers a nested repository the check rejected, and misses a cwd reached
+      // through a junction (see withConfirmedCloneRoots's Returns, and the note at signal 4).
+      cloneRoots = [...new Set(confirmed.keys())];
       cloneProbe = { probed, capped: cloneCapped, candidates: distinctOutsideCwds.length };
       if (confirmed.size > 0) {
-        // The numerator is `confirmed.size` (distinct CWDS confirmed), not `cloneRoots.length`
-        // (distinct ROOTS/toplevels) — two cwds can resolve to the same clone, which would otherwise
-        // silently under-report how many of the M candidates were actually confirmed.
+        // Lists exactly the cwds signal 4 folds in, so this NOTE and the scoring cannot disagree —
+        // as they did when it listed toplevels: a clone reached through a junction was named here
+        // as folded in while signal 4 still scored its cwd outside.
         console.error(
-          `NOTE: ${confirmed.size} of ${distinctOutsideCwds.length} outside cwd(s) confirmed (by origin ` +
-          `remote or initial commit) as separate clones of this repository, not a different project — ` +
-          `resolving to ${cloneRoots.length} distinct root(s), folded into signal 4 as inside: ${cloneRoots.join(", ")}\n`
+          `NOTE: ${confirmed.size} of ${distinctOutsideCwds.length} outside cwd(s) confirmed (by a network ` +
+          `remote, under any remote name, matching any of this repository's own, or by initial commit) as ` +
+          `separate clones of this repository, not a different project — folded into signal 4 as inside, ` +
+          `each by its exact path: ${cloneRoots.join(", ")}\n`
         );
       }
       if (cloneCapped) {
