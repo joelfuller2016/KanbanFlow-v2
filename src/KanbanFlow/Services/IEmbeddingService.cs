@@ -13,9 +13,9 @@ namespace KanbanFlow.Services;
 /// thrown. An embedding outage must not crash the app or break the (audited, #88) write path. The
 /// single exception is <em>caller</em> cancellation: a cancelled <see cref="CancellationToken"/>
 /// propagates as <see cref="OperationCanceledException"/> (honored, not swallowed into a result).
-/// A call that never reaches the provider is still returned for a cancelled token, as it was before
-/// the failure cooldown (#549): a cache hit, and a batch in which every element is a cache hit or
-/// blank, an empty batch included.</para>
+/// A call with nothing to send to the provider is still returned for a cancelled token, as it was
+/// before the failure cooldown (#549): a cache hit, and a batch in which every element is a cache
+/// hit or blank, an empty batch included.</para>
 /// </summary>
 public interface IEmbeddingService
 {
