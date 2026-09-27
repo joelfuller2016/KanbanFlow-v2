@@ -770,6 +770,33 @@ test("normalizeRemoteUrl folds scp WITHOUT a userinfo and an ssh:// port to the 
   assert.notEqual(normalizeRemoteUrl("ssh://git@ssh.github.com:443/x/y.git"), normalizeRemoteUrl("https://github.com/x/y.git"));
 });
 
+test("a NON-default port is another service, not a spelling — only the scheme's default port folds away", () => {
+  // The port used to be dropped from every `scheme://` URL, so https://host:8443/org/repo and
+  // https://host/org/repo shared a key, and a checkout of the service on 8443 matched this
+  // repository and was folded in as inside.
+  const plain = normalizeRemoteUrl("https://example.invalid/org/repo.git");
+  assert.notEqual(normalizeRemoteUrl("https://example.invalid:8443/org/repo.git"), plain, "8443 is not https's default port");
+  assert.notEqual(normalizeRemoteUrl("ssh://git@example.invalid:2222/org/repo.git"), plain, "2222 is not ssh's default port");
+  // The controls: a scheme's own default port is the same endpoint, spelled out.
+  assert.equal(normalizeRemoteUrl("https://example.invalid:443/org/repo.git"), plain, "443 is https's default");
+  assert.equal(normalizeRemoteUrl("ssh://git@example.invalid:22/org/repo.git"), plain, "22 is ssh's default");
+  assert.equal(normalizeRemoteUrl("http://example.invalid:80/org/repo.git"), normalizeRemoteUrl("http://example.invalid/org/repo.git"));
+  assert.equal(normalizeRemoteUrl("git://example.invalid:9418/org/repo.git"), normalizeRemoteUrl("git://example.invalid/org/repo.git"));
+
+  // End to end: the clone check reads the port the same way.
+  const mainRoot = path.resolve("C:\\real\\KanbanFlow-v2");
+  const otherPort = path.resolve("C:\\scratch\\port-8443");
+  const defaultPort = path.resolve("C:\\scratch\\port-443");
+  const candidate = (cwd, url) => ({ "remote": "origin", "rev-parse --show-toplevel": cwd, "rev-list --max-parents=0 HEAD": "aaa111", "remote get-url origin": url });
+  const git = fakeGitByCwd({
+    [mainRoot]: { "remote": "origin", "rev-list --max-parents=0 HEAD": "aaa111", "remote get-url origin": "https://example.invalid/org/repo.git" },
+    [otherPort]: candidate(otherPort, "https://example.invalid:8443/org/repo.git"),
+    [defaultPort]: candidate(defaultPort, "https://example.invalid:443/org/repo.git")
+  });
+  const { confirmed } = withConfirmedCloneRoots([otherPort, defaultPort], [mainRoot], { git });
+  assert.deepEqual([...confirmed.keys()], [defaultPort], "the :8443 checkout stays outside; the :443 one is this repository");
+});
+
 test("#5b: EVERY remote is checked, not only origin — a renamed origin plus a new network remote still vetoes", () => {
   // A derivative can rename `origin` to anything (here `upstream`, pointing back at the TRUE main
   // root) and add its OWN remote under a different name (`github`, a genuinely different project).

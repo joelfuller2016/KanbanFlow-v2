@@ -503,13 +503,21 @@ export function resolveRepoRoots(override, { cwd = process.cwd(), git = gitOutpu
   return { roots: [path.resolve(fallbackRoot ?? cwd)], source: "fallback" };
 }
 
+// The port each scheme uses when a URL names none. Only that port folds away: `https://h:443/o/r`
+// is `https://h/o/r` spelled out, while `https://h:8443/o/r` is another service on the same host,
+// and matching it would fold a different checkout in as this repository. A scheme not listed here
+// keeps any port it names, so its URLs match only when spelled the same way.
+const DEFAULT_PORTS = { ssh: 22, https: 443, http: 80, git: 9418 };
+
 /**
  * Normalize a git remote URL for same-repo comparison: lower-case, drop a trailing slash or
- * `.git`, and fold `https://host/owner/repo`, `ssh://git@host:port/owner/repo` and the SCP
+ * `.git`, and fold `https://host/owner/repo`, `ssh://git@host:22/owner/repo` and the SCP
  * shorthand `[user@]host:owner/repo` (git accepts it WITHOUT a userinfo too, e.g.
  * `example.invalid:org/repo`) to the same `host/owner/repo` key, so the only forms the clone check
- * below needs to tell apart are actually-different repos, not spelling. `null`/non-string in,
- * `null` out — a remote that could not be read is "cannot compare", never an accidental match.
+ * below needs to tell apart are actually-different repos, not spelling. A port is dropped only
+ * when it is its scheme's default (see `DEFAULT_PORTS`); any other port stays in the key.
+ * `null`/non-string in, `null` out — a remote that could not be read is "cannot compare", never an
+ * accidental match.
  *
  * `scheme://` is resolved FIRST, before the SCP check even runs: an scp host can be bare (no
  * userinfo), and testing scp first would misparse `https://…` as scp shorthand with host `https`.
@@ -520,11 +528,14 @@ export function resolveRepoRoots(override, { cwd = process.cwd(), git = gitOutpu
 export function normalizeRemoteUrl(url) {
   if (typeof url !== "string" || url.trim().length === 0) return null;
   const u = url.trim().toLowerCase().replace(/\/+$/, "").replace(/\.git$/, "");
-  if (/^[a-z][a-z0-9+.-]*:\/\//.test(u)) {
+  const scheme = u.match(/^([a-z][a-z0-9+.-]*):\/\//);
+  if (scheme) {
+    const defaultPort = DEFAULT_PORTS[scheme[1]];
     return u
-      .replace(/^[a-z][a-z0-9+.-]*:\/\//, "")   // strip the scheme
+      .slice(scheme[0].length)                   // strip the scheme
       .replace(/^[^/@]+@/, "")                   // strip userinfo, e.g. ssh://git@
-      .replace(/^([^/:]+):\d+(?=\/)/, "$1");     // strip a ssh://host:port's port, keep the host
+      // drop the port only when it is the scheme's default; any other port names another service
+      .replace(/^([^/:]+):(\d+)(?=\/)/, (hostPort, host, port) => (Number(port) === defaultPort ? host : hostPort));
   }
   const scp = u.match(/^(?:[a-z0-9._-]+@)?([a-z0-9.-]{2,}):(.+)$/);
   if (scp) return `${scp[1]}/${scp[2]}`;
