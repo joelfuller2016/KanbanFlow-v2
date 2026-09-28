@@ -52,6 +52,12 @@ A review of the repository and a test run on 2026-09-26 filed findings as issues
 
 ## Entries (newest first)
 
+- 2026-09-28 00:19Z lead: PR #566 gated and marked ready.
+  - Gates on head 596ac66bda82341f81401cd1b0133ca89cc1814c: node 323/323; scripts/verify.ps1 exit 0, build 0 warnings and 0 errors, xUnit 1207/1207. The live DB was untouched.
+  - The body was PATCHed with the Verification section and reads back IDENTICAL (6432 chars).
+  - Copilot review 5332806447: no findings ("Approval recommended").
+  - CodeRabbit: "Review rate limited" (the included plan limit; its comment says the next included review frees in 18 minutes, from 00:16:53Z). One `@coderabbitai review` request is queued for 00:36Z. The on-demand "Run this review for free" box stays unticked.
+  - #564: the implementer has two local commits past the PR head 3e063a0fdb479f747eaa36e27c458d5827e97de7: 31ad2f04202aefef46b7bf3725aede4d6d0e3253 and f8c93b5c08952fd4a6ac2271eb2d8fc1a8a96516, plus an uncommitted edit. They get pushed after its report, not while it is still working.
 - 2026-09-28 00:14Z lead: PR #566 opened as a DRAFT: "docs: add CLAUDE.md with the work-journal rule". Branch docs/claude-md-journal-rule, head 596ac66bda82341f81401cd1b0133ca89cc1814c, one file (31 lines).
   - Why: the instruction's last sentence, "Add this for all insutrctions". CLAUDE.md is the instruction file Claude Code loads, and the rule had lived only in this file's header. A non-journal file goes through a PR.
   - Left alone, with the reasons in the PR body: .github/copilot-instructions.md (written for the review bots) and the two .claude/skills files (board operations across projects, and pinned by scripts/portfolio-sync.test.mjs).
