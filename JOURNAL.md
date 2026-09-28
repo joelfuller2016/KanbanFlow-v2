@@ -52,6 +52,11 @@ A review of the repository and a test run on 2026-09-26 filed findings as issues
 
 ## Entries (newest first)
 
+- 2026-09-28 00:34Z lead: PR #564 (fixes #536) round 8 is implemented and pushed. The head is f8c93b5c08952fd4a6ac2271eb2d8fc1a8a96516, a fast-forward over 3e063a0fdb479f747eaa36e27c458d5827e97de7. The PR is still a draft.
+  - All 9 CodeRabbit findings from the review of 6957621 are fixed, in 8 commits. The implementation reports each group red on 6957621 and green on the head, and the trial-report tests at 169/169 with GIT_* stripped.
+  - The implementation's invariant against 6957621: 727,236 portless configurations are identical. On the port grid, the only changes are 73,130 removals, all through :8443, which is the intended fix for finding B.
+  - The implementation asked whether the environment scrub may move a clone inside. It may: the agreed property is that under any inherited git environment the result equals 6957621's clean-environment answer. So it stays as built.
+  - Next: the node and .NET gates on the head (running), then an independent review of 6957621..f8c93b5. After that come the description update and the replies to the 9 threads, and then the PR is marked ready.
 - 2026-09-28 00:30Z lead: PR #562 (fixes #541) final text posted; head 8474d6c79e57611d8faf694ffd94983f550b05ca is unchanged.
   - Body: the Verification section now holds the gate on the head: node 323/323; scripts/verify.ps1 exit 0, build 0 warnings and 0 errors, xUnit 1231/1231. CodeRabbit's summary block was re-attached. It reads back IDENTICAL (37049 chars).
   - Round-history comment 5861257638 posted: the evidence for rounds 1 to 4b, moved out of the body. It reads back IDENTICAL (29441 chars).
