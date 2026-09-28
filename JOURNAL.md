@@ -52,6 +52,20 @@ A review of the repository and a test run on 2026-09-26 filed findings as issues
 
 ## Entries (newest first)
 
+- 2026-09-28 01:28Z lead: SESSION PAUSED at the owner's request: "We are going to shut down so anythign you need to commit and push and create a PR do that, then clean up".
+  - Pushed before stopping: PR #564's round-8b fix, cd9f67be709bb01bb03cdd174242d7904eae327d ("scrub every inherited GIT_* variable, not a list"). It is a fast-forward over f8c93b5c08952fd4a6ac2271eb2d8fc1a8a96516.
+    - Gate on it: node 365/365; scripts/verify.ps1 exit 0, build 0 warnings and 0 errors, xUnit 1207/1207.
+    - The implementation's run shows its new tests failing against f8c93b5's code (3 of 169). It has not been independently reviewed yet, and PR comment 5861615150 says so.
+  - Nothing is left only on this machine. Every local branch's commits are on origin. The one exception is an old local review branch in the owner's clone, pr-506-review (5 commits, judged superseded earlier), which was left as it is.
+  - Every branch on origin other than master has a PR (8 open, 18 merged). The 80 archive/* branches are the triaged set, unchanged.
+  - Waiting on the owner: #562, #565, #566 and #560 are ready to merge. #564 stays a draft. Next: an independent review of cd9f67b, then the description update and the replies to its nine review threads.
+  - Cleanup:
+    - all 10 helper agents stopped;
+    - 27 scratch worktrees removed with git worktree remove, and one stale entry pruned; branch refs kept;
+    - local-only review files and one in-flight test mutant saved first to the workshop's gitignored backup, never pushed;
+    - 11 temp test folders and one stray directory junction removed.
+  - Left running on purpose: the app on port 5123, the PR #511 build that serves as the owner's board.
+  - To resume: read this journal, then the workshop HANDOFF.json.
 - 2026-09-28 01:04Z lead: PR #564: the reviewer's remaining checks on f8c93b5c08952fd4a6ac2271eb2d8fc1a8a96516 all pass.
   - Groups B to F each fail on 6957621 and pass on f8c93b5, in the reviewer's own runs.
   - Every absolute claim on the lines added this round checks out (40 of 40).
