@@ -52,6 +52,10 @@ A review of the repository and a test run on 2026-09-26 filed findings as issues
 
 ## Entries (newest first)
 
+- 2026-09-28 00:14Z lead: PR #566 opened as a DRAFT: "docs: add CLAUDE.md with the work-journal rule". Branch docs/claude-md-journal-rule, head 596ac66bda82341f81401cd1b0133ca89cc1814c, one file (31 lines).
+  - Why: the instruction's last sentence, "Add this for all insutrctions". CLAUDE.md is the instruction file Claude Code loads, and the rule had lived only in this file's header. A non-journal file goes through a PR.
+  - Left alone, with the reasons in the PR body: .github/copilot-instructions.md (written for the review bots) and the two .claude/skills files (board operations across projects, and pinned by scripts/portfolio-sync.test.mjs).
+  - Next: the node suite and scripts/verify.ps1 are running on the head. When both are green, fill Verification, mark the PR ready and run the bot review loop.
 - 2026-09-28 00:05Z lead: JOURNAL.md now lists entries NEWEST FIRST, so the first screen is the current state. The content is unchanged: every entry block is kept byte-for-byte, and the reorder script asserts that the set of blocks is equal before and after.
   - This corrects two phrases in the 23:55Z entry. The older entries are now BELOW it, not above. New entries are INSERTED at the top of Entries, not appended.
   - The day heading "### 2026-09-27: rebuild-and-run workshop (#560, #562, #563, #564, #565)" was dropped, since each entry carries its date. Every entry from 19:48Z to 23:55Z belongs to that workshop.
