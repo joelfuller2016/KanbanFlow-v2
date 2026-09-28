@@ -52,6 +52,15 @@ A review of the repository and a test run on 2026-09-26 filed findings as issues
 
 ## Entries (newest first)
 
+- 2026-09-28 UTC (scheduled PR monitor, third run): build gate DOWN — dotnet install blocked (403 egress policy); no merges.
+  - 7 open PRs: #565, #562, #560 (non-draft), #554 (known blocker), #564, #521, #511 (drafts, skipped).
+  - **#560** (fix/mcp-wrapper-stdin-eof-drain, head 835ffa1): CodeRabbit APPROVED on head; 2 review threads both resolved (is_outdated). Merge-ready pending build gate.
+  - **#562** (fix/test-runner-fixture-leak-on-cancel, head 8474d6c): CodeRabbit APPROVED on head; 7 review threads all resolved (is_outdated). Merge-ready pending build gate.
+  - **#565** (fix/embed-negative-cache, head a1c2f62): 2 Copilot threads both resolved by owner; no CodeRabbit review on current head yet (requested ~8h ago). Not merge-ready.
+  - **#554** (Dependabot OpenApi 2.12→3.10): NU1608 known upstream blocker. No action.
+  - PHASE 2: 0 unresolved review threads on any non-draft PR. Nothing to fix.
+  - master build+test: not run (build gate down).
+
 - 2026-09-28 UTC (scheduled PR monitor, second run): build gate DOWN again — dotnet install still blocked (403 from egress policy, builds.dotnet.microsoft.com unreachable); no merges.
   - 7 open PRs checked: #565, #562, #560 (non-draft), #554 (blocked upstream), #564, #521, #511 (drafts, skipped).
   - **#560** (fix/mcp-wrapper-stdin-eof-drain, head 835ffa1): CodeRabbit APPROVED on head, 0 unresolved threads. Merge-ready pending build gate.
