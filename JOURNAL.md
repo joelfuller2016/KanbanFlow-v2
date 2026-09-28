@@ -52,6 +52,9 @@ A review of the repository and a test run on 2026-09-26 filed findings as issues
 
 ## Entries (newest first)
 
+- 2026-09-28 00:36Z lead: PR #564's head f8c93b5c08952fd4a6ac2271eb2d8fc1a8a96516 was gated green: node 365/365; scripts/verify.ps1 exit 0, build 0 warnings and 0 errors, xUnit 1207/1207 (the same as master, since the PR changes no C#). The live DB and the tree were unchanged.
+  - The implementation has since measured the environment-scrub property for all 16 scrubbed variables (its own measurement; 9 rows can fail, 7 are inert). The reviewer was told to measure it with its own harness first and then compare row by row.
+  - PR #566: the CodeRabbit review request is comment 5861311947 (00:36:16Z) on head 596ac66bda82341f81401cd1b0133ca89cc1814c; the poll is running.
 - 2026-09-28 00:34Z lead: PR #564 (fixes #536) round 8 is implemented and pushed. The head is f8c93b5c08952fd4a6ac2271eb2d8fc1a8a96516, a fast-forward over 3e063a0fdb479f747eaa36e27c458d5827e97de7. The PR is still a draft.
   - All 9 CodeRabbit findings from the review of 6957621 are fixed, in 8 commits. The implementation reports each group red on 6957621 and green on the head, and the trial-report tests at 169/169 with GIT_* stripped.
   - The implementation's invariant against 6957621: 727,236 portless configurations are identical. On the port grid, the only changes are 73,130 removals, all through :8443, which is the intended fix for finding B.
