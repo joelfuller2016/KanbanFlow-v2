@@ -787,7 +787,7 @@ test("normalizeRemoteUrl folds scp WITHOUT a userinfo and an ssh:// port to the 
 });
 
 test("a NON-default port is another service, not a spelling — only the scheme's default port folds away", () => {
-  // The port used to be dropped from every `scheme://` URL, so https://host:8443/org/repo and
+  // The port used to be dropped from any `scheme://` URL, so https://host:8443/org/repo and
   // https://host/org/repo shared a key, and a checkout of the service on 8443 matched this
   // repository and was folded in as inside.
   const plain = normalizeRemoteUrl("https://example.invalid/org/repo.git");
@@ -1278,7 +1278,7 @@ test("clone confirmation is bounded — exactly the first 50 distinct cwds, in t
   const many = Array.from({ length: 60 }, (_, i) => path.resolve(`C:\\scratch\\wt${i}`));
   // Every candidate is confirmable (no remote at all, and this repository's root commit), so each one
   // left unconfirmed was left unprobed, not rejected: the confirmed set IS the probed set. Without a
-  // `remote` answer every candidate was inconclusive, and the old assertions held for any cap.
+  // `remote` answer every candidate was inconclusive, and the old assertions held for any cap below 60.
   const table = { [mainRoot]: { "remote": "", "rev-list --max-parents=0 HEAD": "aaa111" } };
   for (const c of many) table[c] = { "remote": "", "rev-parse --show-toplevel": c, "rev-list --max-parents=0 HEAD": "aaa111" };
 
@@ -1672,14 +1672,12 @@ test("no inherited variable from git's local-environment list changes what the c
 });
 
 test("scrubGitEnv drops every variable git lists, and GIT_CONFIG_KEY_<n>/VALUE_<n>, in any case, and keeps the rest", () => {
-  const scrubbed = scrubGitEnv({
-    PATH: "p", GIT_EDITOR: "e", HOME: "h",
-    Git_Dir: "leak", GIT_CONFIG: "c", GIT_CONFIG_PARAMETERS: "x", GIT_CONFIG_COUNT: "1",
-    GIT_CONFIG_KEY_0: "k", git_config_value_0: "v", GIT_GRAFT_FILE: "g", GIT_REPLACE_REF_BASE: "r",
-    GIT_NO_REPLACE_OBJECTS: "1", GIT_SHALLOW_FILE: "s", GIT_IMPLICIT_WORK_TREE: "0", GIT_NAMESPACE: "n"
-  });
   // Windows reads environment names case-insensitively, so `Git_Dir` reaches git as GIT_DIR.
-  assert.deepEqual(scrubbed, { PATH: "p", GIT_EDITOR: "e", HOME: "h" });
+  const env = { PATH: "p", GIT_EDITOR: "e", HOME: "h", Git_Dir: "leak", GIT_CONFIG_KEY_0: "k", git_config_value_0: "v" };
+  const listed = gitEnvScrub().keys;
+  for (const key of listed) env[key] = "set";
+  assert.ok(listed.length >= 16, "git 2.55's fifteen names and GIT_NAMESPACE, at least");
+  assert.deepEqual(scrubGitEnv(env), { PATH: "p", GIT_EDITOR: "e", HOME: "h" });
 });
 
 test("gitEnvScrub reads git's own list once, and falls back to the static copy, saying so, when that read fails", () => {
@@ -1687,7 +1685,7 @@ test("gitEnvScrub reads git's own list once, and falls back to the static copy, 
   assert.equal(live.source, "git");
   for (const key of ["GIT_DIR", "GIT_CONFIG_PARAMETERS", "GIT_CONFIG_COUNT", "GIT_GRAFT_FILE", "GIT_REPLACE_REF_BASE",
     "GIT_NO_REPLACE_OBJECTS", "GIT_SHALLOW_FILE"]) assert.ok(live.keys.includes(key), `${key} is on the list`);
-  assert.equal(gitEnvScrub(), live, "read once: every later call answers from the first read");
+  assert.equal(gitEnvScrub(), live, "read once: a later call answers from the first read");
   const future = gitEnvScrub({ run: () => "GIT_SOME_FUTURE_VARIABLE\nGIT_DIR\n" });
   assert.ok(future.keys.includes("GIT_SOME_FUTURE_VARIABLE"), "a name only git's list carries is scrubbed too");
   assert.ok(future.keys.includes("GIT_NAMESPACE"), "and the static copy always is");

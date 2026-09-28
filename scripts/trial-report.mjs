@@ -75,7 +75,7 @@ const GIT_TIMEOUT_MS = 5_000;
 // --local-env-vars`), also carries config injection — GIT_CONFIG_PARAMETERS and GIT_CONFIG_COUNT,
 // which `git -c` and `--config-env` export to every child, hooks included — and graft, replace and
 // shallow overrides. Measured on the same git: an inherited `url.<main>.insteadOf=<fork>` rewrites
-// every url of a fork to main's, and an inherited GIT_GRAFT_FILE or GIT_REPLACE_REF_BASE hands an
+// a fork's urls to main's, and an inherited GIT_GRAFT_FILE or GIT_REPLACE_REF_BASE hands an
 // unrelated repository main's root commit; each of those confirms a repository that is not a clone.
 // So the scrub is git's whole list, read from git once (see `gitEnvScrub`), plus every
 // GIT_CONFIG_KEY_<n> / GIT_CONFIG_VALUE_<n>, which git's list implies but does not name. This static
@@ -462,7 +462,7 @@ function dropGitEnv(env, keys) {
 }
 
 // git's list is the same in any repository and outside one, so this reads it from wherever the
-// report runs — itself scrubbed of the static copy, so an inherited variable cannot skew the read.
+// report runs — itself scrubbed of the static copy, so none of those variables reaches the read.
 const readLocalEnvVars = () => execFileSync("git", ["rev-parse", "--local-env-vars"], {
   encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: GIT_TIMEOUT_MS,
   env: dropGitEnv(process.env, GIT_ENV_SCRUB_KEYS)
@@ -496,11 +496,11 @@ export function scrubGitEnv(env) {
 }
 
 /**
- * Run one git plumbing command against `cwd`, scrubbed of every inherited variable git itself
- * lists as local-repository environment, so the ANSWER is about `cwd` (see GIT_ENV_SCRUB_KEYS
- * above). Exported, and takes `env` as an option, purely so a test can inject a contaminated
- * environment (a fake `GIT_DIR`) without mutating this PROCESS's real `process.env` — which every
- * other `execFileSync`/`spawnSync` call in this file's test suite would then inherit too.
+ * Run one git plumbing command against `cwd`, scrubbed of the inherited variables git itself lists
+ * as local-repository environment, so the ANSWER is about `cwd` (see GIT_ENV_SCRUB_KEYS and
+ * `gitEnvScrub` above). Exported, and takes `env` as an option, purely so a test can inject a
+ * contaminated environment (a fake `GIT_DIR`) without mutating this PROCESS's real `process.env` —
+ * which several of this file's tests pass on, whole, to the processes they spawn.
  */
 export function gitOutput(args, cwd, { env = process.env } = {}) {
   const scrubbed = scrubGitEnv(env);
@@ -569,7 +569,7 @@ export function resolveRepoRoots(override, { cwd = process.cwd(), git = gitOutpu
 // The port each scheme uses when a URL names none. Only that port folds away: `https://h:443/o/r`
 // is `https://h/o/r` spelled out, while `https://h:8443/o/r` is another service on the same host,
 // and matching it would fold a different checkout in as this repository. A scheme not listed here
-// keeps any port it names, so its URLs match only when spelled the same way.
+// keeps any port it names, so two of its URLs match only when their ports agree.
 const DEFAULT_PORTS = { ssh: 22, https: 443, http: 80, git: 9418 };
 
 /**
@@ -597,7 +597,7 @@ export function normalizeRemoteUrl(url) {
     return u
       .slice(scheme[0].length)                   // strip the scheme
       .replace(/^[^/@]+@/, "")                   // strip userinfo, e.g. ssh://git@
-      // drop the port only when it is the scheme's default; any other port names another service
+      // drop the port only when it is the scheme's default; any other port is treated as another service
       .replace(/^([^/:]+):(\d+)(?=\/)/, (hostPort, host, port) => (Number(port) === defaultPort ? host : hostPort));
   }
   const scp = u.match(/^(?:[a-z0-9._-]+@)?([a-z0-9.-]{2,}):(.+)$/);
@@ -906,8 +906,8 @@ export function describeCloneProbeLimits(probe) {
     const why = probe.budgetSpent ? `its ${PROBE_BUDGET_MS / 1000} s time budget ran out` : `at ${MAX_CLONE_PROBES} candidates`;
     out.push(
       `CLONE CONFIRMATION CAPPED THIS RUN (${why}): only ${probe.probed} of ${probe.candidates} distinct outside ` +
-      `cwd(s) were checked (newest first) — capped: ${unprobed} candidate(s) unprobed, all OLDER than the ` +
-      "checked ones, left counted as outside without being checked."
+      `cwd(s) were checked (newest first) — capped: ${unprobed} candidate(s) unprobed, the OLDEST, left ` +
+      "counted as outside without being checked."
     );
   }
   if (probe.tooManyRemotes > 0) {
@@ -1203,9 +1203,8 @@ export function summarize({
   // left some unprobed (`capped`, with `budgetSpent` when it was the time budget), and how many
   // were left inconclusive for listing too many remotes. Disclosure only: it changes no signal's
   // verdict, only the honesty of signal 4's caveat and `sources.cloneProbe*` in the JSON output.
-  // `null` (the default, and what every direct `summarize` caller — every test below — gets) means
-  // "no probing was run", which is simply not disclosed rather than reported as a cap that never
-  // happened.
+  // `null` (the default, for a direct caller that passes none) means "no probing was run", which is
+  // simply not disclosed rather than reported as a cap that never happened.
   cloneProbe = null,
   since = null,
   // `truncated` means HARMFULLY truncated — a full page whose oldest event is still inside the
@@ -1807,8 +1806,7 @@ export function summarize({
       // The full { probed, capped, candidates, budgetSpent, tooManyRemotes } main() measured this
       // run, not just the boolean above — exposed so an operator (or a test) can see the actual
       // counts without parsing them back out of caveat prose, which only mentions them at all when a
-      // bound was hit. `null` when no probing ran (cloneProbe was never passed in — every direct
-      // `summarize` caller not opting into it, e.g. every fixture-based test in this file).
+      // bound was hit. `null` when no probing ran (no cloneProbe was passed in).
       cloneProbe: cloneProbe && {
         probed: cloneProbe.probed, capped: cloneProbeCapped, candidates: cloneProbe.candidates,
         budgetSpent: Boolean(cloneProbe.budgetSpent), tooManyRemotes: cloneProbe.tooManyRemotes ?? 0
