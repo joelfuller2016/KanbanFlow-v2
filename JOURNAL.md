@@ -52,6 +52,12 @@ A review of the repository and a test run on 2026-09-26 filed findings as issues
 
 ## Entries (newest first)
 
+- 2026-09-28 00:30Z lead: PR #562 (fixes #541) final text posted; head 8474d6c79e57611d8faf694ffd94983f550b05ca is unchanged.
+  - Body: the Verification section now holds the gate on the head: node 323/323; scripts/verify.ps1 exit 0, build 0 warnings and 0 errors, xUnit 1231/1231. CodeRabbit's summary block was re-attached. It reads back IDENTICAL (37049 chars).
+  - Round-history comment 5861257638 posted: the evidence for rounds 1 to 4b, moved out of the body. It reads back IDENTICAL (29441 chars).
+  - Issue #541 PATCHed from the final draft. Nobody had edited it since the draft's snapshot. It reads back IDENTICAL (55568 chars).
+  - Before posting, five lines in the frozen drafts still said the head's gate was "pending". They now state the measured result, and the full check suite passes on the edited drafts: every fenced block verbatim (Verification 15/15), the one-digit negative control red, hygiene clean, no-loss intact.
+  - State: 7 of 7 review threads resolved, mergeState CLEAN, CodeRabbit approved 8474d6c. Ready for the owner to merge.
 - 2026-09-28 00:19Z lead: PR #566 gated and marked ready.
   - Gates on head 596ac66bda82341f81401cd1b0133ca89cc1814c: node 323/323; scripts/verify.ps1 exit 0, build 0 warnings and 0 errors, xUnit 1207/1207. The live DB was untouched.
   - The body was PATCHed with the Verification section and reads back IDENTICAL (6432 chars).
