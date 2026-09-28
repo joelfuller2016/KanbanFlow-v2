@@ -52,6 +52,12 @@ A review of the repository and a test run on 2026-09-26 filed findings as issues
 
 ## Entries (newest first)
 
+- 2026-09-28 13:33Z (scheduled dependabot-automerge run, thirteenth run): build gate DOWN — dotnet install still blocked (403 egress policy); no merges.
+  - 2 open Dependabot PRs: #567 (coverlet.collector 10.0.1→10.1.0), #554 (Microsoft.OpenApi 2.12.2→3.10.2).
+  - **#567** (nuget-tests-minor-patch, head cc6167b): mergeable_state=unknown — skipped (GitHub lazy compute pending).
+  - **#554** (Microsoft.OpenApi major bump): mergeable_state=unknown + known NU1608 upstream blocker — skipped.
+  - Build gate unavailable: `curl -fsSL https://dot.net/v1/dotnet-install.sh` returns HTTP 403 (egress policy blocks outbound HTTPS to dot.net). No merges performed.
+
 - 2026-09-28 13:20Z (scheduled PR monitor, twelfth run): build gate DOWN — dotnet install still blocked (403 egress policy); no merges.
   - 8 open PRs: #567, #565, #562, #560 (non-draft), #554 (known blocker), #564, #521, #511 (drafts, skipped).
   - **#560** (fix/mcp-wrapper-stdin-eof-drain, head 835ffa1): CodeRabbit APPROVED on head; 2 review threads both resolved+outdated. mergeable_state=unknown (GitHub lazy compute). Merge-ready pending build gate. Unchanged.
