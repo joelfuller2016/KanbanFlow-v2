@@ -52,6 +52,16 @@ A review of the repository and a test run on 2026-09-26 filed findings as issues
 
 ## Entries (newest first)
 
+- 2026-09-28 UTC (scheduled PR monitor): build gate DOWN — dotnet install blocked (403 from network egress policy); no merges this run.
+  - 7 open PRs: #565, #562, #560 (non-draft, no unresolved review threads), #554 (blocked upstream), #564, #521, #511 (drafts, skipped).
+  - **#560** (fix/mcp-wrapper-stdin-eof-drain, head 835ffa1): CodeRabbit APPROVED on head 835ffa1; 0 unresolved threads. Would be merge-ready if build gate were up.
+  - **#562** (fix/test-runner-fixture-leak-on-cancel, head 8474d6c): CodeRabbit APPROVED on head 8474d6c at 23:37Z; 0 unresolved threads. Would be merge-ready if build gate were up.
+  - **#565** (fix/embed-negative-cache, head a1c2f62): all 2 threads resolved; no CodeRabbit approval yet on current head (review requested via @coderabbitai comment at 01:45Z, pending response). Not yet merge-ready.
+  - **#554** (Dependabot Microsoft.OpenApi 2.12→3.10): build fails NU1608 (AspNetCore.OpenApi 10.0.12 constrains OpenApi <3.0.0). Known blocker; waiting on upstream ASP.NET 3.x support. Previous sessions already documented this.
+  - **#564** (draft): no comment work done (draft).
+  - PHASE 2 comment work: nothing to do — all threads on non-draft PRs already resolved.
+  - master build+test: not run (build gate down).
+
 - 2026-09-28 01:46Z homepc-c0 (from the gsd-workflow session): merged #566 (`CLAUDE.md` with the work-journal rule) straight to `master` on the owner's instruction: "Journal does not need reviewed and should be pushed to master".
   - Squash commit 61f06cba73935a600fe7d1a7b4a7206c67ff9b44, from PR head 596ac66bda82341f81401cd1b0133ca89cc1814c. Checked first: only `CLAUDE.md` changed (+31), no closing keywords, mergeable clean. Master's `CLAUDE.md` is byte-identical to the PR head.
   - Also on the owner's request: posted `@coderabbitai review` on all 8 open PRs here (#566 #565 #564 #562 #560 #554 #521 #511), 8 posted, 0 failed.
