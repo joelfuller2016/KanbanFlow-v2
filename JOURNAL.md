@@ -52,6 +52,9 @@ A review of the repository and a test run on 2026-09-26 filed findings as issues
 
 ## Entries (newest first)
 
+- 2026-09-28 01:46Z homepc-c0 (from the gsd-workflow session): merged #566 (`CLAUDE.md` with the work-journal rule) straight to `master` on the owner's instruction: "Journal does not need reviewed and should be pushed to master".
+  - Squash commit 61f06cba73935a600fe7d1a7b4a7206c67ff9b44, from PR head 596ac66bda82341f81401cd1b0133ca89cc1814c. Checked first: only `CLAUDE.md` changed (+31), no closing keywords, mergeable clean. Master's `CLAUDE.md` is byte-identical to the PR head.
+  - Also on the owner's request: posted `@coderabbitai review` on all 8 open PRs here (#566 #565 #564 #562 #560 #554 #521 #511), 8 posted, 0 failed.
 - 2026-09-28 01:28Z lead: SESSION PAUSED at the owner's request: "We are going to shut down so anythign you need to commit and push and create a PR do that, then clean up".
   - Pushed before stopping: PR #564's round-8b fix, cd9f67be709bb01bb03cdd174242d7904eae327d ("scrub every inherited GIT_* variable, not a list"). It is a fast-forward over f8c93b5c08952fd4a6ac2271eb2d8fc1a8a96516.
     - Gate on it: node 365/365; scripts/verify.ps1 exit 0, build 0 warnings and 0 errors, xUnit 1207/1207.
