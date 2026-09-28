@@ -23,7 +23,7 @@ import {
   pathFlavor, asUtcIso, normalizeEvent, normalizeTaskId, readLogGenerations, resolveRepoRoots,
   fetchActivity, ActivityHttpError, dedupeRows, buildIdentityBridge, aliasesOf, normalizeActor,
   WRITE_TOOLS, MUTATING_TOOLS, normalizeRemoteUrl, withConfirmedCloneRoots, gitOutput, isLocalPathRemote,
-  scrubGitEnv, gitEnvScrub,
+  scrubGitEnv,
   selectRowsInWindow, selectCloneCandidates
 } from "./trial-report.mjs";
 
@@ -1592,10 +1592,13 @@ test("resolveRepoRoots is not fooled by a leaked GIT_DIR either — same scrub, 
   }
 });
 
-test("no inherited variable from git's local-environment list changes what the clone check answers", () => {
-  // One row per class of variable `git rev-parse --local-env-vars` lists, each injected through the
-  // `env` option and compared with the answer a clean environment gives. The first four used to
-  // CONFIRM a repository that is not a clone of a; the last two used to HIDE one that is.
+test("an inherited GIT_* variable that would confirm a non-clone or hide a clone leaves the clone check's answer as a clean environment gives it", () => {
+  // Each row injects, through the `env` option, one inherited GIT_* variable measured to move this
+  // answer, and compares the result with the answer a clean environment gives. Reaching git, the
+  // first six would CONFIRM a repository that is not a clone of a; the last four would HIDE one
+  // that is. GIT_CONFIG_GLOBAL, GIT_CONFIG_SYSTEM, GIT_CEILING_DIRECTORIES and GIT_REDIRECT_STDOUT
+  // are not on git's own `--local-env-vars` list (as of 2.55). GIT_REDIRECT_STDOUT is a
+  // Windows-only variable; elsewhere its row gives the clean answer whether or not it is scrubbed.
   const commitFile = (dir, file) => {
     fs.writeFileSync(path.join(dir, file), file);
     gitOutput(["add", file], dir);
@@ -1644,7 +1647,18 @@ test("no inherited variable from git's local-environment list changes what the c
     commitFile(shallow, "s.txt");
     const shallowFile = path.join(make(), "shallow");
     fs.writeFileSync(shallowFile, `${gitOutput(["rev-parse", "HEAD"], shallow)}\n`);
-    return { a, fork, grafted: grafted.dir, graftFile, hidden: hidden.dir, ownReplace: ownReplace.dir, shallow, shallowFile };
+    // A config whose rule rewrites the fork's urls to a's, for GIT_CONFIG_GLOBAL/_SYSTEM to name.
+    const insteadOfConfig = path.join(make(), "insteadof.gitconfig");
+    fs.writeFileSync(insteadOfConfig, '[url "https://example.invalid/org/"]\n\tinsteadOf = https://example.invalid/alice/\n');
+    // A plain clone of a. Asked about from a directory inside it, a ceiling at the clone stops git
+    // finding it; asked about directly, a redirected stdout leaves git's answers in a file instead.
+    const clone = make();
+    gitOutput(["clone", "-q", a, clone], a);
+    const cloneSub = path.join(clone, "sub");
+    fs.mkdirSync(cloneSub);
+    const redirectedStdout = path.join(make(), "stdout.txt");
+    return { a, fork, grafted: grafted.dir, graftFile, hidden: hidden.dir, ownReplace: ownReplace.dir, shallow, shallowFile,
+      insteadOfConfig, clone, cloneSub, redirectedStdout };
   });
   try {
     const rows = [
@@ -1654,8 +1668,12 @@ test("no inherited variable from git's local-environment list changes what the c
         env: { GIT_CONFIG_COUNT: "1", GIT_CONFIG_KEY_0: "url.https://example.invalid/org/.insteadOf", GIT_CONFIG_VALUE_0: "https://example.invalid/alice/" } },
       { name: "GIT_GRAFT_FILE", cwd: fx.grafted, clean: false, env: { GIT_GRAFT_FILE: fx.graftFile } },
       { name: "GIT_REPLACE_REF_BASE", cwd: fx.hidden, clean: false, env: { GIT_REPLACE_REF_BASE: "refs/hidden-replace/" } },
+      { name: "GIT_CONFIG_GLOBAL", cwd: fx.fork, clean: false, env: { GIT_CONFIG_GLOBAL: fx.insteadOfConfig } },
+      { name: "GIT_CONFIG_SYSTEM", cwd: fx.fork, clean: false, env: { GIT_CONFIG_SYSTEM: fx.insteadOfConfig } },
       { name: "GIT_NO_REPLACE_OBJECTS", cwd: fx.ownReplace, clean: true, env: { GIT_NO_REPLACE_OBJECTS: "1" } },
-      { name: "GIT_SHALLOW_FILE", cwd: fx.shallow, clean: true, env: { GIT_SHALLOW_FILE: fx.shallowFile } }
+      { name: "GIT_SHALLOW_FILE", cwd: fx.shallow, clean: true, env: { GIT_SHALLOW_FILE: fx.shallowFile } },
+      { name: "GIT_CEILING_DIRECTORIES", cwd: fx.cloneSub, clean: true, env: { GIT_CEILING_DIRECTORIES: fx.clone } },
+      { name: "GIT_REDIRECT_STDOUT", cwd: fx.clone, clean: true, env: { GIT_REDIRECT_STDOUT: fx.redirectedStdout } }
     ];
     const wrong = [];
     for (const r of rows) {
@@ -1665,33 +1683,32 @@ test("no inherited variable from git's local-environment list changes what the c
       if (clean !== r.clean) wrong.push(`${r.name}: fixture sanity — a clean environment confirmed=${clean}, expected ${r.clean}`);
       if (underIt !== clean) wrong.push(`${r.name}: inherited, confirmed=${underIt}; clean, confirmed=${clean}`);
     }
-    assert.deepEqual(wrong, [], "an inherited local-environment variable changed the clone check's answer");
+    assert.deepEqual(wrong, [], "an inherited GIT_* variable changed the clone check's answer");
   } finally {
     fx.cleanup();
   }
 });
 
-test("scrubGitEnv drops every variable git lists, and GIT_CONFIG_KEY_<n>/VALUE_<n>, in any case, and keeps the rest", () => {
+test("scrubGitEnv drops every GIT_* variable, in any ASCII case, and keeps the rest", () => {
   // Windows reads environment names case-insensitively, so `Git_Dir` reaches git as GIT_DIR.
   const env = { PATH: "p", GIT_EDITOR: "e", HOME: "h", Git_Dir: "leak", GIT_CONFIG_KEY_0: "k", git_config_value_0: "v" };
-  const listed = gitEnvScrub().keys;
-  for (const key of listed) env[key] = "set";
-  assert.ok(listed.length >= 16, "git 2.55's fifteen names and GIT_NAMESPACE, at least");
-  assert.deepEqual(scrubGitEnv(env), { PATH: "p", GIT_EDITOR: "e", HOME: "h" });
+  assert.deepEqual(scrubGitEnv(env), { PATH: "p", HOME: "h" });
 });
 
-test("gitEnvScrub reads git's own list once, and falls back to the static copy, saying so, when that read fails", () => {
-  const live = gitEnvScrub();
-  assert.equal(live.source, "git");
-  for (const key of ["GIT_DIR", "GIT_CONFIG_PARAMETERS", "GIT_CONFIG_COUNT", "GIT_GRAFT_FILE", "GIT_REPLACE_REF_BASE",
-    "GIT_NO_REPLACE_OBJECTS", "GIT_SHALLOW_FILE"]) assert.ok(live.keys.includes(key), `${key} is on the list`);
-  assert.equal(gitEnvScrub(), live, "read once: a later call answers from the first read");
-  const future = gitEnvScrub({ run: () => "GIT_SOME_FUTURE_VARIABLE\nGIT_DIR\n" });
-  assert.ok(future.keys.includes("GIT_SOME_FUTURE_VARIABLE"), "a name only git's list carries is scrubbed too");
-  assert.ok(future.keys.includes("GIT_NAMESPACE"), "and the static copy always is");
-  const failed = gitEnvScrub({ run: () => { throw new Error("git could not run"); } });
-  assert.equal(failed.source, "fallback");
-  assert.ok(failed.keys.includes("GIT_CONFIG_PARAMETERS"), "the fallback still covers config injection");
+test("the scrub is by prefix: GIT_* names on no list are dropped before git reads them, and look-alike names are kept", () => {
+  // GIT_EDITOR is not on git's own `--local-env-vars` list, and no list can carry a name git has
+  // yet to add. GITHUB_TOKEN and XGIT_DIR only resemble one, and XDG_CONFIG_HOME is outside the
+  // prefix too.
+  const env = { GIT_SOME_FUTURE_VARIABLE: "f", GIT_CONFIG_GLOBAL: "g", GIT_CEILING_DIRECTORIES: "c",
+    GIT_REDIRECT_STDOUT: "o", GITHUB_TOKEN: "t", XGIT_DIR: "x", XDG_CONFIG_HOME: "d" };
+  assert.deepEqual(scrubGitEnv(env), { GITHUB_TOKEN: "t", XGIT_DIR: "x", XDG_CONFIG_HOME: "d" });
+  // Through real git: it reads GIT_EDITOR ahead of core.editor, so `git var GIT_EDITOR` prints
+  // whichever of the two reached it. Windows reads the lower-case spelling as the same variable.
+  for (const name of ["GIT_EDITOR", "git_editor"]) {
+    const seen = gitOutput(["-c", "core.editor=kept-editor", "var", "GIT_EDITOR"], os.tmpdir(),
+      { env: { ...process.env, [name]: "leaked-editor" } });
+    assert.equal(seen, "kept-editor", `an inherited ${name} reached git`);
+  }
 });
 
 // --- 5d. Which candidates main() probes, and in what order (bounded-probe-budget priority) --

@@ -70,27 +70,25 @@ const GIT_TIMEOUT_MS = 5_000;
 // a second, independent false-ADOPT path this scrub closes as a side effect, not just the
 // clone-confirmation one it was written for.
 //
-// The location variables are not the whole list. git's own list of variables that point a git
-// process at a repository, or change what it answers about the one it finds (`git rev-parse
-// --local-env-vars`), also carries config injection — GIT_CONFIG_PARAMETERS and GIT_CONFIG_COUNT,
-// which `git -c` and `--config-env` export to every child, hooks included — and graft, replace and
-// shallow overrides. Measured on the same git: an inherited `url.<main>.insteadOf=<fork>` rewrites
-// a fork's urls to main's, and an inherited GIT_GRAFT_FILE or GIT_REPLACE_REF_BASE hands an
-// unrelated repository main's root commit; each of those confirms a repository that is not a clone.
-// So the scrub is git's whole list, read from git once (see `gitEnvScrub`), plus every
-// GIT_CONFIG_KEY_<n> / GIT_CONFIG_VALUE_<n>, which git's list implies but does not name. This static
-// copy of it (git 2.55's list, plus GIT_NAMESPACE, which it omits) is always scrubbed too, and stands
-// alone when that read fails. What git then answers is what it answers about `cwd` with none of
-// these set. Against an inherited environment that can move a cwd either way: an inherited
-// GIT_NO_REPLACE_OBJECTS or shallow file can also HIDE a clone's own history, and the scrub gives
-// it back. In both directions the answer lands on the one a clean environment gives.
-const GIT_ENV_SCRUB_KEYS = [
-  "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_CONFIG", "GIT_CONFIG_PARAMETERS", "GIT_CONFIG_COUNT",
-  "GIT_OBJECT_DIRECTORY", "GIT_DIR", "GIT_WORK_TREE", "GIT_IMPLICIT_WORK_TREE", "GIT_GRAFT_FILE",
-  "GIT_INDEX_FILE", "GIT_NO_REPLACE_OBJECTS", "GIT_REPLACE_REF_BASE", "GIT_PREFIX", "GIT_SHALLOW_FILE",
-  "GIT_COMMON_DIR", "GIT_NAMESPACE"
-];
-const GIT_CONFIG_PAIR = /^GIT_CONFIG_(?:KEY|VALUE)_\d+$/i;
+// The location variables are not the only ones that change git's answer. Measured on the same
+// git: an inherited `url.<main>.insteadOf=<fork>` rewrites a fork's urls to main's, whether it
+// arrives in GIT_CONFIG_PARAMETERS or GIT_CONFIG_COUNT — which `git -c` and `--config-env` export
+// to every child, hooks included — or in the config file GIT_CONFIG_GLOBAL or GIT_CONFIG_SYSTEM
+// names, and an inherited GIT_GRAFT_FILE or GIT_REPLACE_REF_BASE hands an unrelated repository
+// main's root commit; each of those confirms a repository that is not a clone. The other way, an
+// inherited GIT_NO_REPLACE_OBJECTS or GIT_SHALLOW_FILE hides a clone's own history,
+// GIT_CEILING_DIRECTORIES stops git finding a clone from a directory inside it, and on Windows
+// GIT_REDIRECT_STDOUT sends git's output to a file; each of those hides a clone. git's own list of
+// local-repository variables (`git rev-parse --local-env-vars`, as of 2.55) leaves out
+// GIT_CONFIG_GLOBAL, GIT_CONFIG_SYSTEM, GIT_CEILING_DIRECTORIES and GIT_REDIRECT_STDOUT, so the
+// scrub is not a list. It drops every variable whose name starts with GIT_, in any ASCII case
+// (Windows reads environment names case-insensitively, so an inherited `Git_Dir` reaches git as
+// GIT_DIR), including a name a later git adds. No inherited GIT_* variable reaches git, so none can
+// change what it answers: in both directions the answer is the one an environment without any
+// GIT_* variable gives. The scrub touches nothing outside that prefix: HOME and XDG_CONFIG_HOME
+// still choose which global config git reads, and PATH which git runs, exactly as they do in a
+// clean run.
+const GIT_ENV_PREFIX = /^GIT_/i;
 
 // Tools that mutate ONE IDENTIFIED TASK, used to decide whether two sessions wrote the same task.
 // Every name here takes a `taskId` argument or mutates a child of one; only the `taskId`-bearing
@@ -449,58 +447,23 @@ export function isOutsideAllRoots(cwd, roots) {
   return list.every(root => isOutsideRepo(cwd, root));
 }
 
-/** `env` without `keys` and without any GIT_CONFIG_KEY_<n> / GIT_CONFIG_VALUE_<n>, matched
- * case-insensitively: Windows reads environment names that way, so an inherited `Git_Dir` would
- * reach git as GIT_DIR, and git reads none of these under another case anywhere else. */
-function dropGitEnv(env, keys) {
-  const drop = new Set(keys.map(k => k.toUpperCase()));
+/** `env` as `gitOutput` hands it to git: every variable whose name starts with GIT_, in any ASCII
+ * case, removed, and every other variable kept as it is (see GIT_ENV_PREFIX above). */
+export function scrubGitEnv(env) {
   const scrubbed = { ...env };
   for (const key of Object.keys(scrubbed)) {
-    if (drop.has(key.toUpperCase()) || GIT_CONFIG_PAIR.test(key)) delete scrubbed[key];
+    if (GIT_ENV_PREFIX.test(key)) delete scrubbed[key];
   }
   return scrubbed;
 }
 
-// git's list is the same in any repository and outside one, so this reads it from wherever the
-// report runs — itself scrubbed of the static copy, so none of those variables reaches the read.
-const readLocalEnvVars = () => execFileSync("git", ["rev-parse", "--local-env-vars"], {
-  encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: GIT_TIMEOUT_MS,
-  env: dropGitEnv(process.env, GIT_ENV_SCRUB_KEYS)
-});
-
-let gitEnvScrubCache = null;
-
 /**
- * Which variables `gitOutput` strips: git's own list (`git rev-parse --local-env-vars`), read once
- * and cached, together with GIT_ENV_SCRUB_KEYS. `source` is "git" when git answered, "fallback"
- * when the read failed and the static list stands alone — main() prints a NOTE saying so. `run`
- * replaces the read, for tests, and bypasses the cache.
- */
-export function gitEnvScrub({ run } = {}) {
-  if (!run && gitEnvScrubCache) return gitEnvScrubCache;
-  let result;
-  try {
-    const listed = String((run ?? readLocalEnvVars)()).split(/\r?\n/).map(s => s.trim()).filter(Boolean);
-    if (listed.length === 0) throw new Error("git listed no local-environment variables");
-    result = { keys: [...new Set([...GIT_ENV_SCRUB_KEYS, ...listed])], source: "git" };
-  } catch {
-    result = { keys: [...GIT_ENV_SCRUB_KEYS], source: "fallback" };
-  }
-  if (!run) gitEnvScrubCache = result;
-  return result;
-}
-
-/** `env` as `gitOutput` hands it to git: see GIT_ENV_SCRUB_KEYS and `gitEnvScrub`. */
-export function scrubGitEnv(env) {
-  return dropGitEnv(env, gitEnvScrub().keys);
-}
-
-/**
- * Run one git plumbing command against `cwd`, scrubbed of the inherited variables git itself lists
- * as local-repository environment, so the ANSWER is about `cwd` (see GIT_ENV_SCRUB_KEYS and
- * `gitEnvScrub` above). Exported, and takes `env` as an option, purely so a test can inject a
- * contaminated environment (a fake `GIT_DIR`) without mutating this PROCESS's real `process.env` —
- * which several of this file's tests pass on, whole, to the processes they spawn.
+ * Run one git plumbing command against `cwd`, scrubbed of every inherited GIT_* variable, so the
+ * ANSWER is about `cwd` (see GIT_ENV_PREFIX above). It sets no GIT_* variable of its own; one it
+ * ever needs has to go on the scrubbed copy, after the scrub, or the scrub removes it. Exported,
+ * and takes `env` as an option, purely so a test can inject a contaminated environment (a fake
+ * `GIT_DIR`) without mutating this PROCESS's real `process.env` — which several of this file's
+ * tests pass on, whole, to the processes they spawn.
  */
 export function gitOutput(args, cwd, { env = process.env } = {}) {
   const scrubbed = scrubGitEnv(env);
@@ -2099,13 +2062,6 @@ async function main(argv) {
     console.error(`NOTE: the usage log is misconfigured, so signals derived from it CANNOT BE MEASURED.\n      ${logConfigError}\n`);
   }
   const here = path.dirname(fileURLToPath(import.meta.url));
-  if (gitEnvScrub().source === "fallback") {
-    console.error(
-      "NOTE: git's own list of local-repository environment variables could not be read " +
-      `(git rev-parse --local-env-vars failed), so every git call was scrubbed of a static copy of it ` +
-      `(${GIT_ENV_SCRUB_KEYS.length} variables, plus GIT_CONFIG_KEY_<n>/GIT_CONFIG_VALUE_<n>) instead.\n`
-    );
-  }
   const { roots: repoRoots, source: repoRootSource } = resolveRepoRoots(repoRootOverride, {
     cwd: here,
     fallbackRoot: path.resolve(here, "..")
