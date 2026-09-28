@@ -52,6 +52,17 @@ A review of the repository and a test run on 2026-09-26 filed findings as issues
 
 ## Entries (newest first)
 
+- 2026-09-28 14:00Z (scheduled PR monitor, fourteenth run): build gate DOWN — dotnet install still blocked (403 egress policy); no merges.
+  - 8 open PRs: #567, #565, #562, #560 (non-draft), #554 (known blocker), #564, #521, #511 (drafts, skipped).
+  - **#560** (fix/mcp-wrapper-stdin-eof-drain, head 835ffa1): CodeRabbit APPROVED on head; 2 review threads both resolved+outdated. mergeable_state=unknown. Merge-ready pending build gate. Unchanged.
+  - **#562** (fix/test-runner-fixture-leak-on-cancel, head 8474d6c): CodeRabbit APPROVED on head; Copilot threads on old commit only; 7 review threads all resolved+outdated per previous runs. mergeable_state=unknown. Merge-ready pending build gate. Unchanged.
+  - **#565** (fix/embed-negative-cache, head a1c2f62): CodeRabbit APPROVED on head; 2 Copilot threads both resolved (not outdated). mergeable_state=unknown. Merge-ready pending build gate. Unchanged.
+  - **#567** (Dependabot coverlet.collector 10.0.1→10.1.0, head cc6167b): no bot reviews; mergeable_state=unknown. Not merge-ready. Unchanged.
+  - **#554** (Dependabot OpenApi 2.12→3.10): known NU1608 upstream blocker. No action.
+  - PHASE 2: 0 unresolved review threads on any non-draft PR. Nothing to fix.
+  - master build+test: not run (build gate down).
+  - Summary: 3 PRs (#560, #562, #565) merge-ready; 1 PR (#567) awaiting bot review; all blocked on build gate recovery.
+
 - 2026-09-28 13:33Z (scheduled dependabot-automerge run, thirteenth run): build gate DOWN — dotnet install still blocked (403 egress policy); no merges.
   - 2 open Dependabot PRs: #567 (coverlet.collector 10.0.1→10.1.0), #554 (Microsoft.OpenApi 2.12.2→3.10.2).
   - **#567** (nuget-tests-minor-patch, head cc6167b): mergeable_state=unknown — skipped (GitHub lazy compute pending).
