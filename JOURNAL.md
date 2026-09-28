@@ -52,6 +52,11 @@ A review of the repository and a test run on 2026-09-26 filed findings as issues
 
 ## Entries (newest first)
 
+- 2026-09-28 01:04Z lead: PR #564: the reviewer's remaining checks on f8c93b5c08952fd4a6ac2271eb2d8fc1a8a96516 all pass.
+  - Groups B to F each fail on 6957621 and pass on f8c93b5, in the reviewer's own runs.
+  - Every absolute claim on the lines added this round checks out (40 of 40).
+  - A budget run with a real clock stopped with no git call started after the deadline. The deadline fell mid-probe, and the cut-short candidate was not counted as confirmed.
+  - So the only open item is the environment-scrub finding, whose fix (a prefix scrub) is being built as one new commit.
 - 2026-09-28 00:55Z lead: PR #564's independent review of round 8 (head f8c93b5c08952fd4a6ac2271eb2d8fc1a8a96516) came back FIX, with one finding.
   - Four inherited variables are on neither git's --local-env-vars list nor the static list, so the scrub misses them: GIT_CONFIG_GLOBAL, GIT_CONFIG_SYSTEM, GIT_CEILING_DIRECTORIES and GIT_REDIRECT_STDOUT. The two config variables can make a fork confirm as a clone, which the design forbids. The other two can hide a real clone.
   - The reviewer measured both candidate fixes on its own copy. An extended list and a prefix scrub each leave 0 violations.
