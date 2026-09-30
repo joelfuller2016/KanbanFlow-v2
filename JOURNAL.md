@@ -52,6 +52,19 @@ A review of the repository and a test run on 2026-09-26 filed findings as issues
 
 ## Entries (newest first)
 
+- 2026-09-30 00:00Z (scheduled PR monitor, thirty-fourth run): build gate DOWN — dotnet install still blocked (403 egress policy); no merges.
+  - 8 open PRs: #567, #565, #562, #560 (non-draft), #554 (known blocker), #564 (DRAFT), #521, #511 (drafts, skipped).
+  - **#560** (fix/mcp-wrapper-stdin-eof-drain, head 835ffa1): 2 threads, both resolved+outdated. Unchanged — merge-ready pending build gate.
+  - **#562** (fix/test-runner-fixture-leak-on-cancel, head 8474d6c): 7 threads, all resolved+outdated. Unchanged — merge-ready pending build gate.
+  - **#565** (fix/embed-negative-cache, head a1c2f62): 2 threads, both resolved (non-outdated). Unchanged — merge-ready pending build gate.
+  - **#567** (Dependabot coverlet.collector, head cc6167b): 0 reviews, 0 threads. Awaiting bot reviews.
+  - **#554** (Dependabot OpenApi 2.12→3.10): known NU1608 upstream blocker. No action.
+  - **#564** (fix/trial-signal4-clone-caveat, head cd9f67b): still draft. No action.
+  - PHASE 1: No merges (build gate down).
+  - PHASE 2: 0 unresolved review threads on any non-draft PR. Nothing to fix.
+  - master build+test: not run (build gate down).
+  - Summary: 3 PRs (#560, #562, #565) merge-ready; #567 awaiting bot review; #564 still draft; all blocked on build gate recovery.
+
 - 2026-09-30 23:00Z (scheduled PR monitor, thirty-third run): build gate DOWN — dotnet install still blocked (403 egress policy); no merges.
   - 8 open PRs: #567, #565, #562, #560 (non-draft), #554 (known blocker), #564 (DRAFT), #521, #511 (drafts, skipped).
   - **#560** (fix/mcp-wrapper-stdin-eof-drain, head 835ffa1): 2 threads, both resolved+outdated. CodeRabbit APPROVED. Unchanged — merge-ready pending build gate.
