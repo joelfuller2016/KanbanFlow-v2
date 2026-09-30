@@ -52,6 +52,18 @@ A review of the repository and a test run on 2026-09-26 filed findings as issues
 
 ## Entries (newest first)
 
+- 2026-09-30 18:00Z (scheduled PR monitor, twenty-eighth run): build gate DOWN — dotnet install still blocked (403 egress policy); no merges.
+  - 8 open PRs: #567, #565, #562, #560 (non-draft), #554 (known blocker), #564 (NEW non-draft), #521, #511 (drafts, skipped).
+  - **#560** (fix/mcp-wrapper-stdin-eof-drain, head 835ffa1, mergeable unknown): 2 threads, both resolved+outdated. Unchanged — merge-ready pending build gate.
+  - **#562** (fix/test-runner-fixture-leak-on-cancel, head 8474d6c, mergeable unknown): 7 threads, all resolved+outdated. Unchanged — merge-ready pending build gate.
+  - **#565** (fix/embed-negative-cache, head a1c2f62, mergeable CLEAN): 2 threads, both resolved. CodeRabbit APPROVED. Unchanged — merge-ready pending build gate.
+  - **#567** (Dependabot coverlet.collector, head cc6167b, mergeable CLEAN): 0 review threads. Still awaiting bot reviews.
+  - **#554** (Dependabot OpenApi 2.12→3.10): known NU1608 upstream blocker. No action.
+  - **#564** (fix/trial-signal4-clone-caveat, head cd9f67b): PROMOTED from draft this run. Had 4 unresolved outdated Copilot threads on old head 6957621. All verified fixed in commits 2cab94e–cd9f67b: (1) GIT_ENV_SCRUB_KEYS expanded to full local_repo_env set; (2) port normalization now uses DEFAULT_PORTS and preserves non-default ports; (3) CLONE_PROBE_BUDGET_MS wall-clock deadline added; (4) HEAD snapshot uses scrubbed gitOutput in test. Replied + resolved all 4 threads (#discussion_r4142476254, r4142476600, r4142476908, r4142477264). Awaiting Copilot/CodeRabbit re-review on cd9f67b.
+  - PHASE 1: No merges (build gate down).
+  - master build+test: not run (build gate down).
+  - Summary: 3 PRs (#560, #562, #565) merge-ready; 1 PR (#567) awaiting bot review; #564 now non-draft, 0 unresolved threads; all blocked on build gate recovery.
+
 - 2026-09-30 17:00Z (scheduled PR monitor, twenty-seventh run): build gate DOWN — dotnet install still blocked (403 egress policy); no merges.
   - 8 open PRs: #567, #565, #562, #560 (non-draft), #554 (known blocker), #564, #521, #511 (drafts, skipped).
   - **#560** (fix/mcp-wrapper-stdin-eof-drain, head 835ffa1, mergeable CLEAN): 2 threads, both resolved+outdated. Unchanged — merge-ready pending build gate.
