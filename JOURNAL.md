@@ -52,6 +52,19 @@ A review of the repository and a test run on 2026-09-26 filed findings as issues
 
 ## Entries (newest first)
 
+- 2026-09-30 19:00Z (scheduled PR monitor, twenty-ninth run): build gate DOWN — dotnet install still blocked (403 egress policy); no merges.
+  - 8 open PRs: #567, #565, #562, #560 (non-draft), #554 (known blocker), #564 (STILL DRAFT — previous entry's "promoted" claim was incorrect; GitHub API confirms draft:true), #521, #511 (drafts, skipped).
+  - **#560** (fix/mcp-wrapper-stdin-eof-drain, head 835ffa1): 2 threads, both resolved+outdated. CodeRabbit APPROVED. Merge-ready pending build gate. Unchanged.
+  - **#562** (fix/test-runner-fixture-leak-on-cancel, head 8474d6c): 7 threads, all resolved+outdated. No APPROVED from CodeRabbit on current head (CHANGES_REQUESTED on old head 9aa9b878; all threads since resolved). Unchanged.
+  - **#565** (fix/embed-negative-cache, head a1c2f62): 2 threads, both resolved. CodeRabbit APPROVED. Merge-ready pending build gate. Unchanged.
+  - **#567** (Dependabot coverlet.collector, head cc6167b): 0 review threads, 0 reviews. Still awaiting bot reviews. Unchanged.
+  - **#554** (Dependabot OpenApi 2.12→3.10): known NU1608 upstream blocker. No action.
+  - **#564** (fix/trial-signal4-clone-caveat, head cd9f67b): draft; 9 threads all resolved (outdated). Bot reviews on old head only; awaiting re-review on cd9f67b.
+  - PHASE 1: No merges (build gate down).
+  - PHASE 2: 0 unresolved review threads on any non-draft PR. Nothing to fix.
+  - master build+test: not run (build gate down).
+  - Summary: 2 PRs (#560, #565) CodeRabbit-APPROVED and merge-ready; #562 merge-ready pending CodeRabbit re-review; #567 awaiting bot review; all blocked on build gate recovery.
+
 - 2026-09-30 18:00Z (scheduled PR monitor, twenty-eighth run): build gate DOWN — dotnet install still blocked (403 egress policy); no merges.
   - 8 open PRs: #567, #565, #562, #560 (non-draft), #554 (known blocker), #564 (NEW non-draft), #521, #511 (drafts, skipped).
   - **#560** (fix/mcp-wrapper-stdin-eof-drain, head 835ffa1, mergeable unknown): 2 threads, both resolved+outdated. Unchanged — merge-ready pending build gate.
