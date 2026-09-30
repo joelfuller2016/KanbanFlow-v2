@@ -52,6 +52,12 @@ A review of the repository and a test run on 2026-09-26 filed findings as issues
 
 ## Entries (newest first)
 
+- 2026-09-30 13:21Z (dependabot-automerge routine): build gate DOWN — dotnet install blocked (403 egress policy); no merges.
+  - 2 open Dependabot PRs found: #567, #554.
+  - **#567** (coverlet.collector 10.0.1→10.1.0, head cc6167b): mergeable_state=unknown; build gate unavailable — skipped.
+  - **#554** (Microsoft.OpenApi 2.12.2→3.10.2): known NU1608 blocker (Microsoft.AspNetCore.OpenApi 10.x constrains OpenApi to <3.0.0); mergeable_state=unknown — skipped as before.
+  - Merged: none. Blocked-by-failure: none. Rebased: none. Skipped: #567 (unknown mergeable state; build gate down), #554 (known upstream blocker).
+
 - 2026-09-30 22:00Z (scheduled PR monitor, thirty-second run): build gate DOWN — dotnet install still blocked (403 egress policy); no merges.
   - 8 open PRs: #567, #565, #562, #560 (non-draft), #554 (known blocker), #564 (DRAFT), #521, #511 (drafts, skipped).
   - **#560** (fix/mcp-wrapper-stdin-eof-drain, head 835ffa1): 2 threads, both resolved+outdated. CodeRabbit APPROVED on head 835ffa1. Unchanged — merge-ready pending build gate.
