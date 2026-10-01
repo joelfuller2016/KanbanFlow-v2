@@ -52,6 +52,14 @@ A review of the repository and a test run on 2026-09-26 filed findings as issues
 
 ## Entries (newest first)
 
+- 2026-10-01 06:00Z (scheduled PR monitor, fiftieth run): build gate DOWN — dotnet install still blocked (403 egress policy); no merges.
+  - 8 open PRs: #567, #565, #562, #560 (non-draft), #554 (known blocker), #564 (DRAFT), #521, #511 (drafts, skipped). Unchanged.
+  - All PR heads identical to forty-ninth run. No new review activity.
+  - PHASE 1: No merges (build gate down — curl blocked by 403 egress policy, cannot install .NET SDK).
+  - PHASE 2: 0 unresolved review threads on non-draft PRs. Nothing to fix.
+  - master build+test: not run (build gate down).
+  - Summary: 3 PRs (#560, #562, #565) CodeRabbit-APPROVED and merge-ready; #567 awaiting formal bot review; #564 still draft; all blocked on build gate recovery.
+
 - 2026-10-01 05:00Z (scheduled PR monitor, forty-ninth run): build gate DOWN — dotnet install still blocked (403 egress policy); no merges.
   - 8 open PRs: #567, #565, #562, #560 (non-draft), #554 (known blocker), #564 (DRAFT), #521, #511 (drafts, skipped). Unchanged.
   - **#560** (fix/mcp-wrapper-stdin-eof-drain, head 835ffa1): 2 threads, both resolved+outdated. CodeRabbit APPROVED. mergeable=true. Merge-ready pending build gate.
