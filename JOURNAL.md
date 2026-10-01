@@ -52,6 +52,13 @@ A review of the repository and a test run on 2026-09-26 filed findings as issues
 
 ## Entries (newest first)
 
+- 2026-10-01 14:00Z (scheduled PR monitor, fifty-seventh run): build gate DOWN — dotnet install still blocked (403 egress policy); no merges.
+  - 8 open PRs unchanged: #567, #565, #562, #560 (non-draft), #554 (known blocker), #564 (DRAFT), #521, #511 (drafts, skipped). All head SHAs identical to fifty-sixth run.
+  - PHASE 1: No merges (build gate down — curl returned 403 on dotnet-install.sh download after 301 redirect; no .NET binary found anywhere on system).
+  - PHASE 2: 0 unresolved review threads on non-draft PRs. Nothing to fix.
+  - master build+test: not run (build gate down).
+  - Summary: 3 PRs (#560, #562, #565) CodeRabbit-APPROVED and merge-ready; #567 awaiting formal bot review; #564 still draft; all blocked on build gate recovery.
+
 - 2026-10-01 13:22Z (dependabot-automerge routine): build gate DOWN — curl blocked by 403 egress policy; no merges.
   - Dependabot PRs open: #567 (nuget-tests-minor-patch, non-draft) and #554 (Microsoft.OpenApi major bump, non-draft, known blocker).
   - dotnet not installed; curl fetch of dotnet-install.sh returned HTTP 403 (egress policy). Build gate unavailable — no PR merged per task rules.
