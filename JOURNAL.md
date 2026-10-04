@@ -52,6 +52,25 @@ A review of the repository and a test run on 2026-09-26 filed findings as issues
 
 ## Entries (newest first)
 
+- 2026-10-04 22:05Z (local code review of #560, owner asked "can you review locally"): reviewed #560 at head `835ffa12bb21472cc986d3aeace17fcd73b7fc4e` with Claude Code `/code-review` at the `high` level, from a throwaway clone. Nothing was posted on #560 itself.
+  - **Filed #568 (P2), a regression against the old exit-at-EOF:**
+    - After stdin EOF, a client that closes stdin and then waits without reading stdout blocks the wrapper forever on Windows once a response exceeds about 128 KiB.
+    - A watchdog Worker ends it at 4,524 ms with exit code 1.
+    - The exit-code policy on that path is the owner's decision.
+  - **Filed #569 (P3), pre-existing:**
+    - `process.exit(0)` at lines 893 and 900 aborts with `0xC0000409` on Node 24.12.0 and 24.19.0 (10/10) after concurrent requests.
+    - `process.exitCode = 0` there gave 0/10 crashes, and the PR's tests stayed 6/6.
+  - **Evidence comments** (reproductions and fix pairs checked both ways):
+    - #539: `get_task` versus the deadline, id:null, an unterminated final line, POSIX truncation, mutations after a dead stdout, reused ids, and stdout error labels.
+    - #563: +150 ms of start-up delay is enough; test 1 passes a forced-error mutant; the POSIX clause and the fast path are unpinned; the usage-log guard does not enrol the new harness.
+  - **#560 merge readiness:** CodeRabbit approved `835ffa1`, but #568 is a behaviour regression for clients that do not read stdout. Weigh it before merging. Merges are the owner's.
+  - **Run:**
+    - About 2 h 03 m, with no machine sleep in that window.
+    - 9 finder angles produced 52 candidates, and 15 verifiers checked them.
+    - At the head, the PR's 6 drain tests and 329/329 script tests pass.
+    - The probes are inlined in #568 and #569. Mutants and logs are under SCRATCH/mut/, on this machine only.
+  - **Next:** the owner decides #568's exit-code policy, and whether the #569 and #539 items ride on #560 or come as follow-ups.
+
 - 2026-10-01 18:00Z (scheduled PR monitor, sixty-first run): build gate DOWN — dotnet install still blocked (403 egress policy); no merges.
   - 8 open PRs unchanged: #567, #565, #562, #560 (non-draft), #554 (known blocker), #564 (DRAFT), #521, #511 (drafts, skipped). All head SHAs identical to sixtieth run.
   - PHASE 1: No merges (build gate down — curl returned 403 on dotnet-install.sh; no .NET binary found on system).
