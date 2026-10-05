@@ -52,6 +52,29 @@ A review of the repository and a test run on 2026-09-26 filed findings as issues
 
 ## Entries (newest first)
 
+- 2026-10-05 03:14Z (comparison of local reviewers on #560; corrects the 2026-10-04 22:05Z entry): **Correction.** The 22:05Z entry called #569 pre-existing. That holds only for the graceful path.
+  - **The early-close path is a #560 change.** When stdin closes while requests are in flight:
+    - the merge-base `84feb548ad304cfbf73911213391c579b249e36e` exits 0 and drops the responses;
+    - #560 delivers them and then aborts with `0xC0000409` on Node 24.12.0 (10/10 for each, with controls on 24.20.0).
+    - Posted as a correction comment and a dated banner on #569. Its priority and plan are unchanged.
+  - **New evidence on #539: real MCP clients kill the wrapper soon after EOF.**
+    - MCP TypeScript SDK 1.30.0 `close()` sends SIGTERM 2 s after `stdin.end()`. Checked against the installed source.
+    - Claude Code 2.1.289 on win32 appears to run `taskkill /T` about 0.25 s after EOF. Read from the binary and emulated; never run.
+    - So the drain only rescues calls that finish quickly.
+  - **The comparison,** at `835ffa12bb21472cc986d3aeace17fcd73b7fc4e`, scored against the first review's 15 findings:
+    - `codex exec review --base origin/master` found 0 of 15 in 268 s. Its read-only sandbox blocked process spawning (EPERM), so it ran only in-process checks.
+    - Claude Code `/code-review 560 medium` did not apply the level and ran the max recipe. It took 103.5 min and 527,691 tokens and found 15 of 15 plus 5 new items, but its lead read the first review's notes and seeded 3 checks from them, so it was not independent.
+    - So whether `medium` is fast enough is still unmeasured.
+  - **Found but not filed (low):**
+    - an overdue drain tick can abandon already-answered requests after a blocked write;
+    - a call abandoned at the deadline leaves no usage-log row;
+    - a duplicate-frame mutant passes all 6 tests;
+    - deleting the tests' `destroy()` calls, or `stdoutErrorLogged`, keeps them green.
+  - **Side effect:** one probe in the second review created an empty usage-log file in the owner's KanbanFlow data folder. It is 0 bytes and the database was untouched. Left in place and flagged.
+  - **Next:**
+    - The owner runs `/code-review medium` themselves on a PR with no earlier review notes in reach, to time it.
+    - The owner decides #568's exit-code policy and whether to merge #560.
+
 - 2026-10-04 22:05Z (local code review of #560, owner asked "can you review locally"): reviewed #560 at head `835ffa12bb21472cc986d3aeace17fcd73b7fc4e` with Claude Code `/code-review` at the `high` level, from a throwaway clone. Nothing was posted on #560 itself.
   - **Filed #568 (P2), a regression against the old exit-at-EOF:**
     - After stdin EOF, a client that closes stdin and then waits without reading stdout blocks the wrapper forever on Windows once a response exceeds about 128 KiB.
