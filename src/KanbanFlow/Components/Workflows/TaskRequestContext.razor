@@ -1,0 +1,49 @@
+@implements IDisposable
+@inject WorkspaceService Workflow
+@if (context is not null && task is not null)
+{
+    <section class="border rounded p-2 mb-3 bg-light" aria-label="Task request context">
+        <a href="@context.BoardUrl">Request: @context.Title</a>
+        <div class="small text-muted">Idea #@context.IdeaId · task specification @task.SpecificationVersion</div>
+        @if (context.Repositories.FirstOrDefault(r => r.Id == task.Specification.RepositoryId) is { } repository)
+        {
+            <div class="small mt-2"><strong>@repository.Name</strong> <code>@repository.LocalPath</code></div>
+        }
+        @if (!string.IsNullOrEmpty(task.Specification.FileReferences)) { <pre class="small mt-2 mb-0" style="white-space:pre-wrap">@task.Specification.FileReferences</pre> }
+        <div class="small mt-2">@task.Evidence.Count reported results · @task.Evidence.Count(e => e.Current && e.AcceptedAt is not null) current accepted</div>
+        <button class="btn btn-sm btn-link px-0" @onclick="Load">Refresh request context</button>
+    </section>
+}
+@code {
+    [Parameter] public int TaskId { get; set; }
+    private int loadedId;
+    private CancellationTokenSource? loadCancellation;
+    private bool disposed;
+    private WorkflowContext? context;
+    private WorkflowTaskContext? task;
+    protected override async Task OnParametersSetAsync()
+    {
+        if (loadedId != TaskId) { loadedId = TaskId; context = null; task = null; await Load(); }
+    }
+    private async Task Load()
+    {
+        if (disposed) return;
+        loadCancellation?.Cancel(); loadCancellation?.Dispose();
+        var source = loadCancellation = new CancellationTokenSource();
+        var ct = source.Token;
+        var id = TaskId;
+        try
+        {
+            var request = await Workflow.GetForTaskAsync(id, ct);
+            var loaded = request is null ? null : await Workflow.ContextAsync(request.Id, ct);
+            if (ct.IsCancellationRequested || disposed || id != TaskId) return;
+            context = loaded;
+            task = context?.Tasks.FirstOrDefault(t => t.TaskId == id);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { }
+    }
+    public void Dispose()
+    {
+        disposed = true; loadCancellation?.Cancel(); loadCancellation?.Dispose();
+    }
+}

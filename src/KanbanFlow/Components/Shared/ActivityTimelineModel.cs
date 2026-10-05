@@ -58,6 +58,9 @@ public sealed record TimelineEntry
 
     /// <summary>Plain-text fallback headline, used when <see cref="Changes"/> is empty.</summary>
     public string? Headline { get; init; }
+    public string? Subject { get; init; }
+    public string? BeforeDetails { get; init; }
+    public string? AfterDetails { get; init; }
 
     /// <summary>Markdown body — comment rows only. Null for audit events.</summary>
     public string? Markdown { get; init; }
@@ -157,6 +160,17 @@ public static class ActivityTimelineBuilder
         ("sortOrder", "Order"),
         ("completedAt", "Completed"),
         ("claimedAt", "Claimed at"),
+        ("text", "Text"),
+        ("completed", "Complete"),
+        ("goals", "Goals"),
+        ("readme", "Readme"),
+        ("projectId", "Project"),
+        ("taskItemId", "Task"),
+        ("dependsOnTaskItemId", "Depends on task"),
+        ("parentFeatureId", "Parent feature"),
+        ("parentSubtaskId", "Parent subtask"),
+        ("promotedProjectId", "Linked project"),
+        ("archived", "Archived"),
     ];
 
     /// <summary>Badge text + category for each audit event type this app emits.</summary>
@@ -169,6 +183,8 @@ public static class ActivityTimelineBuilder
         "TaskFeatureChanged" => ("Moved", TimelineCategory.Change),
         "TaskClaimed" => ("Claimed", TimelineCategory.Change),
         "TaskClaimRenewed" => ("Renewed", TimelineCategory.Change),
+        "TaskClaimHeartbeat" => ("Heartbeat", TimelineCategory.Change),
+        "TaskReordered" => ("Reordered", TimelineCategory.Change),
         "TaskClaimStolen" => ("Taken over", TimelineCategory.Change),
         "TaskReleased" => ("Released", TimelineCategory.Change),
         "TaskCommentAdded" => ("Comment", TimelineCategory.Comment),
@@ -406,6 +422,9 @@ public static class ActivityTimelineBuilder
             Tone = EventTone(ev.EventType, category),
             Actor = ev.Actor,
             Headline = ev.Message,
+            Subject = ev.EntityType == "Task" ? $"Task #{ev.EntityId}" : ev.EntityId > 0 ? $"{ev.EntityType} #{ev.EntityId}" : ev.EntityType,
+            BeforeDetails = ev.BeforeJson,
+            AfterDetails = ev.AfterJson,
             Changes = DiffFields(ev.BeforeJson, ev.AfterJson),
             SourceId = ev.Id,
             FromComment = false

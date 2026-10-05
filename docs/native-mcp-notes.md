@@ -1,4 +1,6 @@
-# Native in-process MCP server (prototype)
+# Native in-process MCP server
+
+Historical September 6, 2026 transport discovery returned **33 native tools** and **54 wrapper tools**. Current source declares **36 native tools** (32 in `KanbanMcpTools`, four in `WorkspaceMcpTools`) and 54 wrapper tools. The September 14 verification did not rerun live discovery, so these source counts are not a fresh transport result. [Request workflows](request-workflow.md#mcp-and-rest-reference) add four shared tools in `WorkspaceMcpTools`; native task reads now include comments and native field updates use the existing task service. The historical prototype notes below explain the original implementation, not its current inventory.
 
 This documents the prototype that hosts an **MCP server inside the same ASP.NET Core
 process** as the REST API and Blazor UI — proving we can eventually retire the Node.js
@@ -142,7 +144,7 @@ to hand-edit.
 
 #231 tracks retiring the Node stdio wrapper (`scripts/mcp-server.mjs`) in favour of the
 in-process native `/mcp` server. **Until that cutover the Node wrapper remains the production
-tool surface** — currently **50 tools** (11 read + 10 authoring + 5 subtask + 5 acceptance-criterion
+tool surface** — **50 tools before the workflow additions, now 54 tools** (11 read + 10 authoring + 5 subtask + 5 acceptance-criterion
 + 3 dependency + 2 activity + 5 idea + 9 knowledge-graph).
 
 > Historical counts elsewhere are stale: this file's "41-tool surface" (above) and some issues'

@@ -38,7 +38,7 @@ else
 {
     <div class="project-shell d-flex @(outlineOpen ? "outline-open" : null)">
 
-        <ProjectOutline Project="project"
+        <ProjectOutline @key="Id" Project="project"
                         ExpandedFeatures="expandedFeatures"
                         ExpandedTasks="expandedTasks"
                         OnGoHome="GoHome"
@@ -48,7 +48,15 @@ else
                         OnOpenAddFeature="OpenAddModalForFeature"
                         OnOpenAddTaskSubtask="OpenAddSubtaskForTask"
                         OnOpenAddSubtaskChild="OpenAddChildSubtaskFromOutline"
-                        OnOpenEditTask="OpenEditModalForTask"
+                        OnOpenEditTask="OpenOutlineTask"
+                        OnOpenSubtask="OpenOutlineSubtask"
+                        Selection="CurrentOutlineItem"
+                        RevealRequest="outlineRevealRequest"
+                        FocusSelection="outlineFocusSelection"
+                        CanGoBack="@(FindOutlineHistoryIndex(-1) >= 0)"
+                        CanGoForward="@(FindOutlineHistoryIndex(1) >= 0)"
+                        OnBack="() => NavigateOutline(-1)"
+                        OnForward="() => NavigateOutline(1)"
                         OnToggleFeature="ToggleFeature"
                         OnToggleTask="ToggleTask"
                         OnToggleTaskDone="ToggleTaskDone"
@@ -63,6 +71,7 @@ else
 
         @* ── Right Panel: AI Action Bar + Kanban Board ── *@
         <div class="project-main flex-grow-1 d-flex flex-column overflow-hidden" style="min-width: 0;">
+            <RequestWorkspace ProjectId="Id" RequestId="WorkflowRequestId" OnChanged="LoadProject" />
             <div class="border-bottom bg-white px-3 py-2">
                 <div class="d-lg-none mb-3">
                     <button class="btn btn-sm btn-outline-secondary d-inline-flex align-items-center gap-2"
@@ -371,7 +380,8 @@ else
     Features="project?.Features?.ToList()"
     IsOpen="detailPanelOpen"
     AddSubtaskParentId="detailPanelAddSubtaskParentId"
-    OnClose="OnDetailClose"
+                     OnClose="OnDetailClose"
+                     OnShowInOutline="ShowInOutline"
     OnTaskUpdated="OnTaskUpdated"
     OnTaskDeleted="OnTaskDeleted" />
 
@@ -381,6 +391,7 @@ else
     EditProjectId="Id"
     EditFeatureId="editModalFeatureId"
     EditTaskId="editModalTaskId"
+    HistoryRefreshToken="historyRefreshToken"
     AllFeatures="project?.Features?.ToList()"
     InitialName="@editModalName"
     InitialDescription="@editModalDescription"
@@ -406,6 +417,7 @@ else
     OnItemCreated="OnItemCreated" />
 
 @code {
+    [SupplyParameterFromQuery(Name = "request")] public Guid? WorkflowRequestId { get; set; }
     [Parameter]
     public int Id { get; set; }
 
@@ -419,11 +431,11 @@ else
     public int? DeepLinkTaskId { get; set; }
 
     /// <summary>
-    /// Applied ONCE per component instance. Every later <see cref="LoadProject"/> — a save, a
-    /// drag, closing the panel — must not silently re-open a panel the user just dismissed while
-    /// the query string is still in the address bar.
+    /// Applied once per task-query change. Reloads, closing the panel and filter changes must
+    /// not re-open a dismissed task, but following another task link must open its panel.
     /// </summary>
     private bool deepLinkApplied;
+    private int? observedDeepLinkTaskId;
 
     private Project? project;
     private List<TaskItem> allTasks = [];
@@ -470,7 +482,11 @@ else
     private int? pendingDetailFocusReturnTaskId;
     private bool outlineOpen;
 
-    private void ToggleOutline() => outlineOpen = !outlineOpen;
+    private void ToggleOutline()
+    {
+        outlineOpen = !outlineOpen;
+        if (outlineOpen && CurrentOutlineItem is { } item) RevealOutlineItem(item);
+    }
 
     private void CloseOutline() => outlineOpen = false;
 
@@ -478,6 +494,8 @@ else
 
     private void OpenTaskDetail(TaskItem task, int? addSubtaskParentId, bool forceTaskExpansion)
     {
+        SelectOutlineItem(addSubtaskParentId is int subtaskId
+            ? new(OutlineItemKind.Subtask, subtaskId) : new(OutlineItemKind.Task, task.Id));
         selectedTask = task;
         detailPanelAddSubtaskParentId = addSubtaskParentId;
         detailPanelOpen = true;
@@ -554,13 +572,17 @@ else
     private string? aiPanelError;
     private AiProjectContext? aiContext;
     private List<AiTaskRecommendation> aiNextTasks = [];
+    private CancellationTokenSource? aiLoadCancellation;
+    private int aiLoadGeneration;
 
     // Requirements are compact by default so the board is visible sooner.
     private bool requirementsExpanded;
 
+    private int? loadedProjectId;
+
     protected override async Task OnInitializedAsync()
     {
-        // Read the filter off the URL ONCE, here, and never again (#112). The URL is this filter's
+        // Read the filter off the URL once per project visit (#112). The URL is this filter's
         // only persistence, so a reload or a shared link must restore the exact view — but reading
         // it on every parameter set would fight the user: SyncFilterToUrl below navigates on every
         // keystroke, each navigation re-runs OnParametersSet, and a re-read there would race the
@@ -574,14 +596,55 @@ else
         // in-page popstate this component would ignore — at which point subscribe to
         // Nav.LocationChanged, re-parse, and unsubscribe in DisposeAsync. (CodeRabbit, PR #362.)
         filter = TaskFilterState.FromUri(Nav.Uri);
+        loadedProjectId = Id;
         await LoadProject();
+    }
+
+    protected override async Task OnParametersSetAsync()
+    {
+        if (loadedProjectId != Id)
+        {
+            loadedProjectId = Id;
+            urlSyncCts?.Cancel();
+            filter = TaskFilterState.FromUri(Nav.Uri);
+            outlineHistory.Clear();
+            outlineHistoryIndex = -1;
+            expandedFeatures.Clear();
+            expandedTasks.Clear();
+            outlineExpansionInitialized = false;
+            outlineOpen = false;
+            detailPanelOpen = editModalOpen = addModalOpen = false;
+            selectedTask = null;
+            pendingDetailFocusReturnTaskId = detailPanelAddSubtaskParentId = null;
+            project = null;
+            allTasks = [];
+            notFound = false;
+            loadError = null;
+            moveError = null;
+            CloseAiPanel();
+            requirementsExpanded = false;
+            deepLinkApplied = false;
+            sortablesInitialized = false;
+            dotNetRef?.Dispose();
+            dotNetRef = null;
+            await LoadProject();
+        }
+
+        if (observedDeepLinkTaskId != DeepLinkTaskId)
+        {
+            observedDeepLinkTaskId = DeepLinkTaskId;
+            deepLinkApplied = false;
+        }
+
         ApplyDeepLinkedTask();
     }
 
     /// <summary>Opens the task named by <see cref="DeepLinkTaskId"/>, if it exists here.</summary>
     private void ApplyDeepLinkedTask()
     {
-        if (deepLinkApplied || DeepLinkTaskId is not int taskId) return;
+        // This panel is controlled by Blazor. Rendering it open during prerender lets
+        // Bootstrap's load handler create a second backdrop outside Blazor's ownership.
+        if (!RendererInfo.IsInteractive || deepLinkApplied || DeepLinkTaskId is not int taskId) return;
         deepLinkApplied = true;
 
         var task = allTasks.FirstOrDefault(t => t.Id == taskId);
@@ -613,6 +676,11 @@ else
 
         if (project is not null)
         {
+            if (outlineSortablesRefreshPending)
+            {
+                outlineSortablesRefreshPending = false;
+                await ReinitializeSortables();
+            }
             try
             {
                 await JS.InvokeVoidAsync("KanbanFlow.initProjectOutlineAccessibility");
@@ -649,25 +717,28 @@ else
 
     private async Task ShowProjectContextAsync()
     {
-        await LoadAiPanelAsync("Project Context", async client =>
-        {
-            aiContext = await client.GetFromJsonAsync<AiProjectContext>(Nav.ToAbsoluteUri($"/api/projects/{Id}/context"), _cts.Token);
-            aiNextTasks = [];
-        });
+        await LoadAiPanelAsync("Project Context",
+            (client, projectId, ct) => client.GetFromJsonAsync<AiProjectContext>(Nav.ToAbsoluteUri($"/api/projects/{projectId}/context"), ct),
+            context => aiContext = context);
     }
 
     private async Task ShowNextTasksAsync()
     {
-        await LoadAiPanelAsync("Next Tasks", async client =>
-        {
-            var response = await client.GetFromJsonAsync<AiNextTasksResponse>(Nav.ToAbsoluteUri($"/api/projects/{Id}/next-tasks"), _cts.Token);
-            aiNextTasks = response?.Recommendations ?? [];
-            aiContext = null;
-        });
+        await LoadAiPanelAsync("Next Tasks",
+            (client, projectId, ct) => client.GetFromJsonAsync<AiNextTasksResponse>(Nav.ToAbsoluteUri($"/api/projects/{projectId}/next-tasks"), ct),
+            response => aiNextTasks = response?.Recommendations ?? []);
     }
 
-    private async Task LoadAiPanelAsync(string title, Func<HttpClient, Task> load)
+    private async Task LoadAiPanelAsync<T>(string title, Func<HttpClient, int, CancellationToken, Task<T>> load, Action<T> apply)
     {
+        if (_cts.IsCancellationRequested) return;
+        CancelAiLoad();
+        var generation = aiLoadGeneration;
+        var projectId = Id;
+        aiLoadCancellation = CancellationTokenSource.CreateLinkedTokenSource(_cts.Token);
+        var ct = aiLoadCancellation.Token;
+        bool IsCurrent() => !ct.IsCancellationRequested && generation == aiLoadGeneration && Id == projectId;
+
         aiPanelTitle = title;
         aiControlsExpanded = true;
         aiPanelOpen = true;
@@ -683,24 +754,35 @@ else
             // BaseAddress is needed. Disposing the wrapper is safe; the pooled handler
             // is owned by the factory and survives.
             using var client = HttpClientFactory.CreateClient();
-            await load(client);
+            var result = await load(client, projectId, ct);
+            if (IsCurrent()) apply(result);
         }
-        catch (OperationCanceledException)
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
-            // Component disposed during load - expected
+            // Route change, panel close, newer action or component disposal.
         }
         catch (Exception ex)
         {
-            aiPanelError = ex.Message;
+            if (IsCurrent()) aiPanelError = ex.Message;
         }
         finally
         {
-            aiLoading = false;
+            if (IsCurrent()) aiLoading = false;
         }
+    }
+
+    private void CancelAiLoad()
+    {
+        ++aiLoadGeneration;
+        aiLoadCancellation?.Cancel();
+        aiLoadCancellation?.Dispose();
+        aiLoadCancellation = null;
+        aiLoading = false;
     }
 
     private void CloseAiPanel()
     {
+        CancelAiLoad();
         aiPanelOpen = false;
         aiPanelError = null;
         aiContext = null;
@@ -709,8 +791,12 @@ else
 
     private int CountOpenAiTasks() => aiContext?.Tasks.Count(t => t.Status != "Done") ?? 0;
 
+    private int historyRefreshToken;
+    private int projectLoadGeneration;
     private async Task LoadProject()
     {
+        var generation = ++projectLoadGeneration;
+        var projectId = Id;
         try
         {
             using var db = await DbFactory.CreateDbContextAsync(_cts.Token);
@@ -735,17 +821,21 @@ else
                 .Include(p => p.Requirements)
                     .ThenInclude(r => r.TaskItem)
                 .AsSplitQuery()
-                .FirstOrDefaultAsync(p => p.Id == Id, _cts.Token);
+                .FirstOrDefaultAsync(p => p.Id == projectId, _cts.Token);
 
-            if (_cts.IsCancellationRequested) return;
+            if (_cts.IsCancellationRequested || generation != projectLoadGeneration || Id != projectId) return;
 
             if (loaded is null)
             {
+                project = null;
+                allTasks = [];
                 notFound = true;
                 return;
             }
 
             project = loaded;
+            notFound = false;
+            historyRefreshToken++;
             allTasks = project.Features.SelectMany(f => f.Tasks).ToList();
             // Re-narrow after EVERY reload. A drag, a done-toggle, an edit and a delete all end in
             // LoadProject, and each of them can change whether a task still matches the filter.
@@ -766,7 +856,8 @@ else
         }
         catch (Exception ex)
         {
-            loadError = ex.Message;
+            if (!_cts.IsCancellationRequested && generation == projectLoadGeneration && Id == projectId)
+                loadError = ex.Message;
         }
     }
 
@@ -805,7 +896,7 @@ else
             using var db = await DbFactory.CreateDbContextAsync(_cts.Token);
             db.Subtasks.Attach(subtask);
             db.Entry(subtask).Property(s => s.Completed).IsModified = true;
-            await db.SaveChangesAsync(_cts.Token);
+            await db.SaveChangesWithAuditAsync("User", _cts.Token);
             StateHasChanged();
         }
         catch (OperationCanceledException) { }
@@ -924,6 +1015,7 @@ else
 
     private void OpenEditModalForFeature(Feature feature)
     {
+        SelectOutlineItem(new(OutlineItemKind.Feature, feature.Id));
         editModalMode = EditItemType.Feature;
         editModalFeatureId = feature.Id;
         editModalTaskId = null;
@@ -1021,8 +1113,8 @@ else
         try
         {
             // The query string is rebuilt from `filter`, not edited in place — that is what makes
-            // Clear able to leave a genuinely empty query — and then the ONE parameter this route
-            // owns outside the filter is merged back on.
+            // Clear able to remove all filters — then this route's task and request context
+            // parameters are merged back on.
             //
             // That merge is not optional. `?task=` arrived with #281 (the Home card's "Next" chip
             // deep-links straight at a task), which is precisely the "if this route ever grows an
@@ -1030,7 +1122,8 @@ else
             // first keystroke in the filter box silently strips `task=` out of the address bar, so
             // reloading or sharing the link no longer opens the task it named — and because
             // DeepLinkTaskId is [SupplyParameterFromQuery], the value is gone from the component
-            // too and cannot be put back. `taskId` is an int, so no escaping is required.
+            // too and cannot be put back. Preserve `request=` for the same reason: losing it
+            // resets the request workspace and its unsaved drafts. Ints and GUIDs need no escaping.
             //
             // replace: true so typing five characters leaves ONE history entry, not five — otherwise
             // Back walks the user backwards through their own keystrokes instead of off the page.
@@ -1040,6 +1133,10 @@ else
             if (DeepLinkTaskId is int taskId)
             {
                 query = query.Length == 0 ? $"?task={taskId}" : $"{query}&task={taskId}";
+            }
+            if (WorkflowRequestId is Guid requestId)
+            {
+                query = query.Length == 0 ? $"?request={requestId}" : $"{query}&request={requestId}";
             }
 
             Nav.NavigateTo($"/project/{Id}{query}", forceLoad: false, replace: true);
@@ -1154,6 +1251,7 @@ else
 
     public async ValueTask DisposeAsync()
     {
+        CancelAiLoad();
         _cts.Cancel();
         _cts.Dispose();
 

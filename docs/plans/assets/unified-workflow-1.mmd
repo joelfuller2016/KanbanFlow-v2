@@ -1,0 +1,9 @@
+flowchart LR
+  H[Human] --> UI[Existing Ideas / Project board / Task detail]
+  AI[AI client] --> MCP[Existing native MCP or Node wrapper]
+  MCP --> API[Workflow operations and existing task operations]
+  UI --> S[Shared idea, workflow and task services]
+  API --> S
+  S --> DB[(Existing AppDbContext and SQLite database)]
+  DB --> UI
+  DB --> MCP

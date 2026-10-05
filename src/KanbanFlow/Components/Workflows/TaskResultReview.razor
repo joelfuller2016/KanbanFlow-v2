@@ -1,0 +1,42 @@
+<details class="border rounded p-3 mb-2 bg-white">
+    <summary><a href="@Task.Url">#@Task.TaskId @Task.Name</a> · @Task.Status · @Task.Evidence.Count reports</summary>
+    <form @onsubmit="Report" @onsubmit:preventDefault class="mt-3">
+        <label for="result-summary-@Task.Id" class="form-label">Result summary</label><textarea id="result-summary-@Task.Id" class="form-control mb-2" @bind="summary" maxlength="20000" required></textarea>
+        <label for="result-checks-@Task.Id" class="form-label">Observed checks and outcomes</label><textarea id="result-checks-@Task.Id" class="form-control mb-2" @bind="checks" maxlength="20000" required></textarea>
+        <label for="result-source-@Task.Id" class="form-label">Checked source or document revision</label><input id="result-source-@Task.Id" class="form-control mb-2" @bind="source" maxlength="2000" required />
+        <button class="btn btn-outline-primary">Record report and move to Review</button>
+    </form>
+    @foreach (var evidence in Task.Evidence.Reverse())
+    {
+        <article class="border-top pt-3 mt-3" @key="evidence.Id">
+            <strong>@(evidence.Current ? "Current task scope" : "Historical · task scope changed")</strong>
+            <div class="small text-muted">Reported by @evidence.Author · @evidence.CreatedAt.ToLocalTime().ToString("g")</div>
+            <MarkdownContent Markdown="@evidence.Summary" /><p class="mb-1"><strong>Checks:</strong> @evidence.Checks</p><p><strong>Reference:</strong> @evidence.CodeReference</p>
+            @if (evidence.AcceptedAt is not null) { <p>Accepted by @evidence.AcceptedBy · @evidence.AcceptedAt.Value.ToLocalTime().ToString("g")</p> }
+            else if (evidence.Current)
+            {
+                @foreach (var criterion in Task.AcceptanceCriteria)
+                {
+                    <label @key="(evidence.Id, criterion.Id)" class="d-block"><input type="checkbox" checked="@confirmed.Contains((evidence.Id, criterion.Id))" @onchange="e => Confirm(evidence.Id, criterion.Id, e)" /> I reviewed: @criterion.Text</label>
+                }
+                <button class="btn btn-success mt-2" @onclick="() => Accept(evidence.Id)" disabled="@(!Task.AcceptanceCriteria.All(c => confirmed.Contains((evidence.Id, c.Id))))">Accept result and mark Done</button>
+            }
+        </article>
+    }
+</details>
+@code {
+    [Parameter, EditorRequired] public WorkflowTaskContext Task { get; set; } = null!;
+    [Parameter] public int Version { get; set; }
+    [Parameter] public EventCallback<WorkflowSubmission> OnSubmit { get; set; }
+    private string summary = "", checks = "", source = "";
+    private readonly HashSet<(Guid, int)> confirmed = [];
+    private void Confirm(Guid evidence, int criterion, ChangeEventArgs e) { if (e.Value is true) confirmed.Add((evidence, criterion)); else confirmed.Remove((evidence, criterion)); }
+    private async System.Threading.Tasks.Task Report()
+    {
+        var submission = new WorkflowSubmission(new() { Operation = "report_result", ItemId = Task.Id, ExpectedVersion = Version, Evidence = new(summary, checks, source) });
+        await OnSubmit.InvokeAsync(submission);
+        if (submission.Succeeded) summary = checks = source = "";
+    }
+    private System.Threading.Tasks.Task Accept(Guid id) => OnSubmit.InvokeAsync(new WorkflowSubmission(new() { Operation = "accept_result", ItemId = Task.Id, EvidenceId = id, ExpectedVersion = Version,
+        CheckedCriterionIds = Task.AcceptanceCriteria.Where(c => confirmed.Contains((id, c.Id))).Select(c => c.Id).ToArray() }));
+}

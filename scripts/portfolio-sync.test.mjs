@@ -1,178 +1,419 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { execFile } from "node:child_process";
+import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
+import {
+  commentTextFor, completeCommentIds, descriptionFor, descriptionRefreshFor,
+  needsContentRestoration, restoreContent, syncComments,
+} from "./portfolio-sync.mjs";
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 
 const FOOTER = "…(truncated — see the issue)";
+const COMMENT_FOOTER = "…(truncated — read it on GitHub)";
+const issue = (body, number = 488) => ({ id: `I_${number}`, number, title: "Keep the complete source", body,
+  url: `https://github.com/owner/repository/issues/${number}`, state: "OPEN",
+  milestone: { title: "M1" }, labels: [{ name: "bug" }] });
+const bodyOf = (description) => description.slice(description.indexOf("<!-- /kanbanflow-sync -->\n\n") + "<!-- /kanbanflow-sync -->\n\n".length);
+const legacy = (body, number = 488) => `<!-- kanbanflow-sync -->\n**Issue:** https://github.com/owner/repository/issues/${number}\n**State:** OPEN · **Milestone:** M1 · **Labels:** bug\n**Open PR:** none\n**Synced:** 2026-08-30T12:00:00.000Z\n<!-- /kanbanflow-sync -->\n\n${body}`;
 
-async function load(limit, tag = "test") {
-  if (limit === undefined) delete process.env.KANBANFLOW_BODY_EXCERPT_LIMIT;
-  else process.env.KANBANFLOW_BODY_EXCERPT_LIMIT = String(limit);
-  return import(`./portfolio-sync.mjs?${tag}-${limit ?? "default"}`);
+test("descriptionFor preserves the entire large Unicode Markdown body including whitespace and tail", () => {
+  const body = `  \r\n# Full issue\r\n\r\n\`\`\`json\r\n${'{"path":"C:\\\\work", "text":"漢字🙂"}\r\n'.repeat(4000)}\`\`\`\r\nLAST REQUIRED ACCEPTANCE CHECK  \r\n\t`;
+  assert.ok(Buffer.byteLength(JSON.stringify(body), "utf8") > 29491);
+  const saved = descriptionFor(issue(body), { url: "https://github.com/owner/repository/pull/511", isDraft: true });
+  assert.equal(bodyOf(saved), body);
+  assert.ok(saved.includes("**Open PR:** https://github.com/owner/repository/pull/511 (draft)"));
+  assert.equal(needsContentRestoration(saved), false);
+});
+
+test("descriptionFor preserves empty and whitespace-only source bodies without normalizing them", () => {
+  for (const body of ["", " \t\r\n ", "single line  ", "\nleading and trailing\n", null]) {
+    assert.equal(bodyOf(descriptionFor(issue(body), null)), body ?? "");
+  }
+});
+
+test("large provenance is retained with the complete body instead of a replacement stub", () => {
+  const source = issue("DO NOT LOSE THIS BODY\n");
+  source.labels = [{ name: "label".repeat(9000) }];
+  const saved = descriptionFor(source, null);
+  assert.ok(saved.includes(source.labels[0].name));
+  assert.ok(saved.includes(source.url));
+  assert.equal(bodyOf(saved), source.body);
+});
+
+test("legacy limits cannot shorten a new issue or comment", async () => {
+  const previous = process.env.KANBANFLOW_BODY_EXCERPT_LIMIT;
+  process.env.KANBANFLOW_BODY_EXCERPT_LIMIT = "1024";
+  try {
+    const module = await import("./portfolio-sync.mjs?legacy-limit");
+    const body = "row 漢🙂\\\"\n".repeat(8000) + "FINAL TEXT  \n";
+    assert.equal(bodyOf(module.descriptionFor(issue(body), null)), body);
+    const comment = module.commentTextFor({ ghId: "IC_full", header: "source", body }, 10);
+    assert.ok(comment.endsWith(body));
+    assert.equal(comment.split("source\n\n")[1], body);
+    assert.match(parseArgs(["sync", "--max-comment-chars", "10"]).error, /full comment text must be preserved/);
+  } finally {
+    if (previous === undefined) delete process.env.KANBANFLOW_BODY_EXCERPT_LIMIT;
+    else process.env.KANBANFLOW_BODY_EXCERPT_LIMIT = previous;
+  }
+});
+
+test("matching legacy prefixes restore complete text once", () => {
+  const body = "  original prefix\ncontinued source\nTHE FINAL REQUIREMENT  \n";
+  const complete = descriptionFor(issue(body), null);
+  assert.equal(descriptionRefreshFor(legacy(`original prefix\n\n${FOOTER}`), complete), complete);
+  assert.equal(descriptionRefreshFor(complete, descriptionFor(issue("changed remote text"), null)), null);
+});
+
+test("synthetic closing fences do not become duplicated local text during repair", () => {
+  for (const fence of ["```", "~~~~"]) {
+    const body = `intro\n${fence}js\nconst first = 1;\nconst last = 2;\n${fence}\nfooter\n`;
+    const old = legacy(`intro\n${fence}js\nconst first = 1;\n${fence}\n\n${FOOTER}`);
+    const complete = descriptionFor(issue(body), null);
+    assert.equal(descriptionRefreshFor(old, complete), complete);
+  }
+});
+
+test("differing prior board text and its Markdown whitespace survive full-source recovery", () => {
+  const local = "Human decision: keep this behavior.  \n\n\t";
+  const complete = descriptionFor(issue("The complete current GitHub issue.\n"), null);
+  const restored = descriptionRefreshFor(legacy(`${local}\n\n${FOOTER}`), complete);
+  assert.ok(restored.startsWith(complete));
+  assert.ok(restored.includes(`\n\n${local}\n<!-- /kanbanflow-preserved-board-text -->`));
+  assert.match(restored, /## Preserved prior board text/);
+  assert.equal(needsContentRestoration(restored), false);
+  assert.equal(descriptionRefreshFor(restored, complete), null);
+});
+
+test("repair preserves leading Markdown indentation added on the board", () => {
+  const local = "    keep as code";
+  const complete = descriptionFor(issue("keep as code\nrest of the current issue"), null);
+  const restored = descriptionRefreshFor(legacy(`${local}\n\n${FOOTER}`), complete);
+  assert.ok(restored.startsWith(complete));
+  assert.ok(restored.includes(`\n\n${local}\n<!-- /kanbanflow-preserved-board-text -->`));
+});
+
+test("ordinary complete content and marker-like human prose are not overwritten", () => {
+  const complete = descriptionFor(issue("new source"), null);
+  for (const old of [legacy("Human rewrite with no cutoff"), `notes\n\n${FOOTER}`, "<!-- kanbanflow-sync -->\nmalformed\n" + FOOTER]) {
+    assert.equal(descriptionRefreshFor(old, complete), null);
+  }
+  assert.equal(descriptionRefreshFor(legacy(`old\n\n${FOOTER}`, 100), complete), null);
+  assert.equal(descriptionRefreshFor(legacy(`old\n\n${FOOTER}`), legacy(`new\n\n${FOOTER}`)), null);
+});
+
+test("a complete source may itself quote the old cutoff marker without being treated as incomplete", () => {
+  const complete = descriptionFor(issue(`A bug report can end with the literal text\n${FOOTER}`), null);
+  assert.equal(needsContentRestoration(complete), false);
+  assert.equal(bodyOf(complete), `A bug report can end with the literal text\n${FOOTER}`);
+  assert.equal(descriptionRefreshFor(complete, descriptionFor(issue("later source"), null)), null);
+});
+
+test("a legacy omitted-provenance stub can be recovered from its task identity", () => {
+  const stub = "<!-- kanbanflow-sync -->\n**Issue:** (provenance omitted: header exceeded description budget)\n<!-- /kanbanflow-sync -->";
+  const complete = descriptionFor(issue("full source"), null);
+  assert.equal(needsContentRestoration(stub), true);
+  assert.equal(descriptionRefreshFor(stub, complete), complete);
+});
+
+test("an incomplete comment does not block a full additive repair, which then deduplicates", () => {
+  const old = { text: `<!-- gh:IC_old -->\nsource\n\npartial\n\n${COMMENT_FOOTER}` };
+  assert.equal(completeCommentIds([old]).has("IC_old"), false);
+  const body = " complete 漢字🙂\n".repeat(6000) + "final requirement  \n";
+  const restored = { text: commentTextFor({ ghId: "IC_old", header: "source", body }) };
+  assert.ok(restored.text.endsWith(body));
+  assert.deepEqual([...completeCommentIds([old, restored])], ["IC_old"]);
+  assert.equal(old.text, `<!-- gh:IC_old -->\nsource\n\npartial\n\n${COMMENT_FOOTER}`);
+  const literal = { text: commentTextFor({ ghId: "IC_literal", header: "source", body: COMMENT_FOOTER }) };
+  assert.equal(completeCommentIds([literal]).has("IC_literal"), true);
+  assert.deepEqual([...completeCommentIds([{ text: "ordinary note" }, { text: "<!-- gh:IC_existing -->\nold complete copy" }])], ["IC_existing"]);
+});
+
+function fixture({ taskChanges = {}, sourceMissing = false, conflictingProject = false, mutateBeforeWrite = false, corruptSave = false, projectDescription = "<!-- github: owner/repository -->" } = {}) {
+  const source = issue("old prefix\n" + "full source 漢🙂\n".repeat(3000) + "END  \n");
+  let task = { id: 7, name: "#488 Human-kept task title", description: legacy(`old prefix\n\n${FOOTER}`), updatedAt: "before", status: "Review", priority: "High", featureId: 4, sortOrder: 2.5, assignee: "Human", ...taskChanges };
+  const calls = [];
+  const request = async (method, path, body) => {
+    if (method === "GET" && path === "/api/projects/2/external-work-item-links") return [];
+    calls.push({ method, path, body });
+    if (method === "GET" && path === "/api/projects") {
+      const project = { id: 2, name: "repository", description: projectDescription };
+      return conflictingProject ? [project, { ...project, id: 3 }] : [project];
+    }
+    if (method === "GET" && path === "/api/projects/2/tasks") return [{ ...task }];
+    if (method === "GET" && path === "/api/tasks/7") return { ...task, ...(mutateBeforeWrite ? { description: "human changed this while the repair was prepared" } : {}) };
+    if (method === "PUT" && path === "/api/tasks/7") {
+      assert.deepEqual(Object.keys(body).sort(), ["actor", "description", "name"]);
+      task = { ...task, name: body.name, description: corruptSave ? "partial" : body.description, updatedAt: "after" };
+      return { ...task };
+    }
+    throw new Error(`Unexpected request ${method} ${path}`);
+  };
+  let sourceReads = 0;
+  const readSources = async () => { sourceReads++; return { issues: sourceMissing ? [] : [source], prByIssue: new Map() }; };
+  return { request, readSources, readRepositoryIdentity: async () => ({ externalId: "R_restore", fullName: "owner/repository" }), calls, source, getTask: () => task, sourceReads: () => sourceReads };
 }
 
-test("a multi-byte body is capped by UTF-8 bytes", async () => {
-  const { excerptFor } = await load(undefined, "multibyte");
-  const budget = 160;
-  const body = Array.from({ length: 12 }, (_, i) => `第${i}行：漢字漢字漢字`).join("\n");
-  assert.ok(body.length < budget, "fixture must fit by UTF-16 units so .length would fail this test");
-  const output = excerptFor(body, budget);
-  assert.ok(Buffer.byteLength(output, "utf8") <= budget);
-  assert.match(output, /truncated/);
+test("restore-content dry-run reads real candidates but performs no mutation", async () => {
+  const io = fixture();
+  const before = structuredClone(io.getTask());
+  const result = await restoreContent("owner/repository", { dryRun: true, actor: "repair" }, io);
+  assert.deepEqual(result, { candidates: 1, restored: 1, preservedPriorText: 0 });
+  assert.ok(io.calls.every(c => c.method === "GET"));
+  assert.deepEqual(io.getTask(), before);
+  assert.equal(io.sourceReads(), 1);
 });
 
-test("--max-comment-chars truncates multi-byte comments by characters, not UTF-8 bytes", async () => {
-  const { commentTextFor } = await load(undefined, "multibyte-comment-chars");
-  const firstLine = "漢字漢字漢字漢字漢字";
-  const comment = {
-    ghId: "IC_multibyte",
-    header: "**octocat** commented:",
-    body: `${firstLine}\n${"続".repeat(60)}`,
+test("restore-content changes only an existing description and its audit actor, then becomes a no-op", async () => {
+  const io = fixture();
+  const before = structuredClone(io.getTask());
+  await restoreContent("owner/repository", { dryRun: false, actor: "repair" }, io);
+  assert.equal(bodyOf(io.getTask().description), io.source.body);
+  assert.deepEqual({ ...io.getTask(), description: before.description, updatedAt: before.updatedAt }, before);
+  assert.equal(io.calls.filter(c => c.method === "PUT").length, 1);
+  assert.equal(io.calls.find(c => c.method === "PUT").body.actor, "repair");
+  const writes = io.calls.filter(c => c.method !== "GET").length;
+  const second = await restoreContent("owner/repository", { dryRun: false, actor: "repair" }, io);
+  assert.equal(second.candidates, 0);
+  assert.equal(second.restored, 0);
+  assert.equal(io.calls.filter(c => c.method !== "GET").length, writes);
+  assert.equal(io.sourceReads(), 1);
+});
+
+test("content restoration refuses ambiguous projects, missing source and concurrent board changes before writing", async () => {
+  for (const options of [{ conflictingProject: true }, { sourceMissing: true }, { mutateBeforeWrite: true }]) {
+    const io = fixture(options);
+    await assert.rejects(restoreContent("owner/repository", { dryRun: false, actor: "repair" }, io));
+    assert.ok(io.calls.every(c => c.method === "GET"));
+  }
+});
+
+test("content restoration fails when persistence does not return the complete text", async () => {
+  const io = fixture({ corruptSave: true });
+  await assert.rejects(restoreContent("owner/repository", { dryRun: false, actor: "repair" }, io), /full-content read-back failed/);
+  assert.equal(io.calls.filter(c => c.method === "PUT").length, 1);
+});
+
+test("content restoration preserves board text whose source changed and leaves foreign provenance untouched", async () => {
+  const io = fixture({ taskChanges: { description: legacy(`local decision  \n\n${FOOTER}`) } });
+  const result = await restoreContent("owner/repository", { dryRun: false, actor: "repair" }, io);
+  assert.equal(result.preservedPriorText, 1);
+  assert.ok(io.getTask().description.includes(io.source.body));
+  assert.ok(io.getTask().description.includes("local decision  \n<!-- /kanbanflow-preserved-board-text -->"));
+  const foreign = fixture({ taskChanges: { description: legacy(`old\n\n${FOOTER}`).replace("owner/repository/issues/", "someone/else/issues/") } });
+  await assert.rejects(restoreContent("owner/repository", { dryRun: false, actor: "repair" }, foreign), /different repository/);
+  assert.ok(foreign.calls.every(c => c.method === "GET"));
+});
+
+test("title-only stub repair requires a durable matching repository marker", async () => {
+  const description = "<!-- kanbanflow-sync -->\n**Issue:** (provenance omitted: header exceeded description budget)\n<!-- /kanbanflow-sync -->";
+  const unmarked = fixture({ taskChanges: { description }, projectDescription: "unmarked repository" });
+  await assert.rejects(restoreContent("owner/repository", { dryRun: false, actor: "repair" }, unmarked), /durable matching project marker/);
+  assert.ok(unmarked.calls.every(c => c.method === "GET"));
+  const marked = fixture({ taskChanges: { description } });
+  await restoreContent("owner/repository", { dryRun: false, actor: "repair" }, marked);
+  assert.equal(bodyOf(marked.getTask().description), marked.source.body);
+});
+
+test("content restoration honors immutable repository and task identity before any writes", async () => {
+  const matching = { id: 1, taskId: 7, provider: "GitHub", state: "Active",
+    repositoryExternalId: "R_restore", externalNodeId: "I_488", externalNumber: 488 };
+  for (const changes of [
+    { state: "Quarantined" }, { repositoryExternalId: "R_foreign" },
+    { externalNodeId: "I_foreign" }, { externalNumber: 999 }, { externalNodeId: null },
+  ]) {
+    const io = fixture({ taskChanges: { externalLinks: [{ ...matching, ...changes }] } });
+    await assert.rejects(restoreContent("owner/repository", { dryRun: false }, io), /durable identity/);
+    assert.ok(io.calls.every(c => c.method === "GET"));
+  }
+  const foreignProject = fixture({ projectDescription: "<!-- github-node: R_foreign -->\n<!-- github: owner/repository -->" });
+  await assert.rejects(restoreContent("owner/repository", { dryRun: false }, foreignProject), /conflicting immutable repository/);
+  assert.ok(foreignProject.calls.every(c => c.method === "GET"));
+  const valid = fixture({ taskChanges: { name: "Human renamed title", externalLinks: [matching] } });
+  await restoreContent("owner/repository", { dryRun: false }, valid);
+  assert.equal(bodyOf(valid.getTask().description), valid.source.body);
+  assert.equal(valid.getTask().name, "Human renamed title");
+});
+
+test("content restoration recovers an omitted header after sync removed the issue number from its title", async () => {
+  const description = "<!-- kanbanflow-sync -->\n**Issue:** (provenance omitted: header exceeded description budget)\n<!-- /kanbanflow-sync -->";
+  const link = { id: 1, taskId: 7, provider: "GitHub", state: "Active",
+    repositoryExternalId: "R_restore", externalNodeId: "I_488", externalNumber: 488 };
+  const io = fixture({ taskChanges: { name: "Plain synced title", description, externalLinks: [link] } });
+  await restoreContent("owner/repository", { dryRun: false, actor: "repair" }, io);
+  assert.equal(bodyOf(io.getTask().description), io.source.body);
+  assert.equal(io.getTask().name, "Plain synced title");
+});
+
+test("content restoration refuses ambiguous provenance and newly quarantined links", async () => {
+  const initial = legacy(`old\n\n${FOOTER}`);
+  for (const description of [
+    initial.replace("**State:**", "**Issue:** https://github.com/owner/repository/issues/999\n**State:**"),
+    initial + "\n<!-- kanbanflow-sync -->\n**Issue:** https://github.com/owner/repository/issues/999\n<!-- /kanbanflow-sync -->\n" + FOOTER,
+  ]) {
+    const io = fixture({ taskChanges: { description } });
+    await assert.rejects(restoreContent("owner/repository", { dryRun: false }, io), /malformed source provenance/);
+    assert.ok(io.calls.every(c => c.method === "GET"));
+  }
+  const io = fixture();
+  const originalRequest = io.request;
+  let reads = 0;
+  io.request = async (method, path, body) => {
+    if (path.endsWith("/external-work-item-links")) {
+      if (++reads === 1) return [];
+      return [{ id: 1, taskId: 7, provider: "GitHub", state: "Quarantined", repositoryExternalId: "R_restore" }];
+    }
+    return originalRequest(method, path, body);
   };
-  const output = commentTextFor(comment, 50);
-  const mirroredBody = output.slice(output.indexOf("\n\n") + 2);
-
-  assert.equal(mirroredBody, `${firstLine}\n\n…(truncated — read it on GitHub)`);
-  assert.ok(mirroredBody.length <= 50);
-  assert.ok(Buffer.byteLength(mirroredBody, "utf8") > 50,
-    "fixture must exceed the byte budget so reverting the call site to byte counting fails");
+  await assert.rejects(restoreContent("owner/repository", { dryRun: false }, io), /durable identity/);
+  assert.ok(io.calls.every(c => c.method === "GET"));
 });
 
-test("an ASCII body near the byte boundary is not truncated unnecessarily", async () => {
-  const { excerptFor } = await load(undefined, "ascii");
-  const body = "a".repeat(200);
-  assert.equal(excerptFor(body, 200), body);
+test("outbound issue bodies preserve complete Markdown and quoted sync blocks", () => {
+  const text = "    authored indentation\r\n<!-- kanbanflow-sync -->\nquoted metadata\n<!-- /kanbanflow-sync -->\nfinal hard break  \r\n\t";
+  for (const description of [text, descriptionFor(issue(text), null)]) {
+    const body = issueBodyFor({ name: "Project" }, { id: 7, status: "Todo", priority: "High", description }, "Feature");
+    assert.ok(body.includes(`\n\n${text}\n\n---`));
+  }
 });
 
-test("truncation inside a fenced code block closes the fence before the prose footer", async () => {
-  const { excerptFor } = await load(undefined, "fence");
-  const body = `intro\n\`\`\`js\n${"const value = 1;\n".repeat(30)}\`\`\``;
-  const output = excerptFor(body, 180);
-  const fences = output.match(/^```/gm) || [];
-  assert.equal(fences.length % 2, 0, "backtick fences must be balanced");
-  assert.ok(output.lastIndexOf("```") < output.lastIndexOf(FOOTER), "footer must follow the closing fence");
-});
-
-test("truncation inside a tilde-fenced code block closes the fence before the prose footer", async () => {
-  const { excerptFor } = await load(undefined, "tilde-fence");
-  const body = `intro\n~~~~js\n${"const value = 1;\n".repeat(30)}~~~~`;
-  const output = excerptFor(body, 180);
-  const fences = output.match(/^~~~~(?:js)?$/gm) || [];
-  assert.equal(fences.length, 2, "tilde fence opener and generated closer must both be present");
-  assert.ok(output.lastIndexOf("~~~~") < output.lastIndexOf(FOOTER), "footer must follow the tilde closer");
-});
-
-test("a closing fence cannot carry an info string", async () => {
-  const { excerptFor } = await load(undefined, "invalid-fence-close");
-  const body = `intro\n\`\`\`js\nkept\n\`\`\`not-a-close\n${"more code\n".repeat(30)}`;
-  const output = excerptFor(body, 160);
-  assert.match(output, /^```not-a-close$/m, "the invalid closer must be retained in the fixture excerpt");
-  assert.match(output, /\n```\n\n…\(truncated — see the issue\)$/, "an actual closing fence must be added before the footer");
-});
-
-test("truncation outside a fence still cuts on a line boundary", async () => {
-  const { excerptFor } = await load(undefined, "line");
-  const body = Array.from({ length: 30 }, (_, i) => `whole line ${i}`).join("\n");
-  const output = excerptFor(body, 150);
-  const kept = output.slice(0, output.indexOf(`\n\n${FOOTER}`));
-  assert.ok(body.split("\n").includes(kept.split("\n").at(-1)), "last retained line must be whole");
-  assert.ok(!kept.endsWith("\n"));
-});
-
-test("the environment override is clamped at both ends and cannot exceed the safe maximum", async () => {
-  const high = await load(Number.MAX_SAFE_INTEGER, "high-clamp");
-  const low = await load(-100, "low-clamp");
-  assert.equal(high.BODY_EXCERPT_LIMIT, high.MAX_DESCRIPTION_BYTES);
-  assert.equal(low.BODY_EXCERPT_LIMIT, 1_024);
-  assert.ok(high.BODY_EXCERPT_LIMIT < 32_768);
-});
-
-test("the complete mirrored description, including header and footer, stays within its frame budget", async () => {
-  const { descriptionFor, BODY_EXCERPT_LIMIT } = await load(undefined, "description");
-  const issue = {
-    url: "https://github.com/owner/repository/issues/488",
-    state: "OPEN",
-    milestone: { title: "M1" },
-    labels: [{ name: "bug" }],
-    body: Array.from({ length: 4000 }, (_, i) => `line ${i} plain ASCII`).join("\n"),
+test("comment sync appends an incomplete source once and does not duplicate a complete legacy literal", async () => {
+  const url = "https://github.com/owner/repository/issues/488#issuecomment-1";
+  const fullBody = "Full comment 漢🙂\n".repeat(4000) + "required final sentence  \n";
+  const incoming = { ...issue("source"), comments: [
+    { id: "IC_repair", url, body: fullBody, author: { login: "octocat" } },
+    { id: "IC_literal", url, body: COMMENT_FOOTER, author: { login: "octocat" } },
+  ] };
+  const oldText = `<!-- gh:IC_repair -->\n_[issue comment](${url})_\n\npartial\n\n${COMMENT_FOOTER}`;
+  const literalText = `<!-- gh:IC_literal -->\n_[issue comment](${url})_\n\n${COMMENT_FOOTER}`;
+  const stored = [{ text: oldText }, { text: literalText }];
+  const writes = [];
+  const request = async (method, path, body) => {
+    assert.equal(path, "/api/tasks/7/comments");
+    if (method === "GET") return structuredClone(stored);
+    assert.equal(method, "POST");
+    writes.push(body);
+    stored.push({ text: body.text });
+    return { id: 99 };
   };
-  const output = descriptionFor(issue, null);
-  assert.ok(Buffer.byteLength(JSON.stringify(output), "utf8") <= BODY_EXCERPT_LIMIT);
-  assert.match(output, /truncated/);
+  await syncComments(incoming, null, 7, { dryRun: true }, request);
+  assert.equal(writes.length, 0);
+  await syncComments(incoming, null, 7, { dryRun: false }, request);
+  assert.equal(writes.length, 1);
+  assert.ok(writes[0].text.endsWith(fullBody));
+  assert.equal(writes[0].author, "octocat");
+  assert.equal(stored[0].text, oldText);
+  assert.equal(stored[1].text, literalText);
+  await syncComments(incoming, null, 7, { dryRun: false }, request);
+  assert.equal(writes.length, 1);
 });
 
-test("a newline-dense body is capped by its JSON-serialized size, not its raw size", async () => {
-  const { descriptionFor, BODY_EXCERPT_LIMIT } = await load(undefined, "serialized-description");
-  const issue = {
-    url: "https://github.com/owner/repository/issues/489",
-    state: "OPEN",
-    labels: [],
-    body: Array.from({ length: 14_000 }, () => "x").join("\n"),
+test("restore-content CLI refuses an omitted repo before reading an environment portfolio", async () => {
+  const rejectFetch = "globalThis.fetch = async () => { throw new Error('UNEXPECTED_API_REQUEST'); };";
+  const cli = fileURLToPath(new URL("./portfolio-sync.mjs", import.meta.url));
+  await assert.rejects(promisify(execFile)(process.execPath,
+    ["--import", `data:text/javascript,${encodeURIComponent(rejectFetch)}`, cli, "restore-content"], {
+      env: { ...process.env, KANBANFLOW_API_URL: "http://127.0.0.1:1", KANBANFLOW_PORTFOLIO_REPOS: "owner/should-not-be-read" },
+      timeout: 10_000,
+      windowsHide: true,
+    }), (error) => {
+      assert.equal(error.code, 2);
+      assert.match(error.stderr, /`restore-content` needs an explicit repo/);
+      assert.doesNotMatch(error.stderr, /UNEXPECTED_API_REQUEST/);
+      return true;
+    });
+});
+
+function batchFixture({ missingSecondSource = false, changeSecondBeforeWrite = false } = {}) {
+  const sources = [issue("first prefix\nFirst complete source 漢🙂\nFINAL FIRST  \n", 488),
+    { ...issue("second prefix\nSecond complete source\r\nFINAL SECOND\t\n", 489), state: "CLOSED" }];
+  const tasks = new Map(sources.map((source, index) => [7 + index, {
+    id: 7 + index, name: `#${source.number} Local title ${index + 1}`,
+    description: legacy(`${index === 0 ? "first" : "second"} prefix\n\n${FOOTER}`, source.number),
+    updatedAt: `before-${7 + index}`, status: index === 0 ? "Review" : "Todo",
+    priority: index === 0 ? "High" : "Low", featureId: 4 + index, sortOrder: index + 0.5, assignee: "Human",
+  }]));
+  const correction = "Human correction during preparation  ";
+  const calls = [];
+  let changePending = changeSecondBeforeWrite;
+  let sourceReads = 0;
+  const request = async (method, path, body) => {
+    if (method === "GET" && path === "/api/projects/2/external-work-item-links") return [];
+    calls.push({ method, path, body: body && structuredClone(body) });
+    if (method === "GET" && path === "/api/projects") return [{ id: 2, name: "repository", description: "<!-- github: owner/repository -->" }];
+    if (method === "GET" && path === "/api/projects/2/tasks") return structuredClone([...tasks.values()]);
+    const id = Number(/^\/api\/tasks\/(\d+)$/.exec(path)?.[1]);
+    const task = tasks.get(id);
+    if (!task) throw new Error(`Unexpected request ${method} ${path}`);
+    if (method === "GET") {
+      if (id === 8 && changePending) {
+        task.description = legacy(`${correction}\n\n${FOOTER}`, 489);
+        task.updatedAt = "human-revision";
+        changePending = false;
+      }
+      return structuredClone(task);
+    }
+    assert.equal(method, "PUT");
+    assert.deepEqual(Object.keys(body).sort(), ["actor", "description", "name"]);
+    tasks.set(id, { ...task, name: body.name, description: body.description, updatedAt: `saved-${id}` });
+    return structuredClone(tasks.get(id));
   };
-  assert.ok(Buffer.byteLength(issue.body, "utf8") < BODY_EXCERPT_LIMIT, "raw fixture must fit the old budget");
-  assert.ok(Buffer.byteLength(JSON.stringify(issue.body), "utf8") > BODY_EXCERPT_LIMIT, "serialized fixture must exceed it");
-  const output = descriptionFor(issue, null);
-  assert.ok(Buffer.byteLength(JSON.stringify(output), "utf8") <= BODY_EXCERPT_LIMIT);
-  assert.match(output, /truncated/);
-});
-
-test("an oversized provenance header is replaced by a bounded sync stub", async () => {
-  const { descriptionFor, BODY_EXCERPT_LIMIT } = await load(undefined, "oversized-header");
-  const issue = {
-    url: "https://github.com/owner/repository/issues/490",
-    state: "OPEN",
-    labels: [{ name: "x".repeat(BODY_EXCERPT_LIMIT + 1_000) }],
-    body: "",
+  const readSources = async () => {
+    sourceReads++;
+    // Reverse the source order so selecting an issue by array position corrupts a tested result.
+    return { issues: missingSecondSource ? [sources[0]] : [...sources].reverse(), prByIssue: new Map() };
   };
-  const output = descriptionFor(issue, null);
-  assert.ok(Buffer.byteLength(JSON.stringify(output), "utf8") <= BODY_EXCERPT_LIMIT);
-  assert.match(output, /^<!-- kanbanflow-sync -->/);
-  assert.match(output, /provenance omitted/);
+  return { request, readSources, readRepositoryIdentity: async () => ({ externalId: "R_restore", fullName: "owner/repository" }), calls, sources, correction,
+    getTasks: () => structuredClone([...tasks.values()]), sourceReads: () => sourceReads };
+}
+
+test("restore-content restores both candidates from their own sources without changing other fields", async () => {
+  const io = batchFixture();
+  const before = io.getTasks();
+  const result = await restoreContent("owner/repository", { dryRun: false, actor: "batch-repair" }, io);
+  assert.deepEqual(result, { candidates: 2, restored: 2, preservedPriorText: 0 });
+  assert.deepEqual(io.calls.filter(c => c.method !== "GET").map(c => [c.method, c.path, c.body.actor]),
+    [["PUT", "/api/tasks/7", "batch-repair"], ["PUT", "/api/tasks/8", "batch-repair"]]);
+  for (const [index, task] of io.getTasks().entries()) {
+    assert.equal(bodyOf(task.description), io.sources[index].body);
+    assert.deepEqual({ ...task, description: before[index].description, updatedAt: before[index].updatedAt }, before[index]);
+  }
+  assert.equal(io.sourceReads(), 1);
 });
 
-const syncDescription = (body) => `<!-- kanbanflow-sync -->
-**Issue:** https://github.com/owner/repository/issues/488
-**State:** OPEN · **Milestone:** M1 · **Labels:** bug
-**Open PR:** none
-**Synced:** 2026-08-30T12:00:00.000Z
-<!-- /kanbanflow-sync -->
-
-${body}`;
-
-test("a sync-shaped, still-truncated description is selected for refresh", async () => {
-  const { descriptionRefreshFor } = await load(undefined, "refresh-truncated");
-  const stored = syncDescription(`old excerpt\n\n${FOOTER}`);
-  const regenerated = syncDescription("complete current body");
-  assert.equal(descriptionRefreshFor(stored, regenerated), regenerated);
+test("restore-content preflights a missing second source before writing the valid first candidate", async () => {
+  const io = batchFixture({ missingSecondSource: true });
+  const before = io.getTasks();
+  await assert.rejects(restoreContent("owner/repository", { dryRun: false, actor: "batch-repair" }, io),
+    /Task 8: full GitHub issue 489 is unavailable/);
+  assert.deepEqual(io.calls.filter(c => c.method !== "GET"), []);
+  assert.deepEqual(io.getTasks(), before);
+  assert.equal(io.sourceReads(), 1);
 });
 
-test("a sync-shaped description without the truncation marker is not refreshed", async () => {
-  const { descriptionRefreshFor } = await load(undefined, "refresh-untruncated");
-  assert.equal(descriptionRefreshFor(syncDescription("complete old body"), syncDescription("complete new body")), null);
-});
+test("restore-content retries a partially successful batch without rewriting the first task or losing a correction", async () => {
+  const io = batchFixture({ changeSecondBeforeWrite: true });
+  await assert.rejects(restoreContent("owner/repository", { dryRun: false, actor: "batch-repair" }, io),
+    /Task 8 changed while the repair was being prepared/);
+  const [firstSaved, secondChanged] = io.getTasks();
+  assert.equal(bodyOf(firstSaved.description), io.sources[0].body);
+  assert.equal(secondChanged.description, legacy(`${io.correction}\n\n${FOOTER}`, 489));
+  assert.deepEqual(io.calls.filter(c => c.method !== "GET").map(c => c.path), ["/api/tasks/7"]);
 
-test("a human-edited description with the sync header but no marker is never overwritten", async () => {
-  const { descriptionRefreshFor } = await load(undefined, "refresh-human-edit");
-  const humanEdit = syncDescription("Human rewrite: preserve this decision and its rationale.");
-  assert.equal(descriptionRefreshFor(humanEdit, syncDescription("GitHub's current issue body")), null);
-});
+  const retried = await restoreContent("owner/repository", { dryRun: false, actor: "batch-repair" }, io);
+  assert.deepEqual(retried, { candidates: 1, restored: 1, preservedPriorText: 1 });
+  const [firstAfterRetry, secondSaved] = io.getTasks();
+  assert.deepEqual(firstAfterRetry, firstSaved);
+  assert.ok(bodyOf(secondSaved.description).startsWith(`${io.sources[1].body}\n\n<!-- kanbanflow-preserved-board-text -->`));
+  assert.ok(secondSaved.description.includes(`\n\n${io.correction}\n<!-- /kanbanflow-preserved-board-text -->`));
+  assert.deepEqual({ ...secondSaved, description: secondChanged.description, updatedAt: secondChanged.updatedAt }, secondChanged);
+  assert.deepEqual(io.calls.filter(c => c.method !== "GET").map(c => c.path), ["/api/tasks/7", "/api/tasks/8"]);
 
-test("a truncated description that regenerates identically produces no write", async () => {
-  const { descriptionRefreshFor } = await load(undefined, "refresh-identical");
-  const identical = syncDescription(`same excerpt\n\n${FOOTER}`);
-  assert.equal(descriptionRefreshFor(identical, identical), null);
-});
-
-test("a sync timestamp change alone does not rewrite a still-truncated description", async () => {
-  const { descriptionRefreshFor } = await load(undefined, "refresh-timestamp-only");
-  const stored = syncDescription(`same excerpt\n\n${FOOTER}`);
-  const regenerated = stored.replace("2026-08-30T12:00:00.000Z", "2026-08-30T12:01:00.000Z");
-  assert.equal(descriptionRefreshFor(stored, regenerated), null);
-});
-
-test("a non-sync description with copied truncation text is not refreshed", async () => {
-  const { descriptionRefreshFor } = await load(undefined, "refresh-nonsync");
-  assert.equal(descriptionRefreshFor(`human notes\n\n${FOOTER}`, syncDescription("new body")), null);
+  const repeated = await restoreContent("owner/repository", { dryRun: false, actor: "batch-repair" }, io);
+  assert.deepEqual(repeated, { candidates: 0, restored: 0, preservedPriorText: 0 });
+  assert.deepEqual(io.calls.filter(c => c.method !== "GET").map(c => c.path), ["/api/tasks/7", "/api/tasks/8"]);
+  assert.equal(io.sourceReads(), 2);
 });
 
 // --- argv guards: a flag must never be consumed as another flag's value -------------------
@@ -189,14 +430,13 @@ const REFUSAL_TAIL =
   ` A flag is never a value: consuming one silently discards it, and a swallowed --dry-run runs a LIVE sync.`;
 
 for (const [flag, argv, need] of [
-  ["--max-comment-chars", ["sync", "--max-comment-chars", "--dry-run"], "a character count"],
+
   ["--repos", ["sync", "--repos", "--dry-run"], "a comma-separated owner/repo list"],
   ["--actor", ["sync", "--actor", "--dry-run"], "a non-blank name"],
   ["--task", ["push-issue", "--task", "--dry-run"], "an integer task id"],
   ["--limit", ["push-issue", "--limit", "--dry-run"], "an integer count"],
 ]) {
   test(`${flag} refuses a following --dry-run instead of swallowing it and running live`, async () => {
-    const { parseArgs } = await load(undefined, `swallow${flag}`);
     const args = parseArgs(argv);
     assert.equal(args.error, `${flag} needs ${need}, but got the flag "--dry-run".${REFUSAL_TAIL}`);
     assert.equal(args.dryRun, false,
@@ -205,22 +445,19 @@ for (const [flag, argv, need] of [
 }
 
 test("--actor refuses a short flag (-h) just as it refuses a long flag (--dry-run)", async () => {
-  const { parseArgs } = await load(undefined, "short-flag-actor");
   const args = parseArgs(["sync", "--actor", "-h"]);
   assert.equal(args.error, `--actor needs a non-blank name, but got the flag "-h".${REFUSAL_TAIL}`);
 });
 
 test("a value flag at the end of argv refuses instead of falling through to the default repo list", async () => {
-  const { parseArgs } = await load(undefined, "argv-trailing-value-flag");
   const args = parseArgs(["sync", "--dry-run", "--repos"]);
   assert.equal(args.error, `--repos needs a comma-separated owner/repo list, but got nothing.${REFUSAL_TAIL}`);
 });
 
 test("a fully specified command line still parses every value-taking flag", async () => {
-  const { parseArgs } = await load(undefined, "argv-happy-path");
   const args = parseArgs([
     "push-issue", "owner/repo", "--task", "42", "--limit", "5",
-    "--actor", "nightly-sync", "--max-comment-chars", "500", "--dry-run",
+    "--actor", "nightly-sync", "--dry-run",
   ]);
   assert.equal(args.error, null);
   assert.equal(args.command, "push-issue");
@@ -229,11 +466,10 @@ test("a fully specified command line still parses every value-taking flag", asyn
   assert.equal(args.task, 42);
   assert.equal(args.limit, 5);
   assert.equal(args.actor, "nightly-sync");
-  assert.equal(args.maxCommentChars, 500);
+
 });
 
 test("--repos still accepts a comma-separated list and still leaves --dry-run visible", async () => {
-  const { parseArgs } = await load(undefined, "argv-repos-list");
   const args = parseArgs(["sync", "--repos", "owner/a, owner/b", "--dry-run"]);
   assert.equal(args.error, null);
   assert.deepEqual(args.repos, ["owner/a", "owner/b"]);
@@ -942,7 +1178,6 @@ test("backfill quarantines a new candidate colliding with persisted Active or Qu
 // wording distinguishes a refusal from an accident.
 test("every value-consuming flag refuses a following flag instead of swallowing it", () => {
   const cases = [
-    ["--max-comment-chars", "maxCommentChars", 0],
     // `octo/board` is a bare positional repo, so --repos starts from that one entry.
     ["--repos", "repos", ["octo/board"]],
     ["--actor", "actor", "portfolio-sync"],
@@ -987,7 +1222,7 @@ test("a genuine value still parses, so the guard refuses flags and nothing else"
     "push-issue", "octo/board", "--allow-write", "--task", " 7 ", "--resume", OP,
     "--authorize-ambiguous-retry", OP, "--actor", "operator-a",
     "--resolution-reason", "Reviewed the exhaustive zero-marker scan", "--limit", "5",
-    "--max-comment-chars", "120", "--repos", "octo/other",
+    "--repos", "octo/other",
   ]);
   assert.equal(args.error, null);
   assert.equal(args.task, 7);
@@ -997,7 +1232,6 @@ test("a genuine value still parses, so the guard refuses flags and nothing else"
   assert.equal(args.actorExplicit, true);
   assert.equal(args.resolutionReason, "Reviewed the exhaustive zero-marker scan");
   assert.equal(args.limit, 5);
-  assert.equal(args.maxCommentChars, 120);
   assert.deepEqual(args.repos, ["octo/board", "octo/other"]);
 });
 

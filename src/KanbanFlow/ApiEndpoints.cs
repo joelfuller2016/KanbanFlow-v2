@@ -1,6 +1,8 @@
+using KanbanFlow.Services;
 using System.Text.Json;
 using KanbanFlow.Data;
 using KanbanFlow.Models;
+using KanbanFlow.Models.Workflows;
 using Microsoft.EntityFrameworkCore;
 
 namespace KanbanFlow;
@@ -475,7 +477,7 @@ public static class ApiEndpoints
         });
 
         // POST /api/projects — create
-        app.MapPost("/api/projects", async (ProjectDto dto, AppDbContext db) =>
+        app.MapPost("/api/projects", async (ProjectDto dto, AppDbContext db, CancellationToken ct) =>
         {
             if (string.IsNullOrWhiteSpace(dto.Name))
                 return Results.UnprocessableEntity(new { message = "Name is required." });
@@ -489,7 +491,7 @@ public static class ApiEndpoints
             };
 
             db.Projects.Add(project);
-            await db.SaveChangesAsync();
+            await db.SaveChangesWithAuditAsync(ct: ct);
 
             return Results.Created($"/api/projects/{project.Id}", new
             {
@@ -504,9 +506,9 @@ public static class ApiEndpoints
         });
 
         // PUT /api/projects/{id} — update
-        app.MapPut("/api/projects/{id:int}", async (int id, ProjectDto dto, AppDbContext db) =>
+        app.MapPut("/api/projects/{id:int}", async (int id, ProjectDto dto, AppDbContext db, CancellationToken ct) =>
         {
-            var project = await db.Projects.FindAsync(id);
+            var project = await db.Projects.FindAsync([id], ct);
             if (project is null)
                 return Results.NotFound(new { message = $"Project {id} not found." });
 
@@ -538,7 +540,7 @@ public static class ApiEndpoints
             }
             if (changed) project.UpdatedAt = DateTime.UtcNow;
 
-            await db.SaveChangesAsync();
+            await db.SaveChangesWithAuditAsync(ct: ct);
 
             return Results.Ok(new
             {
@@ -578,53 +580,27 @@ public static class ApiEndpoints
 
     private static void MapActivityEndpoints(this WebApplication app)
     {
-        // GET /api/projects/{id}/activity — durable project event trail
-        app.MapGet("/api/projects/{id:int}/activity", async (int id, int? limit, AppDbContext db) =>
+        // Existing callers keep the array response; MCP can request explicit paging metadata.
+        app.MapGet("/api/projects/{id:int}/activity", async (int id, int? limit, int? beforeId, bool? includePage, string? entityType, int? entityId, string? entityKey, AppDbContext db, CancellationToken ct) =>
         {
-            // Audit events are retained without a Project FK so history survives deletion (#85).
-            // Query events first; 404 only when there is genuinely nothing — no events AND the
-            // project does not currently exist. A deleted project with retained events still returns them.
-            var take = Math.Clamp(limit ?? 100, 1, 500);
-            var events = await db.ActivityEvents
-                .Where(e => e.ProjectId == id)
-                .AsNoTracking()
-                .OrderByDescending(e => e.CreatedAt)
-                // ── Id tiebreak (#328). CreatedAt alone is NOT a total order here: TaskService
-                // writes several events inside one SaveChangesAsync, so identical instants are
-                // routine. Without a tiebreak the sort is unstable, and a `Take(n)` over an
-                // unstable sort can return a different SET between two identical requests — not
-                // merely a different order. Applied to EVERY ActivityEvent query below, not just
-                // the one that surfaced it.
-                .ThenByDescending(e => e.Id)
-                .Take(take)
-                .ToListAsync();
-
-            if (events.Count == 0 && !await db.Projects.AnyAsync(p => p.Id == id))
+            ActivityPage page;
+            try { page = await ActivityLogReader.ReadAsync(db, projectId: id, limit: limit, beforeId: beforeId, ct: ct, entityType: entityType, entityId: entityId, entityKey: entityKey); }
+            catch (ValidationException ex) { return Results.UnprocessableEntity(new { message = ex.Message }); }
+            if (page.Total == 0 && !await db.Projects.AnyAsync(p => p.Id == id, ct))
                 return Results.NotFound(new { message = $"Project {id} not found." });
-
-            return Results.Ok(events.Select(MapActivityEvent));
+            return includePage == true ? Results.Ok(new { items = page.Items.Select(MapActivityEvent), page.Total, page.NextBeforeId })
+                : Results.Ok(page.Items.Select(MapActivityEvent));
         });
 
-        // GET /api/tasks/{id}/activity — durable task event trail
-        app.MapGet("/api/tasks/{id:int}/activity", async (int id, int? limit, AppDbContext db) =>
+        app.MapGet("/api/tasks/{id:int}/activity", async (int id, int? limit, int? beforeId, bool? includePage, string? entityType, int? entityId, string? entityKey, AppDbContext db, CancellationToken ct) =>
         {
-            var take = Math.Clamp(limit ?? 100, 1, 500);
-            var events = await db.ActivityEvents
-                .Where(e => e.EntityType == "Task" && e.EntityId == id)
-                .AsNoTracking()
-                .OrderByDescending(e => e.CreatedAt)
-                .ThenByDescending(e => e.Id)   // total order — see the note on /api/projects/{id}/activity
-                .Take(take)
-                .ToListAsync();
-
-            if (events.Count == 0)
-            {
-                var taskExists = await db.Tasks.AnyAsync(t => t.Id == id);
-                if (!taskExists)
-                    return Results.NotFound(new { message = $"Task {id} not found." });
-            }
-
-            return Results.Ok(events.Select(MapActivityEvent));
+            ActivityPage page;
+            try { page = await ActivityLogReader.ReadAsync(db, taskId: id, limit: limit, beforeId: beforeId, ct: ct, entityType: entityType, entityId: entityId, entityKey: entityKey); }
+            catch (ValidationException ex) { return Results.UnprocessableEntity(new { message = ex.Message }); }
+            if (page.Total == 0 && !await db.Tasks.AnyAsync(t => t.Id == id, ct))
+                return Results.NotFound(new { message = $"Task {id} not found." });
+            return includePage == true ? Results.Ok(new { items = page.Items.Select(MapActivityEvent), page.Total, page.NextBeforeId })
+                : Results.Ok(page.Items.Select(MapActivityEvent));
         });
     }
 
@@ -731,7 +707,8 @@ public static class ApiEndpoints
                     Plan: dto.Plan,
                     Status: status,
                     Tags: dto.Tags,
-                    Priority: priority);
+                    Priority: priority,
+                    ExpectedWorkflowVersion: dto.ExpectedWorkflowVersion);
                 var idea = await ideaSvc.UpdateAsync(id, update, dto.Actor, ct);
 
                 return Results.Ok(MapIdea(idea));
@@ -739,6 +716,10 @@ public static class ApiEndpoints
             catch (Services.IdeaNotFoundException)
             {
                 return Results.NotFound(new { message = $"Idea {id} not found." });
+            }
+            catch (WorkflowException ex) when (ex.Code == "conflict")
+            {
+                return Results.Conflict(new { message = ex.Message });
             }
             catch (Services.ValidationException ex)
             {
@@ -768,12 +749,16 @@ public static class ApiEndpoints
         {
             try
             {
-                var result = await ideaSvc.PromoteAsync(id, dto?.Actor, ct);
+                var result = await ideaSvc.PromoteAsync(id, dto?.Actor, ct: ct);
                 return Results.Ok(new { ideaId = result.IdeaId, projectId = result.ProjectId });
             }
             catch (Services.IdeaNotFoundException)
             {
                 return Results.NotFound(new { message = $"Idea {id} not found." });
+            }
+            catch (WorkflowException ex) when (ex.Code == "conflict")
+            {
+                return Results.Conflict(new { message = ex.Message });
             }
             catch (Services.ValidationException ex)
             {
@@ -998,9 +983,9 @@ public static class ApiEndpoints
         });
 
         // POST /api/projects/{projectId}/features — create (optionally nested under parentFeatureId)
-        app.MapPost("/api/projects/{projectId:int}/features", async (int projectId, FeatureDto dto, AppDbContext db) =>
+        app.MapPost("/api/projects/{projectId:int}/features", async (int projectId, FeatureDto dto, AppDbContext db, CancellationToken ct) =>
         {
-            var projectExists = await db.Projects.AnyAsync(p => p.Id == projectId);
+            var projectExists = await db.Projects.AnyAsync(p => p.Id == projectId, ct);
             if (!projectExists)
                 return Results.NotFound(new { message = $"Project {projectId} not found." });
 
@@ -1010,7 +995,7 @@ public static class ApiEndpoints
             // Validate parent feature if provided
             if (dto.ParentFeatureId.HasValue)
             {
-                var parentExists = await db.Features.AnyAsync(f => f.Id == dto.ParentFeatureId.Value && f.ProjectId == projectId);
+                var parentExists = await db.Features.AnyAsync(f => f.Id == dto.ParentFeatureId.Value && f.ProjectId == projectId, ct);
                 if (!parentExists)
                     return Results.NotFound(new { message = $"Parent feature {dto.ParentFeatureId.Value} not found in project {projectId}." });
             }
@@ -1019,7 +1004,7 @@ public static class ApiEndpoints
                 ? db.Features.Where(f => f.ParentFeatureId == dto.ParentFeatureId.Value)
                 : db.Features.Where(f => f.ProjectId == projectId && f.ParentFeatureId == null);
 
-            var maxSort = await siblingQuery.MaxAsync(f => (int?)f.SortOrder) ?? -1;
+            var maxSort = await siblingQuery.MaxAsync(f => (int?)f.SortOrder, ct) ?? -1;
 
             var feature = new Feature
             {
@@ -1031,7 +1016,7 @@ public static class ApiEndpoints
             };
 
             db.Features.Add(feature);
-            await db.SaveChangesAsync();
+            await db.SaveChangesWithAuditAsync(ct: ct);
 
             return Results.Created($"/api/features/{feature.Id}", new
             {
@@ -1047,9 +1032,9 @@ public static class ApiEndpoints
         });
 
         // PUT /api/features/{id} — update
-        app.MapPut("/api/features/{id:int}", async (int id, FeatureDto dto, AppDbContext db) =>
+        app.MapPut("/api/features/{id:int}", async (int id, FeatureDto dto, AppDbContext db, CancellationToken ct) =>
         {
-            var feature = await db.Features.FindAsync(id);
+            var feature = await db.Features.FindAsync([id], ct);
             if (feature is null)
                 return Results.NotFound(new { message = $"Feature {id} not found." });
 
@@ -1078,7 +1063,7 @@ public static class ApiEndpoints
                     var allProjectFeatures = await db.Features
                         .Where(f => f.ProjectId == feature.ProjectId)
                         .AsNoTracking()
-                        .ToListAsync();
+                        .ToListAsync(ct);
 
                     var parentExists = allProjectFeatures.Any(f => f.Id == newParentFeatureId.Value);
                     if (!parentExists)
@@ -1092,7 +1077,7 @@ public static class ApiEndpoints
             }
             if (changed) feature.UpdatedAt = DateTime.UtcNow;
 
-            await db.SaveChangesAsync();
+            await db.SaveChangesWithAuditAsync(ct: ct);
 
             return Results.Ok(new
             {
@@ -1137,7 +1122,7 @@ public static class ApiEndpoints
             return Results.NotFound(new { message = $"Feature {id} not found." });
 
         await KanbanFlow.Services.ProjectGraphDeleter.DeleteFeatureTreeAsync(db, id, ct);
-        await db.SaveChangesAsync(ct);
+        await db.SaveChangesWithAuditAsync(ct: ct);
         await tx.CommitAsync(ct);
         return Results.NoContent();
     }
@@ -1442,7 +1427,7 @@ public static class ApiEndpoints
 
             // Recent activity touching this task (capped)
             var recentActivity = await db.ActivityEvents
-                .Where(e => e.EntityType == "Task" && e.EntityId == id)
+                .Where(e => (e.EntityType == "Task" && e.EntityId == id) || e.TaskId == id || e.RelatedTaskId == id)
                 .OrderByDescending(e => e.CreatedAt)
                 .ThenByDescending(e => e.Id)   // total order — see the note on /api/projects/{id}/activity
                 .Take(20)
@@ -2273,14 +2258,14 @@ public static class ApiEndpoints
         });
 
         // DELETE /api/task-dependencies/{id} — delete a dependency
-        app.MapDelete("/api/task-dependencies/{id:int}", async (int id, AppDbContext db) =>
+        app.MapDelete("/api/task-dependencies/{id:int}", async (int id, AppDbContext db, CancellationToken ct) =>
         {
-            var dependency = await db.TaskDependencies.FindAsync(id);
+            var dependency = await db.TaskDependencies.FindAsync([id], ct);
             if (dependency is null)
                 return Results.NotFound(new { message = $"Task dependency {id} not found." });
 
             db.TaskDependencies.Remove(dependency);
-            await db.SaveChangesAsync();
+            await db.SaveChangesWithAuditAsync(ct: ct);
             return Results.NoContent();
         });
     }
@@ -2316,9 +2301,9 @@ public static class ApiEndpoints
         });
 
         // POST /api/tasks/{taskId}/subtasks — create (optionally nested under parentSubtaskId)
-        app.MapPost("/api/tasks/{taskId:int}/subtasks", async (int taskId, SubtaskDto dto, AppDbContext db) =>
+        app.MapPost("/api/tasks/{taskId:int}/subtasks", async (int taskId, SubtaskDto dto, AppDbContext db, CancellationToken ct) =>
         {
-            var taskExists = await db.Tasks.AnyAsync(t => t.Id == taskId);
+            var taskExists = await db.Tasks.AnyAsync(t => t.Id == taskId, ct);
             if (!taskExists)
                 return Results.NotFound(new { message = $"Task {taskId} not found." });
 
@@ -2328,7 +2313,7 @@ public static class ApiEndpoints
             // Validate parent subtask if provided
             if (dto.ParentSubtaskId.HasValue)
             {
-                var parentExists = await db.Subtasks.AnyAsync(s => s.Id == dto.ParentSubtaskId.Value && s.TaskItemId == taskId);
+                var parentExists = await db.Subtasks.AnyAsync(s => s.Id == dto.ParentSubtaskId.Value && s.TaskItemId == taskId, ct);
                 if (!parentExists)
                     return Results.NotFound(new { message = $"Parent subtask {dto.ParentSubtaskId.Value} not found in task {taskId}." });
             }
@@ -2337,7 +2322,7 @@ public static class ApiEndpoints
                 ? db.Subtasks.Where(s => s.ParentSubtaskId == dto.ParentSubtaskId.Value)
                 : db.Subtasks.Where(s => s.TaskItemId == taskId && s.ParentSubtaskId == null);
 
-            var maxSort = await siblingQuery.MaxAsync(s => (int?)s.SortOrder) ?? -1;
+            var maxSort = await siblingQuery.MaxAsync(s => (int?)s.SortOrder, ct) ?? -1;
 
             var subtask = new Subtask
             {
@@ -2349,7 +2334,7 @@ public static class ApiEndpoints
             };
 
             db.Subtasks.Add(subtask);
-            await db.SaveChangesAsync();
+            await db.SaveChangesWithAuditAsync(ct: ct);
 
             return Results.Created($"/api/subtasks/{subtask.Id}", new
             {
@@ -2364,9 +2349,9 @@ public static class ApiEndpoints
         });
 
         // PUT /api/subtasks/{id} — update
-        app.MapPut("/api/subtasks/{id:int}", async (int id, SubtaskDto dto, AppDbContext db) =>
+        app.MapPut("/api/subtasks/{id:int}", async (int id, SubtaskDto dto, AppDbContext db, CancellationToken ct) =>
         {
-            var subtask = await db.Subtasks.FindAsync(id);
+            var subtask = await db.Subtasks.FindAsync([id], ct);
             if (subtask is null)
                 return Results.NotFound(new { message = $"Subtask {id} not found." });
 
@@ -2389,7 +2374,7 @@ public static class ApiEndpoints
                     var allTaskSubtasks = await db.Subtasks
                         .Where(s => s.TaskItemId == subtask.TaskItemId)
                         .AsNoTracking()
-                        .ToListAsync();
+                        .ToListAsync(ct);
 
                     var parentExists = allTaskSubtasks.Any(s => s.Id == newParentSubtaskId.Value);
                     if (!parentExists)
@@ -2402,7 +2387,7 @@ public static class ApiEndpoints
                 subtask.ParentSubtaskId = newParentSubtaskId;
             }
 
-            await db.SaveChangesAsync();
+            await db.SaveChangesWithAuditAsync(ct: ct);
 
             return Results.Ok(new
             {
@@ -2419,12 +2404,14 @@ public static class ApiEndpoints
         // DELETE /api/subtasks/{id} — delete
         app.MapDelete("/api/subtasks/{id:int}", async (int id, AppDbContext db, CancellationToken ct) =>
         {
+            await using var transaction = await db.Database.BeginTransactionAsync(ct);
             var exists = await db.Subtasks.AnyAsync(s => s.Id == id, ct);
             if (!exists)
                 return Results.NotFound(new { message = $"Subtask {id} not found." });
 
             await KanbanFlow.Services.ProjectGraphDeleter.DeleteSubtaskTreeAsync(db, id, ct);
-            await db.SaveChangesAsync(ct);
+            await db.SaveChangesWithAuditAsync(ct: ct);
+            await transaction.CommitAsync(ct);
             return Results.NoContent();
         });
     }
@@ -2465,9 +2452,9 @@ public static class ApiEndpoints
         });
 
         // POST /api/tasks/{taskId}/acceptance-criteria — create
-        app.MapPost("/api/tasks/{taskId:int}/acceptance-criteria", async (int taskId, AcceptanceCriterionDto dto, AppDbContext db) =>
+        app.MapPost("/api/tasks/{taskId:int}/acceptance-criteria", async (int taskId, AcceptanceCriterionDto dto, AppDbContext db, CancellationToken ct) =>
         {
-            var taskExists = await db.Tasks.AnyAsync(t => t.Id == taskId);
+            var taskExists = await db.Tasks.AnyAsync(t => t.Id == taskId, ct);
             if (!taskExists)
                 return Results.NotFound(new { message = $"Task {taskId} not found." });
 
@@ -2476,7 +2463,7 @@ public static class ApiEndpoints
 
             var maxSort = await db.AcceptanceCriteria
                 .Where(c => c.TaskItemId == taskId)
-                .MaxAsync(c => (int?)c.SortOrder) ?? -1;
+                .MaxAsync(c => (int?)c.SortOrder, ct) ?? -1;
 
             var criterion = new AcceptanceCriterion
             {
@@ -2487,7 +2474,7 @@ public static class ApiEndpoints
             };
 
             db.AcceptanceCriteria.Add(criterion);
-            await db.SaveChangesAsync();
+            await db.SaveChangesWithAuditAsync(ct: ct);
 
             return Results.Created($"/api/acceptance-criteria/{criterion.Id}", new
             {
@@ -2502,9 +2489,9 @@ public static class ApiEndpoints
         });
 
         // PUT /api/acceptance-criteria/{id} — update
-        app.MapPut("/api/acceptance-criteria/{id:int}", async (int id, AcceptanceCriterionDto dto, AppDbContext db) =>
+        app.MapPut("/api/acceptance-criteria/{id:int}", async (int id, AcceptanceCriterionDto dto, AppDbContext db, CancellationToken ct) =>
         {
-            var criterion = await db.AcceptanceCriteria.FindAsync(id);
+            var criterion = await db.AcceptanceCriteria.FindAsync([id], ct);
             if (criterion is null)
                 return Results.NotFound(new { message = $"Acceptance criterion {id} not found." });
 
@@ -2518,7 +2505,7 @@ public static class ApiEndpoints
             if (dto.SortOrder.HasValue) criterion.SortOrder = dto.SortOrder.Value;
             criterion.UpdatedAt = DateTime.UtcNow;
 
-            await db.SaveChangesAsync();
+            await db.SaveChangesWithAuditAsync(ct: ct);
 
             return Results.Ok(new
             {
@@ -2533,14 +2520,14 @@ public static class ApiEndpoints
         });
 
         // DELETE /api/acceptance-criteria/{id} — delete
-        app.MapDelete("/api/acceptance-criteria/{id:int}", async (int id, AppDbContext db) =>
+        app.MapDelete("/api/acceptance-criteria/{id:int}", async (int id, AppDbContext db, CancellationToken ct) =>
         {
-            var criterion = await db.AcceptanceCriteria.FindAsync(id);
+            var criterion = await db.AcceptanceCriteria.FindAsync([id], ct);
             if (criterion is null)
                 return Results.NotFound(new { message = $"Acceptance criterion {id} not found." });
 
             db.AcceptanceCriteria.Remove(criterion);
-            await db.SaveChangesAsync();
+            await db.SaveChangesWithAuditAsync(ct: ct);
             return Results.NoContent();
         });
     }
@@ -2583,9 +2570,9 @@ public static class ApiEndpoints
         });
 
         // POST /api/projects/{projectId}/requirements — create
-        app.MapPost("/api/projects/{projectId:int}/requirements", async (int projectId, RequirementDto dto, AppDbContext db) =>
+        app.MapPost("/api/projects/{projectId:int}/requirements", async (int projectId, RequirementDto dto, AppDbContext db, CancellationToken ct) =>
         {
-            var projectExists = await db.Projects.AnyAsync(p => p.Id == projectId);
+            var projectExists = await db.Projects.AnyAsync(p => p.Id == projectId, ct);
             if (!projectExists)
                 return Results.NotFound(new { message = $"Project {projectId} not found." });
 
@@ -2602,13 +2589,13 @@ public static class ApiEndpoints
 
             // Validate feature/task links exist AND belong to this project (#82). Missing → 404,
             // cross-project → 422 (mirrors the CrossProjectReassignmentException convention).
-            var linkValidation = await ValidateRequirementLinksScopedAsync(projectId, dto.FeatureId, dto.TaskItemId, db);
+            var linkValidation = await ValidateRequirementLinksScopedAsync(projectId, dto.FeatureId, dto.TaskItemId, db, ct);
             if (MapRequirementLinkError(linkValidation) is { } linkError)
                 return linkError;
 
             var maxSort = await db.Requirements
                 .Where(r => r.ProjectId == projectId)
-                .MaxAsync(r => (int?)r.SortOrder) ?? -1;
+                .MaxAsync(r => (int?)r.SortOrder, ct) ?? -1;
 
             var requirement = new Requirement
             {
@@ -2626,7 +2613,7 @@ public static class ApiEndpoints
             };
 
             db.Requirements.Add(requirement);
-            await db.SaveChangesAsync();
+            await db.SaveChangesWithAuditAsync(ct: ct);
 
             return Results.Created($"/api/requirements/{requirement.Id}", new
             {
@@ -2645,9 +2632,9 @@ public static class ApiEndpoints
         });
 
         // PUT /api/requirements/{id} — update
-        app.MapPut("/api/requirements/{id:int}", async (int id, RequirementDto dto, AppDbContext db) =>
+        app.MapPut("/api/requirements/{id:int}", async (int id, RequirementDto dto, AppDbContext db, CancellationToken ct) =>
         {
-            var requirement = await db.Requirements.FindAsync(id);
+            var requirement = await db.Requirements.FindAsync([id], ct);
             if (requirement is null)
                 return Results.NotFound(new { message = $"Requirement {id} not found." });
 
@@ -2678,7 +2665,7 @@ public static class ApiEndpoints
             // PUT previously applied NO link validation, so it could point a requirement at a
             // non-existent or cross-project feature/task — now identical to POST/PATCH.
             // Missing → 404, cross-project → 422.
-            var linkValidation = await ValidateRequirementLinksScopedAsync(requirement.ProjectId, dto.FeatureId, dto.TaskItemId, db);
+            var linkValidation = await ValidateRequirementLinksScopedAsync(requirement.ProjectId, dto.FeatureId, dto.TaskItemId, db, ct);
             if (MapRequirementLinkError(linkValidation) is { } linkError)
                 return linkError;
 
@@ -2699,7 +2686,7 @@ public static class ApiEndpoints
             if (dto.SortOrder.HasValue && requirement.SortOrder != dto.SortOrder.Value) { requirement.SortOrder = dto.SortOrder.Value; changed = true; }
             if (changed) requirement.UpdatedAt = DateTime.UtcNow;
 
-            await db.SaveChangesAsync();
+            await db.SaveChangesWithAuditAsync(ct: ct);
 
             return Results.Ok(new
             {
@@ -2718,21 +2705,21 @@ public static class ApiEndpoints
         });
 
         // DELETE /api/requirements/{id} — delete
-        app.MapDelete("/api/requirements/{id:int}", async (int id, AppDbContext db) =>
+        app.MapDelete("/api/requirements/{id:int}", async (int id, AppDbContext db, CancellationToken ct) =>
         {
-            var requirement = await db.Requirements.FindAsync(id);
+            var requirement = await db.Requirements.FindAsync([id], ct);
             if (requirement is null)
                 return Results.NotFound(new { message = $"Requirement {id} not found." });
 
             db.Requirements.Remove(requirement);
-            await db.SaveChangesAsync();
+            await db.SaveChangesWithAuditAsync(ct: ct);
             return Results.NoContent();
         });
 
         // PATCH /api/requirements/{id}/assign — assign to feature or task
-        app.MapPatch("/api/requirements/{id:int}/assign", async (int id, RequirementAssignDto dto, AppDbContext db) =>
+        app.MapPatch("/api/requirements/{id:int}/assign", async (int id, RequirementAssignDto dto, AppDbContext db, CancellationToken ct) =>
         {
-            var requirement = await db.Requirements.FindAsync(id);
+            var requirement = await db.Requirements.FindAsync([id], ct);
             if (requirement is null)
                 return Results.NotFound(new { message = $"Requirement {id} not found." });
 
@@ -2741,7 +2728,7 @@ public static class ApiEndpoints
             // Validate feature/task links exist AND belong to this requirement's project (#82)
             // before mutating. A value of 0 clears the link and is skipped by the validator.
             // Missing → 404, cross-project → 422.
-            var linkValidation = await ValidateRequirementLinksScopedAsync(requirement.ProjectId, dto.FeatureId, dto.TaskItemId, db);
+            var linkValidation = await ValidateRequirementLinksScopedAsync(requirement.ProjectId, dto.FeatureId, dto.TaskItemId, db, ct);
             if (MapRequirementLinkError(linkValidation) is { } linkError)
                 return linkError;
 
@@ -2760,7 +2747,7 @@ public static class ApiEndpoints
             // stream (a different schema than every other "Task" event). The snapshot already carries
             // TaskItemId/FeatureId for consumers that want the link. (#186)
             AddActivityEvent(db, requirement.ProjectId, "Requirement", requirement.Id, null, "RequirementAssigned", before, RequirementActivitySnapshot(requirement), $"Requirement '{requirement.Text}' assignment updated");
-            await db.SaveChangesAsync();
+            await db.SaveChangesWithAuditAsync(ct: ct);
 
             return Results.Ok(new
             {
@@ -2846,14 +2833,14 @@ public static class ApiEndpoints
         });
 
         // DELETE /api/comments/{id}
-        app.MapDelete("/api/comments/{id:int}", async (int id, AppDbContext db) =>
+        app.MapDelete("/api/comments/{id:int}", async (int id, AppDbContext db, CancellationToken ct) =>
         {
-            var comment = await db.TaskComments.FindAsync(id);
+            var comment = await db.TaskComments.FindAsync([id], ct);
             if (comment is null)
                 return Results.NotFound(new { message = $"Comment {id} not found." });
 
             db.TaskComments.Remove(comment);
-            await db.SaveChangesAsync();
+            await db.SaveChangesWithAuditAsync(ct: ct);
             return Results.NoContent();
         });
     }
@@ -2868,6 +2855,9 @@ public static class ApiEndpoints
         e.ProjectId,
         e.EntityType,
         e.EntityId,
+        e.EntityKey,
+        e.TaskId,
+        e.RelatedTaskId,
         e.Actor,
         e.EventType,
         e.BeforeJson,
@@ -2932,7 +2922,7 @@ public static class ApiEndpoints
     /// kinds carry an actionable message; <see cref="RequirementLinkValidation.Valid"/> means OK.
     /// </returns>
     internal static async Task<RequirementLinkValidation> ValidateRequirementLinksScopedAsync(
-        int projectId, int? featureId, int? taskItemId, AppDbContext db)
+        int projectId, int? featureId, int? taskItemId, AppDbContext db, CancellationToken ct = default)
     {
         if (featureId.HasValue && featureId.Value != 0)
         {
@@ -2940,7 +2930,7 @@ public static class ApiEndpoints
             var featureProjectId = await db.Features
                 .Where(f => f.Id == featureId.Value)
                 .Select(f => (int?)f.ProjectId)
-                .FirstOrDefaultAsync();
+                .FirstOrDefaultAsync(ct);
             if (featureProjectId is null)
                 return RequirementLinkValidation.NotFound($"Feature {featureId.Value} not found.");
             if (featureProjectId.Value != projectId)
@@ -2953,7 +2943,7 @@ public static class ApiEndpoints
             var taskProjectId = await db.Tasks
                 .Where(t => t.Id == taskItemId.Value)
                 .Select(t => (int?)t.Feature.ProjectId)
-                .FirstOrDefaultAsync();
+                .FirstOrDefaultAsync(ct);
             if (taskProjectId is null)
                 return RequirementLinkValidation.NotFound($"Task {taskItemId.Value} not found.");
             if (taskProjectId.Value != projectId)
@@ -3271,7 +3261,8 @@ public static class ApiEndpoints
         priority = idea.Priority?.ToString(),   // nullable enum
         idea.PromotedProjectId,
         idea.CreatedAt,
-        idea.UpdatedAt
+        idea.UpdatedAt,
+        idea.WorkflowVersion
     };
 
     // Memory node projection (#224). Enums → strings (no JsonStringEnumConverter in this repo);
@@ -3646,7 +3637,7 @@ public record TaskDependencyDto(int? TaskItemId, int? BlockedTaskId, int? Depend
 // convention — accept the enum as a string and parse it manually.
 public record IdeaCreateDto(string Title, string? Body, string? Plan, string? Tags, string? Priority, string? Actor);
 
-public record IdeaUpdateDto(string? Title, string? Body, string? Plan, string? Status, string? Tags, string? Priority, string? Actor);
+public record IdeaUpdateDto(string? Title, string? Body, string? Plan, string? Status, string? Tags, string? Priority, string? Actor, int? ExpectedWorkflowVersion = null);
 
 public record IdeaPromoteDto(string? Actor);
 

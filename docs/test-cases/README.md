@@ -14,6 +14,7 @@ that case's `runs/` directory records what was actually executed at one immutabl
 | TC-462 | MCP nullable text clears | [Case](462-mcp-empty-clears/README.md) | [2026-09-08 · `f3dc411c4e9e`](462-mcp-empty-clears/runs/2026-09-08-f3dc411c4e9e.md) | Passed real transports, checklist validation and SSE review repairs |
 | TC-336 | Durable GitHub links and review safety | [Case](336-durable-github-links/README.md) | [2026-09-08 · `5f4126562a41`](336-durable-github-links/runs/2026-09-08-5f4126562a41.md) | Bounded repairs verified; atomic projection #507 and human review remain |
 | TC-496 | Decision & Memory Map | [Case](496-decision-memory-map/README.md) | [2026-08-30 · `d7be7da5d98d`](496-decision-memory-map/runs/2026-08-30-d7be7da5d98d.md) | Passed at the pinned implementation commit |
+| TC-509 | Complete content, human decisions, history and proposed outline context | [Case](509-unified-workflow/README.md) | [September 14 review corrections](509-unified-workflow/runs/2026-09-14-440c0ed07e51.md) | Source gate passed at `440c0ed07e51`; script suite was not rerun for that record and last passed at `9fe16aaa1b04`; current external HTTP/native/stdio transport, browser walkthroughs and human acceptance remain unverified/pending |
 
 ## Conventions
 

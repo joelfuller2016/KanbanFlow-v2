@@ -960,7 +960,9 @@ public class ActivityTimelineTests
             new[]
             {
                 "status", "priority", "assignee", "claimedBy", "name",
-                "featureId", "description", "sortOrder", "completedAt", "claimedAt"
+                "featureId", "description", "sortOrder", "completedAt", "claimedAt",
+                "text", "completed", "goals", "readme", "projectId", "taskItemId", "dependsOnTaskItemId",
+                "parentFeatureId", "parentSubtaskId", "promotedProjectId", "archived"
             },
             ActivityTimelineBuilder.DisplayFields.Select(f => f.Json).ToArray());
     }
@@ -1253,12 +1255,8 @@ public class ActivityTimelineTests
             "back to its audit Message. Changes derived from an unparseable payload are invented.");
     }
 
-    /// <summary>The labels <c>DisplayFields</c> can emit — mirrored here so a whitelist change is loud.</summary>
-    private static readonly string[] DisplayLabels =
-    [
-        "Status", "Priority", "Assigned", "Claimed by", "Name",
-        "Feature", "Description", "Order", "Completed", "Claimed at"
-    ];
+    /// <summary>Labels accepted by the fuzz checks; explicit whitelist coverage above owns the expected field set.</summary>
+    private static readonly string[] DisplayLabels = ActivityTimelineBuilder.DisplayFields.Select(field => field.Label).ToArray();
 
     // AC6's fifth shape — a STRUCTURED (object/array) value in a whitelisted slot — is NOT
     // guarded here, deliberately. Writing that assertion proved it is a live defect rather than

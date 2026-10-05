@@ -14,14 +14,14 @@
 | | |
 |---|---|
 | **Stack** | .NET 10 · Blazor Server · SQLite (EF Core 10) · Minimal APIs · Node 18+ for the MCP wrapper |
-| **Surfaces** | 6 UI routes · 71 REST endpoints · 28 native MCP tools · 50 Node-wrapper MCP tools |
+| **Surfaces** | 6 UI routes · 77 REST endpoints · 36 native MCP tools · 54 Node-wrapper MCP tools |
 | **Sync** | GitHub → board projection, plus one explicit additive board → GitHub issue-create path. Preview is the default; live create requires `--allow-write --task <id>` and a durable journal. No edit/close/delete path — see [Who owns what](#who-owns-what) |
-| **Tests** | 1,079 xUnit · 56 in-app integration · 52 Playwright e2e · 274 script unit · 2 smoke suites — [all local, no CI](#deliberate-non-features) |
+| **Tests** | Verified: 1,572 xUnit and 358 script tests. HTTP/native/stdio-to-application integration, full browser checks and human UI acceptance remain unverified — [all local, no CI](#deliberate-non-features) |
 | **Runs at** | `http://127.0.0.1:5123` — localhost only, no auth, no Docker, no cloud |
 | **Log book** | [`docs/BACKLOG.md`](docs/BACKLOG.md) — the authoritative record of what happened |
 | **Deep detail** | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) |
 
-Every count above was re-derived from the code for this revision. The commands that produced
+The 1,572 .NET tests passed on September 14, 2026 at source `440c0ed07e51` ([run record](docs/test-cases/509-unified-workflow/runs/2026-09-14-440c0ed07e51.md)). The unchanged script suite last passed all 358 tests at `9fe16aaa1b04`; it was not repeated for this Razor/documentation correction. Native/wrapper source inventories are 36/54; September 6 transport discovery measured 33/54, not the current live surface. Other inventories retain their existing baseline. The commands that produced
 them are in [Surfaces, verified](#surfaces-verified) — run them yourself; do not trust the
 table alone.
 
@@ -47,6 +47,8 @@ table alone.
 
 ## The thesis
 
+For work that starts as a local idea, the [request workflow](docs/request-workflow.md) now connects the exact original ask to a refined brief, published cards and results inside these same boards. The GitHub import remains available for work that starts as an issue.
+
 GitHub already holds the work: the issues, the milestones, the review conversations, the
 closes. What it does not hold is a **picture**. `gh issue list` across six repos is 400 lines
 of text with no shape — you cannot see what is in flight, what is blocked, or what to do next.
@@ -63,7 +65,7 @@ graph and gives that graph three surfaces:
    pastes into chat as a link. Filtering never reorders anything: a drag under an active filter
    anchors on the next *visible* card's identity and the server resolves that against the full
    persisted column. For you.
-2. **A REST API** — 71 endpoints over the same graph. For scripts.
+2. **A REST API** — 77 endpoints over the same graph. For scripts.
 3. **An MCP server** — the same capabilities as first-class agent tools, plus a direction
    engine that answers *"what next, and why"* with a human-readable reason. For agents.
 
@@ -140,8 +142,8 @@ flowchart LR
     subgraph OUT["surfaces over the same graph"]
         direction TB
         UI["Blazor UI<br/>/ · /project/{id} · /ideas · /memory"]
-        REST["REST · 71 endpoints"]
-        MCP["MCP · 28 native / 50 wrapper"]
+        REST["REST · 77 endpoints"]
+        MCP["MCP · 36 native / 54 wrapper"]
     end
 
     REPO --> READ
@@ -177,7 +179,7 @@ The right-hand box is the part that makes this a projection rather than a mirror
 entities are created by you and by agents doing real work, live only on the board, and are
 invisible to GitHub.
 
-The sync also **cannot** run over the native MCP server: the 28 native tools include
+The sync also **cannot** run over the native MCP server: the 36 native tools include
 `list_projects` and `get_project_context` but **no `create_project`**, so an agent on `/mcp`
 cannot onboard a repo. That parity gap is [#231](https://github.com/joelfuller2016/KanbanFlow-v2/issues/231).
 
@@ -715,25 +717,25 @@ the command beside it — not copied from the previous README, and not copied fr
 
 | Surface | Count | Command that produced it |
 |---|---:|---|
-| REST endpoints (app) | 66 | `grep -cE '\.Map(Get\|Post\|Put\|Patch\|Delete)\(' src/KanbanFlow/ApiEndpoints.cs` |
+| REST endpoints (app) | 67 | `grep -cE '\.Map(Get\|Post\|Put\|Patch\|Delete)\(' src/KanbanFlow/ApiEndpoints.cs` |
 | REST endpoints (admin) | 5 | `grep -cE '\.Map(Get\|Post\|Put\|Patch\|Delete)\(' src/KanbanFlow/AdminEndpoints.cs` |
-| **REST endpoints total** | **71** | *sum of the two above* |
-| Native MCP tools (`POST /mcp`) | 28 | `grep -c '\[McpServerTool(' src/KanbanFlow/Mcp/KanbanMcpTools.cs` |
-| Node-wrapper MCP tools | 50 | `tools/list` over stdio against `scripts/mcp-server.mjs` — [exact invocation](docs/ARCHITECTURE.md#mcp-surface-28-native--50-wrapper) |
+| Workflow REST endpoints | 5 | `rg -c '\.Map(Get\|Post)\(' src/KanbanFlow/WorkflowEndpoints.cs` |
+| **REST endpoints total** | **77** | *sum of the three above* |
+| Native MCP tools (`POST /mcp`) | 36 | Native tool attributes across `src/KanbanFlow/Mcp`; transport checks: `scripts/smoke-workflow.mjs` |
+| Node-wrapper MCP tools | 54 | Actual stdio `tools/list`; see `scripts/smoke-workflow.mjs` |
 | Blazor routes | 6 | `grep -rn '@page' src/KanbanFlow/Components/ \| sort -u` → `/`, `/Error`, `/ideas`, `/memory`, `/project/{Id:int}`, `/settings` |
-| Razor components | 28 | `find src/KanbanFlow/Components -name '*.razor' \| wc -l` |
-| xUnit tests | 1,079 | `dotnet test tests/KanbanFlow.Tests` |
+| Razor components | 38 | `find src/KanbanFlow/Components -name '*.razor' \| wc -l` |
+| xUnit tests | 1,572 | `dotnet test tests/KanbanFlow.Tests` |
 | In-app integration tests | 56 | `grep -c 'results.Add(await RunTest' src/KanbanFlow/Services/TestRunnerService.cs` (28 API + 22 service + 6 UI) |
-| Playwright e2e scenarios | 52 | `npm run test:ui` |
-| Script unit tests (`scripts/*.mjs`) | 274 | `npm run test:scripts` |
+| Playwright e2e scenarios | See scenario registry | `npm run test:ui` (requires a running verification app) |
+| Script unit tests (`scripts/*.mjs`) | 358 | `npm run test:scripts` |
 
-Corrections this revision made to the previous README: **53 → 60** endpoints previously (both memory
-endpoints and `GET /api/tasks/{id}/context` were missing), then **60 → 71** for the #336
-external-identity/write-journal routes;
-**41 → 50** wrapper tools; native tool count stated for the first time (**28**); in-app suite
+Historical inventory corrections from the original README revision: **53 → 60** endpoints (both memory
+endpoints and `GET /api/tasks/{id}/context` were missing from the route list entirely);
+**41 → 50** wrapper tools; native tool count stated for the first time (**24**); in-app suite
 **40 → 56**; and `GET /api/subtasks/{id}`, `GET /api/acceptance-criteria/{id}`,
 `GET /api/requirements/{id}` were listed as existing — **they do not exist**. The route map in
-[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md#rest-surface-71-endpoints) now marks them.
+[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md#rest-surface-77-endpoints) now marks them.
 
 Also corrected: `#82`, `#83`, `#85`, `#88`, and `#89` were all cited as open/broken. All five
 are **closed**, and the code enforces what they asked for.
@@ -898,6 +900,9 @@ them.
 
 | Doc | What it holds |
 |---|---|
+| [Requests, plans and results](docs/request-workflow.md) | Use the existing app and boards for original requests, briefs, real task cards, MCP updates, reviewed reports and conclusions |
+| [Central project board implementation specification](docs/plans/central-project-board-implementation.md) | Detailed issue checklist, four diagrams, existing-versus-new behavior, acceptance checks and explicit later Codex work |
+| [Central project board proposal](docs/plans/central-project-board.md) | Product direction, the same-board constraint and the proposed Codex execution path |
 | [`docs/BACKLOG.md`](docs/BACKLOG.md) | **The log book.** Authoritative record of what happened and why. Start here. |
 | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | Entity model, write path, full REST route map, MCP inventory, capability matrix, known gaps |
 | [`docs/GITHUB-SYNC.md`](docs/GITHUB-SYNC.md) | Full sync semantics, drift cases, comment mirroring |

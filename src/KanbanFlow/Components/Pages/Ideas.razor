@@ -6,6 +6,11 @@
 
 <PageTitle>Ideas - KanbanFlow</PageTitle>
 
+@if (WorkflowIdeaId is not null)
+{
+    <RequestWorkspace IdeaId="WorkflowIdeaId" OnChanged="LoadIdeas" />
+}
+
 <div class="d-flex justify-content-between align-items-center mb-4">
     <h1 class="mb-0">Ideas</h1>
     <button class="btn btn-primary" @onclick="OpenCreateModal" data-testid="new-idea-button">
@@ -290,6 +295,7 @@ else
 }
 
 @code {
+    [SupplyParameterFromQuery(Name = "idea")] public int? WorkflowIdeaId { get; set; }
     // ── Idea list + filters ──
     private List<Idea>? ideas;
     private string? searchFilter;
@@ -597,7 +603,7 @@ else
         {
             // In-process through IIdeaService, NOT the HTTP API: the service is the single audit
             // boundary (#88) and writes the IdeaUpdated ActivityEvent for this mutation.
-            await IdeaSvc.UpdateAsync(idea.Id, new IdeaUpdate(Status: target), actor: "User", _cts.Token);
+            await IdeaSvc.UpdateAsync(idea.Id, new IdeaUpdate(Status: target, ExpectedWorkflowVersion: idea.WorkflowVersion), actor: "User", _cts.Token);
 
             // Archived/Rejected are live drop targets that render as 3rem rails, so a card dropped into
             // one lands somewhere the user cannot see it — the gesture succeeds and looks like it did
@@ -773,7 +779,7 @@ else
 
         try
         {
-            var result = await IdeaSvc.PromoteAsync(promotingIdea.Id, "User", _cts.Token);
+            var result = await IdeaSvc.PromoteAsync(promotingIdea.Id, "User", ct: _cts.Token);
             await ClosePromoteModal();
             promoteSuccess = result;
             // The promoted card just changed columns, so LoadIdeas re-binds the sortables for us.

@@ -1,6 +1,9 @@
 @* SortableJS contract (#307): `.feature-tasks[data-feature-id]` may contain expanded subtask
    siblings, but only roots with `data-task-id` are draggable. The client sends the next TASK id
    (0 = append), so non-task DOM children can never become database indices. *@
+@inject IJSRuntime JS
+@implements IAsyncDisposable
+
 <div id="project-outline" class="project-outline border-end bg-light p-3" data-testid="project-outline">
     <div class="project-outline-header">
         <div class="outline-title-row">
@@ -37,6 +40,22 @@
                 </svg>
             </button>
         </div>
+        <div class="outline-navigation" role="group" aria-label="Outline navigation">
+            <button type="button" class="btn btn-sm btn-outline-secondary icon-btn"
+                    disabled="@(!CanGoBack)" @onclick="() => OnBack.InvokeAsync()"
+                    title="Previous outline item" aria-label="Previous outline item" data-testid="outline-back-button">
+                <svg width="16" height="16" fill="currentColor" viewBox="0 0 16 16" aria-hidden="true">
+                    <path fill-rule="evenodd" d="M11.354 1.646a.5.5 0 0 1 0 .708L5.707 8l5.647 5.646a.5.5 0 0 1-.708.708l-6-6a.5.5 0 0 1 0-.708l6-6a.5.5 0 0 1 .708 0" />
+                </svg>
+            </button>
+            <button type="button" class="btn btn-sm btn-outline-secondary icon-btn"
+                    disabled="@(!CanGoForward)" @onclick="() => OnForward.InvokeAsync()"
+                    title="Next outline item" aria-label="Next outline item" data-testid="outline-forward-button">
+                <svg width="16" height="16" fill="currentColor" viewBox="0 0 16 16" aria-hidden="true">
+                    <path fill-rule="evenodd" d="M4.646 1.646a.5.5 0 0 1 .708 0l6 6a.5.5 0 0 1 0 .708l-6 6a.5.5 0 0 1-.708-.708L10.293 8 4.646 2.354a.5.5 0 0 1 0-.708" />
+                </svg>
+            </button>
+        </div>
         <button type="button"
                 class="btn btn-sm btn-primary d-flex align-items-center justify-content-center gap-2 w-100"
                 @onclick="() => OnOpenAddProject.InvokeAsync()"
@@ -50,6 +69,7 @@
         </button>
     </div>
 
+    <div class="project-outline-items" data-testid="outline-items" data-reveal-request="@RevealRequest" @ref="itemsElement">
     @{ var rootFeatures = Project.Features.Where(f => f.ParentFeatureId == null).OrderBy(f => f.SortOrder).ToList(); }
     @foreach (var rootFeature in rootFeatures)
     {
@@ -60,6 +80,7 @@
     {
         <p class="text-muted small text-center">No features yet. Add one to get started.</p>
     }
+    </div>
 </div>
 
 @code {
@@ -74,6 +95,14 @@
     [Parameter] public EventCallback<TaskItem> OnOpenAddTaskSubtask { get; set; }
     [Parameter] public EventCallback<Subtask> OnOpenAddSubtaskChild { get; set; }
     [Parameter] public EventCallback<TaskItem> OnOpenEditTask { get; set; }
+    [Parameter] public EventCallback<Subtask> OnOpenSubtask { get; set; }
+    [Parameter] public OutlineItem? Selection { get; set; }
+    [Parameter] public int RevealRequest { get; set; }
+    [Parameter] public bool FocusSelection { get; set; }
+    [Parameter] public bool CanGoBack { get; set; }
+    [Parameter] public bool CanGoForward { get; set; }
+    [Parameter] public EventCallback OnBack { get; set; }
+    [Parameter] public EventCallback OnForward { get; set; }
     [Parameter] public EventCallback<int> OnToggleFeature { get; set; }
     [Parameter] public EventCallback<int> OnToggleTask { get; set; }
     [Parameter] public EventCallback<TaskItem> OnToggleTaskDone { get; set; }
@@ -86,6 +115,34 @@
     [Parameter] public int CheckboxResetToken { get; set; }
     [Parameter] public EventCallback<Subtask> OnToggleOutlineSubtask { get; set; }
     [Parameter] public EventCallback OnCloseOutline { get; set; }
+
+    private ElementReference itemsElement;
+    private ProjectOutlineInterop? interop;
+    private int appliedRevealRequest;
+    private readonly CancellationTokenSource revealCancellation = new();
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (appliedRevealRequest == RevealRequest) return;
+        appliedRevealRequest = RevealRequest;
+        interop ??= new ProjectOutlineInterop(JS);
+        try { await interop.RevealAsync(itemsElement, RevealRequest, FocusSelection, revealCancellation.Token); }
+        catch (OperationCanceledException) when (revealCancellation.IsCancellationRequested) { }
+        catch (JSDisconnectedException) { }
+        catch (ObjectDisposedException) { }
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        revealCancellation.Cancel();
+        try { if (interop is not null) await interop.DisposeAsync(); }
+        finally { revealCancellation.Dispose(); }
+    }
+
+    private bool IsSelected(OutlineItemKind kind, int id) => Selection == new OutlineItem(kind, id);
+    private string? Current(OutlineItemKind kind, int id) => IsSelected(kind, id) ? "true" : null;
+    private string RowClass(OutlineItemKind kind, int id) =>
+        $"card mb-1 outline-item{(IsSelected(kind, id) ? " is-selected" : "")}";
 
     private (int done, int total) GetFeatureTaskCounts(Feature feature)
     {
@@ -111,7 +168,7 @@
         var hasChildren = childFeatures.Count > 0 || feature.Tasks.Count > 0;
         var progressPct = totalCount > 0 ? (int)(100.0 * doneCount / totalCount) : 0;
 
-        <div class="card mb-1" style="border-left: 4px solid @GetDepthColor(depth); cursor: pointer;"
+        <div @key="feature.Id" class="@RowClass(OutlineItemKind.Feature, feature.Id)" style="border-left: 4px solid @GetDepthColor(depth); cursor: pointer;"
              data-testid="outline-feature-@feature.Id" @onclick="() => OnOpenEditFeature.InvokeAsync(feature)">
             <div class="card-body p-2">
                 <div class="d-flex align-items-center">
@@ -137,7 +194,7 @@
                             class="btn btn-link text-reset text-decoration-none text-start p-0 d-flex align-items-center flex-grow-1 overflow-hidden"
                             @onclick="() => OnOpenEditFeature.InvokeAsync(feature)"
                             @onclick:stopPropagation="true"
-                            aria-label="Edit feature @feature.Name">
+                            aria-label="Edit feature @feature.Name" aria-current="@Current(OutlineItemKind.Feature, feature.Id)">
                         <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="@GetDepthColor(depth)" class="me-2 flex-shrink-0" viewBox="0 0 16 16">
                             <path d="M1 3.5A1.5 1.5 0 0 1 2.5 2h2.764c.958 0 1.76.56 2.311 1.184C7.985 3.648 8.48 4 9 4h4.5A1.5 1.5 0 0 1 15 5.5v7a1.5 1.5 0 0 1-1.5 1.5h-11A1.5 1.5 0 0 1 1 12.5z"/>
                         </svg>
@@ -185,8 +242,8 @@
                    card: this row's done checkbox is `checked="@taskIsDone"` with @onchange, so a
                    refused toggle leaves Status unchanged, Blazor emits no DOM update, and the
                    user's click stands on a task that is not Done. *@
-                <div class="card mb-1" @key="(task.Id, CheckboxResetToken)"
-                     style="border-left: 4px solid @GetDepthColor(depth + 1); @(taskIsDone ? "opacity: 0.6;" : "") cursor: pointer;"
+                <div class="@RowClass(OutlineItemKind.Task, task.Id)" @key="(task.Id, CheckboxResetToken)"
+                     style="border-left: 4px solid @GetDepthColor(depth + 1); @(taskIsDone && !IsSelected(OutlineItemKind.Task, task.Id) ? "opacity: 0.6;" : "") cursor: pointer;"
                      data-testid="outline-task-@task.Id" data-task-id="@task.Id"
                      @onclick="() => OnOpenEditTask.InvokeAsync(task)">
                     <div class="card-body p-2">
@@ -224,7 +281,7 @@
                                     class="btn btn-link text-reset text-decoration-none text-start p-0 flex-grow-1 small outline-task-title @(taskIsDone ? "text-decoration-line-through text-muted" : "")"
                                     @onclick="() => OnOpenEditTask.InvokeAsync(task)"
                                     @onclick:stopPropagation="true"
-                                    aria-label="Open task details for @task.Name"
+                                    aria-label="Open task details for @task.Name" aria-current="@Current(OutlineItemKind.Task, task.Id)"
                                     title="@task.Name"><span class="outline-task-title-text">@task.Name</span></button>
                             <span class="ms-auto @GetPriorityBadgeClass(task.Priority)" style="font-size: 0.6rem;">@task.Priority</span>
                             <button type="button" class="outline-action-btn ms-1"
@@ -266,8 +323,8 @@
         var children = parentTask.Subtasks.Where(s => s.ParentSubtaskId == subtask.Id).OrderBy(s => s.SortOrder).ToList();
         var hasChildren = children.Count > 0;
 
-        <div class="card mb-1" style="border-left: 4px solid @GetDepthColor(depth); @(subtask.Completed ? "opacity: 0.6;" : "") cursor: pointer;"
-             data-testid="outline-subtask-@subtask.Id" @onclick="() => OnOpenEditTask.InvokeAsync(parentTask)">
+        <div @key="subtask.Id" class="@RowClass(OutlineItemKind.Subtask, subtask.Id)" style="border-left: 4px solid @GetDepthColor(depth); @(subtask.Completed && !IsSelected(OutlineItemKind.Subtask, subtask.Id) ? "opacity: 0.6;" : "") cursor: pointer;"
+             data-testid="outline-subtask-@subtask.Id" @onclick="() => OnOpenSubtask.InvokeAsync(subtask)">
             <div class="card-body p-2">
                 <div class="d-flex align-items-center">
                     @if (hasChildren)
@@ -292,9 +349,9 @@
                            data-testid="outline-subtask-@subtask.Id-done-checkbox" />
                     <button type="button"
                             class="btn btn-link text-reset text-decoration-none text-start p-0 flex-grow-1 text-truncate small @(subtask.Completed ? "text-decoration-line-through text-muted" : "")"
-                            @onclick="() => OnOpenEditTask.InvokeAsync(parentTask)"
+                            @onclick="() => OnOpenSubtask.InvokeAsync(subtask)"
                             @onclick:stopPropagation="true"
-                            aria-label="Open parent task details for @subtask.Text"
+                                aria-label="Open subtask details for @subtask.Text" aria-current="@Current(OutlineItemKind.Subtask, subtask.Id)"
                             title="@subtask.Text">@subtask.Text</button>
                     <button type="button" class="outline-action-btn ms-auto"
                             @onclick="() => OnOpenAddSubtaskChild.InvokeAsync(subtask)"

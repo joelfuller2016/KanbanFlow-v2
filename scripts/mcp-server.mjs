@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import { createUsageLogger } from "./usage-log.mjs";
+import { workflowTools } from "./workflow-tools.mjs";
 
 const apiBaseUrl = (process.env.KANBANFLOW_API_URL || "http://127.0.0.1:5123").replace(/\/$/, "");
 const defaultRestTimeoutMs = 10000;
@@ -51,6 +52,7 @@ const inFlightRequestIds = new Set();
 const usageLogger = createUsageLogger();
 
 const tools = [
+  ...workflowTools,
   {
     name: "list_projects",
     description: "List all projects with feature and task counts.",
@@ -556,11 +558,13 @@ const tools = [
 
   {
     name: "list_project_activity",
-    description: "List recent activity events for a project (newest first). Limit defaults to 100 server-side, max 500.",
+    description: "Read retained project history, including child changes. Pass includePage=true for items, total, nextBeforeId; use nextBeforeId as beforeId for older entries. Default response remains an array.",
     inputSchema: {
       type: "object",
       properties: {
         projectId: { type: "integer", minimum: 1, description: "Project id whose activity to list." },
+        beforeId: { type: "integer", minimum: 1, description: "Older-than cursor from nextBeforeId." },
+        includePage: { type: "boolean", description: "Return paging metadata with the events." },
         limit: { type: "integer", minimum: 1, maximum: 500, description: "Optional max number of events. Server clamps to [1, 500] and defaults to 100." }
       },
       required: ["projectId"]
@@ -568,11 +572,13 @@ const tools = [
   },
   {
     name: "list_task_activity",
-    description: "List recent activity events for a task (newest first). Limit defaults to 100 server-side, max 500.",
+    description: "Read retained task history, including child changes. Pass includePage=true for items, total, nextBeforeId; use nextBeforeId as beforeId for older entries. Default response remains an array.",
     inputSchema: {
       type: "object",
       properties: {
         taskId: { type: "integer", minimum: 1, description: "Task id whose activity to list." },
+        beforeId: { type: "integer", minimum: 1, description: "Older-than cursor from nextBeforeId." },
+        includePage: { type: "boolean", description: "Return paging metadata with the events." },
         limit: { type: "integer", minimum: 1, maximum: 500, description: "Optional max number of events. Server clamps to [1, 500] and defaults to 100." }
       },
       required: ["taskId"]
@@ -637,6 +643,7 @@ const tools = [
       type: "object",
       properties: {
         ideaId: { type: "integer", minimum: 1, description: "Idea id to update." },
+        expectedWorkflowVersion: { type: "integer", minimum: 0, description: "workflowVersion from the original get_idea/list_ideas read. Reload after a conflict before editing again." },
         title: { type: "string", description: "New title (≤500 chars)." },
         body: { type: ["string", "null"], description: "Markdown body: omit or null to preserve, empty/whitespace to clear, non-empty text to replace." },
         plan: { type: ["string", "null"], description: "Markdown plan: omit or null to preserve, empty/whitespace to clear, non-empty text to replace." },
@@ -656,7 +663,7 @@ const tools = [
         },
         actor: { type: "string", description: "Optional actor label recorded in the audit trail." }
       },
-      required: ["ideaId"]
+      required: ["ideaId", "expectedWorkflowVersion"]
     }
   },
   {
@@ -1011,6 +1018,7 @@ async function handleMessage(message) {
     }
     usageLogger.record({ tool: toolName, args, outcome: "ok", ms: Date.now() - startedAt });
     writeResult(id, {
+      ...(isPlainObject(result) ? { structuredContent: result } : {}),
       content: [
         {
           type: "text",
@@ -1067,6 +1075,11 @@ function isPlainObject(value) {
 
 async function callTool(toolName, args) {
   switch (toolName) {
+    case "list_requests":
+    case "get_request_context":
+    case "get_task_workflow":
+    case "workflow_command":
+      return nativeMcpToolCall(toolName, args);
     case "list_projects":
       return restJson("/api/projects");
     case "get_project":
@@ -1121,7 +1134,7 @@ async function callTool(toolName, args) {
     case "add_task_comment":
       return restJson(`/api/tasks/${requiredInt(args, "taskId")}/comments`, {
         method: "POST",
-        body: { text: requiredString(args, "text"), author: args.author ?? "MCP", type: optionalCommentType(args) }
+        body: { text: requiredString(args, "text", { preserveWhitespace: true }), author: args.author ?? "MCP", type: optionalCommentType(args) }
       });
 
     // ── Authoring tools ──
@@ -1325,13 +1338,27 @@ async function callTool(toolName, args) {
     case "list_project_activity": {
       const projectId = requiredInt(args, "projectId", { min: 1 });
       const limit = optionalInt(args, "limit", { min: 1, max: 500 });
-      const query = limit === undefined ? "" : `?limit=${encodeURIComponent(limit)}`;
+      const beforeId = optionalInt(args, "beforeId", { min: 1 });
+      const includePage = optionalBool(args, "includePage");
+      const params = new URLSearchParams();
+      if (limit !== undefined) params.set("limit", limit);
+      if (beforeId !== undefined) params.set("beforeId", beforeId);
+      if (includePage !== undefined) params.set("includePage", includePage);
+      const encoded = params.toString();
+      const query = encoded ? `?${encoded}` : "";
       return restJson(`/api/projects/${projectId}/activity${query}`);
     }
     case "list_task_activity": {
       const taskId = requiredInt(args, "taskId", { min: 1 });
       const limit = optionalInt(args, "limit", { min: 1, max: 500 });
-      const query = limit === undefined ? "" : `?limit=${encodeURIComponent(limit)}`;
+      const beforeId = optionalInt(args, "beforeId", { min: 1 });
+      const includePage = optionalBool(args, "includePage");
+      const params = new URLSearchParams();
+      if (limit !== undefined) params.set("limit", limit);
+      if (beforeId !== undefined) params.set("beforeId", beforeId);
+      if (includePage !== undefined) params.set("includePage", includePage);
+      const encoded = params.toString();
+      const query = encoded ? `?${encoded}` : "";
       return restJson(`/api/tasks/${taskId}/activity${query}`);
     }
 
@@ -1388,6 +1415,7 @@ async function callTool(toolName, args) {
       return restJson(`/api/ideas/${requiredInt(args, "ideaId", { min: 1 })}`, {
         method: "PATCH",
         body: {
+          expectedWorkflowVersion: requiredInt(args, "expectedWorkflowVersion", { min: 0 }),
           title: optionalNonEmptyString(args, "title"),
           body: optionalString(args, "body"),
           plan: optionalString(args, "plan"),
@@ -1550,12 +1578,18 @@ function optionalCommentType(args) {
   return args.type;
 }
 
+function auditHeaderActor(actor) {
+  const value = typeof actor === "string" ? actor.trim() : "";
+  // Fetch headers are ByteStrings and reject controls. Keep the full authored actor in JSON.
+  return value && !/[\x00-\x1f\x7f-\x9f\u0100-\uffff]/.test(value) ? value : "mcp-agent";
+}
+
 async function restJson(path, options = {}) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), restTimeoutMs);
   const requestOptions = {
     method: options.method || "GET",
-    headers: { Accept: "application/json" },
+    headers: { Accept: "application/json", "X-KanbanFlow-Actor": auditHeaderActor(options.body?.actor) },
     signal: controller.signal
   };
 
@@ -1683,12 +1717,12 @@ function optionalFiniteNumber(args, name) {
   return value;
 }
 
-function requiredString(args, name) {
+function requiredString(args, name, { preserveWhitespace = false } = {}) {
   const value = args[name];
   if (typeof value !== "string" || value.trim().length === 0) {
     throw new McpError(-32602, `${name} is required.`);
   }
-  return value.trim();
+  return preserveWhitespace ? value : value.trim();
 }
 
 // `hint` is optional: when a value is rejected for a reason the allowed-list alone does not explain

@@ -548,10 +548,12 @@ public sealed class TestRunnerService(
                     var create = await http.PostAsJsonAsync("/api/ideas", new { title = "before rename" }, Json, ct);
                     if (create.StatusCode != HttpStatusCode.Created)
                         throw new Exception($"Create idea expected 201, got {(int)create.StatusCode}");
-                    ideaId = (await create.Content.ReadFromJsonAsync<JsonElement>(Json, ct)).GetProperty("id").GetInt32();
+                    var created = await create.Content.ReadFromJsonAsync<JsonElement>(Json, ct);
+                    ideaId = created.GetProperty("id").GetInt32();
+                    var wv = created.GetProperty("workflowVersion").GetInt32();
 
                     var patch = await http.PatchAsJsonAsync($"/api/ideas/{ideaId}",
-                        new { title = "renamed", status = IdeaStatus.Triaging.ToString() }, Json, ct);
+                        new { title = "renamed", status = IdeaStatus.Triaging.ToString(), expectedWorkflowVersion = wv }, Json, ct);
                     if (patch.StatusCode != HttpStatusCode.OK)
                         throw new Exception($"PATCH /api/ideas/{ideaId} expected 200, got {(int)patch.StatusCode}");
 
@@ -642,10 +644,12 @@ public sealed class TestRunnerService(
                     var create = await http.PostAsJsonAsync("/api/ideas", new { title = "audit idea" }, Json, ct);
                     if (create.StatusCode != HttpStatusCode.Created)
                         throw new Exception($"Create idea expected 201, got {(int)create.StatusCode}");
-                    ideaId = (await create.Content.ReadFromJsonAsync<JsonElement>(Json, ct)).GetProperty("id").GetInt32();
+                    var created = await create.Content.ReadFromJsonAsync<JsonElement>(Json, ct);
+                    ideaId = created.GetProperty("id").GetInt32();
+                    var wv = created.GetProperty("workflowVersion").GetInt32();
 
                     // PATCH writes an IdeaUpdated activity event.
-                    var patch = await http.PatchAsJsonAsync($"/api/ideas/{ideaId}", new { title = "audit idea (edited)" }, Json, ct);
+                    var patch = await http.PatchAsJsonAsync($"/api/ideas/{ideaId}", new { title = "audit idea (edited)", expectedWorkflowVersion = wv }, Json, ct);
                     if (patch.StatusCode != HttpStatusCode.OK)
                         throw new Exception($"PATCH idea expected 200, got {(int)patch.StatusCode}");
 

@@ -14,6 +14,21 @@ public sealed class ExternalWorkItemServiceTests
         new(2026, 8, 30, 20, 0, 0, TimeSpan.Zero);
     private static readonly TimeSpan LeaseTtl = TimeSpan.FromMinutes(2);
 
+    [Theory]
+    [InlineData("Markdown hard break  ")]
+    [InlineData("    code block\r\n\t")]
+    [InlineData("Unicode 漢字🙂\n\n")]
+    public async Task Prepare_PreservesCompleteAuthoredBodyBeforeOperationMarker(string body)
+    {
+        using var factory = new SqliteTestFactory();
+        var seeded = await SeedTaskAsync(factory);
+        var lease = await Service(factory).PrepareAsync(Request(seeded, body));
+
+        Assert.Equal($"{body}\n\n<!-- kanbanflow-push:{lease.Operation.OperationId:D} -->", lease.Operation.Body);
+        await using var db = await factory.CreateDbContextAsync();
+        Assert.Equal(lease.Operation.Body, (await db.ExternalWriteOperations.SingleAsync()).Body);
+    }
+
     [Fact]
     public async Task Prepare_FreezesPayload_AddsOneMarker_AndAuditsWithoutBody()
     {

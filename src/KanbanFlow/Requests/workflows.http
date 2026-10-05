@@ -1,0 +1,50 @@
+@host = http://127.0.0.1:5123
+@requestId = 00000000-0000-0000-0000-000000000000
+@ideaId = 1
+@taskId = 1
+
+### Discover requests (optionally append ?projectId=1)
+GET {{host}}/api/workflows/
+
+### Read complete request context; replace requestId with a returned ID
+GET {{host}}/api/workflows/{{requestId}}
+
+### Locate an existing idea's request
+GET {{host}}/api/workflows/idea/{{ideaId}}
+
+### Read a real task's parent workflow
+GET {{host}}/api/workflows/task/{{taskId}}
+
+### Capture a request. Reuse this payload/key only to retry THIS capture.
+POST {{host}}/api/workflows/commands
+Content-Type: application/json
+
+{
+  "operation": "capture",
+  "actor": "Human",
+  "key": "http-example-request-001",
+  "capture": {
+    "title": "Example request",
+    "original": "Preserve my original request here, then refine it into a brief and task plan.",
+    "projectId": null,
+    "source": "http-example"
+  }
+}
+
+### Save a brief after replacing requestId and expectedVersion from the latest GET
+POST {{host}}/api/workflows/commands
+Content-Type: application/json
+
+{
+  "operation": "save_brief",
+  "actor": "Human",
+  "key": "http-example-brief-001",
+  "requestId": "{{requestId}}",
+  "expectedVersion": 1,
+  "brief": {
+    "outcome": "Deliver the requested behavior on the existing board.",
+    "scope": "Existing app, task services and MCP.",
+    "constraints": "Preserve existing project and task identities.",
+    "acceptance": "A human and an MCP client can read and edit the same task."
+  }
+}

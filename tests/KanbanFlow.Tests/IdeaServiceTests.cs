@@ -208,7 +208,7 @@ public sealed class IdeaServiceTests
         var svc = new IdeaService(f);
 
         var updated = await svc.UpdateAsync(id,
-            new IdeaUpdate(Title: "after", Status: IdeaStatus.Triaging, Tags: "x"), "editor");
+            new IdeaUpdate(Title: "after", Status: IdeaStatus.Triaging, Tags: "x", ExpectedWorkflowVersion: 0), "editor");
 
         Assert.Equal("after", updated.Title);
         Assert.Equal(IdeaStatus.Triaging, updated.Status);
@@ -231,7 +231,7 @@ public sealed class IdeaServiceTests
         var id = SeedIdea(f, "same");
         var svc = new IdeaService(f);
 
-        await svc.UpdateAsync(id, new IdeaUpdate(Title: "same"), "editor");
+        await svc.UpdateAsync(id, new IdeaUpdate(Title: "same", ExpectedWorkflowVersion: 0), "editor");
 
         Assert.DoesNotContain(IdeaEvents(f, id), e => e.EventType == "IdeaUpdated");
     }
@@ -376,7 +376,7 @@ public sealed class IdeaServiceTests
         var result = await svc.PromoteAsync(idea.Id, "promoter");
 
         var updated = await svc.UpdateAsync(
-            idea.Id, new IdeaUpdate(Title: "retitled after promotion", Tags: "kept"), "editor");
+            idea.Id, new IdeaUpdate(Title: "retitled after promotion", Tags: "kept", ExpectedWorkflowVersion: (await svc.GetByIdAsync(idea.Id))!.WorkflowVersion), "editor");
 
         Assert.Equal("retitled after promotion", updated.Title);
         Assert.Equal(IdeaStatus.Promoted, updated.Status);
@@ -461,7 +461,7 @@ public sealed class IdeaServiceTests
 
         if (shouldSucceed)
         {
-            var updated = await svc.UpdateAsync(id, new IdeaUpdate(Status: to), "editor");
+            var updated = await svc.UpdateAsync(id, new IdeaUpdate(Status: to, ExpectedWorkflowVersion: (await svc.GetByIdAsync(id))!.WorkflowVersion), "editor");
             Assert.Equal(to, updated.Status);
         }
         else

@@ -44,6 +44,22 @@ public static class KanbanMcpTools
     /// </remarks>
     private const int MaxCriterionTextLength = 1000;
 
+    [McpServerTool(Name = "update_task")]
+    [Description("Edit an existing board task's fields through the same audited service as the human task editor. Omitted fields stay unchanged. Done still requires completed acceptance criteria. Read get_task_workflow afterward to see whether earlier evidence became historical.")]
+    public static async Task<TaskDetailResult> UpdateTask(ITaskService service, int taskId, TaskUpdate update,
+        string? actor = null, CancellationToken cancellationToken = default)
+    {
+        if (update is null) throw new McpException("An update payload is required.");
+        try
+        {
+            var task = await service.UpdateAsync(taskId, update, NormalizeActor(actor), cancellationToken);
+            return new(task.Id, task.FeatureId, task.Name, task.Description, task.Status.ToString(), task.Priority.ToString(), task.Assignee, task.SortOrder, "Task updated");
+        }
+        catch (TaskNotFoundException ex) { throw new McpException(ex.Message); }
+        catch (DefinitionOfDoneNotMetException ex) { throw new McpException(ex.Message); }
+        catch (ValidationException ex) { throw new McpException(ex.Message); }
+    }
+
     [McpServerTool(Name = "list_projects")]
     [Description("List all projects with id, name, description, goals, and counts of features and tasks. Start here to discover which project to work in.")]
     public static async Task<IReadOnlyList<ProjectSummary>> ListProjects(
@@ -137,6 +153,7 @@ public static class KanbanMcpTools
             .Include(t => t.AcceptanceCriteria)
             .Include(t => t.Subtasks)
             .Include(t => t.Dependencies)
+            .Include(t => t.Comments)
             .AsSplitQuery()
             .FirstOrDefaultAsync(t => t.Id == taskId, cancellationToken)
             ?? throw new McpException($"Task {taskId} not found.");
@@ -149,7 +166,9 @@ public static class KanbanMcpTools
                 .Select(c => new ChecklistItem(c.Id, c.Text, c.Completed)).ToList(),
             task.Subtasks.OrderBy(s => s.SortOrder).ThenBy(s => s.Id)
                 .Select(s => new ChecklistItem(s.Id, s.Text, s.Completed)).ToList(),
-            task.Dependencies.Select(d => d.DependsOnTaskItemId).OrderBy(id => id).ToList());
+            task.Dependencies.Select(d => d.DependsOnTaskItemId).OrderBy(id => id).ToList(),
+            task.Comments.OrderBy(c => c.CreatedAt).ThenBy(c => c.Id)
+                .Select(c => new TaskCommentDetail(c.Id, c.Text, c.Author, c.Type.ToString(), c.CreatedAt)).ToList());
     }
 
     /// <summary>
@@ -457,11 +476,8 @@ public static class KanbanMcpTools
     // #428 — the audit trail fills with overrides meaning "the tool was missing" rather than
     // "a human judged this done anyway".
     //
-    // These touch EF directly rather than a service because acceptance criteria have no audit
-    // boundary to route through: the REST surface writes them the same way (see
-    // MapAcceptanceCriterionEndpoints) and records no ActivityEvent for them. Matching REST
-    // exactly is the point — a tool that audited differently from the endpoint it mirrors would be
-    // a second source of truth. If criteria ever gain audit events, both surfaces move together.
+    // Criteria use the shared audited save boundary, as do REST and the existing Blazor editors.
+    // Their events retain task context so both MCP readers and the card show the same history.
 
     [McpServerTool(Name = "list_acceptance_criteria")]
     [Description("List a task's acceptance criteria with their completion state, ordered as they appear on the card. Call this when update_task_status refuses a move to Done, to see exactly which criteria are unmet and get the ids to pass to mark_acceptance_criterion_done.")]
@@ -483,6 +499,38 @@ public static class KanbanMcpTools
             .Select(c => new AcceptanceCriterionResult(
                 c.Id, c.TaskItemId, c.Text, c.Completed, c.SortOrder, "Listed."))
             .ToListAsync(cancellationToken);
+    }
+
+    [McpServerTool(Name = "list_project_activity")]
+    [Description("Read retained project change history, including deleted items. Returns items, total and nextBeforeId; pass nextBeforeId as beforeId to read older events. Actor is reported attribution, not authenticated identity.")]
+    public static async Task<ActivityPage> ListProjectActivity(IDbContextFactory<AppDbContext> dbFactory,
+        int projectId, int? limit = null, int? beforeId = null, CancellationToken cancellationToken = default)
+    {
+        await using var db = await dbFactory.CreateDbContextAsync(cancellationToken);
+        try
+        {
+            var page = await ActivityLogReader.ReadAsync(db, projectId: projectId, limit: limit, beforeId: beforeId, ct: cancellationToken);
+            if (page.Total == 0 && !await db.Projects.AnyAsync(p => p.Id == projectId, cancellationToken))
+                throw new McpException($"Project {projectId} not found.");
+            return page;
+        }
+        catch (ValidationException ex) { throw new McpException(ex.Message); }
+    }
+
+    [McpServerTool(Name = "list_task_activity")]
+    [Description("Read retained task history including subtasks, acceptance checks, requirements and dependency changes. Returns items, total and nextBeforeId; pass nextBeforeId as beforeId for older events, including after deletion.")]
+    public static async Task<ActivityPage> ListTaskActivity(IDbContextFactory<AppDbContext> dbFactory,
+        int taskId, int? limit = null, int? beforeId = null, CancellationToken cancellationToken = default)
+    {
+        await using var db = await dbFactory.CreateDbContextAsync(cancellationToken);
+        try
+        {
+            var page = await ActivityLogReader.ReadAsync(db, taskId: taskId, limit: limit, beforeId: beforeId, ct: cancellationToken);
+            if (page.Total == 0 && !await db.Tasks.AnyAsync(t => t.Id == taskId, cancellationToken))
+                throw new McpException($"Task {taskId} not found.");
+            return page;
+        }
+        catch (ValidationException ex) { throw new McpException(ex.Message); }
     }
 
     [McpServerTool(Name = "create_acceptance_criterion")]
@@ -523,7 +571,7 @@ public static class KanbanMcpTools
             SortOrder = resolvedSortOrder
         };
         db.AcceptanceCriteria.Add(criterion);
-        await db.SaveChangesAsync(cancellationToken);
+        await db.SaveChangesWithAuditAsync(DefaultActor, cancellationToken);
 
         // The Definition-of-Done gate is TRANSITION-only (GateDoneTransitionAsync returns
         // immediately when oldStatus == Done), so a criterion added to an already-Done task
@@ -556,7 +604,7 @@ public static class KanbanMcpTools
 
         criterion.Completed = completed;
         criterion.UpdatedAt = DateTime.UtcNow;
-        await db.SaveChangesAsync(cancellationToken);
+        await db.SaveChangesWithAuditAsync(DefaultActor, cancellationToken);
 
         // Tell the agent whether the task is now clear to move, so it does not have to call
         // list_acceptance_criteria again just to find out.
@@ -603,7 +651,7 @@ public static class KanbanMcpTools
         if (completed.HasValue) criterion.Completed = completed.Value;
         if (sortOrder.HasValue) criterion.SortOrder = sortOrder.Value;
         criterion.UpdatedAt = DateTime.UtcNow;
-        await db.SaveChangesAsync(cancellationToken);
+        await db.SaveChangesWithAuditAsync(DefaultActor, cancellationToken);
 
         return new AcceptanceCriterionResult(
             criterion.Id, criterion.TaskItemId, criterion.Text, criterion.Completed, criterion.SortOrder, "Criterion updated.");
@@ -680,6 +728,7 @@ public static class KanbanMcpTools
         [Description("New comma-separated tags, or omit.")] string? tags = null,
         [Description("New priority: Low | Medium | High | Critical (case-insensitive), or omit.")] string? priority = null,
         [Description("Optional actor label recorded in the audit trail (default 'mcp-agent').")] string? actor = null,
+        [Description("Required: workflowVersion from the idea read you are editing. Reload after a conflict; never fetch a new version just to replay stale fields.")] int? expectedWorkflowVersion = null,
         CancellationToken cancellationToken = default)
     {
         var parsedStatus = ParseIdeaStatus(status);
@@ -687,13 +736,17 @@ public static class KanbanMcpTools
         try
         {
             var idea = await ideaService.UpdateAsync(
-                ideaId, new IdeaUpdate(title, body, plan, parsedStatus, tags, parsedPriority),
+                ideaId, new IdeaUpdate(title, body, plan, parsedStatus, tags, parsedPriority, expectedWorkflowVersion),
                 NormalizeActor(actor), cancellationToken);
             return MapIdea(idea);
         }
         catch (IdeaNotFoundException)
         {
             throw new McpException($"Idea {ideaId} not found.");
+        }
+        catch (KanbanFlow.Models.Workflows.WorkflowException ex)
+        {
+            throw new McpException($"{ex.Code}: {ex.Message}");
         }
         catch (ValidationException ex)
         {
@@ -711,7 +764,7 @@ public static class KanbanMcpTools
     {
         try
         {
-            var result = await ideaService.PromoteAsync(ideaId, NormalizeActor(actor), cancellationToken);
+            var result = await ideaService.PromoteAsync(ideaId, NormalizeActor(actor), ct: cancellationToken);
             return new IdeaPromotionResult(
                 result.IdeaId, result.ProjectId,
                 $"Idea {result.IdeaId} promoted to project {result.ProjectId}");
@@ -719,6 +772,10 @@ public static class KanbanMcpTools
         catch (IdeaNotFoundException)
         {
             throw new McpException($"Idea {ideaId} not found.");
+        }
+        catch (KanbanFlow.Models.Workflows.WorkflowException ex)
+        {
+            throw new McpException($"{ex.Code}: {ex.Message}");
         }
         catch (ValidationException ex)
         {
@@ -1270,7 +1327,7 @@ public static class KanbanMcpTools
     // Enums → strings via .ToString()/?.ToString(); the repo has no JsonStringEnumConverter.
     private static IdeaResult MapIdea(Idea idea) => new(
         idea.Id, idea.Title, idea.Body, idea.Plan, idea.Status.ToString(), idea.Tags,
-        idea.Priority?.ToString(), idea.PromotedProjectId, idea.CreatedAt, idea.UpdatedAt);
+        idea.Priority?.ToString(), idea.PromotedProjectId, idea.CreatedAt, idea.UpdatedAt, idea.WorkflowVersion);
 }
 
 // ── Response DTOs (records → serialised to JSON by the MCP SDK) ────────────────────
@@ -1279,7 +1336,8 @@ public sealed record FeatureNode(int Id, int? ParentFeatureId, string Name, stri
 public sealed record TaskNode(int Id, int FeatureId, string Name, string Status, string Priority, string? Assignee, string? ClaimedBy);
 public sealed record ProjectContext(int Id, string Name, string? Description, string? Goals, string? Readme, IReadOnlyList<FeatureNode> Features, IReadOnlyList<TaskNode> Tasks);
 public sealed record ChecklistItem(int Id, string Text, bool Completed);
-public sealed record TaskDetail(int Id, int FeatureId, string Name, string? Description, string Status, string Priority, string? Assignee, string? ClaimedBy, IReadOnlyList<ChecklistItem> AcceptanceCriteria, IReadOnlyList<ChecklistItem> Subtasks, IReadOnlyList<int> DependsOnTaskIds);
+public sealed record TaskDetail(int Id, int FeatureId, string Name, string? Description, string Status, string Priority, string? Assignee, string? ClaimedBy, IReadOnlyList<ChecklistItem> AcceptanceCriteria, IReadOnlyList<ChecklistItem> Subtasks, IReadOnlyList<int> DependsOnTaskIds, IReadOnlyList<TaskCommentDetail>? Comments = null);
+public sealed record TaskCommentDetail(int Id, string Text, string? Author, string Type, DateTime CreatedAt);
 public sealed record NextTask(int Id, string Name, string Status, string Priority, string? ClaimedBy, string Reason);
 public sealed record TaskStatusResult(int Id, string Name, string Status, string Message);
 public sealed record TaskDetailResult(int Id, int FeatureId, string Name, string? Description, string Status, string Priority, string? Assignee, double SortOrder, string Message);
@@ -1289,7 +1347,7 @@ public sealed record TaskCommentResult(int Id, int TaskItemId, string Text, stri
 public sealed record TaskClaimResult(int Id, string Name, string? ClaimedBy, DateTime? ClaimedAt, string Message);
 
 // ── Idea inbox DTOs (#180 Phase 3) — IdeaResult mirrors the REST MapIdea field set ──
-public sealed record IdeaResult(int Id, string Title, string? Body, string? Plan, string Status, string? Tags, string? Priority, int? PromotedProjectId, DateTime CreatedAt, DateTime UpdatedAt);
+public sealed record IdeaResult(int Id, string Title, string? Body, string? Plan, string Status, string? Tags, string? Priority, int? PromotedProjectId, DateTime CreatedAt, DateTime UpdatedAt, int WorkflowVersion);
 public sealed record IdeaPromotionResult(int IdeaId, int ProjectId, string Message);
 
 // ── Knowledge-graph memory DTOs (#224) — serialized camelCase by the MCP SDK, so the JSON matches

@@ -1,11 +1,29 @@
 using KanbanFlow.Models;
+using KanbanFlow.Models.Workflows;
 using Microsoft.EntityFrameworkCore;
 
 namespace KanbanFlow.Data;
 
 public class AppDbContext : DbContext
 {
-    public AppDbContext(DbContextOptions<AppDbContext> options) : base(options) { }
+    public AppDbContext(DbContextOptions<AppDbContext> options, IHttpContextAccessor? httpContext = null) : base(options)
+    {
+        var request = httpContext?.HttpContext?.Request;
+        DefaultAuditActor = request?.Headers["X-KanbanFlow-Actor"].FirstOrDefault()?.Trim()
+            is { Length: > 0 } actor ? actor : request?.Path.StartsWithSegments("/api") == true ? "api" : "System";
+    }
+
+    public string DefaultAuditActor { get; }
+
+    public DbSet<WorkRequest> WorkRequests => Set<WorkRequest>();
+    public DbSet<RequestMessage> RequestMessages => Set<RequestMessage>();
+    public DbSet<BriefRevision> BriefRevisions => Set<BriefRevision>();
+    public DbSet<PlanVersion> PlanVersions => Set<PlanVersion>();
+    public DbSet<PlannedTask> PlannedTasks => Set<PlannedTask>();
+    public DbSet<TaskEvidence> TaskEvidence => Set<TaskEvidence>();
+    public DbSet<RequestResult> RequestResults => Set<RequestResult>();
+    public DbSet<ProjectRepository> ProjectRepositories => Set<ProjectRepository>();
+    public DbSet<WorkflowReceipt> WorkflowReceipts => Set<WorkflowReceipt>();
 
     public DbSet<Project> Projects => Set<Project>();
     public DbSet<Feature> Features => Set<Feature>();
@@ -25,6 +43,7 @@ public class AppDbContext : DbContext
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
+        WorkflowModelConfiguration.Configure(modelBuilder);
         modelBuilder.Entity<Project>(e =>
         {
             e.HasMany(p => p.Features).WithOne(f => f.Project).HasForeignKey(f => f.ProjectId).OnDelete(DeleteBehavior.Cascade);
@@ -94,6 +113,9 @@ public class AppDbContext : DbContext
             e.Ignore(a => a.Project);
             e.HasIndex(a => new { a.ProjectId, a.CreatedAt });
             e.HasIndex(a => new { a.EntityType, a.EntityId, a.CreatedAt });
+            e.HasIndex(a => new { a.EntityType, a.EntityKey, a.CreatedAt });
+            e.HasIndex(a => new { a.TaskId, a.CreatedAt });
+            e.HasIndex(a => new { a.RelatedTaskId, a.CreatedAt });
         });
 
         modelBuilder.Entity<Idea>(e =>
