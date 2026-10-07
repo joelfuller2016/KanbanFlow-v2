@@ -52,6 +52,11 @@ A review of the repository and a test run on 2026-09-26 filed findings as issues
 
 ## Entries (newest first)
 
+- 2026-10-07 02:00Z (scheduled PR monitor, sixty-sixth run): build gate DOWN — dotnet install still blocked (403 egress policy); no merges.
+  - 8 open PRs: #567, #565, #562, #560, #554 (non-draft); #564, #521, #511 (drafts, skipped). Same set as previous run.
+  - PHASE 1: No merges (curl returned 403 on dotnet-install.sh; no .NET binary on system).
+  - PHASE 2: 0 unresolved review threads on any non-draft PR. #567: 0 threads. #565: 2 threads, all resolved. #562: 7 threads, all resolved. #560: 2 threads, all resolved. #554: 0 threads. Nothing to fix.
+
 - 2026-10-07 01:30Z (scheduled PR monitor, sixty-fifth run): build gate DOWN — dotnet install still blocked (403 egress policy); no merges.
   - 8 open PRs: #567, #565, #562, #560, #554 (non-draft); #564, #521, #511 (drafts, skipped). Same set as previous run.
   - PHASE 1: No merges (curl returned 403 on dotnet-install.sh; no .NET binary on system).
