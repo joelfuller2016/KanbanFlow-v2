@@ -52,6 +52,11 @@ A review of the repository and a test run on 2026-09-26 filed findings as issues
 
 ## Entries (newest first)
 
+- 2026-10-07 00:00Z (scheduled PR monitor, sixty-second run): build gate DOWN — dotnet install still blocked (403 egress policy); no merges.
+  - 8 open PRs: #567, #565, #562, #560, #554 (non-draft); #564, #521, #511 (drafts, skipped). Same set as sixty-first run.
+  - PHASE 1: No merges (build gate down — curl returned 403 on dotnet-install.sh; no .NET binary found on system).
+  - PHASE 2: 0 unresolved, non-outdated review threads on non-draft PRs (#560: 0, #562: 0, #565: 0, #567: 0, #554: 0). Nothing to fix.
+
 - 2026-10-05 03:14Z (comparison of local reviewers on #560; corrects the 2026-10-04 22:05Z entry): **Correction.** The 22:05Z entry called #569 pre-existing. That holds only for the graceful path.
   - **The early-close path is a #560 change.** When stdin closes while requests are in flight:
     - the merge-base `84feb548ad304cfbf73911213391c579b249e36e` exits 0 and drops the responses;
