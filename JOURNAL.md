@@ -52,6 +52,11 @@ A review of the repository and a test run on 2026-09-26 filed findings as issues
 
 ## Entries (newest first)
 
+- 2026-10-07 06:00Z (scheduled PR monitor, seventy-fourth run): build gate DOWN — curl returned 403 on dotnet-install.sh; no merges.
+  - 8 open PRs: #567, #565, #562, #560, #554 (non-draft); #564, #521, #511 (drafts, skipped). Same set as seventy-third run. All head SHAs unchanged.
+  - PHASE 1: No merges (no .NET binary on system; curl returns 403 on dotnet-install.sh).
+  - PHASE 2: 0 unresolved review threads on any non-draft PR. #567: 0 threads. #565: 2 threads, all resolved. #562: 7 threads, all resolved. #560: 2 threads, all resolved. #554: 0 threads. Nothing to fix.
+
 - 2026-10-07 05:30Z (scheduled PR monitor, seventy-third run): build gate DOWN — curl timed out (no response) on dotnet-install.sh; no merges.
   - 8 open PRs: #567, #565, #562, #560, #554 (non-draft); #564, #521, #511 (drafts, skipped). Same set as seventy-second run. All head SHAs unchanged.
   - PHASE 1: No merges (no .NET binary on system; curl timed out on dotnet-install.sh).
