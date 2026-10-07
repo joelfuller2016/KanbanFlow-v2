@@ -52,6 +52,11 @@ A review of the repository and a test run on 2026-09-26 filed findings as issues
 
 ## Entries (newest first)
 
+- 2026-10-07 14:00Z (scheduled PR monitor, seventy-fifth run): build gate DOWN — curl returned 403 on dotnet-install.sh; no merges.
+  - 8 open PRs: #567, #565, #562, #560, #554 (non-draft); #564, #521, #511 (drafts, skipped). Same set as seventy-fourth run. All head SHAs unchanged.
+  - PHASE 1: No merges (no .NET binary on system; curl returns 403 on dotnet-install.sh).
+  - PHASE 2: 0 unresolved review threads on any non-draft PR (unchanged from previous run). Nothing to fix.
+
 - 2026-10-07 13:25Z (dependabot-automerge run): build gate DOWN — curl 403 on dotnet-install.sh (egress policy); no merges.
   - 2 open Dependabot PRs: #567 (coverlet.collector 10.0.1→10.1.0), #554 (Microsoft.OpenApi 2.12.2→3.10.2 — major bump).
   - Both PRs have mergeable_state: unknown; skipped per task rules (unknown = skip this run).
