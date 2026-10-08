@@ -52,6 +52,16 @@ A review of the repository and a test run on 2026-09-26 filed findings as issues
 
 ## Entries (newest first)
 
+- 2026-10-08 16:30Z (scheduled PR monitor, one-hundredth run): build gate UP (.NET 10.0.112 installed via Microsoft apt feed).
+  - 7 open PRs: #565, #562, #560, #554 (non-draft); #564, #521, #511 (drafts, skipped). Master at 3d68017 (ninety-ninth run journal).
+  - PHASE 1: Unshallowed clone; git merge-tree confirmed all three non-#554 PRs merge cleanly against master (exit 0). CodeRabbit APPROVED all three on their head commits. All review threads resolved (confirmed ninety-sixth run, head SHAs unchanged).
+    - #565 (a1c2f62): build GREEN, 1233/1235 (2 base-branch failures). **Merged** squash → f5b61bad.
+    - #562 (8474d6c): build GREEN, 1229/1231 (2 base-branch failures). **Merged** squash → 0deab032.
+    - #560 (835ffa1): build GREEN, 1205/1207 (2 base-branch failures). **Merged** squash → 7d964e80.
+    - #554: blocked-by-failure (NU1608 major-version bump, same as prior runs). Skipped.
+  - PHASE 2: No remaining non-draft PRs with unresolved threads (#554 threads confirmed resolved ninety-sixth run).
+  - Master (7d964e80): build GREEN (0 warnings/0 errors), tests 1257/1259 passed — same 2 base-branch failures (filesystem has no independent creation time). Note: branch deletion blocked by proxy; branches fix/embed-negative-cache, fix/test-runner-fixture-leak-on-cancel, fix/mcp-wrapper-stdin-eof-drain remain on GitHub; owner may delete.
+
 - 2026-10-08 15:00Z (scheduled PR monitor, ninety-ninth run): build gate UP (.NET 10.0.112 installed via Microsoft apt feed).
   - 7 open PRs: #565, #562, #560, #554 (non-draft); #564, #521, #511 (drafts, skipped). Master advanced to 5b5404a (JOURNAL.md from ninety-eighth run).
   - PHASE 1: No merges. All 4 non-draft PRs show mergeable_state=unknown; head SHAs unchanged from ninety-eighth run (#565: a1c2f62, #562: 8474d6c, #560: 835ffa1, #554: 998a32d). #554 remains blocked-by-failure (NU1608 major-version bump, documented since 13:29Z run).
