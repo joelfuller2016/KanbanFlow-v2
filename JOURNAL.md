@@ -52,6 +52,11 @@ A review of the repository and a test run on 2026-09-26 filed findings as issues
 
 ## Entries (newest first)
 
+- 2026-10-08 13:23Z (scheduled dependabot-automerge run): build gate UP (.NET 10.0.112 installed via Microsoft apt feed). 2 open Dependabot PRs found.
+  - PR #567 (coverlet.collector 10.0.1 → 10.1.0): build GREEN, tests 1205 passed / 2 failed; both failures also fail on master (filesystem has no independent creation time) — base-branch failures, not introduced by this PR. **Merged** as squash, SHA 220baf5f.
+  - PR #554 (Microsoft.OpenApi 2.12.2 → 3.10.2): build **FAILED** — `NU1608: Microsoft.AspNetCore.OpenApi 10.0.12 requires Microsoft.OpenApi (>= 2.12.0 && < 3.0.0) but 3.10.2 was resolved`. Major-version bump breaks the AspNetCore upper-bound constraint. Left open, failure posted as comment on PR #554.
+  - Summary: merged 1 (#567), blocked-by-failure 1 (#554).
+
 - 2026-10-08 13:00Z (scheduled PR monitor, ninety-seventh run): build gate DOWN — curl returned 403 on dotnet-install.sh; no cached dotnet found; no merges.
   - 8 open PRs: #567, #565, #562, #560, #554 (non-draft); #564, #521, #511 (drafts, skipped). Same set as ninety-sixth run. All non-draft head SHAs unchanged. Master advanced to 749122db.
   - PHASE 1: No merges (build gate down; all PRs show mergeable_state=unknown).
