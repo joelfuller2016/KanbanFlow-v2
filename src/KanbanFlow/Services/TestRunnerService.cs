@@ -26,11 +26,15 @@ public sealed class TestRunnerService(
     /// <param name="ct">A cancellation token that can be used to cancel the test run.</param>
     /// <returns>A TestSuiteResult named "API" containing each TestResult and the total elapsed milliseconds.</returns>
     /// <remarks>
-    /// The method snapshots existing project IDs at start to avoid affecting pre-existing projects, executes multiple isolated API tests (creating and deleting scratch projects as needed), and performs a best-effort audit cleanup after completion using CancellationToken.None; cleanup errors are swallowed so they do not mask test failures or cancellations.
+    /// The method snapshots existing project IDs at start to avoid affecting pre-existing projects, executes multiple isolated API tests (creating and deleting scratch projects as needed), and performs a best-effort cleanup after completion using CancellationToken.None: a per-run-marker sweep for any fixture whose id was never learned because its create failed for a reason unrelated to ct (HttpClient.Timeout, transport reset, server error) before the id was captured, or whose known-id DELETE failed (#150 AC#2, #541), followed by the orphaned-ActivityEvent purge. Cleanup errors are swallowed so they do not mask test failures or cancellations.
     /// </remarks>
     public async Task<TestSuiteResult> RunApiTestsAsync(CancellationToken ct = default)
     {
         var runStart = DateTime.UtcNow;
+        // Per-run marker embedded in the Name/Title of every project and idea this run creates (see NewName);
+        // lets SweepRunMarkerAsync find a fixture whose create timed out or failed in transport
+        // before its id was learned, or whose known-id delete failed (#150 AC#2, #541).
+        var runMarker = NewRunMarker();
         // Snapshot the projects that already exist at run start. The runner uses the live DB,
         // so a user could delete a real, pre-existing project mid-run; excluding these ids from
         // the cleanup keeps that real project's audit trail intact (see TestAuditCleanup).
@@ -56,15 +60,28 @@ public sealed class TestRunnerService(
 
         results.Add(await RunTest("Create + delete project", "API:Project", async () =>
         {
-            var name = NewName("Test-Project");
-            var resp = await http.PostAsJsonAsync("/api/projects", new { name }, Json, ct);
+            var name = NewName("Test-Project", runMarker);
+            // CancellationToken.None for the create + its read — see CreateProjectFeatureTaskAsync's
+            // comment on the same pattern: the server commits this POST regardless of ct, so ct only
+            // ever decides whether we keep what it already committed, checked once id is known.
+            var resp = await PostCreateAsync(http, "/api/projects", new { name }, ct);
             if (resp.StatusCode != HttpStatusCode.Created)
                 throw new Exception($"POST /api/projects expected 201, got {(int)resp.StatusCode}");
-            var body = await resp.Content.ReadFromJsonAsync<JsonElement>(Json, ct);
+            var body = await resp.Content.ReadFromJsonAsync<JsonElement>(Json, CancellationToken.None);
             var id = body.GetProperty("id").GetInt32();
-            var del = await http.DeleteAsync($"/api/projects/{id}", ct);
-            if (del.StatusCode != HttpStatusCode.NoContent)
-                throw new Exception($"DELETE /api/projects/{id} expected 204, got {(int)del.StatusCode}");
+            try
+            {
+                ct.ThrowIfCancellationRequested();
+                var del = await http.DeleteAsync($"/api/projects/{id}", ct);
+                if (del.StatusCode != HttpStatusCode.NoContent)
+                    throw new Exception($"DELETE /api/projects/{id} expected 204, got {(int)del.StatusCode}");
+            }
+            catch
+            {
+                // id is known — clean up immediately rather than leaving this solely to the sweep.
+                await TryDeleteProjectAsync(http, id);
+                throw;
+            }
         }));
 
         results.Add(await RunTest("Create project with empty name returns 422", "API:Project", async () =>
@@ -78,7 +95,7 @@ public sealed class TestRunnerService(
         int? scratchProjectId = null;
         try
         {
-            var (pid, _, _) = await CreateProjectFeatureTaskAsync(http, ct);
+            var (pid, _, _) = await CreateProjectFeatureTaskAsync(http, runMarker, ct);
             scratchProjectId = pid;
 
             results.Add(await RunTest("Get project by id returns full shape", "API:Project", async () =>
@@ -129,7 +146,7 @@ public sealed class TestRunnerService(
 
             results.Add(await RunTest("Status change writes activity event + comment", "API:Service-layer", async () =>
             {
-                var (innerPid, _, taskId) = await CreateProjectFeatureTaskAsync(http, ct);
+                var (innerPid, _, taskId) = await CreateProjectFeatureTaskAsync(http, runMarker, ct);
                 try
                 {
                     var resp = await http.PatchAsJsonAsync($"/api/tasks/{taskId}/status",
@@ -168,7 +185,7 @@ public sealed class TestRunnerService(
 
             results.Add(await RunTest("Invalid status (numeric) returns 422", "API:Validation", async () =>
             {
-                var (innerPid, _, taskId) = await CreateProjectFeatureTaskAsync(http, ct);
+                var (innerPid, _, taskId) = await CreateProjectFeatureTaskAsync(http, runMarker, ct);
                 try
                 {
                     var resp = await http.PatchAsJsonAsync($"/api/tasks/{taskId}/status", new { status = "99" }, Json, ct);
@@ -183,7 +200,7 @@ public sealed class TestRunnerService(
 
             results.Add(await RunTest("Claim then re-claim by same actor renews the claim", "API:Claim", async () =>
             {
-                var (innerPid, _, taskId) = await CreateProjectFeatureTaskAsync(http, ct);
+                var (innerPid, _, taskId) = await CreateProjectFeatureTaskAsync(http, runMarker, ct);
                 try
                 {
                     var first = await http.PostAsJsonAsync($"/api/tasks/{taskId}/claim",
@@ -221,7 +238,7 @@ public sealed class TestRunnerService(
 
             results.Add(await RunTest("Claim conflict returns 409 for different actor", "API:Claim", async () =>
             {
-                var (innerPid, _, taskId) = await CreateProjectFeatureTaskAsync(http, ct);
+                var (innerPid, _, taskId) = await CreateProjectFeatureTaskAsync(http, runMarker, ct);
                 try
                 {
                     await http.PostAsJsonAsync($"/api/tasks/{taskId}/claim", new { actor = "alice" }, Json, ct);
@@ -238,7 +255,7 @@ public sealed class TestRunnerService(
 
             results.Add(await RunTest("Add comment with valid Type", "API:Comment", async () =>
             {
-                var (innerPid, _, taskId) = await CreateProjectFeatureTaskAsync(http, ct);
+                var (innerPid, _, taskId) = await CreateProjectFeatureTaskAsync(http, runMarker, ct);
                 try
                 {
                     var resp = await http.PostAsJsonAsync($"/api/tasks/{taskId}/comments",
@@ -254,7 +271,7 @@ public sealed class TestRunnerService(
 
             results.Add(await RunTest("Add comment with disallowed Type returns 422", "API:Comment", async () =>
             {
-                var (innerPid, _, taskId) = await CreateProjectFeatureTaskAsync(http, ct);
+                var (innerPid, _, taskId) = await CreateProjectFeatureTaskAsync(http, runMarker, ct);
                 try
                 {
                     var resp = await http.PostAsJsonAsync($"/api/tasks/{taskId}/comments",
@@ -270,7 +287,7 @@ public sealed class TestRunnerService(
 
             results.Add(await RunTest("Step context returns rich AI bundle", "API:AI", async () =>
             {
-                var (innerPid, _, taskId) = await CreateProjectFeatureTaskAsync(http, ct);
+                var (innerPid, _, taskId) = await CreateProjectFeatureTaskAsync(http, runMarker, ct);
                 try
                 {
                     var body = await http.GetFromJsonAsync<JsonElement>($"/api/tasks/{taskId}/context", Json, ct);
@@ -299,7 +316,7 @@ public sealed class TestRunnerService(
 
             results.Add(await RunTest("Acceptance criterion CRUD round-trip", "API:AC", async () =>
             {
-                var (innerPid, _, taskId) = await CreateProjectFeatureTaskAsync(http, ct);
+                var (innerPid, _, taskId) = await CreateProjectFeatureTaskAsync(http, runMarker, ct);
                 try
                 {
                     var create = await http.PostAsJsonAsync($"/api/tasks/{taskId}/acceptance-criteria",
@@ -348,7 +365,7 @@ public sealed class TestRunnerService(
 
             results.Add(await RunTest("Claim release frees task for another actor", "API:Claim", async () =>
             {
-                var (innerPid, _, taskId) = await CreateProjectFeatureTaskAsync(http, ct);
+                var (innerPid, _, taskId) = await CreateProjectFeatureTaskAsync(http, runMarker, ct);
                 try
                 {
                     var claim = await http.PostAsJsonAsync($"/api/tasks/{taskId}/claim", new { actor = "alice" }, Json, ct);
@@ -380,7 +397,7 @@ public sealed class TestRunnerService(
 
             results.Add(await RunTest("Dependency blocks next-tasks until blocker is Done", "API:AI", async () =>
             {
-                var (innerPid, featureId, blockerId) = await CreateProjectFeatureTaskAsync(http, ct);
+                var (innerPid, featureId, blockerId) = await CreateProjectFeatureTaskAsync(http, runMarker, ct);
                 try
                 {
                     var t2 = await http.PostAsJsonAsync($"/api/features/{featureId}/tasks",
@@ -425,7 +442,7 @@ public sealed class TestRunnerService(
 
             results.Add(await RunTest("Requirement create / assign / delete round-trip", "API:Requirement", async () =>
             {
-                var (innerPid, _, taskId) = await CreateProjectFeatureTaskAsync(http, ct);
+                var (innerPid, _, taskId) = await CreateProjectFeatureTaskAsync(http, runMarker, ct);
                 try
                 {
                     var create = await http.PostAsJsonAsync($"/api/projects/{innerPid}/requirements",
@@ -464,13 +481,18 @@ public sealed class TestRunnerService(
                 int? ideaId = null;
                 try
                 {
-                    var create = await http.PostAsJsonAsync("/api/ideas",
-                        new { title = "Round-trip idea", body = "the body", plan = "the plan", tags = "ai,backend", priority = TaskPriority.High.ToString() }, Json, ct);
+                    // Marker-tagged (see runMarker): if THIS create's response is never received
+                    // (timeout, transport failure), ideaId below is never assigned and this finally
+                    // cannot clean up by id — SweepRunMarkerAsync is what finds a leak like that (#150 AC#2, #541).
+                    var title = $"{runMarker} Round-trip idea";
+                    var create = await PostCreateAsync(http, "/api/ideas",
+                        new { title, body = "the body", plan = "the plan", tags = "ai,backend", priority = TaskPriority.High.ToString() }, ct);
                     if (create.StatusCode != HttpStatusCode.Created)
                         throw new Exception($"POST /api/ideas expected 201, got {(int)create.StatusCode}");
-                    var created = await create.Content.ReadFromJsonAsync<JsonElement>(Json, ct);
+                    var created = await create.Content.ReadFromJsonAsync<JsonElement>(Json, CancellationToken.None);
                     ideaId = created.GetProperty("id").GetInt32();
-                    if (created.GetProperty("title").GetString() != "Round-trip idea")
+                    ct.ThrowIfCancellationRequested();
+                    if (created.GetProperty("title").GetString() != title)
                         throw new Exception("Created idea title mismatch");
                     if (created.GetProperty("body").GetString() != "the body")
                         throw new Exception("Created idea body mismatch");
@@ -484,7 +506,7 @@ public sealed class TestRunnerService(
                     var got = await http.GetFromJsonAsync<JsonElement>($"/api/ideas/{ideaId}", Json, ct);
                     if (got.GetProperty("id").GetInt32() != ideaId)
                         throw new Exception("GET /api/ideas/{id} returned the wrong id");
-                    if (got.GetProperty("title").GetString() != "Round-trip idea")
+                    if (got.GetProperty("title").GetString() != title)
                         throw new Exception("GET idea title does not match created title");
                     if (got.GetProperty("tags").GetString() != "ai,backend")
                         throw new Exception($"GET idea tags mismatch, got '{got.GetProperty("tags").GetString()}'");
@@ -508,17 +530,24 @@ public sealed class TestRunnerService(
                 int? idB = null;
                 try
                 {
-                    var ra = await http.PostAsJsonAsync("/api/ideas",
-                        new { title = "alpha kanban", tags = "ai,backend" }, Json, ct);
+                    // Marker-tagged titles (see runMarker doc on CreateProjectFeatureTaskAsync) so a
+                    // create that fails before idA/idB below is assigned (a timeout, a transport reset,
+                    // a server error) is still found by SweepRunMarkerAsync. "kanban" stays intact in
+                    // titleA for the ?q= assertion below.
+                    var titleA = $"{runMarker} alpha kanban";
+                    var titleB = $"{runMarker} beta";
+                    var ra = await PostCreateAsync(http, "/api/ideas",
+                        new { title = titleA, tags = "ai,backend" }, ct);
                     if (ra.StatusCode != HttpStatusCode.Created)
                         throw new Exception($"Create idea A expected 201, got {(int)ra.StatusCode}");
-                    idA = (await ra.Content.ReadFromJsonAsync<JsonElement>(Json, ct)).GetProperty("id").GetInt32();
+                    idA = (await ra.Content.ReadFromJsonAsync<JsonElement>(Json, CancellationToken.None)).GetProperty("id").GetInt32();
 
-                    var rb = await http.PostAsJsonAsync("/api/ideas",
-                        new { title = "beta", tags = "frontend" }, Json, ct);
+                    var rb = await PostCreateAsync(http, "/api/ideas",
+                        new { title = titleB, tags = "frontend" }, ct);
                     if (rb.StatusCode != HttpStatusCode.Created)
                         throw new Exception($"Create idea B expected 201, got {(int)rb.StatusCode}");
-                    idB = (await rb.Content.ReadFromJsonAsync<JsonElement>(Json, ct)).GetProperty("id").GetInt32();
+                    idB = (await rb.Content.ReadFromJsonAsync<JsonElement>(Json, CancellationToken.None)).GetProperty("id").GetInt32();
+                    ct.ThrowIfCancellationRequested();
 
                     // Uppercase tag query proves case-insensitive substring matching.
                     var byTag = await http.GetFromJsonAsync<JsonElement>("/api/ideas?tag=BACKEND&limit=500", Json, ct);
@@ -531,7 +560,7 @@ public sealed class TestRunnerService(
 
                     var byQ = await http.GetFromJsonAsync<JsonElement>("/api/ideas?q=kanban&limit=500", Json, ct);
                     if (!byQ.EnumerateArray().Any(i => i.GetProperty("id").GetInt32() == idA))
-                        throw new Exception("?q=kanban should include idea A ('alpha kanban')");
+                        throw new Exception($"?q=kanban should include idea A ('{titleA}')");
                 }
                 finally
                 {
@@ -545,18 +574,27 @@ public sealed class TestRunnerService(
                 int? ideaId = null;
                 try
                 {
-                    var create = await http.PostAsJsonAsync("/api/ideas", new { title = "before rename" }, Json, ct);
+                    // Marker-tagged (see runMarker doc on CreateProjectFeatureTaskAsync). The rename
+                    // target below is ALSO marker-tagged (#541): the id is already known by
+                    // the time the PATCH runs, so this finally's own TryDeleteIdeaAsync is what
+                    // recovers a failure there — but if a LATER, unrelated failure (a crash, or that
+                    // same delete itself failing) leaves this row behind anyway, SweepRunMarkerAsync
+                    // finds a row by its CURRENT title, not its creation title. An unmarked rename
+                    // target would make an otherwise-recoverable leak invisible to the sweep.
+                    var create = await PostCreateAsync(http, "/api/ideas", new { title = $"{runMarker} before rename" }, ct);
                     if (create.StatusCode != HttpStatusCode.Created)
                         throw new Exception($"Create idea expected 201, got {(int)create.StatusCode}");
-                    ideaId = (await create.Content.ReadFromJsonAsync<JsonElement>(Json, ct)).GetProperty("id").GetInt32();
+                    ideaId = (await create.Content.ReadFromJsonAsync<JsonElement>(Json, CancellationToken.None)).GetProperty("id").GetInt32();
+                    ct.ThrowIfCancellationRequested();
 
+                    var renamedTitle = $"{runMarker} renamed";
                     var patch = await http.PatchAsJsonAsync($"/api/ideas/{ideaId}",
-                        new { title = "renamed", status = IdeaStatus.Triaging.ToString() }, Json, ct);
+                        new { title = renamedTitle, status = IdeaStatus.Triaging.ToString() }, Json, ct);
                     if (patch.StatusCode != HttpStatusCode.OK)
                         throw new Exception($"PATCH /api/ideas/{ideaId} expected 200, got {(int)patch.StatusCode}");
 
                     var got = await http.GetFromJsonAsync<JsonElement>($"/api/ideas/{ideaId}", Json, ct);
-                    if (got.GetProperty("title").GetString() != "renamed")
+                    if (got.GetProperty("title").GetString() != renamedTitle)
                         throw new Exception($"PATCH did not persist title, got '{got.GetProperty("title").GetString()}'");
                     if (got.GetProperty("status").GetString() != IdeaStatus.Triaging.ToString())
                         throw new Exception($"PATCH did not persist status, got '{got.GetProperty("status").GetString()}'");
@@ -573,22 +611,32 @@ public sealed class TestRunnerService(
 
             results.Add(await RunTest("Idea delete returns 204 then 404; unknown id 404", "API:Idea", async () =>
             {
-                var create = await http.PostAsJsonAsync("/api/ideas", new { title = "to delete" }, Json, ct);
+                // Marker-tagged (see runMarker doc on CreateProjectFeatureTaskAsync).
+                var create = await PostCreateAsync(http, "/api/ideas", new { title = $"{runMarker} to delete" }, ct);
                 if (create.StatusCode != HttpStatusCode.Created)
                     throw new Exception($"Create idea expected 201, got {(int)create.StatusCode}");
-                var ideaId = (await create.Content.ReadFromJsonAsync<JsonElement>(Json, ct)).GetProperty("id").GetInt32();
+                var ideaId = (await create.Content.ReadFromJsonAsync<JsonElement>(Json, CancellationToken.None)).GetProperty("id").GetInt32();
+                try
+                {
+                    ct.ThrowIfCancellationRequested();
+                    var del = await http.DeleteAsync($"/api/ideas/{ideaId}", ct);
+                    if (del.StatusCode != HttpStatusCode.NoContent)
+                        throw new Exception($"DELETE /api/ideas/{ideaId} expected 204, got {(int)del.StatusCode}");
 
-                var del = await http.DeleteAsync($"/api/ideas/{ideaId}", ct);
-                if (del.StatusCode != HttpStatusCode.NoContent)
-                    throw new Exception($"DELETE /api/ideas/{ideaId} expected 204, got {(int)del.StatusCode}");
+                    var gone = await http.GetAsync($"/api/ideas/{ideaId}", ct);
+                    if (gone.StatusCode != HttpStatusCode.NotFound)
+                        throw new Exception($"GET after delete expected 404, got {(int)gone.StatusCode}");
 
-                var gone = await http.GetAsync($"/api/ideas/{ideaId}", ct);
-                if (gone.StatusCode != HttpStatusCode.NotFound)
-                    throw new Exception($"GET after delete expected 404, got {(int)gone.StatusCode}");
-
-                var delMissing = await http.DeleteAsync("/api/ideas/99999999", ct);
-                if (delMissing.StatusCode != HttpStatusCode.NotFound)
-                    throw new Exception($"DELETE unknown idea expected 404, got {(int)delMissing.StatusCode}");
+                    var delMissing = await http.DeleteAsync("/api/ideas/99999999", ct);
+                    if (delMissing.StatusCode != HttpStatusCode.NotFound)
+                        throw new Exception($"DELETE unknown idea expected 404, got {(int)delMissing.StatusCode}");
+                }
+                catch
+                {
+                    // id is known — this test otherwise has no finally to fall back on.
+                    await TryDeleteIdeaAsync(http, ideaId);
+                    throw;
+                }
             }));
 
             results.Add(await RunTest("Idea promote creates project; re-promote returns 422", "API:Idea", async () =>
@@ -597,19 +645,25 @@ public sealed class TestRunnerService(
                 int? projectId = null;
                 try
                 {
-                    var create = await http.PostAsJsonAsync("/api/ideas",
-                        new { title = "to promote", body = "b", plan = "p" }, Json, ct);
+                    // Marker-tagged (see runMarker doc on CreateProjectFeatureTaskAsync). PromoteAsync
+                    // sets the new Project's Name to the idea's Title, so this also carries the
+                    // marker onto the promoted project below — one sweep query catches both.
+                    var create = await PostCreateAsync(http, "/api/ideas",
+                        new { title = $"{runMarker} to promote", body = "b", plan = "p" }, ct);
                     if (create.StatusCode != HttpStatusCode.Created)
                         throw new Exception($"Create idea expected 201, got {(int)create.StatusCode}");
-                    ideaId = (await create.Content.ReadFromJsonAsync<JsonElement>(Json, ct)).GetProperty("id").GetInt32();
+                    ideaId = (await create.Content.ReadFromJsonAsync<JsonElement>(Json, CancellationToken.None)).GetProperty("id").GetInt32();
 
-                    var promote = await http.PostAsJsonAsync($"/api/ideas/{ideaId}/promote", new { actor = "test-runner" }, Json, ct);
+                    // Promote also creates a Project (PromoteAsync); same CancellationToken.None
+                    // treatment for the same reason as every other fixture-create in this file.
+                    var promote = await PostCreateAsync(http, $"/api/ideas/{ideaId}/promote", new { actor = "test-runner" }, ct);
                     if (promote.StatusCode != HttpStatusCode.OK)
                         throw new Exception($"POST /api/ideas/{ideaId}/promote expected 200, got {(int)promote.StatusCode}");
-                    var promoted = await promote.Content.ReadFromJsonAsync<JsonElement>(Json, ct);
+                    var promoted = await promote.Content.ReadFromJsonAsync<JsonElement>(Json, CancellationToken.None);
                     if (promoted.GetProperty("ideaId").GetInt32() != ideaId)
                         throw new Exception("Promote result ideaId does not match the promoted idea");
                     projectId = promoted.GetProperty("projectId").GetInt32();
+                    ct.ThrowIfCancellationRequested();
                     if (projectId <= 0)
                         throw new Exception($"Promote result projectId should be > 0, got {projectId}");
 
@@ -639,13 +693,18 @@ public sealed class TestRunnerService(
                 int? ideaId = null;
                 try
                 {
-                    var create = await http.PostAsJsonAsync("/api/ideas", new { title = "audit idea" }, Json, ct);
+                    // Marker-tagged (see runMarker doc on CreateProjectFeatureTaskAsync). The rename
+                    // target below is ALSO marker-tagged (#541) so SweepRunMarkerAsync can
+                    // still find this row by its CURRENT title if it is ever left behind after the
+                    // rename — see the identical note on the "before rename" test.
+                    var create = await PostCreateAsync(http, "/api/ideas", new { title = $"{runMarker} audit idea" }, ct);
                     if (create.StatusCode != HttpStatusCode.Created)
                         throw new Exception($"Create idea expected 201, got {(int)create.StatusCode}");
-                    ideaId = (await create.Content.ReadFromJsonAsync<JsonElement>(Json, ct)).GetProperty("id").GetInt32();
+                    ideaId = (await create.Content.ReadFromJsonAsync<JsonElement>(Json, CancellationToken.None)).GetProperty("id").GetInt32();
+                    ct.ThrowIfCancellationRequested();
 
                     // PATCH writes an IdeaUpdated activity event.
-                    var patch = await http.PatchAsJsonAsync($"/api/ideas/{ideaId}", new { title = "audit idea (edited)" }, Json, ct);
+                    var patch = await http.PatchAsJsonAsync($"/api/ideas/{ideaId}", new { title = $"{runMarker} audit idea (edited)" }, Json, ct);
                     if (patch.StatusCode != HttpStatusCode.OK)
                         throw new Exception($"PATCH idea expected 200, got {(int)patch.StatusCode}");
 
@@ -680,14 +739,19 @@ public sealed class TestRunnerService(
                 int? ideaId = null;
                 try
                 {
-                    var postBlank = await http.PostAsJsonAsync("/api/ideas", new { title = "blank enum", priority = " " }, Json, ct);
+                    // Marker-tagged even though this is expected to 422 (defensive — do not assume a
+                    // validation-only POST can never persist a row).
+                    var postBlank = await http.PostAsJsonAsync("/api/ideas", new { title = $"{runMarker} blank enum", priority = " " }, Json, ct);
                     if (postBlank.StatusCode != HttpStatusCode.UnprocessableEntity)
                         throw new Exception($"POST blank priority expected 422, got {(int)postBlank.StatusCode}");
 
-                    var create = await http.PostAsJsonAsync("/api/ideas", new { title = "blank enum patch target" }, Json, ct);
+                    // Marker-tagged (see runMarker doc on CreateProjectFeatureTaskAsync) — unlike the
+                    // blank-priority POST above, this one succeeds and creates a row.
+                    var create = await PostCreateAsync(http, "/api/ideas", new { title = $"{runMarker} blank enum patch target" }, ct);
                     if (create.StatusCode != HttpStatusCode.Created)
                         throw new Exception($"Create idea expected 201, got {(int)create.StatusCode}");
-                    ideaId = (await create.Content.ReadFromJsonAsync<JsonElement>(Json, ct)).GetProperty("id").GetInt32();
+                    ideaId = (await create.Content.ReadFromJsonAsync<JsonElement>(Json, CancellationToken.None)).GetProperty("id").GetInt32();
+                    ct.ThrowIfCancellationRequested();
 
                     var patchBlank = await http.PatchAsJsonAsync($"/api/ideas/{ideaId}", new { status = " " }, Json, ct);
                     if (patchBlank.StatusCode != HttpStatusCode.UnprocessableEntity)
@@ -701,7 +765,7 @@ public sealed class TestRunnerService(
 
             results.Add(await RunTest("Project activity stays queryable after the project is deleted (#85)", "API:Activity", async () =>
             {
-                var (innerPid, _, taskId) = await CreateProjectFeatureTaskAsync(http, ct);
+                var (innerPid, _, taskId) = await CreateProjectFeatureTaskAsync(http, runMarker, ct);
                 var deleted = false;
                 try
                 {
@@ -736,21 +800,22 @@ public sealed class TestRunnerService(
         }
         finally
         {
-            // Best-effort: CancellationToken.None runs cleanup even on cancellation;
-            // swallowing errors prevents masking the suite's original exception (#85, #150).
-            try { await TestAuditCleanup.PurgeOrphanedSinceAsync(dbFactory, runStart, preExistingProjectIds, CancellationToken.None); }
-            catch (Exception ex) { logger.LogWarning(ex, "Best-effort test audit cleanup failed (API suite)."); }
+            await RunEndOfSuiteCleanupAsync(http, runMarker, runStart, preExistingProjectIds, "API");
         }
     }
 
     /// <summary>
     /// Execute the UI test suite against the running application.
     /// </summary>
-    /// <param name="ct">Cancellation token to stop test execution; cleanup is still attempted using <see cref="CancellationToken.None"/> so orphaned test artifacts are purged even on cancellation.</param>
+    /// <param name="ct">Cancellation token to stop test execution; cleanup is still attempted using <see cref="CancellationToken.None"/> so orphaned test artifacts — including a fixture whose id was never learned because its create failed before the id was captured (#150 AC#2, #541) — are purged even on cancellation.</param>
     /// <returns>A <see cref="TestSuiteResult"/> containing the individual test results and the total elapsed milliseconds for the UI suite.</returns>
     public async Task<TestSuiteResult> RunUiTestsAsync(CancellationToken ct = default)
     {
         var runStart = DateTime.UtcNow;
+        // Per-run marker embedded in the Name/Title of every project and idea this run creates (see NewName);
+        // lets SweepRunMarkerAsync find a fixture whose create timed out or failed in transport
+        // before its id was learned, or whose known-id delete failed (#150 AC#2, #541).
+        var runMarker = NewRunMarker();
         // Snapshot the projects that already exist at run start. The runner uses the live DB,
         // so a user could delete a real, pre-existing project mid-run; excluding these ids from
         // the cleanup keeps that real project's audit trail intact (see TestAuditCleanup).
@@ -771,13 +836,14 @@ public sealed class TestRunnerService(
 
         results.Add(await RunTest("Home page lists a freshly-created project as a card", "UI:Home", async () =>
         {
-            var name = NewName("UiHome");
-            var create = await http.PostAsJsonAsync("/api/projects", new { name }, Json, ct);
+            var name = NewName("UiHome", runMarker);
+            var create = await PostCreateAsync(http, "/api/projects", new { name }, ct);
             if (create.StatusCode != HttpStatusCode.Created)
                 throw new Exception($"POST /api/projects expected 201, got {(int)create.StatusCode}");
-            var pid = (await create.Content.ReadFromJsonAsync<JsonElement>(Json, ct)).GetProperty("id").GetInt32();
+            var pid = (await create.Content.ReadFromJsonAsync<JsonElement>(Json, CancellationToken.None)).GetProperty("id").GetInt32();
             try
             {
+                ct.ThrowIfCancellationRequested();
                 var resp = await http.GetAsync("/", ct);
                 if (!resp.IsSuccessStatusCode)
                     throw new Exception($"GET / returned {(int)resp.StatusCode}");
@@ -821,13 +887,14 @@ public sealed class TestRunnerService(
         {
             // IdeaService.ListAsync returns newest-first, so the idea we just created is
             // always on the first page of results regardless of how many ideas exist.
-            var title = NewName("UiIdea");
-            var create = await http.PostAsJsonAsync("/api/ideas", new { title }, Json, ct);
+            var title = NewName("UiIdea", runMarker);
+            var create = await PostCreateAsync(http, "/api/ideas", new { title }, ct);
             if (create.StatusCode != HttpStatusCode.Created)
                 throw new Exception($"POST /api/ideas expected 201, got {(int)create.StatusCode}");
-            var ideaId = (await create.Content.ReadFromJsonAsync<JsonElement>(Json, ct)).GetProperty("id").GetInt32();
+            var ideaId = (await create.Content.ReadFromJsonAsync<JsonElement>(Json, CancellationToken.None)).GetProperty("id").GetInt32();
             try
             {
+                ct.ThrowIfCancellationRequested();
                 var resp = await http.GetAsync("/ideas", ct);
                 if (!resp.IsSuccessStatusCode)
                     throw new Exception($"GET /ideas returned {(int)resp.StatusCode}");
@@ -867,7 +934,7 @@ public sealed class TestRunnerService(
             // Don't depend on seed project id=1 — it can be deleted by other tests
             // or future migrations. Create a scratch project, hit its route, clean up.
             // CreateProjectFeatureTaskAsync seeds exactly one task, with status Todo.
-            var (pid, _, taskId) = await CreateProjectFeatureTaskAsync(http, ct);
+            var (pid, _, taskId) = await CreateProjectFeatureTaskAsync(http, runMarker, ct);
             try
             {
                 var resp = await http.GetAsync($"/project/{pid}", ct);
@@ -955,10 +1022,7 @@ public sealed class TestRunnerService(
         }
         finally
         {
-            // Best-effort: CancellationToken.None runs cleanup even on cancellation;
-            // swallowing errors prevents masking the suite's original exception (#85, #150).
-            try { await TestAuditCleanup.PurgeOrphanedSinceAsync(dbFactory, runStart, preExistingProjectIds, CancellationToken.None); }
-            catch (Exception ex) { logger.LogWarning(ex, "Best-effort test audit cleanup failed (UI suite)."); }
+            await RunEndOfSuiteCleanupAsync(http, runMarker, runStart, preExistingProjectIds, "UI");
         }
     }
 
@@ -968,11 +1032,15 @@ public sealed class TestRunnerService(
     /// <param name="ct">A cancellation token that can be used to cancel the test run.</param>
     /// <returns>A TestSuiteResult containing the suite name ("Service"), the list of individual test results, and the total elapsed milliseconds.</returns>
     /// <remarks>
-    /// The method creates isolated scratch data for each test, verifies persistence and activity audit rows, and performs a best-effort audit cleanup of orphaned test artifacts after the run. Cleanup is attempted with CancellationToken.None and any cleanup exceptions are swallowed to avoid masking test failures or cancellations.
+    /// The method creates isolated scratch data for each test, verifies persistence and activity audit rows, and performs a best-effort cleanup of orphaned test artifacts after the run: a per-run-marker sweep for any fixture whose id was never learned because its create failed before the id was captured, or whose known-id DELETE failed (#150 AC#2, #541), then the orphaned-ActivityEvent purge. Cleanup is attempted with CancellationToken.None and any cleanup exceptions are swallowed to avoid masking test failures or cancellations.
     /// </remarks>
     public async Task<TestSuiteResult> RunServiceTestsAsync(CancellationToken ct = default)
     {
         var runStart = DateTime.UtcNow;
+        // Per-run marker embedded in the Name/Title of every project and idea this run creates (see NewName);
+        // lets SweepRunMarkerAsync find a fixture whose create timed out or failed in transport
+        // before its id was learned, or whose known-id delete failed (#150 AC#2, #541).
+        var runMarker = NewRunMarker();
         // Snapshot the projects that already exist at run start. The runner uses the live DB,
         // so a user could delete a real, pre-existing project mid-run; excluding these ids from
         // the cleanup keeps that real project's audit trail intact (see TestAuditCleanup).
@@ -990,7 +1058,7 @@ public sealed class TestRunnerService(
         {
         results.Add(await RunTest("ChangeStatusAsync writes activity + StatusChange comment", "Service:Task", async () =>
         {
-            var (pid, _, taskId) = await CreateProjectFeatureTaskAsync(http, ct);
+            var (pid, _, taskId) = await CreateProjectFeatureTaskAsync(http, runMarker, ct);
             try
             {
                 await taskSvc.ChangeStatusAsync(taskId, WorkStatus.InProgress, actor: "service-test", ct);
@@ -1011,7 +1079,7 @@ public sealed class TestRunnerService(
 
         results.Add(await RunTest("ChangeStatusAsync is idempotent for same-status calls", "Service:Task", async () =>
         {
-            var (pid, _, taskId) = await CreateProjectFeatureTaskAsync(http, ct);
+            var (pid, _, taskId) = await CreateProjectFeatureTaskAsync(http, runMarker, ct);
             try
             {
                 await taskSvc.ChangeStatusAsync(taskId, WorkStatus.InProgress, "x", ct);
@@ -1034,7 +1102,7 @@ public sealed class TestRunnerService(
 
         results.Add(await RunTest("ChangeStatusAsync sets CompletedAt on transition to Done", "Service:Task", async () =>
         {
-            var (pid, _, taskId) = await CreateProjectFeatureTaskAsync(http, ct);
+            var (pid, _, taskId) = await CreateProjectFeatureTaskAsync(http, runMarker, ct);
             try
             {
                 var task = await taskSvc.ChangeStatusAsync(taskId, WorkStatus.Done, "x", ct);
@@ -1104,7 +1172,7 @@ public sealed class TestRunnerService(
         {
             // Create only the project+feature via REST; the task is authored by the service
             // under test so we exercise CreateAsync directly (not the REST create path).
-            var (pid, featureId, seedTaskId) = await CreateProjectFeatureTaskAsync(http, ct);
+            var (pid, featureId, seedTaskId) = await CreateProjectFeatureTaskAsync(http, runMarker, ct);
             try
             {
                 var created = await taskSvc.CreateAsync(
@@ -1136,7 +1204,7 @@ public sealed class TestRunnerService(
 
         results.Add(await RunTest("CreateAsync rejects empty name + unknown feature", "Service:Task", async () =>
         {
-            var (pid, featureId, _) = await CreateProjectFeatureTaskAsync(http, ct);
+            var (pid, featureId, _) = await CreateProjectFeatureTaskAsync(http, runMarker, ct);
             try
             {
                 try
@@ -1165,7 +1233,7 @@ public sealed class TestRunnerService(
 
         results.Add(await RunTest("DeleteAsync removes task + children and TaskDeleted audit survives", "Service:Task", async () =>
         {
-            var (pid, featureId, taskId) = await CreateProjectFeatureTaskAsync(http, ct);
+            var (pid, featureId, taskId) = await CreateProjectFeatureTaskAsync(http, runMarker, ct);
             try
             {
                 // Build a 2-level subtask tree (parent → child) so the leaf-first delete
@@ -1240,7 +1308,7 @@ public sealed class TestRunnerService(
 
         results.Add(await RunTest("ClaimAsync renews for same actor; conflicts for another", "Service:Task", async () =>
         {
-            var (pid, _, taskId) = await CreateProjectFeatureTaskAsync(http, ct);
+            var (pid, _, taskId) = await CreateProjectFeatureTaskAsync(http, runMarker, ct);
             try
             {
                 var first = await taskSvc.ClaimAsync(taskId, "alice", ct);
@@ -1278,7 +1346,7 @@ public sealed class TestRunnerService(
 
         results.Add(await RunTest("ReleaseAsync clears claim + emits audit; conflict for another actor", "Service:Task", async () =>
         {
-            var (pid, _, taskId) = await CreateProjectFeatureTaskAsync(http, ct);
+            var (pid, _, taskId) = await CreateProjectFeatureTaskAsync(http, runMarker, ct);
             try
             {
                 await taskSvc.ClaimAsync(taskId, "alice", ct);
@@ -1309,7 +1377,7 @@ public sealed class TestRunnerService(
 
         results.Add(await RunTest("AddCommentAsync writes comment + activity; rejects system type", "Service:Task", async () =>
         {
-            var (pid, _, taskId) = await CreateProjectFeatureTaskAsync(http, ct);
+            var (pid, _, taskId) = await CreateProjectFeatureTaskAsync(http, runMarker, ct);
             try
             {
                 var comment = await taskSvc.AddCommentAsync(
@@ -1342,7 +1410,7 @@ public sealed class TestRunnerService(
 
         results.Add(await RunTest("ReassignToFeatureAsync moves within same project", "Service:Task", async () =>
         {
-            var (pid, _, taskId) = await CreateProjectFeatureTaskAsync(http, ct);
+            var (pid, _, taskId) = await CreateProjectFeatureTaskAsync(http, runMarker, ct);
             try
             {
                 var f = await http.PostAsJsonAsync($"/api/projects/{pid}/features", new { name = "Second feature" }, Json, ct);
@@ -1370,11 +1438,11 @@ public sealed class TestRunnerService(
 
         results.Add(await RunTest("ReassignToFeatureAsync rejects cross-project (closes #83)", "Service:Task", async () =>
         {
-            var (pidA, _, taskId) = await CreateProjectFeatureTaskAsync(http, ct);
+            var (pidA, _, taskId) = await CreateProjectFeatureTaskAsync(http, runMarker, ct);
             int? pidB = null;
             try
             {
-                var (createdPidB, featureB, _) = await CreateProjectFeatureTaskAsync(http, ct);
+                var (createdPidB, featureB, _) = await CreateProjectFeatureTaskAsync(http, runMarker, ct);
                 pidB = createdPidB;
 
                 try
@@ -1397,7 +1465,7 @@ public sealed class TestRunnerService(
 
         results.Add(await RunTest("UpdateAsync writes activity event", "Service:Task", async () =>
         {
-            var (pid, _, taskId) = await CreateProjectFeatureTaskAsync(http, ct);
+            var (pid, _, taskId) = await CreateProjectFeatureTaskAsync(http, runMarker, ct);
             try
             {
                 var updated = await taskSvc.UpdateAsync(
@@ -1421,7 +1489,7 @@ public sealed class TestRunnerService(
 
         results.Add(await RunTest("ToggleDoneAsync cascades completion to subtasks", "Service:Task", async () =>
         {
-            var (pid, _, taskId) = await CreateProjectFeatureTaskAsync(http, ct);
+            var (pid, _, taskId) = await CreateProjectFeatureTaskAsync(http, runMarker, ct);
             try
             {
                 foreach (var text in new[] { "subtask A", "subtask B" })
@@ -1449,7 +1517,7 @@ public sealed class TestRunnerService(
 
         results.Add(await RunTest("ToggleDoneAsync un-completes subtasks when toggled off Done", "Service:Task", async () =>
         {
-            var (pid, _, taskId) = await CreateProjectFeatureTaskAsync(http, ct);
+            var (pid, _, taskId) = await CreateProjectFeatureTaskAsync(http, runMarker, ct);
             try
             {
                 var s = await http.PostAsJsonAsync($"/api/tasks/{taskId}/subtasks", new { text = "only sub" }, Json, ct);
@@ -1498,10 +1566,7 @@ public sealed class TestRunnerService(
         }
         finally
         {
-            // Best-effort: CancellationToken.None runs cleanup even on cancellation;
-            // swallowing errors prevents masking the suite's original exception (#85, #150).
-            try { await TestAuditCleanup.PurgeOrphanedSinceAsync(dbFactory, runStart, preExistingProjectIds, CancellationToken.None); }
-            catch (Exception ex) { logger.LogWarning(ex, "Best-effort test audit cleanup failed (Service suite)."); }
+            await RunEndOfSuiteCleanupAsync(http, runMarker, runStart, preExistingProjectIds, "Service");
         }
     }
 
@@ -1559,7 +1624,62 @@ public sealed class TestRunnerService(
         }
     }
 
-    private static string NewName(string prefix) => $"{prefix}-{Guid.NewGuid():N}"[..Math.Min(64, prefix.Length + 1 + 8)];
+    /// <summary>
+    /// A fixture name: <c>{prefix}-{runMarker}-</c> followed by exactly 8 lowercase hex characters of a
+    /// fresh <see cref="Guid"/> — the shape <see cref="IsFixtureProjectName"/> and
+    /// <see cref="IsFixtureIdeaTitle"/> accept, and nothing longer.
+    /// </summary>
+    // internal, not private: TestRunnerServiceCancellationTests round-trips its real output through the API.
+    internal static string NewName(string prefix, string runMarker) =>
+        $"{prefix}-{runMarker}-{Guid.NewGuid():N}"[..(prefix.Length + runMarker.Length + 10)];
+
+    /// <summary>
+    /// Sends a fixture-create POST this run needs to track. Checks the caller's <paramref name="ct"/>
+    /// IMMEDIATELY BEFORE sending — nothing has gone out yet at that point, so honoring cancellation
+    /// here can never reopen the race #541's review found (a cancellation landing WHILE a create is
+    /// in flight, after CancellationToken.None already committed to sending it). The send and its
+    /// caller's later read both still use <see cref="CancellationToken.None"/> unconditionally once
+    /// started: a send bound to <see cref="CancellationToken.None"/> is never aborted by the CALLER's
+    /// cancellation, so the caller cancelling can neither cut a create off part-way nor fire the server's
+    /// request token. That holds whichever way the route saves. <c>POST /api/projects</c> and the feature
+    /// create save with no token at all; <c>POST /api/ideas</c>, promote and the task create pass the
+    /// request's token into their save, and an abort of the request would cancel that save part-way.
+    /// <c>HttpClient.Timeout</c> or a transport failure can still end the request before its id is read;
+    /// <see cref="SweepRunMarkerAsync"/> covers that window, best-effort.
+    /// </summary>
+    /// <remarks>
+    /// Without this pre-check (#541), a cancelled suite still closed its own race, but it
+    /// no longer failed fast: every remaining create-first test still committed a real create and then
+    /// issued its own DELETE, because nothing upstream of the send ever looked at <paramref name="ct"/>
+    /// again once <see cref="RunTest"/> swallowed the first post-cancellation exception into a failed
+    /// result. Measured with this check removed: 21 creates the server still answered with <c>201</c>
+    /// after the caller had cancelled, counted by
+    /// <c>TestRunnerServiceCancellationTests.RunApiTestsAsync_SendsNoFurtherCreates_OnceTheCallerHasAlreadyCancelled</c>.
+    /// That counts only the API suite's top-level <c>POST /api/projects</c> and <c>POST /api/ideas</c>,
+    /// not the feature and task creates, nor promote. Each can pay up to <c>HttpClient.Timeout</c> (10s)
+    /// if the server is slow, before its own DELETE (another 10s ceiling). One check here, before ANY
+    /// of them, is what stops the creates. The suite does not stop at once: <see cref="RunTest"/> still
+    /// swallows each exception, so the remaining wrapped tests keep running, failing at their first token
+    /// check, until the suite ends; in the API suite, if ct fired before its scratch-project setup, that
+    /// setup's create throws out first. None of them sends another create.
+    /// </remarks>
+    private static Task<HttpResponseMessage> PostCreateAsync(HttpClient http, string route, object body, CancellationToken ct)
+    {
+        ct.ThrowIfCancellationRequested();
+        return http.PostAsJsonAsync(route, body, Json, CancellationToken.None);
+    }
+
+    /// <summary>
+    /// A fresh per-run sentinel, minted once at the top of each <c>Run*TestsAsync</c> call and
+    /// threaded (never stored on <c>this</c> — see <see cref="CreateProjectFeatureTaskAsync"/>'s
+    /// remarks) into every fixture name/title that run creates via <see cref="NewName"/>. 16 hex
+    /// characters of a fresh <see cref="Guid"/> gives 60 bits of entropy (one of the 16 is the fixed
+    /// v4 version nibble, not random) behind the fixed "kftest" tag — together something a real user
+    /// will not type by chance and two runs, concurrent or not, will not share by chance, which is what
+    /// lets <see cref="SweepRunMarkerAsync"/> query the live DB for it safely.
+    /// </summary>
+    // internal, not private: TestRunnerServiceCancellationTests mints real markers for its round-trip test.
+    internal static string NewRunMarker() => "kftest" + Guid.NewGuid().ToString("N")[..16];
 
     /// <summary>
     /// Asserts that a task renders as a board card (<c>data-testid="board-card-{taskId}"</c>) inside the
@@ -1598,21 +1718,79 @@ public sealed class TestRunnerService(
             throw new Exception($"Task {taskId} rendered on the page but NOT inside the '{status}' column ({card} not found between {container} and the next column)");
     }
 
-    private static async Task<(int ProjectId, int FeatureId, int TaskId)> CreateProjectFeatureTaskAsync(HttpClient http, CancellationToken ct)
+    /// <summary>
+    /// Shared scratch-fixture helper (#150 / #150 AC#2). Instance method — not static — so it can
+    /// reuse <see cref="TryDeleteProjectAsync"/>'s logging on the cancellation path below.
+    /// <paramref name="runMarker"/> is threaded explicitly (never cached on <c>this</c>) because
+    /// <see cref="TestRunnerService"/> is request-scoped but a single instance still runs its three
+    /// suites SEQUENTIALLY from <see cref="RunAllTestsAsync"/> — an instance field would work for
+    /// that call pattern today, but would silently corrupt the marker (and therefore the sweep) the
+    /// day a future caller runs two suites concurrently on one instance. A parameter cannot.
+    /// </summary>
+    /// <remarks>
+    /// Every create POST below (project, feature, task) and its response read use
+    /// <see cref="CancellationToken.None"/>, never <paramref name="ct"/>: a send bound to
+    /// <see cref="CancellationToken.None"/> is never aborted by the caller's cancellation, so the caller
+    /// cannot cut a create off part-way or fire the server's request token, whichever way
+    /// the route saves (<c>POST /api/projects</c> and the feature create pass no token to their save,
+    /// <c>ApiEndpoints.cs:492</c> and <c>:1034</c>; the task create passes the request's token). Racing
+    /// <paramref name="ct"/> against a create risked losing the id of a row the server may already have
+    /// written. <see cref="PostCreateAsync"/> instead checks
+    /// <paramref name="ct"/> BEFORE each send, so cancellation never abandons a create that has
+    /// already started, and each id is already captured by the time the next check can fire: once
+    /// <c>pid</c> is known, the catch below deletes it with <see cref="CancellationToken.None"/> and
+    /// rethrows. What remains uncaught here is a create that fails for a reason unrelated to
+    /// <paramref name="ct"/> — <c>HttpClient.Timeout</c> (10s default), a transport reset, or a
+    /// server-side error — before <c>pid</c> is captured. <see cref="SweepRunMarkerAsync"/>, called
+    /// from each suite's outer <c>finally</c>, covers that case best-effort only: it runs only if the
+    /// suite reaches that <c>finally</c>, and it deletes only rows with the exact fixture shapes
+    /// (<see cref="IsFixtureProjectName"/>/<see cref="IsFixtureIdeaTitle"/>), by name rather than by id.
+    /// </remarks>
+    // internal, not private, so TestRunnerServiceCancellationTests can drive it directly with a
+    // fault-injecting HttpClient (InternalsVisibleTo is set — see ProjectView.razor for precedent).
+    internal async Task<(int ProjectId, int FeatureId, int TaskId)> CreateProjectFeatureTaskAsync(HttpClient http, string runMarker, CancellationToken ct)
     {
-        var p = await http.PostAsJsonAsync("/api/projects", new { name = NewName("Test") }, Json, ct);
-        var pBody = await p.Content.ReadFromJsonAsync<JsonElement>(Json, ct);
+        // CancellationToken.None for each create POST below and its response read (independent review
+        // of this fix's first version): a send bound to CancellationToken.None is never aborted by the
+        // caller's ct, so ct can no longer cut a create off part-way (HttpClient.Timeout or a transport
+        // failure still can, before the id is read: the window SweepRunMarkerAsync covers). Racing ct
+        // against the create meant its id could be lost while the row still landed — POST /api/projects
+        // (ApiEndpoints.cs:492) saves with no token at all, so it commits regardless. Now
+        // PostCreateAsync checks the caller's ct BEFORE each send, and the send and its read use
+        // CancellationToken.None, so cancellation never abandons a create that has already started,
+        // and each id is already captured by the time the next check can fire.
+        var p = await PostCreateAsync(http, "/api/projects", new { name = NewName("Test", runMarker) }, ct);
+        var pBody = await p.Content.ReadFromJsonAsync<JsonElement>(Json, CancellationToken.None);
         var pid = pBody.GetProperty("id").GetInt32();
 
-        var f = await http.PostAsJsonAsync($"/api/projects/{pid}/features", new { name = "Test feature" }, Json, ct);
-        var fBody = await f.Content.ReadFromJsonAsync<JsonElement>(Json, ct);
-        var fid = fBody.GetProperty("id").GetInt32();
+        try
+        {
+            var f = await PostCreateAsync(http, $"/api/projects/{pid}/features", new { name = "Test feature" }, ct);
+            var fBody = await f.Content.ReadFromJsonAsync<JsonElement>(Json, CancellationToken.None);
+            var fid = fBody.GetProperty("id").GetInt32();
 
-        var t = await http.PostAsJsonAsync($"/api/features/{fid}/tasks", new { name = "Test task", status = "Todo", priority = "Medium" }, Json, ct);
-        var tBody = await t.Content.ReadFromJsonAsync<JsonElement>(Json, ct);
-        var tid = tBody.GetProperty("id").GetInt32();
+            var t = await PostCreateAsync(http, $"/api/features/{fid}/tasks", new { name = "Test task", status = "Todo", priority = "Medium" }, ct);
+            var tBody = await t.Content.ReadFromJsonAsync<JsonElement>(Json, CancellationToken.None);
+            var tid = tBody.GetProperty("id").GetInt32();
 
-        return (pid, fid, tid);
+            return (pid, fid, tid);
+        }
+        catch
+        {
+            // pid IS known at this point. This method observes the caller's ct only BEFORE each send
+            // (PostCreateAsync's check), so this catch runs when that check fires before the feature
+            // or task create, or when either of those creates or its read fails; cascade delete takes
+            // the feature/task with it. A cancellation that lands during or after the task create is
+            // not observed here: the method returns normally, and the caller's own try/finally cleans
+            // that project up. What remains uncaught here is the project create itself failing for a
+            // REAL reason with ct never involved (HttpClient.Timeout, a transport reset) before pid is
+            // captured. SweepRunMarkerAsync, called from each suite's outer finally, covers that case
+            // best-effort only: it runs only if the suite reaches that finally, and it deletes only
+            // rows with the exact fixture shapes (IsFixtureProjectName/IsFixtureIdeaTitle), by name
+            // rather than by id.
+            await TryDeleteProjectAsync(http, pid);
+            throw;
+        }
     }
 
     /// <summary>
@@ -1654,4 +1832,189 @@ public sealed class TestRunnerService(
 
     private Task TryDeleteIdeaAsync(HttpClient http, int ideaId) =>
         TryCleanupAsync(http, $"/api/ideas/{ideaId}");
+
+    /// <summary>
+    /// Both of this runner's best-effort end-of-suite cleanups, run in the ONE order that is safe —
+    /// see <see cref="SweepRunMarkerAsync"/>'s <b>Ordering</b> remarks for why sweep must run before
+    /// the purge, not after. Called from all three suites' outer <c>finally</c>
+    /// (<see cref="RunApiTestsAsync"/>, <see cref="RunUiTestsAsync"/>, <see cref="RunServiceTestsAsync"/>)
+    /// so that ordering lives in exactly one place instead of three copies that could drift apart.
+    /// </summary>
+    /// <param name="suiteName">Only for the log message on a failed purge — e.g. "API", "UI", "Service".</param>
+    private async Task RunEndOfSuiteCleanupAsync(
+        HttpClient http, string runMarker, DateTime runStart, List<int> preExistingProjectIds, string suiteName)
+    {
+        await SweepRunMarkerAsync(http, runMarker, preExistingProjectIds);
+        // Best-effort: CancellationToken.None runs cleanup even on cancellation;
+        // swallowing errors prevents masking the suite's original exception (#85, #150).
+        try
+        {
+            await TestAuditCleanup.PurgeOrphanedSinceAsync(dbFactory, runStart, preExistingProjectIds, CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Best-effort test audit cleanup failed ({Suite} suite).", suiteName);
+        }
+    }
+
+    /// <summary>
+    /// The prefixes this class passes to <see cref="NewName"/> for a PROJECT fixture. See
+    /// <see cref="IsFixtureProjectName"/> for the exact names they produce.
+    /// </summary>
+    // internal, not private (this and the two registries below): TestRunnerServiceCancellationTests pins
+    // them against every name this file builds from runMarker, and round-trips each shape through the API.
+    internal static readonly string[] FixtureProjectPrefixes = ["Test", "Test-Project", "UiHome"];
+
+    /// <summary>The prefixes this class passes to <see cref="NewName"/> for an IDEA fixture.</summary>
+    internal static readonly string[] FixtureIdeaPrefixes = ["UiIdea"];
+
+    /// <summary>
+    /// Every text this class puts after <c>"{marker} "</c> in an idea title, including the titles a PATCH
+    /// renames an idea to, and "blank enum", whose POST is expected to be rejected (registered anyway, in
+    /// case it ever commits a row). <c>PromoteAsync</c> copies an idea's title onto the project it creates,
+    /// so "to promote" is a project fixture's name as well.
+    /// </summary>
+    internal static readonly string[] FixtureLiterals =
+    [
+        "Round-trip idea", "alpha kanban", "beta", "before rename", "renamed", "to delete", "to promote",
+        "audit idea", "audit idea (edited)", "blank enum", "blank enum patch target",
+    ];
+
+    /// <summary>
+    /// True when <paramref name="name"/> is EXACTLY one of the names the sweep treats as a project
+    /// fixture's for <paramref name="marker"/>: <see cref="NewName"/>'s
+    /// <c>{prefix}-{marker}-{8 lowercase hex}</c> for a prefix in <see cref="FixtureProjectPrefixes"/>, or
+    /// <c>{marker} {literal}</c> for ANY literal in <see cref="FixtureLiterals"/> (only
+    /// <c>"{marker} to promote"</c> ever becomes a project's name, through promote, but every registered
+    /// literal is accepted), with nothing before or after it (ordinal). A real row that merely
+    /// quotes a fixture's name ("Please rename Test-{marker}-a1b2c3d4 to something better"), or begins
+    /// with one and goes on ("Test-{marker}-a1b2c3d4 notes"), is not one.
+    /// </summary>
+    internal static bool IsFixtureProjectName(string name, string marker) =>
+        IsNewNameShape(name, marker, FixtureProjectPrefixes) || IsLiteralShape(name, marker);
+
+    /// <summary>
+    /// Same as <see cref="IsFixtureProjectName"/> for an idea title: exactly
+    /// <c>{prefix}-{marker}-{8 lowercase hex}</c> for a prefix in <see cref="FixtureIdeaPrefixes"/>, or
+    /// exactly <c>{marker} {literal}</c>.
+    /// </summary>
+    internal static bool IsFixtureIdeaTitle(string title, string marker) =>
+        IsNewNameShape(title, marker, FixtureIdeaPrefixes) || IsLiteralShape(title, marker);
+
+    private static bool IsNewNameShape(string value, string marker, string[] prefixes)
+    {
+        foreach (var prefix in prefixes)
+        {
+            var head = $"{prefix}-{marker}-";
+            if (value.Length != head.Length + 8 || !value.StartsWith(head, StringComparison.Ordinal))
+                continue;
+
+            var allLowerHex = true;
+            foreach (var c in value.AsSpan(head.Length))
+                allLowerHex &= char.IsAsciiHexDigitLower(c);
+            if (allLowerHex)
+                return true;
+        }
+
+        return false;
+    }
+
+    private static bool IsLiteralShape(string value, string marker)
+    {
+        foreach (var literal in FixtureLiterals)
+        {
+            if (string.Equals(value, $"{marker} {literal}", StringComparison.Ordinal))
+                return true;
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// End-of-run safety net for the residual cases <see cref="CreateProjectFeatureTaskAsync"/> (and
+    /// the other marker-tagged fixture sites in this class) cannot close by catching around an id: a
+    /// create that fails for a reason unrelated to the caller's token — <c>HttpClient.Timeout</c> (10s
+    /// default), a transport reset, or a server-side error — before its id is captured, or a known-id
+    /// DELETE that itself fails. No id is ever recorded for the row in either case, so nothing in this
+    /// class can target a DELETE at it by id (#150 AC#2, #541). Every project and idea this run creates
+    /// carries <paramref name="runMarker"/> in its Name/Title instead (see <see cref="NewName"/>; a
+    /// feature, task or other child row goes with its project by cascade delete), so this
+    /// queries the live DB for that marker directly — no id needed — and deletes what it finds through
+    /// the same REST routes normal cleanup uses, so cascade delete and audit-event emission stay
+    /// exactly as they are for every other cleanup path in this file.
+    /// </summary>
+    /// <remarks>
+    /// <para><b>Safety.</b> A row is deleted only if its Name/Title is EXACTLY a registered fixture shape
+    /// (<see cref="IsFixtureProjectName"/> / <see cref="IsFixtureIdeaTitle"/>): the SQL <c>Contains</c>
+    /// below only fetches candidates, and a real row that quotes a fixture's name, or begins with one
+    /// and goes on, is fetched and then left alone. <paramref name="runMarker"/> is minted fresh per run
+    /// by <see cref="NewRunMarker"/> — 60 bits of fresh <see cref="Guid"/> entropy (16 hex characters,
+    /// one of which is the fixed v4 version nibble) behind a "kftest" tag — so another run's fixtures,
+    /// past or concurrent, do not match. <paramref name="preExistingProjectIds"/> is a second,
+    /// independent guard for projects: a project that existed before this run started is skipped even
+    /// if its name matches. Ideas need no such snapshot: an idea that existed before this run started
+    /// would need a 60-bit coincidence to carry the marker, which the run mints as it starts.</para>
+    /// <para><b>Residual.</b> A real row created DURING the run whose Name/Title is exactly a registered
+    /// fixture shape is indistinguishable from a fixture by name, and would be deleted. For projects, the
+    /// pre-existing snapshot confines this to rows created during the run, but cannot protect those,
+    /// because their ids are new; only the marker bounds it. Such a name carries this run's freshly
+    /// minted 60-bit marker, which appears nowhere but in this run's own fixtures, so short of someone
+    /// copying a fixture's name while the run is in progress (or a 60-bit coincidence), a real row will
+    /// not have one.</para>
+    /// <para><b>Expected to find nothing.</b> On a run where no create or cleanup DELETE fails, every
+    /// fixture is already deleted by its own try/finally before this runs, so the sweep matches zero
+    /// rows — it exists purely for the residual cases those try/finally blocks cannot reach.</para>
+    /// <para><b>Ordering.</b> Callers MUST run this before <see cref="TestAuditCleanup.PurgeOrphanedSinceAsync"/>
+    /// in the same <c>finally</c>, not after: the purge only removes an ActivityEvent once its project
+    /// no longer exists, so if it ran first, a leaked project's events would still be attached to a
+    /// living project and survive; running this sweep first deletes the project (which, like any
+    /// other project deletion, is expected to itself emit an audit event), and the purge that follows
+    /// then removes every one of that now-gone project's events, landing on delta 0 across both
+    /// tables instead of trading a leaked project for a permanently orphaned event. Both calls are
+    /// made together, in this order, by <see cref="RunEndOfSuiteCleanupAsync"/> — the one place this
+    /// ordering lives, so it cannot drift between the three suites.</para>
+    /// <para><b>Never throws.</b> Called from a <c>finally</c> that must run cleanup even when the
+    /// suite itself was cancelled — matches <see cref="TryCleanupAsync"/>'s own rule and this file's
+    /// existing <c>catch (Exception ex) { logger.LogWarning(...) }</c> convention for that.</para>
+    /// </remarks>
+    internal async Task SweepRunMarkerAsync(HttpClient http, string runMarker, IReadOnlyCollection<int> preExistingProjectIds)
+    {
+        try
+        {
+            await using var db = await dbFactory.CreateDbContextAsync(CancellationToken.None);
+
+            // Fetch broadly (SQL Contains — SQLite does that filtering), then keep only the exact
+            // fixture shapes client-side via IsFixtureProjectName/IsFixtureIdeaTitle: Contains alone
+            // would also match a row that quotes the marker, or begins with a fixture's name and goes on.
+            var projectCandidates = await db.Projects
+                .Where(p => p.Name.Contains(runMarker) && !preExistingProjectIds.Contains(p.Id))
+                .Select(p => new { p.Id, p.Name })
+                .ToListAsync(CancellationToken.None);
+            foreach (var candidate in projectCandidates.Where(p => IsFixtureProjectName(p.Name, runMarker)))
+            {
+                logger.LogWarning(
+                    "Test run {RunMarker} sweep found project {ProjectId} ('{Name}') with no cleanup " +
+                    "ever recorded for it — either its create's own id was never learned, or a known-id " +
+                    "delete for it already failed; deleting by name.", runMarker, candidate.Id, candidate.Name);
+                await TryDeleteProjectAsync(http, candidate.Id);
+            }
+
+            var ideaCandidates = await db.Ideas
+                .Where(i => i.Title.Contains(runMarker))
+                .Select(i => new { i.Id, i.Title })
+                .ToListAsync(CancellationToken.None);
+            foreach (var candidate in ideaCandidates.Where(i => IsFixtureIdeaTitle(i.Title, runMarker)))
+            {
+                logger.LogWarning(
+                    "Test run {RunMarker} sweep found idea {IdeaId} ('{Title}') with no cleanup ever " +
+                    "recorded for it — either its create's own id was never learned, or a known-id " +
+                    "delete for it already failed; deleting by title.", runMarker, candidate.Id, candidate.Title);
+                await TryDeleteIdeaAsync(http, candidate.Id);
+            }
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Best-effort run-marker sweep failed for run {RunMarker}.", runMarker);
+        }
+    }
 }
