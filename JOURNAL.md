@@ -52,6 +52,12 @@ A review of the repository and a test run on 2026-09-26 filed findings as issues
 
 ## Entries (newest first)
 
+- 2026-10-08 14:29Z (scheduled PR monitor, ninety-eighth run): build gate UP (.NET 10.0.112 installed via Microsoft apt feed).
+  - 7 open PRs: #565, #562, #560, #554 (non-draft); #564, #521, #511 (drafts, skipped). Master advanced to aab09c0 (JOURNAL.md + coverlet bump from #567 merge).
+  - PHASE 1: No merges. #565/#562/#560 show mergeable_state=unknown (all based on 84feb548; current master aab09c0 — GitHub state not yet computed). #554 still blocked-by-failure (NU1608, same as all prior runs; last failure comment posted at 13:29Z).
+  - PHASE 2: Head SHAs unchanged from ninety-sixth run (#560: 835ffa1, #562: 8474d6c, #565: a1c2f62, #554: 998a32d). All review threads confirmed resolved in ninety-sixth run. Nothing to fix.
+  - Master: build GREEN (0 warnings/0 errors), tests 1205 passed / 2 failed — same 2 base-branch failures (filesystem has no independent creation time) as documented in 13:23Z run.
+
 - 2026-10-08 13:23Z (scheduled dependabot-automerge run): build gate UP (.NET 10.0.112 installed via Microsoft apt feed). 2 open Dependabot PRs found.
   - PR #567 (coverlet.collector 10.0.1 → 10.1.0): build GREEN, tests 1205 passed / 2 failed; both failures also fail on master (filesystem has no independent creation time) — base-branch failures, not introduced by this PR. **Merged** as squash, SHA 220baf5f.
   - PR #554 (Microsoft.OpenApi 2.12.2 → 3.10.2): build **FAILED** — `NU1608: Microsoft.AspNetCore.OpenApi 10.0.12 requires Microsoft.OpenApi (>= 2.12.0 && < 3.0.0) but 3.10.2 was resolved`. Major-version bump breaks the AspNetCore upper-bound constraint. Left open, failure posted as comment on PR #554.
