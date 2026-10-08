@@ -856,7 +856,68 @@ process.stdin.on("data", chunk => {
   readMessages();
 });
 
-process.stdin.on("end", () => process.exit(0));
+// A client that writes its requests and then closes stdin is shutting down normally, not
+// crashing — closing stdin must not be treated as license to drop a response that is still
+// waiting on its REST round-trip (inFlightRequestIds, #168 above). Each REST hop is individually
+// bounded by restTimeoutMs (an AbortController fires at that mark — see restJson/
+// nativeMcpToolCall); most tools make one hop, so the deadline below (that same bound plus a
+// small margin) is generous, but a compound tool that awaits two hops sequentially (get_task)
+// can legitimately still be running when it fires — measured: two 3s hops, each individually well
+// under a 4s per-request timeout, together still reach the deadline branch below (4s timeout + 1s
+// margin measured from "end", vs. ~6s for both hops in sequence). If it fires with request(s)
+// still tracked, they are named on stderr (see the branch below) rather than left silent as
+// before — this is a backstop against a
+// genuine hang, not a promise that every tool settles inside it. The exit code stays 0 even then:
+// an MCP supervisor (Claude Code among others) may treat a non-zero exit as a server failure, and
+// this shutdown is still orderly from the transport's own point of view — the stderr line is the
+// signal, not the exit code (see the issue's Open questions for the case against changing that).
+//
+// PRECONDITION this does NOT cover: the client must keep READING stdout, not merely keep it open.
+// process.stdout.write() is a blocking, synchronous syscall on Windows (Node's own documented
+// behavior for pipes on this platform); a peer that holds its read end open but never drains it
+// makes that write block once a response exceeds the OS pipe buffer, freezing this entire
+// single-threaded process — including the drainInterval below and its own deadline, since neither
+// can run until the blocked write returns. Measured: a 2.6MB response with no reader is still
+// blocked at 5s; the identical response with a reader completes in ~140ms. Not redesigned here:
+// every real MCP client reads its own stdout continuously by construction (that's how it receives
+// ANY response, not just this one), so a peer that stops reading without closing is already
+// violating the transport's own contract, independent of this fix.
+process.stdin.on("end", () => {
+  // On POSIX, a pipe write can still be QUEUED (not yet flushed to the OS) when write() returns,
+  // so checking inFlightRequestIds alone could exit before the last frame is actually sent.
+  // writableLength is 0 immediately after a synchronous Windows write (measured) and also reads 0
+  // once stdout is EPIPE-broken (measured), so this adds real POSIX safety without changing
+  // Windows behavior or risking a wedge against a dead pipe.
+  const drained = () => inFlightRequestIds.size === 0 && process.stdout.writableLength === 0;
+  if (drained()) {
+    process.exit(0);
+    return;
+  }
+  const deadline = Date.now() + restTimeoutMs + 1000;
+  const drainInterval = setInterval(() => {
+    if (drained()) {
+      clearInterval(drainInterval);
+      process.exit(0);
+      return;
+    }
+    if (Date.now() > deadline) {
+      clearInterval(drainInterval);
+      // Request(s) genuinely still in flight at the deadline: their REST call may already have
+      // completed (or still will) server-side, so answering them here with an error would
+      // actively mislead a client that retries a "failed" write which in fact succeeded — the
+      // same silence-over-a-false-answer reasoning as leaving them unanswered today. Named on
+      // stderr instead so it is at least observable; exit code stays 0 on purpose (see above).
+      if (inFlightRequestIds.size > 0) {
+        try {
+          process.stderr.write(`[kanbanflow-mcp] exiting with request(s) still in flight after ${restTimeoutMs + 1000}ms: ${JSON.stringify([...inFlightRequestIds])}\n`);
+        } catch {
+          // stderr is unavailable too (see its own "error" listener below) — nothing else to do.
+        }
+      }
+      process.exit(0);
+    }
+  }, 25);
+});
 process.stdin.resume();
 
 // Crash-safety (#168): a rejected promise with no catch handler, or a throw in a callback
@@ -885,6 +946,45 @@ function reportFatal(kind, reason) {
 
 process.on("unhandledRejection", reason => reportFatal("unhandledRejection", reason));
 process.on("uncaughtException", error => reportFatal("uncaughtException", error));
+
+// A client that stops reading stdout (closes/destroys its read side, or simply exits without
+// draining it) makes every subsequent process.stdout.write() fail with EPIPE. That failure
+// surfaces asynchronously as an "error" event, on its own event-loop tick — never as a
+// synchronous throw from write() itself (verified: 60 writes after the peer closed, 0 synchronous
+// throws). A Node stream with zero "error" listeners throws that error back into the event loop,
+// which — with no listener here — would reach uncaughtException on a LATER tick than the one that
+// started the write, cascading into reportFatal: reportFatal answers EVERY currently in-flight id
+// when it runs (see its own comment above), not just the one that faulted, so an EPIPE on one
+// response would force-claim a DIFFERENT, still-genuinely-pending request and exit before its own
+// real REST completion (measured live — see the PR's test evidence for the before/after trace).
+//
+// This does NOT recover the lost response — EPIPE is permanent, so this client was never going to
+// see it, listener or not. What swallowing it here actually buys: no stack trace per failed write
+// (there can be many, not one — measured 56 of 60 in one run), and the drain above is left to run
+// to its own real completion instead of being cut short by a fault that has nothing to do with it.
+let stdoutErrorLogged = false;
+process.stdout.on("error", error => {
+  if (stdoutErrorLogged) return;
+  stdoutErrorLogged = true;
+  try {
+    process.stderr.write(`[kanbanflow-mcp] stdout error (client stopped reading): ${error.code || error.message}\n`);
+  } catch {
+    // Best-effort only: a synchronous throw here would be caught, but if the client has ALSO
+    // stopped reading stderr, this write fails the same way stdout's did — asynchronously, past
+    // this catch. process.stderr's own "error" listener below is what actually stops THAT from
+    // reaching uncaughtException and re-triggering the exact cascade this listener exists to avoid
+    // (measured: both pipes dead with no stderr listener, exit at 78-98ms via the force-claim
+    // above; with it, 400ms+, i.e. the real REST completion).
+  }
+});
+
+// Same failure shape as the stdout listener above, for the stderr writes IN this file (this one's
+// own catch block just above, and reportFatal's, #168): if the client has also stopped reading
+// stderr, those writes fail asynchronously too, and with no listener here THAT reaches
+// uncaughtException and cascades into reportFatal exactly as an unguarded stdout EPIPE would.
+// There is nothing else to do with a broken stderr but drop it — it is already the last-resort
+// logging channel (see reportFatal's own comment above).
+process.stderr.on("error", () => {});
 
 class McpError extends Error {
   constructor(code, message, data = undefined) {
