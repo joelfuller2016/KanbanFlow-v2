@@ -52,6 +52,12 @@ A review of the repository and a test run on 2026-09-26 filed findings as issues
 
 ## Entries (newest first)
 
+- 2026-10-08 15:00Z (scheduled PR monitor, ninety-ninth run): build gate UP (.NET 10.0.112 installed via Microsoft apt feed).
+  - 7 open PRs: #565, #562, #560, #554 (non-draft); #564, #521, #511 (drafts, skipped). Master advanced to 5b5404a (JOURNAL.md from ninety-eighth run).
+  - PHASE 1: No merges. All 4 non-draft PRs show mergeable_state=unknown; head SHAs unchanged from ninety-eighth run (#565: a1c2f62, #562: 8474d6c, #560: 835ffa1, #554: 998a32d). #554 remains blocked-by-failure (NU1608 major-version bump, documented since 13:29Z run).
+  - PHASE 2: Head SHAs unchanged from ninety-eighth run. All review threads confirmed resolved in ninety-sixth run. Nothing to fix.
+  - Master (5b5404a): build GREEN (0 warnings/0 errors), tests 1205 passed / 2 failed — same 2 base-branch failures (filesystem has no independent creation time) as documented in prior runs.
+
 - 2026-10-08 14:29Z (scheduled PR monitor, ninety-eighth run): build gate UP (.NET 10.0.112 installed via Microsoft apt feed).
   - 7 open PRs: #565, #562, #560, #554 (non-draft); #564, #521, #511 (drafts, skipped). Master advanced to aab09c0 (JOURNAL.md + coverlet bump from #567 merge).
   - PHASE 1: No merges. #565/#562/#560 show mergeable_state=unknown (all based on 84feb548; current master aab09c0 — GitHub state not yet computed). #554 still blocked-by-failure (NU1608, same as all prior runs; last failure comment posted at 13:29Z).
