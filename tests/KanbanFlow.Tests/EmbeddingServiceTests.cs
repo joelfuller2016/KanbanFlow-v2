@@ -1,5 +1,7 @@
+using System.ClientModel;
 using KanbanFlow.Services;
 using Microsoft.Extensions.AI;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Time.Testing;
 
@@ -27,13 +29,14 @@ public sealed class EmbeddingServiceTests
         IEmbeddingGenerator<string, Embedding<float>> generator,
         EmbeddingOptions? config = null,
         int? capacity = null,
-        TimeProvider? timeProvider = null)
+        TimeProvider? timeProvider = null,
+        ILogger<EmbeddingService>? logger = null)
     {
         config ??= new EmbeddingOptions { Model = "test-embed-model", TimeoutMs = 5_000 };
-        // capacity 0 ⇒ the service falls back to its own DefaultCacheCapacity (EmbeddingService.cs:76),
+        // capacity 0 ⇒ the service falls back to its own DefaultCacheCapacity (EmbeddingService.cs:87),
         // so the default path stays identical without duplicating the constant here.
         return new EmbeddingService(
-            generator, config, NullLogger<EmbeddingService>.Instance,
+            generator, config, logger ?? NullLogger<EmbeddingService>.Instance,
             capacity ?? 0, timeProvider);
     }
 
@@ -44,6 +47,17 @@ public sealed class EmbeddingServiceTests
 
     private static Task<GeneratedEmbeddings<Embedding<float>>> CannedBatch(IReadOnlyList<string> inputs) =>
         Task.FromResult(new GeneratedEmbeddings<Embedding<float>>(inputs.Select(Canned)));
+
+    // The shape a refused connect REALLY takes (#549), copied from the app log of a run with nothing
+    // on :5256: System.ClientModel's HttpClientPipelineTransport wraps the HttpRequestException in a
+    // ClientResultException that has no response (Status 0). For a refused connect the SDK does not
+    // surface the bare HttpRequestException the older transport tests throw
+    // (EmbeddingServiceSdkShapeTests.RefusedConnect_IsNotRetried_AndStartsCooldown pins that).
+    private const string RefusedMessage =
+        "No connection could be made because the target machine actively refused it. (localhost:5256)";
+
+    private static ClientResultException SdkTransportFailure() =>
+        new(RefusedMessage, response: null, innerException: new HttpRequestException(RefusedMessage));
 
     // ── success + mapping ──────────────────────────────────────────────────────────
     [Fact]
@@ -243,6 +257,9 @@ public sealed class EmbeddingServiceTests
     [Fact]
     public async Task EmbedAsync_TransientTransportError_RetriesOnce_ThenFailsSoft()
     {
+        // A BARE HttpRequestException is still transient. For a refused connect the SDK does not throw
+        // this shape directly (it wraps it, see SdkTransportFailure), so the production-shape guard for
+        // a dead router is EmbedAsync_SdkWrappedTransportFailure_FailsSoftWithoutRetry, not this test (#549).
         var fake = new FakeEmbeddingGenerator((_, _, _) => throw new HttpRequestException("connection refused"));
         var service = NewService(fake);
 
@@ -255,12 +272,28 @@ public sealed class EmbeddingServiceTests
     }
 
     [Fact]
+    public async Task EmbedAsync_SdkWrappedTransportFailure_FailsSoftWithoutRetry()
+    {
+        // #549: a dead router, in the shape production really throws. A retry would double the ~4 s
+        // refused-connect cost of every memory search, so this is classified as provider-unavailable:
+        // one attempt, then the failure cooldown, never a second attempt inside the same call.
+        var fake = new FakeEmbeddingGenerator((_, _, _) => throw SdkTransportFailure());
+        var service = NewService(fake);
+
+        var result = await service.EmbedAsync("ping", CancellationToken.None);
+
+        Assert.False(result.Ok);
+        Assert.Contains("actively refused", result.Error); // the provider's own failure, not a cached one
+        Assert.Equal(1, fake.CallCount);                   // provider-unavailable ⇒ not retried
+    }
+
+    [Fact]
     public async Task EmbedAsync_Timeout_IsTreatedAsTransient_RetriesThenFailsSoft()
     {
         // #262 — this test used to be flaky, and the flake was self-inflicted. The old version raced a
         // REAL 30ms per-attempt timeout against a 2-second watchdog inside the fake. Under full-suite
         // parallelism the thread pool starved the 30ms CTS, the watchdog won, and it threw a
-        // TimeoutException — which IsTransient (EmbeddingService.cs:306-313, `_ => false`) classifies
+        // TimeoutException — which IsTransient (EmbeddingService.cs:406-419, `_ => false`) classifies
         // as NON-transient. So the watchdog short-circuited the very retry this test exists to verify,
         // and the assertion failed on the watchdog's message instead of "timed out".
         //
@@ -389,6 +422,461 @@ public sealed class EmbeddingServiceTests
         Assert.Equal(new[] { "alpha", "beta" }, fake.LastRequested); // ...for only the two valid texts
     }
 
+    // ── failure cooldown (negative cache, #549) ─────────────────────────────────────────
+    [Fact]
+    public async Task EmbedAsync_WithinCooldown_DoesNotCallProvider()
+    {
+        // After a provider-unavailable failure, every call inside the window fails soft at once with
+        // no provider call, so a dead router costs one refused connect per window, not one per search.
+        // The window is provider-wide (a DIFFERENT text is skipped too), and a cache hit is still
+        // served because the cooldown is checked after the cache lookup.
+        var time = new FakeTimeProvider();
+        var providerUp = true;
+        var fake = new FakeEmbeddingGenerator((inputs, _, _) =>
+            providerUp ? CannedBatch(inputs) : throw SdkTransportFailure());
+        var service = NewService(fake, timeProvider: time);
+
+        var cached = await service.EmbedAsync("cached", CancellationToken.None); // provider up ⇒ cached
+        providerUp = false;
+        var tripped = await service.EmbedAsync("ping", CancellationToken.None);  // refused ⇒ cooldown
+        var skipped = await service.EmbedAsync("pong", CancellationToken.None);  // inside the window
+        var hit = await service.EmbedAsync("cached", CancellationToken.None);    // inside the window
+
+        Assert.True(cached.Ok);
+        Assert.Contains("actively refused", tripped.Error);
+        Assert.False(skipped.Ok);
+        Assert.Contains("cooling down", skipped.Error);
+        Assert.Equal("test-embed-model", skipped.Model);
+        Assert.True(hit.Ok);                     // a cache hit never needed the provider
+        Assert.Equal(cached.Vector, hit.Vector);
+        Assert.Equal(2, fake.CallCount);         // "cached" + "ping": "pong" never reached the provider
+    }
+
+    [Fact]
+    public async Task EmbedAsync_AfterCooldown_CallsProviderAgain()
+    {
+        // The window is exactly FailureCooldownMs long, pinned from both sides: 1 ms before it ends the
+        // provider is still skipped, 1 ms after it ends the next call tries the provider again. A
+        // non-default length proves the configured value is the one honoured. That retry failing opens
+        // a NEW window, so a router that stays down keeps costing one wait per window rather than going
+        // back to one wait per call once the first window has run out.
+        var time = new FakeTimeProvider();
+        var fake = new FakeEmbeddingGenerator((_, _, _) => throw SdkTransportFailure());
+        var service = NewService(
+            fake,
+            new EmbeddingOptions { Model = "test-embed-model", TimeoutMs = 5_000, FailureCooldownMs = 10_000 },
+            timeProvider: time);
+
+        await service.EmbedAsync("ping", CancellationToken.None);  // refused ⇒ cooldown starts
+        time.Advance(TimeSpan.FromMilliseconds(9_999));
+        var inside = await service.EmbedAsync("ping", CancellationToken.None);
+        Assert.Contains("cooling down", inside.Error);
+        Assert.Equal(1, fake.CallCount);                           // still inside the window
+
+        time.Advance(TimeSpan.FromMilliseconds(2));                // FailureCooldownMs + 1
+        var after = await service.EmbedAsync("ping", CancellationToken.None);
+
+        Assert.False(after.Ok);
+        Assert.Contains("actively refused", after.Error);          // a real attempt, not the cooldown
+        Assert.Equal(2, fake.CallCount);                           // the provider was tried again
+
+        var rearmed = await service.EmbedAsync("ping", CancellationToken.None);
+        Assert.Contains("cooling down", rearmed.Error);            // the failed retry opened a new window
+        Assert.Equal(2, fake.CallCount);
+    }
+
+    [Fact]
+    public async Task EmbedAsync_CooldownWarning_IsLoggedOncePerWindow()
+    {
+        // StartCooldown logs its "cooling down" warning only when a failure opens a NEW window. A
+        // failure inside a running window extends it silently: here a probe, the one call that still
+        // reaches the provider inside the window. A failure after the window has run out opens a new
+        // window and logs again.
+        var time = new FakeTimeProvider();
+        var logger = new CapturingLogger();
+        var fake = new FakeEmbeddingGenerator((_, _, _) => throw SdkTransportFailure());
+        var service = NewService(
+            fake,
+            new EmbeddingOptions { Model = "test-embed-model", TimeoutMs = 5_000, FailureCooldownMs = 10_000 },
+            timeProvider: time,
+            logger: logger);
+
+        await service.EmbedAsync("ping", CancellationToken.None);          // refused ⇒ the window opens
+        var probe = await service.ProbeAsync("probe", CancellationToken.None);
+        Assert.Contains("actively refused", probe.Error);                   // a real failure inside the window...
+        Assert.Equal(2, fake.CallCount);
+        Assert.Equal(1, logger.WarningsContaining("cooling down"));        // ...extended it without a second warning
+
+        time.Advance(TimeSpan.FromMilliseconds(10_001));                    // FailureCooldownMs + 1: the window has run out
+        await service.EmbedAsync("pong", CancellationToken.None);           // refused again ⇒ a new window
+        Assert.Equal(3, fake.CallCount);
+        Assert.Equal(2, logger.WarningsContaining("cooling down"));        // ...and one warning for it
+    }
+
+    [Fact]
+    public async Task EmbedAsync_Cooldown_WallClockStepBack_DoesNotStretchIt()
+    {
+        // The window is timed on the TimeProvider's monotonic timestamp, not its wall clock, so a wall
+        // clock stepped back by NTP or by hand does not add the step to the window: once
+        // FailureCooldownMs has really passed, the provider is tried again.
+        var clock = new SteppableClock();
+        var fake = new FakeEmbeddingGenerator((_, _, _) => throw SdkTransportFailure());
+        var service = NewService(
+            fake,
+            new EmbeddingOptions { Model = "test-embed-model", TimeoutMs = 5_000, FailureCooldownMs = 10_000 },
+            timeProvider: clock);
+
+        await service.EmbedAsync("ping", CancellationToken.None);  // refused ⇒ cooldown starts
+        clock.StepWallClock(TimeSpan.FromHours(-1));               // the wall clock jumps an hour back...
+        clock.Advance(TimeSpan.FromMilliseconds(10_001));          // ...then FailureCooldownMs + 1 really passes
+        var next = await service.EmbedAsync("ping", CancellationToken.None);
+
+        Assert.Contains("actively refused", next.Error);           // a real attempt: the window ended on time
+        Assert.Equal(2, fake.CallCount);
+    }
+
+    [Fact]
+    public async Task EmbedAsync_Cooldown_WallClockStepAhead_DoesNotEndIt()
+    {
+        // The mirror: a wall clock stepped ahead does not end the window early. No real time passes
+        // here, so the provider is still skipped.
+        var clock = new SteppableClock();
+        var fake = new FakeEmbeddingGenerator((_, _, _) => throw SdkTransportFailure());
+        var service = NewService(
+            fake,
+            new EmbeddingOptions { Model = "test-embed-model", TimeoutMs = 5_000, FailureCooldownMs = 10_000 },
+            timeProvider: clock);
+
+        await service.EmbedAsync("ping", CancellationToken.None);  // refused ⇒ cooldown starts
+        clock.StepWallClock(TimeSpan.FromHours(1));                // the wall clock jumps an hour ahead
+        var next = await service.EmbedAsync("ping", CancellationToken.None);
+
+        Assert.Contains("cooling down", next.Error);               // still inside the window
+        Assert.Equal(1, fake.CallCount);
+    }
+
+    [Fact]
+    public async Task EmbedAsync_Cooldown_HonoursTimestampFrequency()
+    {
+        // The deadline converts FailureCooldownMs to timestamp units with the TimeProvider's own
+        // TimestampFrequency. The other window tests run at 10 MHz (FakeTimeProvider, SteppableClock's
+        // default, and Stopwatch.Frequency on Windows), where a timestamp unit and a TimeSpan tick are
+        // the same length, so none of them could tell the two apart. At 1 GHz (Stopwatch.Frequency on
+        // Linux) a deadline counted in ticks would end the window 100 times early. Pinned 1 ms either
+        // side, as in EmbedAsync_AfterCooldown_CallsProviderAgain.
+        var clock = new SteppableClock(unitsPerTick: 100);         // 1 GHz
+        var fake = new FakeEmbeddingGenerator((_, _, _) => throw SdkTransportFailure());
+        var service = NewService(
+            fake,
+            new EmbeddingOptions { Model = "test-embed-model", TimeoutMs = 5_000, FailureCooldownMs = 10_000 },
+            timeProvider: clock);
+
+        await service.EmbedAsync("ping", CancellationToken.None);  // refused ⇒ cooldown starts
+        clock.Advance(TimeSpan.FromMilliseconds(9_999));
+        var inside = await service.EmbedAsync("ping", CancellationToken.None);
+        Assert.Contains("cooling down", inside.Error);
+        Assert.Equal(1, fake.CallCount);                           // still inside the window
+
+        clock.Advance(TimeSpan.FromMilliseconds(2));               // FailureCooldownMs + 1
+        var after = await service.EmbedAsync("ping", CancellationToken.None);
+
+        Assert.Contains("actively refused", after.Error);          // a real attempt: the window ended on time
+        Assert.Equal(2, fake.CallCount);
+    }
+
+    [Fact]
+    public async Task Probe_BypassesCooldown_AndSuccessClearsIt()
+    {
+        // embed-ping must report LIVE provider state: inside the window the probe still makes a real
+        // provider call, and a successful one ends the cooldown at once, so recovery shows up
+        // immediately instead of up to FailureCooldownMs later.
+        var time = new FakeTimeProvider();
+        var providerUp = false;
+        var fake = new FakeEmbeddingGenerator((inputs, _, _) =>
+            providerUp ? CannedBatch(inputs) : throw SdkTransportFailure());
+        var service = NewService(fake, timeProvider: time);
+
+        await service.EmbedAsync("ping", CancellationToken.None);             // refused ⇒ cooldown starts
+        var probeDown = await service.ProbeAsync("probe 1", CancellationToken.None);
+        Assert.Contains("actively refused", probeDown.Error);                 // a real attempt, not "cooling down"
+        Assert.Equal(2, fake.CallCount);
+
+        providerUp = true;                                                    // the router comes back
+        var probeUp = await service.ProbeAsync("probe 2", CancellationToken.None);
+        var next = await service.EmbedAsync("next", CancellationToken.None);  // no time has passed
+
+        Assert.True(probeUp.Ok);
+        Assert.True(next.Ok);                                                 // the probe's success ended the cooldown
+        Assert.Equal(4, fake.CallCount);
+    }
+
+    [Fact]
+    public async Task EmbedAsync_InFlightSuccess_EndsCooldown()
+    {
+        // The non-probe half of the test above: ANY provider success ends the window, not only a
+        // probe's. Inside the window EmbedAsync skips the provider, so the success has to come from a
+        // call already in flight when the window opens: "slow" is inside the generator when "trip" is
+        // refused, and completes afterwards. The next call must then reach the provider.
+        using var slowEntered = new SemaphoreSlim(0);
+        var releaseSlow = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var fake = new FakeEmbeddingGenerator(async (inputs, _, token) =>
+        {
+            if (inputs[0] == "trip")
+                throw SdkTransportFailure();
+            if (inputs[0] == "slow")
+            {
+                slowEntered.Release();
+                await releaseSlow.Task.WaitAsync(token); // held until the window is open
+            }
+            return new GeneratedEmbeddings<Embedding<float>>(inputs.Select(Canned));
+        });
+        var service = NewService(fake, timeProvider: new FakeTimeProvider());
+
+        var slow = service.EmbedAsync("slow", CancellationToken.None);            // in flight before the trip
+        Assert.True(await slowEntered.WaitAsync(HangGuard), "slow never reached the generator");
+        await service.EmbedAsync("trip", CancellationToken.None);                 // refused ⇒ cooldown starts
+        var inside = await service.EmbedAsync("inside", CancellationToken.None);
+        Assert.Contains("cooling down", inside.Error);                             // the window is open
+        var callsBefore = fake.CallCount;
+
+        releaseSlow.SetResult();
+        Assert.True((await slow).Ok);                                              // a NON-probe success...
+        var next = await service.EmbedAsync("next", CancellationToken.None);
+
+        Assert.True(next.Ok);                                                      // ...ended the window
+        Assert.Equal(callsBefore + 1, fake.CallCount);                             // "next" reached the provider
+    }
+
+    [Fact]
+    public async Task EmbedAsync_CooldownZero_KeepsTodaysBehaviour()
+    {
+        // FailureCooldownMs = 0 disables the cooldown: every call goes to the provider, as before #549.
+        var time = new FakeTimeProvider();
+        var fake = new FakeEmbeddingGenerator((_, _, _) => throw SdkTransportFailure());
+        var service = NewService(
+            fake,
+            new EmbeddingOptions { Model = "test-embed-model", TimeoutMs = 5_000, FailureCooldownMs = 0 },
+            timeProvider: time);
+
+        var first = await service.EmbedAsync("ping", CancellationToken.None);
+        var second = await service.EmbedAsync("pong", CancellationToken.None);
+
+        Assert.False(first.Ok);
+        Assert.Contains("actively refused", second.Error); // a real attempt, not "cooling down"
+        Assert.Equal(2, fake.CallCount);
+    }
+
+    [Fact]
+    public async Task EmbedAsync_Timeout_StartsCooldown()
+    {
+        // A hung router is the worst case (two per-attempt timeouts per call), so a timeout is
+        // provider-unavailable too: once both attempts time out, the next call fails soft at once.
+        // The clock is a FakeTimeProvider, advanced only once each attempt is inside the generator.
+        // Only "ping" hangs: if a regression let "pong" reach the provider it would come straight
+        // back and fail the asserts, rather than hang on a clock nobody advances.
+        var time = new FakeTimeProvider();
+        using var enteredGenerator = new SemaphoreSlim(0);
+        var fake = new FakeEmbeddingGenerator(async (inputs, _, token) =>
+        {
+            if (inputs[0] != "ping")
+                return new GeneratedEmbeddings<Embedding<float>>(inputs.Select(Canned));
+            enteredGenerator.Release();
+            await Task.Delay(Timeout.Infinite, token); // hang until the service's timeout cancels us
+            return new GeneratedEmbeddings<Embedding<float>>(new[] { Canned("x") });
+        });
+        var service = NewService(
+            fake, new EmbeddingOptions { Model = "test-embed-model", TimeoutMs = 30 }, timeProvider: time);
+
+        var call = service.EmbedAsync("ping", CancellationToken.None);
+        for (var attempt = 1; attempt <= 2; attempt++)
+        {
+            Assert.True(await enteredGenerator.WaitAsync(HangGuard), $"attempt {attempt} never reached the generator");
+            time.Advance(TimeSpan.FromMilliseconds(31));
+        }
+        Assert.Contains("timed out", (await call).Error);
+
+        var next = await service.EmbedAsync("pong", CancellationToken.None);
+
+        Assert.Contains("cooling down", next.Error);
+        Assert.Equal(2, fake.CallCount); // the hung provider was not waited on a third time
+    }
+
+    [Fact]
+    public async Task EmbedAsync_NonProviderError_DoesNotStartCooldown()
+    {
+        // The pair to the tests above: an error the provider is not to blame for (here a local one; a
+        // 4xx is classified the same way) says nothing about its availability, so it never starts the
+        // cooldown and the next call still reaches the provider.
+        var fake = new FakeEmbeddingGenerator((_, _, _) => throw new InvalidOperationException("bad embed shape"));
+        var service = NewService(fake);
+
+        await service.EmbedAsync("ping", CancellationToken.None);
+        var second = await service.EmbedAsync("pong", CancellationToken.None);
+
+        Assert.Contains("bad embed shape", second.Error); // a real attempt, not "cooling down"
+        Assert.Equal(2, fake.CallCount);
+    }
+
+    [Fact]
+    public async Task EmbedAsync_CallerCancelMidAttempt_DoesNotStartCooldown()
+    {
+        // A caller that gives up says nothing about the provider either: the cancel propagates and
+        // starts no cooldown, so the next call still reaches the provider. The cancel lands while the
+        // attempt is blocked inside the generator; a token cancelled before the call never reaches the
+        // provider at all (EmbedAsync_CallerCancellation_Throws_NotSwallowedIntoResult). Nobody
+        // advances the FakeTimeProvider, so the per-attempt timeout cannot fire: the only cancel here
+        // is the caller's.
+        using var enteredGenerator = new SemaphoreSlim(0);
+        var fake = new FakeEmbeddingGenerator(async (inputs, _, token) =>
+        {
+            if (inputs[0] != "ping")
+                return new GeneratedEmbeddings<Embedding<float>>(inputs.Select(Canned));
+            enteredGenerator.Release();
+            await Task.Delay(Timeout.Infinite, token); // blocked until the caller's cancel reaches us
+            return new GeneratedEmbeddings<Embedding<float>>(new[] { Canned("x") });
+        });
+        var service = NewService(fake, timeProvider: new FakeTimeProvider());
+        using var cts = new CancellationTokenSource();
+
+        var call = service.EmbedAsync("ping", cts.Token);
+        Assert.True(await enteredGenerator.WaitAsync(HangGuard), "the attempt never reached the generator");
+        Assert.Equal(1, fake.CallCount); // the attempt had started before the cancel
+        await cts.CancelAsync();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => call);
+
+        var next = await service.EmbedAsync("pong", CancellationToken.None);
+
+        Assert.True(next.Ok);            // reached the provider: the cancel started no cooldown
+        Assert.Equal(2, fake.CallCount);
+    }
+
+    [Fact]
+    public async Task EmbedAsync_CancelledToken_InsideCooldown_Throws()
+    {
+        // Caller cancellation propagates inside the failure cooldown exactly as it does outside it
+        // (EmbedAsync_CallerCancellation_Throws_NotSwallowedIntoResult): the window's early return must
+        // not turn a cancelled call into a fail-soft "cooling down" result, which IEmbeddingService's
+        // contract forbids.
+        var fake = new FakeEmbeddingGenerator((_, _, _) => throw SdkTransportFailure());
+        var service = NewService(fake, timeProvider: new FakeTimeProvider());
+        await service.EmbedAsync("ping", CancellationToken.None);                 // refused ⇒ cooldown starts
+        var skipped = await service.EmbedAsync("pong", CancellationToken.None);
+        Assert.Contains("cooling down", skipped.Error);                            // the window is open
+        using var cts = new CancellationTokenSource();
+        await cts.CancelAsync();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => service.EmbedAsync("pong", cts.Token));
+        Assert.Equal(1, fake.CallCount);
+    }
+
+    [Fact]
+    public async Task EmbedBatchAsync_CancelledToken_InsideCooldown_Throws()
+    {
+        // The batch twin: every chunk checks the caller's token before the cooldown can fail it soft.
+        var fake = new FakeEmbeddingGenerator((_, _, _) => throw SdkTransportFailure());
+        var service = NewService(fake, timeProvider: new FakeTimeProvider());
+        await service.EmbedAsync("ping", CancellationToken.None);                 // refused ⇒ cooldown starts
+        var skipped = await service.EmbedBatchAsync(new[] { "a", "b" }, CancellationToken.None);
+        Assert.All(skipped, r => Assert.Contains("cooling down", r.Error));       // the window is open
+        using var cts = new CancellationTokenSource();
+        await cts.CancelAsync();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => service.EmbedBatchAsync(new[] { "a", "b" }, cts.Token));
+        Assert.Equal(1, fake.CallCount);
+    }
+
+    [Fact]
+    public async Task EmbedBatchAsync_CancelledToken_OutsideCooldown_Throws()
+    {
+        // The control for the test above: with no window running, a cancelled batch throws before any
+        // chunk reaches the provider.
+        var fake = new FakeEmbeddingGenerator((_, _, _) => throw SdkTransportFailure());
+        var service = NewService(fake, timeProvider: new FakeTimeProvider());
+        using var cts = new CancellationTokenSource();
+        await cts.CancelAsync();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => service.EmbedBatchAsync(new[] { "a", "b" }, cts.Token));
+        Assert.Equal(0, fake.CallCount);
+    }
+
+    [Fact]
+    public async Task EmbedAsync_CancelledToken_CacheHit_InsideCooldown_ReturnsCachedSuccess()
+    {
+        // The cancellation check sits after the cache lookup, not at method entry. A cache hit never
+        // reached GenerateAsync's check, so it has always been returned for a cancelled token, and the
+        // cooldown must not change that.
+        var providerUp = true;
+        var fake = new FakeEmbeddingGenerator((inputs, _, _) =>
+            providerUp ? CannedBatch(inputs) : throw SdkTransportFailure());
+        var service = NewService(fake, timeProvider: new FakeTimeProvider());
+        var cached = await service.EmbedAsync("cached", CancellationToken.None); // provider up ⇒ cached
+        providerUp = false;
+        await service.EmbedAsync("ping", CancellationToken.None);                // refused ⇒ cooldown starts
+        var skipped = await service.EmbedAsync("pong", CancellationToken.None);
+        Assert.Contains("cooling down", skipped.Error);                           // the window is open
+        var callsBefore = fake.CallCount;
+        using var cts = new CancellationTokenSource();
+        await cts.CancelAsync();
+
+        var hit = await service.EmbedAsync("cached", cts.Token);
+
+        Assert.True(hit.Ok);
+        Assert.Equal(cached.Vector, hit.Vector);
+        Assert.Equal(callsBefore, fake.CallCount);                                // no provider call
+    }
+
+    [Fact]
+    public async Task EmbedBatchAsync_CancelledToken_AllHits_InsideCooldown_ReturnsCachedSuccesses()
+    {
+        // The batch twin: the check is inside the chunk loop, not at method entry, so a batch in which
+        // every text is cached, and so no chunk is sent, is returned for a cancelled token as it always was.
+        var providerUp = true;
+        var fake = new FakeEmbeddingGenerator((inputs, _, _) =>
+            providerUp ? CannedBatch(inputs) : throw SdkTransportFailure());
+        var service = NewService(fake, timeProvider: new FakeTimeProvider());
+        var cached = await service.EmbedBatchAsync(new[] { "a", "b" }, CancellationToken.None); // provider up ⇒ cached
+        providerUp = false;
+        await service.EmbedAsync("ping", CancellationToken.None);                  // refused ⇒ cooldown starts
+        var skipped = await service.EmbedAsync("pong", CancellationToken.None);
+        Assert.Contains("cooling down", skipped.Error);                             // the window is open
+        var callsBefore = fake.CallCount;
+        using var cts = new CancellationTokenSource();
+        await cts.CancelAsync();
+
+        var hits = await service.EmbedBatchAsync(new[] { "a", "b" }, cts.Token);
+
+        Assert.All(hits, r => Assert.True(r.Ok));
+        Assert.Equal(cached[0].Vector, hits[0].Vector);
+        Assert.Equal(cached[1].Vector, hits[1].Vector);
+        Assert.Equal(callsBefore, fake.CallCount);                                  // no provider call
+    }
+
+    [Fact]
+    public async Task EmbedBatchAsync_WithinCooldown_ServesCacheHits_AndSparesLaterChunks()
+    {
+        // EmbedBatchAsync honours the same window, checked per chunk: the chunk that trips the cooldown
+        // spares the chunks after it the same wait, while a cache hit captured up front is still served.
+        var time = new FakeTimeProvider();
+        var providerUp = true;
+        var fake = new FakeEmbeddingGenerator((inputs, _, _) =>
+            providerUp ? CannedBatch(inputs) : throw SdkTransportFailure());
+        // Batch size 1 ⇒ one chunk per miss, so the window can act BETWEEN chunks.
+        var service = NewService(
+            fake, new EmbeddingOptions { Model = "m", TimeoutMs = 5_000, MaxBatchSize = 1 }, timeProvider: time);
+
+        await service.EmbedAsync("cached", CancellationToken.None); // provider up ⇒ cached
+        providerUp = false;
+
+        var results = await service.EmbedBatchAsync(new[] { "cached", "a", "b" }, CancellationToken.None);
+
+        Assert.True(results[0].Ok);                            // cache hit still served
+        Assert.Contains("actively refused", results[1].Error); // chunk "a" reached the provider and tripped it...
+        Assert.Contains("cooling down", results[2].Error);     // ...so chunk "b" skipped the provider
+        Assert.Equal(2, fake.CallCount);                       // "cached" + chunk "a" only
+    }
+
     // ── input guards ─────────────────────────────────────────────────────────────────
     [Theory]
     [InlineData(null)]
@@ -495,6 +983,15 @@ public sealed class EmbeddingServiceTests
             () => new EmbeddingService(fake, new EmbeddingOptions { MaxBatchSize = 0 }, NullLogger<EmbeddingService>.Instance));
     }
 
+    [Fact]
+    public void Constructor_NegativeCooldown_Throws()
+    {
+        // 0 is valid (it disables the cooldown); only a negative window is a config error.
+        var fake = new FakeEmbeddingGenerator((inputs, _, _) => CannedBatch(inputs));
+        Assert.Throws<ArgumentException>(
+            () => new EmbeddingService(fake, new EmbeddingOptions { FailureCooldownMs = -1 }, NullLogger<EmbeddingService>.Instance));
+    }
+
     // ── EmbeddingOptions.FromEnvironment binding ─────────────────────────────────────
     [Fact]
     public void FromEnvironment_NoVarsSet_UsesDefaults()
@@ -503,6 +1000,7 @@ public sealed class EmbeddingServiceTests
 
         Assert.Equal(EmbeddingOptions.DefaultModel, options.Model);
         Assert.Equal(EmbeddingOptions.DefaultMaxBatchSize, options.MaxBatchSize);
+        Assert.Equal(EmbeddingOptions.DefaultFailureCooldownMs, options.FailureCooldownMs);
         Assert.Null(options.Dimensions);
         // URL/key/timeout are inherited from the shared LlmOptions binding.
         Assert.Equal(LlmOptions.DefaultBaseUrl, options.BaseUrl);
@@ -578,6 +1076,18 @@ public sealed class EmbeddingServiceTests
         Assert.Equal(EmbeddingOptions.DefaultMaxBatchSize, bad.MaxBatchSize);
     }
 
+    [Theory]
+    [InlineData("5000", 5_000)]
+    [InlineData("0", 0)] // 0 is a real setting, not an invalid one: it disables the cooldown
+    [InlineData("-1", EmbeddingOptions.DefaultFailureCooldownMs)]
+    [InlineData("not-a-number", EmbeddingOptions.DefaultFailureCooldownMs)]
+    public void FromEnvironment_CooldownMs_IsParsed_InvalidKeepsDefault(string raw, int expected)
+    {
+        var env = new Dictionary<string, string?> { ["KANBANFLOW_EMBED_COOLDOWN_MS"] = raw };
+        var options = EmbeddingOptions.FromEnvironment(k => env.GetValueOrDefault(k));
+        Assert.Equal(expected, options.FailureCooldownMs);
+    }
+
     [Fact]
     public void FromEnvironment_NullGetEnv_Throws() =>
         Assert.Throws<ArgumentNullException>(() => EmbeddingOptions.FromEnvironment(null!));
@@ -610,5 +1120,59 @@ public sealed class EmbeddingServiceTests
         public object? GetService(Type serviceType, object? serviceKey = null) => null;
 
         public void Dispose() { }
+    }
+
+    /// <summary>
+    /// A <see cref="TimeProvider"/> whose wall clock can be stepped without moving its monotonic
+    /// timestamp, the way NTP or a manual change steps a real clock; <see cref="Advance"/> moves both,
+    /// like real time passing. <paramref name="unitsPerTick"/> timestamp units make one
+    /// <see cref="TimeSpan"/> tick: 1 is 10 MHz, 100 is 1 GHz. Its timers are the base class's real
+    /// ones, which no test here waits on.
+    /// </summary>
+    private sealed class SteppableClock(long unitsPerTick = 1) : TimeProvider
+    {
+        private DateTimeOffset _utcNow = new(2026, 1, 1, 0, 0, 0, TimeSpan.Zero);
+        private long _timestamp = TimeSpan.TicksPerDay * unitsPerTick; // any positive start, as a real one has
+
+        public override DateTimeOffset GetUtcNow() => _utcNow;
+
+        public override long GetTimestamp() => _timestamp;
+
+        public override long TimestampFrequency => TimeSpan.TicksPerSecond * unitsPerTick;
+
+        public void Advance(TimeSpan by)
+        {
+            _utcNow += by;
+            _timestamp += by.Ticks * unitsPerTick;
+        }
+
+        public void StepWallClock(TimeSpan by) => _utcNow += by;
+    }
+
+    /// <summary>
+    /// A logger that keeps every entry's level and formatted message, so a test can count what the
+    /// service logged. The repo has no logger-capture idiom, so it lives here, next to the one test
+    /// that needs it.
+    /// </summary>
+    private sealed class CapturingLogger : ILogger<EmbeddingService>
+    {
+        private readonly List<(LogLevel Level, string Message)> _entries = new();
+
+        public int WarningsContaining(string fragment)
+        {
+            lock (_entries)
+                return _entries.Count(e => e.Level == LogLevel.Warning && e.Message.Contains(fragment, StringComparison.Ordinal));
+        }
+
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(
+            LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
+        {
+            lock (_entries)
+                _entries.Add((logLevel, formatter(state, exception)));
+        }
     }
 }

@@ -12,13 +12,19 @@ namespace KanbanFlow.Services;
 /// <see cref="EmbedResult"/> with <see cref="EmbedResult.Ok"/> = <c>false</c>; they are NEVER
 /// thrown. An embedding outage must not crash the app or break the (audited, #88) write path. The
 /// single exception is <em>caller</em> cancellation: a cancelled <see cref="CancellationToken"/>
-/// propagates as <see cref="OperationCanceledException"/> (honored, not swallowed into a result).</para>
+/// propagates as <see cref="OperationCanceledException"/> (honored, not swallowed into a result).
+/// A call with nothing to send to the provider is still returned for a cancelled token, as it was
+/// before the failure cooldown (#549): a cache hit, and a batch in which every element is a cache
+/// hit or blank, an empty batch included.</para>
 /// </summary>
 public interface IEmbeddingService
 {
     /// <summary>
     /// Embed a single text. <paramref name="text"/> must be non-null and non-blank. Identical text
-    /// (same configured model) served from cache without a provider call on a repeat.
+    /// (same configured model) served from cache without a provider call on a repeat. Inside the
+    /// failure cooldown (#549), for up to <see cref="EmbeddingOptions.FailureCooldownMs"/> after the
+    /// provider was unreachable, timed out or returned a 5xx, a cache miss fails soft without a
+    /// provider call; use <see cref="ProbeAsync"/> for a live check.
     /// </summary>
     Task<EmbedResult> EmbedAsync(string text, CancellationToken ct = default);
 
@@ -27,11 +33,21 @@ public interface IEmbeddingService
     /// count). Duplicate texts within the batch are embedded once; already-cached texts issue no
     /// provider call; the remaining misses go out in provider-safe chunks. A provider failure fails
     /// only the affected items soft (<see cref="EmbedResult.Ok"/> = <c>false</c>) — cache hits and
-    /// other chunks still succeed — and never throws. A <c>null</c> element throws (a typed-batch
+    /// other chunks still succeed, except that inside the failure cooldown (#549) a chunk fails soft
+    /// without a provider call, so the chunks after one that finds the provider unreachable, timed out
+    /// or returning a 5xx fail soft too — and never throws. A <c>null</c> element throws (a typed-batch
     /// caller bug); a blank/whitespace element fails soft locally and is never sent to the provider,
     /// so one bad entry cannot sink its batch-mates.
     /// </summary>
     Task<IReadOnlyList<EmbedResult>> EmbedBatchAsync(IReadOnlyList<string> texts, CancellationToken ct = default);
+
+    /// <summary>
+    /// Embed a single text like <see cref="EmbedAsync"/>, but never short-circuited by the failure
+    /// cooldown (#549): a cache miss always reaches the provider, even inside the window in which
+    /// <see cref="EmbedAsync"/> fails fast after the provider was unreachable, and a success ends that
+    /// window at once. For the <c>embed-ping</c> self-test, which must report live provider state.
+    /// </summary>
+    Task<EmbedResult> ProbeAsync(string text, CancellationToken ct = default);
 }
 
 /// <summary>
