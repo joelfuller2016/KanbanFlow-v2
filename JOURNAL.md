@@ -52,6 +52,11 @@ A review of the repository and a test run on 2026-09-26 filed findings as issues
 
 ## Entries (newest first)
 
+- 2026-10-08 13:00Z (scheduled PR monitor, ninety-seventh run): build gate DOWN — curl returned 403 on dotnet-install.sh; no cached dotnet found; no merges.
+  - 8 open PRs: #567, #565, #562, #560, #554 (non-draft); #564, #521, #511 (drafts, skipped). Same set as ninety-sixth run. All non-draft head SHAs unchanged. Master advanced to 749122db.
+  - PHASE 1: No merges (build gate down; all PRs show mergeable_state=unknown).
+  - PHASE 2: Head SHAs unchanged from ninety-sixth run (confirmed 0 unresolved review threads through ninety-sixth run). Nothing to fix.
+
 - 2026-10-08 12:25Z (scheduled PR monitor, ninety-sixth run): build gate DOWN — curl returned 403 on dotnet-install.sh; apt/snap/nix all failed; no cached dotnet found; no merges.
   - 8 open PRs: #567, #565, #562, #560, #554 (non-draft); #564, #521, #511 (drafts, skipped). Same set as ninety-fifth run. All non-draft head SHAs unchanged. Master at 30872c8f.
   - PHASE 1: No merges (build gate down).
