@@ -52,6 +52,12 @@ A review of the repository and a test run on 2026-09-26 filed findings as issues
 
 ## Entries (newest first)
 
+- 2026-10-09 13:28Z (scheduled dependabot-automerge run): build gate UP (.NET 10.0.112 installed via Microsoft apt feed).
+  - 1 open Dependabot PR: #554 (chore(deps): Bump Microsoft.OpenApi from 2.12.2 to 3.10.2), head 998a32d0, mergeable_state=unknown.
+  - #554 skipped: mergeable_state=unknown (step 3c — not MERGEABLE+CLEAN). NU1608 failure documented in prior runs; head unchanged since 2026-10-08.
+  - Master at f86c479 (one-hundred-and-sixteenth PR monitor journal).
+  - Summary: 0 merged, 0 blocked-by-failure, 0 rebased, 1 skipped (mergeable_state=unknown).
+
 - 2026-10-09 13:27Z (scheduled PR monitor, one-hundred-and-sixteenth run): build gate UP (.NET 10.0.112 installed via Microsoft apt feed).
   - 4 open PRs: #554 (non-draft); #564, #521, #511 (drafts, skipped). Master at 3b04fc8 (one-hundred-and-fifteenth run journal).
   - PHASE 1: No merges. #554 head unchanged at 998a32d0; mergeable_state=unknown; merge criteria not met. NU1608 failure documented since 2026-10-08 13:29Z run (head unchanged). No other non-draft PRs.
