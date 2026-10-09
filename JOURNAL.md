@@ -52,6 +52,12 @@ A review of the repository and a test run on 2026-09-26 filed findings as issues
 
 ## Entries (newest first)
 
+- 2026-10-10 00:30Z (scheduled PR monitor, one-hundred-and-seventh run): build gate UP (.NET 10.0.112 installed via Microsoft apt feed — dotnet-install.sh blocked 403, used Microsoft apt repo).
+  - 4 open PRs: #554 (non-draft); #564, #521, #511 (drafts, skipped). Master at 2b94e72 (one-hundred-and-sixth run journal).
+  - PHASE 1: No merges. #554 head unchanged at 998a32d; mergeable_state=unknown; remains blocked-by-failure (NU1608 major-version bump, documented since 13:29Z run on 2026-10-08). No other non-draft PRs.
+  - PHASE 2: 0 unresolved review threads on #554. Nothing to fix.
+  - Master (2b94e72): build GREEN (0 warnings/0 errors), tests 1257/1259 passed — same 2 base-branch failures (filesystem has no independent creation time).
+
 - 2026-10-09 18:00Z (scheduled PR monitor, one-hundred-and-sixth run): build gate UP (.NET 10.0.112 installed via Microsoft apt feed — dotnet-install.sh blocked 403, used Microsoft apt repo).
   - 4 open PRs: #554 (non-draft); #564, #521, #511 (drafts, skipped). Master at ef575af (one-hundred-and-fifth run journal).
   - PHASE 1: No merges. #554 head unchanged at 998a32d; mergeable_state=unknown; remains blocked-by-failure (NU1608 major-version bump, documented since 13:29Z run on 2026-10-08). No other non-draft PRs.
