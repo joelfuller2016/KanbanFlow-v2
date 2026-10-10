@@ -52,6 +52,11 @@ A review of the repository and a test run on 2026-09-26 filed findings as issues
 
 ## Entries (newest first)
 
+- 2026-10-10 13:12Z (scheduled dependency-merge routine): build gate UP (.NET 10.0.112 via Microsoft apt feed, installed fresh this run).
+  - 1 open Dependabot PR: #554 (dependabot/nuget/src/KanbanFlow/Microsoft.OpenApi-3.10.2, head 998a32d0).
+  - mergeStateStatus: UNKNOWN → skipped per rule c (GitHub still computing mergeability).
+  - Summary: 0 merged, 0 blocked-by-failure, 0 rebased, 1 skipped (UNKNOWN merge state).
+
 - 2026-10-10 12:28Z (scheduled PR monitor, one-hundred-and-thirty-ninth run): build gate UP (.NET 10.0.112 via Ubuntu 24.04 Microsoft apt feed).
   - 4 open PRs: #554 (non-draft); #564, #521, #511 (drafts, skipped). Master at 3cf39f8 (one-hundred-and-thirty-eighth run journal).
   - PHASE 1: No merges. #554 head unchanged at 998a32d0; BUILD GATE FAILED — NU1608: Microsoft.AspNetCore.OpenApi 10.0.12 requires Microsoft.OpenApi (>= 2.12.0 && < 3.0.0) but 3.10.2 resolved. Blocking since 2026-10-08 13:29Z run (head unchanged). No other non-draft PRs.
