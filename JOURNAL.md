@@ -52,6 +52,12 @@ A review of the repository and a test run on 2026-09-26 filed findings as issues
 
 ## Entries (newest first)
 
+- 2026-10-11 08:12Z (scheduled PR monitor, one-hundred-and-fifty-eighth run): BUILD GATE DOWN — `builds.dotnet.microsoft.com` blocked by organization proxy policy (403); apt `dotnet-sdk-10.0` package not found; no dotnet binary available.
+  - 4 open PRs: #554 (non-draft); #564, #521, #511 (drafts, skipped). Master at c1f0f62 (one-hundred-and-fifty-seventh run journal).
+  - PHASE 1: No merges (gate down). #554 head unchanged at 998a32d0; NU1608 (Microsoft.OpenApi 3.10.2 incompatible with Microsoft.AspNetCore.OpenApi 10.0.12) still presumed blocking.
+  - PHASE 2: 0 unresolved review threads on #554. Nothing to fix.
+  - Master: cannot verify build/test (gate down).
+
 - 2026-10-11 07:12Z (scheduled PR monitor, one-hundred-and-fifty-seventh run): BUILD GATE DOWN — `builds.dotnet.microsoft.com` blocked by organization proxy policy (403); no Microsoft apt feed configured; no dotnet binary found anywhere on the system.
   - 4 open PRs: #554 (non-draft); #564, #521, #511 (drafts, skipped). Master at 47f6ee9 (one-hundred-and-fifty-sixth run journal).
   - PHASE 1: No merges (gate down). #554 head unchanged at 998a32d0; NU1608 (Microsoft.OpenApi 3.10.2 incompatible with Microsoft.AspNetCore.OpenApi 10.0.12) still presumed blocking.
