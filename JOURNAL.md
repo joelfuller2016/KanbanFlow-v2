@@ -52,6 +52,12 @@ A review of the repository and a test run on 2026-09-26 filed findings as issues
 
 ## Entries (newest first)
 
+- 2026-10-11 09:12Z (scheduled PR monitor, one-hundred-and-fifty-ninth run): build gate UP (.NET 10.0.112 via Ubuntu 24.04 Microsoft apt feed, installed fresh this run).
+  - 4 open PRs: #554 (non-draft); #564, #521, #511 (drafts, skipped). Master at ac5fec6 (one-hundred-and-fifty-eighth run journal).
+  - PHASE 1: No merges. #554 head unchanged at 998a32d0; BUILD GATE FAILED — NU1608: Microsoft.AspNetCore.OpenApi 10.0.12 requires Microsoft.OpenApi (>= 2.12.0 && < 3.0.0) but 3.10.2 resolved. Blocking since 2026-10-08 13:29Z run (head unchanged).
+  - PHASE 2: 0 unresolved review threads on #554. Nothing to fix.
+  - Master (ac5fec6): build GREEN (0 warnings/0 errors), tests 1257/1259 passed — same 2 base-branch failures (filesystem has no independent creation time).
+
 - 2026-10-11 08:12Z (scheduled PR monitor, one-hundred-and-fifty-eighth run): BUILD GATE DOWN — `builds.dotnet.microsoft.com` blocked by organization proxy policy (403); apt `dotnet-sdk-10.0` package not found; no dotnet binary available.
   - 4 open PRs: #554 (non-draft); #564, #521, #511 (drafts, skipped). Master at c1f0f62 (one-hundred-and-fifty-seventh run journal).
   - PHASE 1: No merges (gate down). #554 head unchanged at 998a32d0; NU1608 (Microsoft.OpenApi 3.10.2 incompatible with Microsoft.AspNetCore.OpenApi 10.0.12) still presumed blocking.
