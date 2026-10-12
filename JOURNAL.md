@@ -52,6 +52,11 @@ A review of the repository and a test run on 2026-09-26 filed findings as issues
 
 ## Entries (newest first)
 
+- 2026-10-12 13:45Z (scheduled dependabot-automerge, one-hundred-and-eighty-ninth run): build gate UP (.NET 10.0.112 via Ubuntu 24.04 Microsoft apt feed, installed fresh this run).
+  - 1 open Dependabot PR: #554 (non-draft). Master at 3e68f49 (one-hundred-and-eighty-eighth run journal).
+  - #554 (Microsoft.OpenApi 2.12.2 → 3.10.2): head 998a32d0, mergeable_state=unknown → skipped this run per task rule (UNKNOWN/BLOCKED/pending: skip). Known NU1608 failure from previous 4+ runs still presumed blocking.
+  - Summary: 0 merged, 0 build failures, 0 rebases, 1 skipped (unknown mergeable state).
+
 - 2026-10-12 13:25Z (scheduled PR monitor, one-hundred-and-eighty-eighth run): build gate UP (.NET 10.0.112 via Ubuntu 24.04 Microsoft apt feed, installed fresh this run).
   - 4 open PRs: #554 (non-draft); #564, #521, #511 (drafts, skipped). Master at 14dbb90 (one-hundred-and-eighty-seventh run journal).
   - PHASE 1: No merges. #554 head unchanged at 998a32d0; mergeable_state=unknown; NU1608 (Microsoft.OpenApi 3.10.2 incompatible with Microsoft.AspNetCore.OpenApi 10.0.12) still blocking — confirmed by fresh build this run.
