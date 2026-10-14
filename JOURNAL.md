@@ -52,6 +52,15 @@ A review of the repository and a test run on 2026-09-26 filed findings as issues
 
 ## Entries (newest first)
 
+- 2026-10-14 00:00Z (scheduled PR monitor, one-hundred-and-ninety-seventh run): build gate UP (.NET 10.0.112 via Ubuntu 24.04 Microsoft apt feed, installed fresh this run).
+  - 6 open PRs: #571, #570, #554 (non-draft); #564, #521, #511 (drafts, skipped).
+  - PHASE 1 — 2 merges:
+    - #571 (xunit.runner.visualstudio 4.0.0→4.0.1): build GREEN, tests 1257/1259 (same 2 base-branch failures) → MERGED squash SHA 85403324.
+    - #570 (playwright npm 1.63.0→1.64.0): build GREEN, tests 1257/1259 (same 2 base-branch failures) → MERGED squash SHA 4a69f46b.
+    - #554 (Microsoft.OpenApi 2.12.2→3.10.2): mergeable_state=unknown → skipped per task rule (unchanged from prior runs).
+  - PHASE 2: 0 unresolved review threads on #554. Nothing to fix.
+  - Master (4a69f46b): build GREEN (0 warnings/0 errors), tests 1257/1259 passed — same 2 base-branch failures (filesystem has no independent creation time).
+
 - 2026-10-12 20:25Z (scheduled PR monitor, one-hundred-and-ninety-sixth run): build gate UP (.NET 10.0.112 via Ubuntu 24.04 Microsoft apt feed, installed fresh this run).
   - 4 open PRs: #554 (non-draft); #564, #521, #511 (drafts, skipped). Master at 8d14154 (one-hundred-and-ninety-fifth run journal).
   - PHASE 1: No merges. #554 head unchanged at 998a32d0; mergeable_state=unknown — skipped per task rule.
