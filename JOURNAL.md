@@ -52,6 +52,12 @@ A review of the repository and a test run on 2026-09-26 filed findings as issues
 
 ## Entries (newest first)
 
+- 2026-10-14 14:00Z (scheduled PR monitor, two-hundred-and-ninth run): build gate UP (.NET 10.0.112 via Ubuntu 24.04 Microsoft apt feed, installed fresh this run).
+  - 4 open PRs: #554 (non-draft); #564, #521, #511 (drafts, skipped). Master at b1515b0b.
+  - PHASE 1: No merges. #554 head 998a32d0; mergeable_state=clean (first time clean — was unknown in prior runs). BUILD GATE FAILED: NU1608 (Microsoft.AspNetCore.OpenApi 10.0.12 requires Microsoft.OpenApi >= 2.12.0 && < 3.0.0, but 3.10.2 resolved). Cannot merge until AspNetCore.OpenApi supports OpenApi 3.x.
+  - PHASE 2: 0 unresolved review threads on #554. Nothing to fix.
+  - Master (b1515b0b): build GREEN (0 warnings/0 errors), tests 1257/1259 passed — same 2 base-branch failures (filesystem has no independent creation time).
+
 - 2026-10-14 13:00Z (scheduled PR monitor, two-hundred-and-eighth run): build gate UP (.NET 10.0.112 via Ubuntu 24.04 Microsoft apt feed, installed fresh this run).
   - 4 open PRs: #554 (non-draft); #564, #521, #511 (drafts, skipped). Master at 9183036 (run 207 journal).
   - PHASE 1: No merges. #554 head unchanged at 998a32d0; mergeable_state=unknown — skipped per task rule (unchanged from prior runs). NU1608 (Microsoft.OpenApi 3.10.2 incompatible with Microsoft.AspNetCore.OpenApi 10.0.12) still blocking.
