@@ -52,6 +52,12 @@ A review of the repository and a test run on 2026-09-26 filed findings as issues
 
 ## Entries (newest first)
 
+- 2026-10-15 12:00Z (scheduled PR monitor, two-hundred-and-twenty-ninth run): build gate UP (.NET 10.0.112 via Ubuntu 24.04 apt feed, installed fresh this run).
+  - 4 open PRs: #554 (non-draft); #564, #521, #511 (drafts, skipped). Master at a430db3 (run 228 journal).
+  - PHASE 1: No merges. #554 head unchanged at 998a32d0; mergeable_state=unknown — skipped per task rule. NU1608 (Microsoft.OpenApi 3.10.2 incompatible with Microsoft.AspNetCore.OpenApi 10.0.12) still expected to block build with `-warnaserror`; mergeable_state gate triggered first.
+  - PHASE 2: 0 unresolved review threads on #554. Nothing to fix.
+  - Master (a430db3): build GREEN (0 warnings/0 errors), tests 1257/1259 passed — same 2 base-branch failures (filesystem has no independent creation time).
+
 - 2026-10-15 11:00Z (scheduled PR monitor, two-hundred-and-twenty-eighth run): build gate UP (.NET 10.0.112 via Ubuntu 24.04 Microsoft apt feed, installed fresh this run).
   - 4 open PRs: #554 (non-draft); #564, #521, #511 (drafts, skipped). Master at 9d21883 (35 new commits since run 227; tests project + package-lock updated).
   - PHASE 1: No merges. #554 head unchanged at 998a32d0; mergeable_state=unknown — skipped per task rule. Build gate not attempted (NU1608 still expected; mergeable_state gate triggered first).
