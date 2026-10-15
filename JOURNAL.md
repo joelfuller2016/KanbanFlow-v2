@@ -52,6 +52,11 @@ A review of the repository and a test run on 2026-09-26 filed findings as issues
 
 ## Entries (newest first)
 
+- 2026-10-15 13:20Z (dependabot-automerge, two-hundred-and-thirtieth run): build gate UNAVAILABLE — dotnet-install.sh blocked (403 from proxy), apt package not found in feed.
+  - 1 open Dependabot PR: #554 (dependabot[bot], Microsoft.OpenApi 2.12.2→3.10.2). Master at 7e794dcd.
+  - #554: SKIPPED — mergeable_state=unknown (same as runs 226–229; NU1608 incompatibility persists).
+  - No merges. Build gate not attempted (mergeable_state gate triggered first; .NET unavailable regardless).
+
 - 2026-10-15 12:00Z (scheduled PR monitor, two-hundred-and-twenty-ninth run): build gate UP (.NET 10.0.112 via Ubuntu 24.04 apt feed, installed fresh this run).
   - 4 open PRs: #554 (non-draft); #564, #521, #511 (drafts, skipped). Master at a430db3 (run 228 journal).
   - PHASE 1: No merges. #554 head unchanged at 998a32d0; mergeable_state=unknown — skipped per task rule. NU1608 (Microsoft.OpenApi 3.10.2 incompatible with Microsoft.AspNetCore.OpenApi 10.0.12) still expected to block build with `-warnaserror`; mergeable_state gate triggered first.
