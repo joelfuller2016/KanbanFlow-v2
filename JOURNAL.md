@@ -52,6 +52,12 @@ A review of the repository and a test run on 2026-09-26 filed findings as issues
 
 ## Entries (newest first)
 
+- 2026-10-15 14:00Z (scheduled PR monitor, two-hundred-and-thirty-first run): build gate UNAVAILABLE — dotnet-install.sh blocked (403 from proxy), apt package not found in feed.
+  - 4 open PRs: #554 (non-draft); #564, #521, #511 (drafts, skipped). Master at 1a10b75a.
+  - PHASE 1: No merges. #554 head unchanged at 998a32d0; mergeable_state=unknown — skipped per task rule. Build gate not attempted (mergeable_state gate triggered first; .NET unavailable regardless).
+  - PHASE 2: 0 unresolved review threads on #554. Nothing to fix.
+  - Master build/test: NOT ATTEMPTED (build gate down).
+
 - 2026-10-15 13:20Z (dependabot-automerge, two-hundred-and-thirtieth run): build gate UNAVAILABLE — dotnet-install.sh blocked (403 from proxy), apt package not found in feed.
   - 1 open Dependabot PR: #554 (dependabot[bot], Microsoft.OpenApi 2.12.2→3.10.2). Master at 7e794dcd.
   - #554: SKIPPED — mergeable_state=unknown (same as runs 226–229; NU1608 incompatibility persists).
