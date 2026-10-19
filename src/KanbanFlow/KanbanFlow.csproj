@@ -23,15 +23,15 @@
          MarkdownRendererTests guards the sanitizer this package backs - do not
          re-suppress this advisory. -->
     <PackageReference Include="HtmlSanitizer" Version="9.2.1039" />
-    <PackageReference Include="Markdig" Version="1.4.0" />
-    <PackageReference Include="Microsoft.AspNetCore.OpenApi" Version="10.0.12" />
-    <PackageReference Include="Microsoft.EntityFrameworkCore.Sqlite" Version="10.0.12" />
+    <PackageReference Include="Markdig" Version="1.4.1" />
+    <PackageReference Include="Microsoft.AspNetCore.OpenApi" Version="10.0.13" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Sqlite" Version="10.0.13" />
     <!-- LLM foundation (#218): provider-agnostic chat client. Microsoft.Extensions.AI
          supplies IChatClient; Microsoft.Extensions.AI.OpenAI is the OpenAI-compatible
          connector we point at ZeroRouter (:5256). Both are stable (non-preview) 10.x,
          pinned to the .NET 10 line like the EF Core packages above. -->
-    <PackageReference Include="Microsoft.Extensions.AI" Version="10.10.0" />
-    <PackageReference Include="Microsoft.Extensions.AI.OpenAI" Version="10.10.1" />
+    <PackageReference Include="Microsoft.Extensions.AI" Version="10.11.0" />
+    <PackageReference Include="Microsoft.Extensions.AI.OpenAI" Version="10.11.0" />
     <!-- Security pin (same pattern as the e_sqlite3 pin below): Microsoft.AspNetCore.OpenApi
          10.0.9 drags in Microsoft.OpenApi 2.0.0, flagged by advisory GHSA-v5pm-xwqc-g5wc
          (circular schema references may terminate OpenAPI parsing; vulnerable 2.x range <= 2.7.4).
