@@ -52,6 +52,12 @@ A review of the repository and a test run on 2026-09-26 filed findings as issues
 
 ## Entries (newest first)
 
+- 2026-10-21 16:00Z (scheduled PR monitor, two-hundred-and-sixty-eighth run): build gate UP (.NET 10.0.113 via Ubuntu 24.04 apt feed, installed fresh this run).
+  - 4 open PRs: #554 (non-draft); #564, #521, #511 (drafts, skipped). Master at 7ffaefc (run 267 journal).
+  - PHASE 1: 0 merges. #554 mergeable_state now CLEAN (changed from unknown). BUILD GATE FAILED — NU1608: `Microsoft.AspNetCore.OpenApi 10.0.13` requires `Microsoft.OpenApi (>= 2.12.2 && < 3.0.0)` but 3.11.0 resolved. Upstream constraint unchanged; MAJOR 2.x→3.x version bump; appropriate for owner review. Posted comment on PR.
+  - PHASE 2: 0 unresolved review threads on #554. Nothing to fix.
+  - Master (7ffaefc): build GREEN (0 warnings/0 errors), tests 1257/1259 passed — same 2 base-branch failures (filesystem has no independent creation time).
+
 - 2026-10-21 14:00Z (scheduled PR monitor, two-hundred-and-sixty-seventh run): build gate UP (.NET 10.0.113 via Ubuntu 24.04 apt feed, installed fresh this run).
   - 4 open PRs: #554 (non-draft); #564, #521, #511 (drafts, skipped). Master at e3a4b6c (run 266 journal).
   - PHASE 1: 0 merges. #554 mergeable_state=unknown — skipped per task rule. MAJOR 2.x→3.x version bump (unchanged from prior runs); appropriate for owner review.
