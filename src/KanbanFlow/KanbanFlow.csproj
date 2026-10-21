@@ -23,7 +23,7 @@
          MarkdownRendererTests guards the sanitizer this package backs - do not
          re-suppress this advisory. -->
     <PackageReference Include="HtmlSanitizer" Version="9.2.1039" />
-    <PackageReference Include="Markdig" Version="1.4.1" />
+    <PackageReference Include="Markdig" Version="1.4.2" />
     <PackageReference Include="Microsoft.AspNetCore.OpenApi" Version="10.0.13" />
     <PackageReference Include="Microsoft.EntityFrameworkCore.Sqlite" Version="10.0.13" />
     <!-- LLM foundation (#218): provider-agnostic chat client. Microsoft.Extensions.AI
