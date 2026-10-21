@@ -52,6 +52,12 @@ A review of the repository and a test run on 2026-09-26 filed findings as issues
 
 ## Entries (newest first)
 
+- 2026-10-21 02:00Z (scheduled PR monitor, two-hundred-and-sixty-first run): build gate UP (.NET 10.0.113 via Ubuntu 24.04 Microsoft apt feed, installed fresh this run).
+  - 5 open PRs: #575, #554 (non-draft); #564, #521, #511 (drafts, skipped). Master at 2186575 (run 260 journal).
+  - PHASE 1: 1 merge — #575 (Markdig 1.4.1→1.4.2, build GREEN 0 warnings/0 errors, 1257/1259, squash 2186575). #554 skipped — MAJOR version bump 2.x→3.x, appropriate for owner review.
+  - PHASE 2: 0 unresolved review threads on #554 (remaining non-draft PR). Nothing to fix.
+  - Master (2186575): build GREEN (0 warnings/0 errors), tests 1257/1259 passed — same 2 base-branch failures (filesystem has no independent creation time).
+
 - 2026-10-21 00:00Z (scheduled PR monitor, two-hundred-and-sixtieth run): build gate UP (.NET 10.0.113 via Ubuntu 24.04 Microsoft apt feed, installed fresh this run).
   - 7 open PRs: #574, #573, #572, #554 (non-draft); #564, #521, #511 (drafts, skipped). Master at c17476f (run 259 journal).
   - PHASE 1: 3 merges — #572 (nuget-minor-patch 5 updates, build GREEN, 1257/1259, squash 5182faf); #573 (playwright 1.64.0→1.64.1, build GREEN, 1257/1259, squash d5c3944); #574 (nuget-tests-minor-patch 7 updates, build GREEN, 1257/1259, squash 25e4103). #554 mergeable_state=unknown — skipped per task rule (MAJOR version bump 2.x→3.x).
