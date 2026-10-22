@@ -52,6 +52,10 @@ A review of the repository and a test run on 2026-09-26 filed findings as issues
 
 ## Entries (newest first)
 
+- 2026-10-22 13:21Z (scheduled dependabot-automerge, run): build gate NOT installed (moot — no mergeable Dependabot PRs).
+  - 1 open Dependabot PR: #554 (Microsoft.OpenApi 2.12.2→3.11.0). mergeable_state=unknown — skipped per task rule.
+  - Result: 0 merged, 0 rebased, 1 skipped (reason: mergeable_state=unknown).
+
 - 2026-10-22 12:26Z (scheduled PR monitor, two-hundred-and-ninety-fourth run): build gate UP (.NET 10.0.113 via Ubuntu 24.04 Microsoft apt feed, installed fresh this run).
   - 4 open PRs: #554 (non-draft); #564, #521, #511 (drafts, skipped). Master at 68df2d6 (journal commit from run 293).
   - PHASE 1: 0 merges. #554 mergeable_state=unknown — skipped per task rule. NU1608 MAJOR 2.x→3.x bump unchanged; appropriate for owner review.
