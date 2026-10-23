@@ -52,6 +52,12 @@ A review of the repository and a test run on 2026-09-26 filed findings as issues
 
 ## Entries (newest first)
 
+- 2026-10-23 14:12Z (scheduled PR monitor, three-hundred-and-nineteenth run): build gate UP (.NET 10.0.113 via Ubuntu 24.04 Microsoft apt feed, installed fresh this run).
+  - 4 open PRs: #554 (non-draft, mergeable=None/unknown); #564, #521, #511 (drafts, skipped). Master at 47257c7 (journal commit from run 318, 2026-10-23 13:12Z).
+  - PHASE 1: 0 merges. #554 mergeable=None (unknown) — skipped per task rule. Prior run 318 (13:12Z) confirmed NU1608 build failure (Microsoft.OpenApi 3.x incompatible with ASP.NET Core 10 OpenApi dependency); no new commits on branch since.
+  - PHASE 2: 0 unresolved review threads on #554. Nothing to fix.
+  - Master (47257c7): build GREEN (0 warnings/0 errors), tests 1257/1259 passed — same 2 base-branch failures (filesystem has no independent creation time).
+
 - 2026-10-23 13:12Z (scheduled dependabot-automerge, three-hundred-and-eighteenth run): build gate UP (.NET 10.0.113 via Ubuntu 24.04 Microsoft apt feed, installed fresh this run).
   - 1 open Dependabot PR: #554 (non-draft; initial state=unknown, resolved to CLEAN on re-fetch). Drafts #564, #521, #511 skipped (non-Dependabot authors).
   - PR #554: "chore(deps): Bump Microsoft.OpenApi from 2.12.2 to 3.11.0" — checked out branch `dependabot/nuget/src/KanbanFlow/Microsoft.OpenApi-3.10.2`.
