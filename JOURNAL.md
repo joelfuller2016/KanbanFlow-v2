@@ -52,6 +52,12 @@ A review of the repository and a test run on 2026-09-26 filed findings as issues
 
 ## Entries (newest first)
 
+- 2026-10-23 11:27Z (scheduled PR monitor, three-hundred-and-seventeenth run): build gate UP (.NET 10.0.113 via Ubuntu 24.04 Microsoft apt feed, installed fresh this run).
+  - 4 open PRs: #554 (non-draft, mergeable_state=unknown); #564, #521, #511 (drafts, skipped). Master at e6563cb (journal commit from run 316, 2026-10-23 10:27Z).
+  - PHASE 1: 0 merges. #554 mergeable_state=unknown — skipped per task rule. 0 reviews (CodeRabbit condition not met); MAJOR 2.x→3.x bump; appropriate for owner review.
+  - PHASE 2: 0 unresolved review threads on #554. Nothing to fix.
+  - Master (e6563cb): build GREEN (0 warnings/0 errors), tests 1257/1259 passed — same 2 base-branch failures (filesystem has no independent creation time).
+
 - 2026-10-23 10:27Z (scheduled PR monitor, three-hundred-and-sixteenth run): build gate UP (.NET 10.0.113 via Ubuntu 24.04 Microsoft apt feed, installed fresh this run).
   - 4 open PRs: #554 (non-draft, mergeable_state=unknown); #564, #521, #511 (drafts, skipped). Master at 6d47ed5 (journal commit from run 315, 2026-10-23 09:27Z).
   - PHASE 1: 0 merges. #554 mergeable_state=unknown — skipped per task rule. MAJOR 2.x→3.x bump; 0 reviews (CodeRabbit condition not met); appropriate for owner review.
