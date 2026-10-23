@@ -52,6 +52,14 @@ A review of the repository and a test run on 2026-09-26 filed findings as issues
 
 ## Entries (newest first)
 
+- 2026-10-23 13:12Z (scheduled dependabot-automerge, three-hundred-and-eighteenth run): build gate UP (.NET 10.0.113 via Ubuntu 24.04 Microsoft apt feed, installed fresh this run).
+  - 1 open Dependabot PR: #554 (non-draft; initial state=unknown, resolved to CLEAN on re-fetch). Drafts #564, #521, #511 skipped (non-Dependabot authors).
+  - PR #554: "chore(deps): Bump Microsoft.OpenApi from 2.12.2 to 3.11.0" — checked out branch `dependabot/nuget/src/KanbanFlow/Microsoft.OpenApi-3.10.2`.
+    - BUILD FAILED: `NU1608` — `Microsoft.AspNetCore.OpenApi 10.0.13` requires `Microsoft.OpenApi (>= 2.12.2 && < 3.0.0)`; version 3.11.0 resolved (major bump incompatible with current ASP.NET Core dependency). 2 errors, 0 warnings.
+    - NOT merged. Failure summary posted as PR comment (github.com/joelfuller2016/KanbanFlow-v2/pull/554#issuecomment-6365738953).
+  - Final summary: 0 merged; 1 blocked-by-build-failure (#554, NU1608 dependency constraint violation); 0 rebased; 0 skipped.
+  - Master at 5be7d04 (journal commit from run 317, 2026-10-23 11:27Z).
+
 - 2026-10-23 11:27Z (scheduled PR monitor, three-hundred-and-seventeenth run): build gate UP (.NET 10.0.113 via Ubuntu 24.04 Microsoft apt feed, installed fresh this run).
   - 4 open PRs: #554 (non-draft, mergeable_state=unknown); #564, #521, #511 (drafts, skipped). Master at e6563cb (journal commit from run 316, 2026-10-23 10:27Z).
   - PHASE 1: 0 merges. #554 mergeable_state=unknown — skipped per task rule. 0 reviews (CodeRabbit condition not met); MAJOR 2.x→3.x bump; appropriate for owner review.
