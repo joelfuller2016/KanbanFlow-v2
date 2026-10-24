@@ -52,6 +52,12 @@ A review of the repository and a test run on 2026-09-26 filed findings as issues
 
 ## Entries (newest first)
 
+- 2026-10-24 13:28Z (scheduled PR monitor, three-hundred-and-forty-second run): build gate UP (.NET 10.0.113 via Ubuntu 24.04 Microsoft apt feed, installed fresh this run).
+  - 4 open PRs: #554 (non-draft, mergeable_state=unknown); #564, #521, #511 (drafts, skipped). Master at 5c20d71 (GitHub workflow alternatives research, 2026-10-24 11:28Z).
+  - PHASE 1: 0 merges. #554 mergeable_state=unknown — skipped per task rule. Head sha e1bb8bde unchanged; NU1608 build failure noted since run 318; 0 review threads.
+  - PHASE 2: 0 unresolved review threads on #554. Nothing to fix.
+  - Master (5c20d71): build GREEN (0 warnings/0 errors), tests 1257/1259 passed — same 2 base-branch failures (filesystem has no independent creation time).
+
 - 2026-10-24 11:28Z (Codex, GitHub workflow alternatives): user asked for a skill or app providing KanbanFlow-like functionality using GitHub directly.
   - Source: origin/master at 1d74efbe5bd0735be8b4736ef5e96bd4847ac200; compared the README's local board/graph/agent workflow with current primary product documentation and skill source. Original local feature branch remains feat/unified-workflow-509 at b9d9ea0dcf32b17a2ec6a1f1f3b913243cb1e4f6; existing dirty files preserved.
   - Best native fit: GitHub Projects provides board/table/roadmap and custom fields, with native issue sub-issues and dependencies. Account Projects read access through gh project list succeeded; no matching Kanban-titled project found. Existing GitHub connector is installed but its exposed tools omit Projects; gh project is available. No project or issue was created or modified.
