@@ -52,6 +52,12 @@ A review of the repository and a test run on 2026-09-26 filed findings as issues
 
 ## Entries (newest first)
 
+- 2026-10-24 06:12Z (scheduled PR monitor, three-hundred-and-thirty-fifth run): build gate UP (.NET 10.0.113 via Ubuntu 24.04 Microsoft apt feed, installed fresh this run).
+  - 4 open PRs: #554 (non-draft, mergeable_state=unknown); #564, #521, #511 (drafts, skipped). Master at 9a527a1 (journal commit from run 334, 2026-10-24 05:12Z).
+  - PHASE 1: 0 merges. #554 mergeable_state=unknown — skipped per task rule. Head sha e1bb8bde unchanged; NU1608 build failure noted since run 318; 0 review threads.
+  - PHASE 2: 0 unresolved review threads on #554. Nothing to fix.
+  - Master (9a527a1): build GREEN (0 warnings/0 errors), tests 1257/1259 passed — same 2 base-branch failures (filesystem has no independent creation time).
+
 - 2026-10-24 05:12Z (scheduled PR monitor, three-hundred-and-thirty-fourth run): build gate UP (.NET 10.0.113 via Ubuntu 24.04 Microsoft apt feed, installed fresh this run).
   - 4 open PRs: #554 (non-draft, mergeable_state=unknown); #564, #521, #511 (drafts, skipped). Master at 6a2ddcf (journal commit from run 333, 2026-10-24 04:12Z).
   - PHASE 1: 0 merges. #554 mergeable_state=unknown — skipped per task rule. Head sha e1bb8bde unchanged; NU1608 build failure noted since run 318; title updated by Dependabot to 3.11.0 but no new commits. 0 check runs, 0 review threads.
