@@ -227,6 +227,11 @@ public static class SchemaPatcher
 
         Execute(connection, transaction, "CREATE INDEX IF NOT EXISTS IX_MemoryNodes_Scope_ScopeKey_Type ON MemoryNodes (Scope, ScopeKey, Type)");
         Execute(connection, transaction, "CREATE INDEX IF NOT EXISTS IX_MemoryNodes_SupersededById ON MemoryNodes (SupersededById)");
+        Execute(connection, transaction, """
+            CREATE INDEX IF NOT EXISTS IX_MemoryNodes_CurrentProjectContext
+            ON MemoryNodes (Scope, ScopeKey, CreatedAt DESC, Id DESC)
+            WHERE ValidTo IS NULL AND SupersededById IS NULL
+            """);
         Execute(connection, transaction, "CREATE INDEX IF NOT EXISTS IX_Observations_MemoryNodeId ON Observations (MemoryNodeId)");
         Execute(connection, transaction, "CREATE INDEX IF NOT EXISTS IX_MemoryRelations_FromType_FromId ON MemoryRelations (FromType, FromId)");
         Execute(connection, transaction, "CREATE INDEX IF NOT EXISTS IX_MemoryRelations_ToType_ToId ON MemoryRelations (ToType, ToId)");
