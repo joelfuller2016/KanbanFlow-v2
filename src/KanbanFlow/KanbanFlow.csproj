@@ -23,9 +23,9 @@
          MarkdownRendererTests guards the sanitizer this package backs - do not
          re-suppress this advisory. -->
     <PackageReference Include="HtmlSanitizer" Version="9.2.1039" />
-    <PackageReference Include="Markdig" Version="1.4.2" />
-    <PackageReference Include="Microsoft.AspNetCore.OpenApi" Version="10.0.13" />
-    <PackageReference Include="Microsoft.EntityFrameworkCore.Sqlite" Version="10.0.13" />
+    <PackageReference Include="Markdig" Version="1.5.0" />
+    <PackageReference Include="Microsoft.AspNetCore.OpenApi" Version="10.0.14" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Sqlite" Version="10.0.14" />
     <!-- LLM foundation (#218): provider-agnostic chat client. Microsoft.Extensions.AI
          supplies IChatClient; Microsoft.Extensions.AI.OpenAI is the OpenAI-compatible
          connector we point at ZeroRouter (:5256). Both are stable (non-preview) 10.x,
@@ -38,8 +38,8 @@
          That breaks the -warnaserror PR gate (NU1903). 2.7.5 is the first patched 2.x build and
          satisfies the open-ended minimum without NU1608. Flows transitively into
          KanbanFlow.Tests via the ProjectReference. -->
-    <PackageReference Include="Microsoft.OpenApi" Version="2.12.2" />
-    <PackageReference Include="ModelContextProtocol.AspNetCore" Version="2.2.0" />
+    <PackageReference Include="Microsoft.OpenApi" Version="2.13.0" />
+    <PackageReference Include="ModelContextProtocol.AspNetCore" Version="2.3.0" />
     <!-- Security pin (#214): EF Core Sqlite 10.0.9 drags in the native SQLite binary
          SQLitePCLRaw.lib.e_sqlite3 2.1.11, flagged by advisory GHSA-2m69-gcr7-jv3q
          (vulnerable range <= 2.1.11). That breaks the -warnaserror PR gate (NU1903).
