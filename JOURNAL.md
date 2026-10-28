@@ -52,6 +52,12 @@ A review of the repository and a test run on 2026-09-26 filed findings as issues
 
 ## Entries (newest first)
 
+- 2026-10-28 01:30Z (scheduled PR monitor, three-hundred-and-forty-sixth run): build gate UP (.NET 10.0.113 via Ubuntu 24.04 Microsoft apt feed, installed fresh this run).
+  - 6 open PRs: #576, #577, #578 (non-drafts, all mergeable=true/clean, CodeRabbit status=success, 0 review threads); #564, #521, #511 (drafts, skipped).
+  - PHASE 1: 2 merges. #576 (nuget-minor-patch group, 5 updates) — build GREEN, tests 1257/1259 (same 2 pre-existing base failures) — merged squash sha 4fb533d. #577 (nuget-tests-minor-patch group, 5 updates) — build GREEN, tests 1257/1259 — merged squash sha 9145a2f. #578 (Microsoft.OpenApi 2.12.2→3.11.0) — BUILD FAILED NU1608: Microsoft.AspNetCore.OpenApi 10.0.13 requires Microsoft.OpenApi < 3.0.0; left open with comment (https://github.com/joelfuller2016/KanbanFlow-v2/pull/578#issuecomment-6458217029).
+  - PHASE 2: 0 unresolved review threads on remaining PRs (#578, #564, #521, #511). Nothing to fix.
+  - Master (9145a2f): build GREEN (0 warnings/0 errors), tests 1257/1259 — same 2 base-branch failures (filesystem has no independent creation time).
+
 - 2026-10-24 16:28Z (scheduled PR monitor, three-hundred-and-forty-fifth run): build gate UP (.NET 10.0.113 via Ubuntu 24.04 Microsoft apt feed, installed fresh this run).
   - 4 open PRs: #554 (non-draft, mergeable_state=unknown); #564, #521, #511 (drafts, skipped). Master at 7d48927 (journal commit from run 344, 2026-10-24 15:28Z).
   - PHASE 1: 0 merges. #554 mergeable_state=unknown — skipped per task rule. Head sha e1bb8bde unchanged; NU1608 build failure noted since run 318; 0 review threads.
