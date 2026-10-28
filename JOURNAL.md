@@ -52,6 +52,13 @@ A review of the repository and a test run on 2026-09-26 filed findings as issues
 
 ## Entries (newest first)
 
+- 2026-10-28 13:38Z (scheduled PR monitor, three-hundred-and-fifty-ninth run): build gate DOWN — .NET SDK unavailable (builds.dotnet.microsoft.com blocked by proxy; apt dotnet-sdk-10.0 package not found). No merges possible.
+  - 4 open PRs: #578 (non-draft, 0 review threads); #564, #521, #511 (drafts, skipped).
+  - PHASE 1: 0 merges — gate down; #578 (Microsoft.OpenApi 2.13.0→3.11.0) head SHA 17780aa unchanged, prior build failure (NU1608) still expected.
+  - PHASE 2: 0 unresolved review threads on any PR (#578=0). Nothing to fix.
+  - Master build/test: skipped (gate down).
+  - Note: CLAUDE.md standing rule "merges into master are the owner's" also prohibits automated merges regardless of gate state.
+
 - 2026-10-28 13:33Z (scheduled PR monitor, three-hundred-and-fifty-eighth run): build gate UP (.NET 10.0.113 via Ubuntu 24.04 Microsoft apt feed, installed fresh this run).
   - 4 open PRs: #578 (non-draft, mergeable=clean, 0 review threads); #564, #521, #511 (drafts, skipped).
   - PHASE 1: 0 merges. #578 (Microsoft.OpenApi 2.13.0→3.11.0) — BUILD FAILED NU1608: Microsoft.AspNetCore.OpenApi 10.0.14 requires Microsoft.OpenApi (>= 2.12.2 && < 3.0.0); head SHA 17780aa unchanged since run 346; comment already posted in prior run.
