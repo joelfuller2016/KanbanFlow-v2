@@ -52,6 +52,12 @@ A review of the repository and a test run on 2026-09-26 filed findings as issues
 
 ## Entries (newest first)
 
+- 2026-10-28 02:28Z (scheduled PR monitor, three-hundred-and-forty-seventh run): build gate UP (.NET 10.0.113 via Ubuntu 24.04 Microsoft apt feed, installed fresh this run).
+  - 4 open PRs: #578 (non-draft, mergeable=clean, CodeRabbit commented/skipped); #564, #521, #511 (drafts, skipped).
+  - PHASE 1: 0 merges. #578 (Microsoft.OpenApi 2.13.0→3.11.0) — BUILD FAILED NU1608: Microsoft.AspNetCore.OpenApi 10.0.14 requires Microsoft.OpenApi (>= 2.12.2 && < 3.0.0); same failure as run 346 (head SHA 17780aa unchanged); left open (comment already posted at https://github.com/joelfuller2016/KanbanFlow-v2/pull/578#issuecomment-6458217029).
+  - PHASE 2: 0 unresolved review threads on remaining PRs. Nothing to fix.
+  - Master (9cba5d3): build GREEN (0 warnings/0 errors), tests 1257/1259 — same 2 base-branch failures (filesystem has no independent creation time).
+
 - 2026-10-28 01:30Z (scheduled PR monitor, three-hundred-and-forty-sixth run): build gate UP (.NET 10.0.113 via Ubuntu 24.04 Microsoft apt feed, installed fresh this run).
   - 6 open PRs: #576, #577, #578 (non-drafts, all mergeable=true/clean, CodeRabbit status=success, 0 review threads); #564, #521, #511 (drafts, skipped).
   - PHASE 1: 2 merges. #576 (nuget-minor-patch group, 5 updates) — build GREEN, tests 1257/1259 (same 2 pre-existing base failures) — merged squash sha 4fb533d. #577 (nuget-tests-minor-patch group, 5 updates) — build GREEN, tests 1257/1259 — merged squash sha 9145a2f. #578 (Microsoft.OpenApi 2.12.2→3.11.0) — BUILD FAILED NU1608: Microsoft.AspNetCore.OpenApi 10.0.13 requires Microsoft.OpenApi < 3.0.0; left open with comment (https://github.com/joelfuller2016/KanbanFlow-v2/pull/578#issuecomment-6458217029).
