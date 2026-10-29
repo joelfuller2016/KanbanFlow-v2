@@ -52,6 +52,12 @@ A review of the repository and a test run on 2026-09-26 filed findings as issues
 
 ## Entries (newest first)
 
+- 2026-10-29 18:34Z (scheduled PR monitor, three-hundred-and-ninetieth run): build gate DOWN — dotnet-install.sh blocked by proxy (403), apt package dotnet-sdk-10.0 not found.
+  - 4 open PRs: #578 (non-draft, mergeable=clean, 0 review threads); #564, #521, #511 (drafts, skipped).
+  - PHASE 1: 0 merges. #578 (Microsoft.OpenApi 2.13.0→3.11.0) skipped — gate down; same build failure (NU1608) expected as all prior runs since run 346.
+  - PHASE 2: 0 unresolved review threads on any PR. Nothing to fix.
+  - Master build/test: skipped (gate down). No notification sent (same blocked state as runs 388–389).
+
 - 2026-10-29 17:47Z (scheduled PR monitor, three-hundred-and-eighty-ninth run): build gate DOWN — dotnet-install.sh blocked by proxy (403), apt package dotnet-sdk-10.0 not found.
   - 4 open PRs: #578 (non-draft, mergeable=clean); #564, #521, #511 (drafts, skipped).
   - PHASE 1: 0 merges. #578 (Microsoft.OpenApi 2.13.0→3.11.0) skipped — gate down; same build failure (NU1608) as all prior runs since run 346.
