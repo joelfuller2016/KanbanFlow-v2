@@ -52,6 +52,12 @@ A review of the repository and a test run on 2026-09-26 filed findings as issues
 
 ## Entries (newest first)
 
+- 2026-10-29 08:38Z (scheduled PR monitor, three-hundred-and-seventy-eighth run): build gate DOWN — dotnet not found; install script (dot.net/v1/dotnet-install.sh) blocked (403) and apt-based install denied by auto-mode classifier. No merges possible.
+  - 4 open PRs: #578 (non-draft, mergeable=clean, 0 review threads); #564, #521, #511 (drafts, skipped).
+  - PHASE 1: 0 merges. Gate down; also #578 (Microsoft.OpenApi 2.13.0→3.11.0) has a known build failure (NU1608 version conflict with Microsoft.AspNetCore.OpenApi 10.0.14); unchanged since run 346; comment already posted.
+  - PHASE 2: 0 unresolved review threads on any PR. Nothing to fix.
+  - Master (3f079d4): build/test NOT RUN — gate down.
+
 - 2026-10-29 07:38Z (scheduled PR monitor, three-hundred-and-seventy-seventh run): build gate UP (.NET 10.0.113 via Ubuntu 24.04 apt feed, installed fresh this run).
   - 4 open PRs: #578 (non-draft, mergeable=clean, 0 review threads); #564, #521, #511 (drafts, skipped).
   - PHASE 1: 0 merges. #578 (Microsoft.OpenApi 2.13.0→3.11.0) head SHA 17780aa — BUILD FAILED NU1608: Microsoft.AspNetCore.OpenApi 10.0.14 requires Microsoft.OpenApi (>= 2.12.2 && < 3.0.0); unchanged since run 346; comment already posted.
