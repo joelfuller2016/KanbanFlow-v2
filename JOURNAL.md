@@ -52,6 +52,12 @@ A review of the repository and a test run on 2026-09-26 filed findings as issues
 
 ## Entries (newest first)
 
+- 2026-10-29 17:00Z (scheduled PR monitor, three-hundred-and-eighty-eighth run): build gate DOWN — dotnet-install.sh blocked by proxy, apt package dotnet-sdk-10.0 not found.
+  - 4 open PRs: #578 (non-draft, mergeable=clean); #564, #521, #511 (drafts, skipped).
+  - PHASE 1: 0 merges. #578 (Microsoft.OpenApi 2.13.0→3.11.0) head SHA 17780aa — gate down; would fail build regardless (NU1608: Microsoft.AspNetCore.OpenApi 10.0.14 requires Microsoft.OpenApi (>= 2.12.2 && < 3.0.0), same as all prior runs since run 346).
+  - PHASE 2: 0 unresolved review threads on any PR. Nothing to fix.
+  - Master HEAD ffc3007: build/test skipped (gate down).
+
 - 2026-10-29 16:10Z (scheduled PR monitor, three-hundred-and-eighty-seventh run): build gate UP (.NET 10.0.113 via Ubuntu 24.04 Microsoft apt feed, installed fresh this run).
   - 4 open PRs: #578 (non-draft, mergeable=clean, 0 review threads); #564, #521, #511 (drafts, skipped).
   - PHASE 1: 0 merges. #578 (Microsoft.OpenApi 2.13.0→3.11.0) head SHA 17780aa — BUILD FAILED NU1608: Microsoft.AspNetCore.OpenApi 10.0.14 requires Microsoft.OpenApi (>= 2.12.2 && < 3.0.0); same failure as all prior runs since run 346; comment already on PR (2026-10-28), no new comment posted.
