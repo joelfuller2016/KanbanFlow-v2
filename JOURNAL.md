@@ -52,6 +52,12 @@ A review of the repository and a test run on 2026-09-26 filed findings as issues
 
 ## Entries (newest first)
 
+- 2026-10-30 17:35Z (scheduled PR monitor, four-hundred-and-thirteenth run): build gate UP (.NET 10.0.114 via Ubuntu 24.04 Microsoft apt feed, installed fresh this run).
+  - 4 open PRs: #578 (non-draft, mergeable=clean, head SHA 17780aa); #564, #521, #511 (drafts, skipped).
+  - PHASE 1: 0 merges. #578 (Microsoft.OpenApi 2.13.0→3.11.0) — same known NU1608 build failure (Microsoft.AspNetCore.OpenApi 10.0.14 requires Microsoft.OpenApi >= 2.12.2 && < 3.0.0); comment already on PR (2026-10-28), no new comment posted.
+  - PHASE 2: 0 unresolved review threads on any PR (#578: 0; #564/#521/#511: drafts, skipped). Nothing to fix.
+  - Master (f6839fa): build GREEN (0 warnings/0 errors), tests 1257/1259 — same 2 pre-existing failures (filesystem has no independent creation time).
+
 - 2026-10-30 16:37Z (scheduled PR monitor, four-hundred-and-twelfth run): build gate UP (.NET 10.0.114 via Ubuntu 24.04 Microsoft apt feed, installed fresh this run).
   - 4 open PRs: #578 (non-draft, mergeable=clean, head SHA 17780aa); #564, #521, #511 (drafts, skipped).
   - PHASE 1: 0 merges. #578 (Microsoft.OpenApi 2.13.0→3.11.0) — same known NU1608 build failure (Microsoft.AspNetCore.OpenApi 10.0.14 requires Microsoft.OpenApi >= 2.12.2 && < 3.0.0); comment already on PR (2026-10-28), no new comment posted.
