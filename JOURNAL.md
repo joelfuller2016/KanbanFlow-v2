@@ -52,6 +52,12 @@ A review of the repository and a test run on 2026-09-26 filed findings as issues
 
 ## Entries (newest first)
 
+- 2026-10-30 13:44Z (scheduled dependabot-automerge run, four-hundred-and-eighth run): build gate UP (.NET 10.0.114 via Ubuntu 24.04 Microsoft apt feed, installed fresh this run).
+  - 1 open Dependabot PR: #578 (Microsoft.OpenApi 2.13.0→3.11.0, head 17780aa, mergeable=true, mergeStateStatus=clean).
+  - Build gate: FAILED — same known NU1608: Microsoft.AspNetCore.OpenApi 10.0.14 requires Microsoft.OpenApi (>= 2.12.2 && < 3.0.0); 3.11.0 is incompatible. PR not merged.
+  - Failure comment already on PR (posted 2026-10-28); no duplicate posted.
+  - Summary: 0 merged, 1 blocked-by-build-failure (#578 NU1608), 0 rebased, 0 skipped.
+
 - 2026-10-30 12:28Z (scheduled PR monitor, four-hundred-and-seventh run): **build gate DOWN** — .NET SDK unavailable (builds.dotnet.microsoft.com and Microsoft apt feed both blocked by proxy policy this run; apt-get permission also denied by auto mode classifier).
   - 4 open PRs: #578 (non-draft); #564, #521, #511 (drafts, skipped).
   - PHASE 1: 0 merges — build gate down; #578 could not be tested.
