@@ -52,6 +52,12 @@ A review of the repository and a test run on 2026-09-26 filed findings as issues
 
 ## Entries (newest first)
 
+- 2026-10-30 12:28Z (scheduled PR monitor, four-hundred-and-seventh run): **build gate DOWN** — .NET SDK unavailable (builds.dotnet.microsoft.com and Microsoft apt feed both blocked by proxy policy this run; apt-get permission also denied by auto mode classifier).
+  - 4 open PRs: #578 (non-draft); #564, #521, #511 (drafts, skipped).
+  - PHASE 1: 0 merges — build gate down; #578 could not be tested.
+  - PHASE 2: 0 unresolved review threads on any PR (#578: 0; #564: 9 all resolved; #521: 3 all resolved; #511: 91 all resolved). Nothing to fix.
+  - Master build+test: skipped — no .NET available.
+
 - 2026-10-30 11:25Z (scheduled PR monitor, four-hundred-and-sixth run): build gate UP (.NET 10.0.114 via Ubuntu 24.04 Microsoft apt feed, installed fresh this run).
   - 4 open PRs: #578 (non-draft, mergeable=clean, head SHA 17780aa); #564, #521, #511 (drafts, skipped).
   - PHASE 1: 0 merges. #578 (Microsoft.OpenApi 2.13.0→3.11.0) head SHA 17780aa — same known NU1608 build failure (Microsoft.AspNetCore.OpenApi 10.0.14 requires Microsoft.OpenApi >= 2.12.2 && < 3.0.0); comment already on PR (2026-10-28), no new comment posted.
