@@ -82,9 +82,8 @@ class CanvasController {
         this.#pending = true;
         try {
             await this.#callback.invokeMethodAsync(APPLY_LAYOUT, workspaceId, [update], revision);
-            const error = this.#root.closest('section').querySelector('[data-testid="canvas-input-error"]');
-            error.hidden = true;
-            error.textContent = '';
+            const error = this.#root.closest('section')?.querySelector('[data-testid="canvas-input-error"]');
+            if (error) { error.hidden = true; error.textContent = ''; }
         }
         catch {
             const error = this.#root.closest('section')?.querySelector('[data-testid="canvas-input-error"]');
