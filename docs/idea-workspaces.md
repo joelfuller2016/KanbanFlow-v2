@@ -10,7 +10,7 @@ Legacy Idea and Project documents remain complete and separately accessible. A f
 
 New persistence uses explicitly named `IdeaWorkspaceStates` and `IdeaWorkspaceReceipts` tables and the `KanbanFlow.Models.IdeaWorkspaces` / `KanbanFlow.Services.IdeaWorkspaces` namespaces. This avoids collision with unmerged PR #511's `Services.Workflows.WorkspaceService`, request/brief/plan tables and `/api/workflows` routes. Do not merge or cherry-pick that unrelated 145-file PR. Reuse its proven invariants and the current master's existing `TaskService.CreateInContextAsync` for atomic task publication. Existing idea tools and status enum ordinals stay compatible.
 
-Each state stores a versioned typed document: components, independent placements, connectors, threaded comments, draft/accepted plan revisions and per-client checkpoints. Content is kept in full. Supported types are frame, note, markdown, research, image, question, decision, checklist, table, plan and task-reference. Components are content records; placements have their own ID, component ID, parent frame, x/y/width/height, z-order and outline order. Removing a placement leaves content intact. An explicit component removal retains its complete before snapshot in history. Parent cycles, missing targets and cross-workspace moves fail visibly.
+Each state stores a versioned typed document: components, independent placements, connectors, threaded comments, draft/accepted plan revisions and per-client checkpoints. Content is kept in full. Supported types are frame, note, markdown, research, image, question, decision, checklist, table, plan and task-reference. Components are content records; placements have their own ID, component ID, parent frame-placement ID, x/y/width/height, z-order and outline order. Child coordinates are parent-relative; moving a frame preserves child offsets, and UI rendering sums ancestor positions for world coordinates. Removing a placement leaves content intact. An explicit component removal retains its complete before snapshot in history. Parent cycles, missing targets and cross-workspace moves fail visibly.
 
 ## Mutation and read consistency
 
@@ -37,3 +37,9 @@ The whiteboard is at `/ideas/workspace/{kind}/{id}`. Ideas gains an explicit gal
 ## Verification boundaries
 
 Implementation checks use real SQLite, current builds, isolated databases and actual REST/native/stdio clients. Browser checks prove UI/API agreement and keyboard/narrow-screen behavior. Automated checks do not supply owner usability feedback. No publishing, merging, access-policy change or live-board migration follows merely from this contract.
+
+## Storage verification
+
+IW-T02 storage/core is implemented. On October 31, 2026, Windows/PowerShell7.6.5/.NET SDK10.0.403, the focused `dotnet test tests/KanbanFlow.Tests/KanbanFlow.Tests.csproj --filter FullyQualifiedName~IdeaWorkspace` gate rebuilt current source and passed 51 tests, failed 0, skipped 0. Receipts are ignored under `_sandbox/579/storage-tests-gate.log` and `test-results/workspace-storage-gate.trx`. Independent review found no unresolved material storage issue.
+
+The tests exercise real SQLite, file restart, two independent concurrent writers, a deterministic WAL read/write interleaving, audit and late-receipt abort triggers, exact long-content/whitespace retention, separate placements/relative frame movement, cycles and foreign targets, original-source preservation, per-client/session checkpoints and property-order-independent retries. Both typed and manually parsed unsupported input fields fail explicitly. This proves the core service; REST/MCP/UI behavior is verified in later tasks.

@@ -1,4 +1,5 @@
 using KanbanFlow.Models;
+using KanbanFlow.Models.IdeaWorkspaces;
 using Microsoft.EntityFrameworkCore;
 
 namespace KanbanFlow.Data;
@@ -17,6 +18,8 @@ public class AppDbContext : DbContext
     public DbSet<TaskDependency> TaskDependencies => Set<TaskDependency>();
     public DbSet<ActivityEvent> ActivityEvents => Set<ActivityEvent>();
     public DbSet<Idea> Ideas => Set<Idea>();
+    public DbSet<IdeaWorkspaceState> IdeaWorkspaceStates => Set<IdeaWorkspaceState>();
+    public DbSet<IdeaWorkspaceReceipt> IdeaWorkspaceReceipts => Set<IdeaWorkspaceReceipt>();
     public DbSet<MemoryNode> MemoryNodes => Set<MemoryNode>();
     public DbSet<Observation> Observations => Set<Observation>();
     public DbSet<MemoryRelation> MemoryRelations => Set<MemoryRelation>();
@@ -25,6 +28,7 @@ public class AppDbContext : DbContext
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
+        IdeaWorkspaceModelConfiguration.Configure(modelBuilder);
         modelBuilder.Entity<Project>(e =>
         {
             e.HasMany(p => p.Features).WithOne(f => f.Project).HasForeignKey(f => f.ProjectId).OnDelete(DeleteBehavior.Cascade);

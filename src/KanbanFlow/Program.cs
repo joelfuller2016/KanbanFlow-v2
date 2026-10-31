@@ -4,6 +4,7 @@ using KanbanFlow;
 using KanbanFlow.Components;
 using KanbanFlow.Data;
 using KanbanFlow.Services;
+using KanbanFlow.Services.IdeaWorkspaces;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.AI;
 using OpenAI;
@@ -51,6 +52,7 @@ builder.Services.AddScoped<ITaskDependencyService, TaskDependencyService>();
 builder.Services.AddScoped<IExternalWorkItemService, ExternalWorkItemService>();
 // Ideas inbox service (#180) — same single-audit-boundary rule as ITaskService.
 builder.Services.AddScoped<IIdeaService, IdeaService>();
+builder.Services.AddScoped<IIdeaWorkspaceService, IdeaWorkspaceService>();
 // Bi-temporal memory store (#221) — same single-audit-boundary rule.
 builder.Services.AddScoped<IMemoryService, MemoryService>();
 // Brute-force cosine vector search over MemoryNode.EmbeddingBlob (#222, retargeted by the #249
@@ -175,6 +177,7 @@ using (var scope = app.Services.CreateScope())
     SchemaPatcher.EnsureMemoryFtsTable(db);
     SchemaPatcher.EnsureExternalWorkItemTables(db);
     SchemaPatcher.EnsureNestingSchema(db);
+    IdeaWorkspaceSchema.EnsureTables(db);
     SeedData.Initialize(db);
 }
 
