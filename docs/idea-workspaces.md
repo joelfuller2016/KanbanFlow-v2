@@ -2,6 +2,8 @@
 
 Implementation contract for [issue #579](https://github.com/joelfuller2016/KanbanFlow-v2/issues/579). Source baseline: `42f17b459f0bee0dce78da48d6a2234f75f6fda6`, October 31, 2026. The issue owns task completion. This guide records the concrete contracts and will be updated with observed usage as implementation proceeds.
 
+For the human workflow and actual application screenshots, see [An idea becomes a working project](idea-workspaces-storyboard.md). The examples below describe the same persisted records used by the UI, API and both MCP transports.
+
 ## Identity, compatibility and saved content
 
 A workspace has a stable key `idea:{positive-id}` or `project:{positive-id}`. These keys let the catalog include every existing idea and standalone project without creating dummy records or mutating on reads. An idea keeps its key after project association. A project has exactly one primary workspace, `project:{id}`; contributing idea workspaces retain their own notes and point at that project's accepted plan. The catalog lists each key once, with its kind and relationships explicit.
@@ -20,7 +22,7 @@ Caller/session checkpoints coexist. Saving or opening workspace B never overwrit
 
 Catalog pages use a stable snapshot cursor which identifies the complete ordered membership/filter generation. New inserts cannot cause gaps/duplicates in that traversal; invalid/expired cursors fail explicitly. Component and activity pages have explicit continuation and full detail reads; APIs never shorten authored text. Summary endpoints explicitly return metadata. Context returns original/current source documents, project identity/deep links, the complete current plan, checkpoints and component paging descriptors. Task-reference details use current domain task data.
 
-## Proposed public surface
+## Public surface
 
 REST lives under `/api/workspaces`; capability discovery is `/api/workspace-capabilities`. Read operations: catalog, context, components/detail and changes. Writes: create/open a source-backed workspace, component/content operations, atomic placement batches, comments, checkpoints, plan proposals/acceptance, project association and publication preview/apply. Every result exposes revision and successful operation identity. Both native MCP and the stdio wrapper expose these same operations and equivalent domain errors.
 
@@ -78,7 +80,7 @@ The warnings-as-errors rebuild and focused gate passed 119 cases. Named Playwrig
 
 Repeatable browser scripts are `workspace-gallery-smoke.browser.mjs`, `workspace-ui-smoke.browser.mjs` and `workspace-ui-recovery.browser.mjs` under `scripts`. Run from ignored scratch using a named Playwright CLI session pointed at disposable data. They retain labeled fixtures and screenshots. In this installed CLI, `.fill` of a 51,774-character plain textarea emitted 5,506 input events. Long fixtures therefore simulate one paste through the actual textarea/input handler; ordinary short-field and keyboard checks remain native. Tests wait for the exact target workspace identity and ready state, with bounded waits. The storage test injects only the browser storage boundary; persistence, audit and receipts remain real.
 
-## Plan and task identity contract — T06 implementation pending
+## Plan and task identity — T06 implemented locally
 
 Association keeps legacy Idea linkage and workspace linkage coherent in one transaction. `link_project` names an existing target and never copies idea narrative into that project's Description/Goals/Readme. Replacing a link requires the explicit expected current project ID. `create_project` creates a project from the complete idea documents while preserving its original workspace and terminal legacy promotion semantics. Both commands save the target project's full original documents before acknowledging the association. The same target capture occurs when a legacy promoted idea receives its first workspace edit.
 
@@ -87,3 +89,175 @@ The linked project's workspace owns the accepted delivery plan. Acceptance check
 Publication identity is independent of revision history: target project ID, originating workspace ID and originating item ID identify a mapping to one real Task/Feature. A server-generated canonical item ID separates two ideas that both call an item `step-1`. Accepted items retain their validated provenance; a draft copied from the canonical plan carries that provenance into the next version, while new items acquire the current source's provenance. Caller-supplied task IDs are never mapping authority. Dependencies are remapped from proposal-local item IDs to canonical IDs. Explicit relinking cannot reuse old-project task mappings in the new target.
 
 Preview performs no writes. Publication can select a subset of accepted items; required predecessors must already be published or included. It creates only new Tasks, criteria and dependency edges, using `TaskService.CreateInContextAsync` inside the same transaction as workspace states, mappings, audit and receipt. Existing mapped tasks, completed criteria, human edits and board ordering remain unchanged. A changed published specification, missing/foreign target, forged provenance, stale canonical revision or late insert failure fails visibly and rolls back. Deleted targets are never silently recreated. This bridge performs no GitHub publication.
+
+Pre-T06 accepted project plans retain their existing item IDs and history. Reads derive legacy provenance `(projectId, project:N, storedItemId, storedItemId)` in memory; the next audited write can persist that enrichment. New contributions receive server-generated canonical IDs. Two proposal entries that resolve to one canonical identity fail with `duplicate_canonical_identity` rather than dropping an entry.
+
+Successful module commands also observe complete legacy source documents. `document.sourceSnapshots` contains `{id,source,actor,capturedAt}` versions when the observed source differs from the latest capture, or from the earliest original when no capture exists. A linked target is observed in the same transaction; an existing target state retains its earliest `originalSource` and adds a new full version when current Description/Goals/Readme differ. Linked-idea context exposes those versions as `projectSourceSnapshots`; the project workspace retains them in its own document. The Source documents panel labels the actor as **Captured by**, without claiming authorship. Reads, preview and identical receipt replay append no versions. Edits outside this module made after the last capture remain recoverable only while the source still exists; the module does not claim to archive unobserved external changes.
+
+The current local checkpoint rebuilt with warnings as errors and passed 178 focused workspace cases, failed 0, skipped 0. Actual REST/native/stdio delivery checks passed nine groups, and the delivery browser run passed all 11 steps, including full captured source documents after deletion. The JavaScript script suite passed 339 cases. The complete verification script exited 0 with a clean build and all 1,437 .NET tests passing; its formatter check reported advisory drift. The subsequent full legacy UI regression passed 56 of 56 scenarios with source-aware readiness and focus waits. Current discovery measured 97 REST operations (92 application and five admin), 53 native MCP tools and 75 stdio tools, with eight page routes and 49 Razor components.
+
+After an actual app stop/start against the same disposable SQLite database, fresh native/stdio clients and REST recovered the canonical accepted plan, provenance, task identity, human-edited Done status/content/completed criteria, two caller checkpoints and captured source history. Identical publication replays through all three transports returned the original result without changing current state, history or task count. Capture and component-command receipts also replayed unchanged. The earlier component/checkpoint restart script passed again with a complete 132,058-character component. Repeat this using [workspace-delivery-restart-smoke.mjs](../scripts/workspace-delivery-restart-smoke.mjs), running its prepare and verify phases as separate processes with the app restart between them. All databases and receipts belong in ignored `_sandbox/`; do not point these fixture-writing scripts at a live board. These are automated local results; owner usability review remains pending before adoption.
+
+## Using the workspace from the UI or an agent
+
+This walkthrough is for a person developing ideas and for an MCP/API client that needs to return to the same work later. Use `/ideas` to discover cards, `/ideas/workspace/{kind}/{id}` to work, and **Project and Kanban** to associate a project and review publication. **Plan** can copy the accepted canonical plan into a new draft while retaining item provenance. The Kanban header links back to the primary project workspace with `?view=plan`. **Read current task status** opens a fresh read from Tasks; status editing stays in the Kanban.
+
+The native HTTP MCP server is at the application's `/mcp` route. The stdio wrapper uses the same domain operations through REST. Discover capabilities before composing payloads. Tool names below are available through both MCP transports; REST path parameters identify the workspace instead of putting `workspaceId` in its body.
+
+| Operation | MCP tool | REST |
+|---|---|---|
+| Capabilities | `get_workspace_capabilities` | `GET /api/workspace-capabilities` |
+| Complete catalog | `list_workspaces` | `GET /api/workspaces` |
+| Full context | `get_workspace_context` | `GET /api/workspaces/{id}/context` |
+| Component summaries/detail | `list_workspace_components`, `get_workspace_component` | `GET /api/workspaces/{id}/components`, `GET /api/workspaces/{id}/component?componentId=...` |
+| Module history | `get_workspace_changes` | `GET /api/workspaces/{id}/changes` |
+| Capture/open | `create_workspace` | `POST /api/workspaces` |
+| Generic mutation | `workspace_command` | `POST /api/workspaces/{id}/commands` |
+| Associate/create project | `link_workspace_project`, `create_workspace_project` | `POST /api/workspaces/{id}/project-association`, `POST /api/workspaces/{id}/project` |
+| Read-only delivery preview | `preview_workspace_publication` | `POST /api/workspaces/{id}/publication-preview` |
+| Publish reviewed tasks | `publish_workspace_plan` | `POST /api/workspaces/{id}/publication` |
+
+For `workspace_command`, send `workspaceId`, `operationId`, `expectedRevision`, `action`, `payload` and `actor`. Mutation aliases use those arguments without `action`. The REST generic command body omits `workspaceId`; REST convenience routes flatten their action fields alongside `operationId`, `expectedRevision` and `actor`. Preview is a read: it takes the two revision fields and optional selection/feature fields, with no operation ID or actor in its body.
+
+### 1. Discover every page, then retrieve full content
+
+The following PowerShell 7 helpers use the application's actual local address supplied by `KANBANFLOW_API_URL`. The write examples create idea/project/task records in that chosen instance.
+
+```powershell
+$workspaceApi = $env:KANBANFLOW_API_URL
+if (-not $workspaceApi) { throw 'Set KANBANFLOW_API_URL to the actual local app address.' }
+$workspaceApi = $workspaceApi.TrimEnd('/')
+function Invoke-WorkspaceApi([string]$Method, [string]$Path, [object]$Body = $null) {
+    $call = @{ Method = $Method; Uri = "$workspaceApi$Path" }
+    if ($null -ne $Body) {
+        $call.ContentType = 'application/json; charset=utf-8'
+        $call.Body = ConvertTo-Json -InputObject $Body -Depth 50
+    }
+    Invoke-RestMethod @call
+}
+function New-WorkspaceCommand([object]$Context, [string]$Action, [object]$Payload) {
+    @{ operationId = [guid]::NewGuid().ToString('N'); expectedRevision = $Context.revision
+       action = $Action; payload = $Payload; actor = 'guide-client' }
+}
+$catalog = @()
+$cursor = $null
+do {
+    $path = '/api/workspaces?limit=50'
+    if ($cursor) { $path += '&cursor=' + [uri]::EscapeDataString($cursor) }
+    $page = Invoke-WorkspaceApi GET $path
+    $catalog += $page.items
+    $cursor = $page.nextCursor
+} while ($cursor)
+```
+
+Keep `kind`, `status`, `q` and an explicit `limit` unchanged when continuing a filtered traversal. Follow `nextCursor` until null; `total` is the snapshot's membership. Cursors expire after ten minutes and can become unavailable after eviction or restart; use the actionable error to restart discovery. A catalog or component summary deliberately omits content. Get the workspace context and each required full component detail; URL-encode arbitrary component IDs in the detail query. Never treat one page or a summary as the complete idea.
+
+### 2. Capture an idea or open an existing project
+
+```powershell
+$capture = @{ operationId = [guid]::NewGuid().ToString('N'); actor = 'guide-client'
+    title = 'Garden sensory bench'; body = "# Concept`n`n  Keep this complete Markdown.  `n"
+    plan = "## Starting plan`n`n- Explore materials`n- Test a prototype`n" }
+$created = Invoke-WorkspaceApi POST '/api/workspaces' $capture
+$key = $created.workspaceId
+$context = Invoke-WorkspaceApi GET "/api/workspaces/$key/context"
+```
+
+Retain the exact `$capture` for an uncertain retry. To open an existing project, use a separate creation request containing `operationId`, `actor` and `projectId` only; it returns `project:N` and creates no dummy idea. It preserves existing workspace content. `body` and `plan` keep null, empty and authored whitespace semantics; supply complete strings. Existing legacy sources without saved state can be read at revision 0 without creating anything.
+
+### 3. Compose content and arrange independent placements
+
+```powershell
+$request = New-WorkspaceCommand $context 'create_component' @{
+    component = @{ id = 'materials-note'; type = 'research'; title = 'Material research'
+        content = "## Findings`n`n- Compare outdoor durability`n- Keep the final requirement`n"
+        url = 'https://example.org/materials' }
+    placement = @{ id = 'materials-appearance'; x = 40; y = 60
+        width = 360; height = 240; zIndex = 10; order = 6 }
+}
+$saved = Invoke-WorkspaceApi POST "/api/workspaces/$key/commands" $request
+$context = Invoke-WorkspaceApi GET "/api/workspaces/$key/context"
+$request = New-WorkspaceCommand $context 'move_components' @{
+    placements = @(@{ placementId = 'materials-appearance'; parentId = 'place-frame-research'
+        x = 20; y = 60; width = 360; height = 240; zIndex = 1; order = 5 })
+}
+$saved = Invoke-WorkspaceApi POST "/api/workspaces/$key/commands" $request
+```
+
+The parent above is the Research **placement** in a freshly initialized workspace. For an existing layout, resolve the actual frame placement from context first. Component IDs and placement IDs are independent. Child X/Y are parent-relative; moving a frame keeps the child's offsets. One `move_components` payload can move, resize, reparent and reorder several placements atomically. Omitted layout fields stay unchanged; `parentId:null` moves an appearance to the canvas root. `add_placement` reuses content; `remove_placement` preserves it. A task-reference component supplies a real `taskId` in the linked project, with current status read from Tasks.
+
+### 4. Save a checkpoint, switch ideas and resume
+
+Refresh context after each successful command. Use `save_checkpoint` with stable, caller-owned `clientId`/`sessionId` and a payload such as:
+
+```json
+{
+  "clientId": "guide-agent", "sessionId": "session-01",
+  "objective": "Choose a weatherproof material",
+  "focusedComponentIds": ["materials-note"],
+  "completedChanges": ["Captured the research card"],
+  "openQuestions": ["Which coating survives winter?"],
+  "nextActions": ["Compare two suppliers", "Draft the prototype criteria"],
+  "lastAcknowledgedActivityId": 0
+}
+```
+
+Zero acknowledges no prior activity. After processing changes, use the actual acknowledged position. Save B's checkpoint against B's key and component IDs; reopening A returns A's document and checkpoints. Browser buffers also remain separate per workspace and tab session. Agents manage their own stable caller IDs rather than sharing the browser's storage keys.
+
+To catch up, call `get_workspace_changes` or `/changes` with `afterActivityId` from the checkpoint. Process all pages through `nextCursor`, preserving the initial position/page size; acknowledge the returned `watermark` only after processing that batch. History is ascending and includes complete before/after JSON. It covers module workspace activity; refresh context/current task reads for external legacy edits.
+
+### 5. Link a project, propose and accept shared work
+
+Use `link_project` with `{projectId: N}` from the catalog. For replacement, include the exact `expectedCurrentProjectId` from context. Alternatively, an unpromoted, unlinked idea can use `create_project` with `{name: "Garden bench delivery"}`. Its accepted standalone plan, if any, is carried into the new canonical project plan. Both actions retain the idea key and update the legacy association atomically.
+
+Read fresh context before composing a proposal. The `propose_plan` payload contains a title, the canonical baseline and local item IDs:
+
+```json
+{
+  "title": "Bench prototype plan",
+  "expectedProjectPlanRevision": 1,
+  "items": [
+    { "id": "step-1", "title": "Choose materials", "description": "Compare complete supplier specifications.",
+      "acceptanceCriteria": ["Record durability and cost"], "dependsOn": [] },
+    { "id": "step-2", "title": "Build the prototype", "description": "Use the selected material.",
+      "acceptanceCriteria": ["Demonstrate the prototype"], "dependsOn": ["step-1"] }
+  ]
+}
+```
+
+Replace the illustrative canonical token `1` with the reviewed `context.projectPlanRevision`, and use `context.revision` in the mutation envelope. The server assigns the draft revision ID. Retrieve it from the operation's `ActivityEvent.AfterJson` document, or from refreshed `document.planRevisions` when its revision still matches the result. `result.activityId` identifies the exact source event; `/changes?afterActivityId={activityId-1}&limit=1` retrieves it even if another writer subsequently adds a draft.
+
+Accept using `accept_plan` with `{planRevisionId,expectedProjectPlanRevision}` and the current source revision. A project workspace's own draft save advances its canonical token; source snapshots and unrelated project edits can also advance it. Review the current shared plan before adopting a newer token. The UI disables stale acceptance and offers an explicit reviewed-current action. A linked idea's stale proposal is never silently restamped.
+
+To expand an existing plan, copy `context.acceptedPlan.items`, retaining each existing item's `provenance`; assign new local IDs and omit provenance/publication IDs for genuinely new items. Dependencies in the proposal refer to its item IDs. The server remaps them to canonical IDs and keeps prior accepted items that were omitted. Do not invent `publishedTaskId` or `publishedFeatureId`; supplied IDs are checked against the durable mapping. Relinking to a different project requires new provenance for new work and cannot reuse the old target's mappings.
+
+### 6. Preview, review and explicitly publish
+
+```powershell
+$context = Invoke-WorkspaceApi GET "/api/workspaces/$key/context"
+$previewBody = @{ expectedRevision = $context.revision
+    expectedProjectPlanRevision = $context.projectPlanRevision
+    itemIds = @($context.acceptedPlan.items | ForEach-Object { $_.id }) }
+$preview = Invoke-WorkspaceApi POST "/api/workspaces/$key/publication-preview" $previewBody
+# Review full Items, NewTaskCount, ExistingTaskCount, dependencies and feature selection.
+$request = @{ operationId = [guid]::NewGuid().ToString('N'); actor = 'guide-client'
+    expectedRevision = $preview.revision; action = 'publish_plan'
+    payload = @{ expectedProjectPlanRevision = $preview.projectPlanRevision
+        itemIds = $previewBody.itemIds } }
+$published = Invoke-WorkspaceApi POST "/api/workspaces/$key/commands" $request
+$published.publication.items
+```
+
+Use canonical IDs from `acceptedPlan.items`, including unpublished prerequisites, or omit `itemIds` for all. Preview performs no saves and includes full descriptions/criteria, existing live tasks and available feature choices. Optional `featureId` selects an existing project feature; optional `featureName` creates a new one for new tasks; do not provide both. With neither, the first publication uses the plan title and later publications reuse the durable feature. If selection or feature changes, preview again and publish the same reviewed fields/tokens. Existing mapped tasks are preserved even when a later operation selects them again.
+
+`publication.items` returns canonical/source identity, real `taskId`/`featureId` and `created`. Read `GET /api/tasks/{taskId}` or the native `get_task` tool for current task data; the workspace's task inspector also reads fresh. Update status in the existing Kanban UI, then refresh the inspector. Acceptance and publication never treat a copied status on an idea card as authority.
+
+### 7. Handle conflicts and uncertain outcomes without losing intent
+
+Keep the exact operation ID, actor, expected revision, action and payload until the result is known. A transport interruption calls for replaying that same envelope; a committed receipt returns `replayed:true` without applying the action again. Do not generate a new operation ID merely because its response was lost. Creation uses its separate global receipt scope and follows the same rule.
+
+A known `revision_conflict` or `project_plan_revision_conflict` calls for loading current context, comparing the complete saved content with the retained draft, and explicitly choosing a revised command. A different payload or actor with an already committed operation ID conflicts. Use a new operation ID for the new reviewed intent. `missing_publication_dependency`, `forged_provenance`, `duplicate_canonical_identity`, `published_specification_changed` and `publication_target_missing` identify issues to resolve before retrying; a deleted task/feature/project is not silently recreated. REST errors expose `code`, `message` and `status`; MCP preserves the domain code/status in its error response.
+
+Source contracts and payload descriptors are implemented in [IIdeaWorkspaceService](../src/KanbanFlow/Services/IdeaWorkspaces/IIdeaWorkspaceService.cs), [delivery DTOs](../src/KanbanFlow/Services/IdeaWorkspaces/IdeaWorkspaceDelivery.cs), [capabilities](../src/KanbanFlow/Services/IdeaWorkspaces/IdeaWorkspaceService.Capabilities.cs), [REST routes](../src/KanbanFlow/IdeaWorkspaceEndpoints.Writes.cs) and the [MCP delivery tools](../src/KanbanFlow/Mcp/IdeaWorkspaceMcpTools.Delivery.cs). Runtime receipts and the final source checkpoint belong in [the work journal](../JOURNAL.md).
+
+The guide's four literal PowerShell blocks were subsequently executed unchanged against the isolated local app, with the intervening checkpoint/project/propose/accept steps and exact source-activity draft lookup. The run passed all 56 assertions: complete 217-member catalog traversal, full strings including an 86,064-character B source, relative placement, A/B/A checkpoint isolation, read-only preview, real tasks/criteria, exact receipt replay and stable task IDs under a later publication operation. The ignored executable receipt is `_sandbox/579/guide-example.ps1`; it produced two real tasks in the disposable instance. This verifies the examples without supplying human adoption feedback.

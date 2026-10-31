@@ -724,7 +724,7 @@ the command beside it — not copied from the previous README, and not copied fr
 | Razor components | 49 | `rg --files src/KanbanFlow/Components -g '*.razor'` |
 | xUnit tests | 1,437 | `scripts/verify.ps1`, October 31, 2026: 1,437 passed, 0 failed/skipped |
 | In-app integration tests | 56 | `grep -c 'results.Add(await RunTest' src/KanbanFlow/Services/TestRunnerService.cs` (28 API + 22 service + 6 UI) |
-| Playwright e2e scenarios | 52 | `npm run test:ui` |
+| Playwright e2e scenarios | 56 | `npm run test:ui`, October 31, 2026: 56 passed, including gallery and preserved board checks in Settings |
 | Script unit tests (`scripts/*.mjs`) | 339 | `npm run test:scripts`, October 31, 2026: 339 passed, 0 failed/skipped |
 
 Corrections this revision made to the previous README: **53 → 60** endpoints previously (both memory
@@ -908,6 +908,7 @@ them.
 | [`docs/native-mcp-notes.md`](docs/native-mcp-notes.md) | Native in-process MCP implementation notes |
 | [`docs/ai-briefing-schema.md`](docs/ai-briefing-schema.md) | The agent briefing payload shape |
 | [`docs/idea-workspaces.md`](docs/idea-workspaces.md) | Persistent idea/project workspaces, UI/API/MCP composition, resume, plan/Kanban contracts and verification |
+| [`docs/idea-workspaces-storyboard.md`](docs/idea-workspaces-storyboard.md) | Seven-scene workflow with six screenshots from the working gallery, whiteboard, resume, plan, preview and Kanban |
 | [`docs/requirements.md`](docs/requirements.md) | Original v1 requirements — partly superseded by `ARCHITECTURE.md` |
 | [`docs/reviews/`](docs/reviews) | Historical review notes |
 

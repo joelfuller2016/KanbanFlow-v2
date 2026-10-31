@@ -883,7 +883,7 @@ public sealed class TestRunnerService(
                 throw new Exception("Settings page HTML missing the 'Run Tests' panel header");
         }));
 
-        results.Add(await RunTest("Ideas page renders a seeded idea as an idea card", "UI:Ideas", async () =>
+        results.Add(await RunTest("Idea gallery and preserved status board render a seeded idea", "UI:Ideas", async () =>
         {
             // IdeaService.ListAsync returns newest-first, so the idea we just created is
             // always on the first page of results regardless of how many ideas exist.
@@ -895,12 +895,22 @@ public sealed class TestRunnerService(
             try
             {
                 ct.ThrowIfCancellationRequested();
-                var resp = await http.GetAsync("/ideas", ct);
+                var gallery = await http.GetAsync("/ideas", ct);
+                if (!gallery.IsSuccessStatusCode)
+                    throw new Exception($"GET /ideas returned {(int)gallery.StatusCode}");
+                var galleryHtml = await gallery.Content.ReadAsStringAsync(ct);
+                foreach (var marker in new[] { "data-testid=\"workspace-gallery\"", $"data-testid=\"gallery-card-idea:{ideaId}\"", $"href=\"/ideas/workspace/idea/{ideaId}\"", title })
+                {
+                    if (!galleryHtml.Contains(marker, StringComparison.Ordinal))
+                        throw new Exception($"Idea gallery did not render its seeded workspace marker '{marker}'");
+                }
+
+                var resp = await http.GetAsync("/ideas/board", ct);
                 if (!resp.IsSuccessStatusCode)
-                    throw new Exception($"GET /ideas returned {(int)resp.StatusCode}");
+                    throw new Exception($"GET /ideas/board returned {(int)resp.StatusCode}");
                 var html = await resp.Content.ReadAsStringAsync(ct);
 
-                // #280: /ideas is a status board, not a flat grid — `ideas-grid` is gone. Assert the
+                // The original #280 status board remains at /ideas/board. Assert the
                 // board rendered AND that the card landed in the *New* column, which is a strictly
                 // stronger check than the old one: it tests the pipeline (CreateAsync always starts an
                 // idea at New, and the board fans it into that column) instead of a wrapper div.
