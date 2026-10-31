@@ -52,6 +52,12 @@ A review of the repository and a test run on 2026-09-26 filed findings as issues
 
 ## Entries (newest first)
 
+- 2026-10-31 23:19Z (scheduled PR monitor, four-hundred-and-forty-second run): build gate UP (.NET 10.0.114 via Ubuntu 24.04 Microsoft apt feed, installed fresh this run).
+  - 5 open PRs: #580 (non-draft, feat/579-idea-workspaces, head SHA now e21a7bc after new commits by owner b42bd16 + this run's fix e21a7bc); #578 (non-draft, head SHA 17780aa); #564, #521, #511 (drafts, skipped).
+  - PHASE 1: 0 merges. #580 mergeable_state=blocked — 4 unresolved review threads (1 MAJOR CodeRabbit RetryDraftStorage + 3 P2 chatgpt-codex). #578 mergeable_state=clean but build gate FAILS (same known NU1608: Microsoft.OpenApi 3.11.0 incompatible with Microsoft.AspNetCore.OpenApi 10.0.14 which requires < 3.0.0); no CodeRabbit review (check=skipped); not merged.
+  - PHASE 2 — #580: Found 7 unresolved threads (via CCR with correct `resolved` key; prior run's 0-count was a parsing bug). Owner had already pushed b42bd16 fixing WorkspaceCanvas null-guard and README count. This run fixed: (1) 20 000-item deep-chain DFS test to prove stack-overflow protection (IdeaWorkspaceServiceTests.cs); committed e21a7bc and pushed. Resolved 2 threads (JOURNAL.md false positive, deep-chain test addressed). Left 4 non-trivial threads with explanatory comments: MAJOR RetryDraftStorage data-integrity race (heavy lift, deferred), P2 delivery-selection relink, P2 ghost ContentDrafts buffer, P2 new-card draft overwrite. PR build+test on branch: GREEN (0 warnings/0 errors, 1492/1494 passed — 2 pre-existing filesystem failures).
+  - Master (bd05e77): build GREEN (0 warnings/0 errors), tests 1257/1259 — same 2 pre-existing failures.
+
 - 2026-10-31 23:32Z (PR #580 final confirmation, same session as run 441):
   - CCR review_threads check: 36 total threads, 0 unresolved non-outdated. All review work complete.
   - Received PR-subscription notification confirming watch active. No CI (repo has no Actions). No outstanding items.
