@@ -137,7 +137,10 @@ builder.Services.AddMcpServer()
 
 // Blazor
 builder.Services.AddRazorComponents()
-    .AddInteractiveServerComponents();
+    .AddInteractiveServerComponents()
+    // Full-content workspace editors can submit large Markdown documents. Raise
+    // the circuit message boundary explicitly; domain saves never trim the text.
+    .AddHubOptions(options => options.MaximumReceiveMessageSize = 8 * 1024 * 1024);
 
 // CORS for AI agents
 builder.Services.AddCors(options =>

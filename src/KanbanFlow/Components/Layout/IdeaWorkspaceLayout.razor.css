@@ -1,0 +1,4 @@
+.workspace-layout { padding: 1rem; max-width: 100%; }
+.workspace-skip-links { position: absolute; z-index: 9999; left: 1rem; top: 0; transform: translateY(-200%); display: flex; gap: .5rem; flex-wrap: wrap; padding: .5rem; background: white; border: 2px solid #2563eb; }
+.workspace-skip-links:focus-within { transform: translateY(0); }
+@media (max-width: 600px) { .workspace-layout { padding: .65rem; } }

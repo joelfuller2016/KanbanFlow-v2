@@ -1,0 +1,25 @@
+<fieldset class="border rounded p-3 mb-3" data-testid="plan-item-@editingItem.Id">
+    <legend class="h6 float-none w-auto px-1">Plan item</legend>
+    <label class="form-label" for="@($"plan-title-{editingItem.Id}")">Title</label><input id="@($"plan-title-{editingItem.Id}")" class="form-control mb-2" value="@editingItem.Title" @oninput="e => Change(editingItem with { Title = Text(e) })" data-testid="plan-item-title-@editingItem.Id" />
+    <label class="form-label" for="@($"plan-description-{editingItem.Id}")">Description / Markdown</label><textarea id="@($"plan-description-{editingItem.Id}")" rows="3" class="form-control mb-2" value="@editingItem.Description" @oninput="e => Change(editingItem with { Description = Text(e) })" data-testid="plan-item-description-@editingItem.Id"></textarea>
+    <label class="form-label" for="@($"plan-criteria-{editingItem.Id}")">Acceptance criteria (one per line)</label><textarea id="@($"plan-criteria-{editingItem.Id}")" rows="2" class="form-control mb-2" value="@editingItem.AcceptanceCriteria" @oninput="e => Change(editingItem with { AcceptanceCriteria = Text(e) })" data-testid="plan-item-criteria-@editingItem.Id"></textarea>
+    <p class="small mb-1">Depends on</p>
+    @foreach (var other in OtherItems.Where(i => i.Id != editingItem.Id))
+    {
+        <label class="d-block small" @key="other.Id"><input type="checkbox" class="form-check-input me-2" checked="@editingItem.DependsOn.Contains(other.Id)" @onchange="e => DependencyChanged(other.Id, (bool)(e.Value ?? false))" />@(other.Title.Length == 0 ? other.Id : other.Title)</label>
+    }
+    <button class="btn btn-link text-danger btn-sm mt-2" @onclick="() => OnRemove.InvokeAsync(editingItem.Id)">Remove item</button>
+</fieldset>
+
+@code {
+    [Parameter, EditorRequired] public WorkspacePlanItemDraft Item { get; set; } = default!;
+    [Parameter] public IReadOnlyList<WorkspacePlanItemDraft> OtherItems { get; set; } = [];
+    [Parameter] public EventCallback<WorkspacePlanItemDraft> OnChanged { get; set; }
+    [Parameter] public EventCallback<string> OnRemove { get; set; }
+    private readonly WorkspaceDraftInput<WorkspacePlanItemDraft> input = new(new());
+    private WorkspacePlanItemDraft editingItem => input.Value;
+    protected override void OnParametersSet() => input.Receive(Item, Item.Id);
+    private static string Text(ChangeEventArgs e) => e.Value?.ToString() ?? "";
+    private Task Change(WorkspacePlanItemDraft item) => input.ChangeAsync(item, OnChanged);
+    private Task DependencyChanged(string id, bool selected) => Change(editingItem with { DependsOn = selected ? [.. editingItem.DependsOn.Where(i => i != id), id] : [.. editingItem.DependsOn.Where(i => i != id)] });
+}

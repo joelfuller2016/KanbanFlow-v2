@@ -1,0 +1,56 @@
+<section class="workspace-panel" aria-labelledby="workspace-plan-heading" data-testid="workspace-plan">
+    <h2 id="workspace-plan-heading" class="h5">Develop the project plan</h2>
+    @if (Context.AcceptedPlan is { } accepted)
+    {
+        <h3 class="h6">Current accepted plan · v@(accepted.Version)</h3>
+        <WorkspacePlanVersion Plan="accepted" />
+    }
+    @foreach (var plan in Context.Document.PlanRevisions.OrderByDescending(p => p.Version))
+    {
+        <details class="border rounded p-3 mb-2" @key="plan.Id" data-testid="plan-version-@plan.Id">
+            <summary>@plan.Title · v@(plan.Version) · @plan.Status</summary>
+            <WorkspacePlanVersion Plan="plan" />
+            @if (plan.Status == "Draft")
+            {
+                <button class="btn btn-outline-success mt-2" disabled="@Busy" @onclick="() => Accept(plan.Id, plan.ExpectedProjectPlanRevision)" data-testid="plan-accept-@plan.Id">Accept this plan</button>
+                @if (Context.ProjectId is not null && plan.ExpectedProjectPlanRevision != Context.ProjectPlanRevision)
+                {
+                    <p class="text-warning small mt-2">This proposal used project-plan revision @(plan.ExpectedProjectPlanRevision?.ToString() ?? "none"). The loaded shared plan is revision @Context.ProjectPlanRevision. Review the current accepted plan above before rebasing acceptance.</p>
+                    <button class="btn btn-outline-secondary" disabled="@Busy" @onclick="() => Accept(plan.Id, Context.ProjectPlanRevision)" data-testid="plan-rebase-accept-@plan.Id">Accept after reviewing shared revision @Context.ProjectPlanRevision</button>
+                }
+            }
+        </details>
+    }
+    <h3 class="h6 mt-4">Propose a new version</h3>
+    @if (editing.BaseRevision is { } original && PlanStale)
+    {
+        <div class="alert alert-warning">Plan draft began at workspace revision @original and shared plan revision @(editing.BaseProjectPlanRevision?.ToString() ?? "none"). Review the current versions, then <button class="btn btn-link p-0" @onclick="Reapply" data-testid="plan-reapply">reapply to workspace revision @Context.Revision and shared plan revision @(Context.ProjectPlanRevision?.ToString() ?? "none")</button>.</div>
+    }
+    <label class="form-label" for="workspace-plan-title">Plan title</label>
+    <input id="workspace-plan-title" class="form-control mb-3" value="@editing.Title" @oninput="TitleChanged" data-testid="plan-title" />
+    @foreach (var item in editing.Items) { <WorkspacePlanItemEditor @key="item.Id" Item="item" OtherItems="editing.Items" OnChanged="ItemChanged" OnRemove="RemoveItem" /> }
+    <div class="d-flex flex-wrap gap-2">
+        <button class="btn btn-outline-secondary" @onclick="AddItem" data-testid="plan-add-item">Add plan item</button>
+        <button class="btn btn-primary" disabled="@(Busy || string.IsNullOrWhiteSpace(editing.Title) || editing.Items.Count == 0 || editing.Items.Any(i => string.IsNullOrWhiteSpace(i.Title)) || PlanStale)" @onclick="Propose" data-testid="plan-propose">Save draft version</button>
+    </div>
+</section>
+
+@code {
+    [Parameter, EditorRequired] public IdeaWorkspaceContext Context { get; set; } = default!;
+    [Parameter, EditorRequired] public WorkspacePlanDraft Draft { get; set; } = default!;
+    [Parameter] public bool Busy { get; set; }
+    [Parameter] public EventCallback<WorkspacePlanDraft> OnDraftChanged { get; set; }
+    [Parameter] public EventCallback<WorkspaceUiCommand> OnCommand { get; set; }
+    private readonly WorkspaceDraftInput<WorkspacePlanDraft> input = new(new());
+    private WorkspacePlanDraft editing => input.Value;
+    protected override void OnParametersSet() => input.Receive(Draft, Context.WorkspaceId, (Context.Revision, Draft.BaseRevision, Draft.BaseProjectPlanRevision));
+    private bool PlanStale => editing.BaseRevision.HasValue && (editing.BaseRevision != Context.Revision || editing.BaseProjectPlanRevision != Context.ProjectPlanRevision);
+    private Task Change(WorkspacePlanDraft draft) => input.ChangeAsync(draft with { BaseRevision = draft.BaseRevision ?? Context.Revision, BaseProjectPlanRevision = editing.BaseRevision.HasValue ? draft.BaseProjectPlanRevision : Context.ProjectPlanRevision }, OnDraftChanged);
+    private Task TitleChanged(ChangeEventArgs e) => Change(editing with { Title = e.Value?.ToString() ?? "" });
+    private Task Reapply() => Change(editing with { BaseRevision = Context.Revision, BaseProjectPlanRevision = Context.ProjectPlanRevision });
+    private Task AddItem() => Change(editing with { Items = [.. editing.Items, new()], BaseRevision = editing.BaseRevision ?? Context.Revision });
+    private Task ItemChanged(WorkspacePlanItemDraft item) => Change(editing with { Items = [.. editing.Items.Select(i => i.Id == item.Id ? item : i)], BaseRevision = editing.BaseRevision ?? Context.Revision });
+    private Task RemoveItem(string id) => Change(editing with { Items = [.. editing.Items.Where(i => i.Id != id).Select(i => i with { DependsOn = [.. i.DependsOn.Where(d => d != id)] })] });
+    private Task Propose() => OnCommand.InvokeAsync(WorkspaceUiCommand.Create("propose_plan", new { title = editing.Title, items = editing.Items.Select(i => new { id = i.Id, title = i.Title, description = i.Description, acceptanceCriteria = WorkspaceUiText.Lines(i.AcceptanceCriteria), dependsOn = i.DependsOn }), expectedProjectPlanRevision = editing.BaseProjectPlanRevision }, editing.BaseRevision ?? Context.Revision, "plan"));
+    private Task Accept(string id, long? baseline) => OnCommand.InvokeAsync(WorkspaceUiCommand.Create("accept_plan", new { planRevisionId = id, expectedProjectPlanRevision = baseline }, Context.Revision));
+}

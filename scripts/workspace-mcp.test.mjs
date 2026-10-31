@@ -77,7 +77,7 @@ test("workspace component/context/change forwarding preserves complete authored 
   await withAdapter(200, { content, revision: 11, nextCursor: null }, async (client, requests) => {
     for (const [name, args, path] of [
       ["get_workspace_context", { workspaceId: "idea:12" }, "/api/workspaces/idea%3A12/context"],
-      ["get_workspace_component", { workspaceId: "idea:12", componentId: "research-a" }, "/api/workspaces/idea%3A12/components/research-a"],
+      ["get_workspace_component", { workspaceId: "idea:12", componentId: "research-a" }, "/api/workspaces/idea%3A12/component"],
       ["list_workspace_components", { workspaceId: "project:8", limit: 2 }, "/api/workspaces/project%3A8/components"],
       ["get_workspace_changes", { workspaceId: "idea:12", afterActivityId: 900, limit: 50 }, "/api/workspaces/idea%3A12/changes"],
     ]) {
@@ -86,6 +86,17 @@ test("workspace component/context/change forwarding preserves complete authored 
     }
     const query = new URL(requests.at(-1).url, "http://fixture").searchParams;
     assert.equal(query.get("afterActivityId"), "900");
+  });
+});
+
+test("workspace component query addressing preserves slashes Unicode percent and query delimiters", async () => {
+  const componentId = "section/Ω?#%+";
+  await withAdapter(200, { component: { id: componentId, content: "Full source" } }, async (client, requests) => {
+    const result = workspaceToolValue(await client.call("get_workspace_component", { workspaceId: "idea:12", componentId }));
+    assert.equal(result.component.id, componentId);
+    const address = new URL(requests[0].url, "http://fixture");
+    assert.equal(address.pathname, "/api/workspaces/idea%3A12/component");
+    assert.equal(address.searchParams.get("componentId"), componentId);
   });
 });
 

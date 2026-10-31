@@ -1,0 +1,36 @@
+<section class="card mb-4" aria-labelledby="workspace-create-heading">
+    <div class="card-body">
+        <h2 id="workspace-create-heading" class="h5">Capture a new idea</h2>
+        <p class="text-muted small">Start with an idea and expand its canvas and plan as you go. Existing projects are already in the gallery.</p>
+        @if (error is not null) { <div class="alert alert-danger" role="alert">@error</div> }
+        <form @onsubmit="Submit" @onsubmit:preventDefault>
+            <label class="form-label" for="workspace-create-title">Title</label>
+            <input id="workspace-create-title" class="form-control mb-3" required maxlength="500" @bind="title" @bind:event="oninput" data-testid="workspace-create-title" />
+            <label class="form-label" for="workspace-create-body">Idea / Markdown</label>
+            <textarea id="workspace-create-body" class="form-control mb-3" rows="5" @bind="body" @bind:event="oninput" data-testid="workspace-create-body"></textarea>
+            <label class="form-label" for="workspace-create-plan">Starting plan (optional)</label>
+            <textarea id="workspace-create-plan" class="form-control mb-3" rows="4" @bind="plan" @bind:event="oninput" data-testid="workspace-create-plan"></textarea>
+            <button type="submit" class="btn btn-primary" disabled="@Busy" data-testid="workspace-create-submit">@(Busy ? "Creating…" : "Create idea workspace")</button>
+        </form>
+    </div>
+</section>
+
+@code {
+    [Parameter] public bool Busy { get; set; }
+    [Parameter] public EventCallback<IdeaWorkspaceCreate> OnCreate { get; set; }
+    private string title = "", body = "", plan = "";
+    private string? error;
+    private string? operationId;
+    private IdeaWorkspaceCreate? lastRequest;
+
+    private async Task Submit()
+    {
+        if (string.IsNullOrWhiteSpace(title)) { error = "Give the idea a title."; return; }
+        error = null;
+        var request = new IdeaWorkspaceCreate(operationId ??= Guid.NewGuid().ToString("N"), "browser", title, body, plan);
+        if (lastRequest is not null && request != lastRequest)
+            request = request with { OperationId = operationId = Guid.NewGuid().ToString("N") };
+        lastRequest = request;
+        await OnCreate.InvokeAsync(request);
+    }
+}

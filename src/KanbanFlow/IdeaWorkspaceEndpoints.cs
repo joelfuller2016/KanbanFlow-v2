@@ -21,6 +21,12 @@ public static partial class IdeaWorkspaceEndpoints
         app.MapGet("/api/workspaces/{workspaceId}/components/{componentId}", (string workspaceId,
             string componentId, IIdeaWorkspaceService service, CancellationToken ct)
             => Read(() => service.GetComponentAsync(workspaceId, componentId, ct)));
+        // ASP.NET routing intentionally keeps encoded slashes escaped in path values.
+        // The query form addresses every supported identifier without double-decoding
+        // literal percent sequences or changing the component's stored identity.
+        app.MapGet("/api/workspaces/{workspaceId}/component", (string workspaceId,
+            string? componentId, IIdeaWorkspaceService service, CancellationToken ct)
+            => Read(() => service.GetComponentAsync(workspaceId, componentId ?? "", ct)));
         app.MapGet("/api/workspaces/{workspaceId}/changes", (string workspaceId,
             IIdeaWorkspaceService service, string? cursor, int? afterActivityId, int? limit, CancellationToken ct)
             => Read(() => service.GetChangesAsync(workspaceId, cursor, afterActivityId, limit, ct)));

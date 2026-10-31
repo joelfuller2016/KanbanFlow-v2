@@ -1,0 +1,14 @@
+@inherits LayoutComponentBase
+@inject NavigationManager Navigation
+
+<div class="workspace-skip-links">
+    <a href="@(Navigation.Uri.Split('#')[0] + "#workspace-main")">Skip to canvas or outline</a>
+    <a href="@(Navigation.Uri.Split('#')[0] + "#workspace-inspector")">Skip to component editor</a>
+</div>
+<NavMenu />
+<main class="workspace-layout">@Body</main>
+<div id="blazor-error-ui" data-nosnippet>
+    The connection was interrupted. Reconnect to restore any draft saved in this browser.
+    <a href="." class="reload">Reconnect</a>
+    <span class="dismiss">×</span>
+</div>

@@ -1,0 +1,22 @@
+@if (Component.Type == "image" && Component.Url is not null)
+{
+    <img class="workspace-image" src="@Component.Url" alt="@Component.Title" loading="lazy" referrerpolicy="no-referrer" />
+    <MarkdownContent Markdown="@Component.Content" EmptyText="No caption." />
+}
+else if (Component.Type is "note" or "question")
+{
+    <p class="workspace-preserve-text mb-0">@Component.Content</p>
+}
+else if (Component.Type == "task-reference")
+{
+    <p class="small mb-1">Task #@Component.TaskId</p>
+    <MarkdownContent Markdown="@Component.Content" EmptyText="Select this card to see the task's current status." />
+}
+else
+{
+    <MarkdownContent Markdown="@Component.Content" EmptyText="No content yet." />
+}
+
+@code {
+    [Parameter, EditorRequired] public IdeaWorkspaceComponent Component { get; set; } = default!;
+}

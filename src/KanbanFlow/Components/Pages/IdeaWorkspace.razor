@@ -1,0 +1,86 @@
+@page "/ideas/workspace/{Kind}/{SourceId:int}"
+@layout IdeaWorkspaceLayout
+@rendermode InteractiveServer
+@inject IIdeaWorkspaceService Workspaces
+@inject NavigationManager Navigation
+@inject IJSRuntime JS
+@implements IAsyncDisposable
+
+<PageTitle>@(context?.Title ?? "Idea workspace") - KanbanFlow</PageTitle>
+@{ var renderedPageScope = new WorkspaceUiScope(workspaceId, generation); }
+<div class="workspace-shell" data-testid="workspace-shell" data-ready="@(Ready ? "true" : "false")" data-workspace-id="@workspaceId" data-revision="@context?.Revision">
+    <header class="workspace-header">
+        <div><a href="/ideas">← Idea gallery</a><h1 class="h3 mt-2 mb-1" data-testid="workspace-heading">@(context?.Title ?? "Idea workspace")</h1>
+            @if (context is not null) { <p class="small text-muted mb-0">@context.WorkspaceId · Revision @context.Revision · @context.Document.Components.Count components <span data-testid="workspace-draft-count">· @DirtyCount unsaved drafts</span></p> }
+        </div>
+        <div class="workspace-header-actions">
+            <label for="workspace-switcher" class="small">Jump to another idea or project</label>
+            <select id="workspace-switcher" class="form-select" value="@workspaceId" @onchange="args => SwitchWorkspace(renderedPageScope, args)" disabled="@(busy || !Ready)" data-testid="workspace-switcher">
+                @foreach (var item in catalog) { <option value="@item.WorkspaceId">@item.Title (@item.WorkspaceId)</option> }
+                @if (context is not null && catalog.All(c => c.WorkspaceId != context.WorkspaceId)) { <option value="@context.WorkspaceId">@context.Title</option> }
+            </select>
+            <div class="d-flex flex-wrap gap-2 mt-2">
+                <a href="/ideas/board" class="btn btn-sm btn-outline-secondary">Status board</a>
+                @if (context?.KanbanUrl is not null) { <a href="@context.KanbanUrl" class="btn btn-sm btn-outline-primary" data-testid="workspace-kanban-link">Open Kanban ↗</a> }
+                <button class="btn btn-sm btn-outline-secondary" @onclick="() => Refresh(renderedPageScope)" disabled="@busy" data-testid="workspace-refresh">Refresh saved context</button>
+            </div>
+        </div>
+    </header>
+    @if (error is not null) { <div class="alert alert-danger" role="alert" data-testid="workspace-error">@error</div> }
+    @if (storageError is not null) { <div class="alert alert-danger" role="alert" data-testid="workspace-storage-error">@storageError <button class="btn btn-outline-dark ms-2" @onclick="() => RetryDraftStorage(renderedPageScope)" data-testid="workspace-retry-draft">Retry browser draft storage</button></div> }
+    @if (notice is not null) { <p class="alert alert-success" role="status" data-testid="workspace-notice">@notice</p> }
+    @if (latestContext is not null)
+    {
+        <div class="alert alert-warning" role="status" data-testid="workspace-new-changes">New saved changes are available at revision @latestContext.Revision. Your local drafts remain separate.
+            <button class="btn btn-sm btn-outline-dark ms-2" @onclick="() => AdoptLatest(renderedPageScope)" disabled="@busy" data-testid="workspace-load-latest">Load latest and compare drafts</button>
+        </div>
+    }
+    @if (draft.Pending is { } pending)
+    {
+        <div class="alert alert-warning" role="alert" data-testid="workspace-pending-command">The result of <strong>@pending.Command.Action</strong> has not been acknowledged. Retry this exact operation to recover its saved result.
+            <button class="btn btn-sm btn-outline-dark ms-2" @onclick="() => RetryPending(renderedPageScope)" disabled="@busy" data-testid="workspace-retry-pending">Retry pending operation</button>
+        </div>
+    }
+    @if (context is null)
+    {
+        @if (error is null) { <p role="status">Loading workspace…</p> }
+    }
+    else
+    {
+        var renderedWorkspaceId = context.WorkspaceId;
+        var renderedScope = new WorkspaceUiScope(renderedWorkspaceId, generation);
+        <div class="d-flex flex-wrap justify-content-between gap-2 mb-3">
+            <div class="btn-group" role="group" aria-label="Workspace view">
+                <button class="btn @(view == "canvas" ? "btn-primary" : "btn-outline-secondary")" @onclick='() => view = "canvas"' aria-pressed="@(view == "canvas")" data-testid="workspace-view-canvas">Canvas</button>
+                <button class="btn @(view == "outline" ? "btn-primary" : "btn-outline-secondary")" @onclick='() => view = "outline"' aria-pressed="@(view == "outline")" data-testid="workspace-view-outline">Outline</button>
+            </div>
+            <button class="btn btn-primary" @onclick="() => NewComponent(renderedScope)" disabled="@ControlsDisabled" data-testid="component-add">Add component</button>
+        </div>
+        <div class="workspace-workbench" @key="(renderedScope, 1)">
+            <div id="workspace-main" tabindex="-1" class="workspace-main">
+                @if (view == "canvas") { <WorkspaceCanvas @key="renderedScope" WorkspaceId="@renderedWorkspaceId" Document="context.Document" Revision="context.Revision" SelectedPlacementId="@draft.SelectedPlacementId" Busy="ControlsDisabled" OnSelect="selection => Select(renderedScope, selection)" OnCommand="command => RunCommand(renderedScope, command)" /> }
+                else { <WorkspaceOutline Document="context.Document" SelectedComponentId="@draft.SelectedComponentId" DirtyIds="DirtyIds" OnSelect="selection => Select(renderedScope, selection)" /> }
+            </div>
+            <aside id="workspace-inspector" tabindex="-1" class="workspace-inspector">
+                <WorkspaceContentEditor Draft="SelectedContent" Context="context" ComponentTypes="componentTypes" Detail="selectedDetail" Busy="ControlsDisabled" OnDraftChanged="value => ContentChanged(renderedScope, value)" OnReapply="key => ReapplyContent(renderedScope, key)" OnCommand="command => RunCommand(renderedScope, command)" />
+                @if (draft.SelectedComponentId is not null)
+                {
+                    <WorkspaceLayoutEditor Context="context" ComponentId="@draft.SelectedComponentId" Draft="SelectedLayout" Busy="ControlsDisabled" OnDraftChanged="value => LayoutChanged(renderedScope, value)" OnSelect="selection => Select(renderedScope, selection)" OnReapply="key => ReapplyLayout(renderedScope, key)" OnCommand="command => RunCommand(renderedScope, command)" />
+                }
+            </aside>
+        </div>
+        <nav class="workspace-tabs" aria-label="Workspace collaboration panels">
+            @foreach (var name in PanelNames) { <button class="btn @(panel == name.Key ? "btn-primary" : "btn-outline-secondary")" @onclick="() => panel = name.Key" aria-pressed="@(panel == name.Key)" data-testid="workspace-tab-@name.Key">@name.Value</button> }
+        </nav>
+        <div class="workspace-collaboration" @key="(renderedScope, 2)">
+            @switch (panel)
+            {
+                case "plan": <WorkspacePlanPanel Context="context" Draft="draft.Plan" Busy="ControlsDisabled" OnDraftChanged="value => PlanChanged(renderedScope, value)" OnCommand="command => RunCommand(renderedScope, command)" /> break;
+                case "discussion": <WorkspaceDiscussion Context="context" Draft="draft.Discussion" Busy="ControlsDisabled" OnDraftChanged="value => DiscussionChanged(renderedScope, value)" OnCommand="command => RunCommand(renderedScope, command)" /> break;
+                case "connections": <WorkspaceConnections Context="context" Draft="draft.Connector" Busy="ControlsDisabled" OnDraftChanged="value => ConnectorChanged(renderedScope, value)" OnCommand="command => RunCommand(renderedScope, command)" /> break;
+                case "resume": <WorkspaceCheckpointPanel Context="context" Draft="draft.Checkpoint" ClientId="@clientId" SessionId="@sessionId" Busy="ControlsDisabled" OnDraftChanged="value => CheckpointChanged(renderedScope, value)" OnSelect="selection => Select(renderedScope, selection)" OnCommand="command => RunCommand(renderedScope, command)" /> break;
+                case "source": <WorkspaceSourceDocuments Context="context" /> break;
+            }
+        </div>
+    }
+</div>

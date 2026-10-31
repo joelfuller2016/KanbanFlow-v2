@@ -1,0 +1,34 @@
+<section class="workspace-panel" aria-labelledby="workspace-connections-heading">
+    <h2 id="workspace-connections-heading" class="h5">Connections</h2>
+    <ul class="list-unstyled">
+        @foreach (var connector in Context.Document.Connectors)
+        {
+            <li @key="connector.Id" class="border rounded p-2 mb-2" data-testid="connector-@connector.Id">@Title(connector.FromComponentId) → @Title(connector.ToComponentId) <strong>@connector.Label</strong>
+                <button class="btn btn-link btn-sm text-danger" disabled="@Busy" @onclick="() => Remove(connector.Id)" data-testid="connector-remove-@connector.Id">Remove</button>
+            </li>
+        }
+    </ul>
+    <label class="form-label" for="connector-from">From</label>
+    <select id="connector-from" class="form-select mb-2" value="@editing.FromComponentId" @onchange="e => Change(editing with { FromComponentId = Text(e) })" data-testid="connector-from"><option value="">Choose component</option>@foreach (var c in Context.Document.Components) { <option value="@c.Id">@c.Title</option> }</select>
+    <label class="form-label" for="connector-to">To</label>
+    <select id="connector-to" class="form-select mb-2" value="@editing.ToComponentId" @onchange="e => Change(editing with { ToComponentId = Text(e) })" data-testid="connector-to"><option value="">Choose component</option>@foreach (var c in Context.Document.Components) { <option value="@c.Id">@c.Title</option> }</select>
+    <label class="form-label" for="connector-label">Relationship</label>
+    <input id="connector-label" class="form-control mb-2" value="@editing.Label" @oninput="e => Change(editing with { Label = Text(e) })" data-testid="connector-label" />
+    <button class="btn btn-outline-primary" disabled="@(Busy || string.IsNullOrEmpty(editing.FromComponentId) || string.IsNullOrEmpty(editing.ToComponentId))" @onclick="Add" data-testid="connector-submit">Connect components</button>
+</section>
+
+@code {
+    [Parameter, EditorRequired] public IdeaWorkspaceContext Context { get; set; } = default!;
+    [Parameter, EditorRequired] public WorkspaceConnectorDraft Draft { get; set; } = default!;
+    [Parameter] public bool Busy { get; set; }
+    [Parameter] public EventCallback<WorkspaceConnectorDraft> OnDraftChanged { get; set; }
+    [Parameter] public EventCallback<WorkspaceUiCommand> OnCommand { get; set; }
+    private readonly WorkspaceDraftInput<WorkspaceConnectorDraft> input = new(new());
+    private WorkspaceConnectorDraft editing => input.Value;
+    protected override void OnParametersSet() => input.Receive(Draft, Context.WorkspaceId, Context.Revision);
+    private Task Change(WorkspaceConnectorDraft value) => input.ChangeAsync(value, OnDraftChanged);
+    private static string Text(ChangeEventArgs e) => e.Value?.ToString() ?? "";
+    private string Title(string id) => Context.Document.Components.FirstOrDefault(c => c.Id == id)?.Title ?? id;
+    private Task Add() => OnCommand.InvokeAsync(WorkspaceUiCommand.Create("create_connector", new { connector = new { fromComponentId = editing.FromComponentId, toComponentId = editing.ToComponentId, label = editing.Label } }, Context.Revision, "connector"));
+    private Task Remove(string id) => OnCommand.InvokeAsync(WorkspaceUiCommand.Create("remove_connector", new { connectorId = id }, Context.Revision));
+}

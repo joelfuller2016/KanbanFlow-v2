@@ -1,0 +1,74 @@
+<section class="workspace-panel" aria-labelledby="component-editor-heading" data-testid="workspace-component-editor">
+    <h2 id="component-editor-heading" class="h5">@(editing.ComponentId is null ? "Add a component" : "Edit component")</h2>
+    @if (editing.Dirty && editing.BaseRevision != Context.Revision)
+    {
+        <div class="alert alert-warning" role="alert" data-testid="component-draft-conflict">
+            Your draft started at revision @editing.BaseRevision. The loaded workspace is revision @Context.Revision.
+            <details class="mt-2"><summary>Compare full saved content with your draft</summary>
+                <h3 class="h6 mt-2">Before your edit</h3><pre class="workspace-source-text">@editing.OriginalContent</pre>
+                <h3 class="h6">Current saved content</h3><pre class="workspace-source-text" data-testid="component-current-content">@(Current?.Content ?? "The component is no longer present.")</pre>
+                <p>Your complete draft remains in the editor below.</p>
+            </details>
+            <button class="btn btn-sm btn-outline-dark mt-2" @onclick="() => OnReapply.InvokeAsync(editing.Key)" data-testid="component-reapply">@(editing.ComponentId is not null && Current is null ? "Keep draft as a new card" : "Use my draft against the loaded revision")</button>
+        </div>
+    }
+    <label class="form-label" for="component-type">Type</label>
+    <select id="component-type" class="form-select mb-3" value="@editing.Type" @onchange="TypeChanged" data-testid="component-type">
+        @foreach (var type in ComponentTypes) { <option value="@type">@type</option> }
+    </select>
+    <label class="form-label" for="component-title">Title</label>
+    <input id="component-title" class="form-control mb-3" maxlength="500" value="@editing.Title" @oninput="e => Change(editing with { Title = Text(e), Dirty = true })" data-testid="component-title" />
+    @if (editing.Type is "image" or "research")
+    {
+        <label class="form-label" for="component-url">@(editing.Type == "image" ? "Image URL" : "Source URL")</label>
+        <input id="component-url" type="url" class="form-control mb-3" value="@editing.Url" @oninput="e => Change(editing with { Url = Text(e), Dirty = true })" data-testid="component-url" />
+    }
+    @if (editing.Type == "task-reference")
+    {
+        <label class="form-label" for="component-task-id">Real task ID in this project</label>
+        <input id="component-task-id" type="number" min="1" class="form-control mb-3" value="@editing.TaskId" @oninput="TaskChanged" data-testid="component-task-id" />
+    }
+    <label class="form-label" for="component-content">@ContentLabel · complete content</label>
+    <textarea id="component-content" class="form-control workspace-editor-text mb-2" rows="12" value="@editing.Content" @oninput="e => Change(editing with { Content = Text(e), Dirty = true })" data-testid="component-content"></textarea>
+    <p class="text-muted small">@editing.Content.Length characters. Markdown is supported for documents, research, decisions, checklists, tables and plans.</p>
+    <button class="btn btn-primary" disabled="@(Busy || !editing.Dirty || editing.BaseRevision != Context.Revision || string.IsNullOrWhiteSpace(editing.Title))" @onclick="Save" data-testid="component-save">@(editing.ComponentId is null ? "Add to canvas" : "Save component")</button>
+    @if (editing.ComponentId is not null)
+    {
+        <button class="btn btn-outline-danger ms-2" disabled="@Busy" @onclick="Remove" data-testid="component-remove">Remove component</button>
+        <p class="text-muted small mt-2">Removing a component removes all its placements. Its complete before snapshot remains in history.</p>
+    }
+    @if (Detail?.Task is { } task)
+    {
+        <div class="alert alert-info mt-3" data-testid="component-task-status"><strong>@task.Name</strong><p class="mb-1">@task.Status · @task.Priority · @task.Assignee</p><a href="@($"/project/{task.ProjectId}")">Open task project</a></div>
+    }
+    @if (Detail?.TaskMissing == true) { <p class="text-warning mt-3" data-testid="component-task-missing">The referenced task was removed. This card's content is retained.</p> }
+    <details class="mt-3"><summary>Preview full draft</summary><MarkdownContent Markdown="@editing.Content" EmptyText="Empty content." /></details>
+</section>
+
+@code {
+    [Parameter, EditorRequired] public WorkspaceContentDraft Draft { get; set; } = default!;
+    [Parameter, EditorRequired] public IdeaWorkspaceContext Context { get; set; } = default!;
+    [Parameter] public IReadOnlyList<string> ComponentTypes { get; set; } = [];
+    [Parameter] public IdeaWorkspaceComponentDetail? Detail { get; set; }
+    [Parameter] public bool Busy { get; set; }
+    [Parameter] public EventCallback<WorkspaceContentDraft> OnDraftChanged { get; set; }
+    [Parameter] public EventCallback<string> OnReapply { get; set; }
+    [Parameter] public EventCallback<WorkspaceUiCommand> OnCommand { get; set; }
+    private readonly WorkspaceDraftInput<WorkspaceContentDraft> input = new(new());
+    private WorkspaceContentDraft editing => input.Value;
+    protected override void OnParametersSet() => input.Receive(Draft, Context.WorkspaceId + ":" + Draft.Key, (Context.Revision, Draft.BaseRevision));
+    private IdeaWorkspaceComponent? Current => Context.Document.Components.FirstOrDefault(c => c.Id == editing.ComponentId);
+    private string ContentLabel => editing.Type switch { "image" => "Caption", "question" => "Question and exploration", "table" => "Markdown table", "checklist" => "Markdown checklist", "decision" => "Decision and rationale", _ => "Content / Markdown" };
+    private static string Text(ChangeEventArgs e) => e.Value?.ToString() ?? "";
+    private Task Change(WorkspaceContentDraft next) => input.ChangeAsync(next, OnDraftChanged);
+    private Task TypeChanged(ChangeEventArgs e) => Change(editing with { Type = Text(e), TaskId = Text(e) == "task-reference" ? editing.TaskId : null, Dirty = true });
+    private Task TaskChanged(ChangeEventArgs e) => Change(editing with { TaskId = int.TryParse(Text(e), out var value) ? value : null, Dirty = true });
+    private Task Save()
+    {
+        var url = string.IsNullOrEmpty(editing.Url) ? null : editing.Url;
+        return editing.ComponentId is null
+            ? OnCommand.InvokeAsync(WorkspaceUiCommand.Create("create_component", new { component = new { type = editing.Type, title = editing.Title, content = editing.Content, url, taskId = editing.TaskId }, placement = new { x = 60 + Context.Document.Components.Count * 24, y = 60 + Context.Document.Components.Count * 24, width = editing.Type == "frame" ? 720 : 320, height = editing.Type == "frame" ? 480 : 220, zIndex = WorkspaceUiText.NextCanvasLayer(Context.Document) } }, editing.BaseRevision, "content:" + editing.Key))
+            : OnCommand.InvokeAsync(WorkspaceUiCommand.Create("update_component", new { componentId = editing.ComponentId, type = editing.Type, title = editing.Title, content = editing.Content, url, taskId = editing.TaskId }, editing.BaseRevision, "content:" + editing.Key));
+    }
+    private Task Remove() => OnCommand.InvokeAsync(WorkspaceUiCommand.Create("remove_component", new { componentId = editing.ComponentId }, Context.Revision, "content:" + editing.Key));
+}

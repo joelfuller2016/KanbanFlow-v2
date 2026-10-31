@@ -1,0 +1,12 @@
+<section class="workspace-panel" aria-labelledby="workspace-source-heading" data-testid="workspace-source-documents">
+    <h2 id="workspace-source-heading" class="h5">Source documents</h2>
+    @if (Context.SourceMissing) { <p class="text-warning">The source was removed. The saved source and workspace are retained.</p> }
+    @if (Context.Source is not null) { <WorkspaceSourceDocument Source="Context.Source" Label="Current source" /> }
+    <WorkspaceSourceDocument Source="Context.OriginalSource" Label="Original snapshot" />
+    @if (Context.ProjectSource is not null) { <WorkspaceSourceDocument Source="Context.ProjectSource" Label="Linked project" /> }
+    @if (Context.OriginalProjectSource is not null) { <WorkspaceSourceDocument Source="Context.OriginalProjectSource" Label="Original linked project snapshot" /> }
+</section>
+
+@code {
+    [Parameter, EditorRequired] public IdeaWorkspaceContext Context { get; set; } = default!;
+}

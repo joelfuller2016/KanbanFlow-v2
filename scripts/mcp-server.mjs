@@ -1576,8 +1576,10 @@ async function callTool(toolName, args) {
       const collection = toolName === "get_workspace_changes" ? "changes" : "components";
       return restJson(`/api/workspaces/${encodeURIComponent(workspaceRequiredString(args, "workspaceId"))}/${collection}?${query}`);
     }
-    case "get_workspace_component":
-      return restJson(`/api/workspaces/${encodeURIComponent(workspaceRequiredString(args, "workspaceId"))}/components/${encodeURIComponent(workspaceRequiredString(args, "componentId"))}`);
+    case "get_workspace_component": {
+      const query = new URLSearchParams({ componentId: workspaceRequiredString(args, "componentId") });
+      return restJson(`/api/workspaces/${encodeURIComponent(workspaceRequiredString(args, "workspaceId"))}/component?${query}`);
+    }
 
     // ── Knowledge-graph memory tools (#224) — forwarded to the native MCP server ──
     // The graph semantics live in the native tools; the wrapper forwards the call verbatim so

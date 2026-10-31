@@ -1,0 +1,27 @@
+<details class="mb-3">
+    <summary class="fw-semibold">@Label · @Source.Title</summary>
+    <p class="text-muted small mt-2">@Source.Kind:@Source.Id · @Source.Status</p>
+    @if (Source.Body is not null)
+    {
+        <h4 class="h6">@(Source.Kind == "project" ? "Description" : "Idea")</h4>
+        <MarkdownContent Markdown="@Source.Body" EmptyText="Empty document." />
+        <details><summary>Exact source text</summary><pre class="workspace-source-text">@Source.Body</pre></details>
+    }
+    @if (Source.Plan is not null)
+    {
+        <h4 class="h6 mt-3">@(Source.Kind == "project" ? "Goals" : "Original plan")</h4>
+        <MarkdownContent Markdown="@Source.Plan" EmptyText="Empty plan." />
+        <details><summary>Exact plan text</summary><pre class="workspace-source-text">@Source.Plan</pre></details>
+    }
+    @if (Source.Readme is not null)
+    {
+        <h4 class="h6 mt-3">Readme</h4>
+        <MarkdownContent Markdown="@Source.Readme" EmptyText="Empty readme." />
+        <details><summary>Exact readme text</summary><pre class="workspace-source-text">@Source.Readme</pre></details>
+    }
+</details>
+
+@code {
+    [Parameter, EditorRequired] public IdeaWorkspaceSource Source { get; set; } = default!;
+    [Parameter] public string Label { get; set; } = "Source";
+}

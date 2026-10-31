@@ -117,6 +117,14 @@ try {
     operationId: `${prefix}-mismatch`, expectedRevision: revision, componentId: "different-target", content: "must not replace", actor,
   }, 400);
   equal(await context(), beforeMismatch);
+  const reservedId = "section/Ω?#%+";
+  await command("native", "create_workspace_component", "create_component", {
+    component: { id: reservedId, title: "Identifier transport parity", content: "Full reserved-ID text  \r\n" },
+  });
+  const reservedDetail = await api("GET", `/api/workspaces/${key}/component?${new URLSearchParams({ componentId: reservedId })}`);
+  equal(await stdio("get_workspace_component", { workspaceId: key, componentId: reservedId }), reservedDetail);
+  equal(await native("get_workspace_component", { workspaceId: key, componentId: reservedId }), reservedDetail);
+  assert.equal(reservedDetail.component.id, reservedId);
   await command("stdio", "add_workspace_comment", "add_comment", { componentId: "smoke-research", text: "  Full comment Ω  \r\n" });
   await command("native", "save_workspace_checkpoint", "save_checkpoint", {
     clientId: "client-a", sessionId: prefix, objective: "  Continue A  ", focusedComponentIds: ["smoke-research"],

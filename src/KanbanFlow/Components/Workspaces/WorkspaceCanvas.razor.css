@@ -1,0 +1,14 @@
+.workspace-canvas-viewport { overflow: auto; height: min(75vh, 850px); min-height: 420px; border: 1px solid #cbd5e1; border-radius: .7rem; background: #f3f6f9; }
+.workspace-canvas { position: relative; width: var(--canvas-width); height: var(--canvas-height); background-image: radial-gradient(#cbd5e1 .8px, transparent .8px); background-size: 20px 20px; }
+.workspace-canvas-card { position: absolute; left: var(--card-x); top: var(--card-y); width: var(--preview-width, var(--card-width)); height: var(--preview-height, var(--card-height)); transform: translate(var(--preview-dx, 0), var(--preview-dy, 0)); z-index: var(--card-layer); display: flex; flex-direction: column; border: 1px solid #bac8d8; border-radius: .6rem; background: white; box-shadow: 0 3px 10px #1e293b12; min-width: 0; }
+.workspace-frame { background: #e7eff7d9; border: 2px dashed #96aabe; }
+.workspace-card-selected { outline: 3px solid #2563eb; outline-offset: 2px; }
+.workspace-drag-handle { border: 0; border-bottom: 1px solid #dbe3eb; background: #f8fafc; border-radius: .6rem .6rem 0 0; padding: .65rem .8rem; display: flex; align-items: start; flex-direction: column; text-align: left; width: 100%; cursor: grab; touch-action: none; overflow-wrap: anywhere; }
+.workspace-drag-handle:focus-visible { outline: 3px solid #2563eb; outline-offset: 2px; }
+.workspace-card-preview { padding: .8rem; overflow: auto; flex: 1; font-size: .9rem; overflow-wrap: anywhere; }
+.workspace-frame .workspace-card-preview { pointer-events: none; }
+.workspace-resize-handle { position: absolute; right: 0; bottom: 0; padding: 0 .2rem; color: #64748b; cursor: nwse-resize; touch-action: none; background: #ffffffd9; }
+.workspace-connectors { position: absolute; inset: 0; overflow: visible; pointer-events: none; z-index: 0; }
+.workspace-connectors line { stroke: #5d7895; stroke-width: 2; }
+.workspace-connectors text { fill: #34495e; font-size: 12px; paint-order: stroke; stroke: #f3f6f9; stroke-width: 4px; stroke-linejoin: round; }
+@media (max-width: 600px) { .workspace-canvas-viewport { height: 55vh; min-height: 320px; } }

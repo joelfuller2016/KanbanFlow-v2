@@ -1,0 +1,21 @@
+<article class="card h-100 workspace-gallery-card" data-testid="gallery-card-@Workspace.WorkspaceId">
+    <div class="card-body d-flex flex-column gap-2">
+        <div class="d-flex flex-wrap gap-2 small">
+            <span class="badge bg-light text-dark border">@(Workspace.Kind == "project" ? "Project" : "Idea")</span>
+            @if (Workspace.Status is not null) { <span>@Workspace.Status</span> }
+            @if (Workspace.IsLinked) { <span class="badge bg-success">Linked to project</span> }
+        </div>
+        <h2 class="h5"><a href="@Workspace.WorkspaceUrl" data-testid="gallery-open-@Workspace.WorkspaceId">@Workspace.Title</a></h2>
+        @if (Workspace.Tags is not null) { <p class="text-muted small mb-0">@Workspace.Tags</p> }
+        @if (Workspace.SourceMissing) { <p class="text-warning small">Source removed. Saved workspace retained.</p> }
+        <p class="text-muted small mt-auto mb-0">Revision @Workspace.Revision · Updated @Workspace.UpdatedAt.ToLocalTime().ToString("g")</p>
+        <div class="d-flex flex-wrap gap-3">
+            <a href="@Workspace.WorkspaceUrl">Open workspace →</a>
+            @if (Workspace.KanbanUrl is not null) { <a href="@Workspace.KanbanUrl">Kanban ↗</a> }
+        </div>
+    </div>
+</article>
+
+@code {
+    [Parameter, EditorRequired] public IdeaWorkspaceSummary Workspace { get; set; } = default!;
+}
