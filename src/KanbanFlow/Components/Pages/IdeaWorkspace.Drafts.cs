@@ -133,6 +133,11 @@ public partial class IdeaWorkspace
         var current = context.Document.Components.FirstOrDefault(c => c.Id == value.ComponentId);
         if (value.ComponentId is not null && current is null)
         {
+            if (key != "$new" && draft.ContentDrafts.TryGetValue("$new", out var newCard) && newCard.Dirty)
+            {
+                error = "Save your existing unsaved new card before recovering this one. Use Add component to return to that draft. Both complete drafts have been retained.";
+                return;
+            }
             var contents = new Dictionary<string, WorkspaceContentDraft>(draft.ContentDrafts);
             contents.Remove(key);
             contents["$new"] = value with { Key = "$new", ComponentId = null, BaseRevision = context.Revision };

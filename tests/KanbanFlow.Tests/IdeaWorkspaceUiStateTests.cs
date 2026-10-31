@@ -82,7 +82,10 @@ public sealed class IdeaWorkspaceUiStateTests
             ?? throw new Xunit.Sdk.XunitException($"IdeaWorkspace no longer has the restoration field {name}.");
         Field("context").SetValue(component, saved);
         if (fromCache)
+        {
             ((Dictionary<string, WorkspaceBrowserDraft>)Field("browserCache").GetValue(component)!)[saved.WorkspaceId] = previous;
+            ((HashSet<string>)Field("restoredBrowserWorkspaces").GetValue(component)!).Add(saved.WorkspaceId);
+        }
         var method = type.GetMethod("RestoreDraft", flags)
             ?? throw new Xunit.Sdk.XunitException("IdeaWorkspace no longer has its RestoreDraft block.");
         method.Invoke(component, [new WorkspaceUiScope(saved.WorkspaceId, 3), new WorkspaceBrowserSession("browser-client", "tab-session", fromCache ? new() : previous)]);

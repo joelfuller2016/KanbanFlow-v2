@@ -22,21 +22,33 @@ public partial class WorkspaceDeliveryPanel
     private WorkspaceDeliveryDraft editing => input.Value;
     protected override void OnParametersSet()
     {
-        input.Receive(Draft, Context.WorkspaceId, (Context.Revision, Context.ProjectPlanRevision));
+        input.Receive(Draft, Context.WorkspaceId, (Context.Revision, Context.ProjectId, Context.ProjectPlanRevision));
         if (featureProjectId != Context.ProjectId) { features = []; featureProjectId = Context.ProjectId; }
-        if (Preview is not null) features = Preview.Features;
+        if (Preview is not null && Preview.WorkspaceId == Context.WorkspaceId && Preview.ProjectId == Context.ProjectId)
+            features = Preview.Features;
     }
     private Task Change(WorkspaceDeliveryDraft value) => input.ChangeAsync(value, OnDraftChanged);
     private Task TargetChanged(ChangeEventArgs e) => Change(editing with { TargetProjectId = int.TryParse(e.Value?.ToString(), out var id) ? id : null });
     private Task ProjectNameChanged(ChangeEventArgs e) => Change(editing with { ProjectName = e.Value?.ToString() ?? "" });
-    private Task FeatureChanged(ChangeEventArgs e) => Change(editing with { FeatureId = int.TryParse(e.Value?.ToString(), out var id) ? id : null, FeatureName = "" });
+    private Task FeatureChanged(ChangeEventArgs e)
+    {
+        var selected = e.Value?.ToString();
+        if (string.IsNullOrEmpty(selected)) return Change(editing with { FeatureId = null, FeatureName = "" });
+        if (!int.TryParse(selected, out var id) || !features.Any(feature => feature.Id == id)) return Task.CompletedTask;
+        return Change(editing with { FeatureId = id, FeatureName = "" });
+    }
+    private Task FeatureChangedFromProject(int? renderedProjectId, ChangeEventArgs e)
+        => renderedProjectId == Context.ProjectId ? FeatureChanged(e) : Task.CompletedTask;
     private Task FeatureNameChanged(ChangeEventArgs e) => Change(editing with { FeatureName = e.Value?.ToString() ?? "", FeatureId = null });
     private bool IsSelected(string id) => editing.SelectedItemIds is null || editing.SelectedItemIds.Contains(id);
     private Task SelectionChanged(string id, bool selected)
     {
-        var ids = editing.SelectedItemIds ?? Context.AcceptedPlan!.Items.Select(i => i.Id).ToList();
+        if (Context.AcceptedPlan is not { } plan || !plan.Items.Any(item => item.Id == id)) return Task.CompletedTask;
+        var ids = editing.SelectedItemIds ?? plan.Items.Select(i => i.Id).ToList();
         return Change(editing with { SelectedItemIds = selected ? [.. ids.Where(i => i != id), id] : [.. ids.Where(i => i != id)] });
     }
+    private Task SelectionChangedFromProject(int? renderedProjectId, string id, bool selected)
+        => renderedProjectId == Context.ProjectId ? SelectionChanged(id, selected) : Task.CompletedTask;
     private Task Link() => OnCommand.InvokeAsync(WorkspaceUiCommand.Create("link_project", new { projectId = editing.TargetProjectId, expectedCurrentProjectId = Context.ProjectId }, Context.Revision));
     private Task CreateProject() => OnCommand.InvokeAsync(WorkspaceUiCommand.Create("create_project", new { name = string.IsNullOrWhiteSpace(editing.ProjectName) ? null : editing.ProjectName }, Context.Revision));
     private Task PreviewSelection() => OnPreview.InvokeAsync(new(Context.Revision, Context.ProjectPlanRevision!.Value,

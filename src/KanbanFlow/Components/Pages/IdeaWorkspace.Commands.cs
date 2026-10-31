@@ -46,9 +46,11 @@ public partial class IdeaWorkspace
                 publicationPreview = null;
                 publicationRequest = null;
                 previewSequence++;
-                draft = draft with { Delivery = draft.Delivery with { SelectedItemIds = null, FeatureId = null, FeatureName = "" } };
+                draft = draft with { Delivery = draft.Delivery with { SelectedItemIds = null, FeatureId = null, FeatureName = "",
+                    AssociationKnown = true, AssociationProjectId = context.ProjectId } };
             }
             latestContext = null;
+            ReconcileDeliveryDraft();
             UpdateCleanDrafts();
             EnsureSelectedDrafts();
             await ReadSelectedDetail(scope);

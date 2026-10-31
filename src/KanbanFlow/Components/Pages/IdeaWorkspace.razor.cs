@@ -13,6 +13,7 @@ public partial class IdeaWorkspace
     private IdeaWorkspaceComponentDetail? selectedDetail;
     private WorkspaceBrowserDraft draft = new();
     private readonly Dictionary<string, WorkspaceBrowserDraft> browserCache = [];
+    private readonly HashSet<string> restoredBrowserWorkspaces = [];
     private readonly Dictionary<string, WorkspaceBrowserDraftRecovery> draftRecoveries = [];
     private readonly List<IdeaWorkspaceSummary> catalog = [];
     private IReadOnlyList<string> componentTypes = [];
@@ -100,13 +101,22 @@ public partial class IdeaWorkspace
 
     private void RestoreDraft(WorkspaceUiScope scope, WorkspaceBrowserSession session)
     {
+        var cached = browserCache.GetValueOrDefault(scope.WorkspaceId);
+        if (cached is not null && session.Draft is not null && !restoredBrowserWorkspaces.Contains(scope.WorkspaceId))
+        {
+            clientId = "";
+            storageHealthy = false;
+            throw new System.Text.Json.JsonException("New edits were entered before the existing browser draft could be restored. Preserve the original stored draft before continuing; neither draft has been replaced.");
+        }
         clientId = session.ClientId;
         sessionId = session.SessionId;
-        var restored = browserCache.GetValueOrDefault(scope.WorkspaceId) ?? session.Draft ?? DraftFromCheckpoint();
+        var restored = cached ?? session.Draft ?? DraftFromCheckpoint();
         restored.Validate();
         draft = restored;
+        ReconcileDeliveryDraft();
         UpdateCleanDrafts();
         EnsureSelectedDrafts();
+        restoredBrowserWorkspaces.Add(scope.WorkspaceId);
     }
 
     private async Task LoadCatalog()
@@ -175,8 +185,10 @@ public partial class IdeaWorkspace
     private async Task AdoptLatest(WorkspaceUiScope scope)
     {
         if (!IsCurrent(scope) || latestContext is null || latestContext.WorkspaceId != scope.WorkspaceId) return;
+        var projectChanged = context?.ProjectId != latestContext.ProjectId;
         context = latestContext;
         latestContext = null;
+        ReconcileDeliveryDraft(projectChanged);
         UpdateCleanDrafts();
         EnsureSelectedDrafts();
         await ReadSelectedDetail(scope);
@@ -213,6 +225,7 @@ public partial class IdeaWorkspace
             if (!IsCurrent(scope)) return;
             draftRecoveries[scope.WorkspaceId] = preserved;
             browserCache[scope.WorkspaceId] = draft;
+            restoredBrowserWorkspaces.Add(scope.WorkspaceId);
             storedDraftRaw = storedDraftReadError = null;
             clientId = sessionId = "";
             storageError = error = null;

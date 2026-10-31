@@ -84,6 +84,8 @@ public sealed record WorkspaceCheckpointDraft
 public sealed record WorkspacePendingCommand(IdeaWorkspaceCommand Command, string? DraftSection, JsonElement? DraftAtSend = null);
 public sealed record WorkspaceDeliveryDraft
 {
+    public bool AssociationKnown { get; init; }
+    public int? AssociationProjectId { get; init; }
     public int? TargetProjectId { get; init; }
     public string ProjectName { get; init; } = "";
     public List<string>? SelectedItemIds { get; init; }
@@ -129,6 +131,7 @@ public sealed record WorkspaceBrowserDraft
             && Checkpoint.NextActions is not null && Checkpoint.FocusedComponentIds is not null
             && Checkpoint.FocusedComponentIds.All(id => id is not null), "checkpoint draft");
         Require(Delivery!.ProjectName is not null && Delivery.FeatureName is not null
+            && (Delivery.AssociationProjectId is null || Delivery.AssociationProjectId > 0)
             && (Delivery.SelectedItemIds is null || Delivery.SelectedItemIds.All(id => id is not null)), "delivery draft");
         if (Pending is { } pending)
             Require(pending.Command is { } command && command.OperationId is not null && command.Action is not null

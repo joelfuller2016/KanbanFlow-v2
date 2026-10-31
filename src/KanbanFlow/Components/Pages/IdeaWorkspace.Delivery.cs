@@ -15,6 +15,22 @@ public partial class IdeaWorkspace
     private IdeaWorkspaceTaskReference? inspectedTask;
     private IReadOnlyList<IdeaWorkspaceSummary> ProjectCatalog => catalog.Where(w => w.Kind == "project" && !w.SourceMissing).ToArray();
 
+    private void ReconcileDeliveryDraft(bool associationChanged = false)
+    {
+        if (context is null) return;
+        var delivery = draft.Delivery;
+        var changed = delivery.AssociationKnown
+            ? delivery.AssociationProjectId != context.ProjectId
+            : associationChanged || delivery.SelectedItemIds is not null || delivery.FeatureId is not null;
+        draft = draft with { Delivery = delivery with {
+            AssociationKnown = true, AssociationProjectId = context.ProjectId,
+            SelectedItemIds = changed ? [] : delivery.SelectedItemIds,
+            FeatureId = changed ? null : delivery.FeatureId } };
+        if (!changed) return;
+        ClearDeliveryView();
+        deliveryError = "The project association changed or these delivery choices predate project tracking. Item and existing-feature selections were cleared. Your proposed names and all other drafts were retained; review this project and select its plan items before previewing publication.";
+    }
+
     private void ClearDeliveryView()
     {
         publicationPreview = null;
@@ -32,7 +48,12 @@ public partial class IdeaWorkspace
     private async Task DeliveryChanged(WorkspaceUiScope scope, WorkspaceDeliveryDraft value)
     {
         if (!IsCurrent(scope)) return;
-        draft = draft with { Delivery = value };
+        if (value.AssociationKnown && value.AssociationProjectId != context?.ProjectId)
+        {
+            deliveryError = "The project association changed before these choices were applied. Review the current project and select its plan items again.";
+            return;
+        }
+        draft = draft with { Delivery = value with { AssociationKnown = true, AssociationProjectId = context?.ProjectId } };
         publicationPreview = null;
         publicationRequest = null;
         previewBusy = false;

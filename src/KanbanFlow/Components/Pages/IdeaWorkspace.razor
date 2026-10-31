@@ -78,6 +78,7 @@
             <div id="workspace-main" tabindex="-1" class="workspace-main">
                 @if (view == "canvas") { <WorkspaceCanvas @key="renderedScope" WorkspaceId="@renderedWorkspaceId" Document="context.Document" Revision="context.Revision" SelectedPlacementId="@draft.SelectedPlacementId" Busy="ControlsDisabled" OnSelect="selection => Select(renderedScope, selection)" OnCommand="command => RunCommand(renderedScope, command)" /> }
                 else { <WorkspaceOutline Document="context.Document" SelectedComponentId="@draft.SelectedComponentId" DirtyIds="DirtyIds" OnSelect="selection => Select(renderedScope, selection)" /> }
+                <WorkspaceRemovedDrafts Document="context.Document" Drafts="draft.ContentDrafts" SelectedComponentId="@draft.SelectedComponentId" Busy="@(busy || !Ready)" OnSelect="selection => Select(renderedScope, selection)" />
             </div>
             <aside id="workspace-inspector" tabindex="-1" class="workspace-inspector">
                 <WorkspaceContentEditor Draft="SelectedContent" Context="context" ComponentTypes="componentTypes" Detail="selectedDetail" Busy="ControlsDisabled" OnDraftChanged="value => ContentChanged(renderedScope, value)" OnReapply="key => ReapplyContent(renderedScope, key)" OnCommand="command => RunCommand(renderedScope, command)" />
