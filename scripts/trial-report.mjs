@@ -110,7 +110,21 @@ export const MUTATING_TOOLS = new Set([
   "delete_feature",
   "create_idea",
   "update_idea",
-  "promote_idea"
+  "promote_idea",
+  "create_workspace",
+  "workspace_command",
+  "create_workspace_component",
+  "update_workspace_component",
+  "remove_workspace_component",
+  "add_workspace_placement",
+  "remove_component_placement",
+  "move_workspace_components",
+  "add_workspace_connector",
+  "remove_workspace_connector",
+  "add_workspace_comment",
+  "save_workspace_checkpoint",
+  "propose_workspace_plan",
+  "accept_workspace_plan"
 ]);
 
 // Events that prove a task was under a claim. `TaskClaimStolen` counts: a takeover means a claim

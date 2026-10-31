@@ -27,15 +27,6 @@ public sealed partial class IdeaWorkspaceService
     private sealed record ChangeCursor(int Version, string Type, string WorkspaceId,
         int After, int LastId, int Watermark, int Limit, int Total, long Revision);
 
-    public IdeaWorkspaceCapabilities GetCapabilities() => new(
-        1, ComponentTypes,
-        ["create_component", "update_component", "remove_component", "add_placement", "remove_placement",
-            "move_components", "create_connector", "remove_connector", "add_comment", "save_checkpoint",
-            "propose_plan", "accept_plan"],
-        DefaultPageSize, MaximumPageSize, (int)SnapshotLifetime.TotalSeconds,
-        "ParentId names a frame placement; child X/Y are parent-relative.",
-        "Catalog/component summaries omit body text explicitly; context and detail retain complete authored text.");
-
     public async Task<IdeaWorkspacePage<IdeaWorkspaceSummary>> ListAsync(
         string? kind = null, string? status = null, string? q = null, string? cursor = null,
         int? limit = null, CancellationToken ct = default)

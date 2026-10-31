@@ -3,13 +3,15 @@ import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import { once } from "node:events";
 import { openWorkspaceStdio, workspaceToolValue } from "./workspace-transport.mjs";
-import { workspaceReadTools } from "./workspace-mcp-tools.mjs";
+import { workspaceReadTools, workspaceWriteTools } from "./workspace-mcp-tools.mjs";
 
 // These fixtures verify the real wrapper/HTTP adapter, not production workspace persistence.
 async function withAdapter(status, payload, run) {
   const requests = [];
   const server = createServer(async (request, response) => {
-    requests.push({ method: request.method, url: request.url });
+    let body = "";
+    for await (const chunk of request) body += chunk;
+    requests.push({ method: request.method, url: request.url, body: body ? JSON.parse(body) : undefined });
     response.writeHead(status, { "Content-Type": "application/json" });
     response.end(JSON.stringify(payload));
   });
@@ -30,6 +32,43 @@ test("workspace read tools are discoverable through actual stdio with complete p
     assert.equal(url.searchParams.get("q"), "plan Ω");
     assert.equal(url.searchParams.get("cursor"), "snapshot/next+");
     assert.equal(url.searchParams.get("limit"), "17");
+  });
+});
+
+test("workspace write tools are discoverable and preserve complete mutation payloads and revisions", async () => {
+  const content = "\r\n    exact content Ω  \r\n".repeat(3000);
+  const payload = { component: { id: "note-a", type: "markdown", title: "Source", content }, placement: { id: "place-a", x: 10, y: 20 } };
+  await withAdapter(200, { workspaceId: "idea:12", revision: 8, operationId: "op-a", componentId: "note-a" }, async (client, requests) => {
+    const tools = (await client.rpc("tools/list", {})).result.tools;
+    for (const expected of workspaceWriteTools) assert.ok(tools.some(tool => tool.name === expected.name));
+    const result = workspaceToolValue(await client.call("create_workspace_component", { workspaceId: "idea:12", operationId: "op-a", expectedRevision: 7, payload, actor: "test-writer" }));
+    assert.equal(result.revision, 8);
+    assert.deepEqual(requests[0], { method: "POST", url: "/api/workspaces/idea%3A12/commands", body: {
+      operationId: "op-a", expectedRevision: 7, action: "create_component", payload, actor: "test-writer",
+    } });
+  });
+});
+
+test("workspace capture preserves empty and complete authored text with an explicit actor", async () => {
+  const body = "\r\n    capture original Ω  \r\n".repeat(2000);
+  await withAdapter(200, { workspaceId: "idea:13", revision: 1 }, async (client, requests) => {
+    await client.call("create_workspace", { operationId: "capture", title: "A new idea", body, plan: "", actor: "capture-client" });
+    assert.deepEqual(requests[0], { method: "POST", url: "/api/workspaces", body: { operationId: "capture", title: "A new idea", body, plan: "", actor: "capture-client" } });
+  });
+});
+
+test("workspace tools refuse unknown top-level fields before any HTTP write", async () => {
+  await withAdapter(200, {}, async (client, requests) => {
+    for (const [name, args] of [
+      ["create_workspace", { operationId: "capture", title: "Idea", unsupportedReadme: "must not disappear" }],
+      ["create_workspace_component", { workspaceId: "idea:1", operationId: "add", expectedRevision: 0, payload: {}, content: "outside payload" }],
+      ["get_workspace_context", { workspaceId: "idea:1", unsupportedFilter: true }],
+    ]) {
+      const packet = await client.call(name, args);
+      assert.equal(packet.error.code, -32602);
+      assert.match(packet.error.message, /Unsupported workspace argument/);
+    }
+    assert.equal(requests.length, 0);
   });
 });
 

@@ -7,7 +7,7 @@ namespace KanbanFlow.Mcp;
 
 /// <summary>Idea/project canvas tools over the same durable services as REST and the human interface.</summary>
 [McpServerToolType]
-public static class IdeaWorkspaceMcpTools
+public static partial class IdeaWorkspaceMcpTools
 {
     [McpServerTool(Name = "get_workspace_capabilities")]
     [Description("Discover the workspace contract, supported component types, operations and paging limits before composing a workspace.")]

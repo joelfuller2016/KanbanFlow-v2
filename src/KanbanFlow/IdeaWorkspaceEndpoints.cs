@@ -2,10 +2,11 @@ using KanbanFlow.Services.IdeaWorkspaces;
 
 namespace KanbanFlow;
 
-public static class IdeaWorkspaceEndpoints
+public static partial class IdeaWorkspaceEndpoints
 {
     public static void MapIdeaWorkspaceEndpoints(this WebApplication app)
     {
+        MapIdeaWorkspaceWriteEndpoints(app);
         app.MapGet("/api/workspace-capabilities", (IIdeaWorkspaceService service)
             => Results.Ok(service.GetCapabilities()));
         app.MapGet("/api/workspaces", (IIdeaWorkspaceService service, string? kind,

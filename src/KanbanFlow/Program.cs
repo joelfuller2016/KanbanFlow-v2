@@ -131,7 +131,9 @@ builder.Services.AddOpenApi();
 // keeps it simple for local agent clients (no session handshake required).
 builder.Services.AddMcpServer()
     .WithHttpTransport(options => options.Stateless = true)
-    .WithToolsFromAssembly();
+    .WithToolsFromAssembly()
+    .WithRequestFilters(filters => filters.AddCallToolFilter(
+        KanbanFlow.Mcp.IdeaWorkspaceMcpArgumentValidation.RejectUnknownArguments));
 
 // Blazor
 builder.Services.AddRazorComponents()

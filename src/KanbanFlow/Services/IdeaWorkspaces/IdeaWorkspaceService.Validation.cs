@@ -48,7 +48,7 @@ public sealed partial class IdeaWorkspaceService
             throw Invalid("invalid_actor", "Actor must be a nonblank label of at most 200 characters, without control characters.");
     }
 
-    private static void ValidateJsonProperties(JsonElement value)
+    internal static void ValidateJsonProperties(JsonElement value)
     {
         if (value.ValueKind == JsonValueKind.Object)
         {

@@ -5,7 +5,23 @@ namespace KanbanFlow.Services.IdeaWorkspaces;
 public sealed record IdeaWorkspaceCapabilities(
     int ContractVersion, IReadOnlyList<string> ComponentTypes, IReadOnlyList<string> Actions,
     int DefaultPageSize, int MaximumPageSize, int SnapshotLifetimeSeconds,
-    string PlacementParentSemantics, string AuthoredContentPolicy);
+    string PlacementParentSemantics, string AuthoredContentPolicy)
+{
+    public IReadOnlyDictionary<string, IdeaWorkspacePropertyDescriptor> ComponentProperties { get; init; }
+        = new Dictionary<string, IdeaWorkspacePropertyDescriptor>();
+    public IdeaWorkspacePropertyDescriptor? PlacementProperties { get; init; }
+    public IReadOnlyDictionary<string, IdeaWorkspaceActionDescriptor> ActionPayloads { get; init; }
+        = new Dictionary<string, IdeaWorkspaceActionDescriptor>();
+}
+
+public sealed record IdeaWorkspacePropertyDescriptor(
+    IReadOnlyList<string> CreateFields, IReadOnlyList<string> EditableFields,
+    IReadOnlyList<string> RequiredFields, IReadOnlyDictionary<string, string> Constraints,
+    IReadOnlyList<string> ServerOwnedFields);
+
+public sealed record IdeaWorkspaceActionDescriptor(
+    IReadOnlyList<string> Fields, IReadOnlyList<string> RequiredFields,
+    IReadOnlyList<string> EnvelopeFields, string Rules);
 
 public sealed record IdeaWorkspacePage<T>(
     IReadOnlyList<T> Items, int Total, string? NextCursor, int Limit,

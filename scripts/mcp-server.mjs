@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { createUsageLogger } from "./usage-log.mjs";
-import { workspaceReadTools } from "./workspace-mcp-tools.mjs";
+import { workspaceReadTools, workspaceWriteTools, workspaceWriteActions } from "./workspace-mcp-tools.mjs";
 
 const apiBaseUrl = (process.env.KANBANFLOW_API_URL || "http://127.0.0.1:5123").replace(/\/$/, "");
 const defaultRestTimeoutMs = 10000;
@@ -53,6 +53,7 @@ const usageLogger = createUsageLogger();
 
 const tools = [
   ...workspaceReadTools,
+  ...workspaceWriteTools,
   {
     name: "list_projects",
     description: "List all projects with feature and task counts.",
@@ -1099,6 +1100,15 @@ async function handleMessage(message) {
     if (!isPlainObject(args)) {
       throw new McpError(-32602, "tools/call arguments must be an object.");
     }
+    const workspaceTool = [...workspaceReadTools, ...workspaceWriteTools].find(tool => tool.name === toolName);
+    if (workspaceTool) {
+      const allowed = workspaceTool.inputSchema.properties;
+      for (const name of Object.keys(args)) {
+        if (!Object.hasOwn(allowed, name)) {
+          throw new McpError(-32602, `Unsupported workspace argument '${name}'. It was not saved.`);
+        }
+      }
+    }
     // Record EVERY tool call, both outcomes (#477 §11). This is the only choke point every call
     // passes through, and the error path matters as much as the happy one: a refused claim (409)
     // is the collision signal, and a Definition-of-Done refusal (422) is the gate doing its job.
@@ -1509,6 +1519,37 @@ async function callTool(toolName, args) {
 
     case "get_workspace_capabilities":
       return restJson("/api/workspace-capabilities");
+    case "create_workspace": {
+      const body = { operationId: workspaceRequiredString(args, "operationId"), actor: optionalString(args, "actor") ?? "mcp-agent" };
+      for (const key of ["title", "body", "plan", "tags", "priority"]) {
+        const value = optionalString(args, key);
+        if (value !== undefined) body[key] = value;
+      }
+      const projectId = optionalInt(args, "projectId", { min: 1 });
+      if (projectId !== undefined) body.projectId = projectId;
+      return restJson("/api/workspaces", { method: "POST", body });
+    }
+    case "workspace_command":
+    case "create_workspace_component":
+    case "update_workspace_component":
+    case "remove_workspace_component":
+    case "add_workspace_placement":
+    case "remove_component_placement":
+    case "move_workspace_components":
+    case "add_workspace_connector":
+    case "remove_workspace_connector":
+    case "add_workspace_comment":
+    case "save_workspace_checkpoint":
+    case "propose_workspace_plan":
+    case "accept_workspace_plan": {
+      if (!isPlainObject(args.payload)) throw new McpError(-32602, "payload must be a JSON object.");
+      const action = workspaceWriteActions[toolName] ?? workspaceRequiredString(args, "action");
+      return restJson(`/api/workspaces/${encodeURIComponent(workspaceRequiredString(args, "workspaceId"))}/commands`, {
+        method: "POST",
+        body: { operationId: workspaceRequiredString(args, "operationId"), expectedRevision: requiredInt(args, "expectedRevision", { min: 0 }),
+          action, payload: args.payload, actor: optionalString(args, "actor") ?? "mcp-agent" },
+      });
+    }
     case "list_workspaces": {
       const query = new URLSearchParams();
       for (const key of ["kind", "status", "q", "cursor"]) {
@@ -1520,7 +1561,7 @@ async function callTool(toolName, args) {
       return restJson(`/api/workspaces?${query}`);
     }
     case "get_workspace_context":
-      return restJson(`/api/workspaces/${encodeURIComponent(requiredString(args, "workspaceId"))}/context`);
+      return restJson(`/api/workspaces/${encodeURIComponent(workspaceRequiredString(args, "workspaceId"))}/context`);
     case "list_workspace_components":
     case "get_workspace_changes": {
       const query = new URLSearchParams();
@@ -1533,10 +1574,10 @@ async function callTool(toolName, args) {
         if (after !== undefined) query.set("afterActivityId", String(after));
       }
       const collection = toolName === "get_workspace_changes" ? "changes" : "components";
-      return restJson(`/api/workspaces/${encodeURIComponent(requiredString(args, "workspaceId"))}/${collection}?${query}`);
+      return restJson(`/api/workspaces/${encodeURIComponent(workspaceRequiredString(args, "workspaceId"))}/${collection}?${query}`);
     }
     case "get_workspace_component":
-      return restJson(`/api/workspaces/${encodeURIComponent(requiredString(args, "workspaceId"))}/components/${encodeURIComponent(requiredString(args, "componentId"))}`);
+      return restJson(`/api/workspaces/${encodeURIComponent(workspaceRequiredString(args, "workspaceId"))}/components/${encodeURIComponent(workspaceRequiredString(args, "componentId"))}`);
 
     // ── Knowledge-graph memory tools (#224) — forwarded to the native MCP server ──
     // The graph semantics live in the native tools; the wrapper forwards the call verbatim so
@@ -1822,6 +1863,16 @@ function requiredString(args, name) {
     throw new McpError(-32602, `${name} is required.`);
   }
   return value.trim();
+}
+
+// Workspace receipt/target identities belong to the shared domain validator. Never
+// silently trim them into a different operation or target than the caller supplied.
+function workspaceRequiredString(args, name) {
+  const value = args[name];
+  if (typeof value !== "string" || value.length === 0) {
+    throw new McpError(-32602, `${name} is required.`);
+  }
+  return value;
 }
 
 // `hint` is optional: when a value is rejected for a reason the allowed-list alone does not explain

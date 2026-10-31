@@ -1,10 +1,12 @@
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using KanbanFlow.Models.IdeaWorkspaces;
 
 namespace KanbanFlow.Services.IdeaWorkspaces;
 
 public interface IIdeaWorkspaceService
 {
+    Task<IdeaWorkspaceCreateResult> CreateAsync(IdeaWorkspaceCreate request, CancellationToken ct = default);
     IdeaWorkspaceCapabilities GetCapabilities();
     Task<IdeaWorkspacePage<IdeaWorkspaceSummary>> ListAsync(string? kind = null, string? status = null,
         string? q = null, string? cursor = null, int? limit = null, CancellationToken ct = default);
@@ -18,8 +20,13 @@ public interface IIdeaWorkspaceService
     Task<IdeaWorkspaceMutationResult> ExecuteAsync(string workspaceId, IdeaWorkspaceCommand command, CancellationToken ct = default);
 }
 
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record IdeaWorkspaceCommand(
-    string OperationId, long ExpectedRevision, string Action, JsonElement Payload, string Actor);
+    [property: JsonRequired] string OperationId,
+    [property: JsonRequired] long ExpectedRevision,
+    [property: JsonRequired] string Action,
+    [property: JsonRequired] JsonElement Payload,
+    [property: JsonRequired] string Actor);
 
 public sealed record IdeaWorkspaceMutationResult(
     string WorkspaceId, long Revision, string OperationId, string Action,

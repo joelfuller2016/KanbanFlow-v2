@@ -25,3 +25,42 @@ export const workspaceReadTools = [
     afterActivityId: { type: "integer", minimum: 0, description: "Last acknowledged activity position; default zero. Keep unchanged while following a cursor." },
   }, ["workspaceId"]),
 ];
+
+export const workspaceWriteActions = Object.freeze({
+  create_workspace_component: "create_component",
+  update_workspace_component: "update_component",
+  remove_workspace_component: "remove_component",
+  add_workspace_placement: "add_placement",
+  remove_component_placement: "remove_placement",
+  move_workspace_components: "move_components",
+  add_workspace_connector: "create_connector",
+  remove_workspace_connector: "remove_connector",
+  add_workspace_comment: "add_comment",
+  save_workspace_checkpoint: "save_checkpoint",
+  propose_workspace_plan: "propose_plan",
+  accept_workspace_plan: "accept_plan",
+});
+const writeProperties = {
+  workspaceId,
+  operationId: { type: "string", description: "Unique operation identity. Reuse it with identical content to retry safely." },
+  expectedRevision: { type: "integer", minimum: 0, description: "Current workspace revision from get_workspace_context; stale writes conflict." },
+  payload: { type: "object", description: "Action payload matching get_workspace_capabilities descriptors. Complete authored strings are retained; unknown fields fail." },
+  actor: { type: "string", description: "Reported actor label, default mcp-agent; the existing local trust model is unchanged." },
+};
+export const workspaceWriteTools = [
+  tool("create_workspace", "Capture a new idea with full original text, or get/create the primary workspace of an existing projectId without making a dummy idea. Reuse operationId for the same request.", {
+    operationId: writeProperties.operationId, actor: writeProperties.actor,
+    title: { type: "string", description: "New idea title; omit when selecting an existing projectId." },
+    body: { type: ["string", "null"], description: "Complete authored source; whitespace is preserved." },
+    plan: { type: ["string", "null"], description: "Complete initial plan; whitespace is preserved." },
+    tags: { type: ["string", "null"] },
+    priority: { type: "string", enum: ["Low", "Medium", "High", "Critical"] },
+    projectId: { type: "integer", minimum: 1, description: "Existing project source; omit title/body/plan/tags/priority in this mode." },
+  }, ["operationId"]),
+  tool("workspace_command", "Apply one discovered workspace action through the same audited save boundary as the UI/API. Identical retries return the committed receipt.", {
+    ...writeProperties, action: { type: "string", enum: Object.values(workspaceWriteActions) },
+  }, ["workspaceId", "operationId", "expectedRevision", "action", "payload"]),
+  ...Object.entries(workspaceWriteActions).map(([name, action]) => tool(name,
+    `Apply ${action} using the capability-described payload. Saves atomically with audit and operation receipt; stale revisions or unsupported properties fail explicitly.`,
+    writeProperties, ["workspaceId", "operationId", "expectedRevision", "payload"])),
+];

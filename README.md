@@ -14,7 +14,7 @@
 | | |
 |---|---|
 | **Stack** | .NET 10 · Blazor Server · SQLite (EF Core 10) · Minimal APIs · Node 18+ for the MCP wrapper |
-| **Surfaces** | 6 UI routes · 78 REST operations · 35 native MCP tools · 57 Node-wrapper MCP tools (measured in the disposable app, October 31, 2026) |
+| **Surfaces** | 6 UI routes · 92 REST operations · 49 native MCP tools · 71 Node-wrapper MCP tools (measured in the disposable app, October 31, 2026) |
 | **Sync** | GitHub → board projection, plus one explicit additive board → GitHub issue-create path. Preview is the default; live create requires `--allow-write --task <id>` and a durable journal. No edit/close/delete path — see [Who owns what](#who-owns-what) |
 | **Tests** | 1,079 xUnit · 56 in-app integration · 52 Playwright e2e · 274 script unit · 2 smoke suites — [all local, no CI](#deliberate-non-features) |
 | **Runs at** | `http://127.0.0.1:5123` — localhost only, no auth, no Docker, no cloud |
@@ -715,11 +715,11 @@ the command beside it — not copied from the previous README, and not copied fr
 
 | Surface | Count | Command that produced it |
 |---|---:|---|
-| REST operations (app) | 73 | Actual OpenAPI `/api/` operations excluding `/api/admin/`, including workspace routes |
+| REST operations (app) | 87 | Actual OpenAPI `/api/` operations excluding `/api/admin/`, including workspace routes |
 | REST operations (admin) | 5 | Actual OpenAPI `/api/admin/` operations |
-| **REST operations total** | **78** | Actual OpenAPI operation inventory, October 31, 2026 |
-| Native MCP tools (`POST /mcp`) | 35 | Actual `tools/list`; source inventory covers every file under `src/KanbanFlow/Mcp`, including `IdeaWorkspaceMcpTools.cs` |
-| Node-wrapper MCP tools | 57 | Actual `tools/list` over stdio; [workspace verification and transport notes](docs/idea-workspaces.md) |
+| **REST operations total** | **92** | Actual OpenAPI operation inventory, October 31, 2026 |
+| Native MCP tools (`POST /mcp`) | 49 | Actual `tools/list`; source inventory covers every file under `src/KanbanFlow/Mcp`, including workspace read/write tools |
+| Node-wrapper MCP tools | 71 | Actual `tools/list` over stdio; [workspace verification and transport notes](docs/idea-workspaces.md) |
 | Blazor routes | 6 | `grep -rn '@page' src/KanbanFlow/Components/ \| sort -u` → `/`, `/Error`, `/ideas`, `/memory`, `/project/{Id:int}`, `/settings` |
 | Razor components | 28 | `find src/KanbanFlow/Components -name '*.razor' \| wc -l` |
 | xUnit tests | 1,079 | `dotnet test tests/KanbanFlow.Tests` |
