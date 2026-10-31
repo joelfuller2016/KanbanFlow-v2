@@ -524,6 +524,92 @@ public sealed class IdeaWorkspaceServiceTests
     }
 
     [Fact]
+    public async Task RemovedComponentDiscussion_AcceptsRepliesOnItsHistoricalAnchor_AndPreservesAuthoredText()
+    {
+        using var factory = new SqliteTestFactory();
+        var key = $"idea:{await SeedIdea(factory)}";
+        var service = new IdeaWorkspaceService(factory);
+        const string content = "\r\n  # Removed card Ω\r\n\r\n    retain its complete context  \r\n";
+        const string question = "  Original question Ω\r\n\r\n    complete discussion context  \r\n";
+        const string answer = "\r\n  Answer after removal Ω\r\n\r\n    preserve this reply  \r\n";
+        await AddNote(service, key, 0, "historical-card", "historical-place", content);
+        await Change(service, key, 1, "add_comment", new { componentId = "historical-card", text = question });
+        var parent = Assert.Single((await service.GetAsync(key)).Document.Comments);
+        await Change(service, key, 2, "remove_component", new { componentId = "historical-card" });
+
+        await service.ExecuteAsync(key, Command(3, "add_comment",
+            new { componentId = "historical-card", replyToId = parent.Id, text = answer }, actor: "reply-client"));
+
+        var context = await service.GetAsync(key);
+        Assert.Equal(4, context.Revision);
+        Assert.DoesNotContain(context.Document.Components, item => item.Id == "historical-card");
+        var retained = Assert.Single(context.Document.Comments, item => item.Id == parent.Id);
+        Assert.Equal(question, retained.Text);
+        Assert.Equal("test-client", retained.Actor);
+        Assert.Equal("historical-card", retained.ComponentId);
+        var reply = Assert.Single(context.Document.Comments, item => item.ReplyToId == parent.Id);
+        Assert.Equal("historical-card", reply.ComponentId);
+        Assert.Equal(answer, reply.Text);
+        Assert.Equal("reply-client", reply.Actor);
+        await using var db = factory.CreateDbContext();
+        var removal = await db.ActivityEvents.SingleAsync(item => item.Message == "remove_component");
+        Assert.Contains(content, JsonStrings(removal.BeforeJson!));
+        var replyAudit = await db.ActivityEvents.OrderBy(item => item.Id).LastAsync();
+        Assert.Contains(question, JsonStrings(replyAudit.AfterJson!));
+        Assert.Contains(answer, JsonStrings(replyAudit.AfterJson!));
+        Assert.Equal("reply-client", replyAudit.Actor);
+        Assert.Equal(4, await db.IdeaWorkspaceReceipts.CountAsync());
+    }
+
+    [Theory]
+    [InlineData("top-level", "component_not_found", 404)]
+    [InlineData("missing-parent", "comment_not_found", 404)]
+    [InlineData("wrong-anchor", "comment_anchor_mismatch", 400)]
+    [InlineData("omitted-anchor", "comment_anchor_mismatch", 400)]
+    public async Task RemovedComponentDiscussion_RejectsNewOrMismatchedThreads_WithoutAnySavedEffect(
+        string attempt, string code, int statusCode)
+    {
+        using var factory = new SqliteTestFactory();
+        var key = $"idea:{await SeedIdea(factory)}";
+        var service = new IdeaWorkspaceService(factory);
+        await AddNote(service, key, 0, "historical-card", "historical-place");
+        await Change(service, key, 1, "add_comment", new { componentId = "historical-card", text = "Original thread" });
+        var parent = Assert.Single((await service.GetAsync(key)).Document.Comments);
+        await Change(service, key, 2, "remove_component", new { componentId = "historical-card" });
+        var before = await service.GetAsync(key);
+        var payload = new Dictionary<string, object?> { ["text"] = "Must not create a new thread" };
+        if (attempt != "omitted-anchor") payload["componentId"] = attempt == "wrong-anchor" ? "other-card" : "historical-card";
+        if (attempt != "top-level") payload["replyToId"] = attempt == "missing-parent" ? "missing-comment" : parent.Id;
+
+        var error = await Assert.ThrowsAsync<IdeaWorkspaceException>(() => Change(service, key, 3, "add_comment", payload));
+
+        Assert.Equal(code, error.Code);
+        Assert.Equal(statusCode, error.StatusCode);
+        var after = await service.GetAsync(key);
+        Assert.Equal(before.Revision, after.Revision);
+        Assert.Equal(JsonSerializer.Serialize(before.Document, Json), JsonSerializer.Serialize(after.Document, Json));
+        await using var db = factory.CreateDbContext();
+        Assert.Equal(3, await db.IdeaWorkspaceReceipts.CountAsync());
+        Assert.Equal(3, await db.ActivityEvents.CountAsync());
+    }
+
+    [Fact]
+    public async Task WorkspaceDiscussionReply_WithOmittedAnchor_RemainsInItsWorkspaceThread()
+    {
+        using var factory = new SqliteTestFactory();
+        var key = $"idea:{await SeedIdea(factory)}";
+        var service = new IdeaWorkspaceService(factory);
+        await Change(service, key, 0, "add_comment", new { text = "Workspace-level parent" });
+        var parent = Assert.Single((await service.GetAsync(key)).Document.Comments);
+
+        await Change(service, key, 1, "add_comment", new { replyToId = parent.Id, text = "  Workspace-level reply Ω\r\n" });
+
+        var reply = Assert.Single((await service.GetAsync(key)).Document.Comments, item => item.ReplyToId == parent.Id);
+        Assert.Null(reply.ComponentId);
+        Assert.Equal("  Workspace-level reply Ω\r\n", reply.Text);
+    }
+
+    [Fact]
     public async Task Checkpoints_AreIndependentAcrossClientsSessionsAndWorkspaces()
     {
         using var factory = new SqliteTestFactory();
@@ -640,9 +726,82 @@ public sealed class IdeaWorkspaceServiceTests
         }));
 
         Assert.Equal(400, error.StatusCode);
+        Assert.Equal(cycle ? "dependency_cycle" : "missing_dependency", error.Code);
         Assert.Empty((await service.GetAsync(key)).Document.PlanRevisions);
         await using var db = factory.CreateDbContext();
         Assert.Empty(await db.Set<IdeaWorkspaceState>().ToListAsync());
+        Assert.Empty(await db.ActivityEvents.ToListAsync());
+    }
+
+    [Fact]
+    public async Task ProposedPlan_ModerateDependencyDepth_PreservesEveryAuthoredItem()
+    {
+        using var factory = new SqliteTestFactory();
+        var key = $"idea:{await SeedIdea(factory)}";
+        var service = new IdeaWorkspaceService(factory);
+        const int depth = 128;
+        var items = Enumerable.Range(0, depth)
+            .Select(index => PlanItem($"item-{index}", index + 1 < depth ? [$"item-{index + 1}"] : []))
+            .ToArray();
+
+        await Change(service, key, 0, "propose_plan", new { title = "Complete dependency chain", items });
+
+        var saved = Assert.Single((await service.GetAsync(key)).Document.PlanRevisions);
+        Assert.Equal(depth, saved.Items.Count);
+        Assert.Equal(JsonSerializer.Serialize(items, Json), JsonSerializer.Serialize(saved.Items, Json));
+    }
+
+    [Fact]
+    public async Task ProposedPlan_SharedDependencyGraph_PreservesEveryAuthoredBranch()
+    {
+        using var factory = new SqliteTestFactory();
+        var key = $"idea:{await SeedIdea(factory)}";
+        var service = new IdeaWorkspaceService(factory);
+        var items = new[]
+        {
+            PlanItem("first-root", "left", "right"),
+            PlanItem("second-root", "right", "shared-a"),
+            PlanItem("left", "shared-a", "shared-b"),
+            PlanItem("right", "shared-a", "shared-b"),
+            PlanItem("shared-a", "tail"),
+            PlanItem("shared-b", "tail"),
+            PlanItem("tail"),
+            PlanItem("independent")
+        };
+
+        await Change(service, key, 0, "propose_plan", new { title = "Shared prerequisites", items });
+
+        var saved = Assert.Single((await service.GetAsync(key)).Document.PlanRevisions);
+        Assert.Equal(JsonSerializer.Serialize(items, Json), JsonSerializer.Serialize(saved.Items, Json));
+    }
+
+    [Theory]
+    [InlineData("cycle", "dependency_cycle")]
+    [InlineData("missing", "missing_dependency")]
+    [InlineData("null", "missing_dependency")]
+    public async Task ProposedPlan_InvalidSharedDependencyBranch_RejectsTheWholeDraft(string invalid, string code)
+    {
+        using var factory = new SqliteTestFactory();
+        var key = $"idea:{await SeedIdea(factory)}";
+        var service = new IdeaWorkspaceService(factory);
+        var items = new[]
+        {
+            PlanItem("complete"),
+            PlanItem("root", "left", "right"),
+            PlanItem("left", "shared"),
+            PlanItem("right", "shared", invalid == "cycle" ? "root" : invalid == "null" ? null! : "missing"),
+            PlanItem("shared", "complete")
+        };
+
+        var error = await Assert.ThrowsAsync<IdeaWorkspaceException>(() => Change(service, key, 0,
+            "propose_plan", new { title = "Invalid branch after a shared prerequisite", items }));
+
+        Assert.Equal(400, error.StatusCode);
+        Assert.Equal(code, error.Code);
+        Assert.Empty((await service.GetAsync(key)).Document.PlanRevisions);
+        await using var db = factory.CreateDbContext();
+        Assert.Empty(await db.IdeaWorkspaceStates.ToListAsync());
+        Assert.Empty(await db.IdeaWorkspaceReceipts.ToListAsync());
         Assert.Empty(await db.ActivityEvents.ToListAsync());
     }
 
@@ -782,6 +941,12 @@ public sealed class IdeaWorkspaceServiceTests
 
     private static Task<IdeaWorkspaceMutationResult> AddNote(IdeaWorkspaceService service, string key, long revision, string id, string placement, string content = "A note") =>
         AddComponent(service, key, revision, id, placement, "note", content);
+
+    private static IdeaWorkspacePlanItem PlanItem(string id, params string[] dependencies) => new()
+    {
+        Id = id, Title = $"  Deliver {id} Ω  ", Description = $"\r\n  # Complete {id} description Ω\r\n\r\n    preserve indentation  \r\n",
+        AcceptanceCriteria = [$"  Full {id} criterion Ω  \r\n"], DependsOn = [.. dependencies]
+    };
 
     private static Task<IdeaWorkspaceMutationResult> AddComponent(IdeaWorkspaceService service, string key, long revision, string id, string placement, string type, string content = "") =>
         Change(service, key, revision, "create_component", new

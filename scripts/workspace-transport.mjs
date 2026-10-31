@@ -4,11 +4,11 @@ import { once } from "node:events";
 import { fileURLToPath } from "node:url";
 
 // Actual JSON-RPC clients shared by workspace adapter tests and disposable-app smoke checks.
-export async function openWorkspaceStdio(baseUrl) {
+export async function openWorkspaceStdio(baseUrl, { usageLog = "off" } = {}) {
   assert.ok(baseUrl, "An explicit disposable API URL is required.");
   const child = spawn(process.execPath, [fileURLToPath(new URL("./mcp-server.mjs", import.meta.url))], {
     windowsHide: true, stdio: ["pipe", "pipe", "pipe"],
-    env: { ...process.env, KANBANFLOW_API_URL: baseUrl, KANBANFLOW_USAGE_LOG: "off" },
+    env: { ...process.env, KANBANFLOW_API_URL: baseUrl, KANBANFLOW_USAGE_LOG: usageLog },
   });
   let sequence = 0;
   let buffer = "";

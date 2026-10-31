@@ -79,6 +79,7 @@ public sealed partial class IdeaWorkspaceService
                 throw Conflict("project_link_conflict", "Replacing a project link requires explicit expectedCurrentProjectId.");
         }
         var targetWorkspace = await writes.CaptureProjectAsync(targetId, required: true, ct);
+        await ValidateAssociationTaskReferencesAsync(writes, source, targetId, ct);
         var before = source.Source;
         idea.Status = IdeaStatus.Promoted;
         idea.PromotedProjectId = targetId;
@@ -98,6 +99,21 @@ public sealed partial class IdeaWorkspaceService
         }
     }
 
+    private static async Task ValidateAssociationTaskReferencesAsync(
+        WorkspaceWrites writes, WorkspaceWrite source, int projectId, CancellationToken ct)
+    {
+        var references = source.Document.Components.Where(c => c.Type == "task-reference").ToArray();
+        if (references.Length == 0) return;
+        var taskIds = references.Where(c => c.TaskId is not null).Select(c => c.TaskId!.Value).Distinct().ToArray();
+        var validTasks = await writes.Db.Tasks.AsNoTracking()
+            .Where(t => taskIds.Contains(t.Id) && t.Feature.ProjectId == projectId)
+            .Select(t => t.Id).ToHashSetAsync(ct);
+        var invalidCards = references.Where(c => c.TaskId is not { } taskId || !validTasks.Contains(taskId))
+            .Select(c => c.Id).ToArray();
+        if (invalidCards.Length != 0)
+            throw Conflict("project_link_task_conflict", $"Project {projectId} cannot be linked while task-reference cards {string.Join(", ", invalidCards.Select(id => $"'{id}'"))} refer to missing tasks or tasks outside that project. Convert these cards to notes and clear taskId, or remove them, before relinking.");
+    }
+
     private static async Task ProposeDeliveryPlanAsync(WorkspaceWrites writes, WorkspaceWrite source, CancellationToken ct)
     {
         var plan = Read<IdeaWorkspacePlanRevision>(writes.Command.Payload);
@@ -113,11 +129,13 @@ public sealed partial class IdeaWorkspaceService
         WorkspaceWrite? canonical = writes.FindProject(source.ProjectId);
         if (canonical is null && source.ProjectId is { } id && await writes.Db.Set<IdeaWorkspaceState>().AnyAsync(s => s.WorkspaceId == $"project:{id}", ct))
             canonical = await writes.LoadAsync(new("project", id), ct);
+        var canonicalPlan = source.ProjectId is { } projectId && canonical is not null
+            ? CurrentCanonicalPlan(canonical.Document, projectId) : null;
         foreach (var item in plan.Items)
         {
             if (item is null) throw Invalid("invalid_plan_item", "Plan items cannot be null.");
             item.Id = NewIdentifier(item.Id);
-            ValidateProposedIdentity(item, source.ProjectId, canonical?.Document);
+            ValidateProposedIdentity(item, source.ProjectId, canonical?.Document, canonicalPlan);
         }
         ValidatePlan(plan);
         source.Document.PlanRevisions.Add(plan);
@@ -153,7 +171,7 @@ public sealed partial class IdeaWorkspaceService
         var resolutions = new List<(IdeaWorkspacePlanItem Item, IdeaWorkspacePlanItemProvenance Origin)>();
         foreach (var item in proposal.Items)
         {
-            ValidateProposedIdentity(item, projectId, canonical.Document);
+            ValidateProposedIdentity(item, projectId, canonical.Document, existing);
             var origin = item.Provenance;
             if (origin is null)
             {
@@ -221,7 +239,8 @@ public sealed partial class IdeaWorkspaceService
         return plan;
     }
 
-    private static void ValidateProposedIdentity(IdeaWorkspacePlanItem item, int? projectId, IdeaWorkspaceDocument? canonical)
+    private static void ValidateProposedIdentity(IdeaWorkspacePlanItem item, int? projectId,
+        IdeaWorkspaceDocument? canonical, IdeaWorkspacePlanRevision? canonicalPlan)
     {
         if (item.Provenance is not { } origin)
         {
@@ -229,8 +248,7 @@ public sealed partial class IdeaWorkspaceService
                 throw Invalid("forged_provenance", "Published task/feature IDs require validated canonical provenance; they do not choose a mapping.");
             return;
         }
-        var known = projectId is { } id && canonical is not null ? CurrentCanonicalPlan(canonical, id) : null;
-        if (origin.ProjectId != projectId || known?.Items.Any(i => i.Provenance == origin) != true)
+        if (origin.ProjectId != projectId || canonicalPlan?.Items.Any(i => i.Provenance == origin) != true)
             throw Invalid("forged_provenance", "The item's provenance does not identify an accepted item in the current target project. New items must omit provenance and publication IDs.");
         var mapping = FindPublication(canonical!, origin);
         if ((item.PublishedTaskId is not null && item.PublishedTaskId != mapping?.TaskId) ||

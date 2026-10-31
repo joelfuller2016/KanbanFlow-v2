@@ -151,6 +151,8 @@ async page => {
         "The UI-created project must retain the whole source brief, plan and meaningful Markdown whitespace.");
       check(current.originalSource.body === bodyC && current.originalProjectSource.readme === created.readme,
         "Both original source and created-project snapshots must remain complete.");
+      await page.waitForFunction(key => [...document.querySelectorAll('[data-testid="workspace-switcher"] option')]
+        .some(option => option.value === key), `project:${createdProjectId}`);
     });
 
     let proposal;
@@ -291,6 +293,7 @@ async page => {
     await step("copying the canonical plan preserves provenance and adds one new authored item", async () => {
       await open(a.workspaceId, "plan");
       await id("plan-copy-accepted").click();
+      await id("plan-copy-confirm").click();
       await waitState(() => document.querySelectorAll('fieldset[data-testid^="plan-item-"]').length === 2);
       const fields = page.locator('fieldset[data-testid^="plan-item-"]');
       check(await fields.nth(0).getByRole("textbox", { name: "Description / Markdown", exact: true }).inputValue() === specification,

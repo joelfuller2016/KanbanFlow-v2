@@ -260,8 +260,9 @@ public sealed partial class IdeaWorkspaceService
     {
         if (string.IsNullOrWhiteSpace(kind)) return null;
         var normalized = kind.Trim().ToLowerInvariant();
+        if (normalized == "all") return null;
         return normalized is "idea" or "project" or "linked" ? normalized
-            : throw Invalid("invalid_kind", "Kind must be idea, project or linked.");
+            : throw Invalid("invalid_kind", "Kind must be all, idea, project or linked.");
     }
 
     private static string? NormalizeStatus(string? status)

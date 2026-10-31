@@ -19,7 +19,7 @@ public sealed partial class IdeaWorkspaceService
             "remove_connector" => ["connectorId"],
             "add_comment" => ["componentId", "text", "replyToId"],
             "save_checkpoint" => ["clientId", "sessionId", "objective", "focusedComponentIds", "completedChanges", "openQuestions", "nextActions", "lastAcknowledgedActivityId", "actor", "updatedAt"],
-            "propose_plan" => ["id", "version", "title", "status", "items", "expectedProjectPlanRevision", "createdBy", "createdAt", "acceptedBy", "acceptedAt"],
+            "propose_plan" => ["title", "items", "expectedProjectPlanRevision"],
             "accept_plan" => ["planRevisionId", "expectedProjectPlanRevision"],
             "link_project" => ["projectId", "expectedCurrentProjectId"],
             "create_project" => ["name"],
@@ -172,24 +172,31 @@ public sealed partial class IdeaWorkspaceService
                 throw Invalid("duplicate_provenance", "The same canonical item cannot occur twice in a proposal. Keep one item per provenance identity.");
             if (item.DependsOn.Distinct(StringComparer.Ordinal).Count() != item.DependsOn.Count)
                 throw Invalid("duplicate_dependency", "A prerequisite may occur only once in an item's dependency list.");
-            var visiting = new HashSet<string>(StringComparer.Ordinal);
-            var complete = new HashSet<string>(StringComparer.Ordinal);
-            Visit(item.Id);
-            void Visit(string id)
+        }
+        var visiting = new HashSet<string>(StringComparer.Ordinal);
+        var complete = new HashSet<string>(StringComparer.Ordinal);
+        var pending = new Stack<(IdeaWorkspacePlanItem Item, int DependencyIndex)>();
+        foreach (var item in plan.Items)
+        {
+            if (complete.Contains(item.Id)) continue;
+            visiting.Add(item.Id);
+            pending.Push((item, 0));
+            while (pending.TryPop(out var current))
             {
-                if (complete.Contains(id)) return;
-                if (!visiting.Add(id)) throw Invalid("dependency_cycle", "Plan dependencies cannot contain a cycle.");
-                if (!items.TryGetValue(id, out var dependency))
-                    throw Invalid("missing_dependency", "A plan dependency must name an item in the same revision.");
-                if (dependency.DependsOn is null)
-                    throw Invalid("invalid_plan_item", "Plan dependency lists cannot be null.");
-                foreach (var child in dependency.DependsOn)
+                if (current.DependencyIndex == current.Item.DependsOn.Count)
                 {
-                    if (child is null) throw Invalid("missing_dependency", "A dependency cannot be null.");
-                    Visit(child);
+                    visiting.Remove(current.Item.Id);
+                    complete.Add(current.Item.Id);
+                    continue;
                 }
-                visiting.Remove(id);
-                complete.Add(id);
+                pending.Push((current.Item, current.DependencyIndex + 1));
+                var child = current.Item.DependsOn[current.DependencyIndex];
+                if (child is null) throw Invalid("missing_dependency", "A dependency cannot be null.");
+                if (!items.TryGetValue(child, out var dependency))
+                    throw Invalid("missing_dependency", "A plan dependency must name an item in the same revision.");
+                if (complete.Contains(child)) continue;
+                if (!visiting.Add(child)) throw Invalid("dependency_cycle", "Plan dependencies cannot contain a cycle.");
+                pending.Push((dependency, 0));
             }
         }
     }

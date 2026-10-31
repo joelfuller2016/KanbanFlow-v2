@@ -3,8 +3,10 @@ using KanbanFlow.Components.Workspaces;
 
 namespace KanbanFlow.Components.Pages;
 
-public partial class IdeaGallery
+public partial class IdeaGallery : IDisposable
 {
+    private readonly CancellationTokenSource lifetime = new();
+    private bool disposed;
     private IdeaWorkspacePage<IdeaWorkspaceSummary>? page;
     private readonly List<IdeaWorkspaceSummary> items = [];
     private string? query, kind, status, error;
@@ -29,11 +31,14 @@ public partial class IdeaGallery
             activeQuery = string.IsNullOrWhiteSpace(query) ? null : query;
             activeKind = string.IsNullOrEmpty(kind) ? null : kind;
             activeStatus = string.IsNullOrEmpty(status) ? null : status;
-            page = await Workspaces.ListAsync(activeKind, activeStatus, activeQuery);
+            var loaded = await Workspaces.ListAsync(activeKind, activeStatus, activeQuery, ct: lifetime.Token);
+            if (disposed) return;
+            page = loaded;
             items.Clear();
             items.AddRange(page.Items);
         }
-        catch (Exception ex) { error = ex.Message; }
+        catch (OperationCanceledException) when (lifetime.IsCancellationRequested) { }
+        catch (Exception ex) { if (!disposed) error = ex.Message; }
         finally { busy = false; }
     }
 
@@ -41,12 +46,16 @@ public partial class IdeaGallery
     {
         if (busy || page?.NextCursor is null) return;
         busy = true;
+        error = null;
         try
         {
-            page = await Workspaces.ListAsync(activeKind, activeStatus, activeQuery, page.NextCursor);
+            var loaded = await Workspaces.ListAsync(activeKind, activeStatus, activeQuery, page.NextCursor, ct: lifetime.Token);
+            if (disposed) return;
+            page = loaded;
             items.AddRange(page.Items);
         }
-        catch (Exception ex) { error = ex.Message; }
+        catch (OperationCanceledException) when (lifetime.IsCancellationRequested) { }
+        catch (Exception ex) { if (!disposed) error = ex.Message; }
         finally { busy = false; }
     }
 
@@ -57,10 +66,18 @@ public partial class IdeaGallery
         error = null;
         try
         {
-            var created = await Workspaces.CreateAsync(request);
-            Navigation.NavigateTo(WorkspaceUiText.Url(created.WorkspaceId));
+            var created = await Workspaces.CreateAsync(request, lifetime.Token);
+            if (!disposed) Navigation.NavigateTo(WorkspaceUiText.Url(created.WorkspaceId));
         }
-        catch (Exception ex) { error = ex.Message; }
+        catch (OperationCanceledException) when (lifetime.IsCancellationRequested) { }
+        catch (Exception ex) { if (!disposed) error = ex.Message; }
         finally { busy = false; }
+    }
+
+    public void Dispose()
+    {
+        disposed = true;
+        lifetime.Cancel();
+        lifetime.Dispose();
     }
 }

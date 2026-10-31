@@ -13,10 +13,12 @@ public partial class IdeaWorkspace
     private IdeaWorkspaceComponentDetail? selectedDetail;
     private WorkspaceBrowserDraft draft = new();
     private readonly Dictionary<string, WorkspaceBrowserDraft> browserCache = [];
+    private readonly Dictionary<string, WorkspaceBrowserDraftRecovery> draftRecoveries = [];
     private readonly List<IdeaWorkspaceSummary> catalog = [];
     private IReadOnlyList<string> componentTypes = [];
     private string workspaceId = "", clientId = "", sessionId = "";
     private string? error, notice, storageError;
+    private string? storedDraftRaw, storedDraftReadError;
     private string view = "canvas", panel = "plan";
     private bool busy, disposed, storageHealthy = true;
     private int generation, restoredGeneration = -1, restoringGeneration = -1;
@@ -43,6 +45,7 @@ public partial class IdeaWorkspace
         selectedDetail = null;
         ClearDeliveryView();
         error = notice = null;
+        storedDraftRaw = storedDraftReadError = null;
         draft = browserCache.GetValueOrDefault(next) ?? new();
         try
         {
@@ -66,10 +69,7 @@ public partial class IdeaWorkspace
             browser ??= new(JS);
             var session = await browser.InitializeAsync(scope.WorkspaceId);
             if (!IsCurrent(scope)) return;
-            clientId = session.ClientId;
-            sessionId = session.SessionId;
-            draft = browserCache.GetValueOrDefault(scope.WorkspaceId) ?? session.Draft ?? DraftFromCheckpoint();
-            EnsureSelectedDrafts();
+            RestoreDraft(scope, session);
             restoredGeneration = scope.Generation;
             await ReadSelectedDetail(scope);
             if (!IsCurrent(scope)) return;
@@ -86,9 +86,27 @@ public partial class IdeaWorkspace
             // Do not retry during every render or enable mutations without recoverable operation storage.
             restoredGeneration = scope.Generation;
             clientId = "";
+            try
+            {
+                var raw = await browser!.ReadStoredDraftAsync(scope.WorkspaceId);
+                if (IsCurrent(scope)) storedDraftRaw = raw;
+            }
+            catch (Exception readError) { if (IsCurrent(scope)) storedDraftReadError = readError.Message; }
+            if (!IsCurrent(scope)) return;
             StateHasChanged();
         }
         finally { if (restoringGeneration == scope.Generation) restoringGeneration = -1; }
+    }
+
+    private void RestoreDraft(WorkspaceUiScope scope, WorkspaceBrowserSession session)
+    {
+        clientId = session.ClientId;
+        sessionId = session.SessionId;
+        var restored = browserCache.GetValueOrDefault(scope.WorkspaceId) ?? session.Draft ?? DraftFromCheckpoint();
+        restored.Validate();
+        draft = restored;
+        UpdateCleanDrafts();
+        EnsureSelectedDrafts();
     }
 
     private async Task LoadCatalog()
@@ -182,6 +200,33 @@ public partial class IdeaWorkspace
             return;
         }
         if (await PersistDraft(scope) && IsCurrent(scope)) notice = "The current browser draft and any pending operation are stored. You can continue saving.";
+    }
+
+    private async Task RecoverStoredDraft(WorkspaceUiScope scope)
+    {
+        if (!IsCurrent(scope) || busy || browser is null) return;
+        busy = true;
+        try
+        {
+            draft.Validate();
+            var preserved = await browser.PreserveAndClearDraftAsync(scope.WorkspaceId);
+            if (!IsCurrent(scope)) return;
+            draftRecoveries[scope.WorkspaceId] = preserved;
+            browserCache[scope.WorkspaceId] = draft;
+            storedDraftRaw = storedDraftReadError = null;
+            clientId = sessionId = "";
+            storageError = error = null;
+            restoredGeneration = -1;
+            var oldBrowser = browser;
+            browser = null;
+            await oldBrowser.DisposeAsync();
+            notice = "The original stored draft was preserved. Your current unsaved edits are retained while browser storage is restored; the preserved text remains available below.";
+        }
+        catch (Exception ex)
+        {
+            if (IsCurrent(scope)) storageError = $"The original browser draft could not be preserved: {ex.Message}. Your current draft has been retained.";
+        }
+        finally { busy = false; }
     }
 
     public async ValueTask DisposeAsync()

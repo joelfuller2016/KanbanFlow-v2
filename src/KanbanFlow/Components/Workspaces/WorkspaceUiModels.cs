@@ -102,8 +102,41 @@ public sealed record WorkspaceBrowserDraft
     public WorkspaceCheckpointDraft Checkpoint { get; init; } = new();
     public WorkspaceDeliveryDraft Delivery { get; init; } = new();
     public WorkspacePendingCommand? Pending { get; init; }
+
+    public void Validate()
+    {
+        static void Require(bool valid, string section)
+        {
+            if (!valid) throw new JsonException($"The stored browser draft has an incompatible {section}. Its original text has been retained.");
+        }
+        Require(ContentDrafts is not null && LayoutDrafts is not null, "draft collection");
+        Require(Discussion is not null && Connector is not null && Plan is not null && Checkpoint is not null && Delivery is not null, "draft section");
+        foreach (var (key, value) in ContentDrafts!)
+            Require(value is not null && key == value.Key && value.Title is not null && value.Content is not null
+                && value.Type is not null && value.OriginalTitle is not null && value.OriginalContent is not null, "content draft");
+        foreach (var (key, value) in LayoutDrafts!)
+            Require(value is not null && key == value.PlacementId && double.IsFinite(value.X) && double.IsFinite(value.Y)
+                && double.IsFinite(value.Width) && double.IsFinite(value.Height), "layout draft");
+        Require(Discussion!.Text is not null && Connector!.FromComponentId is not null
+            && Connector.ToComponentId is not null && Connector.Label is not null, "discussion or connection draft");
+        Require(Plan!.Title is not null && Plan.Items is not null, "plan draft");
+        foreach (var item in Plan.Items!)
+            Require(item is not null && item.Id is not null && item.Title is not null && item.Description is not null
+                && item.AcceptanceCriteria is not null && item.DependsOn is not null && item.DependsOn.All(id => id is not null)
+                && (item.OriginalAcceptanceCriteria is null || item.OriginalAcceptanceCriteria.All(line => line is not null)), "plan item");
+        Require(Plan.Items!.Select(item => item.Id).Distinct(StringComparer.Ordinal).Count() == Plan.Items.Count, "plan item identities");
+        Require(Checkpoint!.Objective is not null && Checkpoint.CompletedChanges is not null && Checkpoint.OpenQuestions is not null
+            && Checkpoint.NextActions is not null && Checkpoint.FocusedComponentIds is not null
+            && Checkpoint.FocusedComponentIds.All(id => id is not null), "checkpoint draft");
+        Require(Delivery!.ProjectName is not null && Delivery.FeatureName is not null
+            && (Delivery.SelectedItemIds is null || Delivery.SelectedItemIds.All(id => id is not null)), "delivery draft");
+        if (Pending is { } pending)
+            Require(pending.Command is { } command && command.OperationId is not null && command.Action is not null
+                && command.Actor is not null && command.Payload.ValueKind == JsonValueKind.Object, "pending operation");
+    }
 }
 public sealed record WorkspaceBrowserSession(string ClientId, string SessionId, WorkspaceBrowserDraft? Draft);
+public sealed record WorkspaceBrowserDraftRecovery(string? BackupKey, string? Raw);
 
 public static class WorkspaceUiText
 {

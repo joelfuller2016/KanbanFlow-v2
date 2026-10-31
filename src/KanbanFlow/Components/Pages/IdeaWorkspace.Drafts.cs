@@ -27,6 +27,9 @@ public partial class IdeaWorkspace
     private void EnsureSelectedDrafts()
     {
         if (context is null) return;
+        if (draft.SelectedComponentId is { } selected && !context.Document.Components.Any(c => c.Id == selected)
+            && (!draft.ContentDrafts.TryGetValue(selected, out var missing) || !missing.Dirty))
+            draft = draft with { SelectedComponentId = null, SelectedPlacementId = null };
         var contents = new Dictionary<string, WorkspaceContentDraft>(draft.ContentDrafts);
         if (!contents.ContainsKey(SelectedContentKey))
         {

@@ -1100,15 +1100,6 @@ async function handleMessage(message) {
     if (!isPlainObject(args)) {
       throw new McpError(-32602, "tools/call arguments must be an object.");
     }
-    const workspaceTool = [...workspaceReadTools, ...workspaceWriteTools].find(tool => tool.name === toolName);
-    if (workspaceTool) {
-      const allowed = workspaceTool.inputSchema.properties;
-      for (const name of Object.keys(args)) {
-        if (!Object.hasOwn(allowed, name)) {
-          throw new McpError(-32602, `Unsupported workspace argument '${name}'. It was not saved.`);
-        }
-      }
-    }
     // Record EVERY tool call, both outcomes (#477 §11). This is the only choke point every call
     // passes through, and the error path matters as much as the happy one: a refused claim (409)
     // is the collision signal, and a Definition-of-Done refusal (422) is the gate doing its job.
@@ -1116,6 +1107,15 @@ async function handleMessage(message) {
     const startedAt = Date.now();
     let result;
     try {
+      const workspaceTool = [...workspaceReadTools, ...workspaceWriteTools].find(tool => tool.name === toolName);
+      if (workspaceTool) {
+        const allowed = workspaceTool.inputSchema.properties;
+        for (const name of Object.keys(args)) {
+          if (!Object.hasOwn(allowed, name)) {
+            throw new McpError(-32602, `Unsupported workspace argument '${name}'. It was not saved.`);
+          }
+        }
+      }
       result = await callTool(toolName, args);
     } catch (error) {
       usageLogger.record({ tool: toolName, args, outcome: "error", ms: Date.now() - startedAt, error });

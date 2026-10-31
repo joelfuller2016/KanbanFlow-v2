@@ -58,6 +58,15 @@ public partial class IdeaWorkspace
             notice = $"Saved {result.Action.Replace('_', ' ')} at revision {result.Revision}{(result.Replayed ? " (recovered prior result)" : "")}.";
             if (result.Publication is { } publication)
                 notice += $" {publication.NewTaskCount} new tasks; {publication.ExistingTaskCount} already linked tasks preserved.";
+            if (result.Action == "create_project")
+            {
+                try { await LoadCatalog(); }
+                catch (OperationCanceledException) when (lifetime.IsCancellationRequested) { }
+                catch (Exception catalogError)
+                {
+                    if (IsCurrent(scope)) notice += $" The project was saved, but refreshing the workspace picker failed: {catalogError.Message}. Reopen the workspace to retry the picker.";
+                }
+            }
         }
         catch (IdeaWorkspaceException ex)
         {

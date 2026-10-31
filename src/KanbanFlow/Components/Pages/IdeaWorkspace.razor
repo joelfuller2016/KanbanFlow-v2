@@ -29,6 +29,23 @@
     </header>
     @if (error is not null) { <div class="alert alert-danger" role="alert" data-testid="workspace-error">@error</div> }
     @if (storageError is not null) { <div class="alert alert-danger" role="alert" data-testid="workspace-storage-error">@storageError <button class="btn btn-outline-dark ms-2" @onclick="() => RetryDraftStorage(renderedPageScope)" data-testid="workspace-retry-draft">Retry browser draft storage</button></div> }
+    @if (storageError is not null && storedDraftRaw is not null)
+    {
+        <section class="alert alert-warning" aria-label="Browser draft recovery" data-testid="workspace-draft-recovery">
+            <p>The stored browser draft could not be loaded. Review its complete original text below. Starting fresh preserves that original in this tab, including unsaved text and any pending operation; it does not cancel a pending operation.</p>
+            <details><summary>Complete original browser draft</summary><pre class="workspace-source-text" data-testid="workspace-stored-draft-raw">@storedDraftRaw</pre></details>
+            <button class="btn btn-outline-dark mt-2" disabled="@busy" @onclick="() => RecoverStoredDraft(renderedPageScope)" data-testid="workspace-preserve-draft">Preserve original and start fresh browser draft</button>
+        </section>
+    }
+    @if (storageError is not null && storedDraftReadError is not null) { <p class="text-muted" data-testid="workspace-draft-read-error">The original browser draft could not be read: @storedDraftReadError. Retry storage to read it again.</p> }
+    @if (draftRecoveries.TryGetValue(workspaceId, out var recovered) && recovered.Raw is not null)
+    {
+        <details class="alert alert-info" data-testid="workspace-preserved-draft">
+            <summary>Original browser draft preserved for review</summary>
+            <p>Recovery storage key: <code data-testid="workspace-draft-backup-key">@recovered.BackupKey</code>. Review any pending operation against the saved workspace before retrying it.</p>
+            <pre class="workspace-source-text" data-testid="workspace-preserved-draft-raw">@recovered.Raw</pre>
+        </details>
+    }
     @if (notice is not null) { <p class="alert alert-success" role="status" data-testid="workspace-notice">@notice</p> }
     @if (latestContext is not null)
     {

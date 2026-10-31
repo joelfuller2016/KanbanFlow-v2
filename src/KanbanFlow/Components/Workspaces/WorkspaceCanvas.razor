@@ -17,9 +17,9 @@
                     }
                 }
             </svg>
-            @foreach (var placement in Document.Placements.OrderBy(p => p.Order).ThenBy(p => p.Id, StringComparer.Ordinal))
+            @foreach (var placement in orderedPlacements)
             {
-                var component = Document.Components.First(c => c.Id == placement.ComponentId);
+                var component = componentsById[placement.ComponentId];
                 <article @key="placement.Id" class="workspace-canvas-card @(component.Type == "frame" ? "workspace-frame" : "") @(SelectedPlacementId == placement.Id ? "workspace-card-selected" : "")"
                          style="@PlacementStyle(placement)" data-placement-id="@placement.Id" data-component-id="@component.Id" data-parent-id="@placement.ParentId"
                          data-local-x="@N(placement.X)" data-local-y="@N(placement.Y)" data-width="@N(placement.Width)" data-height="@N(placement.Height)"

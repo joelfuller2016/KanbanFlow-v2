@@ -87,7 +87,7 @@ public sealed partial class IdeaWorkspaceService
             var mapping = FindPublication(document, origin);
             if (mapping is null) return null;
             if (mapping.CanonicalItemId != item.Id || !taskById.TryGetValue(mapping.TaskId, out var task) ||
-                task.Feature.ProjectId != projectId || features.All(f => f.Id != mapping.FeatureId))
+                task.Feature.ProjectId != projectId)
                 throw Conflict("publication_target_missing", $"The published target for item '{item.Id}' is missing or belongs to another project. It will not be recreated.");
             if (mapping.SpecificationHash != PublicationSpecificationHash(item))
                 throw Conflict("published_specification_changed", $"Published item '{item.Id}' has a changed specification. Add a new plan item for new work; existing human-edited tasks are not overwritten.");
@@ -111,7 +111,13 @@ public sealed partial class IdeaWorkspaceService
         }
         var featureId = request.FeatureId;
         if (featureId is null && request.FeatureName is null)
-            featureId = document.Publications.FirstOrDefault(p => p.ProjectId == projectId)?.FeatureId;
+        {
+            var priorPublications = document.Publications.Where(p => p.ProjectId == projectId).ToArray();
+            var featureIds = features.Select(f => f.Id).ToHashSet();
+            featureId = priorPublications.FirstOrDefault(p => featureIds.Contains(p.FeatureId))?.FeatureId;
+            if (featureId is null && priorPublications.Length > 0 && previewItems.Any(i => i.WillCreate))
+                throw Conflict("publication_target_missing", "The previously published feature is missing or belongs to another project. Select an existing featureId or a new featureName explicitly for new work; the original feature is not recreated.");
+        }
         var feature = featureId is null ? null : features.SingleOrDefault(f => f.Id == featureId);
         if (featureId is not null && feature is null)
             throw Conflict("publication_target_missing", "The selected or previously published feature is missing or belongs to another project. Select an existing feature explicitly; it is not recreated.");

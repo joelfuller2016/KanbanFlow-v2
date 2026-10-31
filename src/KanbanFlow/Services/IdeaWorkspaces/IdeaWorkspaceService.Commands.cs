@@ -128,10 +128,6 @@ public sealed partial class IdeaWorkspaceService
             case "add_comment":
             {
                 var componentId = OptionalString(payload, "componentId");
-                if (componentId is not null) FindComponent(document, componentId);
-                var text = RequiredString(payload, "text");
-                if (string.IsNullOrWhiteSpace(text))
-                    throw Invalid("empty_comment", "A comment cannot be blank.");
                 var replyToId = OptionalString(payload, "replyToId");
                 if (replyToId is not null)
                 {
@@ -140,6 +136,10 @@ public sealed partial class IdeaWorkspaceService
                     if (parent.ComponentId != componentId)
                         throw Invalid("comment_anchor_mismatch", "A reply must remain on its parent's component or workspace thread.");
                 }
+                else if (componentId is not null) FindComponent(document, componentId);
+                var text = RequiredString(payload, "text");
+                if (string.IsNullOrWhiteSpace(text))
+                    throw Invalid("empty_comment", "A comment cannot be blank.");
                 document.Comments.Add(new IdeaWorkspaceComment
                 {
                     Id = NewIdentifier(), ComponentId = componentId, ReplyToId = replyToId,

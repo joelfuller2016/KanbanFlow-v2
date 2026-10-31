@@ -402,6 +402,98 @@ public sealed class IdeaWorkspaceDeliveryTests
         Assert.Equal(2, await db.Tasks.CountAsync());
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task RelinkProject_WithForeignOrMissingTaskReferences_ConflictsUntilExplicitConversion(bool missingTasks)
+    {
+        using var factory = new SqliteTestFactory();
+        var (service, key, originalProject) = await Linked(factory);
+        var nextProject = await SeedProject(factory, "Explicit new delivery target");
+        await Accept(service, key, Item("a", "First existing task"), Item("b", "Second existing task"));
+        var publication = (await Publish(service, key)).Publication!;
+        var cards = publication.Items.Select((item, index) => new IdeaWorkspaceComponent
+        {
+            Id = $"existing-task-card-{index}", Type = "task-reference", TaskId = item.TaskId,
+            Title = $"  Complete authored card {index} Ω  ",
+            Content = $"\r\n  # Full card {index} context Ω\r\n\r\n    preserve all narrative  \r\n"
+        }).ToArray();
+        foreach (var card in cards)
+            await Change(service, key, "create_component", new { component = card });
+        var oldHistory = JsonSerializer.Serialize((await service.GetAsync($"project:{originalProject}")).Document, Json);
+        if (missingTasks)
+        {
+            await using var db = factory.CreateDbContext();
+            db.Tasks.RemoveRange(await db.Tasks.ToListAsync());
+            await db.SaveChangesAsync();
+        }
+        var original = await service.GetAsync(key);
+        var before = await Snapshot(factory);
+
+        var error = await Assert.ThrowsAsync<IdeaWorkspaceException>(() => Change(service, key, "link_project",
+            new { projectId = nextProject, expectedCurrentProjectId = originalProject }, "blocked-reference-relink"));
+
+        Assert.Equal(409, error.StatusCode);
+        Assert.Equal("project_link_task_conflict", error.Code);
+        foreach (var card in cards) Assert.Contains(card.Id, error.Message, StringComparison.Ordinal);
+        Assert.Equal(before, await Snapshot(factory));
+        var unchanged = await service.GetAsync(key);
+        Assert.Equal(originalProject, unchanged.ProjectId);
+        Assert.Equal(original.Revision, unchanged.Revision);
+        Assert.Equal(JsonSerializer.Serialize(original.Document, Json), JsonSerializer.Serialize(unchanged.Document, Json));
+
+        foreach (var card in cards)
+            await Change(service, key, "update_component", new { componentId = card.Id, type = "note", taskId = (int?)null });
+        await Change(service, key, "link_project", new { projectId = nextProject, expectedCurrentProjectId = originalProject });
+
+        var linked = await service.GetAsync(key);
+        Assert.Equal(nextProject, linked.ProjectId);
+        Assert.Equal(Body, linked.OriginalSource.Body);
+        Assert.Equal(Plan, linked.OriginalSource.Plan);
+        foreach (var card in cards)
+        {
+            var retained = Assert.Single(linked.Document.Components, item => item.Id == card.Id);
+            Assert.Equal("note", retained.Type);
+            Assert.Null(retained.TaskId);
+            Assert.Equal(card.Title, retained.Title);
+            Assert.Equal(card.Content, retained.Content);
+        }
+        Assert.Equal(JsonSerializer.Serialize(original.Document.PlanRevisions, Json), JsonSerializer.Serialize(linked.Document.PlanRevisions, Json));
+        Assert.Equal(oldHistory, JsonSerializer.Serialize((await service.GetAsync($"project:{originalProject}")).Document, Json));
+        await using var verify = factory.CreateDbContext();
+        var idea = await verify.Ideas.SingleAsync();
+        Assert.Equal(nextProject, idea.PromotedProjectId);
+        Assert.Equal(Body, idea.Body);
+        Assert.Equal(Plan, idea.Plan);
+        Assert.False(await verify.IdeaWorkspaceReceipts.AnyAsync(item => item.OperationId == "blocked-reference-relink"));
+    }
+
+    [Fact]
+    public async Task LinkProject_ToTheCurrentTarget_PreservesValidTaskReferenceCards()
+    {
+        using var factory = new SqliteTestFactory();
+        var (service, key, projectId) = await Linked(factory);
+        await Accept(service, key, Item("a", "Task still belongs to this project"));
+        var taskId = Assert.Single((await Publish(service, key)).Publication!.Items).TaskId;
+        await Change(service, key, "create_component", new
+        {
+            component = new { id = "current-project-task", type = "task-reference", title = "  Valid task Ω  ", content = "\r\n  Retain this authored card  \r\n", taskId }
+        });
+        var before = await service.GetAsync(key);
+        var card = Assert.Single(before.Document.Components, item => item.Id == "current-project-task");
+        var task = await TaskSnapshot(factory, taskId);
+
+        var result = await Change(service, key, "link_project", new { projectId });
+
+        Assert.Equal(projectId, result.ProjectId);
+        Assert.Equal(before.Revision + 1, result.Revision);
+        var after = await service.GetAsync(key);
+        Assert.Equal(projectId, after.ProjectId);
+        Assert.Equal(JsonSerializer.Serialize(card, Json), JsonSerializer.Serialize(Assert.Single(after.Document.Components, item => item.Id == card.Id), Json));
+        Assert.Equal(task, await TaskSnapshot(factory, taskId));
+        Assert.Equal(taskId, Assert.Single((await service.GetAsync($"project:{projectId}")).Document.Publications).TaskId);
+    }
+
     [Fact]
     public async Task TwoIdeasUsingTheSameLocalItemId_ExpandOneCanonicalPlanWithDistinctProvenance()
     {
@@ -632,6 +724,104 @@ public sealed class IdeaWorkspaceDeliveryTests
     }
 
     [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Publication_AfterTaskMovesWithinProject_UsesLiveTaskAndRetainsOriginalMapping(bool deleteOriginalFeature)
+    {
+        using var factory = new SqliteTestFactory();
+        var (service, key, projectId) = await Linked(factory);
+        await Accept(service, key, Item("a", "Original published specification"));
+        var published = Assert.Single((await Publish(service, key)).Publication!.Items);
+        var liveFeatureId = await MovePublishedTask(factory, projectId, published, deleteOriginalFeature);
+        var taskBefore = await TaskSnapshot(factory, published.TaskId);
+        var mappingBefore = JsonSerializer.Serialize(Assert.Single((await service.GetAsync($"project:{projectId}")).Document.Publications), Json);
+        var before = await Snapshot(factory);
+
+        var preview = await Preview(service, key);
+
+        Assert.Equal(0, preview.NewTaskCount);
+        Assert.Equal(1, preview.ExistingTaskCount);
+        Assert.Equal(deleteOriginalFeature ? (int?)null : published.FeatureId, preview.FeatureId);
+        var existing = Assert.Single(preview.Items).ExistingTask!;
+        Assert.Equal(published.TaskId, existing.Id);
+        Assert.Equal(liveFeatureId, existing.FeatureId);
+        Assert.Equal(projectId, existing.ProjectId);
+        Assert.Equal("  Human moved task Ω  ", existing.Name);
+        Assert.Equal("\r\n    Human retained task detail Ω  \r\n", existing.Description);
+        Assert.Equal(before, await Snapshot(factory));
+
+        var result = await Publish(service, key);
+
+        Assert.Equal(0, result.Publication!.NewTaskCount);
+        Assert.Equal(1, result.Publication.ExistingTaskCount);
+        var retained = Assert.Single(result.Publication.Items);
+        Assert.Equal(published.TaskId, retained.TaskId);
+        Assert.Equal(published.FeatureId, retained.FeatureId);
+        Assert.False(retained.Created);
+        Assert.Equal(taskBefore, await TaskSnapshot(factory, published.TaskId));
+        Assert.Equal(mappingBefore, JsonSerializer.Serialize(Assert.Single((await service.GetAsync($"project:{projectId}")).Document.Publications), Json));
+        await using var db = factory.CreateDbContext();
+        Assert.Equal(deleteOriginalFeature ? 1 : 2, await db.Features.CountAsync());
+        Assert.Single(await db.Tasks.ToListAsync());
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task NewPublication_AfterHistoricalFeatureRemoval_RequiresAnExplicitTarget(bool createNewFeature)
+    {
+        using var factory = new SqliteTestFactory();
+        var (service, key, projectId) = await Linked(factory);
+        await Accept(service, key, Item("a", "Original published item"));
+        var published = Assert.Single((await Publish(service, key)).Publication!.Items);
+        var originalItem = Assert.Single((await service.GetAsync(key)).AcceptedPlan!.Items);
+        var liveFeatureId = await MovePublishedTask(factory, projectId, published, deleteOriginalFeature: true);
+        await Accept(service, key, Copy(originalItem), Item("b", "Explicitly targeted new work"));
+        var current = await service.GetAsync(key);
+        var newItem = current.AcceptedPlan!.Items.Single(item => item.Provenance!.SourceItemId == "b");
+        var taskBefore = await TaskSnapshot(factory, published.TaskId);
+        var before = await Snapshot(factory);
+
+        var previewError = await Assert.ThrowsAsync<IdeaWorkspaceException>(() => Preview(service, key, [newItem.Id]));
+        var publishError = await Assert.ThrowsAsync<IdeaWorkspaceException>(() => Publish(service, key, [newItem.Id]));
+
+        Assert.Equal("publication_target_missing", previewError.Code);
+        Assert.Equal(409, previewError.StatusCode);
+        Assert.Equal("publication_target_missing", publishError.Code);
+        Assert.Equal(409, publishError.StatusCode);
+        var existingOnly = await Preview(service, key, [originalItem.Id]);
+        Assert.Equal(0, existingOnly.NewTaskCount);
+        Assert.Equal(1, existingOnly.ExistingTaskCount);
+        Assert.Equal(liveFeatureId, Assert.Single(existingOnly.Items).ExistingTask!.FeatureId);
+        Assert.Equal(before, await Snapshot(factory));
+        var request = new IdeaWorkspacePublicationPreviewRequest(current.Revision, current.ProjectPlanRevision!.Value,
+            [newItem.Id], createNewFeature ? null : liveFeatureId, createNewFeature ? "Explicit new target" : null);
+
+        var explicitPreview = await service.PreviewPublicationAsync(key, request);
+        var result = await service.ExecuteAsync(key, Command(current.Revision, "publish_plan", new
+        {
+            expectedProjectPlanRevision = current.ProjectPlanRevision, itemIds = new[] { newItem.Id },
+            featureId = request.FeatureId, featureName = request.FeatureName
+        }));
+
+        Assert.Equal(1, explicitPreview.NewTaskCount);
+        Assert.Equal(1, result.Publication!.NewTaskCount);
+        Assert.Equal(0, result.Publication.ExistingTaskCount);
+        var created = Assert.Single(result.Publication.Items);
+        Assert.True(created.Created);
+        Assert.NotEqual(published.TaskId, created.TaskId);
+        Assert.Equal(taskBefore, await TaskSnapshot(factory, published.TaskId));
+        await using var db = factory.CreateDbContext();
+        var feature = await db.Features.SingleAsync(item => item.Id == created.FeatureId);
+        Assert.Equal(projectId, feature.ProjectId);
+        Assert.Equal(createNewFeature ? "Explicit new target" : "Human selected sibling feature", feature.Name);
+        Assert.Equal(createNewFeature ? 2 : 1, await db.Features.CountAsync());
+        Assert.Equal(2, await db.Tasks.CountAsync());
+        var retained = (await service.GetAsync($"project:{projectId}")).Document.Publications.Single(item => item.TaskId == published.TaskId);
+        Assert.Equal(published.FeatureId, retained.FeatureId);
+    }
+
+    [Theory]
     [InlineData("task")]
     [InlineData("feature")]
     [InlineData("project")]
@@ -757,6 +947,40 @@ public sealed class IdeaWorkspaceDeliveryTests
 
         Assert.Equal(400, error.StatusCode);
         Assert.Equal("forged_provenance", error.Code);
+        Assert.Equal(before, await Snapshot(factory));
+    }
+
+    [Theory]
+    [InlineData("id")]
+    [InlineData("version")]
+    [InlineData("status")]
+    [InlineData("createdBy")]
+    [InlineData("createdAt")]
+    [InlineData("acceptedBy")]
+    [InlineData("acceptedAt")]
+    public async Task ProposedPlan_ServerOwnedMetadata_IsRejectedBeforeAnySavedEffect(string field)
+    {
+        using var factory = new SqliteTestFactory();
+        var (service, key, _) = await Linked(factory);
+        var fields = new Dictionary<string, object?>
+        {
+            ["title"] = "Complete authored proposal Ω",
+            ["items"] = new[] { Item("a", "Complete authored plan item") },
+            ["expectedProjectPlanRevision"] = (await service.GetAsync(key)).ProjectPlanRevision,
+            [field] = field switch
+            {
+                "version" => 999,
+                "createdAt" or "acceptedAt" => new DateTime(2026, 10, 31, 12, 0, 0, DateTimeKind.Utc),
+                _ => "Caller-authored authority must not be silently discarded"
+            }
+        };
+        var before = await Snapshot(factory);
+
+        var error = await Assert.ThrowsAsync<IdeaWorkspaceException>(() => Change(service, key, "propose_plan", fields));
+
+        Assert.Equal(400, error.StatusCode);
+        Assert.Equal("unknown_payload_field", error.Code);
+        Assert.Contains(field, error.Message, StringComparison.Ordinal);
         Assert.Equal(before, await Snapshot(factory));
     }
 
@@ -1098,6 +1322,27 @@ public sealed class IdeaWorkspaceDeliveryTests
         Id = item.Id, Title = item.Title, Description = item.Description, AcceptanceCriteria = [.. item.AcceptanceCriteria],
         DependsOn = [.. item.DependsOn], Provenance = item.Provenance
     };
+
+    private static async Task<int> MovePublishedTask(IDbContextFactory<AppDbContext> factory, int projectId,
+        IdeaWorkspacePublishedItem published, bool deleteOriginalFeature)
+    {
+        await using var db = await factory.CreateDbContextAsync();
+        var sibling = new Feature { ProjectId = projectId, Name = "Human selected sibling feature" };
+        db.Features.Add(sibling);
+        await db.SaveChangesAsync();
+        var task = await db.Tasks.SingleAsync(item => item.Id == published.TaskId);
+        task.FeatureId = sibling.Id;
+        task.Name = "  Human moved task Ω  ";
+        task.Description = "\r\n    Human retained task detail Ω  \r\n";
+        task.Status = WorkStatus.Done;
+        await db.SaveChangesAsync();
+        if (deleteOriginalFeature)
+        {
+            db.Features.Remove(await db.Features.SingleAsync(item => item.Id == published.FeatureId));
+            await db.SaveChangesAsync();
+        }
+        return sibling.Id;
+    }
 
     private static async Task<IdeaWorkspacePlanRevision> Propose(IdeaWorkspaceService service, string key, params IdeaWorkspacePlanItem[] items)
     {

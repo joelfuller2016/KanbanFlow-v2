@@ -23,6 +23,14 @@
             }
         </details>
     }
+    @if (pendingCopy is { } requested)
+    {
+        <div class="alert alert-warning" role="alert" data-testid="plan-copy-confirmation">
+            <p>Replace your current browser plan draft with “@requested.Title”? Your unsaved title, items and acceptance criteria will be replaced.</p>
+            <button class="btn btn-warning" disabled="@Busy" @onclick="ConfirmCopy" data-testid="plan-copy-confirm">Replace current draft</button>
+            <button class="btn btn-outline-secondary ms-2" @onclick="CancelCopy" data-testid="plan-copy-cancel">Keep my current draft</button>
+        </div>
+    }
     <h3 class="h6 mt-4">Propose a new version</h3>
     @if (editing.BaseRevision is { } original && PlanStale)
     {
@@ -46,9 +54,20 @@
     [Parameter] public EventCallback<int> OnInspectTask { get; set; }
     private readonly WorkspaceDraftInput<WorkspacePlanDraft> input = new(new());
     private WorkspacePlanDraft editing => input.Value;
-    protected override void OnParametersSet() => input.Receive(Draft, Context.WorkspaceId, (Context.Revision, Draft.BaseRevision, Draft.BaseProjectPlanRevision));
+    private IdeaWorkspacePlanRevision? pendingCopy;
+    private string? copyWorkspaceId;
+    private long copyRevision;
+    protected override void OnParametersSet()
+    {
+        if (copyWorkspaceId != Context.WorkspaceId || copyRevision != Context.Revision) pendingCopy = null;
+        input.Receive(Draft, Context.WorkspaceId, (Context.Revision, Draft.BaseRevision, Draft.BaseProjectPlanRevision));
+    }
     private bool PlanStale => editing.BaseRevision.HasValue && (editing.BaseRevision != Context.Revision || editing.BaseProjectPlanRevision != Context.ProjectPlanRevision);
-    private Task Change(WorkspacePlanDraft draft) => input.ChangeAsync(draft with { BaseRevision = draft.BaseRevision ?? Context.Revision, BaseProjectPlanRevision = editing.BaseRevision.HasValue ? draft.BaseProjectPlanRevision : Context.ProjectPlanRevision }, OnDraftChanged);
+    private Task Change(WorkspacePlanDraft draft)
+    {
+        pendingCopy = null;
+        return input.ChangeAsync(draft with { BaseRevision = draft.BaseRevision ?? Context.Revision, BaseProjectPlanRevision = editing.BaseRevision.HasValue ? draft.BaseProjectPlanRevision : Context.ProjectPlanRevision }, OnDraftChanged);
+    }
     private Task TitleChanged(ChangeEventArgs e) => Change(editing with { Title = e.Value?.ToString() ?? "" });
     private Task Reapply() => Change(editing with { BaseRevision = Context.Revision, BaseProjectPlanRevision = Context.ProjectPlanRevision });
     private Task AddItem() => Change(editing with { Items = [.. editing.Items, new()], BaseRevision = editing.BaseRevision ?? Context.Revision });
@@ -56,9 +75,21 @@
     private Task RemoveItem(string id) => Change(editing with { Items = [.. editing.Items.Where(i => i.Id != id).Select(i => i with { DependsOn = [.. i.DependsOn.Where(d => d != id)] })] });
     private Task Propose() => OnCommand.InvokeAsync(WorkspaceUiCommand.Create("propose_plan", new { title = editing.Title, items = editing.Items.Select(i => new { id = i.Id, title = i.Title, description = i.Description, acceptanceCriteria = i.OriginalAcceptanceCriteria ?? WorkspaceUiText.Lines(i.AcceptanceCriteria), dependsOn = i.DependsOn, provenance = i.Provenance }), expectedProjectPlanRevision = editing.BaseProjectPlanRevision }, editing.BaseRevision ?? Context.Revision, "plan"));
     private Task Accept(string id, long? baseline) => OnCommand.InvokeAsync(WorkspaceUiCommand.Create("accept_plan", new { planRevisionId = id, expectedProjectPlanRevision = baseline }, Context.Revision));
-    private Task CopyPlan(IdeaWorkspacePlanRevision plan) => Change(new() { Title = plan.Title, BaseRevision = Context.Revision,
+    private Task CopyPlan(IdeaWorkspacePlanRevision plan)
+    {
+        pendingCopy = plan;
+        copyWorkspaceId = Context.WorkspaceId;
+        copyRevision = Context.Revision;
+        return Task.CompletedTask;
+    }
+    private void CancelCopy() => pendingCopy = null;
+    private Task ConfirmCopy()
+    {
+        if (Busy || pendingCopy is not { } plan) return Task.CompletedTask;
+        return Change(new() { Title = plan.Title, BaseRevision = Context.Revision,
         BaseProjectPlanRevision = Context.ProjectPlanRevision,
         Items = plan.Items.Select(i => new WorkspacePlanItemDraft { Id = i.Id, Title = i.Title, Description = i.Description,
             AcceptanceCriteria = string.Join('\n', i.AcceptanceCriteria), OriginalAcceptanceCriteria = [.. i.AcceptanceCriteria],
             DependsOn = [.. i.DependsOn], Provenance = i.Provenance?.ProjectId == Context.ProjectId ? i.Provenance : null }).ToList() });
+    }
 }

@@ -19,50 +19,74 @@ public partial class WorkspaceCanvas
     private WorkspaceCanvasInterop? interop;
     private DotNetObjectReference<WorkspaceCanvas>? dotNet;
     private readonly Dictionary<string, int> effectiveLayers = [];
+    private readonly Dictionary<string, IdeaWorkspaceComponent> componentsById = [];
+    private readonly Dictionary<string, IdeaWorkspacePlacement> placementsById = [];
+    private readonly Dictionary<string, IdeaWorkspacePlacement> firstPlacementByComponentId = [];
+    private readonly Dictionary<string, (double X, double Y)> worldPositions = [];
+    private IdeaWorkspacePlacement[] orderedPlacements = [];
+    private double OriginX { get; set; }
+    private double OriginY { get; set; }
+    private double CanvasWidth { get; set; }
+    private double CanvasHeight { get; set; }
 
     protected override void OnParametersSet()
     {
         effectiveLayers.Clear();
-        void AddGroup(string? parentId)
+        componentsById.Clear();
+        placementsById.Clear();
+        firstPlacementByComponentId.Clear();
+        worldPositions.Clear();
+        foreach (var component in Document.Components) componentsById.Add(component.Id, component);
+        foreach (var placement in Document.Placements)
         {
-            foreach (var placement in Document.Placements.Where(p => p.ParentId == parentId)
-                .OrderBy(p => p.ZIndex).ThenBy(p => p.Order).ThenBy(p => p.Id, StringComparer.Ordinal))
+            placementsById.Add(placement.Id, placement);
+            firstPlacementByComponentId.TryAdd(placement.ComponentId, placement);
+        }
+        foreach (var placement in Document.Placements)
+        {
+            var path = new List<IdeaWorkspacePlacement>();
+            var visited = new HashSet<string>(StringComparer.Ordinal);
+            var current = placement;
+            (double X, double Y) world;
+            while (!worldPositions.TryGetValue(current.Id, out world))
             {
-                if (!effectiveLayers.TryAdd(placement.Id, effectiveLayers.Count + 1)) continue;
-                AddGroup(placement.Id);
+                if (!visited.Add(current.Id)) throw new InvalidOperationException("Workspace canvas placements contain a parent cycle.");
+                path.Add(current);
+                if (current.ParentId is null) break;
+                current = placementsById[current.ParentId];
+            }
+            for (var index = path.Count - 1; index >= 0; index--)
+            {
+                current = path[index];
+                world = (world.X + current.X, world.Y + current.Y);
+                worldPositions.Add(current.Id, world);
             }
         }
-        AddGroup(null);
+        OriginX = 40 - Math.Min(0, worldPositions.Values.Select(p => p.X).DefaultIfEmpty().Min());
+        OriginY = 40 - Math.Min(0, worldPositions.Values.Select(p => p.Y).DefaultIfEmpty().Min());
+        CanvasWidth = Math.Max(1400, Document.Placements.Select(p => worldPositions[p.Id].X + p.Width + OriginX + 100).DefaultIfEmpty().Max());
+        CanvasHeight = Math.Max(850, Document.Placements.Select(p => worldPositions[p.Id].Y + p.Height + OriginY + 100).DefaultIfEmpty().Max());
+        orderedPlacements = Document.Placements.OrderBy(p => p.Order).ThenBy(p => p.Id, StringComparer.Ordinal).ToArray();
+
+        var groups = Document.Placements.OrderBy(p => p.ZIndex).ThenBy(p => p.Order)
+            .ThenBy(p => p.Id, StringComparer.Ordinal).ToLookup(p => p.ParentId);
+        var pending = new Stack<IdeaWorkspacePlacement>(groups[null].Reverse());
+        while (pending.TryPop(out var layerPlacement))
+        {
+            if (!effectiveLayers.TryAdd(layerPlacement.Id, effectiveLayers.Count + 1)) continue;
+            foreach (var child in groups[layerPlacement.Id].Reverse()) pending.Push(child);
+        }
     }
 
     private static string N(double value) => value.ToString(CultureInfo.InvariantCulture);
     private (double X, double Y) World(IdeaWorkspacePlacement placement)
-    {
-        var x = placement.X;
-        var y = placement.Y;
-        var visited = new HashSet<string> { placement.Id };
-        var parentId = placement.ParentId;
-        while (parentId is not null && visited.Add(parentId))
-        {
-            var parent = Document.Placements.FirstOrDefault(p => p.Id == parentId);
-            if (parent is null) break;
-            x += parent.X;
-            y += parent.Y;
-            parentId = parent.ParentId;
-        }
-        return (x, y);
-    }
+        => worldPositions[placement.Id];
     private (double X, double Y)? Center(string componentId)
     {
-        var placement = Document.Placements.FirstOrDefault(p => p.ComponentId == componentId);
-        if (placement is null) return null;
+        if (!firstPlacementByComponentId.TryGetValue(componentId, out var placement)) return null;
         var world = World(placement);
         return (world.X + OriginX + placement.Width / 2, world.Y + OriginY + placement.Height / 2);
     }
-    private double OriginX => 40 - Math.Min(0, Document.Placements.Select(p => World(p).X).DefaultIfEmpty().Min());
-    private double OriginY => 40 - Math.Min(0, Document.Placements.Select(p => World(p).Y).DefaultIfEmpty().Min());
-    private double CanvasWidth => Math.Max(1400, Document.Placements.Select(p => World(p).X + p.Width + OriginX + 100).DefaultIfEmpty().Max());
-    private double CanvasHeight => Math.Max(850, Document.Placements.Select(p => World(p).Y + p.Height + OriginY + 100).DefaultIfEmpty().Max());
     // Dynamic geometry is expressed as CSS properties; presentation remains in the isolated stylesheet.
     private string CanvasStyle => $"--canvas-width:{N(CanvasWidth)}px;--canvas-height:{N(CanvasHeight)}px";
     private string PlacementStyle(IdeaWorkspacePlacement p)

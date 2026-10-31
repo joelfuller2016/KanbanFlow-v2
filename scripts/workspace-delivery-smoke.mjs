@@ -1,8 +1,12 @@
 import assert from "node:assert/strict";
 import { openWorkspaceStdio, workspaceNativePacket, workspaceToolValue } from "./workspace-transport.mjs";
 
-const base = process.env.KANBANFLOW_API_URL;
+const base = process.env.KANBANFLOW_API_URL?.replace(/\/$/, "");
 assert.ok(base, "Set an explicit disposable API URL. This check creates and removes labeled fixture projects/tasks.");
+const address = new URL(base);
+assert.ok(["127.0.0.1", "localhost", "[::1]"].includes(address.hostname), "Use a disposable loopback app.");
+assert.ok(!address.username && !address.password && address.pathname === "/" && !address.search && !address.hash,
+  "Provide a local API origin without credentials, path, query or fragment.");
 const prefix = `workspace-delivery-${Date.now()}`;
 const actor = "delivery-smoke";
 const normalized = value => Array.isArray(value) ? value.map(normalized) : value && typeof value === "object"

@@ -12,7 +12,12 @@
     <fieldset class="mb-3"><legend class="h6">Focus components</legend>
         @foreach (var c in Context.Document.Components)
         {
-            <label class="d-block" @key="c.Id"><input type="checkbox" class="form-check-input me-2" checked="@editing.FocusedComponentIds.Contains(c.Id)" @onchange="e => FocusChanged(c.Id, (bool)(e.Value ?? false))" />@c.Title</label>
+            <label class="d-block" @key="c.Id"><input type="checkbox" class="form-check-input me-2" checked="@editing.FocusedComponentIds.Contains(c.Id)" @onchange="e => FocusChanged(c.Id, (bool)(e.Value ?? false))" data-testid="checkpoint-focus-@c.Id" />@c.Title</label>
+        }
+        @foreach (var id in editing.FocusedComponentIds.Where(id => !Context.Document.Components.Any(c => c.Id == id)).Distinct())
+        {
+            <label class="d-block" @key="id"><input type="checkbox" class="form-check-input me-2" checked="true" @onchange="e => FocusChanged(id, (bool)(e.Value ?? false))" data-testid="checkpoint-missing-focus-@id" />Removed component · @id</label>
+            <p class="text-muted small">This selected component was removed. Uncheck it before saving this checkpoint; your objective and next actions are retained.</p>
         }
     </fieldset>
     <button class="btn btn-primary" disabled="@(Busy || string.IsNullOrEmpty(ClientId))" @onclick="Save" data-testid="checkpoint-save">Save resume checkpoint</button>

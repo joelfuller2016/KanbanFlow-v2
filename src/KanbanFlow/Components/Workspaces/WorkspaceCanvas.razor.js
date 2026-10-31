@@ -80,7 +80,12 @@ class CanvasController {
     }
     async #commit(update, revision, workspaceId) {
         this.#pending = true;
-        try { await this.#callback.invokeMethodAsync(APPLY_LAYOUT, workspaceId, [update], revision); }
+        try {
+            await this.#callback.invokeMethodAsync(APPLY_LAYOUT, workspaceId, [update], revision);
+            const error = this.#root.closest('section').querySelector('[data-testid="canvas-input-error"]');
+            error.hidden = true;
+            error.textContent = '';
+        }
         catch {
             const error = this.#root.closest('section').querySelector('[data-testid="canvas-input-error"]');
             error.textContent = 'The layout could not be sent. The canvas returned to its saved position. Reconnect and retry the move or use the layout fields.';

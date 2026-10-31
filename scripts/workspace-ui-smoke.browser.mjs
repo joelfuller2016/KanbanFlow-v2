@@ -218,7 +218,7 @@ async page => {
         "The filtered gallery must contain exactly three fixture workspaces.");
       for (const key of [a.workspaceId, b.workspaceId, projectKey])
         check(await id(`gallery-card-${key}`).count() === 1, "The complete filtered gallery must show each fixture key exactly once.");
-      check(await id(`gallery-card-${projectKey}`).getByRole("link", { name: "Kanban ↗", exact: true }).getAttribute("href") === `/project/${project.id}`,
+      check(await id(`gallery-card-${projectKey}`).getByRole("link", { name: `Open Kanban: ${project.name}`, exact: true }).getAttribute("href") === `/project/${project.id}`,
         "A standalone project card must link to its real Kanban board.");
     });
 

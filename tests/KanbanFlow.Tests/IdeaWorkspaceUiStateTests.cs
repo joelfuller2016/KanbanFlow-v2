@@ -1,4 +1,9 @@
+using System.Reflection;
+using System.Text.Json;
+using KanbanFlow.Components.Pages;
 using KanbanFlow.Components.Workspaces;
+using KanbanFlow.Models.IdeaWorkspaces;
+using KanbanFlow.Services.IdeaWorkspaces;
 using Microsoft.AspNetCore.Components;
 
 namespace KanbanFlow.Tests;
@@ -6,6 +11,94 @@ namespace KanbanFlow.Tests;
 public sealed class IdeaWorkspaceUiStateTests
 {
     private static readonly TimeSpan CallbackTimeout = TimeSpan.FromSeconds(10);
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task RestoredCleanBuffers_UseCurrentSavedContentAndLayout_FromCacheOrStorage(bool fromCache)
+    {
+        await using var component = new IdeaWorkspace();
+        var saved = CurrentContext();
+        var previous = new WorkspaceBrowserDraft
+        {
+            SelectedComponentId = "card-a", SelectedPlacementId = "place-a",
+            ContentDrafts = new() { ["card-a"] = Draft("card-a", 8, "Old saved title", "\r\n  Old saved text Ω  \r\n") },
+            LayoutDrafts = new() { ["place-a"] = new() { PlacementId = "place-a", BaseRevision = 8, X = 10, Y = 20 } },
+            Checkpoint = new() { Objective = CompleteText("Independent resume objective") }
+        };
+
+        var restored = Restore(component, saved, previous, fromCache);
+
+        Assert.Equal(WorkspaceContentDraft.From(saved.Document.Components[0], saved.Revision), restored.ContentDrafts["card-a"]);
+        Assert.Equal(WorkspaceLayoutDraft.From(saved.Document.Placements[0], saved.Revision), restored.LayoutDrafts["place-a"]);
+        Assert.Equal("card-a", restored.SelectedComponentId);
+        Assert.Equal("place-a", restored.SelectedPlacementId);
+        Assert.Same(previous.Checkpoint, restored.Checkpoint);
+        Assert.False(previous.ContentDrafts["card-a"].Dirty);
+        Assert.Equal(8, previous.ContentDrafts["card-a"].BaseRevision);
+        Assert.Equal(10, previous.LayoutDrafts["place-a"].X);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task RestoredDirtyBuffers_PreserveCompleteTextLayoutAndPendingOperation_FromCacheOrStorage(bool fromCache)
+    {
+        await using var component = new IdeaWorkspace();
+        var text = CompleteText("Retained authored draft");
+        var content = Draft("card-a", 8, "  Unsaved title Ω  ", text) with { Dirty = true };
+        var layout = new WorkspaceLayoutDraft { PlacementId = "place-a", BaseRevision = 8, X = 88, Y = 99, Width = 410, Dirty = true };
+        var pending = new WorkspacePendingCommand(new("immutable-operation", 8, "update_component",
+            JsonSerializer.SerializeToElement(new { componentId = "card-a", content = text }), "ui-test"), "content:card-a");
+        var previous = new WorkspaceBrowserDraft
+        {
+            SelectedComponentId = "card-a", SelectedPlacementId = "place-a",
+            ContentDrafts = new() { ["card-a"] = content }, LayoutDrafts = new() { ["place-a"] = layout },
+            Discussion = new(text), Plan = new() { Title = text, BaseRevision = 8 },
+            Checkpoint = new() { Objective = text, NextActions = text }, Pending = pending
+        };
+
+        var restored = Restore(component, CurrentContext(), previous, fromCache);
+
+        Assert.Same(content, restored.ContentDrafts["card-a"]);
+        Assert.Equal(text, restored.ContentDrafts["card-a"].Content);
+        Assert.Equal(8, restored.ContentDrafts["card-a"].BaseRevision);
+        Assert.Same(layout, restored.LayoutDrafts["place-a"]);
+        Assert.Same(previous.Discussion, restored.Discussion);
+        Assert.Same(previous.Plan, restored.Plan);
+        Assert.Same(previous.Checkpoint, restored.Checkpoint);
+        Assert.Same(pending, restored.Pending);
+        Assert.NotNull(restored.Pending);
+        Assert.Equal(text, restored.Pending.Command.Payload.GetProperty("content").GetString());
+    }
+
+    // The repository has no component renderer test dependency. Invoke the real restoration block;
+    // workspace-ui-restoration.browser.mjs separately drives the actual rendered A/B/A and reload paths.
+    private static WorkspaceBrowserDraft Restore(IdeaWorkspace component, IdeaWorkspaceContext saved, WorkspaceBrowserDraft previous, bool fromCache)
+    {
+        const BindingFlags flags = BindingFlags.Instance | BindingFlags.NonPublic;
+        var type = typeof(IdeaWorkspace);
+        FieldInfo Field(string name) => type.GetField(name, flags)
+            ?? throw new Xunit.Sdk.XunitException($"IdeaWorkspace no longer has the restoration field {name}.");
+        Field("context").SetValue(component, saved);
+        if (fromCache)
+            ((Dictionary<string, WorkspaceBrowserDraft>)Field("browserCache").GetValue(component)!)[saved.WorkspaceId] = previous;
+        var method = type.GetMethod("RestoreDraft", flags)
+            ?? throw new Xunit.Sdk.XunitException("IdeaWorkspace no longer has its RestoreDraft block.");
+        method.Invoke(component, [new WorkspaceUiScope(saved.WorkspaceId, 3), new WorkspaceBrowserSession("browser-client", "tab-session", fromCache ? new() : previous)]);
+        return Assert.IsType<WorkspaceBrowserDraft>(Field("draft").GetValue(component));
+    }
+
+    private static IdeaWorkspaceContext CurrentContext()
+    {
+        var source = new IdeaWorkspaceSource("idea", 11, "Current idea", "Source", null, null, null, null, null, null, default, default);
+        return new("idea:11", "idea", 11, source.Title, 12, source, source, false, null, false,
+            "/ideas/workspace/idea/11", null, null, default, 42, new()
+            {
+                Components = [new() { Id = "card-a", Title = "Current saved title Ω", Content = CompleteText("Current saved content") }],
+                Placements = [new() { Id = "place-a", ComponentId = "card-a", X = 120, Y = 230, Width = 460, Height = 310, Order = 4, ZIndex = 3 }]
+            });
+    }
 
     [Theory]
     [InlineData(true)]

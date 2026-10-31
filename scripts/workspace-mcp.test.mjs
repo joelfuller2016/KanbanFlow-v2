@@ -2,11 +2,14 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import { once } from "node:events";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { openWorkspaceStdio, workspaceToolValue } from "./workspace-transport.mjs";
 import { workspaceReadTools, workspaceWriteTools } from "./workspace-mcp-tools.mjs";
 
 // These fixtures verify the real wrapper/HTTP adapter, not production workspace persistence.
-async function withAdapter(status, payload, run) {
+async function withAdapter(status, payload, run, options) {
   const requests = [];
   const server = createServer(async (request, response) => {
     let body = "";
@@ -16,10 +19,34 @@ async function withAdapter(status, payload, run) {
     response.end(JSON.stringify(payload));
   });
   server.listen(0, "127.0.0.1"); await once(server, "listening");
-  const client = await openWorkspaceStdio(`http://127.0.0.1:${server.address().port}`);
+  const client = await openWorkspaceStdio(`http://127.0.0.1:${server.address().port}`, options);
   try { await run(client, requests); }
   finally { await client.close(); await new Promise(resolve => server.close(resolve)); }
 }
+
+test("rejected workspace arguments are recorded once without logging their authored payload", async () => {
+  const scratch = fileURLToPath(new URL("../_sandbox/579/", import.meta.url));
+  mkdirSync(scratch, { recursive: true });
+  const logPath = path.join(mkdtempSync(path.join(scratch, "usage-rejection-")), "usage.jsonl");
+  const privateMarker = "PRIVATE-REJECTED-WORKSPACE-BODY";
+  await withAdapter(200, {}, async (client, requests) => {
+    const packet = await client.call("create_workspace", {
+      operationId: "usage-rejection", title: "No source should be saved", actor: "usage-regression",
+      unsupportedReadme: privateMarker,
+    });
+    assert.equal(packet.error.code, -32602);
+    assert.equal(requests.length, 0, "rejected fields must not reach the HTTP API");
+    const text = existsSync(logPath) ? readFileSync(logPath, "utf8") : "";
+    const rows = text.split("\n").filter(Boolean).map(line => JSON.parse(line));
+    assert.equal(rows.length, 1, "the actual wrapper must record this rejected tools/call");
+    assert.equal(rows[0].tool, "create_workspace");
+    assert.equal(rows[0].outcome, "error");
+    assert.equal(rows[0].code, -32602);
+    assert.equal(rows[0].actor, "usage-regression");
+    for (const value of [privateMarker, "unsupportedReadme", "usage-rejection", "No source should be saved"])
+      assert.equal(text.includes(value), false, "only allowlisted usage metadata may be logged");
+  }, { usageLog: logPath });
+});
 
 test("workspace read tools are discoverable through actual stdio with complete paging metadata", async () => {
   await withAdapter(200, { items: [], total: 150, nextCursor: "next-page" }, async (client, requests) => {
