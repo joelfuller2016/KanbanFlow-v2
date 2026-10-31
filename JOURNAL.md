@@ -52,6 +52,12 @@ A review of the repository and a test run on 2026-09-26 filed findings as issues
 
 ## Entries (newest first)
 
+- 2026-10-31 12:26Z (scheduled PR monitor, four-hundred-and-thirty-second run): build gate DOWN — builds.dotnet.microsoft.com blocked by proxy policy; apt-based install blocked by auto-mode classifier.
+  - 4 open PRs: #578 (non-draft, mergeable=clean, head SHA 17780aa); #564, #521, #511 (drafts, skipped).
+  - PHASE 1: 0 merges (gate down, no build/test possible).
+  - PHASE 2: 0 unresolved review threads on #578. Drafts skipped.
+  - Master: not verified (gate down).
+
 - 2026-10-31 11:26Z (scheduled PR monitor, four-hundred-and-thirty-first run): build gate UP (.NET 10.0.114 via Ubuntu 24.04 Microsoft apt feed, installed fresh this run).
   - 4 open PRs: #578 (non-draft, mergeable=clean, head SHA 17780aa); #564, #521, #511 (drafts, skipped).
   - PHASE 1: 0 merges. #578 (Microsoft.OpenApi 2.13.0→3.11.0) — same known NU1608 build failure (Microsoft.AspNetCore.OpenApi 10.0.14 requires Microsoft.OpenApi >= 2.12.2 && < 3.0.0); comment already on PR (2026-10-28), no new comment posted.
