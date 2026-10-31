@@ -52,6 +52,11 @@ A review of the repository and a test run on 2026-09-26 filed findings as issues
 
 ## Entries (newest first)
 
+- 2026-10-31 13:13Z (scheduled Dependabot automerge, run): build gate UP (.NET 10.0.114 via Ubuntu 24.04 Microsoft apt feed, installed fresh this run).
+  - 1 open Dependabot PR: #578 (Microsoft.OpenApi 2.13.0→3.11.0, non-draft, head SHA 17780aa).
+  - BUILD GATE: `dotnet build KanbanFlow.slnx -warnaserror` → FAILED. Same known NU1608 error: Microsoft.AspNetCore.OpenApi 10.0.14 requires Microsoft.OpenApi (>= 2.12.2 && < 3.0.0) but version 3.11.0 was resolved. Tests not run (build did not pass).
+  - RESULT: 0 merges. PR #578 blocked by build failure. No new comment posted (failure comment already on PR from 2026-10-28; same error, no change).
+
 - 2026-10-31 13:02Z Codex: Ideas workspace concept review and workflow storyboard.
   - Request: review Ideas versus Projects, research online patterns, and propose an idea-card gallery opening a collaborative whiteboard with an evolving project plan. Reviewed source master/fb933fc0d64f2e4a51e0886f16b7bd396e78f0fd in isolated local branch concept/ideas-workspace-20261031; preserved the existing dirty feat/unified-workflow-509 checkout. Journal publication base 27c643d507ca5d1309565d68421dff78852a91a6 differs from the reviewed source only in JOURNAL.md.
   - Findings: Ideas currently uses five triage columns and Markdown Body/Plan fields; promotion copies content into a new Project, and later edits can diverge. The gallery currently lacks paging beyond the default 100 items and excludes Plan from search. Source inspection and an independent design critique informed the proposal.
