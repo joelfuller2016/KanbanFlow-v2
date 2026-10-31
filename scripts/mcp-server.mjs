@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import { createUsageLogger } from "./usage-log.mjs";
+import { workspaceReadTools } from "./workspace-mcp-tools.mjs";
 
 const apiBaseUrl = (process.env.KANBANFLOW_API_URL || "http://127.0.0.1:5123").replace(/\/$/, "");
 const defaultRestTimeoutMs = 10000;
@@ -51,6 +52,7 @@ const inFlightRequestIds = new Set();
 const usageLogger = createUsageLogger();
 
 const tools = [
+  ...workspaceReadTools,
   {
     name: "list_projects",
     description: "List all projects with feature and task counts.",
@@ -1504,6 +1506,37 @@ async function callTool(toolName, args) {
         // Actor is optional and defaults to "mcp-agent", mirroring the native tool (F4 parity fix).
         body: { actor: optionalString(args, "actor")?.trim() || "mcp-agent" }
       });
+
+    case "get_workspace_capabilities":
+      return restJson("/api/workspace-capabilities");
+    case "list_workspaces": {
+      const query = new URLSearchParams();
+      for (const key of ["kind", "status", "q", "cursor"]) {
+        const value = optionalString(args, key);
+        if (value !== undefined) query.set(key, value);
+      }
+      const limit = optionalInt(args, "limit", { min: 1, max: 500 });
+      if (limit !== undefined) query.set("limit", String(limit));
+      return restJson(`/api/workspaces?${query}`);
+    }
+    case "get_workspace_context":
+      return restJson(`/api/workspaces/${encodeURIComponent(requiredString(args, "workspaceId"))}/context`);
+    case "list_workspace_components":
+    case "get_workspace_changes": {
+      const query = new URLSearchParams();
+      const cursor = optionalString(args, "cursor");
+      const limit = optionalInt(args, "limit", { min: 1, max: 500 });
+      if (cursor !== undefined) query.set("cursor", cursor);
+      if (limit !== undefined) query.set("limit", String(limit));
+      if (toolName === "get_workspace_changes") {
+        const after = optionalInt(args, "afterActivityId", { min: 0 });
+        if (after !== undefined) query.set("afterActivityId", String(after));
+      }
+      const collection = toolName === "get_workspace_changes" ? "changes" : "components";
+      return restJson(`/api/workspaces/${encodeURIComponent(requiredString(args, "workspaceId"))}/${collection}?${query}`);
+    }
+    case "get_workspace_component":
+      return restJson(`/api/workspaces/${encodeURIComponent(requiredString(args, "workspaceId"))}/components/${encodeURIComponent(requiredString(args, "componentId"))}`);
 
     // ── Knowledge-graph memory tools (#224) — forwarded to the native MCP server ──
     // The graph semantics live in the native tools; the wrapper forwards the call verbatim so

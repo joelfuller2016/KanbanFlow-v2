@@ -202,6 +202,7 @@ app.MapGet("/openapi.json", (HttpContext ctx) =>
 });
 
 app.MapApiEndpoints();
+app.MapIdeaWorkspaceEndpoints();
 app.MapAdminEndpoints();
 
 // Native MCP server (Streamable HTTP), prototype — agents connect at POST /mcp.

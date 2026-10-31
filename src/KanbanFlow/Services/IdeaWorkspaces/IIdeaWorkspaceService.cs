@@ -5,6 +5,15 @@ namespace KanbanFlow.Services.IdeaWorkspaces;
 
 public interface IIdeaWorkspaceService
 {
+    IdeaWorkspaceCapabilities GetCapabilities();
+    Task<IdeaWorkspacePage<IdeaWorkspaceSummary>> ListAsync(string? kind = null, string? status = null,
+        string? q = null, string? cursor = null, int? limit = null, CancellationToken ct = default);
+    Task<IdeaWorkspacePage<IdeaWorkspaceComponentSummary>> ListComponentsAsync(string workspaceId,
+        string? cursor = null, int? limit = null, CancellationToken ct = default);
+    Task<IdeaWorkspaceComponentDetail> GetComponentAsync(string workspaceId, string componentId,
+        CancellationToken ct = default);
+    Task<IdeaWorkspaceChangePage> GetChangesAsync(string workspaceId, string? cursor = null,
+        int? afterActivityId = null, int? limit = null, CancellationToken ct = default);
     Task<IdeaWorkspaceContext> GetAsync(string workspaceId, CancellationToken ct = default);
     Task<IdeaWorkspaceMutationResult> ExecuteAsync(string workspaceId, IdeaWorkspaceCommand command, CancellationToken ct = default);
 }
@@ -26,7 +35,17 @@ public sealed record IdeaWorkspaceContext(
     IdeaWorkspaceSource? Source, IdeaWorkspaceSource OriginalSource,
     bool SourceMissing, int? ProjectId, bool ProjectMissing,
     string WorkspaceUrl, string? KanbanUrl, string? AcceptedPlanWorkspaceId,
-    DateTime UpdatedAt, int LastActivityId, IdeaWorkspaceDocument Document);
+    DateTime UpdatedAt, int LastActivityId, IdeaWorkspaceDocument Document)
+{
+    public IdeaWorkspaceSource? ProjectSource { get; init; }
+    public IdeaWorkspaceSource? OriginalProjectSource { get; init; }
+    public IdeaWorkspacePlanRevision? AcceptedPlan { get; init; }
+    public long? ProjectPlanRevision { get; init; }
+    public int ComponentCount { get; init; }
+    public string ComponentsUrl { get; init; } = "";
+    public string ChangesUrl { get; init; } = "";
+    public string PlanUrl { get; init; } = "";
+}
 
 public sealed class IdeaWorkspaceException(int statusCode, string code, string message) : Exception(message)
 {

@@ -14,7 +14,7 @@
 | | |
 |---|---|
 | **Stack** | .NET 10 · Blazor Server · SQLite (EF Core 10) · Minimal APIs · Node 18+ for the MCP wrapper |
-| **Surfaces** | 6 UI routes · 71 REST endpoints · 28 native MCP tools · 50 Node-wrapper MCP tools |
+| **Surfaces** | 6 UI routes · 78 REST operations · 35 native MCP tools · 57 Node-wrapper MCP tools (measured in the disposable app, October 31, 2026) |
 | **Sync** | GitHub → board projection, plus one explicit additive board → GitHub issue-create path. Preview is the default; live create requires `--allow-write --task <id>` and a durable journal. No edit/close/delete path — see [Who owns what](#who-owns-what) |
 | **Tests** | 1,079 xUnit · 56 in-app integration · 52 Playwright e2e · 274 script unit · 2 smoke suites — [all local, no CI](#deliberate-non-features) |
 | **Runs at** | `http://127.0.0.1:5123` — localhost only, no auth, no Docker, no cloud |
@@ -141,7 +141,7 @@ flowchart LR
         direction TB
         UI["Blazor UI<br/>/ · /project/{id} · /ideas · /memory"]
         REST["REST · 71 endpoints"]
-        MCP["MCP · 28 native / 50 wrapper"]
+        MCP["MCP · 35 native / 57 wrapper"]
     end
 
     REPO --> READ
@@ -177,7 +177,7 @@ The right-hand box is the part that makes this a projection rather than a mirror
 entities are created by you and by agents doing real work, live only on the board, and are
 invisible to GitHub.
 
-The sync also **cannot** run over the native MCP server: the 28 native tools include
+The sync also **cannot** run over the native MCP server: the 35 native tools include
 `list_projects` and `get_project_context` but **no `create_project`**, so an agent on `/mcp`
 cannot onboard a repo. That parity gap is [#231](https://github.com/joelfuller2016/KanbanFlow-v2/issues/231).
 
@@ -715,11 +715,11 @@ the command beside it — not copied from the previous README, and not copied fr
 
 | Surface | Count | Command that produced it |
 |---|---:|---|
-| REST endpoints (app) | 66 | `grep -cE '\.Map(Get\|Post\|Put\|Patch\|Delete)\(' src/KanbanFlow/ApiEndpoints.cs` |
-| REST endpoints (admin) | 5 | `grep -cE '\.Map(Get\|Post\|Put\|Patch\|Delete)\(' src/KanbanFlow/AdminEndpoints.cs` |
-| **REST endpoints total** | **71** | *sum of the two above* |
-| Native MCP tools (`POST /mcp`) | 28 | `grep -c '\[McpServerTool(' src/KanbanFlow/Mcp/KanbanMcpTools.cs` |
-| Node-wrapper MCP tools | 50 | `tools/list` over stdio against `scripts/mcp-server.mjs` — [exact invocation](docs/ARCHITECTURE.md#mcp-surface-28-native--50-wrapper) |
+| REST operations (app) | 73 | Actual OpenAPI `/api/` operations excluding `/api/admin/`, including workspace routes |
+| REST operations (admin) | 5 | Actual OpenAPI `/api/admin/` operations |
+| **REST operations total** | **78** | Actual OpenAPI operation inventory, October 31, 2026 |
+| Native MCP tools (`POST /mcp`) | 35 | Actual `tools/list`; source inventory covers every file under `src/KanbanFlow/Mcp`, including `IdeaWorkspaceMcpTools.cs` |
+| Node-wrapper MCP tools | 57 | Actual `tools/list` over stdio; [workspace verification and transport notes](docs/idea-workspaces.md) |
 | Blazor routes | 6 | `grep -rn '@page' src/KanbanFlow/Components/ \| sort -u` → `/`, `/Error`, `/ideas`, `/memory`, `/project/{Id:int}`, `/settings` |
 | Razor components | 28 | `find src/KanbanFlow/Components -name '*.razor' \| wc -l` |
 | xUnit tests | 1,079 | `dotnet test tests/KanbanFlow.Tests` |

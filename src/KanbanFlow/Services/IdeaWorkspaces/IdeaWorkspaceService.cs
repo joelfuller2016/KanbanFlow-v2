@@ -14,6 +14,7 @@ namespace KanbanFlow.Services.IdeaWorkspaces;
 public sealed partial class IdeaWorkspaceService : IIdeaWorkspaceService
 {
     private readonly IDbContextFactory<AppDbContext> _dbFactory;
+    private readonly TimeProvider _timeProvider;
     internal static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
     private static readonly JsonSerializerOptions CommandJsonOptions = new(JsonOptions)
     {
@@ -22,8 +23,11 @@ public sealed partial class IdeaWorkspaceService : IIdeaWorkspaceService
     public static IReadOnlyList<string> ComponentTypes { get; } =
         ["frame", "note", "markdown", "research", "image", "question", "decision", "checklist", "table", "plan", "task-reference"];
 
-    public IdeaWorkspaceService(IDbContextFactory<AppDbContext> dbFactory)
-        => _dbFactory = dbFactory ?? throw new ArgumentNullException(nameof(dbFactory));
+    public IdeaWorkspaceService(IDbContextFactory<AppDbContext> dbFactory, TimeProvider? timeProvider = null)
+    {
+        _dbFactory = dbFactory ?? throw new ArgumentNullException(nameof(dbFactory));
+        _timeProvider = timeProvider ?? TimeProvider.System;
+    }
 
     public async Task<IdeaWorkspaceContext> GetAsync(string workspaceId, CancellationToken ct = default)
     {
@@ -163,7 +167,15 @@ public sealed partial class IdeaWorkspaceService : IIdeaWorkspaceService
         var original = state is null ? source! : Deserialize<IdeaWorkspaceSource>(state.OriginalSourceJson);
         var document = state is null ? CreateDocument(original) : Deserialize<IdeaWorkspaceDocument>(state.DocumentJson);
         var projectId = state?.LinkedProjectId ?? source?.ProjectId ?? original.ProjectId;
-        var projectExists = projectId is not null && await db.Projects.AsNoTracking().AnyAsync(p => p.Id == projectId, ct);
+        var projectSource = projectId is null ? null : key.Kind == "project" && key.SourceId == projectId
+            ? source : await ReadSourceAsync(db, new IdeaWorkspaceKey("project", projectId.Value), ct);
+        var projectExists = projectSource is not null;
+        var projectState = projectId is null ? null : key.Kind == "project" && key.SourceId == projectId
+            ? state : await db.Set<IdeaWorkspaceState>().AsNoTracking()
+                .SingleOrDefaultAsync(s => s.WorkspaceId == $"project:{projectId}", ct);
+        var projectDocument = projectState is null ? null : Deserialize<IdeaWorkspaceDocument>(projectState.DocumentJson);
+        var acceptedDocument = projectId is null ? document : projectDocument;
+        var accepted = acceptedDocument?.PlanRevisions.SingleOrDefault(p => p.Id == acceptedDocument.AcceptedPlanRevisionId);
         var lastActivityId = await db.ActivityEvents.AsNoTracking()
             .Where(a => a.EntityType == key.AuditEntityType && a.EntityId == key.SourceId)
             .Select(a => (int?)a.Id).MaxAsync(ct) ?? 0;
@@ -171,7 +183,17 @@ public sealed partial class IdeaWorkspaceService : IIdeaWorkspaceService
             state?.Revision ?? 0, source, original, source is null, projectId, projectId is not null && !projectExists,
             $"/ideas/workspace/{key.Kind}/{key.SourceId}", projectExists ? $"/project/{projectId}" : null,
             projectId is null ? null : $"project:{projectId}", state?.UpdatedAt ?? source?.UpdatedAt ?? original.UpdatedAt,
-            lastActivityId, document);
+            lastActivityId, document)
+        {
+            ProjectSource = projectSource,
+            OriginalProjectSource = projectState is null ? projectSource : Deserialize<IdeaWorkspaceSource>(projectState.OriginalSourceJson),
+            AcceptedPlan = accepted,
+            ProjectPlanRevision = projectId is null ? null : projectState?.Revision ?? 0,
+            ComponentCount = document.Components.Count,
+            ComponentsUrl = $"/api/workspaces/{key.WorkspaceId}/components",
+            ChangesUrl = $"/api/workspaces/{key.WorkspaceId}/changes",
+            PlanUrl = $"/ideas/workspace/{key.Kind}/{key.SourceId}?view=plan"
+        };
     }
 
     private static async Task<IdeaWorkspaceSource?> ReadSourceAsync(AppDbContext db, IdeaWorkspaceKey key, CancellationToken ct)
