@@ -13,7 +13,8 @@ export function initialize(workspaceId) {
 
 export function readDraft(workspaceId) {
     const value = sessionStorage.getItem(DRAFT_PREFIX + workspaceId);
-    return value === null ? null : JSON.parse(value);
+    if (value === null) return null;
+    try { return JSON.parse(value); } catch { sessionStorage.removeItem(DRAFT_PREFIX + workspaceId); return null; }
 }
 
 export function saveDraft(workspaceId, draft, writerId, version) {

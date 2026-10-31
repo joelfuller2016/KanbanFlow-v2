@@ -32,5 +32,6 @@ public sealed class WorkspaceBrowserInterop(IJSRuntime js) : IAsyncDisposable
             await module.DisposeAsync();
         }
         catch (JSDisconnectedException) { }
+        catch (JSException) { }
     }
 }
