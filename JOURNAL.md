@@ -52,6 +52,14 @@ A review of the repository and a test run on 2026-09-26 filed findings as issues
 
 ## Entries (newest first)
 
+- 2026-10-31 23:34Z (scheduled PR monitor, continuation — chatgpt-codex review on PR #580 commit e21a7bc):
+  - Codex review completed and posted 3 new P2 findings. Also found 3 pre-existing unresolved threads (PRRT_kwDOSA8y6s6yVTPU delivery-selection relink, PRRT_kwDOSA8y6s6yVTPW ghost-buffer, PRRT_kwDOSA8y6s6yViTd new-card overwrite) that had owner "P2 — noted" confirmations but had not been resolved.
+  - Finding 1 (WorkspaceCanvasInterop.cs canvas disposal race — PRRT_kwDOSA8y6s6yVkqh): REAL BUG. Fixed in 63f8094. Added `_disposed` bool; `InitializeAsync` now checks it after the import await and disposes the imported module cleanly if the component was already torn down, preventing `ObjectDisposedException` from the disposed callback.
+  - Finding 2 (preserve unread drafts before memory cache — PRRT_kwDOSA8y6s6yVkqa): Duplicate of RetryDraftStorage race in PRRT_kwDOSA8y6s6yVSbe (owner-deferred, stays open). Replied + resolved as duplicate.
+  - Finding 3 (separate $new draft key — PRRT_kwDOSA8y6s6yVkqf): Duplicate of $new-collision variants in PRRT_kwDOSA8y6s6yVTPW and PRRT_kwDOSA8y6s6yViTd. Replied + resolved as duplicate.
+  - Resolved 6 threads total (PRRT_kwDOSA8y6s6yVkqh, _Vkqa, _Vkqf, _VTPU, _VTPW, _ViTd). Left PRRT_kwDOSA8y6s6yVSbe (RetryDraftStorage) open per owner instruction.
+  - Branch build/test after 63f8094: GREEN (0 warnings/0 errors, 1494 total, 2 pre-existing filesystem failures).
+
 - 2026-10-31 23:19Z (scheduled PR monitor, four-hundred-and-forty-second run): build gate UP (.NET 10.0.114 via Ubuntu 24.04 Microsoft apt feed, installed fresh this run).
   - 5 open PRs: #580 (non-draft, feat/579-idea-workspaces, head SHA now e21a7bc after new commits by owner b42bd16 + this run's fix e21a7bc); #578 (non-draft, head SHA 17780aa); #564, #521, #511 (drafts, skipped).
   - PHASE 1: 0 merges. #580 mergeable_state=blocked — 4 unresolved review threads (1 MAJOR CodeRabbit RetryDraftStorage + 3 P2 chatgpt-codex). #578 mergeable_state=clean but build gate FAILS (same known NU1608: Microsoft.OpenApi 3.11.0 incompatible with Microsoft.AspNetCore.OpenApi 10.0.14 which requires < 3.0.0); no CodeRabbit review (check=skipped); not merged.
