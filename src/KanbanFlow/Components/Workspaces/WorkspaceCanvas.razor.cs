@@ -91,7 +91,7 @@ public partial class WorkspaceCanvas
     private string CanvasStyle => $"--canvas-width:{N(CanvasWidth)}px;--canvas-height:{N(CanvasHeight)}px";
     private string PlacementStyle(IdeaWorkspacePlacement p)
     {
-        var world = World(p);
+        var world = worldPositions[p.Id];
         return $"--card-x:{N(world.X + OriginX)}px;--card-y:{N(world.Y + OriginY)}px;--card-width:{N(p.Width)}px;--card-height:{N(p.Height)}px;--card-layer:{effectiveLayers.GetValueOrDefault(p.Id, 1)}";
     }
 
