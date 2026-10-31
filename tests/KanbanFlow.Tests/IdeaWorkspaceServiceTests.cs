@@ -752,6 +752,24 @@ public sealed class IdeaWorkspaceServiceTests
     }
 
     [Fact]
+    public async Task ProposedPlan_VeryDeepDependencyChain_DoesNotOverflowStack()
+    {
+        // 20 000 items in a straight chain; a recursive Visit() would blow the call stack
+        using var factory = new SqliteTestFactory();
+        var key = $"idea:{await SeedIdea(factory)}";
+        var service = new IdeaWorkspaceService(factory);
+        const int depth = 20_000;
+        var items = Enumerable.Range(0, depth)
+            .Select(index => PlanItem($"item-{index}", index + 1 < depth ? [$"item-{index + 1}"] : []))
+            .ToArray();
+
+        await Change(service, key, 0, "propose_plan", new { title = "Stack-overflow regression chain", items });
+
+        var saved = Assert.Single((await service.GetAsync(key)).Document.PlanRevisions);
+        Assert.Equal(depth, saved.Items.Count);
+    }
+
+    [Fact]
     public async Task ProposedPlan_SharedDependencyGraph_PreservesEveryAuthoredBranch()
     {
         using var factory = new SqliteTestFactory();
