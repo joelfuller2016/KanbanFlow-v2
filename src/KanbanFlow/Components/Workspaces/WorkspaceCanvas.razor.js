@@ -87,9 +87,8 @@ class CanvasController {
             error.textContent = '';
         }
         catch {
-            const error = this.#root.closest('section').querySelector('[data-testid="canvas-input-error"]');
-            error.textContent = 'The layout could not be sent. The canvas returned to its saved position. Reconnect and retry the move or use the layout fields.';
-            error.hidden = false;
+            const error = this.#root.closest('section')?.querySelector('[data-testid="canvas-input-error"]');
+            if (error) { error.textContent = 'The layout could not be sent. The canvas returned to its saved position. Reconnect and retry the move or use the layout fields.'; error.hidden = false; }
         }
         finally { this.#pending = false; }
     }
