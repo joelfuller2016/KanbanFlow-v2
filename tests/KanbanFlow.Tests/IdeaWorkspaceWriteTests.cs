@@ -50,11 +50,22 @@ public sealed class IdeaWorkspaceWriteTests
         var capabilities = new IdeaWorkspaceService(factory).GetCapabilities();
 
         Assert.Equal(capabilities.Actions.OrderBy(value => value, StringComparer.Ordinal), capabilities.ActionPayloads.Keys.OrderBy(value => value, StringComparer.Ordinal));
-        foreach (var descriptor in capabilities.ActionPayloads.Values)
+        foreach (var (action, descriptor) in capabilities.ActionPayloads)
         {
-            Assert.Contains("operationId", descriptor.EnvelopeFields);
-            Assert.Contains("actor", descriptor.EnvelopeFields);
             Assert.All(descriptor.RequiredFields, field => Assert.Contains(field, descriptor.Fields));
+            if (action == "preview_publication")
+            {
+                Assert.Empty(descriptor.EnvelopeFields);
+                Assert.Contains("expectedRevision", descriptor.RequiredFields);
+                Assert.Contains("expectedProjectPlanRevision", descriptor.RequiredFields);
+                Assert.DoesNotContain("operationId", descriptor.Fields);
+                Assert.DoesNotContain("actor", descriptor.Fields);
+            }
+            else
+            {
+                Assert.Contains("operationId", descriptor.EnvelopeFields);
+                Assert.Contains("actor", descriptor.EnvelopeFields);
+            }
         }
         var create = capabilities.ActionPayloads["create_workspace"];
         foreach (var field in new[] { "title", "body", "plan", "tags", "priority", "projectId" })

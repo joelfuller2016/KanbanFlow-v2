@@ -14,7 +14,7 @@
 | | |
 |---|---|
 | **Stack** | .NET 10 · Blazor Server · SQLite (EF Core 10) · Minimal APIs · Node 18+ for the MCP wrapper |
-| **Surfaces** | 8 UI routes · 93 REST operations · 49 native MCP tools · 71 Node-wrapper MCP tools (measured in the disposable app, October 31, 2026) |
+| **Surfaces** | 8 UI routes · 97 REST operations · 53 native MCP tools · 75 Node-wrapper MCP tools (measured in the disposable app, October 31, 2026) |
 | **Sync** | GitHub → board projection, plus one explicit additive board → GitHub issue-create path. Preview is the default; live create requires `--allow-write --task <id>` and a durable journal. No edit/close/delete path — see [Who owns what](#who-owns-what) |
 | **Tests** | 1,079 xUnit · 56 in-app integration · 52 Playwright e2e · 274 script unit · 2 smoke suites — [all local, no CI](#deliberate-non-features) |
 | **Runs at** | `http://127.0.0.1:5123` — localhost only, no auth, no Docker, no cloud |
@@ -63,7 +63,7 @@ graph and gives that graph three surfaces:
    pastes into chat as a link. Filtering never reorders anything: a drag under an active filter
    anchors on the next *visible* card's identity and the server resolves that against the full
    persisted column. For you.
-2. **A REST API** — 71 endpoints over the same graph. For scripts.
+2. **A REST API** — 97 operations over the same graph, including workspace composition and plan publication. For scripts.
 3. **An MCP server** — the same capabilities as first-class agent tools, plus a direction
    engine that answers *"what next, and why"* with a human-readable reason. For agents.
 
@@ -140,8 +140,8 @@ flowchart LR
     subgraph OUT["surfaces over the same graph"]
         direction TB
         UI["Blazor UI<br/>/ · /project/{id} · /ideas · /memory"]
-        REST["REST · 71 endpoints"]
-        MCP["MCP · 35 native / 57 wrapper"]
+        REST["REST · 97 operations"]
+        MCP["MCP · 53 native / 75 wrapper"]
     end
 
     REPO --> READ
@@ -177,7 +177,7 @@ The right-hand box is the part that makes this a projection rather than a mirror
 entities are created by you and by agents doing real work, live only on the board, and are
 invisible to GitHub.
 
-The sync also **cannot** run over the native MCP server: the 35 native tools include
+The sync also **cannot** run over the native MCP server: the 53 native tools include
 `list_projects` and `get_project_context` but **no `create_project`**, so an agent on `/mcp`
 cannot onboard a repo. That parity gap is [#231](https://github.com/joelfuller2016/KanbanFlow-v2/issues/231).
 
@@ -715,17 +715,17 @@ the command beside it — not copied from the previous README, and not copied fr
 
 | Surface | Count | Command that produced it |
 |---|---:|---|
-| REST operations (app) | 88 | Actual OpenAPI `/api/` operations excluding `/api/admin/`, including workspace routes |
+| REST operations (app) | 92 | Actual OpenAPI `/api/` operations excluding `/api/admin/`, including workspace routes |
 | REST operations (admin) | 5 | Actual OpenAPI `/api/admin/` operations |
-| **REST operations total** | **93** | Actual OpenAPI operation inventory, October 31, 2026 |
-| Native MCP tools (`POST /mcp`) | 49 | Actual `tools/list`; source inventory covers every file under `src/KanbanFlow/Mcp`, including workspace read/write tools |
-| Node-wrapper MCP tools | 71 | Actual `tools/list` over stdio; [workspace verification and transport notes](docs/idea-workspaces.md) |
-| Blazor routes | 6 | `grep -rn '@page' src/KanbanFlow/Components/ \| sort -u` → `/`, `/Error`, `/ideas`, `/memory`, `/project/{Id:int}`, `/settings` |
-| Razor components | 28 | `find src/KanbanFlow/Components -name '*.razor' \| wc -l` |
-| xUnit tests | 1,079 | `dotnet test tests/KanbanFlow.Tests` |
+| **REST operations total** | **97** | Actual OpenAPI operation inventory, October 31, 2026 |
+| Native MCP tools (`POST /mcp`) | 53 | Actual `tools/list`; source inventory covers every file under `src/KanbanFlow/Mcp`, including workspace read/write tools |
+| Node-wrapper MCP tools | 75 | Actual `tools/list` over stdio; [workspace verification and transport notes](docs/idea-workspaces.md) |
+| Blazor routes | 8 | `rg '^@page' src/KanbanFlow/Components` includes the gallery, preserved `/ideas/board` and `/ideas/workspace/{Kind}/{SourceId:int}` |
+| Razor components | 49 | `rg --files src/KanbanFlow/Components -g '*.razor'` |
+| xUnit tests | 1,437 | `scripts/verify.ps1`, October 31, 2026: 1,437 passed, 0 failed/skipped |
 | In-app integration tests | 56 | `grep -c 'results.Add(await RunTest' src/KanbanFlow/Services/TestRunnerService.cs` (28 API + 22 service + 6 UI) |
 | Playwright e2e scenarios | 52 | `npm run test:ui` |
-| Script unit tests (`scripts/*.mjs`) | 274 | `npm run test:scripts` |
+| Script unit tests (`scripts/*.mjs`) | 339 | `npm run test:scripts`, October 31, 2026: 339 passed, 0 failed/skipped |
 
 Corrections this revision made to the previous README: **53 → 60** endpoints previously (both memory
 endpoints and `GET /api/tasks/{id}/context` were missing), then **60 → 71** for the #336
@@ -907,6 +907,7 @@ them.
 | [`docs/test-cases/`](docs/test-cases/) | Feature-level test contracts, traceability, and commit-pinned execution records |
 | [`docs/native-mcp-notes.md`](docs/native-mcp-notes.md) | Native in-process MCP implementation notes |
 | [`docs/ai-briefing-schema.md`](docs/ai-briefing-schema.md) | The agent briefing payload shape |
+| [`docs/idea-workspaces.md`](docs/idea-workspaces.md) | Persistent idea/project workspaces, UI/API/MCP composition, resume, plan/Kanban contracts and verification |
 | [`docs/requirements.md`](docs/requirements.md) | Original v1 requirements — partly superseded by `ARCHITECTURE.md` |
 | [`docs/reviews/`](docs/reviews) | Historical review notes |
 

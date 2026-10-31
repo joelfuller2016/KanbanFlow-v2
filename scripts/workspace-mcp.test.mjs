@@ -57,6 +57,20 @@ test("workspace capture preserves empty and complete authored text with an expli
   });
 });
 
+test("workspace publication preview forwards exact revision and subset fields without a write actor", async () => {
+  const description = "\r\n    full publication preview Ω  \r\n".repeat(3000);
+  await withAdapter(200, { projectPlanRevision: 9, items: [{ canonicalItemId: "legacy/item%2F+", description, willCreate: true }] }, async (client, requests) => {
+    const result = workspaceToolValue(await client.call("preview_workspace_publication", {
+      workspaceId: "idea:12", expectedRevision: 7, expectedProjectPlanRevision: 9,
+      itemIds: ["legacy/item%2F+"], featureName: "  New feature Ω  ",
+    }));
+    assert.equal(result.items[0].description, description);
+    assert.deepEqual(requests[0], { method: "POST", url: "/api/workspaces/idea%3A12/publication-preview", body: {
+      expectedRevision: 7, expectedProjectPlanRevision: 9, itemIds: ["legacy/item%2F+"], featureName: "  New feature Ω  ",
+    } });
+  });
+});
+
 test("workspace tools refuse unknown top-level fields before any HTTP write", async () => {
   await withAdapter(200, {}, async (client, requests) => {
     for (const [name, args] of [

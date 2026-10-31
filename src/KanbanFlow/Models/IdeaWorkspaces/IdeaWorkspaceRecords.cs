@@ -1,3 +1,5 @@
+using KanbanFlow.Services.IdeaWorkspaces;
+
 namespace KanbanFlow.Models.IdeaWorkspaces;
 
 /// <summary>Durable canvas state, independent of source-row deletion and legacy workflow tables.</summary>
@@ -35,6 +37,8 @@ public sealed class IdeaWorkspaceDocument
     public List<IdeaWorkspaceCheckpoint> Checkpoints { get; set; } = [];
     public List<IdeaWorkspacePlanRevision> PlanRevisions { get; set; } = [];
     public string? AcceptedPlanRevisionId { get; set; }
+    public List<IdeaWorkspacePublication> Publications { get; set; } = [];
+    public List<IdeaWorkspaceSourceSnapshot> SourceSnapshots { get; set; } = [];
 }
 
 public sealed class IdeaWorkspaceComponent
@@ -119,4 +123,26 @@ public sealed class IdeaWorkspacePlanItem
     public List<string> DependsOn { get; set; } = [];
     public int? PublishedTaskId { get; set; }
     public int? PublishedFeatureId { get; set; }
+    public IdeaWorkspacePlanItemProvenance? Provenance { get; set; }
+}
+
+public sealed record IdeaWorkspacePlanItemProvenance(
+    int ProjectId, string SourceWorkspaceId, string SourceItemId, string CanonicalItemId);
+
+/// <summary>A complete source observed during a successful module write; Actor identifies the capturer.</summary>
+public sealed record IdeaWorkspaceSourceSnapshot(
+    string Id, IdeaWorkspaceSource Source, string Actor, DateTime CapturedAt);
+
+/// <summary>Server-owned publication identity; retained after human edits or target deletion.</summary>
+public sealed class IdeaWorkspacePublication
+{
+    public int ProjectId { get; set; }
+    public string SourceWorkspaceId { get; set; } = "";
+    public string SourceItemId { get; set; } = "";
+    public string CanonicalItemId { get; set; } = "";
+    public int TaskId { get; set; }
+    public int FeatureId { get; set; }
+    public string SpecificationHash { get; set; } = "";
+    public string Actor { get; set; } = "";
+    public DateTime CreatedAt { get; set; }
 }

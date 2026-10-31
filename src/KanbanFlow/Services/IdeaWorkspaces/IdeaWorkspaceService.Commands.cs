@@ -169,51 +169,6 @@ public sealed partial class IdeaWorkspaceService
                 document.Checkpoints.Add(checkpoint);
                 return (null, null);
             }
-            case "propose_plan":
-            {
-                var plan = Read<IdeaWorkspacePlanRevision>(payload);
-                plan.Id = NewIdentifier();
-                plan.Version = document.PlanRevisions.Count + 1;
-                plan.Status = "Draft";
-                plan.CreatedBy = command.Actor;
-                plan.CreatedAt = now;
-                plan.AcceptedAt = null;
-                plan.AcceptedBy = null;
-                if (string.IsNullOrWhiteSpace(plan.Title) || plan.Title.Length > 500 || plan.Items is null)
-                    throw Invalid("invalid_plan", "A plan needs a nonblank title (at most 500 characters) and an items list.");
-                foreach (var item in plan.Items)
-                {
-                    if (item is null) throw Invalid("invalid_plan_item", "Plan items cannot be null.");
-                    item.Id = NewIdentifier(item.Id);
-                    item.PublishedTaskId = null;
-                    item.PublishedFeatureId = null;
-                }
-                ValidatePlan(plan);
-                document.PlanRevisions.Add(plan);
-                return (null, null);
-            }
-            case "accept_plan":
-            {
-                // A contributing idea cannot invent a competing accepted delivery plan. T06
-                // supplies canonical project revision validation and atomic cross-state acceptance.
-                if (key.Kind == "idea" && projectId is not null)
-                    throw Conflict("shared_plan_required", "Accept this proposal through the linked project's canonical plan workflow.");
-                var id = RequiredString(payload, "planRevisionId");
-                var plan = document.PlanRevisions.SingleOrDefault(p => p.Id == id)
-                    ?? throw NotFound("plan_not_found", "The proposed plan revision is not in this workspace.");
-                if (plan.Status != "Draft")
-                    throw Conflict("plan_already_accepted", "This plan revision is already accepted.");
-                if (document.AcceptedPlanRevisionId is { } oldId)
-                {
-                    var previous = document.PlanRevisions.Single(p => p.Id == oldId);
-                    previous.Status = "Superseded";
-                }
-                plan.Status = "Accepted";
-                plan.AcceptedBy = command.Actor;
-                plan.AcceptedAt = now;
-                document.AcceptedPlanRevisionId = plan.Id;
-                return (null, null);
-            }
             default:
                 throw Invalid("unsupported_action", $"Unsupported workspace action '{command.Action}'.");
         }

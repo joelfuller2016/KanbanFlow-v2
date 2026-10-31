@@ -124,7 +124,10 @@ export const MUTATING_TOOLS = new Set([
   "add_workspace_comment",
   "save_workspace_checkpoint",
   "propose_workspace_plan",
-  "accept_workspace_plan"
+  "accept_workspace_plan",
+  "link_workspace_project",
+  "create_workspace_project",
+  "publish_workspace_plan"
 ]);
 
 // Events that prove a task was under a claim. `TaskClaimStolen` counts: a takeover means a claim

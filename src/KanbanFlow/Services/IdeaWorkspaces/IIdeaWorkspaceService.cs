@@ -18,6 +18,8 @@ public interface IIdeaWorkspaceService
         int? afterActivityId = null, int? limit = null, CancellationToken ct = default);
     Task<IdeaWorkspaceContext> GetAsync(string workspaceId, CancellationToken ct = default);
     Task<IdeaWorkspaceMutationResult> ExecuteAsync(string workspaceId, IdeaWorkspaceCommand command, CancellationToken ct = default);
+    Task<IdeaWorkspacePublicationPreview> PreviewPublicationAsync(string workspaceId,
+        IdeaWorkspacePublicationPreviewRequest request, CancellationToken ct = default);
 }
 
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
@@ -30,7 +32,12 @@ public sealed record IdeaWorkspaceCommand(
 
 public sealed record IdeaWorkspaceMutationResult(
     string WorkspaceId, long Revision, string OperationId, string Action,
-    string? ComponentId, string? PlacementId, int ActivityId, bool Replayed = false);
+    string? ComponentId, string? PlacementId, int ActivityId, bool Replayed = false)
+{
+    public int? ProjectId { get; init; }
+    public long? ProjectPlanRevision { get; init; }
+    public IdeaWorkspacePublicationResult? Publication { get; init; }
+}
 
 public sealed record IdeaWorkspaceSource(
     string Kind, int Id, string Title, string? Body, string? Plan,
@@ -46,6 +53,7 @@ public sealed record IdeaWorkspaceContext(
 {
     public IdeaWorkspaceSource? ProjectSource { get; init; }
     public IdeaWorkspaceSource? OriginalProjectSource { get; init; }
+    public IReadOnlyList<IdeaWorkspaceSourceSnapshot> ProjectSourceSnapshots { get; init; } = [];
     public IdeaWorkspacePlanRevision? AcceptedPlan { get; init; }
     public long? ProjectPlanRevision { get; init; }
     public int ComponentCount { get; init; }

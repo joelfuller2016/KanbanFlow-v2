@@ -20,6 +20,11 @@ public static partial class IdeaWorkspaceEndpoints
             IIdeaWorkspaceService service, CancellationToken ct)
             => Read(async () => await service.ExecuteAsync(workspaceId, await ReadRequestAsync<IdeaWorkspaceCommand>(request, ct), ct)))
             .Accepts<IdeaWorkspaceCommand>("application/json").Produces<IdeaWorkspaceMutationResult>();
+        app.MapPost("/api/workspaces/{workspaceId}/publication-preview", (string workspaceId, HttpRequest request,
+            IIdeaWorkspaceService service, CancellationToken ct)
+            => Read(async () => await service.PreviewPublicationAsync(workspaceId,
+                await ReadRequestAsync<IdeaWorkspacePublicationPreviewRequest>(request, ct, normalizeActor: false), ct)))
+            .Accepts<IdeaWorkspacePublicationPreviewRequest>("application/json").Produces<IdeaWorkspacePublicationPreview>();
 
         MapWorkspaceWrite(app, "POST", "/api/workspaces/{workspaceId}/components", "create_component", ["component", "placement"]);
         MapWorkspaceWrite(app, "PATCH", "/api/workspaces/{workspaceId}/components/{componentId}", "update_component",
@@ -37,6 +42,11 @@ public static partial class IdeaWorkspaceEndpoints
             ["title", "items", "expectedProjectPlanRevision"]);
         MapWorkspaceWrite(app, "POST", "/api/workspaces/{workspaceId}/plan-revisions/{planRevisionId}/accept", "accept_plan",
             ["expectedProjectPlanRevision"], "planRevisionId");
+        MapWorkspaceWrite(app, "POST", "/api/workspaces/{workspaceId}/project-association", "link_project",
+            ["projectId", "expectedCurrentProjectId"]);
+        MapWorkspaceWrite(app, "POST", "/api/workspaces/{workspaceId}/project", "create_project", ["name"]);
+        MapWorkspaceWrite(app, "POST", "/api/workspaces/{workspaceId}/publication", "publish_plan",
+            ["expectedProjectPlanRevision", "itemIds", "featureId", "featureName"]);
     }
 
     private static void MapWorkspaceWrite(WebApplication app, string method, string route, string action,
@@ -49,9 +59,9 @@ public static partial class IdeaWorkspaceEndpoints
             .Accepts<JsonElement>("application/json").Produces<IdeaWorkspaceMutationResult>();
     }
 
-    private static async Task<T> ReadRequestAsync<T>(HttpRequest request, CancellationToken ct)
+    private static async Task<T> ReadRequestAsync<T>(HttpRequest request, CancellationToken ct, bool normalizeActor = true)
     {
-        var envelope = await ReadEnvelopeAsync(request, ct);
+        var envelope = await ReadEnvelopeAsync(request, ct, normalizeActor);
         try
         {
             return envelope.Deserialize<T>(WorkspaceRequestJson)
@@ -95,7 +105,7 @@ public static partial class IdeaWorkspaceEndpoints
         return new IdeaWorkspaceCommand(operationId, expectedRevision, action, payload.RootElement.Clone(), actor);
     }
 
-    private static async Task<JsonElement> ReadEnvelopeAsync(HttpRequest request, CancellationToken ct)
+    private static async Task<JsonElement> ReadEnvelopeAsync(HttpRequest request, CancellationToken ct, bool normalizeActor = true)
     {
         if (!request.HasJsonContentType())
             throw RequestError("invalid_content_type", "Workspace writes require application/json.");
@@ -112,6 +122,7 @@ public static partial class IdeaWorkspaceEndpoints
         if (root.ValueKind != JsonValueKind.Object)
             throw RequestError("invalid_payload", "The request must be a JSON object.");
         IdeaWorkspaceService.ValidateJsonProperties(root);
+        if (!normalizeActor) return root;
         var bodyActor = Find(root, "actor");
         if (bodyActor is { } value && value.ValueKind is not (JsonValueKind.String or JsonValueKind.Null))
             throw RequestError("invalid_actor", "actor must be a text label or null.");

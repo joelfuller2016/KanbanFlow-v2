@@ -5,6 +5,8 @@
     <WorkspaceSourceDocument Source="Context.OriginalSource" Label="Original snapshot" />
     @if (Context.ProjectSource is not null) { <WorkspaceSourceDocument Source="Context.ProjectSource" Label="Linked project" /> }
     @if (Context.OriginalProjectSource is not null) { <WorkspaceSourceDocument Source="Context.OriginalProjectSource" Label="Original linked project snapshot" /> }
+    <WorkspaceSourceSnapshotVersions Snapshots="Context.Document.SourceSnapshots" Heading="Captured versions of this source" />
+    <WorkspaceSourceSnapshotVersions Snapshots="Context.ProjectSourceSnapshots" Heading="Captured linked project sources" />
 </section>
 
 @code {

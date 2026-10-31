@@ -3,16 +3,18 @@
     @if (Context.AcceptedPlan is { } accepted)
     {
         <h3 class="h6">Current accepted plan · v@(accepted.Version)</h3>
-        <WorkspacePlanVersion Plan="accepted" />
+        <WorkspacePlanVersion Plan="accepted" KanbanUrl="@Context.KanbanUrl" Current="true" OnInspectTask="OnInspectTask" />
+        <button class="btn btn-outline-secondary mb-3" disabled="@Busy" @onclick="() => CopyPlan(accepted)" data-testid="plan-copy-accepted">Expand this accepted plan in a new draft</button>
     }
     @foreach (var plan in Context.Document.PlanRevisions.OrderByDescending(p => p.Version))
     {
         <details class="border rounded p-3 mb-2" @key="plan.Id" data-testid="plan-version-@plan.Id">
             <summary>@plan.Title · v@(plan.Version) · @plan.Status</summary>
-            <WorkspacePlanVersion Plan="plan" />
+            <WorkspacePlanVersion Plan="plan" KanbanUrl="@Context.KanbanUrl" OnInspectTask="OnInspectTask" />
+            <button class="btn btn-sm btn-outline-secondary mt-2" disabled="@Busy" @onclick="() => CopyPlan(plan)" data-testid="plan-copy-@plan.Id">Use as a new draft</button>
             @if (plan.Status == "Draft")
             {
-                <button class="btn btn-outline-success mt-2" disabled="@Busy" @onclick="() => Accept(plan.Id, plan.ExpectedProjectPlanRevision)" data-testid="plan-accept-@plan.Id">Accept this plan</button>
+                <button class="btn btn-outline-success mt-2" disabled="@(Busy || (Context.ProjectId is not null && plan.ExpectedProjectPlanRevision != Context.ProjectPlanRevision))" @onclick="() => Accept(plan.Id, plan.ExpectedProjectPlanRevision)" data-testid="plan-accept-@plan.Id">Accept this plan</button>
                 @if (Context.ProjectId is not null && plan.ExpectedProjectPlanRevision != Context.ProjectPlanRevision)
                 {
                     <p class="text-warning small mt-2">This proposal used project-plan revision @(plan.ExpectedProjectPlanRevision?.ToString() ?? "none"). The loaded shared plan is revision @Context.ProjectPlanRevision. Review the current accepted plan above before rebasing acceptance.</p>
@@ -41,6 +43,7 @@
     [Parameter] public bool Busy { get; set; }
     [Parameter] public EventCallback<WorkspacePlanDraft> OnDraftChanged { get; set; }
     [Parameter] public EventCallback<WorkspaceUiCommand> OnCommand { get; set; }
+    [Parameter] public EventCallback<int> OnInspectTask { get; set; }
     private readonly WorkspaceDraftInput<WorkspacePlanDraft> input = new(new());
     private WorkspacePlanDraft editing => input.Value;
     protected override void OnParametersSet() => input.Receive(Draft, Context.WorkspaceId, (Context.Revision, Draft.BaseRevision, Draft.BaseProjectPlanRevision));
@@ -51,6 +54,11 @@
     private Task AddItem() => Change(editing with { Items = [.. editing.Items, new()], BaseRevision = editing.BaseRevision ?? Context.Revision });
     private Task ItemChanged(WorkspacePlanItemDraft item) => Change(editing with { Items = [.. editing.Items.Select(i => i.Id == item.Id ? item : i)], BaseRevision = editing.BaseRevision ?? Context.Revision });
     private Task RemoveItem(string id) => Change(editing with { Items = [.. editing.Items.Where(i => i.Id != id).Select(i => i with { DependsOn = [.. i.DependsOn.Where(d => d != id)] })] });
-    private Task Propose() => OnCommand.InvokeAsync(WorkspaceUiCommand.Create("propose_plan", new { title = editing.Title, items = editing.Items.Select(i => new { id = i.Id, title = i.Title, description = i.Description, acceptanceCriteria = WorkspaceUiText.Lines(i.AcceptanceCriteria), dependsOn = i.DependsOn }), expectedProjectPlanRevision = editing.BaseProjectPlanRevision }, editing.BaseRevision ?? Context.Revision, "plan"));
+    private Task Propose() => OnCommand.InvokeAsync(WorkspaceUiCommand.Create("propose_plan", new { title = editing.Title, items = editing.Items.Select(i => new { id = i.Id, title = i.Title, description = i.Description, acceptanceCriteria = i.OriginalAcceptanceCriteria ?? WorkspaceUiText.Lines(i.AcceptanceCriteria), dependsOn = i.DependsOn, provenance = i.Provenance }), expectedProjectPlanRevision = editing.BaseProjectPlanRevision }, editing.BaseRevision ?? Context.Revision, "plan"));
     private Task Accept(string id, long? baseline) => OnCommand.InvokeAsync(WorkspaceUiCommand.Create("accept_plan", new { planRevisionId = id, expectedProjectPlanRevision = baseline }, Context.Revision));
+    private Task CopyPlan(IdeaWorkspacePlanRevision plan) => Change(new() { Title = plan.Title, BaseRevision = Context.Revision,
+        BaseProjectPlanRevision = Context.ProjectPlanRevision,
+        Items = plan.Items.Select(i => new WorkspacePlanItemDraft { Id = i.Id, Title = i.Title, Description = i.Description,
+            AcceptanceCriteria = string.Join('\n', i.AcceptanceCriteria), OriginalAcceptanceCriteria = [.. i.AcceptanceCriteria],
+            DependsOn = [.. i.DependsOn], Provenance = i.Provenance?.ProjectId == Context.ProjectId ? i.Provenance : null }).ToList() });
 }

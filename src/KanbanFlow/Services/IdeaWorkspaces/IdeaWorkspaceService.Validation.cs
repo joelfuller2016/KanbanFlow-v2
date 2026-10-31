@@ -21,6 +21,9 @@ public sealed partial class IdeaWorkspaceService
             "save_checkpoint" => ["clientId", "sessionId", "objective", "focusedComponentIds", "completedChanges", "openQuestions", "nextActions", "lastAcknowledgedActivityId", "actor", "updatedAt"],
             "propose_plan" => ["id", "version", "title", "status", "items", "expectedProjectPlanRevision", "createdBy", "createdAt", "acceptedBy", "acceptedAt"],
             "accept_plan" => ["planRevisionId", "expectedProjectPlanRevision"],
+            "link_project" => ["projectId", "expectedCurrentProjectId"],
+            "create_project" => ["name"],
+            "publish_plan" => ["expectedProjectPlanRevision", "itemIds", "featureId", "featureName"],
             _ => null
         };
         if (allowed is not null) ValidateFields(payload, allowed);
@@ -159,11 +162,16 @@ public sealed partial class IdeaWorkspaceService
             throw Invalid("invalid_plan", "Plan items cannot be null.");
         ValidateUnique(plan.Items.Select(i => i.Id), "plan item");
         var items = plan.Items.ToDictionary(i => i.Id, StringComparer.Ordinal);
+        var origins = new HashSet<IdeaWorkspacePlanItemProvenance>();
         foreach (var item in plan.Items)
         {
             if (string.IsNullOrWhiteSpace(item.Title) || item.Title.Length > 500 || item.Description is null ||
                 item.AcceptanceCriteria is null || item.DependsOn is null || item.AcceptanceCriteria.Any(v => v is null))
                 throw Invalid("invalid_plan_item", "Plan items need a nonblank title (at most 500 characters), text and nonnull criterion/dependency lists.");
+            if (item.Provenance is not null && !origins.Add(item.Provenance))
+                throw Invalid("duplicate_provenance", "The same canonical item cannot occur twice in a proposal. Keep one item per provenance identity.");
+            if (item.DependsOn.Distinct(StringComparer.Ordinal).Count() != item.DependsOn.Count)
+                throw Invalid("duplicate_dependency", "A prerequisite may occur only once in an item's dependency list.");
             var visiting = new HashSet<string>(StringComparer.Ordinal);
             var complete = new HashSet<string>(StringComparer.Ordinal);
             Visit(item.Id);

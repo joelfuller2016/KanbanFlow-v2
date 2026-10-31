@@ -1541,13 +1541,35 @@ async function callTool(toolName, args) {
     case "add_workspace_comment":
     case "save_workspace_checkpoint":
     case "propose_workspace_plan":
-    case "accept_workspace_plan": {
+    case "accept_workspace_plan":
+    case "link_workspace_project":
+    case "create_workspace_project":
+    case "publish_workspace_plan": {
       if (!isPlainObject(args.payload)) throw new McpError(-32602, "payload must be a JSON object.");
       const action = workspaceWriteActions[toolName] ?? workspaceRequiredString(args, "action");
       return restJson(`/api/workspaces/${encodeURIComponent(workspaceRequiredString(args, "workspaceId"))}/commands`, {
         method: "POST",
         body: { operationId: workspaceRequiredString(args, "operationId"), expectedRevision: requiredInt(args, "expectedRevision", { min: 0 }),
           action, payload: args.payload, actor: optionalString(args, "actor") ?? "mcp-agent" },
+      });
+    }
+    case "preview_workspace_publication": {
+      const body = {
+        expectedRevision: requiredInt(args, "expectedRevision", { min: 0 }),
+        expectedProjectPlanRevision: requiredInt(args, "expectedProjectPlanRevision", { min: 0 }),
+      };
+      if (args.itemIds !== undefined && args.itemIds !== null) {
+        if (!Array.isArray(args.itemIds) || !args.itemIds.every(item => typeof item === "string")) {
+          throw new McpError(-32602, "itemIds must be an array of canonical item identifiers.");
+        }
+        body.itemIds = args.itemIds;
+      }
+      const featureId = optionalInt(args, "featureId", { min: 1 });
+      const featureName = optionalString(args, "featureName");
+      if (featureId !== undefined) body.featureId = featureId;
+      if (featureName !== undefined) body.featureName = featureName;
+      return restJson(`/api/workspaces/${encodeURIComponent(workspaceRequiredString(args, "workspaceId"))}/publication-preview`, {
+        method: "POST", body,
       });
     }
     case "list_workspaces": {

@@ -63,6 +63,8 @@ public sealed record WorkspacePlanItemDraft
     public string Description { get; init; } = "";
     public string AcceptanceCriteria { get; init; } = "";
     public List<string> DependsOn { get; init; } = [];
+    public List<string>? OriginalAcceptanceCriteria { get; init; }
+    public IdeaWorkspacePlanItemProvenance? Provenance { get; init; }
 }
 public sealed record WorkspacePlanDraft
 {
@@ -80,6 +82,14 @@ public sealed record WorkspaceCheckpointDraft
     public List<string> FocusedComponentIds { get; init; } = [];
 }
 public sealed record WorkspacePendingCommand(IdeaWorkspaceCommand Command, string? DraftSection, JsonElement? DraftAtSend = null);
+public sealed record WorkspaceDeliveryDraft
+{
+    public int? TargetProjectId { get; init; }
+    public string ProjectName { get; init; } = "";
+    public List<string>? SelectedItemIds { get; init; }
+    public int? FeatureId { get; init; }
+    public string FeatureName { get; init; } = "";
+}
 public sealed record WorkspaceBrowserDraft
 {
     public string? SelectedComponentId { get; init; }
@@ -90,6 +100,7 @@ public sealed record WorkspaceBrowserDraft
     public WorkspaceConnectorDraft Connector { get; init; } = new();
     public WorkspacePlanDraft Plan { get; init; } = new();
     public WorkspaceCheckpointDraft Checkpoint { get; init; } = new();
+    public WorkspaceDeliveryDraft Delivery { get; init; } = new();
     public WorkspacePendingCommand? Pending { get; init; }
 }
 public sealed record WorkspaceBrowserSession(string ClientId, string SessionId, WorkspaceBrowserDraft? Draft);

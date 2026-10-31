@@ -24,6 +24,14 @@ export const workspaceReadTools = [
     workspaceId, cursor, limit,
     afterActivityId: { type: "integer", minimum: 0, description: "Last acknowledged activity position; default zero. Keep unchanged while following a cursor." },
   }, ["workspaceId"]),
+  tool("preview_workspace_publication", "Review real Kanban publication of the current accepted project plan without saving. Use current workspace/project-plan revisions; full descriptions and criteria are retained.", {
+    workspaceId,
+    expectedRevision: { type: "integer", minimum: 0 },
+    expectedProjectPlanRevision: { type: "integer", minimum: 0 },
+    itemIds: { type: ["array", "null"], items: { type: "string" }, description: "Canonical item IDs to publish; omitted/null selects all. Include unpublished predecessors." },
+    featureId: { type: ["integer", "null"], minimum: 1 },
+    featureName: { type: ["string", "null"], description: "Name for a new feature; existing task/feature mappings remain authoritative." },
+  }, ["workspaceId", "expectedRevision", "expectedProjectPlanRevision"]),
 ];
 
 export const workspaceWriteActions = Object.freeze({
@@ -39,6 +47,9 @@ export const workspaceWriteActions = Object.freeze({
   save_workspace_checkpoint: "save_checkpoint",
   propose_workspace_plan: "propose_plan",
   accept_workspace_plan: "accept_plan",
+  link_workspace_project: "link_project",
+  create_workspace_project: "create_project",
+  publish_workspace_plan: "publish_plan",
 });
 const writeProperties = {
   workspaceId,

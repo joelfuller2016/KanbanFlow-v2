@@ -41,6 +41,13 @@ public partial class IdeaWorkspace
             if (result.Action == "remove_component") draft = draft with { SelectedComponentId = null, SelectedPlacementId = null };
             else if (result.ComponentId is not null) draft = draft with { SelectedComponentId = result.ComponentId, SelectedPlacementId = result.PlacementId ?? draft.SelectedPlacementId };
             context = refreshed;
+            if (result.Action is "publish_plan" or "link_project" or "create_project")
+            {
+                publicationPreview = null;
+                publicationRequest = null;
+                previewSequence++;
+                draft = draft with { Delivery = draft.Delivery with { SelectedItemIds = null, FeatureId = null, FeatureName = "" } };
+            }
             latestContext = null;
             UpdateCleanDrafts();
             EnsureSelectedDrafts();
@@ -49,6 +56,8 @@ public partial class IdeaWorkspace
             await PersistDraft(scope);
             if (!IsCurrent(scope)) return;
             notice = $"Saved {result.Action.Replace('_', ' ')} at revision {result.Revision}{(result.Replayed ? " (recovered prior result)" : "")}.";
+            if (result.Publication is { } publication)
+                notice += $" {publication.NewTaskCount} new tasks; {publication.ExistingTaskCount} already linked tasks preserved.";
         }
         catch (IdeaWorkspaceException ex)
         {

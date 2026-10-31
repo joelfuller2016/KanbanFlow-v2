@@ -60,6 +60,7 @@ public sealed partial class IdeaWorkspaceService : IIdeaWorkspaceService
         if (command.Payload.ValueKind != JsonValueKind.Object)
             throw Invalid("invalid_payload", "Payload must be a JSON object.");
         ValidateJsonProperties(command.Payload);
+        ValidateCommandFields(command.Action, command.Payload);
         var requestHash = HashCommand(workspaceId, command);
 
         await using var db = await _dbFactory.CreateDbContextAsync(ct);
@@ -83,57 +84,31 @@ public sealed partial class IdeaWorkspaceService : IIdeaWorkspaceService
                 return Deserialize<IdeaWorkspaceMutationResult>(previousReceipt.ResultJson) with { Replayed = true };
             }
 
-            var state = await db.Set<IdeaWorkspaceState>().SingleOrDefaultAsync(s => s.WorkspaceId == workspaceId, ct);
-            var source = await ReadSourceAsync(db, key, ct);
-            if (state is null && source is null)
-                throw NotFound("workspace_not_found", $"Workspace '{workspaceId}' does not exist.");
-            var revision = state?.Revision ?? 0;
-            if (revision != command.ExpectedRevision)
-                throw Conflict("revision_conflict", $"Workspace revision is {revision}; expected {command.ExpectedRevision}. Reload before applying this change.");
-
-            var original = state is null ? source! : Deserialize<IdeaWorkspaceSource>(state.OriginalSourceJson);
-            var document = state is null ? CreateDocument(source!) : Deserialize<IdeaWorkspaceDocument>(state.DocumentJson);
-            var projectId = state?.LinkedProjectId ?? source?.ProjectId ?? original.ProjectId;
-            var before = state is null ? null : SerializeSnapshot(state, document);
             var now = DateTime.UtcNow;
-            var affected = await ApplyCommandAsync(db, key, document, projectId, command, now, ct);
-            ValidateDocument(document);
-
-            if (state is null)
+            var writes = new WorkspaceWrites(db, command, now);
+            var current = await writes.LoadAsync(key, ct);
+            if (current.OriginalRevision != command.ExpectedRevision)
+                throw Conflict("revision_conflict", $"Workspace revision is {current.OriginalRevision}; expected {command.ExpectedRevision}. Reload before applying this change.");
+            current.Changed = true;
+            // Every first edit of a legacy linked idea captures the complete real target, including Readme.
+            if (key.Kind == "idea" && current.ProjectId is { } linkedId)
             {
-                state = new IdeaWorkspaceState
-                {
-                    WorkspaceId = workspaceId,
-                    Kind = key.Kind,
-                    SourceId = key.SourceId,
-                    LinkedProjectId = projectId,
-                    Revision = 0,
-                    OriginalSourceJson = Serialize(original),
-                    DocumentJson = "",
-                    CreatedAt = now,
-                    UpdatedAt = now
-                };
-                db.Set<IdeaWorkspaceState>().Add(state);
+                // A legacy promotion may happen after this workspace's original unlinked snapshot.
+                // Retain the discovered association when the legacy FK is later cleared on deletion.
+                current.State.LinkedProjectId ??= linkedId;
+                await writes.CaptureProjectAsync(linkedId, required: false, ct);
             }
-            state.Revision = checked(revision + 1);
-            state.DocumentJson = Serialize(document);
-            state.UpdatedAt = now;
-            var activity = new ActivityEvent
+            var affected = IsDeliveryAction(command.Action)
+                ? await ApplyDeliveryCommandAsync(writes, current, ct)
+                : await ApplyCommandAsync(db, key, current.Document, current.ProjectId, command, now, ct);
+            await writes.SaveAsync(ct);
+            var result = new IdeaWorkspaceMutationResult(workspaceId, current.State.Revision, command.OperationId,
+                command.Action, affected.ComponentId, affected.PlacementId, current.Activity!.Id)
             {
-                ProjectId = projectId ?? 0,
-                EntityType = key.AuditEntityType,
-                EntityId = key.SourceId,
-                Actor = command.Actor,
-                EventType = "IdeaWorkspaceChanged",
-                BeforeJson = before,
-                AfterJson = SerializeSnapshot(state, document),
-                Message = command.Action,
-                CreatedAt = now
+                ProjectId = current.ProjectId,
+                ProjectPlanRevision = writes.FindProject(current.ProjectId)?.State.Revision,
+                Publication = writes.Publication
             };
-            db.ActivityEvents.Add(activity);
-            await db.SaveChangesAsync(ct);
-            var result = new IdeaWorkspaceMutationResult(workspaceId, state.Revision, command.OperationId,
-                command.Action, affected.ComponentId, affected.PlacementId, activity.Id);
             db.Set<IdeaWorkspaceReceipt>().Add(new IdeaWorkspaceReceipt
             {
                 WorkspaceId = workspaceId,
@@ -175,7 +150,9 @@ public sealed partial class IdeaWorkspaceService : IIdeaWorkspaceService
                 .SingleOrDefaultAsync(s => s.WorkspaceId == $"project:{projectId}", ct);
         var projectDocument = projectState is null ? null : Deserialize<IdeaWorkspaceDocument>(projectState.DocumentJson);
         var acceptedDocument = projectId is null ? document : projectDocument;
-        var accepted = acceptedDocument?.PlanRevisions.SingleOrDefault(p => p.Id == acceptedDocument.AcceptedPlanRevisionId);
+        var accepted = acceptedDocument is null ? null : projectId is { } targetId
+            ? CurrentCanonicalPlan(acceptedDocument, targetId)
+            : acceptedDocument.PlanRevisions.SingleOrDefault(p => p.Id == acceptedDocument.AcceptedPlanRevisionId);
         var lastActivityId = await db.ActivityEvents.AsNoTracking()
             .Where(a => a.EntityType == key.AuditEntityType && a.EntityId == key.SourceId)
             .Select(a => (int?)a.Id).MaxAsync(ct) ?? 0;
@@ -187,6 +164,7 @@ public sealed partial class IdeaWorkspaceService : IIdeaWorkspaceService
         {
             ProjectSource = projectSource,
             OriginalProjectSource = projectState is null ? projectSource : Deserialize<IdeaWorkspaceSource>(projectState.OriginalSourceJson),
+            ProjectSourceSnapshots = key.Kind == "idea" ? projectDocument?.SourceSnapshots ?? [] : [],
             AcceptedPlan = accepted,
             ProjectPlanRevision = projectId is null ? null : projectState?.Revision ?? 0,
             ComponentCount = document.Components.Count,

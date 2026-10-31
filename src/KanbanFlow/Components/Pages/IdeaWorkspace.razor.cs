@@ -8,6 +8,7 @@ public partial class IdeaWorkspace
 {
     [Parameter] public string Kind { get; set; } = "idea";
     [Parameter] public int SourceId { get; set; }
+    [SupplyParameterFromQuery(Name = "view")] public string? RequestedView { get; set; }
     private IdeaWorkspaceContext? context, latestContext;
     private IdeaWorkspaceComponentDetail? selectedDetail;
     private WorkspaceBrowserDraft draft = new();
@@ -27,10 +28,12 @@ public partial class IdeaWorkspace
     private WorkspaceUiScope CurrentScope => new(workspaceId, generation);
     private bool IsCurrent(WorkspaceUiScope scope) => !disposed && scope.WorkspaceId == workspaceId && scope.Generation == generation;
     private bool ControlsDisabled => !Ready || !storageHealthy || busy || draft.Pending is not null || latestContext is not null;
-    private static readonly KeyValuePair<string, string>[] PanelNames = [new("plan", "Plan"), new("discussion", "Discussion"), new("connections", "Connections"), new("resume", "Resume"), new("source", "Source documents")];
+    private static readonly KeyValuePair<string, string>[] PanelNames = [new("plan", "Plan"), new("delivery", "Project and Kanban"), new("discussion", "Discussion"), new("connections", "Connections"), new("resume", "Resume"), new("source", "Source documents")];
 
     protected override async Task OnParametersSetAsync()
     {
+        if (RequestedView is "plan" or "delivery" or "discussion" or "connections" or "resume" or "source") panel = RequestedView;
+        else if (RequestedView is "canvas" or "outline") view = RequestedView;
         var next = $"{Kind.ToLowerInvariant()}:{SourceId}";
         if (next == workspaceId) return;
         var currentGeneration = ++generation;
@@ -38,6 +41,7 @@ public partial class IdeaWorkspace
         restoredGeneration = -1;
         context = latestContext = null;
         selectedDetail = null;
+        ClearDeliveryView();
         error = notice = null;
         draft = browserCache.GetValueOrDefault(next) ?? new();
         try
@@ -158,6 +162,8 @@ public partial class IdeaWorkspace
         UpdateCleanDrafts();
         EnsureSelectedDrafts();
         await ReadSelectedDetail(scope);
+        if (!IsCurrent(scope)) return;
+        if (inspectedTaskId is { } taskId) await InspectPublishedTask(scope, taskId);
         if (!IsCurrent(scope)) return;
         await PersistDraft(scope);
         if (!IsCurrent(scope)) return;
