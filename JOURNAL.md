@@ -52,6 +52,17 @@ A review of the repository and a test run on 2026-09-26 filed findings as issues
 
 ## Entries (newest first)
 
+- 2026-10-31 23:55Z (scheduled PR monitor, continued run 441 / context continuation):
+  - Resumed PHASE 2 on PR #580 (feat/579-idea-workspaces, head was 5c563ad).
+  - Found 7 unresolved threads from second bot review batch. Checked out feat/579-idea-workspaces.
+  - Fixed 2 remaining quick-wins in b42bd16 (pushed to feat/579-idea-workspaces):
+    - WorkspaceCanvas.razor.js: null-guard success branch querySelector (?.querySelector + conditional); resolves PRRT_kwDOSA8y6s6yVSbk.
+    - README.md: corrected Playwright e2e count 52 → 56 (matches verified-surfaces table); resolves PRRT_kwDOSA8y6s6yVSbY.
+  - Build GREEN (0 warnings/0 errors), tests 1491P+2F (pre-existing) + 1 new deep-chain test = 1493 total.
+  - Resolved 4 threads: PRRT_kwDOSA8y6s6yVSbk (canvas guard), PRRT_kwDOSA8y6s6yVSbY (README count), PRRT_kwDOSA8y6s6yVSbq (deep-chain test depth 20,000 in 5c563ad), PRRT_kwDOSA8y6s6yVSbN (journal spacing, cosmetic/out-of-scope).
+  - Commented and left open 3 non-trivial threads: PRRT_kwDOSA8y6s6yVSbe (RetryDraftStorage data integrity, major), PRRT_kwDOSA8y6s6yVTPU (delivery selections reset on relink, P2), PRRT_kwDOSA8y6s6yVTPW (dirty drafts for removed components, P2).
+  - All 35 review threads now accounted for: 32 resolved, 3 open (non-trivial behavior issues logged for focused follow-up PRs).
+
 - 2026-10-31 22:42Z (continued review of PR #580, same session as run 441):
   - Owner had pushed 05f0c15 (fix: address idea workspace review findings) concurrently, including their own canvas geometry caching (worldPositions/componentsById/firstPlacementByComponentId) and card accessibility improvements — overlapping with session's commits.
   - Rebased local work onto remote; resolved conflicts by taking owner's more complete implementations.
