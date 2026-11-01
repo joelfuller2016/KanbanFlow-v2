@@ -51,6 +51,13 @@ A review of the repository and a test run on 2026-09-26 filed findings as issues
   - S7, for #549.
 
 ## Entries (newest first)
+- 2026-11-01 02:40Z (PR monitor — Copilot review on #580 HEAD 73085d2, two findings replied+resolved):
+  - Owner posted closing delivery record on PR #580 (comment 6552403415): all 78 threads resolved, 1,660 .NET / 374 script / 41 browser / 2 integration checks, Codex on 925f2ef clean. PR stays open; merge and owner walkthrough (T08) remain open.
+  - Owner pushed 73085d282950a456b56b2d5aae404b5be0b8ffde (JOURNAL.md only) to feat/579-idea-workspaces; Copilot review triggered on new HEAD.
+  - Copilot Finding 1 (Medium, r4434146742): pointer-up coordinates — `#finish` uses last `#move` dx/dy; `pointerup` could carry different coordinates. Valid edge case; desktop OS coalesces events so gap is sub-pixel and below the ≥2 px commit threshold; `lostpointercapture → #reset()` guards forced releases. Replied and resolved thread PRRT_kwDOSA8y6s6yWrMF; deferred to next iteration.
+  - Copilot Finding 2 (Medium, r4434146754): unkeyed Blazor `<option>` elements in `WorkspaceDeliveryPanel`, `WorkspaceDiscussion`, `WorkspaceConnections`, `WorkspaceLayoutEditor`. Valid best practice; Blazor Server's synchronous circuit rendering prevents mid-render interactions so the described race cannot occur in practice, but `@key` is still the correct approach. Replied and resolved thread PRRT_kwDOSA8y6s6yWrMM; deferred to next iteration.
+  - All threads on #580 now resolved including new Copilot findings. Codex reviews on 73085d2 still running as of 02:36Z.
+
 - 2026-11-01 02:34Z (PR monitor — Copilot review on #511, three findings addressed):
   - New Copilot review on #511 (feat/unified-workflow-509, HEAD ed205efd) with 3 findings.
   - Finding 1 (High): Subtask.Completed excluded from StateHash — valid, but changing the hash format invalidates all previously recorded evidence; versioned hash or startup migration needed. Replied to thread; flagged to owner.
