@@ -51,6 +51,22 @@ A review of the repository and a test run on 2026-09-26 filed findings as issues
   - S7, for #549.
 
 ## Entries (newest first)
+- 2026-11-01 02:19Z - Owner requested fixes to PRs #580/#564/#521/#511. Applying native GSD debug in isolated detached worktrees; original dirty checkout preserved. Pinned #580 at a2a474377b2fd2c461fcb212a77e4a6c78c6db57, #564 cd9f67be709bb01bb03cdd174242d7904eae327d, #521 599a71402504f8f07a602eddd8a01c7135e0f91a and #511 d412c7321008a88cc95f8b2c56713a2aef9c5843. Independent workers own older-PR integration; parent owns #580 and all publication. Fresh #580 baseline reproduced the preservation failure; repairs now separate early authored state, retire selected-card handlers, synchronize text bindings, correct warning colors and load feature options independently. Narrow integrated #580 check passed 28 cases; mutation and full/runtime verification remain in progress. #564 integrated base locally with169 focused/371 script/1259 .NET passes; #521 native-context verification found and corrected JSON casing/omitted-terminal-cursor guidance; #511 retained both sides of TestRunnerService and repaired real HTTP callers to carry workflow versions. No readiness or human adoption approval is claimed. Next: complete exact-source gates, fresh review and guarded fast-forward updates to the existing PR branches. Only this journal is published at this checkpoint.
+
+
+- 2026-11-01 02:18Z (PR #580 — Codex code and security reviews on a6121dd both clean):
+  - Codex code review on a6121dd: completed, has_unresolved_findings: false.
+  - Codex security review on a6121dd: completed, has_any_findings: null (no findings).
+  - All PR #580 review threads remain resolved (78+ total). PR is ready for owner merge.
+
+- 2026-11-01 02:14Z (PR #580 — RetryDraftStorage/RecoverStoredDraft race fixed in a6121dd):
+  - Fixed PRRT_kwDOSA8y6s6yWGAe (CodeRabbit Minor, IdeaWorkspace.razor.cs lines 206-245):
+    - RetryDraftStorage: added `|| busy` guard; now a no-op while any async operation is running.
+    - RecoverStoredDraft: captured browser as `owned` before the first await; used `owned` throughout; guarded field-clear with `ReferenceEquals(browser, owned)` so a replacement instance is not accidentally nulled.
+    - Retry and Preserve buttons already had `disabled="@busy"` in the Razor markup.
+  - Thread auto-resolved by CodeRabbit on push. Replied to comment 4433909946 with fix details.
+  - 1563/1566 tests pass (3 pre-existing filesystem failures unrelated to this change).
+  - Branch HEAD: a6121dd. Codex reviews will run on new commit.
 
 - 2026-11-01 02:10Z (PR #580 — 6 new CodeRabbit findings on b1e61c3 resolved; regression test added in e697d8a):
   - CodeRabbit review (run c6938ff7) posted 6 findings on b1e61c3:
