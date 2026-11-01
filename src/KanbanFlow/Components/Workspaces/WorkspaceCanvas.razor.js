@@ -80,6 +80,12 @@ class CanvasController {
     async #finish(event) {
         const gesture = this.#gesture;
         if (!gesture || event.pointerId !== gesture.pointerId) return;
+        // A trusted release can arrive at a newer position without a final move event.
+        // Incomplete synthetic releases retain the last complete coordinate pair.
+        if (Number.isFinite(event.clientX) && Number.isFinite(event.clientY)) {
+            gesture.lastClientX = event.clientX;
+            gesture.lastClientY = event.clientY;
+        }
         this.#preview();
         const changed = Math.abs(gesture.dx) + Math.abs(gesture.dy) >= 2;
         const update = gesture.resize

@@ -28,7 +28,7 @@ public sealed class WorkspaceLayoutEditorPlacementTests
     public async Task QueuedPlacementCallback_IgnoresOldAppearance_AndCurrentCallbackStillWorks(string control)
     {
         var fixture = new Fixture();
-        var first = control == "Reapply" ? First with { BaseRevision = 11 } : First;
+        var first = control is "Apply" or "Reapply" ? First with { BaseRevision = 11 } : First;
         var second = control is "Apply" or "Reapply" ? Second with { BaseRevision = 11 } : Second;
         fixture.Receive(first);
         var queued = Callback(fixture.Editor, control, first.PlacementId);
@@ -71,6 +71,7 @@ public sealed class WorkspaceLayoutEditorPlacementTests
             Assert.Equal(control == "Add" ? null : "layout:" + second.PlacementId, command.DraftSection);
             if (control == "Apply")
             {
+                Assert.NotEqual(12, second.BaseRevision);
                 var placement = Assert.Single(command.Payload.GetProperty("placements").EnumerateArray());
                 Assert.Equal(second.PlacementId, placement.GetProperty("placementId").GetString());
                 Assert.Equal(second.X, placement.GetProperty("x").GetDouble());

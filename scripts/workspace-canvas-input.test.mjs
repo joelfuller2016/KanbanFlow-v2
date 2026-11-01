@@ -61,8 +61,10 @@ function canvasBoundary(callback, placements = ["card-position", "second-positio
   context.canvasModule.initialize(root, { invokeMethodAsync: callback });
   boundary.handles = handles;
   boundary.key = (index = 0) => handlers.get("keydown")({ target: handles[index], key: "ArrowRight", shiftKey: false, preventDefault() {} });
-  boundary.pointer = (name, pointerId, index = 0, clientX = 0, clientY = 0) => handlers.get(name)({
-    target: handles[index], pointerId, clientX, clientY, button: 0, preventDefault() {},
+  boundary.pointer = (name, pointerId, index = 0, clientX, clientY) => handlers.get(name)({
+    target: handles[index], pointerId,
+    clientX: name === "pointerup" ? clientX : clientX ?? 0,
+    clientY: name === "pointerup" ? clientY : clientY ?? 0, button: 0, preventDefault() {},
   });
   boundary.scroll = (left, top, notify = true) => {
     viewport.scrollLeft = left;
@@ -72,6 +74,65 @@ function canvasBoundary(callback, placements = ["card-position", "second-positio
   boundary.dispose = () => context.canvasModule.dispose(root);
   return boundary;
 }
+
+for (const resize of [false, true]) {
+  for (const moves of [false, true]) {
+    test(`${resize ? "resize" : "drag"} commits the owning release position ${moves ? "after an earlier move" : "without a move event"}`, async () => {
+      const calls = [];
+      const canvas = canvasBoundary(async (...args) => calls.push(args));
+      canvas.handles[0].resized = resize;
+      canvas.pointer("pointerdown", 1, 0, 100, 100);
+      if (moves) canvas.pointer("pointermove", 1, 0, 110, 105);
+      await canvas.pointer("pointerup", 1, 0, 140, 130);
+
+      assert.equal(calls.length, 1);
+      const update = calls[0][2][0];
+      assert.equal(update.placementId, "card-position");
+      if (resize) { assert.equal(update.width, 360); assert.equal(update.height, 250); }
+      else { assert.equal(update.x, 70); assert.equal(update.y, 70); }
+      assert.equal(calls[0][3], 8);
+      assert.equal(canvas.cards[0].properties.size, 0);
+      canvas.dispose();
+    });
+  }
+}
+
+for (const [x, y] of [[undefined, undefined], [NaN, 130], [140, Infinity], [-Infinity, 130]]) {
+  test(`a nonfinite or missing release pair (${x}, ${y}) retains the last usable pointer position`, async () => {
+    const calls = [];
+    const canvas = canvasBoundary(async (...args) => calls.push(args));
+    canvas.pointer("pointerdown", 1, 0, 100, 100);
+    canvas.pointer("pointermove", 1, 0, 125, 115);
+    await canvas.pointer("pointerup", 1, 0, x, y);
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0][2][0].x, 55);
+    assert.equal(calls[0][2][0].y, 55);
+    canvas.dispose();
+  });
+}
+
+test("finite zero release coordinates remain valid instead of falling back to an earlier move", async () => {
+  const calls = [];
+  const canvas = canvasBoundary(async (...args) => calls.push(args));
+  canvas.pointer("pointerdown", 1, 0, 40, 30);
+  canvas.pointer("pointermove", 1, 0, 50, 35);
+  await canvas.pointer("pointerup", 1, 0, 0, 0);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0][2][0].x, -10);
+  assert.equal(calls[0][2][0].y, 10);
+  canvas.dispose();
+});
+
+test("releasing back at the origin cancels the earlier preview without a save", async () => {
+  const calls = [];
+  const canvas = canvasBoundary(async (...args) => calls.push(args));
+  canvas.pointer("pointerdown", 1, 0, 100, 100);
+  canvas.pointer("pointermove", 1, 0, 125, 115);
+  await canvas.pointer("pointerup", 1, 0, 100, 100);
+  assert.equal(calls.length, 0);
+  assert.equal(canvas.cards[0].properties.size, 0);
+  canvas.dispose();
+});
 
 for (const detach of ["section", "error element"]) {
   for (const fails of [false, true]) {

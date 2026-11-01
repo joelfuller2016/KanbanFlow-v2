@@ -1,4 +1,5 @@
 using System.Reflection;
+using System.Data.Common;
 using System.Text.Json;
 using KanbanFlow.Components.Workspaces;
 using KanbanFlow.Data;
@@ -6,6 +7,7 @@ using KanbanFlow.Models;
 using KanbanFlow.Services.IdeaWorkspaces;
 using Microsoft.AspNetCore.Components;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Diagnostics;
 
 namespace KanbanFlow.Tests;
 
@@ -130,6 +132,51 @@ public sealed class IdeaWorkspaceDeliveryFeatureRecoveryTests
         finally { held.Release.TrySetResult(); await reading.WaitAsync(Deadline); panel.Dispose(); }
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task DisposingTwice_CancelsTheActualFactoryOrQueryRead_WithoutPublishingAnError(bool holdQuery)
+    {
+        using var factory = new SqliteTestFactory();
+        var (project, _, _, _) = await SeedChoices(factory);
+        var heldFactory = new HeldFactory(factory) { HoldNext = !holdQuery };
+        var heldQuery = new HeldFeatureQuery();
+        IDbContextFactory<AppDbContext> reader = holdQuery ? new QueryFactory(factory, heldQuery) : heldFactory;
+        var panel = Panel(reader, Context(project.Id));
+        var reading = Call(panel, "OnParametersSetAsync");
+        try
+        {
+            await (holdQuery ? heldQuery.Entered.Task : heldFactory.Entered.Task).WaitAsync(Deadline);
+            var token = holdQuery ? heldQuery.ReadToken : heldFactory.ReadToken;
+            Assert.True(token.CanBeCanceled);
+            panel.Dispose(); panel.Dispose();
+            await reading.WaitAsync(Deadline);
+            Assert.True(token.IsCancellationRequested);
+            Assert.Empty(Features(panel)); Assert.Null(Field<string?>(panel, "featuresError"));
+            await Call(panel, "ReloadFeatures");
+            await Call(panel, "OnParametersSetAsync");
+        }
+        finally
+        {
+            heldFactory.Release.TrySetResult(); heldQuery.Release.TrySetResult();
+            await reading.WaitAsync(Deadline); panel.Dispose();
+        }
+    }
+
+    [Fact]
+    public async Task CancellationFromAnotherOwner_IsReportedAsARetryableFeatureReadFailure()
+    {
+        using var factory = new SqliteTestFactory();
+        var (project, _, _, _) = await SeedChoices(factory);
+        var held = new HeldFactory(factory) { HoldNext = true, Failure = new OperationCanceledException(new CancellationToken(true)) };
+        using var panel = Panel(held, Context(project.Id));
+        held.Release.TrySetResult(); await Call(panel, "OnParametersSetAsync");
+        Assert.NotNull(Field<string?>(panel, "featuresError"));
+        Assert.Empty(Features(panel));
+        await Call(panel, "ReloadFeatures");
+        Assert.Single(Features(panel)); Assert.Null(Field<string?>(panel, "featuresError"));
+    }
+
     [Fact]
     public async Task ReloadedFeatureChoices_SurviveParentRerender_WithTheSameSuccessfulPreview()
     {
@@ -231,11 +278,13 @@ public sealed class IdeaWorkspaceDeliveryFeatureRecoveryTests
         public bool HoldNext { get; set; }
         public bool FailNext { get; set; }
         public Exception? Failure { get; set; }
+        public CancellationToken ReadToken { get; private set; }
         public TaskCompletionSource Entered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public TaskCompletionSource Release { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public AppDbContext CreateDbContext() => inner.CreateDbContext();
         public async Task<AppDbContext> CreateDbContextAsync(CancellationToken cancellationToken = default)
         {
+            ReadToken = cancellationToken;
             if (FailNext) { FailNext = false; throw new IOException("First feature read failed."); }
             if (HoldNext)
             {
@@ -243,6 +292,24 @@ public sealed class IdeaWorkspaceDeliveryFeatureRecoveryTests
                 if (Failure is not null) throw Failure;
             }
             return inner.CreateDbContext();
+        }
+    }
+
+    private sealed class QueryFactory(SqliteTestFactory inner, HeldFeatureQuery interceptor) : IDbContextFactory<AppDbContext>
+    {
+        public AppDbContext CreateDbContext() => new(new DbContextOptionsBuilder<AppDbContext>(inner.Options).AddInterceptors(interceptor).Options);
+        public Task<AppDbContext> CreateDbContextAsync(CancellationToken cancellationToken = default) => Task.FromResult(CreateDbContext());
+    }
+
+    private sealed class HeldFeatureQuery : DbCommandInterceptor
+    {
+        public CancellationToken ReadToken { get; private set; }
+        public TaskCompletionSource Entered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource Release { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public override async ValueTask<InterceptionResult<DbDataReader>> ReaderExecutingAsync(DbCommand command, CommandEventData eventData,
+            InterceptionResult<DbDataReader> result, CancellationToken cancellationToken = default)
+        {
+            ReadToken = cancellationToken; Entered.TrySetResult(); await Release.Task.WaitAsync(cancellationToken); return result;
         }
     }
 }

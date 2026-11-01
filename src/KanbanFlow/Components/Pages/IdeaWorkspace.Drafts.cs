@@ -94,7 +94,8 @@ public partial class IdeaWorkspace
     private async Task Select(WorkspaceUiScope scope, WorkspaceSelection selection)
     {
         if (!IsCurrent(scope)) return;
-        draft = draft with { SelectedComponentId = selection.ComponentId, SelectedPlacementId = selection.PlacementId };
+        draft = draft with { SelectedComponentId = selection.ComponentId, SelectedPlacementId = selection.PlacementId,
+            SelectionSequence = draft.SelectionSequence + 1 };
         EnsureSelectedDrafts();
         await ReadSelectedDetail(scope);
         if (IsCurrent(scope)) await PersistDraft(scope);

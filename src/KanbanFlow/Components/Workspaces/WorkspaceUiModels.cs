@@ -94,7 +94,8 @@ public sealed record WorkspaceCheckpointDraft
         OriginalOpenQuestions = [.. checkpoint.OpenQuestions], OriginalNextActions = [.. checkpoint.NextActions]
     };
 }
-public sealed record WorkspacePendingCommand(IdeaWorkspaceCommand Command, string? DraftSection, JsonElement? DraftAtSend = null);
+public sealed record WorkspacePendingCommand(IdeaWorkspaceCommand Command, string? DraftSection,
+    JsonElement? DraftAtSend = null, WorkspaceSelection? SelectionAtSend = null, long? SelectionSequenceAtSend = null);
 public sealed record WorkspaceDeliveryDraft
 {
     public bool AssociationKnown { get; init; }
@@ -109,6 +110,7 @@ public sealed record WorkspaceBrowserDraft
 {
     public string? SelectedComponentId { get; init; }
     public string? SelectedPlacementId { get; init; }
+    public long SelectionSequence { get; init; }
     public Dictionary<string, WorkspaceContentDraft> ContentDrafts { get; init; } = [];
     public Dictionary<string, WorkspaceLayoutDraft> LayoutDrafts { get; init; } = [];
     public WorkspaceDiscussionDraft Discussion { get; init; } = new();

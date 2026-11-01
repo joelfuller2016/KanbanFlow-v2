@@ -15,7 +15,8 @@ public partial class IdeaWorkspace
         var section = request.Action is "publish_plan" or "link_project" or "create_project" ? "delivery" : request.DraftSection;
         var sectionDraft = DraftSectionValue(draft, section);
         var pending = new WorkspacePendingCommand(command, section,
-            sectionDraft is null ? null : JsonSerializer.SerializeToElement(sectionDraft, WorkspaceUiCommand.Json));
+            sectionDraft is null ? null : JsonSerializer.SerializeToElement(sectionDraft, WorkspaceUiCommand.Json),
+            new(draft.SelectedComponentId, draft.SelectedPlacementId), draft.SelectionSequence);
         draft = draft with { Pending = pending };
         await ExecutePending(scope, pending);
     }
@@ -39,8 +40,15 @@ public partial class IdeaWorkspace
             var refreshed = await Workspaces.GetAsync(scope.WorkspaceId, lifetime.Token);
             if (!IsCurrent(scope)) return;
             draft = ClearSavedSection(draft with { Pending = null }, pending);
-            if (result.Action == "remove_component") draft = draft with { SelectedComponentId = null, SelectedPlacementId = null };
-            else if (result.ComponentId is not null) draft = draft with { SelectedComponentId = result.ComponentId, SelectedPlacementId = result.PlacementId ?? draft.SelectedPlacementId };
+            // The persisted send snapshot also protects newer selections during uncertain-result retries.
+            // Legacy envelopes without selection metadata cannot authorize replacing the current focus.
+            if (pending.SelectionSequenceAtSend == draft.SelectionSequence
+                && pending.SelectionAtSend is { } selection && selection.ComponentId == draft.SelectedComponentId
+                && selection.PlacementId == draft.SelectedPlacementId)
+            {
+                if (result.Action == "remove_component") draft = draft with { SelectedComponentId = null, SelectedPlacementId = null };
+                else if (result.ComponentId is not null) draft = draft with { SelectedComponentId = result.ComponentId, SelectedPlacementId = result.PlacementId ?? draft.SelectedPlacementId };
+            }
             if (context?.ProjectId != refreshed.ProjectId) ClearDeliveryView();
             context = refreshed;
             if (result.Action is "publish_plan" or "link_project" or "create_project")

@@ -259,7 +259,8 @@ public sealed class IdeaWorkspaceSelectedDetailTests
         public Task SelectHeldCard() => Call(Page, "Select", Scope, new WorkspaceSelection("card-a", "place-a"));
         public void AssertAuthoredDraft(WorkspaceBrowserDraft expected, WorkspaceBrowserDraft actual)
         {
-            Assert.Equal(Serialize(expected with { SelectedComponentId = actual.SelectedComponentId, SelectedPlacementId = actual.SelectedPlacementId }), Serialize(actual));
+            Assert.Equal(Serialize(expected with { SelectedComponentId = actual.SelectedComponentId, SelectedPlacementId = actual.SelectedPlacementId,
+                SelectionSequence = actual.SelectionSequence }), Serialize(actual));
             Assert.Same(expected.Pending, actual.Pending);
             Assert.Same(expected.Pending!.Command, actual.Pending!.Command);
             Assert.Equal(expected.Pending.DraftAtSend!.Value.GetRawText(), actual.Pending.DraftAtSend!.Value.GetRawText());
