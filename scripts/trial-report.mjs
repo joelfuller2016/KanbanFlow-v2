@@ -459,19 +459,27 @@ export function scrubGitEnv(env) {
 
 /**
  * Read only protected ownership exceptions, preserving system/global ordering and empty resets.
- * Explicit config-file locations apply only to this key-only read, never identity probes. A
- * repository-local safe.directory cannot grant itself trust. Git performs its own interpolation.
+ * Explicit config-file locations and system-disable flags apply only to this key-only read,
+ * never identity probes. Local safe.directory cannot grant trust. Git performs interpolation.
  */
-function protectedSafeDirectoryArgs(cwd, env) {
+function protectedSafeDirectoryArgs(cwd, env, remainingTimeout) {
   const configEnv = scrubGitEnv(env);
   for (const [key, value] of Object.entries(env)) {
-    if (/^GIT_CONFIG_(GLOBAL|SYSTEM)$/i.test(key)) configEnv[key.toUpperCase()] = value;
+    if (/^GIT_CONFIG_(GLOBAL|SYSTEM|NOSYSTEM)$/i.test(key)) configEnv[key.toUpperCase()] = value;
+  }
+  const noSystem = configEnv.GIT_CONFIG_NOSYSTEM;
+  let systemDisabled = false;
+  if (noSystem !== undefined) {
+    if (/^(true|yes|on)$/i.test(noSystem)) systemDisabled = true;
+    else if (/^(false|no|off|)$/i.test(noSystem)) systemDisabled = false;
+    else if (/^[+-]?\d+$/.test(noSystem)) systemDisabled = Number(noSystem) !== 0;
+    else throw new Error("Invalid GIT_CONFIG_NOSYSTEM boolean.");
   }
   const values = [];
-  for (const scope of ["system", "global"]) {
+  for (const scope of systemDisabled ? ["global"] : ["system", "global"]) {
     try {
       const output = execFileSync("git", ["config", `--${scope}`, "--includes", "--null", "--get-all", "safe.directory"], {
-        cwd, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: GIT_TIMEOUT_MS, env: configEnv
+        cwd, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: remainingTimeout(), env: configEnv
       });
       values.push(...output.split("\0").slice(0, -1));
     } catch (error) {
@@ -490,7 +498,14 @@ function protectedSafeDirectoryArgs(cwd, env) {
  * contaminated environment without mutating this PROCESS's real process.env.
  */
 export function gitOutput(args, cwd, { env = process.env } = {}) {
-  const safeDirectories = protectedSafeDirectoryArgs(cwd, env);
+  // Ownership lookup and identity plumbing share the original per-command bound.
+  const deadline = Date.now() + GIT_TIMEOUT_MS;
+  const remainingTimeout = () => {
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) throw new Error("Git command exceeded its five-second deadline.");
+    return remaining;
+  };
+  const safeDirectories = protectedSafeDirectoryArgs(cwd, env, remainingTimeout);
   const scrubbed = { ...scrubGitEnv(env), GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null" };
   // `timeout` for the same reason the fetches carry one: an unbounded blocking call in a report
   // that has no other way to finish. `git rev-parse` on a network path, or against a repository
@@ -501,7 +516,7 @@ export function gitOutput(args, cwd, { env = process.env } = {}) {
     cwd,
     encoding: "utf8",
     stdio: ["ignore", "pipe", "ignore"],
-    timeout: GIT_TIMEOUT_MS,
+    timeout: remainingTimeout(),
     env: scrubbed
   }).trim();
 }

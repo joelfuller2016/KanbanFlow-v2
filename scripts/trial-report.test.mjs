@@ -1818,7 +1818,7 @@ test("protected safe.directory exceptions survive isolated Git probes without re
       'console.log(JSON.stringify({ roots, remote, confirmed: [...confirmed.keys()] }));'
     ].join("\n");
 
-    for (const location of ["HOME", "XDG_CONFIG_HOME", "GIT_CONFIG_GLOBAL", "SYSTEM", "INCLUDED"]) {
+    for (const location of ["HOME", "XDG_CONFIG_HOME", "GIT_CONFIG_GLOBAL", "SYSTEM", "INCLUDED", "NOSYSTEM"]) {
       const home = make();
       const xdg = make();
       fs.mkdirSync(path.join(xdg, "git"));
@@ -1838,11 +1838,13 @@ test("protected safe.directory exceptions survive isolated Git probes without re
         fs.writeFileSync(global, "[safe]\n\tdirectory =\n[include]\n\tpath = "
           + JSON.stringify(included.replaceAll("\\", "/")) + "\n" + rewrite);
       } else {
-        fs.writeFileSync(global, (location === "SYSTEM" ? "" : "[safe]\n\tdirectory =\n" + exceptions) + rewrite);
+        fs.writeFileSync(global, (location === "SYSTEM" ? "" : location === "NOSYSTEM" ? exceptions
+          : "[safe]\n\tdirectory =\n" + exceptions) + rewrite);
       }
       const env = { ...scrubGitEnv(process.env), HOME: home, USERPROFILE: home, XDG_CONFIG_HOME: xdg,
         GIT_CONFIG_SYSTEM: system };
       if (location === "GIT_CONFIG_GLOBAL") env.GIT_CONFIG_GLOBAL = global;
+      if (location === "NOSYSTEM") env.GIT_CONFIG_NOSYSTEM = "1";
       const rawEnv = { ...env, GIT_TEST_ASSUME_DIFFERENT_OWNER: "1" };
       const raw = spawnSync("git", ["remote", "get-url", "origin"], {
         cwd: c, env: rawEnv, encoding: "utf8", timeout: 5_000, windowsHide: true
@@ -1867,6 +1869,58 @@ test("protected safe.directory exceptions survive isolated Git probes without re
   } finally {
     cleanup();
   }
+});
+
+function runGitDeadlineFixture(stepMs) {
+  const fixture = buildInto(make => {
+    const a = make();
+    initRealRepo(a, "deadline.txt");
+    return { a };
+  });
+  try {
+    const emptyConfig = path.join(fixture.make(), "empty.gitconfig");
+    fs.writeFileSync(emptyConfig, "");
+    const preload = path.join(fixture.make(), "git-clock.cjs");
+    fs.writeFileSync(preload, [
+      'const cp = require("node:child_process");',
+      'const original = cp.execFileSync;',
+      'let elapsed = 0; globalThis.gitTimeouts = []; Date.now = () => elapsed;',
+      'cp.execFileSync = function (file, args, options) {',
+      '  if (file !== "git") return original.apply(this, arguments);',
+      '  globalThis.gitTimeouts.push(options.timeout);',
+      '  try { return original.apply(this, arguments); } finally { elapsed += Number(process.env.KBF_TEST_GIT_STEP_MS); }',
+      '};',
+      'require("node:module").syncBuiltinESMExports();'
+    ].join("\n"));
+    const script = [
+      `import { gitOutput } from ${JSON.stringify(new URL("./trial-report.mjs", import.meta.url).href)};`,
+      'let success = false, message = null;',
+      `try { success = Boolean(gitOutput(["rev-parse", "--show-toplevel"], ${JSON.stringify(fixture.a)})); } catch (error) { message = error.message; }`,
+      'console.log(JSON.stringify({ success, message, timeouts: globalThis.gitTimeouts }));'
+    ].join("\n");
+    const child = spawnSync(process.execPath, ["--require", preload, "--input-type=module", "--eval", script], {
+      cwd: fixture.a, encoding: "utf8", timeout: 20_000, windowsHide: true,
+      env: { ...scrubGitEnv(process.env), GIT_CONFIG_GLOBAL: emptyConfig, GIT_CONFIG_SYSTEM: emptyConfig,
+        KBF_TEST_GIT_STEP_MS: String(stepMs) }
+    });
+    assert.equal(child.status, 0, child.stderr);
+    return JSON.parse(child.stdout);
+  } finally {
+    fixture.cleanup();
+  }
+}
+
+test("Git config reads and identity share one five-second deadline", () => {
+  const result = runGitDeadlineFixture(1000);
+  assert.equal(result.success, true, result.message);
+  assert.deepEqual(result.timeouts, [5000, 4000, 3000], "each real subprocess gets only the remaining budget");
+});
+
+test("Git identity is not started after config reads exhaust its deadline", () => {
+  const result = runGitDeadlineFixture(2500);
+  assert.equal(result.success, false);
+  assert.deepEqual(result.timeouts, [5000, 2500], "the third subprocess must never start");
+  assert.match(result.message, /budget|deadline|timed out/i);
 });
 
 // --- 5d. Which candidates main() probes, and in what order (bounded-probe-budget priority) --
