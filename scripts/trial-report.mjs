@@ -608,7 +608,8 @@ export function createGitRunner({ env = process.env, timeoutMs = GIT_TIMEOUT_MS 
           { code: "git_cwd_missing" });
       }
       const outputLimit = versionCause?.code === "ENOBUFS" || versionCause?.code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER";
-      const unavailable = versionCause?.status == null &&
+      // Node may retain status 0 alongside an actual timeout or signal error.
+      const unavailable = (versionCause?.status == null || versionCause.status === 0) &&
         (["ETIMEDOUT", "EACCES", "EPERM"].includes(versionCause?.code) ||
           versionCause?.signal && versionCause.code !== "ENOENT" && versionCause.code !== "ENOTDIR");
       if (!outputLimit && unavailable) {

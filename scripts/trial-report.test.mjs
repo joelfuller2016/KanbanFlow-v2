@@ -1132,9 +1132,19 @@ function buildInto(build) {
 // future session.
 function buildRuleAFixture() {
   return buildInto(make => {
+    // Construct owned local repositories separately from the report's five-second read budget.
+    const clone = (source, dir, options = []) => {
+      const child = spawnSync("git", ["clone", "-q", ...options, source, dir], {
+        cwd: a, encoding: "utf8", timeout: 30_000, maxBuffer: 256 * 1024, windowsHide: true,
+        env: { ...scrubGitEnv(process.env), GIT_CONFIG_NOSYSTEM: "1",
+          GIT_CONFIG_SYSTEM: "/dev/null", GIT_CONFIG_GLOBAL: "/dev/null" }
+      });
+      if (child.error) throw child.error;
+      assert.equal(child.status, 0, child.stderr);
+    };
     const cloneWithRemote = (remoteUrl, srcOrigin = "origin") => {
       const dir = make();
-      gitOutput(["clone", "-q", a, dir], a);
+      clone(a, dir);
       if (remoteUrl !== undefined) gitOutput(["remote", "set-url", srcOrigin, remoteUrl], dir);
       return dir;
     };
@@ -1150,7 +1160,7 @@ function buildRuleAFixture() {
     // --- CONFIRMED: shares a's root commit, and either the remote is local or matches a's ---------
     const localClone = cloneWithRemote(); // origin left as-is: git clone sets it to a's own local path
     const fileUrlClone = make();
-    gitOutput(["clone", "-q", `file:///${a.replace(/\\/g, "/")}`, fileUrlClone], a); // needs N1
+    clone(`file:///${a.replace(/\\/g, "/")}`, fileUrlClone); // needs N1
     // Its only remote is a's own URL, spelled exactly as a spells it: the veto that now binds the
     // remote-match path too has nothing to fire on here, and must leave this one confirmed.
     const sameRepoHttps = cloneWithRemote("https://example.invalid/org/repo.git");
@@ -1175,7 +1185,7 @@ function buildRuleAFixture() {
     // so it still vetoes, and this genuinely-same-repository clone still reads as outside.
     const aliasSpelledSameRepo = cloneWithRemote("git@example-work:org/repo.git");
     const derivNoOrigin = make();
-    gitOutput(["clone", "-q", "--origin", "upstream", a, derivNoOrigin], a); // origin renamed away
+    clone(a, derivNoOrigin, ["--origin", "upstream"]); // origin renamed away
     gitOutput(["remote", "add", "github", "https://example.invalid/alice/derivative.git"], derivNoOrigin);
     // The ordinary fork layout: origin is the fork, upstream is a's own URL. The upstream MATCHES,
     // and the non-matching origin still vetoes — on the remote-match path, not only the root-commit one.
@@ -2534,12 +2544,15 @@ test("version launch availability is candidate-local but invalidates implicit an
       report: path.join(HERE, "trial-report.mjs"), foreign: false }, (trial, fs, stateFile, settings, cp) => {
       const cases = [
         { label: "timeout", error: { code: "ETIMEDOUT", signal: "SIGTERM" }, local: true },
+        { label: "timeout-success-status", error: { code: "ETIMEDOUT", status: 0, signal: null }, local: true },
         { label: "signal", error: { signal: "SIGTERM" }, local: true },
+        { label: "signal-success-status", error: { signal: "SIGTERM", status: 0 }, local: true },
         { label: "access", error: { code: "EACCES" }, local: true },
         { label: "permission", error: { code: "EPERM" }, local: true },
         { label: "missing-cwd", error: { code: "ENOENT" }, local: true, missingCwd: true },
         { label: "buffer-signal", error: { code: "ENOBUFS", signal: "SIGTERM" }, local: false },
-        { label: "nonzero-exit", error: { status: 1 }, local: false }
+        { label: "nonzero-exit", error: { status: 1 }, local: false },
+        { label: "timeout-nonzero-exit", error: { code: "ETIMEDOUT", status: 1, signal: "SIGTERM" }, local: false }
       ];
       const results = [];
       for (const role of ["candidate", "explicit", "implicit"]) for (const failure of cases) {
@@ -3400,7 +3413,8 @@ test("candidate version failures stay local for recorded and resolved working di
   const subdir = path.join(b, "recorded-subdir");
   fs.mkdirSync(subdir);
   try {
-    for (const failure of [{ code: "ETIMEDOUT", signal: "SIGTERM" }, { code: "EACCES" }, { code: "EPERM" }, { signal: "SIGTERM", status: null }]) {
+    for (const failure of [{ code: "ETIMEDOUT", signal: "SIGTERM" }, { code: "ETIMEDOUT", status: 0, signal: null },
+      { code: "EACCES" }, { code: "EPERM" }, { signal: "SIGTERM", status: null }, { signal: "SIGTERM", status: 0 }]) {
       for (const failedCwd of [real(subdir), real(b)]) {
         const orders = failure.code === "ETIMEDOUT" && failedCwd === real(b) ? [[subdir, d], [d, subdir]] : [[subdir, d]];
         for (const order of orders) {
@@ -3418,6 +3432,8 @@ test("candidate version failures stay local for recorded and resolved working di
           assert.doesNotMatch(child.stderr, /Git 2\.39 or newer is required/);
           const calls = fs.readFileSync(trace, "utf8").trim().split("\n").map(line => JSON.parse(line));
           assert.ok(calls.some(call => path.resolve(call.cwd) === failedCwd && call.args[0] === "--version"), "the selected failure must actually be reached");
+          assert.ok(calls.filter(call => path.resolve(call.cwd) === failedCwd).every(call => call.args[0] === "--version"),
+            "a failed version read cannot authorize config or identity commands at that cwd");
           assert.ok(calls.some(call => path.resolve(call.cwd) === path.resolve(d) && call.args[0] === "rev-parse"), "healthy commands still delegate to the installed Git");
         }
       }
@@ -3430,7 +3446,8 @@ test("reference version failures disable the report with and without an explicit
   const dir = make(), log = path.join(dir, "usage.jsonl"), trace = path.join(dir, "trace.jsonl");
   try {
     fs.writeFileSync(log, JSON.stringify(row({ cwd: b })) + "\n");
-    for (const failure of [{ code: "ETIMEDOUT", signal: "SIGTERM" }, { code: "EACCES" }, { code: "EPERM" }, { signal: "SIGTERM", status: null }]) {
+    for (const failure of [{ code: "ETIMEDOUT", signal: "SIGTERM" }, { code: "ETIMEDOUT", status: 0, signal: null },
+      { code: "EACCES" }, { code: "EPERM" }, { signal: "SIGTERM", status: null }, { signal: "SIGTERM", status: 0 }]) {
       for (const explicit of failure.code === "ETIMEDOUT" ? [true, false] : [true]) {
         fs.writeFileSync(trace, "");
         const preload = versionFailurePreload(dir, explicit ? a : HERE, failure, trace);
