@@ -51,6 +51,15 @@ A review of the repository and a test run on 2026-09-26 filed findings as issues
   - S7, for #549.
 
 ## Entries (newest first)
+- 2026-11-01 03:30Z (Automated PR monitor run — build gate DOWN, no merges):
+  - .NET 10 SDK unavailable: dotnet-install.sh blocked by egress proxy (builds.dotnet.microsoft.com:443 connect_rejected). BUILD GATE IS DOWN for this run; no PR was merged.
+  - Open PRs: #580 (non-draft), #578 (Dependabot, non-draft), #564/#521/#511 (all drafts, skipped Phase 1).
+  - #580 (feat/579-idea-workspaces, HEAD 925f2ef2dd6a746641168b1d0d3a79b856e8b16f): mergeable_state=clean, 78/78 review threads resolved, no CHANGES_REQUESTED reviews, CodeRabbit check-run on HEAD = neutral. Would be a merge candidate but BLOCKED (build gate down). Phase 2: 0 unresolved threads, nothing to fix.
+  - #578 (Dependabot, Microsoft.OpenApi 2.13.0→3.11.0): mergeable_state=clean, 0 review threads, CodeRabbit check-run = skipped. Contains 3.0.0 BREAKING CHANGES. BLOCKED (build gate down); prior monitor runs also failed this gate.
+  - #564, #521, #511: draft PRs, Phase 1 skipped. Phase 2 (comment resolution) deferred due to build gate down and token constraints.
+  - Master build: not verified (no dotnet available).
+  - Next: build gate recovery needed before any merges; when dotnet is accessible, #580 is clean and ready to gate.
+
 - 2026-11-01 02:26Z (PR monitor — #521 and #511 both clean, new unreviewed commits):
   - PR #521 (review/520-project-memory-ownership): still draft; new head ef34d61f pushed by prior session; CI clean on new head; CodeRabbit paused (last reviewed 599a714, ef34d61 not yet reviewed); no unresolved review threads in notifications.
   - PR #511 (feat/unified-workflow-509): still draft; new head ed205efd pushed by prior session (advancing beyond d412c73 from this monitor's earlier fix); CI clean on new head; CodeRabbit paused (last reviewed 399648b, ed205efd not yet reviewed); no unresolved review threads in notifications.
