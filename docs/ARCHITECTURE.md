@@ -680,6 +680,8 @@ command. Remote URL reads also inspect bounded NUL-framed URL and rewrite config
 that same deadline: embedded line breaks and empty URL values make the fingerprint inconclusive,
 including its reference root history. URL payload whitespace is preserved; only Git's final output
 record terminator is removed. Ordinary repository-local rewrites still come from Git's `get-url`.
+Native Git text is decoded as strict UTF-8 while preserving a valid BOM; malformed bytes cannot
+coalesce into another URL or protected `safe.directory` path through replacement decoding.
 Later operations get the same bound and reread protected configuration without repository
 context, so `gitdir`/`onbranch` conditional includes cannot grant ownership trust. The report does
 not install Git or change global settings. Git child output is capped at 256 KiB. Reference and

@@ -479,6 +479,14 @@ export function scrubGitEnv(env) {
   return scrubbed;
 }
 
+function nativeGitText(bytes, code = "git_invalid_utf8") {
+  try {
+    return new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes);
+  } catch (cause) {
+    throw Object.assign(new Error("Git command output is not valid UTF-8.", { cause }), { code });
+  }
+}
+
 /**
  * Read only protected ownership exceptions, preserving system/global ordering and empty resets.
  * Explicit config-file locations and system-disable flags apply only to this key-only read.
@@ -503,11 +511,11 @@ function protectedSafeDirectoryArgs(cwd, env, remainingTimeout) {
   configEnv.GIT_DIR = path.join(tmpdir(), "kanbanflow-protected-" + randomUUID());
   let output;
   try {
-    output = execFileSync("git", ["config", "--includes", "--null", "--show-scope", "--get-all", "safe.directory"], {
-      cwd, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: remainingTimeout(), maxBuffer: GIT_MAX_OUTPUT_BYTES, env: configEnv, windowsHide: true
-    });
+    output = nativeGitText(execFileSync("git", ["config", "--includes", "--null", "--show-scope", "--get-all", "safe.directory"], {
+      cwd, encoding: null, stdio: ["ignore", "pipe", "ignore"], timeout: remainingTimeout(), maxBuffer: GIT_MAX_OUTPUT_BYTES, env: configEnv, windowsHide: true
+    }));
   } catch (error) {
-    if (error.status === 1 && error.stdout === "") return []; // No key, including absent optional files.
+    if (error.status === 1 && error.stdout?.length === 0) return []; // No key, including absent optional files.
     throw error;
   }
   if (!output.endsWith("\0")) throw new Error("Invalid protected safe.directory framing.");
@@ -525,13 +533,13 @@ function protectedSafeDirectoryArgs(cwd, env, remainingTimeout) {
 function checkRemoteUrlFraming(cwd, safeDirectories, env, remainingTimeout) {
   let output;
   try {
-    output = execFileSync("git", [...safeDirectories, "config", "--includes", "--null", "--get-regexp",
+    output = nativeGitText(execFileSync("git", [...safeDirectories, "config", "--includes", "--null", "--get-regexp",
       "^(remote\\..*\\.(url|pushurl)|url\\..*\\.(insteadof|pushinsteadof))$"], {
-      cwd, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"],
+      cwd, encoding: null, stdio: ["ignore", "pipe", "ignore"],
       timeout: remainingTimeout(), maxBuffer: GIT_MAX_OUTPUT_BYTES, env, windowsHide: true
-    });
+    }), "git_url_framing");
   } catch (error) {
-    if (error.status === 1 && error.stdout === "") return; // No URL/rewrite keys.
+    if (error.status === 1 && error.stdout?.length === 0) return; // No URL/rewrite keys.
     throw error;
   }
   const invalid = () => { throw Object.assign(new Error("Git remote URL configuration has ambiguous record framing."), { code: "git_url_framing" }); };
@@ -577,10 +585,10 @@ export function createGitRunner({ env = process.env, timeoutMs = GIT_TIMEOUT_MS 
     let version = "unavailable";
     let versionCause;
     try {
-      version = execFileSync("git", ["--version"], {
-        cwd, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"],
+      version = nativeGitText(execFileSync("git", ["--version"], {
+        cwd, encoding: null, stdio: ["ignore", "pipe", "ignore"],
         timeout: versionTimeout, maxBuffer: GIT_MAX_OUTPUT_BYTES, env: isolated, windowsHide: true
-      }).trim();
+      })).trim();
     } catch (cause) { versionCause = cause; }
     const parsed = /^git version (\d+)\.(\d+)\.(\d+)(?:[. +\-][^\r\n]*)?$/.exec(version);
     const numbers = parsed?.slice(1, 4).map(Number);
@@ -604,10 +612,10 @@ export function createGitRunner({ env = process.env, timeoutMs = GIT_TIMEOUT_MS 
     const safeDirectories = protectedSafeDirectoryArgs(cwd, captured, remainingTimeout);
     if (args[0] === "remote" && args[1] === "get-url")
       checkRemoteUrlFraming(cwd, safeDirectories, isolated, remainingTimeout);
-    const output = execFileSync("git", [...safeDirectories, ...args], {
-      cwd, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"],
+    const output = nativeGitText(execFileSync("git", [...safeDirectories, ...args], {
+      cwd, encoding: null, stdio: ["ignore", "pipe", "ignore"],
       timeout: remainingTimeout(), maxBuffer: GIT_MAX_OUTPUT_BYTES, env: isolated, windowsHide: true
-    });
+    }), args[0] === "remote" ? "git_url_framing" : "git_invalid_utf8");
     return output.endsWith("\n") ? output.slice(0, -1) : output;
   };
 }
@@ -980,8 +988,9 @@ export function withConfirmedCloneRoots(cwds, roots, { git = gitOutput, now = ()
     let names;
     try {
       names = boundedGitLines(call(["remote"], cwd), MAX_REMOTES_PER_FINGERPRINT);
-    } catch {
-      return { everyUrl: new Set(), fetchUrls: new Set(), inconclusive: true };
+    } catch (error) {
+      return { everyUrl: new Set(), fetchUrls: new Set(), inconclusive: true,
+        ambiguousUrls: error.code === "git_url_framing" };
     }
     if (names === null) return { everyUrl: new Set(), fetchUrls: new Set(), inconclusive: true, tooManyRemotes: true };
     const network = rawUrl => (isLocalPathRemote(rawUrl, { platform }) ? null : normalizeRemoteUrl(rawUrl, { platform }));

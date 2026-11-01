@@ -1591,7 +1591,8 @@ test("a remote with more than 64 urls is inconclusive, including a contradicting
   const candidate = path.resolve("C:\\scratch\\many-urls");
   const limit = Array(64).fill(MAIN).join("\n");
   for (const [label, fetch, push, accepted] of [
-    ["64 aggregate boundary with empty lines", "\n" + Array(32).fill(MAIN).join("\r\n\n") + "\n", Array(32).fill(MAIN).join("\n"), true],
+    ["64 aggregate boundary", Array(32).fill(MAIN).join("\n"), Array(32).fill(MAIN).join("\n"), true],
+    ["empty records cannot disappear from the aggregate bound", "\n" + Array(32).fill(MAIN).join("\r\n\n") + "\n", Array(32).fill(MAIN).join("\n"), false],
     ["65 matching aggregate entries", Array(32).fill(MAIN).join("\n"), Array(33).fill(MAIN).join("\n"), false],
     ["65 matching fetch URLs", limit + "\n" + MAIN, MAIN, false],
     ["65th fetch URL contradicts", limit + "\nhttps://github.com/fork/project.git", MAIN, false],
@@ -1962,6 +1963,54 @@ test("real Git multiline URL framing cannot forge candidate or reference clone e
     gitOutput(["config", "url." + url + ".insteadOf", "short:repo\n"], c);
     gitOutput(["config", "remote.origin.url", url], c);
     assert.equal(withConfirmedCloneRoots([c], [a]).confirmed.has(c), false, "rewrite controls with line breaks cannot authorize ambiguous framing");
+  } finally { cleanup(); }
+});
+
+test("real Git malformed UTF8 URL bytes cannot alias a valid SSH path or reference history", () => {
+  const { a, b, c, d, cleanup } = buildCloneFixture();
+  try {
+    const bases = new Map([a, b, c, d].map(cwd => {
+      const bytes = fs.readFileSync(path.join(cwd, ".git", "config"));
+      const remote = bytes.indexOf(Buffer.from('[remote "origin"]'));
+      return [cwd, remote === -1 ? bytes : bytes.subarray(0, remote)];
+    }));
+    const writeUrlBytes = (cwd, bytes) => fs.writeFileSync(path.join(cwd, ".git", "config"),
+      Buffer.concat([bases.get(cwd), Buffer.from('[remote "origin"]\n\turl = "'), bytes, Buffer.from('"\n')]));
+    const prefix = Buffer.from("ssh://alice@host/repo-"), suffix = Buffer.from(".git");
+    const valid = Buffer.concat([prefix, Buffer.from("\ufffd"), suffix]);
+    const invalid = Buffer.concat([prefix, Buffer.from([0xff]), suffix]);
+    for (const cwd of [a, c]) writeUrlBytes(cwd, valid);
+    for (const cwd of [b, d]) writeUrlBytes(cwd, invalid);
+    const raw = cwd => {
+      const child = spawnSync("git", ["remote", "get-url", "origin"], {
+        cwd, encoding: null, windowsHide: true, timeout: 5000,
+        env: { ...scrubGitEnv(process.env), GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_SYSTEM: "/dev/null", GIT_CONFIG_GLOBAL: "/dev/null" }
+      });
+      assert.equal(child.status, 0, child.stderr?.toString());
+      return child.stdout;
+    };
+    const expected = raw(a), different = raw(d);
+    assert.notDeepEqual(different, expected, "native Git preserves the different SSH pathname bytes");
+    assert.equal(different.toString("utf8"), expected.toString("utf8"), "permissive decoding is the concrete collision being prevented");
+    const { confirmed } = withConfirmedCloneRoots([b, c, d], [a]);
+    assert.equal(confirmed.has(b), false, "invalid URL bytes veto shared-root fallback");
+    assert.equal(confirmed.has(d), false, "replacement decoding cannot manufacture an unrelated repository match");
+    assert.equal(confirmed.has(c), true, "a valid U+FFFD pathname remains supported");
+    assert.throws(() => gitOutput(["remote", "get-url", "origin"], d), error => error.code === "git_url_framing");
+    writeUrlBytes(a, invalid);
+    fs.writeFileSync(path.join(b, ".git", "config"), bases.get(b));
+    assert.equal(withConfirmedCloneRoots([b, c], [a]).confirmed.size, 0, "an invalid reference also loses its shared-root proof");
+
+    // Git also reads its legacy line-framed remote files, outside modern config metadata.
+    // This reaches the URL output decoder itself with genuine native invalid bytes.
+    for (const [name, url] of [["invalid", invalid], ["bom", Buffer.concat([Buffer.from("\ufeff"), valid])]]) {
+      const file = path.join(b, ".git", "remotes", name);
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      fs.writeFileSync(file, Buffer.concat([Buffer.from("URL: "), url, Buffer.from("\n")]));
+    }
+    assert.throws(() => gitOutput(["remote", "get-url", "invalid"], b), error => error.code === "git_url_framing");
+    assert.equal(gitOutput(["remote", "get-url", "bom"], b), "\ufeff" + valid.toString("utf8"),
+      "valid leading BOM bytes are payload, not an encoding marker to discard");
   } finally { cleanup(); }
 });
 
@@ -2370,6 +2419,7 @@ function runGitHarness(make, settings, body) {
     'cp.execFileSync = function (file, args, options) {',
     '  if (file !== "git") return original.apply(this, arguments);',
     '  const current = state();',
+    '  const reply = text => options.encoding === null ? Buffer.from(text) : text;',
     '  options = { ...options, env: { ...options.env, HOME: current.home, USERPROFILE: current.home,',
     '    XDG_CONFIG_HOME: current.xdg, GIT_CONFIG_SYSTEM: options.env.GIT_CONFIG_SYSTEM === "/dev/null" ? "/dev/null" : current.system,',
     '    GIT_TEST_ASSUME_DIFFERENT_OWNER: current.foreign ? "1" : "0" } };',
@@ -2378,13 +2428,13 @@ function runGitHarness(make, settings, body) {
     '  if (current.outputErrorPhase === phase) throw Object.assign(new Error("fixture output exceeded maxBuffer"), { code: "ENOBUFS" });',
     '  if (args[0] === "--version" && (Object.hasOwn(current, "versionReply") || current.versionByPath || current.versionByCwd)) {',
     '    if (current.versionReply === "ERROR") throw Object.assign(new Error("version read failed"), { status: 1 });',
-    '    if (current.versionByCwd) return options.cwd === current.oldCwd ? "git version 2.38.4\\n" : "git version 2.39.0\\n";',
-    '    return current.versionByPath ? (options.env.PATH.startsWith("old-version" + current.pathDelimiter) ? "git version 2.37.4\\n" : "git version 2.39.0\\n") : current.versionReply;',
+    '    if (current.versionByCwd) return reply(options.cwd === current.oldCwd ? "git version 2.38.4\\n" : "git version 2.39.0\\n");',
+    '    return reply(current.versionByPath ? (options.env.PATH.startsWith("old-version" + current.pathDelimiter) ? "git version 2.37.4\\n" : "git version 2.39.0\\n") : current.versionReply);',
     '  }',
     '  if (current.badFraming && args[0] === "config") {',
-    '    if (current.badFraming === "odd") return "global\\0*\\0global\\0";',
-    '    if (current.badFraming === "local" || current.badFraming === "command") return current.badFraming + "\\0*\\0";',
-    '    return "*";',
+    '    if (current.badFraming === "odd") return reply("global\\0*\\0global\\0");',
+    '    if (current.badFraming === "local" || current.badFraming === "command") return reply(current.badFraming + "\\0*\\0");',
+    '    return reply("*");',
     '  }',
     '  try { return original.call(this, file, args, options); }',
     '  finally { if (fakeClock) clock += current.clockStep; }',
@@ -2405,6 +2455,54 @@ function runGitHarness(make, settings, body) {
   assert.equal(result.status, 0, result.stderr + result.stdout);
   return JSON.parse(result.stdout);
 }
+
+test("protected path bytes cannot become a different ownership exception through UTF8 replacement", () => {
+  const fixture = buildInto(make => {
+    const a = path.join(make(), "repo-\ufffd");
+    fs.mkdirSync(a);
+    initRealRepo(a, "protected-bytes.txt");
+    const home = make(), xdg = make(), system = path.join(make(), "empty.gitconfig");
+    fs.writeFileSync(system, "");
+    const directory = Buffer.from(real(a).replaceAll("\\", "/"));
+    const replacement = directory.indexOf(Buffer.from("\ufffd"));
+    assert.ok(replacement >= 0);
+    const rawPath = Buffer.concat([directory.subarray(0, replacement), Buffer.from([0xff]), directory.subarray(replacement + 3)]);
+    fs.writeFileSync(path.join(home, ".gitconfig"), Buffer.concat([
+      Buffer.from('[safe]\n\tdirectory = "'), rawPath, Buffer.from('"\n')
+    ]));
+    return { a, home, xdg, system };
+  });
+  try {
+    const result = runGitHarness(fixture.make, { ...fixture, make: undefined, cleanup: undefined, foreign: true },
+      (trial, fs, stateFile, settings, cp) => {
+        const native = cp.spawnSync("git", ["rev-parse", "--show-toplevel"], {
+          cwd: settings.a, encoding: "utf8", timeout: 5000, windowsHide: true,
+          env: { ...trial.scrubGitEnv(process.env), HOME: settings.home, USERPROFILE: settings.home,
+            XDG_CONFIG_HOME: settings.xdg, GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_SYSTEM: settings.system,
+            GIT_CONFIG_GLOBAL: settings.home + "/.gitconfig", GIT_TEST_ASSUME_DIFFERENT_OWNER: "1" }
+        });
+        let result;
+        try {
+          result = { nativeStatus: native.status, nativeError: native.stderr,
+            value: trial.gitOutput(["rev-parse", "--show-toplevel"], settings.a) };
+        } catch (error) {
+          result = { nativeStatus: native.status, nativeError: native.stderr, errorCode: error.code, error: error.message };
+        }
+        const target = fs.realpathSync(settings.a).replaceAll("\\", "/"), linePath = target + "\nUnicode-☃";
+        fs.writeFileSync(settings.home + "/.gitconfig", "[safe]\n\tdirectory = " + JSON.stringify(linePath)
+          + "\n\tdirectory = " + JSON.stringify(target) + "\n");
+        globalThis.resetGitHarness();
+        return { ...result, linePath, control: trial.gitOutput(["rev-parse", "--show-toplevel"], settings.a),
+          replayed: globalThis.gitCalls.at(-1).args };
+      });
+    assert.equal(result.nativeStatus, 128, result.nativeError);
+    assert.match(result.nativeError, /dubious ownership/i, "the same native Git ownership check refuses the raw-byte allowlist");
+    assert.equal(result.errorCode, "git_invalid_utf8", "the report must reject malformed protected bytes before replaying a different exception: " + JSON.stringify(result));
+    assert.equal(result.value, undefined);
+    assert.equal(path.resolve(result.control), path.resolve(real(fixture.a)), "valid Unicode ownership exceptions still grant the configured trust");
+    assert.ok(result.replayed.includes("safe.directory=" + result.linePath), "valid UTF8 and literal LF survive native NUL records unchanged");
+  } finally { fixture.cleanup(); }
+});
 
 test("Git versions below the supported baseline, unknown versions and version failures stop before config or identity", () => {
   const { a, make, cleanup } = buildCloneFixture();
@@ -3051,7 +3149,7 @@ test("CLI exposes unsupported Git and version-read failures without probing or f
         '  if (file !== "git") return original.apply(this, arguments);',
         '  fs.appendFileSync(' + JSON.stringify(trace) + ', JSON.stringify(args) + "\\n");',
         '  if (args[0] === "--version") {',
-        versionReply === null ? '    throw Object.assign(new Error("version read failed"), { status: 1 });' : '    return ' + JSON.stringify(versionReply) + ';',
+        versionReply === null ? '    throw Object.assign(new Error("version read failed"), { status: 1 });' : '    return Buffer.from(' + JSON.stringify(versionReply) + ');',
         '  }',
         '  return original.apply(this, arguments);',
         '};',
@@ -3131,7 +3229,7 @@ test("late Git incompatibility discards earlier clone confirmations and folded n
         'const fs = require("node:fs"), cp = require("node:child_process"), original = cp.execFileSync;',
         'cp.execFileSync = function (file, args, options) {',
         `  if (file === "git") fs.appendFileSync(${JSON.stringify(trace)}, JSON.stringify({ args, cwd: options.cwd }) + "\\n");`,
-        `  if (file === "git" && args[0] === "--version" && options.cwd === ${JSON.stringify(d)}) return ${JSON.stringify(version + "\n")};`,
+        `  if (file === "git" && args[0] === "--version" && options.cwd === ${JSON.stringify(d)}) return Buffer.from(${JSON.stringify(version + "\n")});`,
         '  return original.apply(this, arguments);',
         '};',
         'require("node:module").syncBuiltinESMExports();'
@@ -3164,7 +3262,7 @@ test("CLI checks Git compatibility before each operation and leaves old or unkno
       'const original = cp.execFileSync;',
       'cp.execFileSync = function (file, args, options) {',
       `  if (file === "git") fs.appendFileSync(${JSON.stringify(trace)}, JSON.stringify(args) + "\\n");`,
-      '  if (file === "git" && args.length === 1 && args[0] === "--version") return process.env.KBF_TEST_VERSION + "\\n";',
+      '  if (file === "git" && args.length === 1 && args[0] === "--version") return Buffer.from(process.env.KBF_TEST_VERSION + "\\n");',
       '  return original.apply(this, arguments);',
       '};',
       'require("node:module").syncBuiltinESMExports();'
@@ -3181,7 +3279,10 @@ test("CLI checks Git compatibility before each operation and leaves old or unkno
       const summary = JSON.parse(child.stdout);
       if (supported) {
         assert.ok(versionCalls > 1, "each operation checks its selected Git");
-        assert.equal(calls.length, versionCalls * 3, "each supported operation reads version, protected config and identity");
+        const urlReads = calls.filter(args => args[args.indexOf("remote") + 1] === "get-url").length;
+        const metadataReads = calls.filter(args => args.includes("--get-regexp")).length;
+        assert.equal(metadataReads, urlReads, "every URL operation validates native NUL metadata");
+        assert.equal(calls.length, versionCalls * 3 + urlReads, "URL operations add one metadata read within their original budget");
         assert.equal(find(summary, 4).verdict, "REVERT");
         assert.equal(summary.sources.cloneProbe.probed, 2);
         assert.ok(calls.length > 4, "the real identity probes must run after the supported-version response");
