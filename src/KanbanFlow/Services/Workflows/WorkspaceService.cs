@@ -13,8 +13,8 @@ public sealed partial class WorkspaceService(IDbContextFactory<AppDbContext> fac
     private static readonly JsonSerializerOptions AuditJson = new(JsonSerializerDefaults.Web);
     public static string Hash<T>(T payload) => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(JsonSerializer.Serialize(payload))));
 
-    // Receipt identity ignores JSON object property order. Persisted evidence/scope hashes
-    // deliberately keep their existing format so an upgrade does not invalidate old results.
+    // Receipt identity ignores JSON object property order. Evidence/scope hashes have their
+    // own versioned contract and retain v1 compatibility only for complete subtask-free graphs.
     private static string ReceiptHash<T>(T payload)
     {
         using var stream = new MemoryStream();
@@ -111,9 +111,14 @@ public sealed partial class WorkspaceService(IDbContextFactory<AppDbContext> fac
         {
             if (!await db.Projects.AnyAsync(p => p.Id == projectId, ct)) throw Missing("Project");
             var resolved = RepositoryPaths.Resolve(path, projectsRoot);
-            var existing = await db.ProjectRepositories.FirstOrDefaultAsync(r => r.ProjectId == projectId && r.LocalPath == resolved, ct);
+            var identity = RepositoryPaths.Identity(resolved);
+            var existing = await db.ProjectRepositories.FirstOrDefaultAsync(r => r.ProjectId == projectId && r.PathIdentity == identity, ct);
+            // Older rows have no key and may already contain case aliases. Compare their OS
+            // identities under WriteAsync's writer reservation; keep every authored row and ID.
+            existing ??= (await db.ProjectRepositories.Where(r => r.ProjectId == projectId && r.PathIdentity == null)
+                .OrderBy(r => r.Id).ToListAsync(ct)).FirstOrDefault(r => RepositoryPaths.Identity(r.LocalPath) == identity);
             if (existing is not null) return existing.Id;
-            var repository = new ProjectRepository { ProjectId = projectId, Name = Required(name, "Repository name", 120).Trim(), LocalPath = resolved };
+            var repository = new ProjectRepository { ProjectId = projectId, Name = Required(name, "Repository name", 120).Trim(), LocalPath = resolved, PathIdentity = identity };
             db.ProjectRepositories.Add(repository);
             await db.SaveChangesWithAuditAsync(actor, ct);
             Audit(db, projectId, Guid.Empty, actor, "WorkspaceRepositoryRegistered", repository.Id, "ProjectRepository");

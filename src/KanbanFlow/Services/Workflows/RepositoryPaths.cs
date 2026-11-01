@@ -4,6 +4,12 @@ namespace KanbanFlow.Services.Workflows;
 
 public static class RepositoryPaths
 {
+    public static string Identity(string path)
+    {
+        var normalized = Path.TrimEndingDirectorySeparator(Path.GetFullPath(path));
+        return OperatingSystem.IsWindows() ? normalized.ToUpperInvariant() : normalized;
+    }
+
     public static string Resolve(string path, string root)
     {
         if (!Path.IsPathFullyQualified(path)) throw new WorkflowException("invalid", "Choose an absolute repository path under Projects.");

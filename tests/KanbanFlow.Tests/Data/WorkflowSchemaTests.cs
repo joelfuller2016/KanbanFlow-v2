@@ -12,6 +12,49 @@ namespace KanbanFlow.Tests.Data;
 
 public sealed class WorkflowSchemaTests
 {
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task RepositoryIdentityUpgrade_PreservesLegacyAliasesAndEnforcesCanonicalKey(bool failFirst)
+    {
+        using var f = new WorkflowSqliteTestFactory();
+        var project = await f.Service.CreateProjectAsync("Legacy identity", WorkflowSqliteTestFactory.Actor, WorkflowSqliteTestFactory.Key());
+        await using var db = f.CreateDbContext();
+        db.ProjectRepositories.AddRange(
+            new ProjectRepository { ProjectId = project, Name = "Original name", LocalPath = "/Projects/Repository" },
+            new ProjectRepository { ProjectId = project, Name = "Authored alias", LocalPath = "/Projects/REPOSITORY" });
+        await db.SaveChangesAsync();
+        var before = await db.ProjectRepositories.OrderBy(r => r.Id).Select(r => new { r.Id, r.Name, r.LocalPath }).ToArrayAsync();
+        var auditCount = await db.ActivityEvents.CountAsync();
+        await db.Database.ExecuteSqlRawAsync("DROP INDEX IF EXISTS IX_ProjectRepositories_ProjectId_PathIdentity;");
+        if (await db.Database.SqlQueryRaw<string>("SELECT name AS Value FROM pragma_table_info('ProjectRepositories')").ContainsAsync("PathIdentity"))
+            await db.Database.ExecuteSqlRawAsync("ALTER TABLE ProjectRepositories DROP COLUMN PathIdentity;");
+        if (failFirst)
+        {
+            await db.Database.ExecuteSqlRawAsync("CREATE TABLE IX_ProjectRepositories_ProjectId_PathIdentity (Marker TEXT NOT NULL);");
+            var error = Assert.Throws<SqliteException>(() => WorkflowSchema.EnsureTables(db));
+            Assert.Contains("IX_ProjectRepositories_ProjectId_PathIdentity", error.Message);
+            Assert.False(await db.Database.SqlQueryRaw<string>("SELECT name AS Value FROM pragma_table_info('ProjectRepositories')").ContainsAsync("PathIdentity"));
+            await db.Database.ExecuteSqlRawAsync("DROP TABLE IX_ProjectRepositories_ProjectId_PathIdentity;");
+        }
+
+        WorkflowSchema.EnsureTables(db);
+        WorkflowSchema.EnsureTables(db);
+
+        Assert.True(await db.Database.SqlQueryRaw<string>("SELECT name AS Value FROM pragma_table_info('ProjectRepositories')").ContainsAsync("PathIdentity"));
+        Assert.Equal(before, await db.ProjectRepositories.OrderBy(r => r.Id).Select(r => new { r.Id, r.Name, r.LocalPath }).ToArrayAsync());
+        Assert.Equal(auditCount, await db.ActivityEvents.CountAsync()); // No startup rewriting/backfill to audit.
+        Assert.Equal(2, await db.ProjectRepositories.CountAsync(r => r.PathIdentity == null));
+        var first = before[0].Id;
+        var second = before[1].Id;
+        await db.Database.ExecuteSqlInterpolatedAsync($"UPDATE ProjectRepositories SET PathIdentity = {"canonical-key"} WHERE Id = {first}");
+        var duplicate = await Assert.ThrowsAsync<SqliteException>(() => db.Database.ExecuteSqlInterpolatedAsync(
+            $"UPDATE ProjectRepositories SET PathIdentity = {"canonical-key"} WHERE Id = {second}"));
+        Assert.Equal(19, duplicate.SqliteErrorCode);
+        Assert.Contains("UNIQUE constraint failed", duplicate.Message);
+        await AssertForeignKeysValidAsync(db);
+    }
+
     private sealed class ExistingDatabaseFactory(string path) : IDbContextFactory<AppDbContext>
     {
         public AppDbContext CreateDbContext() => new(new DbContextOptionsBuilder<AppDbContext>()

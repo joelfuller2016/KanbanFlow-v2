@@ -51,6 +51,13 @@ A review of the repository and a test run on 2026-09-26 filed findings as issues
   - S7, for #549.
 
 ## Entries (newest first)
+- 2026-11-01 03:05Z (PR monitor — CodeRabbit incremental review on #511, fix applied):
+  - CodeRabbit posted 1 actionable inline comment on Ideas.razor:606 (incremental review of 399648b→a6e7b49).
+  - Finding: WorkflowException("conflict") fell through to generic catch, showing "Move failed: …" instead of service message. Valid — verified against current code.
+  - Fixed in e01fa76ca on feat/unified-workflow-509: added explicit `catch (WorkflowException ex) when (ex.Code == "conflict")` branch showing ex.Message directly, matching the ValidationException branch pattern. Replied on thread (comment 4434200495).
+  - 3 outside-diff-range comments (ui-e2e.mjs:3283 calm fixture, mcp-server.mjs:903 shutdown timeout, one further) — outside current diff, flagged to owner.
+  - PR #511 known open threads: Finding 1 (subtask hash — owner decision needed), Finding 3 (Windows path casing — owner decision needed). Build gate still DOWN.
+
 
 - 2026-11-01 02:55Z (PR monitor — owner pushed c674da7, new code commit on #580):
   - Owner pushed c674da7763f9bfb2909601a395ed9060dd841a51 to feat/579-idea-workspaces: "fix: preserve workspace input and selected-control identity". 544+/51- across WorkspaceDeliveryPanel, WorkspaceDiscussion, WorkspaceConnections, WorkspaceLayoutEditor, WorkspaceContentEditor, WorkspacePlanItemEditor, WorkspacePlanPanel, WorkspaceSourceDocuments, WorkspaceCard, WorkspaceCheckpointPanel, IdeaWorkspace. New: workspace-ui-feature-recovery.browser.mjs, workspace-ui-races.browser.mjs, WorkspaceLayoutEditorPlacementTests.cs (177 lines); extended IdeaWorkspaceRestoreAndRelinkTests.cs (+91).

@@ -117,6 +117,7 @@ public sealed class ProjectRepository
     public Project Project { get; set; } = null!;
     public required string Name { get; set; }
     public required string LocalPath { get; set; }
+    public string? PathIdentity { get; set; }
 }
 
 public sealed class WorkflowReceipt

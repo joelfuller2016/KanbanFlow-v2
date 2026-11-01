@@ -48,6 +48,7 @@ public static class WorkflowModelConfiguration
         {
             e.HasOne(x => x.Project).WithMany().HasForeignKey(x => x.ProjectId).OnDelete(DeleteBehavior.Cascade);
             e.HasIndex(x => new { x.ProjectId, x.LocalPath }).IsUnique();
+            e.HasIndex(x => new { x.ProjectId, x.PathIdentity }).IsUnique().HasFilter("\"PathIdentity\" IS NOT NULL");
         });
         modelBuilder.Entity<WorkflowReceipt>().HasIndex(x => new { x.Actor, x.Operation, x.Key }).IsUnique();
     }

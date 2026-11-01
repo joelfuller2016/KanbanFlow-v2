@@ -8,6 +8,7 @@ namespace KanbanFlow.Services.Workflows;
 public sealed partial class WorkspaceService
 {
     private const string MissingTaskStateHash = "missing-task";
+    private const string SubtaskStateHashPrefix = "task-state-v2:";
 
     private static void RequireCompleteTaskState(string stateHash)
     {
@@ -71,17 +72,31 @@ public sealed partial class WorkspaceService
                 foreach (var edge in task.Dependencies) pending.Enqueue(edge.DependsOnTaskItemId);
             }
 
-            // The property names, order and per-root status exclusions are the persisted
-            // evidence format. Changing them would invalidate already recorded results.
-            return stateHashes[taskId] = Hash(reachable.OrderBy(p => p.Key).Select(p => new
+            // V1 is complete only when no reachable task has subtasks. Retain that exact
+            // persisted format for those reports and conclusions; there are no omitted
+            // hierarchy/order/progress values to reinterpret. A graph with subtasks needs
+            // V2, so an older report cannot silently attest to fields it never captured.
+            if (reachable.Values.All(t => t.Subtasks.Count == 0))
+                return stateHashes[taskId] = Hash(reachable.OrderBy(p => p.Key).Select(p => new
+                {
+                    p.Key, p.Value.FeatureId, p.Value.Name, p.Value.Description,
+                    Criteria = p.Value.AcceptanceCriteria.OrderBy(c => c.Id).Select(c => new { c.Id, c.Text }),
+                    Subtasks = p.Value.Subtasks.OrderBy(c => c.Id).Select(c => new { c.Id, c.Text }),
+                    Dependencies = p.Value.Dependencies.OrderBy(d => d.DependsOnTaskItemId).Select(d => new { d.DependsOnTaskItemId, d.Type }),
+                    PrerequisiteStatus = p.Key == taskId ? (WorkStatus?)null : p.Value.Status,
+                    PrerequisiteCompletedAt = p.Key == taskId ? null : p.Value.CompletedAt,
+                    PrerequisiteChecks = p.Key == taskId ? null : p.Value.AcceptanceCriteria.OrderBy(c => c.Id).Select(c => c.Completed).ToArray()
+                }));
+            return stateHashes[taskId] = SubtaskStateHashPrefix + Hash(reachable.OrderBy(p => p.Key).Select(p => new
             {
                 p.Key, p.Value.FeatureId, p.Value.Name, p.Value.Description,
                 Criteria = p.Value.AcceptanceCriteria.OrderBy(c => c.Id).Select(c => new { c.Id, c.Text }),
-                Subtasks = p.Value.Subtasks.OrderBy(c => c.Id).Select(c => new { c.Id, c.Text }),
+                Subtasks = p.Value.Subtasks.OrderBy(c => c.Id).Select(c => new { c.Id, c.Text, c.SortOrder, c.ParentSubtaskId }),
                 Dependencies = p.Value.Dependencies.OrderBy(d => d.DependsOnTaskItemId).Select(d => new { d.DependsOnTaskItemId, d.Type }),
                 PrerequisiteStatus = p.Key == taskId ? (WorkStatus?)null : p.Value.Status,
                 PrerequisiteCompletedAt = p.Key == taskId ? null : p.Value.CompletedAt,
-                PrerequisiteChecks = p.Key == taskId ? null : p.Value.AcceptanceCriteria.OrderBy(c => c.Id).Select(c => c.Completed).ToArray()
+                PrerequisiteChecks = p.Key == taskId ? null : p.Value.AcceptanceCriteria.OrderBy(c => c.Id).Select(c => c.Completed).ToArray(),
+                PrerequisiteSubtaskChecks = p.Key == taskId ? null : p.Value.Subtasks.OrderBy(c => c.Id).Select(c => c.Completed).ToArray()
             }));
         }
     }

@@ -645,6 +645,14 @@ else
             // It vanished mid-drag. The reload tells the truth; no error worth showing.
             await LoadIdeas();
         }
+        catch (KanbanFlow.Models.Workflows.WorkflowException ex) when (ex.Code == "conflict")
+        {
+            // Another writer changed this idea after the board loaded it. Same ordering
+            // rule as ValidationException: set moveError BEFORE the reload so the message
+            // lands before the [JSInvokable] path's only StateHasChanged.
+            moveError = ex.Message;
+            await LoadIdeas();
+        }
         catch (Exception ex)
         {
             // Same bug, same fix, same ordering (see the ValidationException branch above).

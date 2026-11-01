@@ -45,7 +45,12 @@ public sealed partial class WorkspaceService
             var stateHash = await TaskStateHashAsync(db, item.TaskItemId, ct);
             RequireCompleteTaskState(stateHash);
             if (!EvidenceMatches(item, evidence, stateHash))
+            {
+                if (stateHash.StartsWith(SubtaskStateHashPrefix, StringComparison.Ordinal)
+                    && !evidence.TaskStateHash.StartsWith(SubtaskStateHashPrefix, StringComparison.Ordinal))
+                    throw Invalid("This older report did not capture subtask hierarchy, order or prerequisite progress. Its history is preserved; record checks for the current task before accepting it.");
                 throw Invalid("This evidence covers an older specification. Record checks for the current task.");
+            }
             var criteria = item.Task.AcceptanceCriteria.Select(c => c.Id).ToHashSet();
             if (checkedCriterionIds is null || criteria.Count == 0 || !criteria.SetEquals(checkedCriterionIds) || criteria.Count != checkedCriterionIds.Length)
                 throw Invalid("Review and confirm every current acceptance check before accepting this result.");
