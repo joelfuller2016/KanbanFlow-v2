@@ -7,6 +7,7 @@
             <li @key="component.Id" class="mb-2">
                 <button class="btn text-start w-100 @(component.Id == SelectedComponentId ? "btn-primary" : "btn-outline-secondary")"
                         @onclick="() => OnSelect.InvokeAsync(new(component.Id, Document.Placements.FirstOrDefault(p => p.ComponentId == component.Id)?.Id))"
+                        aria-pressed="@(component.Id == SelectedComponentId ? "true" : "false")"
                         data-testid="outline-component-@component.Id">
                     <span class="d-block">@component.Title @(DirtyIds.Contains(component.Id) ? "• draft" : "")</span>
                     <span class="small">@component.Type · @Document.Placements.Count(p => p.ComponentId == component.Id) placements</span>
