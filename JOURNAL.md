@@ -52,13 +52,17 @@ A review of the repository and a test run on 2026-09-26 filed findings as issues
 
 ## Entries (newest first)
 
+- 2026-11-01 01:30Z (PR #580 — CodeRabbit finding fixed, 0 unresolved threads, 50 total):
+  - CodeRabbit Minor docs/idea-workspaces.md:117 fix: 5cf4438 — replaced "The current local checkpoint" with "At the T06 checkpoint," and "Current discovery" with "Discovery at this checkpoint" to scope T06 counts (1,437 .NET / 339 script) distinctly from the final gate (1,565 / 362). Thread PRRT_kwDOSA8y6s6yWGAK resolved.
+  - All 50 review threads resolved (0 unresolved). No pending automated reviews outstanding.
+  - PR #580 is clean. Head: 5cf4438. Owner action needed: rebase feat/579-idea-workspaces onto master and merge.
+
 - 2026-11-01 01:04Z (PR #580 — PHASE 2 review cycle on bed7e91, 4 findings fixed):
   - Codex P2 stale-poll fix: e7acca6 — captured `polledContext` before GET, guard against context replacement on response + inside InvokeAsync callback. Thread PRRT_kwDOSA8y6s6yWCUO resolved.
   - Copilot finding Commands.cs:129 fix: e46465a — inverted ClearSavedSection guard (&&→||) so section is retained when DraftAtSend is absent. Thread PRRT_kwDOSA8y6s6yWCrn resolved.
   - Copilot finding WorkspaceCanvas.razor:31 fix: e46465a — added aria-pressed to drag-handle button. Thread PRRT_kwDOSA8y6s6yWCry resolved.
   - Copilot finding WorkspaceOutline.razor:8 fix: e46465a — added aria-pressed to outline button. Thread PRRT_kwDOSA8y6s6yWCr3 resolved.
   - 0 unresolved threads (49 total). Awaiting Codex code+security reviews on e7acca6/e46465a and CodeRabbit review on e46465a.
-  - Next: resolve any new automated findings; notify owner when PR is clean.
 
 - 2026-11-01 00:37Z (PR #580 — clean, all automated reviews passed on cda6063):
   - Codex code review on cda6063: completed, has_unresolved_findings=false ✅
