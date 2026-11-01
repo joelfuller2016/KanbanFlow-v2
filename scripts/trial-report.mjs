@@ -23,6 +23,8 @@
 //   npm run trial:report -- --repo-root C:\Users\Owner\Documents\Claude\KanbanFlow-v2
 
 import fs from "node:fs";
+import { randomUUID } from "node:crypto";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
@@ -459,8 +461,9 @@ export function scrubGitEnv(env) {
 
 /**
  * Read only protected ownership exceptions, preserving system/global ordering and empty resets.
- * Explicit config-file locations and system-disable flags apply only to this key-only read,
- * never identity probes. Local safe.directory cannot grant trust. Git performs interpolation.
+ * Explicit config-file locations and system-disable flags apply only to this key-only read.
+ * Like Git's ownership check, it has no repository/worktree context: local values and
+ * gitdir/onbranch conditional includes cannot grant trust. Git performs interpolation.
  */
 function protectedSafeDirectoryArgs(cwd, env, remainingTimeout) {
   const configEnv = scrubGitEnv(env);
@@ -475,16 +478,24 @@ function protectedSafeDirectoryArgs(cwd, env, remainingTimeout) {
     else if (/^[+-]?\d+$/.test(noSystem)) systemDisabled = Number(noSystem) !== 0;
     else throw new Error("Invalid GIT_CONFIG_NOSYSTEM boolean.");
   }
+  // A unique uncreated locator prevents repository discovery without creating files. It is
+  // used only here; identity probes must still discover the repository named by cwd.
+  configEnv.GIT_DIR = path.join(tmpdir(), "kanbanflow-protected-" + randomUUID());
+  let output;
+  try {
+    output = execFileSync("git", ["config", "--includes", "--null", "--show-scope", "--get-all", "safe.directory"], {
+      cwd, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: remainingTimeout(), env: configEnv
+    });
+  } catch (error) {
+    if (error.status === 1 && error.stdout === "") return []; // No key, including absent optional files.
+    throw error;
+  }
+  if (!output.endsWith("\0")) throw new Error("Invalid protected safe.directory framing.");
+  const fields = output.split("\0").slice(0, -1);
+  if (fields.length % 2 !== 0) throw new Error("Invalid protected safe.directory scope/value framing.");
   const values = [];
-  for (const scope of systemDisabled ? ["global"] : ["system", "global"]) {
-    try {
-      const output = execFileSync("git", ["config", `--${scope}`, "--includes", "--null", "--get-all", "safe.directory"], {
-        cwd, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: remainingTimeout(), env: configEnv
-      });
-      values.push(...output.split("\0").slice(0, -1));
-    } catch (error) {
-      if (error.status !== 1) throw error; // no matching key is normal; an unreadable config is not
-    }
+  for (let i = 0; i < fields.length; i += 2) {
+    if (fields[i] === "global" || fields[i] === "system" && !systemDisabled) values.push(fields[i + 1]);
   }
   return values.flatMap(value => ["-c", `safe.directory=${value}`]);
 }
@@ -497,13 +508,13 @@ function protectedSafeDirectoryArgs(cwd, env, remainingTimeout) {
  * on the copy AFTER the scrub. Exported, and takes `env` as an option, so tests can inject a
  * contaminated environment without mutating this PROCESS's real process.env.
  */
-export function gitOutput(args, cwd, { env = process.env } = {}) {
+export function gitOutput(args, cwd, { env = process.env, timeoutMs = GIT_TIMEOUT_MS } = {}) {
   // Ownership lookup and identity plumbing share the original per-command bound.
-  const deadline = performance.now() + GIT_TIMEOUT_MS;
+  const deadline = performance.now() + Math.min(GIT_TIMEOUT_MS, timeoutMs);
   const remainingTimeout = () => {
     const remaining = deadline - performance.now();
-    if (remaining <= 0) throw new Error("Git command exceeded its five-second deadline.");
-    return Math.ceil(remaining);
+    if (!(remaining >= 1)) throw new Error("Git command exceeded its deadline.");
+    return Math.floor(remaining);
   };
   const safeDirectories = protectedSafeDirectoryArgs(cwd, env, remainingTimeout);
   const scrubbed = { ...scrubGitEnv(env), GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null" };
@@ -579,14 +590,14 @@ const GIT_URL_SCHEME = /^([a-z0-9][a-z0-9+.-]*):\/\//i;
 const GIT_REMOTE_HELPER = /^[a-z0-9][a-z0-9+.-]*::/i;
 
 /**
- * Normalize a git remote URL for same-repo comparison: lower-case the host, drop a trailing slash
- * or `.git`, and fold `https://host/owner/repo`, `ssh://git@host:22/owner/repo` and the SCP
- * shorthand `[user@]host:owner/repo` (git accepts it WITHOUT a userinfo too, e.g.
- * `example.invalid:org/repo`) to the same `host/owner/repo` key, so the only forms the clone check
- * below needs to tell apart are actually-different repos, not spelling. A port is dropped only
- * when it is its scheme's default (see `DEFAULT_PORTS`); any other port stays in the key.
- * `null`/non-string in, `null` out — a remote that could not be read is "cannot compare", never an
- * accidental match.
+ * Normalize only proven remote aliases for same-repo comparison. GitHub's default HTTPS and
+ * git-account SSH endpoints share a case-insensitive owner/repo namespace and optional `.git`.
+ * Unknown servers retain their transport, SSH account and complete path: `alice@host:repo.git`
+ * is home-relative, not `ssh://alice@host/repo.git`, and Bob may own another repo at the same
+ * relative path. Named `~user` homes and a significant `.git` suffix must survive too.
+ * See https://git-scm.com/docs/git-clone#_git_urls. Hosts and known schemes ignore case; a port
+ * folds only when it is that scheme's default. Nondefault GitHub ports get no hosting aliases.
+ * `null`/non-string in, `null` out — an unreadable remote cannot accidentally compare equal.
  *
  * `scheme://` is resolved FIRST, before the SCP check even runs: an scp host can be bare (no
  * userinfo), and testing scp first would misparse `https://…` as scp shorthand with host `https`.
@@ -596,29 +607,34 @@ const GIT_REMOTE_HELPER = /^[a-z0-9][a-z0-9+.-]*::/i;
  */
 export function normalizeRemoteUrl(url) {
   if (typeof url !== "string" || url.trim().length === 0) return null;
-  const u = url.trim().replace(/\/+$/, "");
+  const u = url.trim();
   // Explicit remote-helper syntax is not the SCP host named before the double colon.
-  if (GIT_REMOTE_HELPER.test(u)) return url.trim();
-  const key = (host, repository) => {
-    const authority = host.toLowerCase();
-    // GitHub repository names ignore case. Arbitrary Git servers can expose Main and main
-    // as different repositories, so their paths must retain the spelling Git reported.
-    const repositoryPath = authority === "github.com" ? repository.toLowerCase() : repository;
-    return `${authority}/${repositoryPath.replace(/\/+$/, "").replace(/\.git$/, "")}`;
-  };
+  if (GIT_REMOTE_HELPER.test(u)) return u;
+  const githubKey = repository => `github.com/${repository.toLowerCase().replace(/\/+$/, "").replace(/\.git$/, "")}`;
   const scheme = u.match(GIT_URL_SCHEME);
   if (scheme) {
     const protocol = scheme[1].toLowerCase();
-    if (!Object.hasOwn(DEFAULT_PORTS, protocol)) return protocol + url.trim().slice(scheme[1].length);
+    if (!Object.hasOwn(DEFAULT_PORTS, protocol)) return protocol + u.slice(scheme[1].length);
     const defaultPort = DEFAULT_PORTS[protocol];
-    const location = u.slice(scheme[0].length).replace(/^[^/@]+@/, "");
+    const location = u.slice(scheme[0].length);
     const separator = location.indexOf("/");
-    const authority = (separator === -1 ? location : location.slice(0, separator))
+    const rawAuthority = separator === -1 ? location : location.slice(0, separator);
+    const userEnd = rawAuthority.lastIndexOf("@");
+    const userinfo = userEnd === -1 ? "" : rawAuthority.slice(0, userEnd + 1);
+    const authority = rawAuthority.slice(userEnd + 1).toLowerCase()
       .replace(/:(\d+)$/, (portPart, port) => Number(port) === defaultPort ? "" : portPart);
-    return separator === -1 ? authority.toLowerCase() : key(authority, location.slice(separator + 1));
+    const repository = separator === -1 ? "" : location.slice(separator + 1);
+    if (authority === "github.com" && (protocol === "https" || (protocol === "ssh" && userinfo === "git@"))) {
+      return githubKey(repository);
+    }
+    return `${protocol}://${userinfo}${authority}${separator === -1 ? "" : "/" + repository}`;
   }
-  const scp = u.match(/^(?:[a-z0-9._-]+@)?([a-z0-9.-]{2,}):(.+)$/i);
-  if (scp) return key(scp[1], scp[2]);
+  const scp = u.match(/^(?:([a-z0-9._-]+)@)?([a-z0-9.-]{2,}):(.+)$/i);
+  if (scp) {
+    const host = scp[2].toLowerCase();
+    if (host === "github.com" && scp[1] === "git") return githubKey(scp[3]);
+    return `${scp[1] === undefined ? "" : scp[1] + "@"}${host}:${scp[3]}`;
+  }
   return u;
 }
 
