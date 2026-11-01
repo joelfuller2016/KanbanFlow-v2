@@ -329,6 +329,7 @@ public sealed class IdeaWorkspaceDeliveryFeatureRecoveryTests
     private sealed class HeldFeatureQuery : DbCommandInterceptor
     {
         public CancellationToken ReadToken { get; private set; }
+        public CancellationToken Token => ReadToken;
         public TaskCompletionSource Entered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public TaskCompletionSource Release { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public override async ValueTask<InterceptionResult<DbDataReader>> ReaderExecutingAsync(DbCommand command, CommandEventData eventData,
