@@ -638,6 +638,10 @@ npm run trial:report -- --since 2026-08-30
 npm run trial:report -- --json
 ```
 
+Repository and clone probes require **Git 2.38 or newer**, the report's supported baseline for
+isolated configuration and protected ownership exceptions. Older or unrecognized Git versions
+leave clones unconfirmed and print the requirement; they never supply repository identity evidence.
+
 The report takes each signal from whichever source can actually answer it — the log for who called
 what from where, the board's `ActivityEvent` rows for what changed — and it says what it could not
 measure rather than scoring it as a pass. Two refusals matter most: it will not treat "unprompted"

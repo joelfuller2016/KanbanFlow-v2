@@ -51,6 +51,7 @@ const ACTIVITY_PROBE = ACTIVITY_PAGE + 1;
 // source-unavailable case the report already knows how to report honestly.
 export const FETCH_TIMEOUT_MS = 10_000;
 const GIT_TIMEOUT_MS = 5_000;
+const GIT_VERSION_REQUIREMENT = "Git 2.38 or newer is required for isolated repository probes.";
 
 // A tool that itself invokes git — a pre-commit hook running in a LINKED WORKTREE (git sets these
 // for exactly that hook invocation, pointing at the worktree it fired in), another script, a
@@ -509,15 +510,31 @@ function protectedSafeDirectoryArgs(cwd, env, remainingTimeout) {
  * contaminated environment without mutating this PROCESS's real process.env.
  */
 export function gitOutput(args, cwd, { env = process.env, timeoutMs = GIT_TIMEOUT_MS } = {}) {
-  // Ownership lookup and identity plumbing share the original per-command bound.
+  // Version, ownership lookup and identity plumbing share the original per-command bound.
   const deadline = performance.now() + Math.min(GIT_TIMEOUT_MS, timeoutMs);
   const remainingTimeout = () => {
     const remaining = deadline - performance.now();
     if (!(remaining >= 1)) throw new Error("Git command exceeded its deadline.");
     return Math.floor(remaining);
   };
-  const safeDirectories = protectedSafeDirectoryArgs(cwd, env, remainingTimeout);
   const scrubbed = { ...scrubGitEnv(env), GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null" };
+  const versionTimeout = remainingTimeout();
+  let version;
+  try {
+    version = execFileSync("git", ["--version"], {
+      cwd, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: versionTimeout, env: scrubbed
+    }).trim();
+  } catch (cause) {
+    throw Object.assign(new Error(`${GIT_VERSION_REQUIREMENT} Unable to read git --version.`, { cause }), { code: "GIT_VERSION_UNSUPPORTED" });
+  }
+  // A supported baseline, not a claim that each isolation feature first appeared in 2.38.
+  // Check every call: PATH and the caller's environment may select another Git executable.
+  const match = /^git version (\d+)\.(\d+)\.(\d+)(?:[. +\-][^\r\n]*)?$/.exec(version);
+  const numbers = match?.slice(1, 4).map(Number);
+  if (!numbers?.every(Number.isSafeInteger) || !(numbers[0] > 2 || numbers[0] === 2 && numbers[1] >= 38)) {
+    throw Object.assign(new Error(`${GIT_VERSION_REQUIREMENT} The version output is unsupported.`), { code: "GIT_VERSION_UNSUPPORTED" });
+  }
+  const safeDirectories = protectedSafeDirectoryArgs(cwd, env, remainingTimeout);
   // `timeout` for the same reason the fetches carry one: an unbounded blocking call in a report
   // that has no other way to finish. `git rev-parse` on a network path, or against a repository
   // whose index lock is held, can sit indefinitely — and a hung git here hangs the whole run before
@@ -1743,7 +1760,8 @@ export function summarize({
     // master, rather than being guessed into "the same repository". The last sentence states the
     // veto itself, because it is the one exclusion a reader could mistake for a bug: a fork whose
     // `upstream`, or whose own fetch url, matches this repository is outside on purpose.
-    " A clone this check cannot confirm — its directory no longer exists, git is unavailable, a call " +
+    " A clone this check cannot confirm — its directory no longer exists, git is unavailable or unsupported " +
+    "(Git 2.38 or newer is required), a call " +
     "exceeded GIT_TIMEOUT_MS, it listed more remotes than the check reads, it was left unprobed by " +
     "the cap or the time budget above (and that includes a cwd INSIDE a " +
     "clone that was confirmed, or one that merely spells a confirmed cwd differently: a cwd is folded " +
@@ -2148,9 +2166,18 @@ async function main(argv) {
     console.error(`NOTE: the usage log is misconfigured, so signals derived from it CANNOT BE MEASURED.\n      ${logConfigError}\n`);
   }
   const here = path.dirname(fileURLToPath(import.meta.url));
+  let gitVersionWarning = null;
+  const reportGit = (...args) => {
+    try { return gitOutput(...args); }
+    catch (error) {
+      if (error.code === "GIT_VERSION_UNSUPPORTED") gitVersionWarning = error.message;
+      throw error;
+    }
+  };
   const { roots: repoRoots, source: repoRootSource } = resolveRepoRoots(repoRootOverride, {
     cwd: here,
-    fallbackRoot: path.resolve(here, "..")
+    fallbackRoot: path.resolve(here, ".."),
+    git: reportGit
   });
 
   const { text, files, generations, discovered, unreadable } = readLogGenerations(logPath);
@@ -2221,7 +2248,7 @@ async function main(argv) {
       // `summarize()` call) — a `const` this name would shadow only inside this block, harmlessly,
       // but a reader skimming past the shadow could easily mix the two up.
       const { confirmed, probed, capped: cloneCapped, budgetSpent, tooManyRemotes } =
-        withConfirmedCloneRoots(distinctOutsideCwds, repoRoots.slice(0, 1));
+        withConfirmedCloneRoots(distinctOutsideCwds, repoRoots.slice(0, 1), { git: reportGit });
       // The confirmed CWDS — the map's keys — never the toplevels they resolved to: a toplevel as a
       // prefix root also covers a nested repository the check rejected, and misses a cwd reached
       // through a junction (see withConfirmedCloneRoots's Returns, and the note at signal 4).
@@ -2244,6 +2271,7 @@ async function main(argv) {
     }
   }
 
+  if (gitVersionWarning) console.error(`NOTE: ${gitVersionWarning}\n`);
   const summary = summarize({
     rows, events, repoRoots, repoRootSource, cloneRoots, cloneProbe, since, truncated, truncatedCovered, capped,
     sources: { log: logAvailable && !nothingParsed, activity: activityAvailable }

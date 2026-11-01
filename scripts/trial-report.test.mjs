@@ -1557,7 +1557,7 @@ function buildCloneFixture() {
     initRealRepo(a, "a.txt");
     gitOutput(["remote", "add", "origin", "https://example.invalid/org/repo.git"], a);
 
-    gitOutput(["clone", "-q", a, b]);
+    gitOutput(["clone", "-q", a, b], a);
     gitOutput(["remote", "remove", "origin"], b);
 
     initRealRepo(c, "c.txt");
@@ -1962,6 +1962,10 @@ function runGitHarness(make, settings, body) {
     '    XDG_CONFIG_HOME: current.xdg, GIT_CONFIG_SYSTEM: current.system,',
     '    GIT_TEST_ASSUME_DIFFERENT_OWNER: current.foreign ? "1" : "0" } };',
     '  globalThis.gitCalls.push({ args, timeout: options.timeout });',
+    '  if (args[0] === "--version" && (Object.hasOwn(current, "versionReply") || current.versionByPath)) {',
+    '    if (current.versionReply === "ERROR") throw Object.assign(new Error("version read failed"), { status: 1 });',
+    '    return current.versionByPath ? (options.env.PATH.startsWith("old-version" + current.pathDelimiter) ? "git version 2.37.4\\n" : "git version 2.38.0\\n") : current.versionReply;',
+    '  }',
     '  if (current.badFraming && args[0] === "config") {',
     '    if (current.badFraming === "odd") return "global\\0*\\0global\\0";',
     '    if (current.badFraming === "local" || current.badFraming === "command") return current.badFraming + "\\0*\\0";',
@@ -1986,6 +1990,61 @@ function runGitHarness(make, settings, body) {
   assert.equal(result.status, 0, result.stderr + result.stdout);
   return JSON.parse(result.stdout);
 }
+
+test("Git versions below the supported baseline, unknown versions and version failures stop before config or identity", () => {
+  const { a, make, cleanup } = buildCloneFixture();
+  const home = make(), xdg = make();
+  const system = path.join(make(), "empty.gitconfig");
+  fs.writeFileSync(system, "");
+  try {
+    const results = runGitHarness(make, { a, home, xdg, system, foreign: false }, (trial, fs, stateFile, settings) => {
+      const results = [];
+      for (const versionReply of ["git version 2.31.9\n", "git version 2.37.4\n", "unknown\n", "", "git version 2.55.0\nextra", "ERROR",
+        "git version 2.38.0\n", "git version 2.55.0.windows.3\n", "git version 2.39.3 (Apple Git-145)\n", "git version 3.0.0\n"]) {
+        fs.writeFileSync(stateFile, JSON.stringify({ ...settings, versionReply }));
+        globalThis.resetGitHarness();
+        try {
+          results.push({ versionReply, value: trial.gitOutput(["rev-parse", "--show-toplevel"], settings.a), calls: globalThis.gitCalls });
+        } catch (error) {
+          results.push({ versionReply, error: error.message, calls: globalThis.gitCalls });
+        }
+      }
+      return results;
+    });
+    for (const result of results.slice(0, 6)) {
+      assert.match(result.error, /Git 2\.38 or newer.*required/i, result.versionReply);
+      assert.deepEqual(result.calls.map(call => call.args), [["--version"]], "unsupported Git must never capture config or probe identity");
+    }
+    for (const result of results.slice(6)) {
+      assert.equal(result.error, undefined, result.versionReply);
+      assert.equal(path.resolve(result.value), path.resolve(a));
+      assert.equal(result.calls.length, 3, "supported versions delegate protected capture and identity to real Git");
+    }
+  } finally { cleanup(); }
+});
+
+test("Git version checks are fresh for each caller PATH", () => {
+  const { a, make, cleanup } = buildCloneFixture();
+  const home = make(), xdg = make();
+  const system = path.join(make(), "empty.gitconfig");
+  fs.writeFileSync(system, "");
+  try {
+    const results = runGitHarness(make, { a, home, xdg, system, foreign: false, versionByPath: true, pathDelimiter: path.delimiter }, (trial, fs, stateFile, settings) => {
+      const results = [];
+      for (const prefix of ["new-version", "old-version", "new-version"]) {
+        globalThis.resetGitHarness();
+        try {
+          results.push({ value: trial.gitOutput(["rev-parse", "--show-toplevel"], settings.a, { env: { ...process.env, PATH: prefix + settings.pathDelimiter + process.env.PATH } }), calls: globalThis.gitCalls });
+        } catch (error) { results.push({ error: error.message, calls: globalThis.gitCalls }); }
+      }
+      return results;
+    });
+    assert.equal(path.resolve(results[0].value), path.resolve(a));
+    assert.match(results[1].error, /Git 2\.38 or newer.*required/i);
+    assert.deepEqual(results[1].calls.map(call => call.args), [["--version"]]);
+    assert.equal(path.resolve(results[2].value), path.resolve(a));
+  } finally { cleanup(); }
+});
 
 test("protected capture matches native ownership resets and excludes repository-context trust", () => {
   const { a, c, make, cleanup } = buildCloneFixture();
@@ -2218,7 +2277,7 @@ function runGitDeadlineFixture(stepMs, timeoutMs = 5000) {
 test("Git config reads and identity share one five-second deadline", () => {
   const result = runGitDeadlineFixture(1000.25);
   assert.equal(result.success, true, result.message);
-  assert.deepEqual(result.timeouts, [5000, 3999], "wall-clock rollback cannot extend the monotonic budget; fractional allowances round down");
+  assert.deepEqual(result.timeouts, [5000, 3999, 2999], "version, config and identity share the monotonic budget; fractional allowances round down");
 });
 
 test("Git identity is not started after config reads exhaust its deadline", () => {
@@ -2237,10 +2296,10 @@ test("Git refuses an identity subprocess when less than one millisecond remains"
 test("Git honors a shorter caller cap without extending its default maximum", () => {
   const short = runGitDeadlineFixture(1000.25, 3000);
   assert.equal(short.success, true, short.message);
-  assert.deepEqual(short.timeouts, [3000, 1999]);
+  assert.deepEqual(short.timeouts, [3000, 1999, 999]);
   const long = runGitDeadlineFixture(1000.25, 10000);
   assert.equal(long.success, true, long.message);
-  assert.deepEqual(long.timeouts, [5000, 3999]);
+  assert.deepEqual(long.timeouts, [5000, 3999, 2999]);
 });
 
 // --- 5d. Which candidates main() probes, and in what order (bounded-probe-budget priority) --
@@ -2297,13 +2356,50 @@ test("selectCloneCandidates deduplicates by cwd — one entry per distinct cwd, 
 // 2/3 are UNMEASURED, so overall is INCOMPLETE and the CLI exits 1 — that is correct, not a failure
 // of any test here. Signal 4 needs only the log, not the activity trail, so it is still scored.
 const runCliJson = (log, repoRoot, args = [], nodeArgs = []) => {
-  const env = { ...process.env, KANBANFLOW_USAGE_LOG: log, KANBANFLOW_API_URL: "http://127.0.0.1:1" };
-  for (const key of Object.keys(env)) if (key.startsWith("GIT_")) delete env[key];
+  const env = { ...scrubGitEnv(process.env), KANBANFLOW_USAGE_LOG: log, KANBANFLOW_API_URL: "http://127.0.0.1:1" };
   return spawnSync(process.execPath, [...nodeArgs, path.join(HERE, "trial-report.mjs"), "--repo-root", repoRoot, ...args, "--json"], {
     encoding: "utf8",
+    timeout: 20_000,
     env
   });
 };
+
+test("CLI exposes unsupported Git and version-read failures without probing or folding clones", () => {
+  const { a, b, make, cleanup } = buildCloneFixture();
+  const log = path.join(make(), "usage.jsonl");
+  const trace = path.join(make(), "git-calls.jsonl");
+  const preload = path.join(make(), "git-version.cjs");
+  try {
+    fs.writeFileSync(log, JSON.stringify(row({ session: "clone", cwd: b })) + "\n");
+    for (const versionReply of ["git version 2.37.4\n", "unrecognized\n", null]) {
+      fs.writeFileSync(trace, "");
+      fs.writeFileSync(preload, [
+        'const fs = require("node:fs"), cp = require("node:child_process");',
+        'const original = cp.execFileSync;',
+        'cp.execFileSync = function (file, args, options) {',
+        '  if (file !== "git") return original.apply(this, arguments);',
+        '  fs.appendFileSync(' + JSON.stringify(trace) + ', JSON.stringify(args) + "\\n");',
+        '  if (args[0] === "--version") {',
+        versionReply === null ? '    throw Object.assign(new Error("version read failed"), { status: 1 });' : '    return ' + JSON.stringify(versionReply) + ';',
+        '  }',
+        '  return original.apply(this, arguments);',
+        '};',
+        'require("node:module").syncBuiltinESMExports();'
+      ].join("\n"));
+      const result = runCliJson(log, a, [], ["--require", preload]);
+      assert.equal(result.status, 1, result.stderr + result.stdout);
+      assert.match(result.stderr, /Git 2\.38 or newer.*required/i);
+      assert.doesNotMatch(result.stderr, /folded into signal 4/);
+      const summary = JSON.parse(result.stdout);
+      assert.match(find(summary, 4).caveat, /Git 2\.38 or newer.*required/i);
+      assert.equal(summary.sources.cloneProbe.probed, 1);
+      assert.equal(find(summary, 4).verdict, "ADOPT");
+      const calls = fs.readFileSync(trace, "utf8").trim().split(/\r?\n/).map(line => JSON.parse(line));
+      assert.ok(calls.length > 0);
+      assert.ok(calls.every(args => args.length === 1 && args[0] === "--version"), "no config capture or identity probe may follow unsupported Git");
+    }
+  } finally { cleanup(); }
+});
 const escapeRe = text => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 function quotedValues(text) {
   return quotedLiterals(text).map(value => JSON.parse(value));
@@ -3668,7 +3764,7 @@ test("the git call is bounded too — the same unbounded-blocking shape", () => 
   // Observe the real child-process boundary, rather than its position/spelling in source text.
   const result = runGitDeadlineFixture(0);
   assert.equal(result.success, true, result.message);
-  assert.equal(result.timeouts.length, 2, "protected capture and identity must both be observed");
+  assert.equal(result.timeouts.length, 3, "version, protected capture and identity must all be observed");
   assert.ok(result.timeouts.every(timeout => Number.isInteger(timeout) && timeout > 0 && timeout <= 5000),
     "every Git subprocess must have a finite positive timeout within the five-second bound");
 });
