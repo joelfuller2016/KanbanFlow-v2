@@ -51,6 +51,13 @@ A review of the repository and a test run on 2026-09-26 filed findings as issues
   - S7, for #549.
 
 ## Entries (newest first)
+- 2026-11-01 02:45Z (PR monitor — 3 more Copilot performance findings on #580 replied+resolved):
+  - Copilot posted 3 more medium findings on 73085d2 (second re-review of same HEAD).
+  - Finding 1 (r4434164875, WorkspaceOutline.razor:9–28): O(C×P) outline rendering — component sort and placement count each scan the full placement list per component. Valid; imperceptible at typical scale. Replied+resolved PRRT_kwDOSA8y6s6yWt_V; deferred (dict lookup in OnParametersSet).
+  - Finding 2 (r4434164902, WorkspacePlanItemEditor.razor:11–13): O(N²) prerequisite checkboxes — each item editor renders N-1 checkboxes; quadratic for 500+ items. Valid; practical plans are fine. Replied+resolved PRRT_kwDOSA8y6s6yWt_n; deferred (lazy expansion / paged picker).
+  - Finding 3 (r4434164909, WorkspacePlanVersion.razor:9 + WorkspaceDeliveryPanel.razor:61): O(N²) dependency label lookup via repeated FirstOrDefault. Valid; correct fix is a Dictionary<id,title> built once per render. Replied+resolved PRRT_kwDOSA8y6s6yWt_s; deferred.
+  - All 83 threads on #580 now resolved. These are optimization deferrals, not correctness issues.
+
 - 2026-11-01 02:40Z (PR monitor — Codex both clean on #580 HEAD 73085d2; PR fully reviewed):
   - Codex code review on 73085d282950a456b56b2d5aae404b5be0b8ffde: has_any_findings=false, status=completed. ✅
   - Codex security review on 73085d282950a456b56b2d5aae404b5be0b8ffde: has_any_findings=null, status=completed. ✅
