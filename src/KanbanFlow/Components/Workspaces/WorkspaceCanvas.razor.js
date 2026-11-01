@@ -23,7 +23,7 @@ class CanvasController {
     #start(event) {
         const handle = event.target.closest('.workspace-drag-handle, .workspace-resize-handle');
         const card = handle?.closest('[data-placement-id]');
-        if (!card || event.button !== 0 || !this.#available()) return;
+        if (!card || event.button !== 0 || !this.#available() || this.#gesture) return;
         const descendants = [...this.#root.querySelectorAll('[data-placement-id]')].filter(candidate => {
             const seen = new Set();
             let parent = candidate.dataset.parentId;

@@ -31,12 +31,16 @@ public sealed class WorkspaceCanvasInterop(IJSRuntime js) : IAsyncDisposable
     public async ValueTask DisposeAsync()
     {
         _disposed = true;
-        try
-        {
-            if (module is null) return;
-            await module.InvokeVoidAsync(DisposeMethod, element);
-            await module.DisposeAsync();
-        }
+        var m = module;
+        if (m is null) return;
+        module = null;
+        try { await m.InvokeVoidAsync(DisposeMethod, element); }
         catch (JSDisconnectedException) { }
+        catch (JSException) { }
+        catch (OperationCanceledException) { }
+        try { await m.DisposeAsync(); }
+        catch (JSDisconnectedException) { }
+        catch (JSException) { }
+        catch (OperationCanceledException) { }
     }
 }
