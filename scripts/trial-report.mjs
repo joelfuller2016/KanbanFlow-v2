@@ -496,7 +496,8 @@ function nativeGitText(bytes, code = "git_invalid_utf8") {
 function protectedSafeDirectoryArgs(executable, cwd, env, remainingTimeout) {
   const configEnv = scrubGitEnv(env);
   for (const [key, value] of Object.entries(env)) {
-    if (/^GIT_CONFIG_(GLOBAL|SYSTEM|NOSYSTEM)$/i.test(key)) configEnv[key.toUpperCase()] = value;
+    const name = process.platform === "win32" ? key.toUpperCase() : key;
+    if (/^GIT_CONFIG_(GLOBAL|SYSTEM|NOSYSTEM)$/.test(name)) configEnv[name] = value;
   }
   const noSystem = configEnv.GIT_CONFIG_NOSYSTEM;
   let systemDisabled = false;

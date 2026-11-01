@@ -2478,6 +2478,7 @@ function runGitHarness(make, settings, body) {
     '  const reply = text => options.encoding === null ? Buffer.from(text) : text;',
     '  options = { ...options, env: { ...options.env, HOME: current.home, USERPROFILE: current.home,',
     '    XDG_CONFIG_HOME: current.xdg, GIT_CONFIG_SYSTEM: options.env.GIT_CONFIG_SYSTEM === "/dev/null" ? "/dev/null" : current.system,',
+    '    ...(current.respectExplicitSystem && options.env.GIT_CONFIG_SYSTEM !== undefined ? { GIT_CONFIG_SYSTEM: options.env.GIT_CONFIG_SYSTEM } : {}),',
     '    GIT_TEST_ASSUME_DIFFERENT_OWNER: current.foreign ? "1" : "0" } };',
     '  globalThis.gitCalls.push({ file, args, timeout: options.timeout });',
     '  let offset = 0; while (args[offset] === "-c") offset += 2; const command = args.slice(offset);',
@@ -2939,6 +2940,43 @@ test("a non-directory cwd is a candidate-local launch failure", () => {
     const file = path.join(make(), "file.txt");
     fs.writeFileSync(file, "fixture");
     assert.throws(() => createGitRunner()(["rev-parse", "--show-toplevel"], file), error => error.code === "git_cwd_missing");
+  } finally { cleanup(); }
+});
+
+test("protected config locations do not promote inert POSIX environment spellings", () => {
+  const { a, make, cleanup } = buildInto(make => { const a = make(); initRealRepo(a, "case-sensitive-env.txt"); return { a }; });
+  const home = make(), xdg = make(), system = path.join(make(), "empty.gitconfig");
+  const alternate = path.join(make(), "explicit-safe.gitconfig");
+  fs.writeFileSync(system, "");
+  fs.writeFileSync(alternate, "[safe]\n\tdirectory = *\n");
+  try {
+    const results = runGitHarness(make, { a, home, xdg, system, alternate, foreign: false, respectExplicitSystem: true },
+      (trial, fs, stateFile, settings) => {
+        const descriptor = Object.getOwnPropertyDescriptor(process, "platform"), results = [];
+        const setForeign = value => fs.writeFileSync(stateFile, JSON.stringify({ ...settings, foreign: value }));
+        try {
+          for (const location of ["GLOBAL", "SYSTEM"]) for (const spelling of ["upper", "lower", "mixed"]) {
+            const upper = "GIT_CONFIG_" + location;
+            const key = spelling === "upper" ? upper : spelling === "lower" ? upper.toLowerCase() : "GiT_CoNfIg_" + location;
+            for (const platform of ["linux", "win32"]) {
+              Object.defineProperty(process, "platform", descriptor); setForeign(false);
+              const git = trial.createGitRunner({ env: { ...trial.scrubGitEnv(process.env), [key]: settings.alternate } });
+              git(["--version"], settings.a); // Pin the installed native executable before simulating only the environment-name rule.
+              Object.defineProperty(process, "platform", { ...descriptor, value: platform }); setForeign(true);
+              try { results.push({ location, spelling, platform, ok: true, value: git(["rev-parse", "--show-toplevel"], settings.a) }); }
+              catch (error) { results.push({ location, spelling, platform, ok: false, status: error.status, code: error.code }); }
+            }
+          }
+        } finally { Object.defineProperty(process, "platform", descriptor); setForeign(false); }
+        return results;
+      });
+    assert.equal(results.length, 12);
+    for (const result of results) {
+      const allowed = result.platform === "win32" || result.spelling === "upper";
+      assert.equal(result.ok, allowed, JSON.stringify(result));
+      if (allowed) assert.equal(real(result.value), real(a));
+      else assert.equal(result.status, 128, "without promoted trust, native Git must refuse the foreign-owned fixture");
+    }
   } finally { cleanup(); }
 });
 

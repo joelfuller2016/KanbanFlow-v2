@@ -690,7 +690,8 @@ record terminator is removed. Ordinary repository-local rewrites still come from
 Native Git text is decoded as strict UTF-8 while preserving a valid BOM; malformed bytes cannot
 coalesce into another URL or protected `safe.directory` path through replacement decoding.
 Later operations get the same bound and reread protected configuration without repository
-context, so `gitdir`/`onbranch` conditional includes cannot grant ownership trust. The report does
+context, so `gitdir`/`onbranch` conditional includes cannot grant ownership trust. Config-location
+variables use exact uppercase names on POSIX and case-insensitive names on Windows. The report does
 not install Git or change global settings. Git child output is capped at 256 KiB. Reference and
 candidate fingerprints scan at most 16 remote names, 64 URL entries per remote across
 fetch and push reads together, and 256 URL entries across the entire fingerprint; duplicates count. Exceeding
