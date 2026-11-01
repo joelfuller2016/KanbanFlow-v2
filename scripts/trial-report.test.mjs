@@ -28,6 +28,7 @@ import {
 } from "./trial-report.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
+const GIT_PRELOAD_MATCHER = '  const isGitExecutable = file => ["git", "git.exe", "git.com"].includes(require("node:path").basename(file).toLowerCase());';
 const REPO = "C:\\Users\\Owner\\Documents\\Claude\\KanbanFlow-v2";
 
 // This file's own worktree HEAD must be EXACTLY unchanged after this run. Several tests below
@@ -701,6 +702,33 @@ test("a git clone of THIS repo is confirmed by its root commit and folded in as 
   assert.equal(s4.detail[0].session, "genuinely-external");
   assert.match(s4.caveat, /confirmed/i);
   assert.ok(quotedValues(s4.caveat).includes(cloneCwd), "the caveat names which cwd was reclassified");
+});
+
+test("an incomplete reference fingerprint contributes neither URL nor root-history proof", () => {
+  const main = path.resolve("C:\\reference"), candidate = path.resolve("C:\\candidate");
+  const url = "https://example.invalid/org/repo.git";
+  for (const reference of [
+    { remote: "origin", "remote get-url origin": url }, // Root history read failed.
+    { "rev-list --max-parents=0 HEAD": "shared" }, // Remote listing failed.
+    { remote: "first\nfailed", "remote get-url first": url, "rev-list --max-parents=0 HEAD": "shared" }
+  ]) {
+    const result = withConfirmedCloneRoots([candidate], [main], { git: fakeGitByCwd({
+      [main]: reference, [candidate]: { remote: "origin", "remote get-url origin": url,
+        "rev-parse --show-toplevel": candidate, "rev-list --max-parents=0 HEAD": "shared" }
+    }) });
+    assert.equal(result.confirmed.size, 0, "partial reference evidence cannot confirm a candidate");
+    assert.equal(result.referenceAvailable, false);
+    assert.equal(result.probed, 0, "candidate reads cannot repair an incomplete reference");
+    const summary = summarize({ rows: [row({ cwd: candidate })], repoRoots: [main], repoRootSource: "override",
+      cloneProbe: { ...result, confirmed: undefined } });
+    assert.equal(find(summary, 4).verdict, "UNMEASURED", "helper callers also retain reference integrity when summarizing");
+  }
+  const complete = withConfirmedCloneRoots([candidate], [main], { git: fakeGitByCwd({
+    [main]: { remote: "", "rev-list --max-parents=0 HEAD": "shared" },
+    [candidate]: { remote: "", "rev-parse --show-toplevel": candidate, "rev-list --max-parents=0 HEAD": "shared" }
+  }) });
+  assert.equal(complete.referenceAvailable, true, "a successfully read empty remote list is complete evidence");
+  assert.equal(complete.confirmed.has(candidate), true);
 });
 
 test("a shared root commit does NOT confirm a fork or renamed derivative pushed to a different network remote", () => {
@@ -2444,13 +2472,27 @@ function runGitHarness(make, settings, body) {
     'globalThis.resetGitHarness();',
     'Object.defineProperty(performance, "now", { value: () => fakeClock ? clock : nativeNow() });',
     'cp.execFileSync = function (file, args, options) {',
-    '  if (file !== "git") return original.apply(this, arguments);',
+    GIT_PRELOAD_MATCHER,
+    '  if (!isGitExecutable(file)) return original.apply(this, arguments);',
     '  const current = state();',
     '  const reply = text => options.encoding === null ? Buffer.from(text) : text;',
     '  options = { ...options, env: { ...options.env, HOME: current.home, USERPROFILE: current.home,',
     '    XDG_CONFIG_HOME: current.xdg, GIT_CONFIG_SYSTEM: options.env.GIT_CONFIG_SYSTEM === "/dev/null" ? "/dev/null" : current.system,',
     '    GIT_TEST_ASSUME_DIFFERENT_OWNER: current.foreign ? "1" : "0" } };',
-    '  globalThis.gitCalls.push({ args, timeout: options.timeout });',
+    '  globalThis.gitCalls.push({ file, args, timeout: options.timeout });',
+    '  let offset = 0; while (args[offset] === "-c") offset += 2; const command = args.slice(offset);',
+    '  if (current.referenceFault && options.cwd === current.referenceFaultCwd) {',
+    '    const fail = properties => { throw Object.assign(new Error("private-reference-command"), properties); };',
+    '    if (current.referenceFault === "history" && command[0] === "rev-list") fail({ status: 128 });',
+    '    if (current.referenceFault === "listing" && command[0] === "remote" && command.length === 1) fail({ status: 128 });',
+    '    if (current.referenceFault === "url" && command[0] === "remote" && command[1] === "get-url") fail({ status: 128 });',
+    '    if (current.referenceFault === "protected-timeout" && command[0] === "config" && command.includes("safe.directory")) fail({ code: "ETIMEDOUT", status: 0, signal: null });',
+    '    if (current.referenceFault === "metadata-framing" && command.includes("--get-regexp")) return reply("missing-nul");',
+    '    if (current.referenceFault === "invalid-utf8" && command[0] === "remote" && command.length === 1) return Buffer.from([255]);',
+    '    if (current.referenceFault === "output-cap" && command[0] === "remote" && command.length === 1) fail({ code: "ENOBUFS", signal: "SIGTERM" });',
+    '    if (current.referenceFault === "name-cap" && command[0] === "remote" && command.length === 1) return reply(Array.from({ length: 17 }, (_, i) => "remote" + i).join("\\n") + "\\n");',
+    '    if (current.referenceFault === "resolution" && command[0] === "rev-parse") fail({ status: 128 });',
+    '  }',
     '  if (current.trace) fs.appendFileSync(current.trace, JSON.stringify({ args, cwd: options.cwd }) + "\\n");',
     '  if (args[0] === "--version" && options.cwd === current.failureCwd && current.versionFailure) throw Object.assign(new Error("fixture version launch failed"), current.versionFailure);',
     '  const phase = args[0] === "--version" ? "version" : args[0] === "config" && args.includes("safe.directory") ? "config" : "identity";',
@@ -2619,6 +2661,74 @@ test("Git versions below the supported baseline, unknown versions and version fa
       assert.equal(result.error, undefined, result.versionReply);
       assert.equal(path.resolve(result.value), path.resolve(a));
       assert.equal(result.calls.length, 3, "supported versions delegate protected capture and identity to real Git");
+    }
+  } finally { cleanup(); }
+});
+
+test("every incomplete reference read makes CLI signal four unmeasured without leaking native errors", () => {
+  const { a, b, make, cleanup } = buildCloneFixture();
+  const home = make(), xdg = make(), system = path.join(make(), "empty.gitconfig"), log = path.join(make(), "usage.jsonl");
+  fs.writeFileSync(system, "");
+  fs.writeFileSync(log, JSON.stringify(row({ cwd: b })) + "\n");
+  gitOutput(["remote", "add", "origin", "https://example.invalid/org/repo.git"], b);
+  try {
+    const results = runGitHarness(make, { a, b, home, xdg, system, log, here: HERE,
+      report: path.join(HERE, "trial-report.mjs"), foreign: false }, (trial, fs, stateFile, settings, cp) => {
+      const results = [];
+      for (const fault of ["history", "listing", "url", "protected-timeout", "metadata-framing", "invalid-utf8", "output-cap", "name-cap", "resolution"]) {
+        const explicit = fault !== "resolution";
+        fs.writeFileSync(stateFile, JSON.stringify({ ...settings, referenceFault: fault,
+          referenceFaultCwd: explicit ? settings.a : settings.here }));
+        const child = cp.spawnSync(process.execPath, ["--require", stateFile.replace(/state\.json$/, "git-boundary.cjs"), settings.report,
+          ...(explicit ? ["--repo-root", settings.a] : []), "--json"], {
+          cwd: settings.a, encoding: "utf8", timeout: 20_000, windowsHide: true,
+          env: { ...trial.scrubGitEnv(process.env), KANBANFLOW_USAGE_LOG: settings.log, KANBANFLOW_API_URL: "http://127.0.0.1:1" }
+        });
+        results.push({ fault, status: child.status, summary: JSON.parse(child.stdout), stderr: child.stderr });
+      }
+      return results;
+    });
+    for (const result of results) {
+      assert.equal(result.status, 1, result.fault + result.stderr);
+      assert.equal(find(result.summary, 4).verdict, "UNMEASURED", result.fault + ": reference errors cannot turn genuine clones into adoption evidence");
+      assert.doesNotMatch(result.stderr, /folded into signal 4|private-reference-command/, result.fault);
+      assert.match(result.stderr, /reference.*(?:unavailable|incomplete)/i, result.fault);
+    }
+  } finally { cleanup(); }
+});
+
+test("logged candidate directories cannot select the report's Git executable", () => {
+  const { a, b, make, cleanup } = buildCloneFixture();
+  const log = path.join(make(), "usage.jsonl"), executable = process.platform === "win32" ? "git.exe" : "git";
+  const pathKey = Object.keys(process.env).find(key => process.platform === "win32" ? key.toLowerCase() === "path" : key === "PATH");
+  fs.writeFileSync(log, JSON.stringify(row({ cwd: b })) + "\n");
+  const copyNode = target => {
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    try { fs.linkSync(process.execPath, target); }
+    catch { fs.copyFileSync(process.execPath, target); }
+    const control = spawnSync(target, ["--version"], { cwd: b, encoding: "utf8", timeout: 5000, windowsHide: true });
+    assert.equal(control.status, 0, control.stderr);
+    assert.equal(control.stdout.trim(), process.version, "the harmless candidate executable is Node, not Git");
+  };
+  try {
+    const cases = process.platform === "win32" ? ["implicit-cwd", "relative-path", "no-default-cwd"] : ["relative-path"];
+    for (const mode of cases) {
+      const target = path.join(mode === "no-default-cwd" ? a : mode === "relative-path" ? path.join(b, "tools") : b, executable);
+      copyNode(target);
+      try {
+        const env = scrubGitEnv(process.env);
+        for (const key of Object.keys(env)) if (/^(path|NoDefaultCurrentDirectoryInExePath)$/i.test(key)) delete env[key];
+        env.PATH = (mode === "relative-path" ? "tools" + path.delimiter : "") + (process.env[pathKey] ?? "");
+        if (mode === "no-default-cwd") env.NoDefaultCurrentDirectoryInExePath = "1";
+        const child = spawnSync(process.execPath, [path.join(HERE, "trial-report.mjs"), "--repo-root", a, "--json"], {
+          cwd: a, encoding: "utf8", timeout: 30_000, windowsHide: true,
+          env: { ...env, KANBANFLOW_USAGE_LOG: log, KANBANFLOW_API_URL: "http://127.0.0.1:1" }
+        });
+        assert.equal(child.status, 1, child.stderr);
+        const summary = JSON.parse(child.stdout);
+        assert.equal(find(summary, 4).verdict, "REVERT", mode + ": the trusted Git must prove the genuine clone instead of running candidate Node");
+        assert.match(child.stderr, /1 of 1 outside cwd\(s\) confirmed/);
+      } finally { fs.unlinkSync(target); }
     }
   } finally { cleanup(); }
 });
@@ -2868,7 +2978,8 @@ test("protected safe.directory exceptions survive isolated Git probes without re
       'const cp = require("node:child_process");',
       'const original = cp.execFileSync;',
       'cp.execFileSync = function (file, args, options) {',
-      '  return original.call(this, file, args, file === "git" ? { ...options, env: { ...options.env, GIT_TEST_ASSUME_DIFFERENT_OWNER: "1" } } : options);',
+      GIT_PRELOAD_MATCHER,
+      '  return original.call(this, file, args, isGitExecutable(file) ? { ...options, env: { ...options.env, GIT_TEST_ASSUME_DIFFERENT_OWNER: "1" } } : options);',
       '};',
       'require("node:module").syncBuiltinESMExports();'
     ].join("\n"));
@@ -2956,7 +3067,8 @@ function runGitDeadlineFixture(stepMs, timeoutMs = 5000, urlRead = false, initia
       'const initial = JSON.parse(process.env.KBF_TEST_GIT_INITIAL_CLOCK_MS);',
       'Object.defineProperty(performance, "now", { value: () => initial.shift() ?? elapsed });',
       'cp.execFileSync = function (file, args, options) {',
-      '  if (file !== "git") return original.apply(this, arguments);',
+      GIT_PRELOAD_MATCHER,
+      '  if (!isGitExecutable(file)) return original.apply(this, arguments);',
       '  globalThis.gitTimeouts.push(options.timeout);',
       '  globalThis.gitMaxBuffers.push(options.maxBuffer);',
       '  try { return original.apply(this, arguments); } finally { elapsed += steps.shift() ?? 0; }',
@@ -3313,7 +3425,8 @@ test("CLI exposes unsupported Git and version-read failures without probing or f
         'const fs = require("node:fs"), cp = require("node:child_process");',
         'const original = cp.execFileSync;',
         'cp.execFileSync = function (file, args, options) {',
-        '  if (file !== "git") return original.apply(this, arguments);',
+        GIT_PRELOAD_MATCHER,
+        '  if (!isGitExecutable(file)) return original.apply(this, arguments);',
         '  fs.appendFileSync(' + JSON.stringify(trace) + ', JSON.stringify(args) + "\\n");',
         '  if (args[0] === "--version") {',
         versionReply === null ? '    throw Object.assign(new Error("version read failed"), { status: 1 });' : '    return Buffer.from(' + JSON.stringify(versionReply) + ');',
@@ -3398,8 +3511,9 @@ function versionFailurePreload(dir, failCwd, failure, trace) {
   fs.writeFileSync(preload, [
     'const fs = require("node:fs"), path = require("node:path"), cp = require("node:child_process"), original = cp.execFileSync;',
     'cp.execFileSync = function (file, args, options) {',
-    `  if (file === "git") fs.appendFileSync(${JSON.stringify(trace)}, JSON.stringify({ args, cwd: options.cwd }) + "\\n");`,
-    `  if (file === "git" && args[0] === "--version" && path.resolve(options.cwd) === ${JSON.stringify(path.resolve(failCwd))})`,
+    GIT_PRELOAD_MATCHER,
+    `  if (isGitExecutable(file)) fs.appendFileSync(${JSON.stringify(trace)}, JSON.stringify({ args, cwd: options.cwd }) + "\\n");`,
+    `  if (isGitExecutable(file) && args[0] === "--version" && path.resolve(options.cwd) === ${JSON.stringify(path.resolve(failCwd))})`,
     `    throw Object.assign(new Error("controlled native version failure"), ${JSON.stringify(failure)});`,
     '  return original.apply(this, arguments);',
     '};',
@@ -3483,8 +3597,9 @@ test("late Git incompatibility discards earlier clone confirmations and folded n
       fs.writeFileSync(preload, [
         'const fs = require("node:fs"), cp = require("node:child_process"), original = cp.execFileSync;',
         'cp.execFileSync = function (file, args, options) {',
-        `  if (file === "git") fs.appendFileSync(${JSON.stringify(trace)}, JSON.stringify({ args, cwd: options.cwd }) + "\\n");`,
-        `  if (file === "git" && args[0] === "--version" && options.cwd === ${JSON.stringify(d)}) return Buffer.from(${JSON.stringify(version + "\n")});`,
+        GIT_PRELOAD_MATCHER,
+        `  if (isGitExecutable(file)) fs.appendFileSync(${JSON.stringify(trace)}, JSON.stringify({ args, cwd: options.cwd }) + "\\n");`,
+        `  if (isGitExecutable(file) && args[0] === "--version" && options.cwd === ${JSON.stringify(d)}) return Buffer.from(${JSON.stringify(version + "\n")});`,
         '  return original.apply(this, arguments);',
         '};',
         'require("node:module").syncBuiltinESMExports();'
@@ -3516,8 +3631,9 @@ test("CLI checks Git compatibility before each operation and leaves old or unkno
       'const fs = require("node:fs"), cp = require("node:child_process");',
       'const original = cp.execFileSync;',
       'cp.execFileSync = function (file, args, options) {',
-      `  if (file === "git") fs.appendFileSync(${JSON.stringify(trace)}, JSON.stringify(args) + "\\n");`,
-      '  if (file === "git" && args.length === 1 && args[0] === "--version") return Buffer.from(process.env.KBF_TEST_VERSION + "\\n");',
+      GIT_PRELOAD_MATCHER,
+      `  if (isGitExecutable(file)) fs.appendFileSync(${JSON.stringify(trace)}, JSON.stringify(args) + "\\n");`,
+      '  if (isGitExecutable(file) && args.length === 1 && args[0] === "--version") return Buffer.from(process.env.KBF_TEST_VERSION + "\\n");',
       '  return original.apply(this, arguments);',
       '};',
       'require("node:module").syncBuiltinESMExports();'
@@ -3570,7 +3686,8 @@ test("a report runner freezes its environment while rereading protected configur
       'const cp = require("node:child_process"), original = cp.execFileSync;',
       'globalThis.gitCalls = [];',
       'cp.execFileSync = function (file, args, options) {',
-      '  if (file === "git") globalThis.gitCalls.push({ args, system: options.env.GIT_CONFIG_SYSTEM, global: options.env.GIT_CONFIG_GLOBAL });',
+      GIT_PRELOAD_MATCHER,
+      '  if (isGitExecutable(file)) globalThis.gitCalls.push({ args, system: options.env.GIT_CONFIG_SYSTEM, global: options.env.GIT_CONFIG_GLOBAL });',
       '  return original.apply(this, arguments);',
       '};',
       'require("node:module").syncBuiltinESMExports();'
@@ -3700,7 +3817,8 @@ test("CLI integration: unavailable or corrupt usage logs skip clone probes and f
       'const cp = require("node:child_process");',
       'const original = cp.execFileSync;',
       'cp.execFileSync = function (file, args, options) {',
-      '  if (file === "git") fs.appendFileSync(' + JSON.stringify(trace) + ', JSON.stringify({ args, cwd: options?.cwd }) + "\\n");',
+      GIT_PRELOAD_MATCHER,
+      '  if (isGitExecutable(file)) fs.appendFileSync(' + JSON.stringify(trace) + ', JSON.stringify({ args, cwd: options?.cwd }) + "\\n");',
       '  return original.apply(this, arguments);',
       '};',
       'require("node:module").syncBuiltinESMExports();'

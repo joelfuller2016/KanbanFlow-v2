@@ -487,13 +487,45 @@ function nativeGitText(bytes, code = "git_invalid_utf8") {
   }
 }
 
+// Resolve only against the captured startup context. Logged directories never select code.
+function resolveGitExecutable(env, startupCwd, parentEnv) {
+  const windows = process.platform === "win32";
+  const value = (source, name) => {
+    const key = windows ? Object.keys(source).sort().find(key => key.toUpperCase() === name.toUpperCase()) : name;
+    return key === undefined ? undefined : source[key];
+  };
+  const pathValue = value(env, "PATH") ?? (windows ? value(parentEnv, "PATH") ?? "" : "/usr/bin:/bin");
+  const directories = [];
+  // libuv asks the parent process's Windows policy before constructing the child environment.
+  if (windows && value(parentEnv, "NoDefaultCurrentDirectoryInExePath") === undefined) directories.push(startupCwd);
+  for (let directory of String(pathValue).split(path.delimiter)) {
+    if (windows && directory === "") continue;
+    if (windows && (directory.startsWith('"') || directory.startsWith("'"))) {
+      if (directory.at(-1) !== directory[0]) continue;
+      directory = directory.slice(1, -1);
+    }
+    directories.push(path.resolve(startupCwd, directory));
+  }
+  for (const directory of directories) {
+    for (const name of windows ? ["git.com", "git.exe"] : ["git"]) {
+      const candidate = path.join(directory, name);
+      try {
+        if (!fs.statSync(candidate).isFile()) continue;
+        fs.accessSync(candidate, fs.constants.X_OK);
+        return fs.realpathSync(candidate);
+      } catch { /* Try the next trusted startup search entry. */ }
+    }
+  }
+  throw Object.assign(new Error("Git could not be resolved from the trusted startup environment."), { code: "ENOENT" });
+}
+
 /**
  * Read only protected ownership exceptions, preserving system/global ordering and empty resets.
  * Explicit config-file locations and system-disable flags apply only to this key-only read.
  * Like Git's ownership check, it has no repository/worktree context: local values and
  * gitdir/onbranch conditional includes cannot grant trust. Git performs interpolation.
  */
-function protectedSafeDirectoryArgs(cwd, env, remainingTimeout) {
+function protectedSafeDirectoryArgs(executable, cwd, env, remainingTimeout) {
   const configEnv = scrubGitEnv(env);
   for (const [key, value] of Object.entries(env)) {
     if (/^GIT_CONFIG_(GLOBAL|SYSTEM|NOSYSTEM)$/i.test(key)) configEnv[key.toUpperCase()] = value;
@@ -511,7 +543,7 @@ function protectedSafeDirectoryArgs(cwd, env, remainingTimeout) {
   configEnv.GIT_DIR = path.join(tmpdir(), "kanbanflow-protected-" + randomUUID());
   let output;
   try {
-    output = nativeGitText(execFileSync("git", ["config", "--includes", "--null", "--show-scope", "--get-all", "safe.directory"], {
+    output = nativeGitText(execFileSync(executable, ["config", "--includes", "--null", "--show-scope", "--get-all", "safe.directory"], {
       cwd, encoding: null, stdio: ["ignore", "pipe", "ignore"], timeout: remainingTimeout(), maxBuffer: GIT_MAX_OUTPUT_BYTES, env: configEnv, windowsHide: true
     }));
   } catch (error) {
@@ -530,10 +562,10 @@ function protectedSafeDirectoryArgs(cwd, env, remainingTimeout) {
 
 // get-url has only newline framing. Inspect the effective local URL/rewrite configuration with
 // native NUL records first, so a newline inside one value cannot impersonate several URLs.
-function checkRemoteUrlFraming(cwd, safeDirectories, env, remainingTimeout) {
+function checkRemoteUrlFraming(executable, cwd, safeDirectories, env, remainingTimeout) {
   let output;
   try {
-    output = nativeGitText(execFileSync("git", [...safeDirectories, "config", "--includes", "--null", "--get-regexp",
+    output = nativeGitText(execFileSync(executable, [...safeDirectories, "config", "--includes", "--null", "--get-regexp",
       "^(remote\\..*\\.(url|pushurl)|url\\..*\\.(insteadof|pushinsteadof))$"], {
       cwd, encoding: null, stdio: ["ignore", "pipe", "ignore"],
       timeout: remainingTimeout(), maxBuffer: GIT_MAX_OUTPUT_BYTES, env, windowsHide: true
@@ -572,8 +604,11 @@ export function gitOutput(args, cwd, { env = process.env, timeoutMs = GIT_TIMEOU
 /** Capture the report environment; version and protected trust are checked on EVERY command. */
 export function createGitRunner({ env = process.env, timeoutMs = GIT_TIMEOUT_MS } = {}) {
   const captured = Object.freeze({ ...env });
+  let executable, executableError;
+  try { executable = resolveGitExecutable(captured, process.cwd(), { ...process.env }); }
+  catch (error) { executableError = error; } // Report unavailable Git through the normal lazy diagnostic path.
   return (args, cwd) => {
-    // Relative PATH entries can select another binary when cwd changes. Never cache its version.
+    // Pin executable selection once, while checking its version and protected trust on every call.
     const deadline = performance.now() + Math.min(GIT_TIMEOUT_MS, timeoutMs);
     const remainingTimeout = () => {
       const remaining = Math.floor(deadline - performance.now());
@@ -586,7 +621,8 @@ export function createGitRunner({ env = process.env, timeoutMs = GIT_TIMEOUT_MS 
     let version = "unavailable";
     let versionCause;
     try {
-      version = nativeGitText(execFileSync("git", ["--version"], {
+      if (executableError) throw executableError;
+      version = nativeGitText(execFileSync(executable, ["--version"], {
         cwd, encoding: null, stdio: ["ignore", "pipe", "ignore"],
         timeout: versionTimeout, maxBuffer: GIT_MAX_OUTPUT_BYTES, env: isolated, windowsHide: true
       })).trim();
@@ -619,10 +655,10 @@ export function createGitRunner({ env = process.env, timeoutMs = GIT_TIMEOUT_MS 
       throw Object.assign(new Error(`${GIT_VERSION_REQUIREMENT} Found ${quotedPathForReport(version)}. Clone confirmation was not run.`, { cause: versionCause }),
         { code: "git_unsupported" });
     }
-    const safeDirectories = protectedSafeDirectoryArgs(cwd, captured, remainingTimeout);
+    const safeDirectories = protectedSafeDirectoryArgs(executable, cwd, captured, remainingTimeout);
     if (args[0] === "remote" && args[1] === "get-url")
-      checkRemoteUrlFraming(cwd, safeDirectories, isolated, remainingTimeout);
-    const output = nativeGitText(execFileSync("git", [...safeDirectories, ...args], {
+      checkRemoteUrlFraming(executable, cwd, safeDirectories, isolated, remainingTimeout);
+    const output = nativeGitText(execFileSync(executable, [...safeDirectories, ...args], {
       cwd, encoding: null, stdio: ["ignore", "pipe", "ignore"],
       timeout: remainingTimeout(), maxBuffer: GIT_MAX_OUTPUT_BYTES, env: isolated, windowsHide: true
     }), args[0] === "remote" ? "git_url_framing" : "git_invalid_utf8");
@@ -918,7 +954,8 @@ export function withConfirmedCloneRoots(cwds, roots, { git = gitOutput, now = ()
   const distinct = [...new Set((Array.isArray(cwds) ? cwds : []).filter(c => typeof c === "string" && c.length > 0))];
   const limits = { tooManyRemotes: 0, tooManyUrls: 0, outputTooLarge: 0, limitedMainRoots: 0 };
   if (mainRoots.length === 0 || distinct.length === 0) {
-    return { confirmed: new Map(), probed: 0, capped: false, budgetSpent: false, ...limits };
+    return { confirmed: new Map(), probed: 0, capped: false, budgetSpent: false,
+      referenceAvailable: mainRoots.length > 0, ...limits };
   }
 
   const probeList = distinct.slice(0, MAX_CLONE_PROBES);
@@ -930,6 +967,8 @@ export function withConfirmedCloneRoots(cwds, roots, { git = gitOutput, now = ()
   let budgetSpent = false;
   let outputLimited = false;
   let probeRole = "reference";
+  const unavailableReference = () => ({ confirmed: new Map(), probed: 0, capped: false,
+    budgetSpent, referenceAvailable: false, ...limits });
   const outOfBudget = () => budgetSpent || (budgetSpent = now() > deadline);
   // Every git call here answers a question about a SPECIFIC directory — a candidate cwd, or one of
   // the main roots — never about the process's own cwd, for the same reason `gitOutput`'s callers
@@ -955,7 +994,7 @@ export function withConfirmedCloneRoots(cwds, roots, { git = gitOutput, now = ()
     const out = safeGit(["rev-list", "--max-parents=0", "HEAD"], cwd);
     // A repo can have more than one root commit (a graft, an `--allow-unrelated-histories` merge),
     // so this is a SET to compare against, not a single value.
-    return out ? new Set(out.split(/\r?\n/).map(s => s.trim()).filter(Boolean)) : null;
+    return typeof out === "string" ? new Set(out.split(/\r?\n/).map(s => s.trim()).filter(Boolean)) : null;
   };
 
   // Which `git remote get-url` reads each remote is judged on — the flags before the remote's name.
@@ -1035,24 +1074,21 @@ export function withConfirmedCloneRoots(cwds, roots, { git = gitOutput, now = ()
     return { everyUrl, fetchUrls, inconclusive: false };
   };
 
-  // Fingerprint the main root(s) ONCE, outside the per-candidate loop — repeating this per
-  // candidate would still be correct, just needlessly slower against a wide log. An inconclusive
-  // read of a MAIN root's own remotes degrades to "this main root contributes no network remotes to
-  // match against" — never to a thrown error — which is the fail-closed direction here too: it can
-  // only make a candidate's remote LESS likely to match (never fabricate a match), so it can only
-  // ever move a candidate toward the veto, not away from it.
+  // Every reference fingerprint must be complete before comparing candidates. Losing a main URL
+  // can veto a genuine clone, while retaining only root history can admit an unrelated remote.
   const mainRootCommits = new Set();
   const mainNetworkRemotes = new Set();
   for (const main of mainRoots) {
     outputLimited = false;
     const commits = rootCommitsOf(main);
-    if (outputLimited) { limits.limitedMainRoots++; continue; }
+    if (outputLimited) { limits.limitedMainRoots++; return unavailableReference(); }
+    if (commits === null) return unavailableReference();
     const remotes = networkRemotesOf(main, MAIN_URL_READS);
-    if (remotes.ambiguousDrive || remotes.ambiguousUrls) continue;
     if (outputLimited || remotes.tooManyRemotes || remotes.tooManyUrls) {
       limits.limitedMainRoots++;
-      continue; // The whole fingerprint, including its root commits, is unusable.
+      return unavailableReference();
     }
+    if (remotes.inconclusive || remotes.ambiguousDrive || remotes.ambiguousUrls) return unavailableReference();
     for (const c of commits ?? []) mainRootCommits.add(c);
     for (const r of remotes.fetchUrls) mainNetworkRemotes.add(r);
   }
@@ -1106,7 +1142,7 @@ export function withConfirmedCloneRoots(cwds, roots, { git = gitOutput, now = ()
     probed++;
   }
 
-  return { confirmed, probed, capped: probed < distinct.length, budgetSpent, ...limits };
+  return { confirmed, probed, capped: probed < distinct.length, budgetSpent, referenceAvailable: true, ...limits };
 }
 
 /**
@@ -1501,9 +1537,11 @@ export function summarize({
     // With NO root at all nothing can be outside anything, and the signal scored REVERT: the one
     // outcome this file's header says a missing source must never produce.
     repoRoot: {
-      ok: roots.length > 0 && repoRootSource !== "fallback" && sources.git !== false,
+      ok: roots.length > 0 && repoRootSource !== "fallback" && sources.git !== false && cloneProbe?.referenceAvailable !== false,
       why:
-        sources.git === false ? sources.gitReason || "supported Git was unavailable for repository identity checks" : roots.length === 0
+        sources.git === false ? sources.gitReason || "supported Git was unavailable for repository identity checks"
+          : cloneProbe?.referenceAvailable === false ? "reference repository Git evidence was unavailable or incomplete"
+          : roots.length === 0
           ? "no repo root was supplied, so there is no boundary to be outside OF — every session reads as inside and the signal would score REVERT while measuring nothing"
           : "the repo root came from a FALLBACK (git could not be run, or this is not a git repository), so it is the parent of this script's own directory rather than the repository git would name. Run from a linked worktree, that root is the WORKTREE and every ordinary session in the main checkout reads as outside it — fabricating this signal's adopt condition out of where the script was launched. Pass --repo-root to measure it"
     }
@@ -2353,11 +2391,11 @@ async function main(argv) {
     if (gitIncompatibility) throw gitIncompatibility;
     try { return runner(args, cwd); }
     catch (error) {
-      const mainFailure = ["git_cwd_unavailable", "git_cwd_missing"].includes(error.code) &&
-        probeRole === "reference";
+      const mainFailure = probeRole === "reference";
       if (error.code === "git_unsupported" || mainFailure) {
-        gitIncompatibility = error;
-        console.error(`NOTE: ${error.message}\n`);
+        gitIncompatibility = error.code === "git_unsupported" ? error : new Error(
+          "Reference repository Git evidence is unavailable or incomplete. Signal 4 cannot be measured.", { cause: error });
+        console.error(`NOTE: ${gitIncompatibility.message}\n`);
       }
       throw error;
     }
@@ -2434,8 +2472,13 @@ async function main(argv) {
       // activity-page-capped project list from `fetchActivity`, used a few lines below in the
       // `summarize()` call) — a `const` this name would shadow only inside this block, harmlessly,
       // but a reader skimming past the shadow could easily mix the two up.
-      const { confirmed, probed, capped: cloneCapped, budgetSpent, tooManyRemotes, tooManyUrls, outputTooLarge, limitedMainRoots } =
+      const { confirmed, probed, capped: cloneCapped, budgetSpent, tooManyRemotes, tooManyUrls, outputTooLarge, limitedMainRoots, referenceAvailable } =
         withConfirmedCloneRoots(distinctOutsideCwds, repoRoots.slice(0, 1), { git: reportGit });
+      if (!referenceAvailable && !gitIncompatibility) {
+        const limits = describeCloneProbeLimits({ tooManyRemotes, tooManyUrls, outputTooLarge, limitedMainRoots });
+        gitIncompatibility = new Error("Reference repository Git evidence is unavailable or incomplete. Signal 4 cannot be measured." + (limits ? ` ${limits}` : ""));
+        console.error(`NOTE: ${gitIncompatibility.message}\n`);
+      }
       // The confirmed CWDS — the map's keys — never the toplevels they resolved to: a toplevel as a
       // prefix root also covers a nested repository the check rejected, and misses a cwd reached
       // through a junction (see withConfirmedCloneRoots's Returns, and the note at signal 4).
