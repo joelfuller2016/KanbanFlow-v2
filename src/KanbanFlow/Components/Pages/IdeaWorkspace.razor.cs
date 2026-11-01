@@ -174,10 +174,11 @@ public partial class IdeaWorkspace
     private async Task Refresh(WorkspaceUiScope scope)
     {
         if (!IsCurrent(scope) || busy || context is null) return;
+        var capturedContext = context;
         try
         {
             var refreshed = await Workspaces.GetAsync(scope.WorkspaceId, lifetime.Token);
-            if (!IsCurrent(scope)) return;
+            if (!IsCurrent(scope) || !ReferenceEquals(context, capturedContext)) return;
             latestContext = refreshed;
             await AdoptLatest(scope);
         }
