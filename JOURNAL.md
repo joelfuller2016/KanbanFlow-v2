@@ -52,6 +52,10 @@ A review of the repository and a test run on 2026-09-26 filed findings as issues
 
 ## Entries (newest first)
 
+- 2026-11-01 02:55Z (PR monitor — owner pushed c674da7, new code commit on #580):
+  - Owner pushed c674da7763f9bfb2909601a395ed9060dd841a51 to feat/579-idea-workspaces: "fix: preserve workspace input and selected-control identity". 544+/51- across WorkspaceDeliveryPanel, WorkspaceDiscussion, WorkspaceConnections, WorkspaceLayoutEditor, WorkspaceContentEditor, WorkspacePlanItemEditor, WorkspacePlanPanel, WorkspaceSourceDocuments, WorkspaceCard, WorkspaceCheckpointPanel, IdeaWorkspace. New: workspace-ui-feature-recovery.browser.mjs, workspace-ui-races.browser.mjs, WorkspaceLayoutEditorPlacementTests.cs (177 lines); extended IdeaWorkspaceRestoreAndRelinkTests.cs (+91).
+  - PR HEAD is now c674da7. Codex code+security reviews failed with service error ("We couldn't complete this review") — not actual findings. Awaiting Copilot review on new HEAD.
+
 - 2026-11-01 02:52Z - Corrected shell escape characters in this review's immediately preceding checkpoint entry. Its initial insertion used an expandable PowerShell here-string around SHA markup, creating two escape characters and a NUL. Replaced only that new entry with literal text, retained every older entry, and verified the journal is plain UTF-8 text with zero NULs. Future generated prose uses literal strings. No application files changed.
 
 
