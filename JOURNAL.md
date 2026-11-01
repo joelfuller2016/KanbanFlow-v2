@@ -53,12 +53,9 @@ A review of the repository and a test run on 2026-09-26 filed findings as issues
 ## Entries (newest first)
 - 2026-11-01 04:46Z (PR monitor — PR #511 merged by owner):
   - GitHub merge event received at 04:46Z: PR #511 feat/unified-workflow-509 merged by the owner.
-  - Pre-merge review state on HEAD cce2c416443d1c59e7dfc2ad99135c7713f0d4cb:
-    - Codex Code Review: completed 04:44Z — no findings ✅
-    - Codex Security Review: completed 04:44Z — no findings ✅
-    - CodeRabbit: resumed by owner at 04:44Z but immediately hit hourly rate limit; old-SHA (a6e7b496) summary showing already-fixed WorkflowException finding. Owner proceeded knowing rate limit was hit.
-    - All 96 review threads resolved. Owner's verification: 1,702 .NET / 389 script tests, zero warnings/errors.
-  - PR #511 closed. Remaining open PRs: #564, #580.
+  - Pre-merge Codex reviews on HEAD cce2c41: Code Review no findings; Security Review no findings.
+  - CodeRabbit hit hourly rate limit before completing on cce2c41; owner proceeded. All 96 threads resolved.
+  - Owner verification: 1,702 .NET / 389 script tests, exit 0. PR #511 closed.
 
 
 - 2026-11-01 04:48Z Codex: PR #511 was squash merged through normal repository controls as 68f5e87dbe911ae9e822c6302992d2ab077dec3e from exact head cce2c416443d1c59e7dfc2ad99135c7713f0d4cb. Published and merged non-journal files were proved identical to tested aebe73ecf63a582ee6d2093f76fa928736475d61. Final gate: exit 0, 1,702 .NET and 389 script tests, zero failures/skips and zero build warnings/errors; formatting remains advisory.
