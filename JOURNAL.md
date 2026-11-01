@@ -51,7 +51,23 @@ A review of the repository and a test run on 2026-09-26 filed findings as issues
   - S7, for #549.
 
 ## Entries (newest first)
-- 2026-11-01 01:18Z — Started the owner's repository and open-PR review. Read current GitHub metadata, full review threads and branch protection; pinned PR #580 at `5cf4438323c64c0b0f91354c8e7a7abae8544b76`, #564 at `cd9f67be709bb01bb03cdd174242d7904eae327d`, #521 at `599a71402504f8f07a602eddd8a01c7135e0f91a`, and #511 at `d412c7321008a88cc95f8b2c56713a2aef9c5843`. The original dirty checkout is preserved. Fresh primary and #580 warnings-as-errors build/test gates passed at `19fa192eb2e011adce397c609d9ba3b893ce6904` and the pinned PR head; #580 passed 1,565 .NET and 362 script tests, #564's focused script suite passed 169. Formatting remains advisory. Independent source reviewers are active; no readiness verdict yet. Corrected a moving-PR diff capture by regenerating canonical diffs from exact base/head commits; later remote changes will be reconciled separately. This review is local/report-only; only the journal is published. No PR/issue comments, source fixes, board mutations or merges were performed.
+
+- 2026-11-01 04:00Z (PR #580 — all 12 CodeRabbit/Copilot threads from f2e7999 round resolved; Drafts.cs browserCache guard committed):
+  - Resolved all 12 open review threads: 4 fixed in 4de1359 (WGAe, WLbB, WGAs, WLa9), 3 stale-resolved (WGAi, WLbN, WLbx — code already addressed), 5 deferred (WGAS, WGAV, WGAd, WLbY, WLbi).
+  - Committed pending Drafts.cs change: PersistDraft now guards browserCache write behind `restoredBrowserWorkspaces.Contains(scope.WorkspaceId)` — prevents stomping cached in-memory draft before workspace restoration completes (addresses WGAd root cause).
+  - PR #85/branch feat/579-idea-workspaces HEAD: awaiting Codex reviews on 4de1359 and 0613e47. 0 unresolved threads. Next: resolve any new Codex findings; notify owner when PR is clean.
+
+- 2026-11-01 02:50Z (PR #580 — correction: WGAV (workspace-transport stdin/exit) fixed in 0613e47, not deferred):
+  - The 02:30Z entry listed WGAV as deferred. In fact, commit 0613e47 (which precedes 4de1359 in branch history) already fixes it: exit handler includes signal via `code ?? signal`; rpc() now rejects immediately when child has already exited. Correction reply posted at comment 4433973652. All 4 Copilot threads from 5cf4438 review also fixed in 91999ee and resolved. CodeRabbit JOURNAL.md spacing thread resolved as by-design (append-only rule).
+  - Codex code + security reviews on 91999ee: both complete, has_unresolved_findings:false.
+  - Awaiting Codex reviews on 4de1359 and 0613e47. Next: resolve any new findings; notify owner when PR is clean.
+
+- 2026-11-01 02:30Z (PR #580 — new CodeRabbit/Copilot round on f2e7999, 4 fixed + 5 deferred + 5 stale-resolved):
+  - Resolved Codex WJaN (Refresh race — already fixed 53b75f6) and WJaO (delivery features — already deferred).
+  - Fix 4de1359: Commands.cs:129 normalize DraftAtSend via JsonNode.Parse before GetRawText comparison (Copilot WLa9); Delivery.cs InspectPublishedTask StateHasChanged() before first await (Copilot WLbB); IdeaWorkspace.razor Retry button disabled=@busy guard (CodeRabbit WGAe); WriteTests deep-chain assertion strengthened to check Action+ActivityId (CodeRabbit WGAs).
+  - Stale findings already addressed in prior commits: WGAi/WLbN (parentMap built once per gesture since earlier commit); WLbx (DependsOn filtered in ItemChanged since earlier commit). Replied + resolved.
+  - Deferred to owner: WGAd (PersistDraft cache before Ready — complex behavioral change); WGAV (stdin EPIPE — pre-existing transport issue); WGAS (README count commands — editorial); WLbY (scroll-delta drag position — coordinate transform scope); WLbi (item editor stale on copy confirm — two-component lifecycle).
+  - Next: monitor Codex reviews on 4de1359; resolve any new findings; notify owner when PR is clean.
 
 - 2026-11-01 02:30Z (PR #580 — Copilot findings from 5cf4438 review, 4 fixed + 2 deferred; Codex clean on 91999ee):
   - Fix 91999ee — 4 Copilot findings resolved: Commands.cs:129 normalize DraftAtSend through same JsonSerializer options before GetRawText() comparison (comment 4433942976); Delivery.cs:105 clear inspectedTask before async db read in InspectPublishedTask (comment 4433942988); WorkspaceCanvas.razor.js:36 build parentMap once O(n) before descendant loop instead of inner querySelectorAll O(n²×d) (comment 4433943006); WorkspacePlanPanel.razor:75 filter incoming DependsOn to existing item IDs in ItemChanged (comment 4433943055).
@@ -59,6 +75,8 @@ A review of the repository and a test run on 2026-09-26 filed findings as issues
   - CodeRabbit JOURNAL.md spacing finding (comment 4433579820) resolved as by-design per append-only rule. All 5 Copilot/CodeRabbit threads replied to and resolved (PRRT_kwDOSA8y6s6yWLa9, WLbB, WLbN, WLbx, WGAV).
   - Codex code + security reviews on 91999ee both complete: has_unresolved_findings:false, no security findings.
   - 0 unresolved threads. PR #580 is clean. Head: 91999ee. Owner action needed: rebase feat/579-idea-workspaces onto master and merge.
+
+- 2026-11-01 01:18Z — Started the owner's repository and open-PR review. Read current GitHub metadata, full review threads and branch protection; pinned PR #580 at `5cf4438323c64c0b0f91354c8e7a7abae8544b76`, #564 at `cd9f67be709bb01bb03cdd174242d7904eae327d`, #521 at `599a71402504f8f07a602eddd8a01c7135e0f91a`, and #511 at `d412c7321008a88cc95f8b2c56713a2aef9c5843`. The original dirty checkout is preserved. Fresh primary and #580 warnings-as-errors build/test gates passed at `19fa192eb2e011adce397c609d9ba3b893ce6904` and the pinned PR head; #580 passed 1,565 .NET and 362 script tests, #564's focused script suite passed 169. Formatting remains advisory. Independent source reviewers are active; no readiness verdict yet. Corrected a moving-PR diff capture by regenerating canonical diffs from exact base/head commits; later remote changes will be reconciled separately. This review is local/report-only; only the journal is published. No PR/issue comments, source fixes, board mutations or merges were performed.
 
 - 2026-11-01 02:00Z (PR #580 — Codex P2 review findings on 5cf4438, 1 fixed + 1 deferred):
   - Codex P2 IdeaWorkspace.razor.cs:182 fix: 53b75f6 — Refresh() now captures context before GET and bails on ReferenceEquals mismatch, matching PollForChanges guard (e7acca6). Replied to comment 4433930515.
