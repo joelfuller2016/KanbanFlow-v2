@@ -1256,12 +1256,13 @@ public class ActivityTimelineTests
             "back to its audit Message. Changes derived from an unparseable payload are invented.");
     }
 
-    /// <summary>Labels accepted by the fuzz checks; explicit whitelist coverage above owns the expected field set.</summary>
+    /// <summary>Expected display-label contract, independent of the production definitions.</summary>
     private static readonly string[] DisplayLabels =
     [
-        "Status", "Priority", "Assigned", "Claimed by", "Name", "Feature", "Description",
-        "Order", "Completed", "Claimed at", "Text", "Complete", "Goals", "Readme", "Project",
-        "Task", "Depends on task", "Parent feature", "Parent subtask", "Linked project", "Archived"
+        "Status", "Priority", "Assigned", "Claimed by", "Name",
+        "Feature", "Description", "Order", "Completed", "Claimed at",
+        "Text", "Complete", "Goals", "Readme", "Project", "Task", "Depends on task",
+        "Parent feature", "Parent subtask", "Linked project", "Archived"
     ];
 
     // AC6's fifth shape — a STRUCTURED (object/array) value in a whitelisted slot — is NOT
