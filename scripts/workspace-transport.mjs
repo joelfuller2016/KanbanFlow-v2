@@ -32,15 +32,16 @@ export async function openWorkspaceStdio(baseUrl, { usageLog = "off" } = {}) {
   });
   child.stderr.resume();
   child.on("error", fail);
-  child.on("exit", (code, signal) => fail(new Error(`Workspace MCP process exited ${code ?? signal}`)));
   child.stdin.on("error", fail);
+  child.on("exit", (code, signal) => fail(new Error(`Workspace MCP process exited ${code ?? signal}`)));
   const rpc = (method, params) => new Promise((resolve, reject) => {
-    if (child.exitCode !== null || child.signalCode !== null)
-      return reject(new Error(`Workspace MCP process already exited: ${method}`));
+    if (child.exitCode !== null || child.signalCode !== null || child.stdin.destroyed || child.stdin.writableEnded)
+      return reject(new Error(`Workspace MCP process is not accepting calls: ${method}`));
     const id = ++sequence;
     const timeout = setTimeout(() => { pending.delete(id); reject(new Error(`Workspace MCP timeout: ${method}`)); }, 20000);
     pending.set(id, { resolve, reject, timeout });
-    child.stdin.write(JSON.stringify({ jsonrpc: "2.0", id, method, params }) + "\n");
+    try { child.stdin.write(JSON.stringify({ jsonrpc: "2.0", id, method, params }) + "\n"); }
+    catch (error) { fail(error); }
   });
   const close = async () => {
     const alive = child.exitCode === null && child.signalCode === null;

@@ -145,6 +145,19 @@ grep -rln 'ITaskService\|IIdeaService' src/KanbanFlow/Components/
 
 ## REST surface (71 endpoints)
 
+The route groups below describe the earlier base checkpoint. The current workspace-inclusive
+surface is measured from the running app: 92 application and five admin operations, 97 total.
+Use an explicit disposable instance to reproduce the OpenAPI and both MCP counts:
+
+```powershell
+node scripts/workspace-surface-inventory.mjs http://127.0.0.1:5123
+```
+
+The [inventory script](../scripts/workspace-surface-inventory.mjs) counts actual HTTP methods
+under `/api/` in `/openapi/v1.json`; `/api/admin/` is counted separately. It also performs
+actual native and stdio `tools/list`, without calling a data-writing tool. Workspace
+contracts and current tool coverage are in the [workspace guide](idea-workspaces.md).
+
 ```bash
 grep -cE '\.Map(Get|Post|Put|Patch|Delete)\(' src/KanbanFlow/ApiEndpoints.cs    # 66
 grep -cE '\.Map(Get|Post|Put|Patch|Delete)\(' src/KanbanFlow/AdminEndpoints.cs  #  5
@@ -367,6 +380,9 @@ Plus `GET /openapi.json` in `Program.cs`, which 302s to `/openapi/v1.json`.
 ---
 
 ## MCP surface (28 native / 50 wrapper)
+
+These group tables describe the earlier base surface. The workspace-inclusive totals are
+53 native and 75 wrapper tools; reproduce them with the read-only inventory command above.
 
 Two MCP servers ship, and they are **not** at parity. Tracked in
 [#231](https://github.com/joelfuller2016/KanbanFlow-v2/issues/231).

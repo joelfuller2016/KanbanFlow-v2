@@ -38,7 +38,7 @@
     }
     <label class="form-label" for="workspace-plan-title">Plan title</label>
     <input id="workspace-plan-title" class="form-control mb-3" value="@editing.Title" @oninput="TitleChanged" data-testid="plan-title" />
-    @foreach (var item in editing.Items) { <WorkspacePlanItemEditor @key="item.Id" Item="item" OtherItems="editing.Items" OnChanged="ItemChanged" OnRemove="RemoveItem" /> }
+    @foreach (var item in editing.Items) { <WorkspacePlanItemEditor @key="item.Id" Item="item" OtherItems="editing.Items" WorkspaceId="@Context.WorkspaceId" ResetVersion="@itemResetVersion" OnChanged="ItemChanged" OnRemove="RemoveItem" /> }
     <div class="d-flex flex-wrap gap-2">
         <button class="btn btn-outline-secondary" @onclick="AddItem" data-testid="plan-add-item">Add plan item</button>
         <button class="btn btn-primary" disabled="@(Busy || string.IsNullOrWhiteSpace(editing.Title) || editing.Items.Count == 0 || editing.Items.Any(i => string.IsNullOrWhiteSpace(i.Title)) || PlanStale)" @onclick="Propose" data-testid="plan-propose">Save draft version</button>
@@ -57,6 +57,7 @@
     private IdeaWorkspacePlanRevision? pendingCopy;
     private string? copyWorkspaceId;
     private long copyRevision;
+    private long itemResetVersion;
     protected override void OnParametersSet()
     {
         if (copyWorkspaceId != Context.WorkspaceId || copyRevision != Context.Revision) pendingCopy = null;
@@ -69,14 +70,18 @@
         return input.ChangeAsync(draft with { BaseRevision = draft.BaseRevision ?? Context.Revision, BaseProjectPlanRevision = editing.BaseRevision.HasValue ? draft.BaseProjectPlanRevision : Context.ProjectPlanRevision }, OnDraftChanged);
     }
     private Task TitleChanged(ChangeEventArgs e) => Change(editing with { Title = e.Value?.ToString() ?? "" });
-    private Task Reapply() => Change(editing with { BaseRevision = Context.Revision, BaseProjectPlanRevision = Context.ProjectPlanRevision,
-        Items = [.. editing.Items.Select(i => i with { Provenance = i.Provenance?.ProjectId == Context.ProjectId ? i.Provenance : null })] });
+    private Task Reapply()
+    {
+        itemResetVersion++;
+        return Change(editing with { BaseRevision = Context.Revision, BaseProjectPlanRevision = Context.ProjectPlanRevision,
+            Items = [.. editing.Items.Select(item => item with { Provenance = item.Provenance?.ProjectId == Context.ProjectId ? item.Provenance : null })] });
+    }
     private Task AddItem() => Change(editing with { Items = [.. editing.Items, new()], BaseRevision = editing.BaseRevision ?? Context.Revision });
     private Task ItemChanged(WorkspacePlanItemDraft item)
     {
-        var existingIds = editing.Items.Select(i => i.Id).ToHashSet();
-        var clean = item with { DependsOn = [.. item.DependsOn.Where(d => d != item.Id && existingIds.Contains(d))] };
-        return Change(editing with { Items = [.. editing.Items.Select(i => i.Id == item.Id ? clean : i)], BaseRevision = editing.BaseRevision ?? Context.Revision });
+        var currentIds = editing.Items.Select(value => value.Id).ToHashSet(StringComparer.Ordinal);
+        var currentItem = item with { DependsOn = [.. item.DependsOn.Where(currentIds.Contains)] };
+        return Change(editing with { Items = [.. editing.Items.Select(value => value.Id == item.Id ? currentItem : value)], BaseRevision = editing.BaseRevision ?? Context.Revision });
     }
     private Task RemoveItem(string id) => Change(editing with { Items = [.. editing.Items.Where(i => i.Id != id).Select(i => i with { DependsOn = [.. i.DependsOn.Where(d => d != id)] })] });
     private Task Propose() => OnCommand.InvokeAsync(WorkspaceUiCommand.Create("propose_plan", new { title = editing.Title, items = editing.Items.Select(i => new { id = i.Id, title = i.Title, description = i.Description, acceptanceCriteria = i.OriginalAcceptanceCriteria ?? WorkspaceUiText.Lines(i.AcceptanceCriteria), dependsOn = i.DependsOn, provenance = i.Provenance }), expectedProjectPlanRevision = editing.BaseProjectPlanRevision }, editing.BaseRevision ?? Context.Revision, "plan"));
@@ -92,6 +97,7 @@
     private Task ConfirmCopy()
     {
         if (Busy || pendingCopy is not { } plan) return Task.CompletedTask;
+        itemResetVersion++;
         return Change(new() { Title = plan.Title, BaseRevision = Context.Revision,
         BaseProjectPlanRevision = Context.ProjectPlanRevision,
         Items = plan.Items.Select(i => new WorkspacePlanItemDraft { Id = i.Id, Title = i.Title, Description = i.Description,

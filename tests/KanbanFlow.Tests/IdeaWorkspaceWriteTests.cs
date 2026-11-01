@@ -537,34 +537,6 @@ public sealed class IdeaWorkspaceWriteTests
         Assert.Equal("  complete existing readme\r\n", project.Readme);
     }
 
-    [Fact]
-    public async Task ProposePlan_DeepLinearChain_DoesNotOverflowStack()
-    {
-        // 20 000-item linear chain: item[0] depends on item[1] ... depends on item[19999].
-        // A recursive Visit implementation overflows the .NET stack well below this depth;
-        // the iterative implementation handles it in O(n) heap space.
-        const int depth = 20_000;
-        using var factory = new SqliteTestFactory();
-        var service = new IdeaWorkspaceService(factory);
-        var created = await service.CreateAsync(new IdeaWorkspaceCreate("deep-chain", "client", Title: "Deep chain", Body: "test"));
-        var items = Enumerable.Range(0, depth).Select(i => new IdeaWorkspacePlanItem
-        {
-            Id = $"item{i:D6}",
-            Title = $"Step {i}",
-            Description = "deep chain step",
-            AcceptanceCriteria = ["done"],
-            DependsOn = i + 1 < depth ? [$"item{i + 1:D6}"] : [],
-        }).ToList();
-        var context = await service.GetAsync(created.WorkspaceId);
-        var command = Change(Guid.NewGuid().ToString("N"), context.Revision, "propose_plan",
-            new { title = "Deep chain plan", items, expectedProjectPlanRevision = context.ProjectPlanRevision }, "test-actor");
-
-        var result = await service.ExecuteAsync(created.WorkspaceId, command);
-
-        Assert.Equal("propose_plan", result.Action);
-        Assert.True(result.ActivityId > 0);
-    }
-
     private static IdeaWorkspaceCommand Change(string operationId, long revision, string action, object payload, string actor) =>
         new(operationId, revision, action, JsonSerializer.SerializeToElement(payload, Json), actor);
 

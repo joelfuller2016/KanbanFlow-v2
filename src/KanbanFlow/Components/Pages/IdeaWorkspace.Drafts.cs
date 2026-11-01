@@ -5,6 +5,7 @@ namespace KanbanFlow.Components.Pages;
 
 public partial class IdeaWorkspace
 {
+    private long detailSequence;
     private string SelectedContentKey => WorkspaceContentDraft.KeyForComponent(draft.SelectedComponentId);
     private WorkspaceContentDraft SelectedContent => draft.ContentDrafts.GetValueOrDefault(SelectedContentKey)
         ?? new() { BaseRevision = context?.Revision ?? 0 };
@@ -66,8 +67,7 @@ public partial class IdeaWorkspace
     {
         if (!IsCurrent(scope)) return false;
         var snapshot = draft;
-        if (restoredBrowserWorkspaces.Contains(scope.WorkspaceId))
-            browserCache[scope.WorkspaceId] = snapshot;
+        browserCache[scope.WorkspaceId] = snapshot;
         if (browser is null || !Ready) return false;
         var version = ++persistenceVersion;
         try
@@ -104,17 +104,22 @@ public partial class IdeaWorkspace
     private async Task ReadSelectedDetail(WorkspaceUiScope scope)
     {
         if (!IsCurrent(scope)) return;
+        var sequence = ++detailSequence;
         selectedDetail = null;
         if (context is null || draft.SelectedComponentId is null || !context.Document.Components.Any(c => c.Id == draft.SelectedComponentId)) return;
         var id = draft.SelectedComponentId;
         try
         {
             var detail = await Workspaces.GetComponentAsync(scope.WorkspaceId, id, lifetime.Token);
-            if (IsCurrent(scope) && id == draft.SelectedComponentId) selectedDetail = detail;
+            if (IsCurrent(scope) && id == draft.SelectedComponentId && sequence == detailSequence) selectedDetail = detail;
         }
-        catch (IdeaWorkspaceException ex) { if (IsCurrent(scope)) error = ex.Message; }
         catch (OperationCanceledException) when (lifetime.IsCancellationRequested) { }
-        catch (Exception ex) { if (IsCurrent(scope)) error = $"The component detail could not be loaded: {ex.Message}"; }
+        catch (IdeaWorkspaceException ex) { if (IsCurrent(scope) && id == draft.SelectedComponentId && sequence == detailSequence) error = ex.Message; }
+        catch (Exception ex)
+        {
+            if (IsCurrent(scope) && id == draft.SelectedComponentId && sequence == detailSequence)
+                error = $"Component details could not be loaded: {ex.Message}. Your unsaved draft is retained; select the component again to retry.";
+        }
     }
 
     private async Task ContentChanged(WorkspaceUiScope scope, WorkspaceContentDraft value)

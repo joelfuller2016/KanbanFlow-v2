@@ -16,7 +16,7 @@
 | **Stack** | .NET 10 · Blazor Server · SQLite (EF Core 10) · Minimal APIs · Node 18+ for the MCP wrapper |
 | **Surfaces** | 8 UI routes · 97 REST operations · 53 native MCP tools · 75 Node-wrapper MCP tools (measured in the disposable app, October 31, 2026) |
 | **Sync** | GitHub → board projection, plus one explicit additive board → GitHub issue-create path. Preview is the default; live create requires `--allow-write --task <id>` and a durable journal. No edit/close/delete path — see [Who owns what](#who-owns-what) |
-| **Tests** | 1,565 xUnit · 56 in-app integration · 56 Playwright e2e · 362 script unit · 2 smoke suites — [all local, no CI](#deliberate-non-features) |
+| **Tests** | 1,638 xUnit · 56 in-app integration · 56 Playwright e2e · 370 script unit · 2 smoke suites — [all local, no CI](#deliberate-non-features) |
 | **Runs at** | `http://127.0.0.1:5123` — localhost only, no auth, no Docker, no cloud |
 | **Log book** | [`docs/BACKLOG.md`](docs/BACKLOG.md) — the authoritative record of what happened |
 | **Deep detail** | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) |
@@ -715,17 +715,30 @@ the command beside it — not copied from the previous README, and not copied fr
 
 | Surface | Count | Command that produced it |
 |---|---:|---|
-| REST operations (app) | 92 | Actual OpenAPI `/api/` operations excluding `/api/admin/`, including workspace routes |
-| REST operations (admin) | 5 | Actual OpenAPI `/api/admin/` operations |
-| **REST operations total** | **97** | Actual OpenAPI operation inventory, October 31, 2026 |
-| Native MCP tools (`POST /mcp`) | 53 | Actual `tools/list`; source inventory covers every file under `src/KanbanFlow/Mcp`, including workspace read/write tools |
-| Node-wrapper MCP tools | 75 | Actual `tools/list` over stdio; [workspace verification and transport notes](docs/idea-workspaces.md) |
+| REST operations (app) | 92 | [Run the inventory below](#reproduce-surface-counts): `rest.application` |
+| REST operations (admin) | 5 | [Run the inventory below](#reproduce-surface-counts): `rest.admin` |
+| **REST operations total** | **97** | [Run the inventory below](#reproduce-surface-counts): `rest.total` |
+| Native MCP tools (`POST /mcp`) | 53 | [Actual native `tools/list`](#reproduce-surface-counts): `nativeMcpTools` |
+| Node-wrapper MCP tools | 75 | [Actual stdio `tools/list`](#reproduce-surface-counts): `stdioMcpTools` |
 | Blazor routes | 8 | `rg '^@page' src/KanbanFlow/Components` includes the gallery, preserved `/ideas/board` and `/ideas/workspace/{Kind}/{SourceId:int}` |
 | Razor components | 49 | `rg --files src/KanbanFlow/Components -g '*.razor'` |
-| xUnit tests | 1,565 | `scripts/verify.ps1`, November 1, 2026 UTC: 1,565 passed, 0 failed/skipped |
+| xUnit tests | 1,638 | `scripts/verify.ps1`, November 1, 2026 UTC: 1,638 passed, 0 failed/skipped |
 | In-app integration tests | 56 | `grep -c 'results.Add(await RunTest' src/KanbanFlow/Services/TestRunnerService.cs` (28 API + 22 service + 6 UI) |
 | Playwright e2e scenarios | 56 | `npm run test:ui`, October 31, 2026: 56 passed, including gallery and preserved board checks in Settings |
-| Script unit tests (`scripts/*.mjs`) | 362 | `npm run test:scripts`, November 1, 2026 UTC: 362 passed, 0 failed/skipped |
+| Script unit tests (`scripts/*.mjs`) | 370 | `npm run test:scripts`, November 1, 2026 UTC: 370 passed, 0 failed/skipped |
+
+### Reproduce surface counts
+
+Start a disposable instance, then pass its actual URL. This read-only inventory fetches
+`/openapi/v1.json` and asks both MCP servers for `tools/list`; it does not call a data-writing tool.
+
+```powershell
+node scripts/workspace-surface-inventory.mjs http://127.0.0.1:5123
+```
+
+The [inventory implementation](scripts/workspace-surface-inventory.mjs) counts OpenAPI HTTP
+operations, separating `/api/admin/` from other `/api/` routes. See the
+[REST document location and route map](docs/ARCHITECTURE.md#rest-surface-71-endpoints) for API details.
 
 Corrections this revision made to the previous README: **53 → 60** endpoints previously (both memory
 endpoints and `GET /api/tasks/{id}/context` were missing), then **60 → 71** for the #336
@@ -846,7 +859,7 @@ All local. There is no CI — [on purpose](#deliberate-non-features).
 ```
 
 ```bash
-dotnet test tests/KanbanFlow.Tests/KanbanFlow.Tests.csproj # 1,565 xUnit tests
+dotnet test tests/KanbanFlow.Tests/KanbanFlow.Tests.csproj # 1,638 xUnit tests
 ```
 
 ```powershell

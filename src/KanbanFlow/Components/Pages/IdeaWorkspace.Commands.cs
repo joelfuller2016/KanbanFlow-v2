@@ -41,7 +41,7 @@ public partial class IdeaWorkspace
             draft = ClearSavedSection(draft with { Pending = null }, pending);
             if (result.Action == "remove_component") draft = draft with { SelectedComponentId = null, SelectedPlacementId = null };
             else if (result.ComponentId is not null) draft = draft with { SelectedComponentId = result.ComponentId, SelectedPlacementId = result.PlacementId ?? draft.SelectedPlacementId };
-            var oldProjectId = context?.ProjectId;
+            if (context?.ProjectId != refreshed.ProjectId) ClearDeliveryView();
             context = refreshed;
             if (result.Action is "publish_plan" or "link_project" or "create_project")
             {
@@ -49,13 +49,6 @@ public partial class IdeaWorkspace
                 publicationRequest = null;
                 previewSequence++;
                 draft = draft with { Delivery = CompleteDeliveryDraft(draft.Delivery, pending, context.ProjectId) };
-            }
-            if (context.ProjectId != oldProjectId)
-            {
-                inspectedTaskId = null;
-                inspectedTask = null;
-                taskError = null;
-                taskSequence++;
             }
             latestContext = null;
             ReconcileDeliveryDraft();
@@ -134,10 +127,8 @@ public partial class IdeaWorkspace
     private static WorkspaceBrowserDraft ClearSavedSection(WorkspaceBrowserDraft value, WorkspacePendingCommand pending)
     {
         var section = pending.DraftSection;
-        if (pending.DraftAtSend is not { } saved ||
-            JsonSerializer.SerializeToElement(DraftSectionValue(value, section), WorkspaceUiCommand.Json).GetRawText() !=
-            JsonSerializer.SerializeToElement(System.Text.Json.Nodes.JsonNode.Parse(saved.GetRawText()), WorkspaceUiCommand.Json).GetRawText())
-            return value; // No send snapshot or a newer edit arrived; keep the current buffer.
+        if (pending.DraftAtSend is not { } saved || !JsonElement.DeepEquals(JsonSerializer.SerializeToElement(DraftSectionValue(value, section), WorkspaceUiCommand.Json), saved))
+            return value; // Only a matching send snapshot authorizes clearing a complete current buffer.
         if (section?.StartsWith("content:", StringComparison.Ordinal) == true)
         {
             var content = new Dictionary<string, WorkspaceContentDraft>(value.ContentDrafts);

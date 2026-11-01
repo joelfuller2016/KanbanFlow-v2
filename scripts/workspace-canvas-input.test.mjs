@@ -8,38 +8,67 @@ const sourceUrl = new URL("../src/KanbanFlow/Components/Workspaces/WorkspaceCanv
 const script = new Script(readFileSync(sourceUrl, "utf8").replace(/^export /gm, "")
   + "\nglobalThis.canvasModule = { initialize, dispose };", { filename: sourceUrl.pathname });
 
-function canvasBoundary(callback) {
+class CanvasDocument extends EventTarget {
+  captureLossListeners = new Set();
+  addEventListener(name, listener, options) {
+    if (name === "lostpointercapture") this.captureLossListeners.add(listener);
+    super.addEventListener(name, listener, options);
+  }
+  removeEventListener(name, listener, options) {
+    if (name === "lostpointercapture") this.captureLossListeners.delete(listener);
+    super.removeEventListener(name, listener, options);
+  }
+  loseCapture(pointerId) {
+    const event = new Event("lostpointercapture");
+    Object.defineProperty(event, "pointerId", { value: pointerId });
+    this.dispatchEvent(event);
+  }
+}
+
+function canvasBoundary(callback, placements = ["card-position", "second-position"]) {
   const handlers = new Map();
   const error = { hidden: true, textContent: "" };
-  const boundary = { attached: true, hasError: true, error, handlers };
+  const viewportHandlers = new Map();
+  const viewport = { scrollLeft: 0, scrollTop: 0, addEventListener: (name, handler) => viewportHandlers.set(name, handler) };
+  const ownerDocument = new CanvasDocument();
+  const boundary = { attached: true, hasError: true, error, handlers, viewport, ownerDocument, placementQueries: 0, parentReads: 0, previewOrder: [] };
   const root = {
+    ownerDocument,
     dataset: { workspaceId: "idea:11", revision: "8", busy: "false" },
     addEventListener: (name, handler) => handlers.set(name, handler),
-    closest: () => boundary.attached ? { querySelector: () => boundary.hasError ? error : null } : null,
-    querySelectorAll: () => boundary.cards,
+    closest: selector => selector === ".workspace-canvas-viewport" ? viewport
+      : boundary.attached ? { querySelector: () => boundary.hasError ? error : null } : null,
+    querySelectorAll: () => { boundary.placementQueries++; return boundary.cards; },
   };
-  boundary.cards = ["card-position", "second-position"].map(placementId => {
+  boundary.cards = placements.map(value => {
+    const { placementId, parentId } = typeof value === "string" ? { placementId: value } : value;
     const properties = new Map();
-    return { dataset: { placementId, localX: "30", localY: "40", width: "320", height: "220" },
-      properties, style: { setProperty: (name, value) => properties.set(name, value), removeProperty: name => properties.delete(name) } };
+    const dataset = { placementId, localX: "30", localY: "40", width: "320", height: "220" };
+    Object.defineProperty(dataset, "parentId", { get() { boundary.parentReads++; return parentId; } });
+    return { dataset, properties, style: {
+      setProperty: (name, value) => { boundary.previewOrder.push([placementId, name]); properties.set(name, value); },
+      removeProperty: name => properties.delete(name),
+    } };
   });
-  const handles = boundary.cards.map(card => ({
-    captured: [], resized: false, listeners: new Map(),
+  const handles = boundary.cards.map((card, index) => ({
+    captured: [], resized: false,
     closest(selector) { return selector === "[data-placement-id]" ? card : this; },
-    classList: { contains: name => name === "workspace-resize-handle" && handles[boundary.cards.indexOf(card)].resized },
+    classList: { contains: name => name === "workspace-resize-handle" && handles[index].resized },
     setPointerCapture(pointerId) { this.captured.push(pointerId); },
-    addEventListener(name, handler) { this.listeners.set(name, handler); },
-    focus() {},
   }));
   const context = createContext({ AbortController });
   script.runInContext(context);
   context.canvasModule.initialize(root, { invokeMethodAsync: callback });
   boundary.handles = handles;
-  boundary.lostCapture = (index = 0) => handles[index].listeners.get("lostpointercapture")?.();
-  boundary.key = () => handlers.get("keydown")({ target: handles[0], key: "ArrowRight", shiftKey: false, preventDefault() {} });
+  boundary.key = (index = 0) => handlers.get("keydown")({ target: handles[index], key: "ArrowRight", shiftKey: false, preventDefault() {} });
   boundary.pointer = (name, pointerId, index = 0, clientX = 0, clientY = 0) => handlers.get(name)({
     target: handles[index], pointerId, clientX, clientY, button: 0, preventDefault() {},
   });
+  boundary.scroll = (left, top, notify = true) => {
+    viewport.scrollLeft = left;
+    viewport.scrollTop = top;
+    if (notify) viewportHandlers.get("scroll")?.();
+  };
   boundary.dispose = () => context.canvasModule.dispose(root);
   return boundary;
 }
@@ -154,4 +183,138 @@ test("cancel and disposal clear the owning pointer preview without publishing it
   canvas.dispose();
   assert.equal(canvas.cards[0].properties.size, 0);
   assert.equal(calls.length, 0);
+});
+
+test("a nested group is discovered with one placement query and one parent read per node", () => {
+  const placements = Array.from({ length: 80 }, (_, index) => ({ placementId: `node-${index}`, parentId: index === 0 ? undefined : `node-${index - 1}` }));
+  const canvas = canvasBoundary(async () => {}, placements);
+  canvas.pointer("pointerdown", 1);
+  canvas.pointer("pointermove", 1, 0, 20, 10);
+  assert.equal(canvas.placementQueries, 1);
+  assert.equal(canvas.parentReads, placements.length);
+  assert.ok(canvas.cards.every(card => card.properties.get("--preview-dx") === "20px"));
+  assert.deepEqual(canvas.previewOrder.filter(([, name]) => name === "--preview-dx").map(([id]) => id), placements.map(p => p.placementId));
+  canvas.dispose();
+  assert.ok(canvas.cards.every(card => card.properties.size === 0));
+});
+
+test("group traversal preserves DOM order while terminating cycles and excluding unrelated placements", () => {
+  const placements = [
+    { placementId: "root", parentId: "cycle-child" },
+    { placementId: "grandchild", parentId: "child" },
+    { placementId: "other" },
+    { placementId: "child", parentId: "root" },
+    { placementId: "cycle-child", parentId: "root" },
+    { placementId: "unrelated-cycle-a", parentId: "unrelated-cycle-b" },
+    { placementId: "unrelated-cycle-b", parentId: "unrelated-cycle-a" },
+    { placementId: "missing-parent", parentId: "missing" },
+  ];
+  const canvas = canvasBoundary(async () => {}, placements);
+  canvas.pointer("pointerdown", 1);
+  canvas.pointer("pointermove", 1, 0, 20, 10);
+  assert.equal(canvas.placementQueries, 1);
+  assert.deepEqual(canvas.previewOrder.filter(([, name]) => name === "--preview-dx").map(([id]) => id), ["root", "grandchild", "child", "cycle-child"]);
+  assert.equal(canvas.cards[2].properties.size, 0);
+  assert.ok(canvas.cards.slice(5).every(card => card.properties.size === 0));
+  canvas.dispose();
+});
+
+for (const resize of [false, true]) {
+  test(`viewport scroll combines with pointer movement for ${resize ? "resize" : "drag"} preview and publication`, async () => {
+    const calls = [];
+    const canvas = canvasBoundary(async (...args) => calls.push(args));
+    canvas.handles[0].resized = resize;
+    canvas.scroll(100, 50);
+    canvas.pointer("pointerdown", 1, 0, 200, 100);
+    canvas.scroll(140, 80);
+    canvas.pointer("pointermove", 1, 0, 215, 125);
+    assert.equal(canvas.cards[0].properties.get(resize ? "--preview-width" : "--preview-dx"), resize ? "375px" : "55px");
+    assert.equal(canvas.cards[0].properties.get(resize ? "--preview-height" : "--preview-dy"), resize ? "275px" : "55px");
+    // Pointer-up may omit coordinates in clients dispatching synthetic input events.
+    await canvas.pointer("pointerup", 1);
+    assert.equal(calls.length, 1);
+    const update = calls[0][2][0];
+    assert.equal(update[resize ? "width" : "x"], resize ? 375 : 85);
+    assert.equal(update[resize ? "height" : "y"], resize ? 275 : 95);
+    assert.equal(canvas.cards[0].properties.size, 0);
+    canvas.dispose();
+  });
+
+  test(`scroll-only changes before pointer-up are saved for ${resize ? "resize" : "drag"}`, async () => {
+    const calls = [];
+    const canvas = canvasBoundary(async (...args) => calls.push(args));
+    canvas.handles[0].resized = resize;
+    canvas.scroll(100, 50);
+    canvas.pointer("pointerdown", 1, 0, 200, 100);
+    canvas.scroll(125, 40);
+    assert.equal(canvas.cards[0].properties.get(resize ? "--preview-width" : "--preview-dx"), resize ? "345px" : "25px");
+    canvas.scroll(140, 30, false); // Final offset is observed even before a scroll notification or pointermove.
+    await canvas.pointer("pointerup", 1);
+    assert.equal(calls.length, 1);
+    const update = calls[0][2][0];
+    assert.equal(update[resize ? "width" : "x"], resize ? 360 : 70);
+    assert.equal(update[resize ? "height" : "y"], resize ? 200 : 20);
+    canvas.dispose();
+  });
+}
+
+test("document capture loss clears an unmounted handle's preview and permits a new drag and keyboard input", async () => {
+  const calls = [];
+  const canvas = canvasBoundary(async (...args) => calls.push(args));
+  canvas.pointer("pointerdown", 1);
+  canvas.pointer("pointermove", 1, 0, 25, 15);
+  const removed = canvas.cards[0];
+  canvas.cards = canvas.cards.slice(1);
+  canvas.ownerDocument.loseCapture(1);
+  assert.equal(removed.properties.size, 0);
+  assert.equal(canvas.ownerDocument.captureLossListeners.size, 0);
+  canvas.pointer("pointerdown", 2, 1);
+  canvas.pointer("pointermove", 2, 1, 20, 10);
+  await canvas.pointer("pointerup", 2, 1);
+  await canvas.key(1);
+  assert.equal(calls.length, 2);
+  assert.equal(calls[0][2][0].placementId, "second-position");
+  assert.equal(calls[0][2][0].x, 50);
+  assert.equal(calls[1][2][0].x, 40);
+  canvas.dispose();
+});
+
+test("foreign capture loss does not consume the owning pointer's capture-loss listener", () => {
+  const canvas = canvasBoundary(async () => {});
+  canvas.pointer("pointerdown", 1);
+  canvas.pointer("pointermove", 1, 0, 25, 15);
+  canvas.ownerDocument.loseCapture(2);
+  assert.equal(canvas.cards[0].properties.get("--preview-dx"), "25px");
+  assert.equal(canvas.ownerDocument.captureLossListeners.size, 1);
+  canvas.ownerDocument.loseCapture(1);
+  assert.equal(canvas.cards[0].properties.size, 0);
+  assert.equal(canvas.ownerDocument.captureLossListeners.size, 0);
+  canvas.dispose();
+});
+
+test("successive gestures keep one document listener and stale gesture callbacks cannot reset a new gesture", () => {
+  const canvas = canvasBoundary(async () => {});
+  let priorListener;
+  for (let index = 0; index < 20; index++) {
+    canvas.pointer("pointerdown", 1);
+    canvas.pointer("pointermove", 1, 0, 25, 15);
+    assert.equal(canvas.ownerDocument.captureLossListeners.size, 1);
+    priorListener?.({ pointerId: 1 }); // A delayed callback from the preceding gesture shares this pointer ID.
+    assert.equal(canvas.cards[0].properties.get("--preview-dx"), "25px");
+    priorListener = [...canvas.ownerDocument.captureLossListeners][0];
+    canvas.pointer("pointercancel", 1);
+    assert.equal(canvas.ownerDocument.captureLossListeners.size, 0);
+  }
+  canvas.dispose();
+});
+
+test("disposal removes the document capture-loss listener and every active preview", () => {
+  const canvas = canvasBoundary(async () => {});
+  canvas.pointer("pointerdown", 1);
+  canvas.pointer("pointermove", 1, 0, 25, 15);
+  assert.equal(canvas.ownerDocument.captureLossListeners.size, 1);
+  canvas.dispose();
+  assert.equal(canvas.ownerDocument.captureLossListeners.size, 0);
+  assert.ok(canvas.cards.every(card => card.properties.size === 0));
+  assert.doesNotThrow(() => canvas.ownerDocument.loseCapture(1));
 });
