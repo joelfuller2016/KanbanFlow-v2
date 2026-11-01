@@ -16,12 +16,12 @@
 | **Stack** | .NET 10 · Blazor Server · SQLite (EF Core 10) · Minimal APIs · Node 18+ for the MCP wrapper |
 | **Surfaces** | 8 UI routes · 102 REST operations · 60 native MCP tools · 79 Node-wrapper MCP tools (measured in the disposable combined app, November 1, 2026) |
 | **Sync** | GitHub → board projection, plus one explicit additive board → GitHub issue-create path. Preview is the default; live create requires `--allow-write --task <id>` and a durable journal. No edit/close/delete path — see [Who owns what](#who-owns-what) |
-| **Tests** | Combined checkpoint: 2,158 xUnit · 444 script unit · 16 named browser suites · actual HTTP/native/stdio and restart checks — [all local, no CI](#deliberate-non-features) |
+| **Tests** | Combined checkpoint: 2,164 xUnit · 444 script unit · 16 named browser suites · actual HTTP/native/stdio and restart checks — [all local, no CI](#deliberate-non-features) |
 | **Runs at** | `http://127.0.0.1:5123` — localhost only, no auth, no Docker, no cloud |
 | **Log book** | [`docs/BACKLOG.md`](docs/BACKLOG.md) — the authoritative record of what happened |
 | **Deep detail** | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) |
 
-The November 1, 2026 combined workflow/workspace checkpoint passed 2,158 .NET tests and 444 script tests. The warnings-as-errors build and canonical verification script passed; formatting drift remained advisory. Sixteen named browser suites, actual HTTP/native/stdio checks and a same-database restart passed. Human usability/adoption remains pending. Historical source-specific receipts and current command evidence are recorded in [JOURNAL.md](JOURNAL.md). The counts can be reproduced with the commands in [Surfaces, verified](#surfaces-verified).
+The November 1, 2026 combined workflow/workspace checkpoint passed 2,164 .NET tests and 444 script tests. The warnings-as-errors build and canonical verification script passed; formatting drift remained advisory. The earlier combined checkpoint passed sixteen named browser suites, actual HTTP/native/stdio checks and a same-database restart. The subsequent PlanPanel-only refresh passed six rendered-callback cases and fresh PlanPanel, UI-race and convergence browser checks. The earlier backend receipts retain their original source labels and apply to byte-identical backend code. Human usability/adoption remains pending. Historical source-specific receipts and current command evidence are recorded in [JOURNAL.md](JOURNAL.md). The counts can be reproduced with the commands in [Surfaces, verified](#surfaces-verified).
 
 ---
 
@@ -721,7 +721,7 @@ test receipts retain their execution dates and do not imply a new full browser r
 | Node-wrapper MCP tools | 79 | [Actual stdio `tools/list`](#reproduce-surface-counts): `stdioMcpTools` |
 | Blazor routes | 8 | `rg '^@page' src/KanbanFlow/Components` includes the gallery, preserved `/ideas/board` and `/ideas/workspace/{Kind}/{SourceId:int}` |
 | Razor components | 60 | `rg --files src/KanbanFlow/Components -g '*.razor'` |
-| xUnit tests | 2,158 | `scripts/verify.ps1`, November 1, 2026 combined checkpoint: 2,158 passed, 0 failed/skipped |
+| xUnit tests | 2,164 | `scripts/verify.ps1`, November 1, 2026 combined checkpoint: 2,164 passed, 0 failed/skipped |
 | In-app integration tests | 56 | `grep -c 'results.Add(await RunTest' src/KanbanFlow/Services/TestRunnerService.cs` (28 API + 22 service + 6 UI) |
 | Playwright e2e scenarios | 56 | `npm run test:ui`, October 31, 2026: 56 passed, including gallery and preserved board checks in Settings |
 | Script unit tests (`scripts/*.test.mjs`) | 444 | `npm run test:scripts`, November 1, 2026 combined checkpoint: 444 passed, 0 failed/skipped |

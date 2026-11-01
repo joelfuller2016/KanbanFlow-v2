@@ -67,7 +67,7 @@ Owner usability feedback and adoption remain pending. No deployment, live-board 
 
 ## Evidence and limits
 
-The walkthrough describes implemented behavior. Runtime evidence, source commits, failed checks and corrections are recorded in [JOURNAL.md](../JOURNAL.md). The November 1, 2026 combined workflow/workspace gate passed 2,158 .NET tests and 444 script tests with zero failed or skipped tests. The warnings-as-errors build passed; formatting drift remains advisory under the repository gate.
+The walkthrough describes implemented behavior. Runtime evidence, source commits, failed checks and corrections are recorded in [JOURNAL.md](../JOURNAL.md). The November 1, 2026 combined workflow/workspace gate passed 2,164 .NET tests and 444 script tests with zero failed or skipped tests. The warnings-as-errors build passed; formatting drift remains advisory under the repository gate. The latest PlanPanel-only refresh adds six rendered-callback cases plus fresh stale/fresh acceptance, UI-race and convergence browser proof; earlier transport and restart receipts apply to unchanged backend source.
 
 Repeatable browser scripts cover these flows:
 
