@@ -2541,7 +2541,7 @@ function runGitHarness(make, settings, body) {
     'console.log(JSON.stringify((' + body.toString() + ')(trial, fs, stateFile, settings, cp)));'
   ].join("\n"));
   const result = spawnSync(process.execPath, ["--require", preload, worker], {
-    encoding: "utf8", timeout: 60_000, windowsHide: true, env: scrubGitEnv(process.env)
+    cwd: settings.workerCwd, encoding: "utf8", timeout: 60_000, windowsHide: true, env: scrubGitEnv(process.env)
   });
   assert.equal(result.status, 0, result.stderr + result.stdout);
   return JSON.parse(result.stdout);
@@ -2918,6 +2918,33 @@ test("a blocked or indeterminate cwd discriminator cannot prove missing Git or a
     assert.equal(result.inconclusive, "git_cwd_unavailable", "lack of directory proof cannot become a missing-executable diagnosis");
     assert.equal(real(result.recovered), real(a));
     assert.equal(result.recoveryLookups, 0, "candidate availability failures do not discard the existing executable pin");
+  } finally { cleanup(); }
+});
+
+test("relative cwd discrimination preserves the report's directory namespace", () => {
+  const { a, make, cleanup } = buildCloneFixture();
+  const home = make(), xdg = make(), system = path.join(make(), "empty.gitconfig"), base = make();
+  const workerCwd = path.join(base, "report"); fs.mkdirSync(workerCwd); fs.writeFileSync(system, "");
+  const missing = path.join("..", path.basename(path.dirname(process.execPath))), existing = path.basename(process.execPath);
+  fs.mkdirSync(path.join(workerCwd, existing));
+  assert.equal(fs.existsSync(path.resolve(workerCwd, missing)), false);
+  assert.equal(fs.statSync(path.resolve(path.dirname(process.execPath), missing)).isDirectory(), true);
+  assert.equal(fs.statSync(path.resolve(path.dirname(process.execPath), existing)).isDirectory(), false);
+  try {
+    const results = runGitHarness(make, { a, home, xdg, system, foreign: false, workerCwd, missing, existing },
+      (trial, fs, stateFile, settings) => {
+        const results = [];
+        for (const [cwd, injectMissingExecutable] of [[settings.missing, false], [settings.existing, true]]) {
+          fs.writeFileSync(stateFile, JSON.stringify({ ...settings, failureCwd: cwd,
+            versionFailure: injectMissingExecutable ? { code: "ENOENT" } : null }));
+          try { trial.createGitRunner()(["rev-parse", "--show-toplevel"], cwd); results.push({ ok: true }); }
+          catch (error) { results.push({ code: error.code, cause: error.cause?.code }); }
+        }
+        return results;
+      });
+    assert.equal(results[0].code, "git_cwd_missing", "the real missing logged path must be resolved against the report, not the helper installation");
+    assert.equal(results[1].code, "git_unsupported", "an existing relative cwd cannot mask an executable-ENOENT failure");
+    assert.equal(results[1].cause, "ENOENT");
   } finally { cleanup(); }
 });
 

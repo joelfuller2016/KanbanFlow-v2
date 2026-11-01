@@ -685,7 +685,7 @@ export function createGitRunner({ env = process.env, timeoutMs = GIT_TIMEOUT_MS 
       let cwdUnavailable = false;
       if (versionCause?.code === "ENOENT" || versionCause?.code === "ENOTDIR") {
         let state;
-        try { state = gitFilesystemProbe("cwd", cwd ?? process.cwd(), captured, remainingTimeout); }
+        try { state = gitFilesystemProbe("cwd", path.resolve(cwd ?? process.cwd()), captured, remainingTimeout); }
         catch (cause) { throw Object.assign(new Error("Git cwd availability could not be determined.", { cause }), { code: "git_cwd_unavailable" }); }
         if (state !== "missing" && state !== "directory") throw Object.assign(
           new Error("Git cwd availability is inconclusive."), { code: "git_cwd_unavailable" });
