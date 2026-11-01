@@ -51,6 +51,66 @@ A review of the repository and a test run on 2026-09-26 filed findings as issues
   - S7, for #549.
 
 ## Entries (newest first)
+
+- 2026-11-01 04:35Z Codex: PR #578 was squash merged through normal repository controls as 37845392f9034fcb26a3e58e52faff062b101046 from exact head dea6988bc7b77b3f0e9d2448c3781cbc7e01816d. After integrating merged PR #521, scripts/verify.ps1 passed 1,295 .NET tests with zero build warnings/errors; all 329 script cases passed. The final journal merge was proved byte-identical outside JOURNAL.md to tested facc362582012ac874d59db3482f2650116eb588. Fresh independent review and its actual HTTP regression rerun passed. CodeRabbit explicitly skipped both incremental and full review requests; those skips are not described as review passes, and no required check or blocking review was overridden.
+  - PRs #511, #564 and #580 remain in progress. A real SQLite counterexample proved that a create-project/attach version conflict could create a second project on a later click; the workflow repair now preserves the original project and offers explicit reattachment, with the regression green. Final combined verification remains pending.
+  - PR #580's fresh selection repair is being strengthened to preserve explicit selection changes across queued renders and retry receipts; its prior standalone gate was green at 1,699 .NET/384 script cases before this correction. Actual trusted pointer drag/resize release cases passed 4/4. These earlier results remain pinned to their source rather than claimed for later edits.
+  - Temporarily returned #564 and #580 to draft while confirmed new issues are being repaired, consistent with the repository work-in-progress convention and to prevent the scheduled PR monitor merging older heads. They will be marked ready again after current-source verification. Concurrent PR #580 head 5b7c7a987f10ef22e52e837c04b85781369b2766 is being preserved. The original dirty feature checkout remains untouched.
+
+
+
+- 2026-11-01 04:29Z Codex: PR #521 was squash merged after verified repairs as f1be4156dd716551adc45878e6049699fd679b74, from exact head bd351826594d1387039d7e581ce0ed95c88cd36b. Its canonical gate passed 1,294 .NET tests with zero build warnings/errors; all 329 script cases and 20 focused project-memory key/upgrade cases passed. Current review threads were resolved; final journal-only integration preserved tested source. The merge used the expected PR head and normal repository controls.
+  - PR #578 repair is published at 73cfb6a99f7455a4393bd1e6b447be7d8be4948e: canonical exit 0, 1,260 .NET and 329 script cases; before NU1608, after real HTTP OpenAPI test 1/1; independent review and its focused rerun passed. The new combined gate is running after integrating merged project-memory support.
+  - PR #564 initially passed 1,259 .NET, 373 script and 171 focused trial cases, including a guard-removal mutation that failed on six actual Git calls. Fresh configured review found three additional portability/correctness issues: remote path case, a host-path fixture and preservation of explicit Git safe-directory trust. These are being repaired before merge. CodeRabbit has rate limited review and retains an older change request; no control is being bypassed.
+  - PR #511 focused provider-fault/idempotency/schema regressions now pass 26 cases; its current standalone gate passes 1,663 .NET and 389 script cases plus actual native/stdio checks. Final integration is pending. PR #580 workspace fixes and four fresh review items are in progress. Cross-feature review additionally found route, original-capture, project-association and versioned browser-fixture interactions to address in the final combined feature branch before merging it.
+  - Verified process lesson: compare every final head with its tested source excluding only JOURNAL.md before carrying a gate forward; use expected-head merges and repeat checks when actual application files combine. Optional bot rate limits and source review are not recorded as test passes.
+
+
+- 2026-11-01 04:29Z (PR monitor — Codex both clean on #580 HEAD 5b7c7a9):
+  - Codex Code Review: has_any_findings: false ✅ (completed 04:26Z).
+  - Codex Security Review: has_any_findings: null/completed ✅ (completed 04:29Z).
+  - All 4 CodeRabbit threads on 5b7c7a9 replied, resolved, and acknowledged by CodeRabbit.
+  - #580 HEAD=5b7c7a9 fully clean — awaiting owner walkthrough and merge.
+
+- 2026-11-01 05:00Z (PR monitor — scheduled run):
+  - .NET 10 SDK: UNAVAILABLE. `curl` to dot.net install script returned HTTP 403 (network
+    proxy blocks it); apt has no `dotnet-sdk-10.0` package. BUILD GATE IS DOWN — no merges.
+  - PHASE 1 assessment (non-draft, merge-gate evaluation):
+    - #580 feat/579-idea-workspaces (HEAD 5b7c7a9): not-draft, mergeable=MERGEABLE,
+      mergeable_state=CLEAN, reviewDecision=null, 0 unresolved threads, no CHANGES_REQUESTED.
+      Criteria met; BLOCKED — .NET build/test gate unavailable, cannot merge.
+    - #578 dependabot/nuget OpenApi-3.11.0 (HEAD 73cfb6a): not-draft, mergeable=MERGEABLE,
+      mergeable_state=CLEAN, reviewDecision=null, 0 unresolved threads, no CHANGES_REQUESTED.
+      Criteria met; BLOCKED — .NET build/test gate unavailable, cannot merge.
+    - #564 fix/trial-signal4-clone-caveat (HEAD 61b758c): not-draft, mergeable_state=BLOCKED
+      (copilot-pull-request-reviewer check in_progress). SKIPPED — not CLEAN.
+    - #521 review/520-project-memory-ownership: DRAFT. SKIPPED.
+    - #511 feat/unified-workflow-509: DRAFT. SKIPPED.
+  - PHASE 2 — review comment resolution: all threads already resolved across all PRs
+    (#580: 86 threads resolved; #564: 11 resolved; #521: 4 resolved; #511: 96 resolved;
+    #578: 0 threads). Nothing to fix.
+  - Master build+test: NOT RUN — gate down.
+  - Action required: restore .NET 10 SDK access to re-enable the merge gate.
+
+- 2026-11-01 04:24Z (PR monitor — CodeRabbit review on #580 HEAD 5b7c7a9):
+  - CodeRabbit posted 4 actionable comments on HEAD 737a8c7 at 04:17Z.
+  - Applied all 4 per session policy. Commit 5b7c7a9 on feat/579-idea-workspaces:
+    - WorkspaceDeliveryPanel: added CancellationTokenSource lifetime; threaded lifetime.Token
+      through CreateDbContextAsync and ToListAsync in ReadFeatures; swallow
+      OperationCanceledException only when lifetime cancelled; made Dispose idempotent
+      (prevents double-dispose error, existing test DisposingDuringFeatureRead passes).
+    - WorkspaceLayoutEditorPlacementTests: set Second.BaseRevision = 11 for "Apply" case
+      (was same as Context.Revision = 12, masking wrong-source use); updated ExpectedRevision
+      assertion to check second.BaseRevision for Apply, 12 otherwise.
+    - docs/idea-workspaces.md, docs/idea-workspaces-storyboard.md: added 4 missing browser
+      scripts (convergence, polling, preview-target, button-contrast) to repeatable-script
+      lists; updated storyboard gate counts to 1,686 .NET / 374 script tests.
+  - Build clean, 20 affected tests pass. #580 awaiting owner review.
+
+- 2026-11-01 04:20Z Codex: The owner explicitly requested repairs to all open reviewed PRs, testing, and merging when verified green, and then requested Spec Kit. This task-specific authorization covers code delivery and merges for PRs #511, #521, #564, #578 and #580; it supersedes the earlier owner-only merge convention for this batch. No live-board deployment is requested.
+  - Applied pinned Spec Kit v1.2.5 built-in task, consistency-analysis and convergence guidance inside GSD-debug. One ignored execution plan maps the ten validated findings to source paths and observable acceptance checks; the existing workflow feature plan remains authoritative. No new Spec Kit engine, specification tree, provider configuration or security-policy change was installed.
+  - Fetched current heads and created five isolated repair worktrees. Current primary source was 9ae0ade5e8278c6a369ec6d9bec890a8c02ccd23; original feature checkout b9d9ea0dcf32b17a2ec6a1f1f3b913243cb1e4f6 and unrelated edits are preserved. Newer concurrent repairs are being inspected and tested rather than overwritten.
+  - PR #578 reproduced NU1608 with incompatible Microsoft.OpenApi 3.11.0. Restoring compatible 2.13.0 plus a real Kestrel HTTP document-generation regression now passes the focused test; canonical and script gates are running. PR #511 still needs provider-fault recovery, the outline selector and required native version contract; three bounded native workers own independent PR validation/repairs. New configured review feedback is being reconciled before final gates. No PR has been merged in this task yet.
 - 2026-11-01 04:10Z Codex: Published the final PR #580 workspace repairs at `737a8c7982072313ec3fba72383b6303df617dfc` (verified repair `1d1cc40d204daad29705998e7c74c2b1e9eea3f8`): required verify.ps1 exit 0, 1,686 .NET / 374 script cases, zero build warnings/errors. Nine new gallery/publication cases reproduced five original failures then passed 9/9. Four current browser suites passed: reviewed-target deletion refuses silent retargeting and requires latest-context adoption plus a new explicit preview; existing-feature recovery; exact saved typing/stale controls/focus at 0/150/300 ms; 16 light/dark normal/hover contrast measurements (all text >=4.5:1, recovery border >=3:1). The original compiled app measured 3.427467:1 for dark primary text. Browser fixtures were corrected to await server draft acknowledgement and honor the existing 409 adoption gate; no application/.NET test source changed after the completed gate. Independent review passed. Concurrent `d322ce4` history was retained with exact tested tree identity; final JOURNAL merge preserved 627 feature and 594 primary blocks. All 86 review threads resolved at readback; exact description/draft readback matched. Owned app/browser stopped, owning-process query empty, worktree clean.
 
   PR #564 final Git-config repair is published at `fd28a0c3589ad00ca40395d87879ecf752e1347f` (verified script `81d4d0e01501fddc78aaf340fdcd59c9b2016f40`): verify exit 0, 1,259 .NET / 373 script / 171 focused cases, zero build warnings/errors. Real Git HOME/XDG disguise and independent global/system guard removals were observed red; byte-identical restore is green, local rewrites remain effective, host settings unchanged. The tested Git-compatible `/dev/null` path avoids Node's Windows device-path incompatibility. Independent review passed; all 11 threads resolved, description/draft readbacks match. A final low PR #511 test-oracle finding is being repaired separately: expected timeline labels must not derive from the production list. PR #521 application repair remains verified at `87481e8` with its additive test passing. Original checkout `feat/unified-workflow-509` at `b9d9ea0dcf32b17a2ec6a1f1f3b913243cb1e4f6` retains its pre-existing README/documentation work. No PR merge/deployment or human usability acceptance. Raw evidence is under `_sandbox/fixes/2026-10-31-prs/capture` and the owning ignored worktree folders; `.gsd-debug-prs-20261101/conclusion.md` owns the integrated result.
