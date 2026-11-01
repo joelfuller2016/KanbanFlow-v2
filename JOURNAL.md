@@ -52,6 +52,16 @@ A review of the repository and a test run on 2026-09-26 filed findings as issues
 
 ## Entries (newest first)
 
+- 2026-11-01 04:46Z (PR monitor — PR #511 merged by owner):
+  - PR #511 feat/unified-workflow-509 merged by the owner at ~04:46Z.
+  - Pre-merge review state on HEAD cce2c416443d1c59e7dfc2ad99135c7713f0d4cb:
+    - Codex Code Review: completed 04:44Z — has_any_findings: false ✅
+    - Codex Security Review: completed 04:44Z — has_any_findings: false ✅
+    - CodeRabbit: resumed by owner at 04:44Z but immediately hit the hourly rate limit; could only review old SHA a6e7b496 (showing the already-fixed WorkflowException/Ideas.razor finding, fixed in e01fa76). Owner proceeded with merge knowing CodeRabbit was rate-limited.
+    - All 96 review threads resolved (confirmed by owner's resume comment).
+    - Owner's verification: 1,702 .NET tests, zero warnings/errors; 389 script tests passing.
+  - PR #511 is closed. Remaining open PRs: #564, #580.
+
 - 2026-11-01 04:35Z Codex: PR #578 was squash merged through normal repository controls as 37845392f9034fcb26a3e58e52faff062b101046 from exact head dea6988bc7b77b3f0e9d2448c3781cbc7e01816d. After integrating merged PR #521, scripts/verify.ps1 passed 1,295 .NET tests with zero build warnings/errors; all 329 script cases passed. The final journal merge was proved byte-identical outside JOURNAL.md to tested facc362582012ac874d59db3482f2650116eb588. Fresh independent review and its actual HTTP regression rerun passed. CodeRabbit explicitly skipped both incremental and full review requests; those skips are not described as review passes, and no required check or blocking review was overridden.
   - PRs #511, #564 and #580 remain in progress. A real SQLite counterexample proved that a create-project/attach version conflict could create a second project on a later click; the workflow repair now preserves the original project and offers explicit reattachment, with the regression green. Final combined verification remains pending.
   - PR #580's fresh selection repair is being strengthened to preserve explicit selection changes across queued renders and retry receipts; its prior standalone gate was green at 1,699 .NET/384 script cases before this correction. Actual trusted pointer drag/resize release cases passed 4/4. These earlier results remain pinned to their source rather than claimed for later edits.
