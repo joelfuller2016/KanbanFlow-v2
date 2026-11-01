@@ -52,6 +52,60 @@ A review of the repository and a test run on 2026-09-26 filed findings as issues
 
 ## Entries (newest first)
 
+- 2026-11-01 02:05Z (PR #580 — 2 more CodeRabbit findings fixed in a2a4743; 2 deferred; JOURNAL.md corrections noted):
+  - Fixed JOURNAL.md ordering: on the feature branch (and master) the 01:30Z entry appears above the 04:00Z entry, but 04:00Z is newer. The no-reorder rule means corrections go here, not by moving entries.
+  - Fixed JOURNAL.md typo: the 04:00Z entry body says "PR #85/branch" where it should say "PR #580/branch". Error introduced by an earlier session.
+  - Fixed in a2a4743 (CodeRabbit findings, 2 code changes):
+    - Drafts.cs line 115: broadened ReadSelectedDetail catch to handle OperationCanceledException (disposal) and catch-all Exception (circuit-protecting); CodeRabbit comment 4434075449.
+    - WorkspaceCanvas.razor line 11: added role="region" to viewport div so aria-label is a valid landmark; CodeRabbit comment 4434075452.
+  - Deferred with replies:
+    - IdeaWorkspace.razor.cs lines 104-121 (CodeRabbit 4434075450, Major): RestoreDraft authored-edit preservation — requires per-workspace restoration-generation tracking; heavy lift, deferred.
+    - WorkspacePlanPanel.razor line 82 (CodeRabbit 4434075454, Trivial): regression test for editing copied-item criteria — enhancement, separate issue.
+  - JOURNAL.md CodeRabbit findings (4434075443, 4434075445): corrections recorded here; feature-branch JOURNAL.md is stale.
+  - Branch: feat/579-idea-workspaces HEAD at a2a4743. Codex reviews will run.
+
+
+- 2026-11-01 01:51Z (Codex repository review — pinned master and unattended reliability):
+  - Request: review KanbanFlow GitHub repository. Reviewed `master` at `878fe8ddb3fe21410b7acde735bc29cda4639946` in an isolated worktree; preserved the dirty original branch and running user applications. Review-only scope; no application fix, live-board mutation, PR change, issue/comment/status write or merge.
+  - Source-backed findings: CI reuse lacks exact root/origin validation before destructive checkout/clean; overlapping PR checks share a mutable clone; existing #561 can purge real non-project audit events; existing #533 accepts another served database. Read-only Git discovery control confirmed ancestor resolution; destructive/race scenarios were not executed.
+  - Observed verification: PowerShell 7.6.5/.NET SDK 10.0.403; existing verify gate exit 0, build 0 warnings/errors, 1,259 .NET tests passed with none failed/skipped; 329 script tests passed with none failed/skipped. Isolated API smoke passed on its own SQLite database/free port/offline embedding profile; task-created processes, port and smoke directory cleaned up. Formatter drift remained advisory.
+  - Delivery: local `docs/reviews/2026-10-31-repository-review.md` and README index; GSD/Codex reuse candidates and explicit coverage gaps included. Static counts 72 REST registrations, 29 native MCP declarations, 51 wrapper tool declarations and 6 routes differ from README. Master results do not validate PR #580 or supply owner UI acceptance.
+  - Validation/lesson: 16 local report links resolve, raw evidence is ignored, recorded pins agree, cleanup assertions and diff checks pass; two bounded final reviews found no material report correction. Extract GitHub metadata before reading selected discussion bodies to avoid oversized irrelevant payloads. Do not infer visible consoles from missing flags or complete audit ownership from timestamps.
+  - Publication: only this journal entry is staged. Fetched current master and verified the reviewed application/source tree is unchanged except journal history, preserving concurrent entries. No external reviewer/provider invoked. Next: scope the four reliability fixes separately and validate each PR on its actual current head.
+
+
+- 2026-11-01 01:52Z (PR #580 — Codex code and security reviews on b1e61c3 both completed clean; PR ready to merge):
+  - Codex code review on b1e61c3: status=completed, has_any_findings=true (prior findings), has_unresolved_findings=false. All previous findings resolved.
+  - Codex security review on b1e61c3: status=completed, has_any_findings=null (no findings). Clean.
+  - 72/72 PR review threads resolved. No open findings from any reviewer.
+  - PR #580 (feat/579-idea-workspaces) is ready for owner to merge.
+
+
+- 2026-11-01 01:44Z (PR #580 — 2 new Copilot findings fixed in b1e61c3; 72/72 threads resolved):
+  - Copilot review 5725912714 posted 2 findings on 16c5f65:
+    - PRRT_kwDOSA8y6s6yWYbC (High, test file): already fixed in 73304b0 (addEventListener added to mock). Replied and resolved.
+    - PRRT_kwDOSA8y6s6yWYbO (Medium, Canvas.razor.js line 43): repeated drags accumulate lostpointercapture listeners. Fixed in b1e61c3: added `once: true` to listener options so it auto-removes after first invocation. Replied and resolved.
+  - All 9 canvas tests pass at b1e61c3. 72/72 PR review threads resolved.
+  - Codex code and security reviews running on 73304b0 (started 01:41:05Z); b1e61c3 will trigger new reviews.
+  - Branch: feat/579-idea-workspaces HEAD at b1e61c3. Next: wait for Codex reviews; notify owner when clean.
+- 2026-11-01 01:43Z - Final moving-head follow-up for the repository review: inspected PR #580 commit `73304b018ff041bc0cf614d45fd87484906df51c`, whose only delta from `16c5f65e493d2d2c0c3c5a85d5fd71c10b8eefdb` repairs the canvas test handle mock. Repeated the full script suite: 362 passed, 0 failed/skipped, exit 0. This corrects the final script-gate status reported in the preceding checkpoint; the five validated application findings and failing draft-preservation regression are unchanged. No additional full .NET pass is claimed. Local report updated; #580 remains not ready. Only this journal is published.
+
+
+- 2026-11-01 01:41Z (PR #580 — Codex P2 test fix in 73304b0; all 70 threads resolved):
+  - New Codex code review finding (PRRT_kwDOSA8y6s6yWX_a, comment 4434023703) on 16c5f65: canvas test mock handles lacked addEventListener, causing TypeError in all 4 pointer tests after lostpointercapture fix in b54b19b.
+  - Fixed in 73304b0: added addEventListener (storing listeners by name) and no-op focus to canvasBoundary handle mock; exposed boundary.lostCapture(index) helper. All 9 canvas tests pass.
+  - Thread replied and resolved. 70/70 PR review threads resolved.
+  - Codex security review on 16c5f65 completed clean. Code review completed (produced this finding, now resolved).
+  - Branch: feat/579-idea-workspaces HEAD at 73304b0. Next: wait for Codex reviews on 73304b0; notify owner when clean.
+- 2026-11-01 01:40Z - Completed Codex repository/open-PR review, report-only. Reviewed #580 initially at `5cf4438323c64c0b0f91354c8e7a7abae8544b76`, reconciled every code delta through `16c5f65e493d2d2c0c3c5a85d5fd71c10b8eefdb`; older PR heads remain #564 `cd9f67be709bb01bb03cdd174242d7904eae327d`, #521 `599a71402504f8f07a602eddd8a01c7135e0f91a`, #511 `d412c7321008a88cc95f8b2c56713a2aef9c5843`. Thirteen native source lenses completed; one fresh validator confirmed five retained findings: pre-restoration typing lost on storage retry; stale inspector control targets the newly selected card; manual input/render synchronization loses characters; inaccessible warning contrast; preview-dependent existing-feature choices. Earlier Refresh/provenance/stdio fixes were excluded after source refresh. Browser probes reproduced typing and wrong-card deletion using a disposable database; affected code is unchanged at the final reviewed head. Latest warnings-as-errors rebuild passed with zero warnings/errors; restore/relink suite failed 1 of 19, reproducing the existing preservation regression. Latest script suite passed 357/362; four canvas test-boundary failures reproduced alone, while the CPU-sampling failure passed alone. At `57867139afa5069bad99c028ecedf33289d44e03`, the full .NET gate passed 1563/1565; the other request-timeout failure passed on isolated rerun. Earlier green gates do not certify these later revisions. Primary code baseline `19fa192eb2e011adce397c609d9ba3b893ce6904` passed 1259 .NET tests; later inspected primary changes were journal-only. #564 passed 169 targeted tests. Current #511 merge-tree verification conflicts in TestRunnerService.cs. Verdict: #580/#511 not ready; #564/#521 remain drafts. IW-T07 follow-up and IW-T08 actual owner feedback remain pending. Local report/index: docs/reviews/2026-10-31-repository-pr-review.md and docs/reviews/README.md; four local links checked, zero failures. Original dirty checkout preserved; task-owned browser/app stopped; no live-board changes, code fixes, PR/issue messages or merges. Only this journal is published. Verified lesson: pin metadata and diffs to the same immutable commit, refresh moving PRs separately, and rebuild changed source before applying earlier test evidence.
+
+
+- 2026-11-01 01:34Z (PR #580 — Codex P2 deferred and resolved; Codex retry triggered):
+  - Resolved final unresolved review thread: PRRT_kwDOSA8y6s6yWTXX (Codex P2, Drafts.cs line 70) — deferred. The guard preventing browserCache writes before restoration completes is intentional; the pre-restoration edit loss scenario requires a transient init failure plus user typing before retry, and fixing it correctly (separate pre-restoration buffer or post-restoration merge) is out of scope for this PR. Reply posted at comment 4434018489.
+  - All 69/69 PR review threads now resolved.
+  - Codex code and security reviews on 16c5f65 failed again; triggered retry via @codex review and @codex security review (PR comment 6551856350).
+  - Branch: feat/579-idea-workspaces HEAD at 16c5f65. Next: wait for Codex retry result; notify owner when clean.
+
 - 2026-11-01 01:30Z (PR #580 — new Copilot review resolved; 2 more fixes in b54b19b; all threads clean):
   - New Copilot review (review_id 5725856458) on d11f2a1 posted 4 open threads: 2 new, 2 re-listed from prior deferred round.
   - Fixed r4433977114 (Commands.cs): track `oldProjectId` before updating `context = refreshed`; clear inspectedTask/taskSequence when project ID changes after link_project/create_project, preventing stale inspector from previous project.
