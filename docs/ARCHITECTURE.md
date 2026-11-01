@@ -674,8 +674,9 @@ check finds an older or unrecognizable version, it produces one diagnostic and l
 five-second monotonic deadline includes that check, a protected configuration read and the identity
 command; later operations get the same bound and reread protected configuration without repository
 context, so `gitdir`/`onbranch` conditional includes cannot grant ownership trust. The report does
-not install Git or change global settings. Git child output is capped at one MiB. Reference and
-candidate fingerprints scan at most 16 remote names and 64 nonempty URLs per remote read; exceeding
+not install Git or change global settings. Git child output is capped at 256 KiB. Reference and
+candidate fingerprints scan at most 16 remote names, 64 nonempty URL entries per remote across
+fetch and push reads together, and 256 URL entries across the entire fingerprint; duplicates count. Exceeding
 a bound rejects the whole fingerprint and is disclosed in the report, rather than trusting a
 truncated prefix. Other servers retain their transport, account and exact
 repository path; generic SSH comparison preserves the login and effective
