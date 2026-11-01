@@ -1,4 +1,5 @@
 using System.Data.Common;
+using KanbanFlow.Services;
 using Microsoft.EntityFrameworkCore;
 
 namespace KanbanFlow.Data;
@@ -130,8 +131,8 @@ public static class SchemaPatcher
 
     /// <summary>
     /// Ensure the memory data model tables (<c>MemoryNodes</c>, <c>Observations</c>,
-    /// <c>MemoryRelations</c>) and their indexes exist. No-op on non-SQLite providers. Opens and
-    /// closes the context connection like the other startup patchers.
+    /// <c>MemoryRelations</c>) and their indexes exist, and canonicalize legacy project scope keys
+    /// with attributed audits. No-op on non-SQLite providers. Opens and closes the context connection.
     /// </summary>
     public static void EnsureMemoryTables(AppDbContext db)
     {
@@ -167,8 +168,8 @@ public static class SchemaPatcher
     /// <summary>
     /// Connection-level worker: runs the <c>CREATE TABLE/INDEX IF NOT EXISTS</c> batch against an
     /// already-open connection. Public so tests can drive it directly against a raw SQLite
-    /// connection that has no memory tables (a pre-feature database). Safe to call repeatedly —
-    /// every statement is <c>IF NOT EXISTS</c>. Table/column/index names match what
+    /// connection that has no memory tables (a pre-feature database). Schema creation and project-key
+    /// repair are idempotent. Table/column/index names match what
     /// <see cref="AppDbContext"/>.EnsureCreated() produces so a patched DB and a fresh DB converge.
     /// </summary>
     public static void EnsureMemoryTables(DbConnection connection)
@@ -227,9 +228,19 @@ public static class SchemaPatcher
 
         Execute(connection, transaction, "CREATE INDEX IF NOT EXISTS IX_MemoryNodes_Scope_ScopeKey_Type ON MemoryNodes (Scope, ScopeKey, Type)");
         Execute(connection, transaction, "CREATE INDEX IF NOT EXISTS IX_MemoryNodes_SupersededById ON MemoryNodes (SupersededById)");
+        Execute(connection, transaction, """
+            CREATE INDEX IF NOT EXISTS IX_MemoryNodes_CurrentProjectContext
+            ON MemoryNodes (Scope, ScopeKey, CreatedAt DESC, Id DESC)
+            WHERE ValidTo IS NULL AND SupersededById IS NULL
+            """);
         Execute(connection, transaction, "CREATE INDEX IF NOT EXISTS IX_Observations_MemoryNodeId ON Observations (MemoryNodeId)");
         Execute(connection, transaction, "CREATE INDEX IF NOT EXISTS IX_MemoryRelations_FromType_FromId ON MemoryRelations (FromType, FromId)");
         Execute(connection, transaction, "CREATE INDEX IF NOT EXISTS IX_MemoryRelations_ToType_ToId ON MemoryRelations (ToType, ToId)");
+
+        using var normalizationDb = new AppDbContext(new DbContextOptionsBuilder<AppDbContext>()
+            .UseSqlite(connection).Options);
+        normalizationDb.Database.UseTransaction(transaction);
+        MemoryService.NormalizeProjectScopeKeys(normalizationDb);
 
         transaction.Commit();
     }

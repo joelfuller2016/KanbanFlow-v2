@@ -51,6 +51,41 @@ A review of the repository and a test run on 2026-09-26 filed findings as issues
   - S7, for #549.
 
 ## Entries (newest first)
+- 2026-11-01 05:00Z (PR monitor — scheduled run):
+  - .NET 10 SDK: UNAVAILABLE. `curl` to dot.net install script returned HTTP 403 (network
+    proxy blocks it); apt has no `dotnet-sdk-10.0` package. BUILD GATE IS DOWN — no merges.
+  - PHASE 1 assessment (non-draft, merge-gate evaluation):
+    - #580 feat/579-idea-workspaces (HEAD 5b7c7a9): not-draft, mergeable=MERGEABLE,
+      mergeable_state=CLEAN, reviewDecision=null, 0 unresolved threads, no CHANGES_REQUESTED.
+      Criteria met; BLOCKED — .NET build/test gate unavailable, cannot merge.
+    - #578 dependabot/nuget OpenApi-3.11.0 (HEAD 73cfb6a): not-draft, mergeable=MERGEABLE,
+      mergeable_state=CLEAN, reviewDecision=null, 0 unresolved threads, no CHANGES_REQUESTED.
+      Criteria met; BLOCKED — .NET build/test gate unavailable, cannot merge.
+    - #564 fix/trial-signal4-clone-caveat (HEAD 61b758c): not-draft, mergeable_state=BLOCKED
+      (copilot-pull-request-reviewer check in_progress). SKIPPED — not CLEAN.
+    - #521 review/520-project-memory-ownership: DRAFT. SKIPPED.
+    - #511 feat/unified-workflow-509: DRAFT. SKIPPED.
+  - PHASE 2 — review comment resolution: all threads already resolved across all PRs
+    (#580: 86 threads resolved; #564: 11 resolved; #521: 4 resolved; #511: 96 resolved;
+    #578: 0 threads). Nothing to fix.
+  - Master build+test: NOT RUN — gate down.
+  - Action required: restore .NET 10 SDK access to re-enable the merge gate.
+
+- 2026-11-01 04:24Z (PR monitor — CodeRabbit review on #580 HEAD 5b7c7a9):
+  - CodeRabbit posted 4 actionable comments on HEAD 737a8c7 at 04:17Z.
+  - Applied all 4 per session policy. Commit 5b7c7a9 on feat/579-idea-workspaces:
+    - WorkspaceDeliveryPanel: added CancellationTokenSource lifetime; threaded lifetime.Token
+      through CreateDbContextAsync and ToListAsync in ReadFeatures; swallow
+      OperationCanceledException only when lifetime cancelled; made Dispose idempotent
+      (prevents double-dispose error, existing test DisposingDuringFeatureRead passes).
+    - WorkspaceLayoutEditorPlacementTests: set Second.BaseRevision = 11 for "Apply" case
+      (was same as Context.Revision = 12, masking wrong-source use); updated ExpectedRevision
+      assertion to check second.BaseRevision for Apply, 12 otherwise.
+    - docs/idea-workspaces.md, docs/idea-workspaces-storyboard.md: added 4 missing browser
+      scripts (convergence, polling, preview-target, button-contrast) to repeatable-script
+      lists; updated storyboard gate counts to 1,686 .NET / 374 script tests.
+  - Build clean, 20 affected tests pass. #580 awaiting owner review.
+
 - 2026-11-01 04:20Z Codex: The owner explicitly requested repairs to all open reviewed PRs, testing, and merging when verified green, and then requested Spec Kit. This task-specific authorization covers code delivery and merges for PRs #511, #521, #564, #578 and #580; it supersedes the earlier owner-only merge convention for this batch. No live-board deployment is requested.
   - Applied pinned Spec Kit v1.2.5 built-in task, consistency-analysis and convergence guidance inside GSD-debug. One ignored execution plan maps the ten validated findings to source paths and observable acceptance checks; the existing workflow feature plan remains authoritative. No new Spec Kit engine, specification tree, provider configuration or security-policy change was installed.
   - Fetched current heads and created five isolated repair worktrees. Current primary source was 9ae0ade5e8278c6a369ec6d9bec890a8c02ccd23; original feature checkout b9d9ea0dcf32b17a2ec6a1f1f3b913243cb1e4f6 and unrelated edits are preserved. Newer concurrent repairs are being inspected and tested rather than overwritten.
