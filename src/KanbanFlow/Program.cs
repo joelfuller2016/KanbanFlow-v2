@@ -4,6 +4,7 @@ using KanbanFlow;
 using KanbanFlow.Components;
 using KanbanFlow.Data;
 using KanbanFlow.Services;
+using KanbanFlow.Services.IdeaWorkspaces;
 using KanbanFlow.Services.Workflows;
 using KanbanFlow.Models.Workflows;
 using Microsoft.AspNetCore.Http.Connections;
@@ -12,7 +13,7 @@ using Microsoft.Extensions.AI;
 using OpenAI;
 
 var builder = WebApplication.CreateBuilder(args);
-const int editorMessageLimit = 4 * 1024 * 1024;
+const int editorMessageLimit = 8 * 1024 * 1024;
 
 // Database (#354): DbPathResolver owns which file is opened — KANBANFLOW_DB_PATH first, then a
 // probe for an existing kanbanflow.db, then a launch-directory-independent default. Resolving
@@ -64,6 +65,7 @@ builder.Services.AddScoped<ITaskDependencyService, TaskDependencyService>();
 builder.Services.AddScoped<IExternalWorkItemService, ExternalWorkItemService>();
 // Ideas inbox service (#180) — same single-audit-boundary rule as ITaskService.
 builder.Services.AddScoped<IIdeaService, IdeaService>();
+builder.Services.AddScoped<IIdeaWorkspaceService, IdeaWorkspaceService>();
 // Bi-temporal memory store (#221) — same single-audit-boundary rule.
 builder.Services.AddScoped<IMemoryService, MemoryService>();
 // Brute-force cosine vector search over MemoryNode.EmbeddingBlob (#222, retargeted by the #249
@@ -142,14 +144,15 @@ builder.Services.AddOpenApi();
 // keeps it simple for local agent clients (no session handshake required).
 builder.Services.AddMcpServer()
     .WithHttpTransport(options => options.Stateless = true)
-    .WithToolsFromAssembly();
+    .WithToolsFromAssembly()
+    .WithRequestFilters(filters => filters.AddCallToolFilter(
+        KanbanFlow.Mcp.IdeaWorkspaceMcpArgumentValidation.RejectUnknownArguments));
 
 // Blazor
 builder.Services.AddRazorComponents()
     .AddInteractiveServerComponents()
-    // Full issue bodies/comments must survive an actual editor input event. The default 32KB
-    // inbound frame limit previously motivated lossy sync excerpts. This is a transport bound,
-    // never a storage clipping rule; 4MiB covers complete GitHub text plus JSON/Unicode overhead.
+    // Full-content workspace editors can submit large Markdown documents. Raise
+    // the circuit message boundary explicitly; domain saves never trim the text.
     .AddHubOptions(options => options.MaximumReceiveMessageSize = editorMessageLimit);
 
 // CORS for AI agents
@@ -193,6 +196,7 @@ using (var scope = app.Services.CreateScope())
     SchemaPatcher.EnsureMemoryFtsTable(db);
     SchemaPatcher.EnsureExternalWorkItemTables(db);
     SchemaPatcher.EnsureNestingSchema(db);
+    IdeaWorkspaceSchema.EnsureTables(db);
     SeedData.Initialize(db);
 }
 
@@ -225,6 +229,7 @@ app.MapGet("/openapi.json", (HttpContext ctx) =>
 });
 
 app.MapApiEndpoints();
+app.MapIdeaWorkspaceEndpoints();
 app.MapWorkflowEndpoints();
 app.MapAdminEndpoints();
 

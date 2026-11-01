@@ -49,7 +49,7 @@ public sealed class UnifiedTaskWorkflowTests
         Assert.Contains(workflowTask.Comments, c => c.Type == "Created");
         Assert.Contains(workflowTask.Comments, c => c.Type == "StatusChange");
         Assert.Equal(detail.Comments!.Select(c => (c.Id, c.Text, c.Author, c.Type)), workflowTask.Comments.Select(c => (c.Id, c.Text, c.Author, c.Type)));
-        Assert.Equal($"/ideas?idea={request.IdeaId}", context.IdeaUrl);
+        Assert.Equal($"/ideas/board?idea={request.IdeaId}", context.IdeaUrl);
         Assert.Equal($"/project/{request.ProjectId}?request={request.Id}", context.BoardUrl);
         Assert.Equal($"/project/{request.ProjectId}?task={item.TaskItemId}", workflowTask.Url);
         // The immutable plan retains what was published; current task fields expose later edits.

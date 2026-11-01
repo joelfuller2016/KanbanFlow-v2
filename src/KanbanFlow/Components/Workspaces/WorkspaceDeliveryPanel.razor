@@ -1,0 +1,71 @@
+@{ var renderedProjectId = Context.ProjectId; }
+<section class="workspace-panel" aria-labelledby="workspace-delivery-heading" data-testid="workspace-delivery">
+    <h2 id="workspace-delivery-heading" class="h5">Project and Kanban</h2>
+    @if (Error is not null) { <p class="alert alert-danger" role="alert" data-testid="delivery-error">@Error</p> }
+    @if (Context.ProjectId is { } projectId)
+    {
+        <p>Linked to project @projectId. The shared plan is at revision @Context.ProjectPlanRevision.</p>
+        <div class="d-flex flex-wrap gap-3 mb-3">
+            @if (Context.KanbanUrl is not null) { <a href="@Context.KanbanUrl" data-testid="delivery-open-project">Open Kanban ↗</a> }
+            <a href="@($"/ideas/workspace/project/{projectId}?view=plan")" data-testid="delivery-canonical-plan-link">Open canonical project plan</a>
+        </div>
+        @if (Context.ProjectMissing) { <p class="alert alert-warning">The project was removed. Your saved documents remain; publishing cannot recreate the missing target.</p> }
+    }
+    @if (Context.Kind == "idea" && !Context.SourceMissing)
+    {
+        <details open="@(Context.ProjectId is null)">
+            <summary class="fw-semibold mb-2">@(Context.ProjectId is null ? "Connect this idea to delivery" : "Change the project association")</summary>
+            <label class="form-label" for="delivery-project-select">Existing project</label>
+            <select id="delivery-project-select" class="form-select mb-2" value="@editing.TargetProjectId" @onchange="TargetChanged" data-testid="delivery-project-select"><option value="">Choose a project</option>@foreach (var project in Projects) { <option value="@project.SourceId">@project.Title · @project.SourceId</option> }</select>
+            <p class="small text-muted">Linking keeps both sets of documents and snapshots the complete target project. Relinking retains prior plan and publication history.</p>
+            <button class="btn btn-outline-primary mb-3" disabled="@(Busy || editing.TargetProjectId is null)" @onclick="Link" data-testid="delivery-link-project">@(Context.ProjectId is null ? "Link this project" : "Replace association with selected project")</button>
+            @if (Context.ProjectId is null && Context.Source?.Status != "Promoted")
+            {
+                <label class="form-label d-block" for="delivery-project-name">Or create a project from this idea</label>
+                <input id="delivery-project-name" class="form-control mb-2" placeholder="@Context.Title" @bind:get="editing.ProjectName" @bind:set="value => ProjectNameChanged(new ChangeEventArgs { Value = value })" @bind:event="oninput" data-testid="delivery-project-name" />
+                <p class="small text-muted">Creates a project from the full idea documents. Its original idea workspace remains available. Promotion is permanent.</p>
+                <button class="btn btn-primary mb-3" disabled="@Busy" @onclick="CreateProject" data-testid="delivery-create-project">Create project</button>
+            }
+        </details>
+    }
+    @if (Context.ProjectId is not null && !Context.ProjectMissing && Context.AcceptedPlan is { } accepted)
+    {
+        <h3 class="h6 mt-4">Publish accepted items as tasks</h3>
+        <p class="text-muted small">Select canonical items and include unpublished prerequisites. Existing mapped tasks keep their human edits, completed criteria and board order.</p>
+        <fieldset class="mb-3"><legend class="h6">Accepted plan items</legend>
+            @foreach (var item in accepted.Items)
+            {
+                <label class="d-block mb-2" @key="item.Id"><input type="checkbox" class="form-check-input me-2" checked="@IsSelected(item.Id)" @onchange="e => SelectionChangedFromProject(renderedProjectId, item.Id, (bool)(e.Value ?? false))" data-testid="delivery-select-@item.Id" />@item.Title @if (item.PublishedTaskId is not null) { <span class="small text-muted">· Task #@item.PublishedTaskId</span> }</label>
+            }
+        </fieldset>
+        <label class="form-label" for="delivery-feature-select">Task feature</label>
+        <select id="delivery-feature-select" class="form-select mb-2" value="@editing.FeatureId" @onchange="e => FeatureChangedFromProject(renderedProjectId, e)" data-testid="delivery-feature-select"><option value="">Use the existing publication feature, or create one named after the plan</option>@foreach (var feature in features) { <option @key="feature.Id" value="@feature.Id">@feature.Name · @feature.Id</option> }</select>
+        @if (featuresError is not null) { <p class="text-warning-emphasis" role="alert" data-testid="delivery-feature-error">@featuresError</p> }
+        @if (featuresBusy) { <p class="small text-muted" role="status">Loading project features…</p> }
+        <button class="btn btn-sm btn-outline-secondary mb-3" disabled="@(Busy || featuresBusy)" @onclick="ReloadFeatures" data-testid="delivery-reload-features">Reload feature choices</button>
+        <label class="form-label" for="delivery-feature-name">New feature name (optional)</label>
+        <input id="delivery-feature-name" class="form-control mb-3" @bind:get="editing.FeatureName" @bind:set="value => FeatureNameChanged(new ChangeEventArgs { Value = value })" @bind:event="oninput" data-testid="delivery-feature-name" />
+        <button class="btn btn-outline-primary" disabled="@(Busy || PreviewBusy || (editing.SelectedItemIds is { Count: 0 }))" @onclick="PreviewSelection" data-testid="delivery-preview">@(PreviewBusy ? "Reading preview…" : "Preview task publication")</button>
+        @if (Preview is { } preview)
+        {
+            <section class="border rounded p-3 mt-3" data-testid="delivery-preview-result">
+                <h3 class="h6">Review the task changes</h3>
+                <p><strong data-testid="delivery-new-count">@preview.NewTaskCount new tasks</strong> · <span data-testid="delivery-existing-count">@preview.ExistingTaskCount already linked</span> · Feature: @preview.FeatureName</p>
+                <p class="small text-muted">Workspace revision @preview.Revision · canonical project revision @preview.ProjectPlanRevision. This preview has not saved any changes.</p>
+                @foreach (var item in preview.Items)
+                {
+                    <article class="border-top py-3" @key="item.CanonicalItemId" data-testid="delivery-item-@item.CanonicalItemId">
+                        <h4 class="h6">@item.Title · @(item.WillCreate ? "New task" : "Already published")</h4>
+                        <MarkdownContent Markdown="@item.Description" EmptyText="No description." />
+                        <ul>@foreach (var criterion in item.AcceptanceCriteria) { <li class="workspace-preserve-text">@criterion</li> }</ul>
+                        @if (item.DependsOn.Count != 0) { <p class="small">Prerequisites: @string.Join(", ", item.DependsOn.Select(id => accepted.Items.FirstOrDefault(i => i.Id == id)?.Title ?? id))</p> }
+                        @if (item.ExistingTask is { } task) { <p class="small">Current task #@task.Id: @task.Name · @task.Status · @task.Priority. This task will be preserved.</p> }
+                    </article>
+                }
+                <button class="btn btn-success" disabled="@(Busy || preview.Revision != Context.Revision || preview.ProjectPlanRevision != Context.ProjectPlanRevision)" @onclick="Publish" data-testid="delivery-publish">Publish reviewed tasks to Kanban</button>
+                @if (preview.Revision != Context.Revision || preview.ProjectPlanRevision != Context.ProjectPlanRevision) { <p class="text-warning-emphasis mt-2">The saved context advanced. Preview again before publishing.</p> }
+            </section>
+        }
+    }
+    else if (Context.ProjectId is not null && !Context.ProjectMissing) { <p class="mt-3">Accept a shared project plan before previewing tasks. The Plan panel lets you copy and expand the current accepted version.</p> }
+</section>

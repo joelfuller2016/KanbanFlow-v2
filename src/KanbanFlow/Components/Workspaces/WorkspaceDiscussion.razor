@@ -1,0 +1,41 @@
+<section class="workspace-panel" aria-labelledby="workspace-discussion-heading" data-testid="workspace-discussion">
+    <h2 id="workspace-discussion-heading" class="h5">Discussion</h2>
+    @if (Context.Document.Comments.Count == 0) { <p class="text-muted">No comments yet. Capture a question, response or next thought here.</p> }
+    @foreach (var comment in Context.Document.Comments.OrderBy(c => c.CreatedAt))
+    {
+        <article class="border rounded p-3 mb-2 @(comment.ReplyToId is null ? "" : "ms-3")" @key="comment.Id" data-testid="workspace-comment-@comment.Id">
+            <p class="small text-muted mb-1">@comment.Actor · @comment.CreatedAt.ToLocalTime().ToString("g")
+                @if (comment.ComponentId is not null) { <span> · @ComponentTitle(comment.ComponentId)</span> }
+            </p>
+            @if (comment.ReplyToId is not null) { <p class="small text-muted">Reply to @ReplyLabel(comment.ReplyToId)</p> }
+            <MarkdownContent Markdown="@comment.Text" EmptyText="Empty comment." />
+            <button class="btn btn-sm btn-outline-secondary mt-2" @onclick="() => Change(editing with { ReplyToId = comment.Id, ComponentId = comment.ComponentId })" data-testid="comment-reply-@comment.Id">Reply</button>
+        </article>
+    }
+    <label class="form-label" for="workspace-comment-target">Discuss</label>
+    <select id="workspace-comment-target" class="form-select mb-2" value="@(editing.ComponentId ?? "")" @onchange="TargetChanged" data-testid="comment-target"><option value="">Whole workspace</option>@foreach (var component in Context.Document.Components) { <option value="@component.Id">@component.Title</option> }</select>
+    @if (editing.ReplyToId is not null)
+    {
+        <p class="small">Replying to @ReplyLabel(editing.ReplyToId). <button class="btn btn-link btn-sm" @onclick="() => Change(editing with { ReplyToId = null })">Cancel reply</button></p>
+    }
+    <label class="form-label" for="workspace-comment-text">Comment / Markdown</label>
+    <textarea id="workspace-comment-text" rows="4" class="form-control mb-2" @bind:get="editing.Text" @bind:set="value => TextChanged(new ChangeEventArgs { Value = value })" @bind:event="oninput" data-testid="comment-text"></textarea>
+    <button class="btn btn-primary" disabled="@(Busy || string.IsNullOrWhiteSpace(editing.Text))" @onclick="Add" data-testid="comment-submit">Add comment</button>
+</section>
+
+@code {
+    [Parameter, EditorRequired] public IdeaWorkspaceContext Context { get; set; } = default!;
+    [Parameter, EditorRequired] public WorkspaceDiscussionDraft Draft { get; set; } = default!;
+    [Parameter] public bool Busy { get; set; }
+    [Parameter] public EventCallback<WorkspaceDiscussionDraft> OnDraftChanged { get; set; }
+    [Parameter] public EventCallback<WorkspaceUiCommand> OnCommand { get; set; }
+    private readonly WorkspaceDraftInput<WorkspaceDiscussionDraft> input = new(new());
+    private WorkspaceDiscussionDraft editing => input.Value;
+    protected override void OnParametersSet() => input.Receive(Draft, Context.WorkspaceId, Context.Revision);
+    private Task Change(WorkspaceDiscussionDraft value) => input.ChangeAsync(value, OnDraftChanged);
+    private string ComponentTitle(string id) => Context.Document.Components.FirstOrDefault(c => c.Id == id)?.Title ?? $"Removed component {id}";
+    private string ReplyLabel(string id) => Context.Document.Comments.FirstOrDefault(c => c.Id == id)?.Actor ?? id;
+    private Task TextChanged(ChangeEventArgs e) => Change(editing with { Text = e.Value?.ToString() ?? "" });
+    private Task TargetChanged(ChangeEventArgs e) => Change(editing with { ComponentId = string.IsNullOrEmpty(e.Value?.ToString()) ? null : e.Value!.ToString(), ReplyToId = null });
+    private Task Add() => OnCommand.InvokeAsync(WorkspaceUiCommand.Create("add_comment", new { text = editing.Text, componentId = editing.ComponentId, replyToId = editing.ReplyToId }, Context.Revision, "discussion"));
+}

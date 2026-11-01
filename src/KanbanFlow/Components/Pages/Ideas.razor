@@ -1,4 +1,4 @@
-@page "/ideas"
+@page "/ideas/board"
 @rendermode InteractiveServer
 @inject IIdeaService IdeaSvc
 @inject IJSRuntime JS
@@ -13,6 +13,7 @@
 
 <div class="d-flex justify-content-between align-items-center mb-4">
     <h1 class="mb-0">Ideas</h1>
+    <a class="btn btn-outline-secondary" href="/ideas" data-testid="ideas-gallery-link">Card gallery</a>
     <button class="btn btn-primary" @onclick="OpenCreateModal" data-testid="new-idea-button">
         <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" class="bi bi-plus-lg me-1" viewBox="0 0 16 16" aria-hidden="true">
             <path fill-rule="evenodd" d="M8 2a.5.5 0 0 1 .5.5v5h5a.5.5 0 0 1 0 1h-5v5a.5.5 0 0 1-1 0v-5h-5a.5.5 0 0 1 0-1h5v-5A.5.5 0 0 1 8 2"/>

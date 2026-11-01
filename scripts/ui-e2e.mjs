@@ -2099,7 +2099,7 @@ async function main() {
     // starts empty: assert the empty state first, then drive the full lifecycle through
     // the real Blazor UI (IdeaModal + IdeaCard + the confirm modals).
     await test("Ideas inbox shows the empty state on a fresh DB", async () => {
-      await page.goto(`${baseUrl}/ideas`);
+      await page.goto(`${baseUrl}/ideas/board`);
       await page.waitForLoadState("networkidle").catch(() => {});
       await page.locator('[data-testid="ideas-empty-state"]').waitFor({ state: "visible" });
     });
@@ -2142,7 +2142,7 @@ async function main() {
     await test("Tag filter narrows the list to the matching idea", async () => {
       // A second idea with a different tag must be filtered OUT by our unique tag.
       const other = await api("POST", "/api/ideas", { title: `E2E Other ${stamp}`, tags: "unrelated" });
-      await page.goto(`${baseUrl}/ideas`);
+      await page.goto(`${baseUrl}/ideas/board`);
       const ours = page.locator(`[data-testid="idea-card-${createdIdea.id}"]`);
       const unrelated = page.locator(`[data-testid="idea-card-${other.id}"]`);
       const tagInput = page.locator('[data-testid="idea-tag-filter"]');
@@ -2249,7 +2249,7 @@ async function main() {
     });
 
     await test("Deleting an idea removes its card", async () => {
-      await page.goto(`${baseUrl}/ideas`);
+      await page.goto(`${baseUrl}/ideas/board`);
       await clickUntil(
         () => page.locator(`[data-testid="idea-card-menu-${createdIdea.id}"]`).click(),
         page.locator(`[data-testid="idea-card-delete-${createdIdea.id}"]`),
@@ -2272,7 +2272,7 @@ async function main() {
     await test("Ideas board: an empty column's add affordance is contained, hit-testable, and opens the modal (#322/#290)", async () => {
       const parked = await api("POST", "/api/ideas", { title: `E2E Empty ${stamp}` });
       await api("PATCH", `/api/ideas/${parked.id}`, { status: "Triaging", expectedWorkflowVersion: parked.workflowVersion });   // vacate New
-      await page.goto(`${baseUrl}/ideas`);
+      await page.goto(`${baseUrl}/ideas/board`);
       await page.locator('[data-testid="add-idea-New-button"]').waitFor({ state: "visible" });
 
       const g = await page.evaluate(() => {
@@ -2334,7 +2334,7 @@ async function main() {
       const parked = await mkIdea("Parked", "Low"); // a bystander in the destination column
       await api("PATCH", `/api/ideas/${parked.id}`, { status: "Archived", expectedWorkflowVersion: parked.workflowVersion });
 
-      await page.goto(`${baseUrl}/ideas`);
+      await page.goto(`${baseUrl}/ideas/board`);
       await page.locator(`[data-testid="idea-card-${top.id}"]`).waitFor({ state: "visible" });
       // Archived/Rejected are terminal rails and start collapsed, drawing no cards at all. Open
       // them so "badge === cards drawn" is a claim about EVERY column on the board.
@@ -2434,7 +2434,7 @@ async function main() {
       }
       const stale = await api("POST", "/api/ideas", { title: `E2E Refused ${stamp}`, priority: "Critical" });
 
-      await page.goto(`${baseUrl}/ideas`);
+      await page.goto(`${baseUrl}/ideas/board`);
       await page.locator(`[data-testid="idea-card-${stale.id}"]`).waitFor({ state: "visible" });
       await waitForSortableArmed(page, "New");
 
@@ -2542,7 +2542,7 @@ async function main() {
         await mkIdea("Under", "High", "The card that paints over the open menu.");
         await mkIdea("Below", "Medium", "And the one under that.");
 
-        await page.goto(`${baseUrl}/ideas`);
+        await page.goto(`${baseUrl}/ideas/board`);
         const card = page.locator(`[data-testid="idea-card-${target.id}"]`);
         await card.waitFor({ state: "visible" });
         // Not needed by the dropdown (Bootstrap's own JS runs it), but it is this file's settled
@@ -2683,7 +2683,7 @@ async function main() {
       }
       const idea = await api("POST", "/api/ideas", { title: `E2E Trap ${stamp}`, priority: "High" });
 
-      await page.goto(`${baseUrl}/ideas`);
+      await page.goto(`${baseUrl}/ideas/board`);
       await page.locator(`[data-testid="idea-card-${idea.id}"]`).waitFor({ state: "visible" });
       // This file's settled "the board has finished standing itself up" signal: the circuit is live,
       // so a click reaches the server and the modal's OnAfterRenderAsync (which arms the trap) runs.
