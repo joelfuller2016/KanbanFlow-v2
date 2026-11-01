@@ -51,6 +51,10 @@ A review of the repository and a test run on 2026-09-26 filed findings as issues
   - S7, for #549.
 
 ## Entries (newest first)
+- 2026-11-01 03:45Z Codex: Published PR #511 repair at `edce7af8ffc50adee7284cfa220694411e6b5db2`, verified application source `a48cafb72e6d83b5b5b995c431b9db0d516cfb22`. Required gate exit 0: 1,651 .NET / 389 script / 52 focused cases, zero build warnings/errors; 28 API and four browser cases plus native/stdio passed. Stale drag observed HTTP 409, verbatim conflict, preserved concurrent edit and successful fresh move. Independent review passed; both remaining threads resolved (95 total/zero unresolved at that readback), exact PR description and draft state verified. All owned app/browser resources stopped. PR #521 concurrent test-only child `87481e806df26c64e7914c711153a42dee657b8d` preserves the verified application tree and its added test rebuilt/passed 1/1; earlier 1,293-case full gate is reported separately. Final primary journal merges left verified PR #580 application source unchanged at published head `32079a0654a0b6da311f7d1e5b68713c11c3c8ab` and PR #564 at `5dfbbebcb2527ae39c15c2118a7b7c11a70e1436`.
+
+  New comments arrived during the final readback: PR #564 global/system Git URL rewrites can disguise an unrelated fork; PR #580 unresolved default publication targets can drift after out-of-band feature edits, failed gallery searches pair old cursors with new filters, and outline buttons have insufficient dark-mode contrast. Work continues on those four findings before closure. Real Git confirmed the rewrite counterexample without changing host config. The old compiled workspace DLL (SHA256 `125A6F7819BA89E0933371F83FF23CA19742329B0FF27CCCF58474AD07F70130`) produced a real browser AA failure at 3.427467:1 dark primary text contrast. New patches/tests are isolated; shared workspace builds/mutations are scheduled sequentially. The verification-only journal-block helper was exercised on real PR580/564/511 reconciliations without changing authored entries. No PR merged; owner usability remains pending.
+
 - 2026-11-01 05:35Z PR monitor (automated session):
   - .NET 10 SDK unavailable (curl 403 from proxy). BUILD GATE DOWN — no merges performed.
   - Open PRs surveyed: #580 (non-draft), #578 (non-draft, dependabot bump), #564/#521/#511 (all draft). No PR titles contain WIP or DO NOT MERGE.
@@ -62,6 +66,18 @@ A review of the repository and a test run on 2026-09-26 filed findings as issues
     - #511: 2 unresolved threads (Copilot: subtask-hash versioning risk; Copilot: Windows path-casing for repository dedup). Both confirmed valid by owner in prior replies; both require design decisions (versioned-hash format, OS-aware path canonicalization). Left open per non-trivial rule.
     - #521: 1 unresolved Copilot thread (KanbanMcpTools.cs:124 — zero-padded project ScopeKey stored verbatim, silently missing from get_project_context). Discovered upstream commit 62921b6 already applied write-boundary fix (scopeKey = projectId.ToString(CultureInfo.InvariantCulture)). Added regression test CreateNode_ProjectScope_CanonicalizesZeroPaddedScopeKey in 87481e806df26c64e7914c711153a42dee657b8d. Replied on Copilot thread and resolved PRRT_kwDOSA8y6s6yWpBZ. PR #521 now has 0 unresolved threads.
   - Master build+test: skipped — .NET gate down.
+
+- 2026-11-01 03:47Z (PR monitor — Codex both clean on #580 HEAD d322ce4):
+  - Codex Code Review: has_any_findings: false ✅ (completed 03:43Z).
+  - Codex Security Review: has_any_findings: null/completed ✅ (completed 03:46Z).
+  - #580 HEAD=d322ce4, Codex clean. Copilot re-review pending. PR ready for owner's merge.
+
+- 2026-11-01 03:37Z (PR monitor — Copilot review on #580 HEAD 32079a0; 2 bugs fixed, 1 deferred):
+  - Copilot posted review (review_id=5726261507): 1 high + 2 medium findings.
+  - Finding 1 (high, IdeaWorkspace.Delivery.cs:77): publish_plan sent unresolved featureId/featureName from the original preview request, not the resolved values from the preview result. If a previewed feature was deleted and another exists, the server silently picked a different default. Fixed in d322ce4: now sends publicationPreview.FeatureId (resolved) and, for new-feature case only, publicationPreview.FeatureName. Deleted preview target now fails explicitly (publication_target_missing). Replied+resolved.
+  - Finding 2 (medium, IdeaGallery.razor.cs:36): Reload() committed activeQuery/Kind/Status before awaiting ListAsync; failed reload left active filters updated but page.NextCursor pointing at old query, causing cursor_mismatch on Load more. Fixed in d322ce4: active fields written only after successful load. Replied+resolved.
+  - Finding 3 (medium, IdeaWorkspace.razor.css:10): workspace outline buttons below WCAG AA in dark mode (~3.3:1). Deferred to #84 accessibility pass. Replied+resolved.
+  - Commit d322ce4 pushed to feat/579-idea-workspaces. #580 HEAD=d322ce4, Codex re-review pending.
 
 - 2026-11-01 03:33Z (PR monitor — Codex both clean on #580 HEAD 32079a0):
   - Owner pushed 32079a0 (JOURNAL.md merge commit, +26 lines, "Merge current primary journal into verified workspace repairs").
