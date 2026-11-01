@@ -66,6 +66,95 @@ public sealed class IdeaWorkspaceRestoreAndRelinkTests
     }
 
     [Fact]
+    public async Task RetryAfterFailedInitialization_WithOnlyNavigation_RestoresStoredTextAndPendingOperation()
+    {
+        var original = StoredDraft();
+        var raw = JsonSerializer.Serialize(original, Json);
+        var runtime = new DraftStorageRuntime(raw);
+        await using var page = Page(Context(1));
+        Set(page, "browser", new WorkspaceBrowserInterop(runtime));
+        Set(page, "storageHealthy", false);
+
+        // Opening the empty new-card inspector is navigation, not a replacement authored draft.
+        await (Task)Invoke(page, "Select", Scope, new WorkspaceSelection(null))!;
+        await (Task)Invoke(page, "RetryDraftStorage", Scope)!;
+        var retry = new WorkspaceBrowserInterop(runtime);
+        Set(page, "browser", retry);
+        Invoke(page, "RestoreDraft", Scope, await retry.InitializeAsync(Scope.WorkspaceId));
+
+        var restored = Field<WorkspaceBrowserDraft>(page, "draft");
+        Assert.Equal(original.ContentDrafts["original-card"].Content, restored.ContentDrafts["original-card"].Content);
+        Assert.Equal(JsonSerializer.Serialize(original.Pending, Json), JsonSerializer.Serialize(restored.Pending, Json));
+        Assert.Equal(raw, runtime.Module.Raw);
+        Assert.Equal(0, runtime.Module.SaveCalls);
+        Assert.Equal(0, runtime.Module.PreserveCalls);
+        Assert.Contains(Scope.WorkspaceId, Field<HashSet<string>>(page, "restoredBrowserWorkspaces"));
+    }
+
+    [Fact]
+    public async Task RetryAfterFailedInitialization_WithoutAStoredDraft_RetainsCompleteEarlyTyping()
+    {
+        var runtime = new DraftStorageRuntime(null);
+        await using var page = Page(Context(1));
+        Set(page, "browser", new WorkspaceBrowserInterop(runtime));
+        var entered = new WorkspaceContentDraft { Title = "Early authored title", Content = CompleteText("early authored text"), Dirty = true };
+        await (Task)Invoke(page, "ContentChanged", Scope, entered)!;
+        await (Task)Invoke(page, "Select", Scope, new WorkspaceSelection(null))!;
+
+        await (Task)Invoke(page, "RetryDraftStorage", Scope)!;
+        var retry = new WorkspaceBrowserInterop(runtime);
+        Set(page, "browser", retry);
+        Invoke(page, "RestoreDraft", Scope, await retry.InitializeAsync(Scope.WorkspaceId));
+
+        var retained = Field<WorkspaceBrowserDraft>(page, "draft").ContentDrafts["$new"];
+        Assert.Equal(entered.Title, retained.Title);
+        Assert.Equal(entered.Content, retained.Content);
+        Assert.True(retained.Dirty);
+        Assert.Equal(0, runtime.Module.PreserveCalls);
+    }
+
+    [Fact]
+    public async Task QueuedStorageRetry_DuringRecovery_DoesNotReplaceTheActiveInterop()
+    {
+        var runtime = new DraftStorageRuntime(JsonSerializer.Serialize(StoredDraft(), Json));
+        await using var page = Page(Context(1));
+        var browser = new WorkspaceBrowserInterop(runtime);
+        Set(page, "browser", browser);
+        Set(page, "busy", true);
+        Set(page, "restoredGeneration", Scope.Generation);
+
+        await (Task)Invoke(page, "RetryDraftStorage", Scope)!;
+
+        Assert.Same(browser, Field<WorkspaceBrowserInterop>(page, "browser"));
+        Assert.Equal(Scope.Generation, Field<int>(page, "restoredGeneration"));
+        Assert.Equal(0, runtime.Module.PreserveCalls);
+    }
+
+    [Fact]
+    public async Task TypingAfterExplicitPreservation_BeforeReinitialization_RetainsTheNewestCompleteDraft()
+    {
+        var raw = JsonSerializer.Serialize(StoredDraft(), Json);
+        var runtime = new DraftStorageRuntime(raw);
+        await using var page = Page(Context(1));
+        Set(page, "browser", new WorkspaceBrowserInterop(runtime));
+        var before = new WorkspaceContentDraft { Title = "Before preservation", Content = CompleteText("before preservation"), Dirty = true };
+        await (Task)Invoke(page, "ContentChanged", Scope, before)!;
+
+        await (Task)Invoke(page, "RecoverStoredDraft", Scope)!;
+        var newest = before with { Title = "While initialization is pending", Content = CompleteText("newest complete typing") };
+        await (Task)Invoke(page, "ContentChanged", Scope, newest)!;
+        var retry = new WorkspaceBrowserInterop(runtime);
+        Set(page, "browser", retry);
+        Invoke(page, "RestoreDraft", Scope, await retry.InitializeAsync(Scope.WorkspaceId));
+
+        var retained = Field<WorkspaceBrowserDraft>(page, "draft").ContentDrafts["$new"];
+        Assert.Equal(newest.Title, retained.Title);
+        Assert.Equal(newest.Content, retained.Content);
+        Assert.Equal(raw, runtime.Module.BackupRaw);
+        Assert.Equal(1, runtime.Module.PreserveCalls);
+    }
+
+    [Fact]
     public async Task FailedExplicitPreservation_DoesNotTrustTheNewCacheOrChangeEitherDraft()
     {
         var raw = JsonSerializer.Serialize(StoredDraft(), Json);
@@ -441,7 +530,7 @@ public sealed class IdeaWorkspaceRestoreAndRelinkTests
     private static string CompleteText(string label) => $"\r\n  ## Complete {label} Ω 漢字 🧭  \r\n" + new string('文', 40_000) + "\r\nFINAL COMPLETE REQUIREMENT  \r\n";
 
     // Model only the external JS/storage boundary. Page restoration, cache priority and retry are real.
-    private sealed class DraftStorageRuntime(string raw) : IJSRuntime
+    private sealed class DraftStorageRuntime(string? raw) : IJSRuntime
     {
         public DraftStorageModule Module { get; } = new(raw);
         public ValueTask<TValue> InvokeAsync<TValue>(string identifier, object?[]? args) => InvokeAsync<TValue>(identifier, default, args);
@@ -451,7 +540,7 @@ public sealed class IdeaWorkspaceRestoreAndRelinkTests
             return ValueTask.FromResult((TValue)(object)Module);
         }
     }
-    private sealed class DraftStorageModule(string raw) : IJSObjectReference
+    private sealed class DraftStorageModule(string? raw) : IJSObjectReference
     {
         public string? Raw { get; private set; } = raw;
         public string? BackupRaw { get; private set; }

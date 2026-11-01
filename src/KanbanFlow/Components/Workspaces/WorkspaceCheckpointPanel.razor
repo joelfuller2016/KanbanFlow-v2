@@ -2,13 +2,13 @@
     <h2 id="workspace-checkpoint-heading" class="h5">Leave a place to resume</h2>
     <p class="text-muted small">Saved per browser client and tab session. Other people and AI callers keep their own checkpoints.</p>
     <label class="form-label" for="checkpoint-objective">Current objective</label>
-    <textarea id="checkpoint-objective" rows="2" class="form-control mb-2" value="@editing.Objective" @oninput="e => Change(editing with { Objective = Text(e) })" data-testid="checkpoint-objective"></textarea>
+    <textarea id="checkpoint-objective" rows="2" class="form-control mb-2" @bind:get="editing.Objective" @bind:set="value => Change(editing with { Objective = value })" @bind:event="oninput" data-testid="checkpoint-objective"></textarea>
     <label class="form-label" for="checkpoint-completed">Completed changes (one per line)</label>
-    <textarea id="checkpoint-completed" rows="2" class="form-control mb-2" value="@editing.CompletedChanges" @oninput="CompletedChanged" data-testid="checkpoint-completed"></textarea>
+    <textarea id="checkpoint-completed" rows="2" class="form-control mb-2" @bind:get="editing.CompletedChanges" @bind:set="value => CompletedChanged(new ChangeEventArgs { Value = value })" @bind:event="oninput" data-testid="checkpoint-completed"></textarea>
     <label class="form-label" for="checkpoint-questions">Open questions (one per line)</label>
-    <textarea id="checkpoint-questions" rows="2" class="form-control mb-2" value="@editing.OpenQuestions" @oninput="QuestionsChanged" data-testid="checkpoint-questions"></textarea>
+    <textarea id="checkpoint-questions" rows="2" class="form-control mb-2" @bind:get="editing.OpenQuestions" @bind:set="value => QuestionsChanged(new ChangeEventArgs { Value = value })" @bind:event="oninput" data-testid="checkpoint-questions"></textarea>
     <label class="form-label" for="checkpoint-next">Next actions (one per line)</label>
-    <textarea id="checkpoint-next" rows="3" class="form-control mb-2" value="@editing.NextActions" @oninput="NextChanged" data-testid="checkpoint-next"></textarea>
+    <textarea id="checkpoint-next" rows="3" class="form-control mb-2" @bind:get="editing.NextActions" @bind:set="value => NextChanged(new ChangeEventArgs { Value = value })" @bind:event="oninput" data-testid="checkpoint-next"></textarea>
     <fieldset class="mb-3"><legend class="h6">Focus components</legend>
         @foreach (var c in Context.Document.Components)
         {

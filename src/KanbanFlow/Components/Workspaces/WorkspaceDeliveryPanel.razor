@@ -22,7 +22,7 @@
             @if (Context.ProjectId is null && Context.Source?.Status != "Promoted")
             {
                 <label class="form-label d-block" for="delivery-project-name">Or create a project from this idea</label>
-                <input id="delivery-project-name" class="form-control mb-2" placeholder="@Context.Title" value="@editing.ProjectName" @oninput="ProjectNameChanged" data-testid="delivery-project-name" />
+                <input id="delivery-project-name" class="form-control mb-2" placeholder="@Context.Title" @bind:get="editing.ProjectName" @bind:set="value => ProjectNameChanged(new ChangeEventArgs { Value = value })" @bind:event="oninput" data-testid="delivery-project-name" />
                 <p class="small text-muted">Creates a project from the full idea documents. Its original idea workspace remains available. Promotion is permanent.</p>
                 <button class="btn btn-primary mb-3" disabled="@Busy" @onclick="CreateProject" data-testid="delivery-create-project">Create project</button>
             }
@@ -40,11 +40,11 @@
         </fieldset>
         <label class="form-label" for="delivery-feature-select">Task feature</label>
         <select id="delivery-feature-select" class="form-select mb-2" value="@editing.FeatureId" @onchange="e => FeatureChangedFromProject(renderedProjectId, e)" data-testid="delivery-feature-select"><option value="">Use the existing publication feature, or create one named after the plan</option>@foreach (var feature in features) { <option @key="feature.Id" value="@feature.Id">@feature.Name · @feature.Id</option> }</select>
-        @if (featuresError is not null) { <p class="text-warning" role="alert" data-testid="delivery-feature-error">@featuresError</p> }
+        @if (featuresError is not null) { <p class="text-warning-emphasis" role="alert" data-testid="delivery-feature-error">@featuresError</p> }
         @if (featuresBusy) { <p class="small text-muted" role="status">Loading project features…</p> }
         <button class="btn btn-sm btn-outline-secondary mb-3" disabled="@(Busy || featuresBusy)" @onclick="ReloadFeatures" data-testid="delivery-reload-features">Reload feature choices</button>
         <label class="form-label" for="delivery-feature-name">New feature name (optional)</label>
-        <input id="delivery-feature-name" class="form-control mb-3" value="@editing.FeatureName" @oninput="FeatureNameChanged" data-testid="delivery-feature-name" />
+        <input id="delivery-feature-name" class="form-control mb-3" @bind:get="editing.FeatureName" @bind:set="value => FeatureNameChanged(new ChangeEventArgs { Value = value })" @bind:event="oninput" data-testid="delivery-feature-name" />
         <button class="btn btn-outline-primary" disabled="@(Busy || PreviewBusy || (editing.SelectedItemIds is { Count: 0 }))" @onclick="PreviewSelection" data-testid="delivery-preview">@(PreviewBusy ? "Reading preview…" : "Preview task publication")</button>
         @if (Preview is { } preview)
         {
@@ -63,7 +63,7 @@
                     </article>
                 }
                 <button class="btn btn-success" disabled="@(Busy || preview.Revision != Context.Revision || preview.ProjectPlanRevision != Context.ProjectPlanRevision)" @onclick="Publish" data-testid="delivery-publish">Publish reviewed tasks to Kanban</button>
-                @if (preview.Revision != Context.Revision || preview.ProjectPlanRevision != Context.ProjectPlanRevision) { <p class="text-warning mt-2">The saved context advanced. Preview again before publishing.</p> }
+                @if (preview.Revision != Context.Revision || preview.ProjectPlanRevision != Context.ProjectPlanRevision) { <p class="text-warning-emphasis mt-2">The saved context advanced. Preview again before publishing.</p> }
             </section>
         }
     }

@@ -7,7 +7,7 @@
         </div>
         <h2 class="h5"><a href="@Workspace.WorkspaceUrl" data-testid="gallery-open-@Workspace.WorkspaceId">@Workspace.Title</a></h2>
         @if (Workspace.Tags is not null) { <p class="text-muted small mb-0">@Workspace.Tags</p> }
-        @if (Workspace.SourceMissing) { <p class="text-warning small">Source removed. Saved workspace retained.</p> }
+        @if (Workspace.SourceMissing) { <p class="text-warning-emphasis small">Source removed. Saved workspace retained.</p> }
         <p class="text-muted small mt-auto mb-0">Revision @Workspace.Revision · Updated @Workspace.UpdatedAt.ToLocalTime().ToString("g")</p>
         <div class="d-flex flex-wrap gap-3">
             <a href="@Workspace.WorkspaceUrl" aria-label="@($"Open workspace: {Workspace.Title}")">Open workspace <span aria-hidden="true">→</span></a>

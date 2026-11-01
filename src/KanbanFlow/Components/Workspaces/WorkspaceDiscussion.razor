@@ -19,7 +19,7 @@
         <p class="small">Replying to @ReplyLabel(editing.ReplyToId). <button class="btn btn-link btn-sm" @onclick="() => Change(editing with { ReplyToId = null })">Cancel reply</button></p>
     }
     <label class="form-label" for="workspace-comment-text">Comment / Markdown</label>
-    <textarea id="workspace-comment-text" rows="4" class="form-control mb-2" value="@editing.Text" @oninput="TextChanged" data-testid="comment-text"></textarea>
+    <textarea id="workspace-comment-text" rows="4" class="form-control mb-2" @bind:get="editing.Text" @bind:set="value => TextChanged(new ChangeEventArgs { Value = value })" @bind:event="oninput" data-testid="comment-text"></textarea>
     <button class="btn btn-primary" disabled="@(Busy || string.IsNullOrWhiteSpace(editing.Text))" @onclick="Add" data-testid="comment-submit">Add comment</button>
 </section>
 

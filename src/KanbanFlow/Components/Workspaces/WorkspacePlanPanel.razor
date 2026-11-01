@@ -17,7 +17,7 @@
                 <button class="btn btn-outline-success mt-2" disabled="@(Busy || (Context.ProjectId is not null && plan.ExpectedProjectPlanRevision != Context.ProjectPlanRevision))" @onclick="() => Accept(plan.Id, plan.ExpectedProjectPlanRevision)" data-testid="plan-accept-@plan.Id">Accept this plan</button>
                 @if (Context.ProjectId is not null && plan.ExpectedProjectPlanRevision != Context.ProjectPlanRevision)
                 {
-                    <p class="text-warning small mt-2">This proposal used project-plan revision @(plan.ExpectedProjectPlanRevision?.ToString() ?? "none"). The loaded shared plan is revision @Context.ProjectPlanRevision. Review the current accepted plan above before rebasing acceptance.</p>
+                    <p class="text-warning-emphasis small mt-2">This proposal used project-plan revision @(plan.ExpectedProjectPlanRevision?.ToString() ?? "none"). The loaded shared plan is revision @Context.ProjectPlanRevision. Review the current accepted plan above before rebasing acceptance.</p>
                     <button class="btn btn-outline-secondary" disabled="@Busy" @onclick="() => Accept(plan.Id, Context.ProjectPlanRevision)" data-testid="plan-rebase-accept-@plan.Id">Accept after reviewing shared revision @Context.ProjectPlanRevision</button>
                 }
             }
@@ -37,7 +37,7 @@
         <div class="alert alert-warning">Plan draft began at workspace revision @original and shared plan revision @(editing.BaseProjectPlanRevision?.ToString() ?? "none"). Review the current versions, then <button class="btn btn-link p-0" @onclick="Reapply" data-testid="plan-reapply">reapply to workspace revision @Context.Revision and shared plan revision @(Context.ProjectPlanRevision?.ToString() ?? "none")</button>.</div>
     }
     <label class="form-label" for="workspace-plan-title">Plan title</label>
-    <input id="workspace-plan-title" class="form-control mb-3" value="@editing.Title" @oninput="TitleChanged" data-testid="plan-title" />
+    <input id="workspace-plan-title" class="form-control mb-3" @bind:get="editing.Title" @bind:set="value => TitleChanged(new ChangeEventArgs { Value = value })" @bind:event="oninput" data-testid="plan-title" />
     @foreach (var item in editing.Items) { <WorkspacePlanItemEditor @key="item.Id" Item="item" OtherItems="editing.Items" WorkspaceId="@Context.WorkspaceId" ResetVersion="@itemResetVersion" OnChanged="ItemChanged" OnRemove="RemoveItem" /> }
     <div class="d-flex flex-wrap gap-2">
         <button class="btn btn-outline-secondary" @onclick="AddItem" data-testid="plan-add-item">Add plan item</button>

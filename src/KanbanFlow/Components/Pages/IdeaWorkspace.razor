@@ -80,7 +80,7 @@
                 else { <WorkspaceOutline Document="context.Document" SelectedComponentId="@draft.SelectedComponentId" DirtyIds="DirtyIds" OnSelect="selection => Select(renderedScope, selection)" /> }
                 <WorkspaceRemovedDrafts Document="context.Document" Drafts="draft.ContentDrafts" SelectedComponentId="@draft.SelectedComponentId" Busy="@(busy || !Ready)" OnSelect="selection => Select(renderedScope, selection)" />
             </div>
-            <aside id="workspace-inspector" tabindex="-1" class="workspace-inspector">
+            <aside id="workspace-inspector" tabindex="-1" class="workspace-inspector" @key="(renderedScope, draft.SelectedComponentId)">
                 <WorkspaceContentEditor Draft="SelectedContent" Context="context" ComponentTypes="componentTypes" Detail="selectedDetail" Busy="ControlsDisabled" OnDraftChanged="value => ContentChanged(renderedScope, value)" OnReapply="key => ReapplyContent(renderedScope, key)" OnCommand="command => RunCommand(renderedScope, command)" />
                 @if (draft.SelectedComponentId is not null)
                 {

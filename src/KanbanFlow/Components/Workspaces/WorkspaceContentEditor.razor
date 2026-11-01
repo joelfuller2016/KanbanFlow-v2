@@ -17,19 +17,19 @@
         @foreach (var type in ComponentTypes) { <option value="@type">@type</option> }
     </select>
     <label class="form-label" for="component-title">Title</label>
-    <input id="component-title" class="form-control mb-3" maxlength="500" value="@editing.Title" @oninput="e => Change(editing with { Title = Text(e), Dirty = true })" data-testid="component-title" />
+    <input id="component-title" class="form-control mb-3" maxlength="500" @bind:get="editing.Title" @bind:set="value => Change(editing with { Title = value, Dirty = true })" @bind:event="oninput" data-testid="component-title" />
     @if (editing.Type is "image" or "research")
     {
         <label class="form-label" for="component-url">@(editing.Type == "image" ? "Image URL" : "Source URL")</label>
-        <input id="component-url" type="url" class="form-control mb-3" value="@editing.Url" @oninput="e => Change(editing with { Url = Text(e), Dirty = true })" data-testid="component-url" />
+        <input id="component-url" type="url" class="form-control mb-3" @bind:get="editing.Url" @bind:set="value => Change(editing with { Url = value, Dirty = true })" @bind:event="oninput" data-testid="component-url" />
     }
     @if (editing.Type == "task-reference")
     {
         <label class="form-label" for="component-task-id">Real task ID in this project</label>
-        <input id="component-task-id" type="number" min="1" class="form-control mb-3" value="@editing.TaskId" @oninput="TaskChanged" data-testid="component-task-id" />
+        <input id="component-task-id" type="number" min="1" class="form-control mb-3" @bind:get="editing.TaskId" @bind:set="value => Change(editing with { TaskId = value, Dirty = true })" @bind:event="oninput" data-testid="component-task-id" />
     }
     <label class="form-label" for="component-content">@ContentLabel · complete content</label>
-    <textarea id="component-content" class="form-control workspace-editor-text mb-2" rows="12" value="@editing.Content" @oninput="e => Change(editing with { Content = Text(e), Dirty = true })" data-testid="component-content"></textarea>
+    <textarea id="component-content" class="form-control workspace-editor-text mb-2" rows="12" @bind:get="editing.Content" @bind:set="value => Change(editing with { Content = value, Dirty = true })" @bind:event="oninput" data-testid="component-content"></textarea>
     <p class="text-muted small">@editing.Content.Length characters. Markdown is supported for documents, research, decisions, checklists, tables and plans.</p>
     <button class="btn btn-primary" disabled="@(Busy || !editing.Dirty || editing.BaseRevision != Context.Revision || string.IsNullOrWhiteSpace(editing.Title))" @onclick="Save" data-testid="component-save">@(editing.ComponentId is null ? "Add to canvas" : "Save component")</button>
     @if (editing.ComponentId is not null)
@@ -41,7 +41,7 @@
     {
         <div class="alert alert-info mt-3" data-testid="component-task-status"><strong>@task.Name</strong><p class="mb-1">@task.Status · @task.Priority · @task.Assignee</p><a href="@($"/project/{task.ProjectId}")">Open task project</a></div>
     }
-    @if (Detail?.TaskMissing == true) { <p class="text-warning mt-3" data-testid="component-task-missing">The referenced task was removed. This card's content is retained.</p> }
+    @if (Detail?.TaskMissing == true) { <p class="text-warning-emphasis mt-3" data-testid="component-task-missing">The referenced task was removed. This card's content is retained.</p> }
     <details class="mt-3"><summary>Preview full draft</summary><MarkdownContent Markdown="@editing.Content" EmptyText="Empty content." /></details>
 </section>
 
@@ -62,7 +62,6 @@
     private static string Text(ChangeEventArgs e) => e.Value?.ToString() ?? "";
     private Task Change(WorkspaceContentDraft next) => input.ChangeAsync(next, OnDraftChanged);
     private Task TypeChanged(ChangeEventArgs e) => Change(editing with { Type = Text(e), TaskId = Text(e) == "task-reference" ? editing.TaskId : null, Dirty = true });
-    private Task TaskChanged(ChangeEventArgs e) => Change(editing with { TaskId = int.TryParse(Text(e), out var value) ? value : null, Dirty = true });
     private Task Save()
     {
         var url = string.IsNullOrEmpty(editing.Url) ? null : editing.Url;

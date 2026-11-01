@@ -13,7 +13,7 @@
     <label class="form-label" for="connector-to">To</label>
     <select id="connector-to" class="form-select mb-2" value="@editing.ToComponentId" @onchange="e => Change(editing with { ToComponentId = Text(e) })" data-testid="connector-to"><option value="">Choose component</option>@foreach (var c in Context.Document.Components) { <option value="@c.Id">@c.Title</option> }</select>
     <label class="form-label" for="connector-label">Relationship</label>
-    <input id="connector-label" class="form-control mb-2" value="@editing.Label" @oninput="e => Change(editing with { Label = Text(e) })" data-testid="connector-label" />
+    <input id="connector-label" class="form-control mb-2" @bind:get="editing.Label" @bind:set="value => Change(editing with { Label = value })" @bind:event="oninput" data-testid="connector-label" />
     <button class="btn btn-outline-primary" disabled="@(Busy || string.IsNullOrEmpty(editing.FromComponentId) || string.IsNullOrEmpty(editing.ToComponentId))" @onclick="Add" data-testid="connector-submit">Connect components</button>
 </section>
 
