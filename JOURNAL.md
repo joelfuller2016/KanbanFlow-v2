@@ -52,6 +52,15 @@ A review of the repository and a test run on 2026-09-26 filed findings as issues
 
 ## Entries (newest first)
 
+- 2026-11-01 02:14Z (PR #580 — RetryDraftStorage/RecoverStoredDraft race fixed in a6121dd):
+  - Fixed PRRT_kwDOSA8y6s6yWGAe (CodeRabbit Minor, IdeaWorkspace.razor.cs lines 206-245):
+    - RetryDraftStorage: added `|| busy` guard; now a no-op while any async operation is running.
+    - RecoverStoredDraft: captured browser as `owned` before the first await; used `owned` throughout; guarded field-clear with `ReferenceEquals(browser, owned)` so a replacement instance is not accidentally nulled.
+    - Retry and Preserve buttons already had `disabled="@busy"` in the Razor markup.
+  - Thread auto-resolved by CodeRabbit on push. Replied to comment 4433909946 with fix details.
+  - 1563/1566 tests pass (3 pre-existing filesystem failures unrelated to this change).
+  - Branch HEAD: a6121dd. Codex reviews will run on new commit.
+
 - 2026-11-01 02:10Z (PR #580 — 6 new CodeRabbit findings on b1e61c3 resolved; regression test added in e697d8a):
   - CodeRabbit review (run c6938ff7) posted 6 findings on b1e61c3:
     - PRRT_kwDOSA8y6s6yWgGJ (JOURNAL.md ordering): branch copy only; cannot reorder per append-only rule; deferred with explanation.
