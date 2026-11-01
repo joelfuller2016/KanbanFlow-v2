@@ -1,6 +1,12 @@
 # Native in-process MCP server
 
-Historical September 6, 2026 transport discovery returned **33 native tools** and **54 wrapper tools**. Current source declares **36 native tools** (32 in `KanbanMcpTools`, four in `WorkspaceMcpTools`) and 54 wrapper tools. The September 14 verification did not rerun live discovery, so these source counts are not a fresh transport result. [Request workflows](request-workflow.md#mcp-and-rest-reference) add four shared tools in `WorkspaceMcpTools`; native task reads now include comments and native field updates use the existing task service. The historical prototype notes below explain the original implementation, not its current inventory.
+Historical September 6, 2026 transport discovery returned **33 native tools** and **54 wrapper tools**. The September 14 source estimate of 36 native/54 wrapper tools was not a fresh discovery run. The inventory has since expanded; use `tools/list` and a pinned [native/stdio verification run](request-workflow.md#verification-and-local-operation) for current counts. [Request workflows](request-workflow.md#mcp-and-rest-reference) share tools in `WorkspaceMcpTools`; persistent workspace tools also use the common services. The historical prototype notes below explain the original implementation, not its current inventory.
+
+## Wrapper response correlation
+
+The November 1 [regression contract](test-cases/2026-11-01-regression-expansion.md) fixes production JSON/SSE response selection in the stdio wrapper. It accepts only an exact-ID terminal JSON-RPC response, skips unrelated notifications/server requests and preserves valid error codes/messages/data, including code zero. Invalid or unmatched replies produce an error without an implicit retry; the caller retains its business retry key. The contract records real-wrapper red/green tests, workflow snapshot/content checks and reproduction commands.
+
+## Historical prototype
 
 This documents the prototype that hosts an **MCP server inside the same ASP.NET Core
 process** as the REST API and Blazor UI — proving we can eventually retire the Node.js

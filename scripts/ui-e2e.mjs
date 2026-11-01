@@ -2973,7 +2973,7 @@ async function main() {
       critical: await api("POST", `/api/features/${cardFeature.id}/tasks`, { name: `card critical ${stamp}`, status: "Todo", priority: "Critical" }),
     };
 
-    // A second project that nothing has ever happened to — the calm-empty case (AC 5).
+    // A new empty project has creation activity, but no work or claim placeholders (AC 5).
     const calmProj = await api("POST", "/api/projects", { name: `E2E Calm ${stamp}` });
 
     const cardFor = (projectId) => page.locator(`[data-testid="project-card"][data-project-id="${projectId}"]`);
@@ -3274,15 +3274,23 @@ async function main() {
       }
     });
 
-    await test("A project with no activity renders calm — no placeholder chips", async () => {
+    await test("A new empty project shows creation recency without work placeholders", async () => {
       await page.goto(`${baseUrl}/`);
       const card = cardFor(calmProj.id);
       await card.waitFor({ state: "visible" });
 
-      for (const testid of ["project-progress", "project-next-task", "project-claim", "project-last-activity"]) {
+      for (const testid of ["project-progress", "project-next-task", "project-claim"]) {
         assert(await card.locator(`[data-testid="${testid}"]`).count() === 0,
-          `an untouched project rendered "${testid}" — AC 5 requires the card to stay calm`);
+          `an empty project rendered "${testid}" — AC 5 requires no work placeholders`);
       }
+      const listed = (await api("GET", "/api/projects")).find((project) => project.id === calmProj.id);
+      assert(listed?.lastActivityAt, "the created project must expose its actual creation activity through the API");
+      const activity = card.locator('[data-testid="project-last-activity"]');
+      await activity.waitFor({ state: "visible" });
+      const renderedAt = await activity.getAttribute("datetime");
+      const apiAt = Date.parse(utcIso(listed.lastActivityAt));
+      assert(Number.isFinite(apiAt) && Date.parse(renderedAt || "") === apiAt,
+        `creation recency datetime "${renderedAt}" must match the API instant "${listed.lastActivityAt}"`);
       // …but it is still a real card with a way in, not a blank tile. `exact` matters: the ⋮
       // menu's accessible name starts with "Open project actions for …", so a loose match here
       // resolves to two buttons and fails on strict mode rather than on the product.

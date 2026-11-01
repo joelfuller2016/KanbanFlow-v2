@@ -857,7 +857,7 @@ All local. There is no CI — [on purpose](#deliberate-non-features).
 ```
 
 ```bash
-dotnet test tests/KanbanFlow.Tests/KanbanFlow.Tests.csproj # 2,182 xUnit tests at the November 1 post-merge checkpoint
+dotnet test tests/KanbanFlow.Tests/KanbanFlow.Tests.csproj # all xUnit tests; dated results are recorded in JOURNAL.md
 ```
 
 ```powershell
@@ -870,9 +870,9 @@ dotnet test tests/KanbanFlow.Tests/KanbanFlow.Tests.csproj # 2,182 xUnit tests a
 ```bash
 node ./scripts/smoke-mcp.mjs 1          # MCP tool surface — needs the app running on :5123
 npm run test:mcp                        # stdio framing A/B + the MCP smoke suite
-npm run test:scripts                    # node:test units for scripts/*.mjs — the shared
-                                        # priority model behind portfolio-sync and the
-                                        # log book (#360). No app, no network, no DB.
+npm run test:scripts                    # node:test units, including local Git/HTTP child
+                                        # fixtures. No configured live app or external
+                                        # service is required.
 npm run test:ui                         # Playwright e2e — builds, boots an isolated instance
                                         # (fixed port 5198 + throwaway DB), drives chromium, tears down
 ```
@@ -909,6 +909,7 @@ them.
 
 | Doc | What it holds |
 |---|---|
+| [Workflow and transport regression contract](docs/test-cases/2026-11-01-regression-expansion.md) | Exact report/field/snapshot tests, real-wrapper JSON/SSE correlation, red/green controls, browser creation-recency checks and rerun steps |
 | [Requests, plans and results](docs/request-workflow.md) | Use the existing app and boards for original requests, briefs, real task cards, MCP updates, reviewed reports and conclusions |
 | [Central project board implementation specification](docs/plans/central-project-board-implementation.md) | Detailed issue checklist, four diagrams, existing-versus-new behavior, acceptance checks and explicit later Codex work |
 | [Central project board proposal](docs/plans/central-project-board.md) | Product direction, the same-board constraint and the proposed Codex execution path |

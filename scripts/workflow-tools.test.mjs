@@ -15,12 +15,16 @@ async function harness(t, respond) {
   const received = [];
   const server = createServer(async (request, response) => {
     try {
-      let body = "";
-      for await (const chunk of request) body += chunk;
-      const rpc = JSON.parse(body);
+      const chunks = [];
+      for await (const chunk of request) chunks.push(chunk);
+      const rpc = JSON.parse(Buffer.concat(chunks).toString("utf8"));
       received.push({ method: request.method, url: request.url, headers: request.headers, rpc });
       const reply = respond(rpc);
       response.writeHead(200, { "Content-Type": reply.sse ? "text/event-stream" : "application/json" });
+      if (Object.hasOwn(reply, "raw")) {
+        response.end(reply.raw);
+        return;
+      }
       const json = JSON.stringify({ jsonrpc: "2.0", id: rpc.id, ...reply.message });
       response.end(reply.sse ? `event: message\ndata: ${json}\n\n` : json);
     } catch (error) {
@@ -171,3 +175,115 @@ test("wrapper returns native stale-version refusal as an error and a refreshed r
   assert.deepEqual(JSON.parse(retry.result.content[0].text), { requestId, version: 11 });
   assert.deepEqual(h.received.map(call => call.rpc.params.arguments.input), [input, refreshed]);
 });
+
+function sseFrame(message) {
+  return `event: message\r\ndata: ${JSON.stringify(message)}\r\n\r\n`;
+}
+
+test("wrapper selects the matching terminal SSE response after unrelated traffic", async t => {
+  const original = "  # Complete source café 👋 Ω\r\n\r\n"
+    + "  - Preserve this Markdown\r\n\r\n    exact indentation 👋 Ω  \r\n".repeat(4096)
+    + "\r\n  final authored line  ";
+  const input = { operation: "capture", actor: "reviewer Ω", key: "mixed-native-frames",
+    capture: { title: "Complete source", original, projectId: null, source: "wrapper-regression" } };
+  const expected = { requestId, version: 8, messages: [{ kind: "original", text: original }] };
+  const h = await harness(t, rpc => {
+    const terminal = { jsonrpc: "2.0", id: rpc.id,
+      result: { structuredContent: expected, content: [{ type: "text", text: "decoy text" }] } };
+    // Multi-line SSE data is legal. JSON string escapes keep the authored CRLF/space values exact.
+    const terminalFrame = "event: message\r\n"
+      + JSON.stringify(terminal, null, 2).split("\n").map(line => `data: ${line}`).join("\r\n") + "\r\n\r\n";
+    return { sse: true, raw: ": heartbeat\r\n\r\ndata: not-json\r\n\r\n"
+      + sseFrame({ jsonrpc: "2.0", method: "notifications/progress", params: { progressToken: "work", progress: 1 } })
+      + sseFrame({ jsonrpc: "2.0", id: rpc.id + 100, result: { structuredContent: { wrong: "foreign response" } } })
+      + sseFrame({ jsonrpc: "2.0", id: rpc.id, method: "roots/list", params: {} })
+      + terminalFrame };
+  });
+  const reply = await h.send("tools/call", { name: "workflow_command", arguments: { input } });
+  assert.equal(reply.error, undefined);
+  assert.deepEqual(reply.result.structuredContent, expected);
+  assert.deepEqual(JSON.parse(reply.result.content[0].text), expected);
+  assert.equal(h.received.length, 1, "Traffic frames must not cause another HTTP request");
+  assert.deepEqual(h.received[0].rpc.params, { name: "workflow_command", arguments: { input } });
+  assert.equal(h.received[0].rpc.params.arguments.input.capture.original, original);
+});
+
+const invalidNativeResponses = [
+  ["wrong numeric ID", id => ({ jsonrpc: "2.0", id: id + 100, result: {} })],
+  ["numeric-equivalent string ID", id => ({ jsonrpc: "2.0", id: String(id), result: {} })],
+  ["missing ID", () => ({ jsonrpc: "2.0", result: {} })],
+  ["server request only", id => ({ jsonrpc: "2.0", id, method: "roots/list", params: {} })],
+  ["server request with a result property", id => ({ jsonrpc: "2.0", id, method: "roots/list", params: {}, result: {} })],
+  ["missing terminal result or error", id => ({ jsonrpc: "2.0", id })],
+  ["wrong JSON-RPC version", id => ({ jsonrpc: "1.0", id, result: {} })],
+  ["missing JSON-RPC version", id => ({ id, result: {} })],
+  ["ambiguous result and error", id => ({ jsonrpc: "2.0", id, result: {},
+    error: { code: -32602, message: "Both branches must not qualify" } })],
+  ["null error", id => ({ jsonrpc: "2.0", id, error: null })],
+  ["non-object error", id => ({ jsonrpc: "2.0", id, error: [] })],
+  ["non-integer error code", id => ({ jsonrpc: "2.0", id, error: { code: "-32602", message: "Invalid code" } })],
+  ["fractional error code", id => ({ jsonrpc: "2.0", id, error: { code: -32602.5, message: "Fractional code" } })],
+  ["non-string error message", id => ({ jsonrpc: "2.0", id, error: { code: -32602, message: { text: "Invalid message" } } })],
+  ["missing error code", id => ({ jsonrpc: "2.0", id, error: { message: "Missing code" } })],
+  ["missing error message", id => ({ jsonrpc: "2.0", id, error: { code: -32602 } })]
+];
+
+for (const transport of ["JSON", "SSE"]) {
+  for (const [label, envelope] of invalidNativeResponses) {
+    test(`wrapper rejects native responses without a matching terminal ID (${transport}: ${label})`, async t => {
+      const input = { operation: "capture", actor: "reviewer", key: `explicit-retry-${label}`,
+        capture: { title: "Keep the request", original: "  café 👋\r\n\r\n    source stays exact  ", source: "regression" } };
+      const expected = { requestId, version: 17 };
+      let calls = 0;
+      const h = await harness(t, rpc => {
+        const message = ++calls === 1 ? envelope(rpc.id)
+          : { jsonrpc: "2.0", id: rpc.id, result: { structuredContent: expected } };
+        return { sse: transport === "SSE", raw: transport === "SSE" ? sseFrame(message) : JSON.stringify(message) };
+      });
+      const failed = await h.send("tools/call", { name: "workflow_command", arguments: { input } });
+      assert.equal(failed.result, undefined, "Invalid native envelopes must never produce a successful receipt");
+      assert.equal(failed.error.code, -32000);
+      assert.equal(failed.error.message, "Native MCP returned no matching terminal response for workflow_command.");
+      assert.equal(h.received.length, 1, "The wrapper must not retry the command implicitly");
+
+      const recovered = await h.send("tools/call", { name: "workflow_command", arguments: { input } });
+      assert.equal(recovered.error, undefined);
+      assert.deepEqual(recovered.result.structuredContent, expected);
+      assert.deepEqual(JSON.parse(recovered.result.content[0].text), expected);
+      assert.equal(h.received.length, 2, "Only the explicit second client call may make a second HTTP request");
+      assert.notEqual(h.received[0].rpc.id, h.received[1].rpc.id);
+      assert.deepEqual(h.received.map(call => call.rpc.params), [
+        { name: "workflow_command", arguments: { input } },
+        { name: "workflow_command", arguments: { input } }
+      ]);
+    });
+  }
+}
+
+const correlatedNativeErrors = [
+  ["", { code: -32602, message: "  Rejected café 👋\r\n\r\n    keep the complete reason  ",
+    data: { requestId, field: "input", expectedVersion: 7, details: ["Ω", { keep: false, empty: null }] } }],
+  [" (zero code and empty message)", { code: 0, message: "", data: 0 }],
+  [" (omitted optional data)", { code: 42, message: "Custom error" }]
+];
+
+for (const transport of ["JSON", "SSE"]) {
+  for (const [boundary, nativeError] of correlatedNativeErrors) {
+    test(`wrapper preserves correlated native errors${transport === "SSE" ? " after unrelated SSE traffic" : " in JSON"}${boundary}`, async t => {
+      const input = { operation: "archive", actor: "reviewer", key: "correlated-error-key", requestId,
+        expectedVersion: 8, archived: false };
+      const h = await harness(t, rpc => {
+        const terminal = { jsonrpc: "2.0", id: rpc.id, error: nativeError };
+        return { sse: transport === "SSE", raw: transport === "SSE"
+          ? sseFrame({ jsonrpc: "2.0", id: rpc.id + 1, error: { code: -32001, message: "Another call" } })
+            + sseFrame({ jsonrpc: "2.0", id: rpc.id, method: "roots/list", params: {} }) + sseFrame(terminal)
+          : JSON.stringify(terminal) };
+      });
+      const reply = await h.send("tools/call", { name: "workflow_command", arguments: { input } });
+      assert.equal(reply.result, undefined);
+      assert.deepEqual(reply.error, nativeError);
+      assert.equal(h.received.length, 1);
+      assert.deepEqual(h.received[0].rpc.params, { name: "workflow_command", arguments: { input } });
+    });
+  }
+}
