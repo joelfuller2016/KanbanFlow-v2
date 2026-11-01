@@ -51,6 +51,14 @@ A review of the repository and a test run on 2026-09-26 filed findings as issues
   - S7, for #549.
 
 ## Entries (newest first)
+
+- 2026-11-01 01:44Z (PR #580 — 2 new Copilot findings fixed in b1e61c3; 72/72 threads resolved):
+  - Copilot review 5725912714 posted 2 findings on 16c5f65:
+    - PRRT_kwDOSA8y6s6yWYbC (High, test file): already fixed in 73304b0 (addEventListener added to mock). Replied and resolved.
+    - PRRT_kwDOSA8y6s6yWYbO (Medium, Canvas.razor.js line 43): repeated drags accumulate lostpointercapture listeners. Fixed in b1e61c3: added `once: true` to listener options so it auto-removes after first invocation. Replied and resolved.
+  - All 9 canvas tests pass at b1e61c3. 72/72 PR review threads resolved.
+  - Codex code and security reviews running on 73304b0 (started 01:41:05Z); b1e61c3 will trigger new reviews.
+  - Branch: feat/579-idea-workspaces HEAD at b1e61c3. Next: wait for Codex reviews; notify owner when clean.
 - 2026-11-01 01:43Z - Final moving-head follow-up for the repository review: inspected PR #580 commit `73304b018ff041bc0cf614d45fd87484906df51c`, whose only delta from `16c5f65e493d2d2c0c3c5a85d5fd71c10b8eefdb` repairs the canvas test handle mock. Repeated the full script suite: 362 passed, 0 failed/skipped, exit 0. This corrects the final script-gate status reported in the preceding checkpoint; the five validated application findings and failing draft-preservation regression are unchanged. No additional full .NET pass is claimed. Local report updated; #580 remains not ready. Only this journal is published.
 
 
