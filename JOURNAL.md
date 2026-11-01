@@ -52,6 +52,12 @@ A review of the repository and a test run on 2026-09-26 filed findings as issues
 
 ## Entries (newest first)
 
+- 2026-11-01 02:00Z (PR #580 — Codex P2 review findings on 5cf4438, 1 fixed + 1 deferred):
+  - Codex P2 IdeaWorkspace.razor.cs:182 fix: 53b75f6 — Refresh() now captures context before GET and bails on ReferenceEquals mismatch, matching PollForChanges guard (e7acca6). Replied to comment 4433930515.
+  - Codex P2 WorkspaceDeliveryPanel.razor.cs:28: feature choices empty on first publication_target_missing — deferred to owner. Requires new GetPublicationFeaturesAsync method or embedding features in error payload. Replied to comment 4433930518.
+  - 0 unresolved threads (50 total). Awaiting Codex reviews on 53b75f6 and 5c7e68e.
+  - Next: resolve any new findings; notify owner when PR is clean.
+
 - 2026-11-01 01:45Z (PR #580 — Codex P2 provenance fix on 5cf4438):
   - Codex P2 finding: WorkspacePlanPanel.razor:72 — Reapply() did not clear foreign-project provenance from plan items after a workspace relink; ValidateProposedIdentity rejected saves with forged_provenance.
   - Fix: 62e8cf7 — applied same pattern as ConfirmCopy() (line 93): null provenance when its ProjectId ≠ Context.ProjectId.
