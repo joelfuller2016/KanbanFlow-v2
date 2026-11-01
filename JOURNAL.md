@@ -52,6 +52,11 @@ A review of the repository and a test run on 2026-09-26 filed findings as issues
 
 ## Entries (newest first)
 
+- 2026-11-01 02:18Z (PR #580 — Codex code and security reviews on a6121dd both clean):
+  - Codex code review on a6121dd: completed, has_unresolved_findings: false.
+  - Codex security review on a6121dd: completed, has_any_findings: null (no findings).
+  - All PR #580 review threads remain resolved (78+ total). PR is ready for owner merge.
+
 - 2026-11-01 02:14Z (PR #580 — RetryDraftStorage/RecoverStoredDraft race fixed in a6121dd):
   - Fixed PRRT_kwDOSA8y6s6yWGAe (CodeRabbit Minor, IdeaWorkspace.razor.cs lines 206-245):
     - RetryDraftStorage: added `|| busy` guard; now a no-op while any async operation is running.
