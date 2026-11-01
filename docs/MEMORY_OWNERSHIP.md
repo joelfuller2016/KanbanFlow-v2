@@ -46,6 +46,17 @@ MemoryNode IDs identify versions. An update retires the old row and creates a
 new one; follow `SupersededById` when resolving an old reference, or reload current
 project context. Do not infer identity from a mutable title or a text match.
 
+Project scope keys use the positive project ID in canonical decimal form: accepted
+inputs such as `01`, `+1` and padded `1` identify project `1`. Typed project reads
+(list, graph and memory search) accept the same numeric forms. Other namespaces
+keep their text keys, and a list filter without a selected scope remains an exact
+text match. The startup patch normalizes previously stored valid project keys and
+records one `MemoryScopeKeyNormalized` event attributed to `schema-patcher` per
+changed node, atomically. Node IDs, authored content, provenance, validity,
+observations, relations, embeddings and prior audit records are preserved.
+Malformed project keys remain unchanged; repeating startup produces no further
+changes or normalization events.
+
 The synchronization direction is KanbanFlow to a disposable agent context/cache.
 Reload before each project task. Mutations go back to KanbanFlow's existing
 audit-aware API/MCP write tools, then invalidate the cached context. There is no

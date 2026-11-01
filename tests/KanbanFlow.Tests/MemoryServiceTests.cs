@@ -1020,7 +1020,7 @@ public sealed class MemoryServiceTests
         Assert.DoesNotContain("MemoryNodes", SqliteMasterNames(connection, "table"));
 
         SchemaPatcher.EnsureMemoryTables(connection);
-        SchemaPatcher.EnsureMemoryTables(connection); // must not throw (every statement is IF NOT EXISTS)
+        SchemaPatcher.EnsureMemoryTables(connection); // schema creation and project-key repair are idempotent
 
         var tables = SqliteMasterNames(connection, "table");
         Assert.Contains("MemoryNodes", tables);

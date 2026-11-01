@@ -36,7 +36,7 @@ public interface IMemorySearch
     /// access-stat bump that this call applies to the hits.</para>
     /// </summary>
     /// <param name="scope">Memory scope to search within.</param>
-    /// <param name="scopeKey">The scope's key (matched exactly, trimmed).</param>
+    /// <param name="scopeKey">The trimmed scope key; numeric project aliases use the canonical project id.</param>
     /// <param name="query">Free-text query; drives both the keyword and the (embedded) vector signal.</param>
     /// <param name="k">Maximum number of hits to return.</param>
     /// <param name="opts">Signal weights + tuning; <c>null</c> ⇒ defaults.</param>

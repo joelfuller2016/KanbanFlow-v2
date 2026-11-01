@@ -35,7 +35,7 @@ public interface IVectorSearch
     /// with no embeddings, yields an empty list.</para>
     /// </summary>
     /// <param name="scope">Memory scope to search within.</param>
-    /// <param name="scopeKey">The scope's key (e.g. a project id as text); matched exactly (trimmed).</param>
+    /// <param name="scopeKey">The trimmed scope key; numeric project aliases use the canonical project id.</param>
     /// <param name="queryEmbedding">The query vector; ranked against each candidate by cosine similarity.</param>
     /// <param name="k">Maximum number of hits to return (the top-k).</param>
     /// <returns>Up to <paramref name="k"/> <see cref="VectorHit"/>s ordered by descending score.</returns>
