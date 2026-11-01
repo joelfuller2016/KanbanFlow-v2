@@ -41,6 +41,7 @@ public partial class IdeaWorkspace
             draft = ClearSavedSection(draft with { Pending = null }, pending);
             if (result.Action == "remove_component") draft = draft with { SelectedComponentId = null, SelectedPlacementId = null };
             else if (result.ComponentId is not null) draft = draft with { SelectedComponentId = result.ComponentId, SelectedPlacementId = result.PlacementId ?? draft.SelectedPlacementId };
+            var oldProjectId = context?.ProjectId;
             context = refreshed;
             if (result.Action is "publish_plan" or "link_project" or "create_project")
             {
@@ -48,6 +49,13 @@ public partial class IdeaWorkspace
                 publicationRequest = null;
                 previewSequence++;
                 draft = draft with { Delivery = CompleteDeliveryDraft(draft.Delivery, pending, context.ProjectId) };
+            }
+            if (context.ProjectId != oldProjectId)
+            {
+                inspectedTaskId = null;
+                inspectedTask = null;
+                taskError = null;
+                taskSequence++;
             }
             latestContext = null;
             ReconcileDeliveryDraft();
