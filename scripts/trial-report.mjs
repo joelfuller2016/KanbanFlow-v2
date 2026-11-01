@@ -574,10 +574,13 @@ export function createGitRunner({ env = process.env, timeoutMs = GIT_TIMEOUT_MS 
         { code: "git_unsupported" });
     }
     const safeDirectories = protectedSafeDirectoryArgs(cwd, captured, remainingTimeout);
-    return execFileSync("git", [...safeDirectories, ...args], {
+    const output = execFileSync("git", [...safeDirectories, ...args], {
       cwd, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"],
       timeout: remainingTimeout(), maxBuffer: GIT_MAX_OUTPUT_BYTES, env: isolated, windowsHide: true
-    }).trim();
+    });
+    // Remote names and URLs are payloads: Git adds one record LF, but spaces belong to the value.
+    return args[0] === "remote" && (args.length === 1 || args[1] === "get-url")
+      ? output.replace(/\n$/, "") : output.trim();
   };
 }
 
@@ -654,11 +657,11 @@ const GIT_REMOTE_HELPER = /^[a-z0-9][a-z0-9+.-]*::/i;
  * keeps Windows drive paths out while permitting unambiguous account/host forms.
  */
 export function normalizeRemoteUrl(url) {
-  if (typeof url !== "string" || url.trim().length === 0) return null;
-  const raw = url.trim();
+  if (typeof url !== "string" || url.length === 0) return null;
+  const raw = url;
   const u = raw;
   // Explicit remote-helper syntax is not the SCP host named before the double colon.
-  if (GIT_REMOTE_HELPER.test(u)) return url.trim();
+  if (GIT_REMOTE_HELPER.test(u)) return raw;
   const githubKey = repository => `github.com/${repository.toLowerCase().replace(/\/+$/, "").replace(/\.git$/, "")}`;
   const sshKey = (authority, commandPath) => {
     const at = authority.lastIndexOf("@");
@@ -676,7 +679,7 @@ export function normalizeRemoteUrl(url) {
   const scheme = u.match(GIT_URL_SCHEME);
   if (scheme) {
     const protocol = scheme[1].toLowerCase();
-    if (!Object.hasOwn(DEFAULT_PORTS, protocol)) return protocol + url.trim().slice(scheme[1].length);
+    if (!Object.hasOwn(DEFAULT_PORTS, protocol)) return protocol + raw.slice(scheme[1].length);
     if (protocol === "ssh") {
       let location;
       try { location = decodeURIComponent(raw.slice(scheme[0].length)); }
@@ -730,8 +733,8 @@ export function normalizeRemoteUrl(url) {
  * — it stays outside, exactly as an alias- or IP-spelled clone of this very repo would on master.
  */
 export function isLocalPathRemote(rawUrl) {
-  if (typeof rawUrl !== "string" || rawUrl.trim().length === 0) return false;
-  const u = rawUrl.trim();
+  if (typeof rawUrl !== "string" || rawUrl.length === 0) return false;
+  const u = rawUrl;
   if (GIT_REMOTE_HELPER.test(u)) return false;
   if (/^file:\/\//i.test(u)) return true;
   if (GIT_URL_SCHEME.test(u)) return false;
@@ -771,7 +774,7 @@ function boundedGitLines(text, limit) {
   const lines = [];
   for (let start = 0; start < text.length;) {
     const newline = text.indexOf("\n", start);
-    const line = text.slice(start, newline === -1 ? text.length : newline).trim();
+    const line = text.slice(start, newline === -1 ? text.length : newline);
     if (line) {
       if (lines.length >= limit) return null;
       lines.push(line);
