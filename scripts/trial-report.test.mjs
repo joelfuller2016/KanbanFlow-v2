@@ -2488,6 +2488,7 @@ function runGitHarness(make, settings, body) {
     '    globalThis.lookupCalls ??= []; globalThis.lookupCalls.push({ file, kind: args.at(-1), cwd: options.cwd, timeout: options.timeout,',
     '      maxBuffer: options.maxBuffer, killSignal: options.killSignal, windowsHide: options.windowsHide, input: options.input,',
     '      nodeKeys: Object.keys(options.env).filter(key => /^(NODE_OPTIONS|NODE_PATH)$/i.test(key)) });',
+    '    if (Object.hasOwn(current, "lookupReply") && args.at(-1) === "lookup") return Buffer.from(JSON.stringify(current.lookupReply));',
     '    try { return original.call(this, file, ["--require", __filename, ...args], options); }',
     '    finally { if (fakeClock) clock += current.lookupClockStep ?? 0; }',
     '  }',
@@ -2939,8 +2940,15 @@ test("private filesystem helpers receive only the selected PATH and do not rerun
         const envPreserved = globalThis.gitNodeEnvs.every(value => value.NODE_OPTIONS === env.NODE_OPTIONS && value.NODE_PATH === env.NODE_PATH);
         const missing = trial.createGitRunner({ env: { ...env, PATH: undefined, Path: env[key] } });
         let emptyError; try { missing(["rev-parse", "--show-toplevel"], settings.a); } catch (error) { emptyError = { code: error.code, cause: error.cause?.code }; }
-        return { value, firstCalls: calls.length - 1, onlyPath: calls[0].input === JSON.stringify(env[key]), nodeKeys: calls[0].nodeKeys,
-          preloadRan: fs.existsSync(settings.marker), envPreserved, emptyError, emptyInput: calls.at(-1).input };
+        const emptyInput = calls.at(-1).input, beforeOverflow = calls.length;
+        let overflow; try { trial.createGitRunner({ env: { ...env, PATH: "/".repeat(256 * 1024) } })(["rev-parse", "--show-toplevel"], settings.a); }
+        catch (error) { overflow = error.cause?.message; }
+        const overflowBlocked = calls.length === beforeOverflow, beforeMalformed = globalThis.gitCalls.length;
+        fs.writeFileSync(stateFile, JSON.stringify({ ...settings, lookupReply: process.platform === "win32" ? "git.exe" : "git" }));
+        let malformedCode; try { trial.createGitRunner({ env })(["rev-parse", "--show-toplevel"], settings.a); } catch (error) { malformedCode = error.code; }
+        return { value, onlyPath: calls[0].input === JSON.stringify(env[key]), nodeKeys: calls[0].nodeKeys,
+          preloadRan: fs.existsSync(settings.marker), envPreserved, emptyError, emptyInput, overflow, overflowBlocked,
+          malformedCode, malformedGitCalls: globalThis.gitCalls.length - beforeMalformed, firstCalls: beforeOverflow - 1 };
       });
     assert.equal(real(result.value), real(a));
     assert.equal(result.firstCalls, 1, "success is pinned across repeated identity operations");
@@ -2950,6 +2958,10 @@ test("private filesystem helpers receive only the selected PATH and do not rerun
     assert.equal(result.envPreserved, true, "Node options remain unchanged for the parent and Git environments");
     assert.deepEqual(result.emptyError, { code: "git_unsupported", cause: "ENOENT" });
     assert.equal(result.emptyInput, JSON.stringify(""), "selection precedes JSON serialization of an undefined first PATH key");
+    assert.match(result.overflow, /input exceeded its byte bound/);
+    assert.equal(result.overflowBlocked, true, "oversized private-helper input must be rejected before process creation");
+    assert.equal(result.malformedCode, "git_unsupported", "a relative helper result must never authorize a Git process");
+    assert.equal(result.malformedGitCalls, 0);
   } finally { cleanup(); }
 });
 
