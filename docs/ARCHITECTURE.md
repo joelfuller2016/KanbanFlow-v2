@@ -674,7 +674,10 @@ check finds an older or unrecognizable version, it produces one diagnostic and l
 five-second monotonic deadline includes that check, a protected configuration read and the identity
 command; later operations get the same bound and reread protected configuration without repository
 context, so `gitdir`/`onbranch` conditional includes cannot grant ownership trust. The report does
-not install Git or change global settings. Other servers retain their transport, account and exact
+not install Git or change global settings. Git child output is capped at one MiB. Reference and
+candidate fingerprints scan at most 16 remote names and 64 nonempty URLs per remote read; exceeding
+a bound rejects the whole fingerprint and is disclosed in the report, rather than trusting a
+truncated prefix. Other servers retain their transport, account and exact
 repository path; generic SSH comparison preserves the login and effective
 command path (including `.git` and relative, absolute or tilde forms); GitHub's documented `git`
 account clone URLs retain their hosted HTTPS aliases. Paths printed in reports are reversible

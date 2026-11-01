@@ -1052,7 +1052,7 @@ test("a PUSH-url read that fails is inconclusive too — even when the fetch rea
 function buildInto(build) {
   const dirs = [];
   const make = () => { const d = tmp(); dirs.push(d); return d; };
-  const cleanup = () => { for (const d of dirs) fs.rmSync(d, { recursive: true, force: true }); };
+  const cleanup = () => { for (const d of dirs) fs.rmSync(d, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); };
   try {
     return { ...build(make), make, cleanup };
   } catch (error) {
@@ -1462,26 +1462,117 @@ test("a candidate listing MORE than 16 remotes is left inconclusive before any o
   assert.match(s4.caveat, /1 checked cwd\(s\) listed more than 16 remotes/);
 });
 
-test("a remote with more than 64 urls has its url list capped per read — the candidate still confirms when all urls are the main repo", () => {
-  // MAX_URLS_PER_REMOTE caps unbounded `remote.<name>.url`/`pushurl` entries from a hostile cwd.
-  // When all 65 urls are the main repo's own url the candidate confirms; the cap drops only the
-  // 65th entry, which is the same as the first 64.
+test("a remote with more than 64 urls is inconclusive, including a contradicting 65th fetch or push URL", () => {
   const mainRoot = path.resolve("C:\\real\\KanbanFlow-v2");
   const MAIN = "https://github.com/joel/kanbanflow-v2.git";
   const candidate = path.resolve("C:\\scratch\\many-urls");
-  const manyUrls = Array.from({ length: 65 }, () => MAIN).join("\n");
+  const limit = Array(64).fill(MAIN).join("\n");
+  for (const [label, fetch, push, accepted] of [
+    ["64 boundary with empty lines", "\n" + limit.replaceAll("\n", "\r\n\n") + "\n", limit, true],
+    ["65 matching fetch URLs", limit + "\n" + MAIN, MAIN, false],
+    ["65th fetch URL contradicts", limit + "\nhttps://github.com/fork/project.git", MAIN, false],
+    ["65th push URL contradicts", MAIN, limit + "\nhttps://github.com/fork/project.git", false]
+  ]) {
+    const git = fakeGitByCwd({
+      [mainRoot]: { "remote": "origin", "rev-list --max-parents=0 HEAD": "aaa111", "remote get-url origin": MAIN },
+      [candidate]: { "rev-parse --show-toplevel": candidate, "rev-list --max-parents=0 HEAD": "aaa111",
+        "remote": "origin", "remote get-url --all origin": fetch, "remote get-url --push --all origin": push }
+    });
+    const result = withConfirmedCloneRoots([candidate], [mainRoot], { git });
+    assert.equal(result.confirmed.has(candidate), accepted, label);
+    if (!accepted) assert.equal(result.tooManyUrls, 1, label + ": disclose the rejected read");
+  }
+});
+
+test("URL overflow in a later remote discards an earlier matching fingerprint", () => {
+  const main = path.resolve("C:\\real\\main");
+  const candidate = path.resolve("C:\\scratch\\clone");
+  const url = "https://github.com/owner/project.git";
   const git = fakeGitByCwd({
-    [mainRoot]: { "remote": "origin", "rev-list --max-parents=0 HEAD": "aaa111", "remote get-url origin": MAIN },
-    [candidate]: {
-      "rev-parse --show-toplevel": candidate,
-      "rev-list --max-parents=0 HEAD": "aaa111",
-      "remote": "origin",
-      "remote get-url --all origin": manyUrls,
-      "remote get-url --push --all origin": manyUrls
-    }
+    [main]: { remote: "origin", "rev-list --max-parents=0 HEAD": "shared", "remote get-url origin": url },
+    [candidate]: { "rev-parse --show-toplevel": candidate, remote: "origin\nlater",
+      "remote get-url origin": url, "remote get-url later": Array(65).fill(url).join("\n") }
   });
-  const { confirmed } = withConfirmedCloneRoots([candidate], [mainRoot], { git });
-  assert.deepEqual([...confirmed.keys()], [candidate], "65-url remote confirms when all urls match main");
+  const result = withConfirmedCloneRoots([candidate], [main], { git });
+  assert.equal(result.confirmed.size, 0, "the earlier matching origin cannot bypass incomplete later evidence");
+  assert.equal(result.tooManyUrls, 1);
+});
+
+test("the reference fingerprint also refuses more than 16 remote names before reading their URLs", () => {
+  const main = path.resolve("C:\\real\\main");
+  const local = path.resolve("C:\\scratch\\local-clone");
+  const network = path.resolve("C:\\scratch\\network-clone");
+  const url = "https://github.com/owner/project.git";
+  for (const count of [16, 17]) {
+    const root = { remote: Array.from({ length: count }, (_, i) => "r" + i).join("\n"), "rev-list --max-parents=0 HEAD": "shared" };
+    for (let i = 0; i < count; i++) root["remote get-url r" + i] = url;
+    const fake = fakeGitByCwd({ [main]: root,
+      [local]: { "rev-parse --show-toplevel": local, remote: "", "rev-list --max-parents=0 HEAD": "shared" },
+      [network]: { "rev-parse --show-toplevel": network, remote: "origin", "remote get-url origin": url }
+    });
+    let rootUrlReads = 0;
+    const result = withConfirmedCloneRoots([local, network], [main], { git: (args, cwd) => {
+      if (cwd === main && args[1] === "get-url") rootUrlReads++;
+      return fake(args, cwd);
+    } });
+    assert.deepEqual([...result.confirmed.keys()], count === 16 ? [local, network] : [], "a capped reference contributes no partial fingerprint");
+    assert.equal(rootUrlReads, count === 16 ? 16 : 0);
+    assert.equal(result.tooManyRemotes, count === 16 ? 0 : 1);
+  }
+});
+
+test("oversized Git output is rejected before parsing on either reference or candidate reads", () => {
+  const main = path.resolve("C:\\real\\main");
+  const candidate = path.resolve("C:\\scratch\\clone");
+  const oversized = "aaa111\n".repeat(150_000);
+  assert.ok(Buffer.byteLength(oversized) > 1024 * 1024);
+  for (const overflowAt of [main, candidate]) {
+    const git = fakeGitByCwd({
+      [main]: { remote: "", "rev-list --max-parents=0 HEAD": overflowAt === main ? oversized : "aaa111" },
+      [candidate]: { "rev-parse --show-toplevel": candidate, remote: "", "rev-list --max-parents=0 HEAD": overflowAt === candidate ? oversized : "aaa111" }
+    });
+    const result = withConfirmedCloneRoots([candidate], [main], { git });
+    assert.equal(result.confirmed.size, 0, "partial or oversized history cannot confirm a clone");
+    assert.equal(result.oversizedGitOutputs, 1);
+  }
+});
+
+test("real Git URL overflow rejects the whole candidate and is disclosed on both CLI surfaces", () => {
+  const { a, b, make, cleanup } = buildCloneFixture();
+  const url = "https://example.invalid/org/repo.git";
+  const config = path.join(b, ".git", "config");
+  const initial = fs.readFileSync(config, "utf8");
+  try {
+    const setUrls = urls => fs.writeFileSync(config, initial + '\n[remote "origin"]\n' + urls.map(value => "\turl = " + value + "\n").join(""));
+    setUrls(Array(64).fill(url));
+    assert.equal(gitOutput(["remote", "get-url", "--all", "origin"], b).split(/\r?\n/).length, 64);
+    assert.equal(withConfirmedCloneRoots([b], [a]).confirmed.has(b), true, "exactly 64 fetch and push URLs are fully checked");
+    setUrls([...Array(64).fill(url), "https://example.invalid/fork/repo.git"]);
+    assert.equal(gitOutput(["remote", "get-url", "--all", "origin"], b).split(/\r?\n/).length, 65);
+    assert.equal(withConfirmedCloneRoots([b], [a]).confirmed.has(b), false, "a real 65th contradiction cannot be dropped");
+    const log = path.join(make(), "usage.jsonl");
+    fs.writeFileSync(log, JSON.stringify(row({ cwd: b })) + "\n");
+    const child = runCliJson(log, a);
+    assert.equal(child.status, 1, child.stderr + child.stdout);
+    const summary = JSON.parse(child.stdout);
+    assert.equal(summary.sources.cloneProbe.tooManyUrls, 1);
+    assert.match(child.stderr, /more than 64 URLs/);
+    assert.match(find(summary, 4).caveat, /more than 64 URLs/);
+    assert.doesNotMatch(child.stderr, /folded into signal 4/);
+  } finally { cleanup(); }
+});
+
+test("real Git enforces the one MiB child-output bound", () => {
+  const { a, cleanup } = buildCloneFixture();
+  try {
+    const config = path.join(a, ".git", "config");
+    const initial = fs.readFileSync(config, "utf8");
+    fs.writeFileSync(config, initial + "\n[diagnostic]\n\toutput = " + "x".repeat(1024 * 1024 - 1) + "\n");
+    assert.equal(gitOutput(["config", "--get", "diagnostic.output"], a).length, 1024 * 1024 - 1,
+      "the value plus Git's final newline exactly fills the allowed output buffer");
+    fs.writeFileSync(config, initial + "\n[diagnostic]\n\toutput = " + "x".repeat(1024 * 1024 + 1) + "\n");
+    assert.throws(() => gitOutput(["config", "--get", "diagnostic.output"], a), error => error.code === "ENOBUFS");
+  } finally { cleanup(); }
 });
 
 test("the probe pass has a 60 s budget — once it is spent the pass stops, the rest stay outside, and the caveat says so", () => {
