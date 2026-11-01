@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import { createUsageLogger } from "./usage-log.mjs";
+import { workspaceReadTools, workspaceWriteTools, workspaceWriteActions } from "./workspace-mcp-tools.mjs";
 import { workflowTools } from "./workflow-tools.mjs";
 
 const apiBaseUrl = (process.env.KANBANFLOW_API_URL || "http://127.0.0.1:5123").replace(/\/$/, "");
@@ -52,6 +53,8 @@ const inFlightRequestIds = new Set();
 const usageLogger = createUsageLogger();
 
 const tools = [
+  ...workspaceReadTools,
+  ...workspaceWriteTools,
   ...workflowTools,
   {
     name: "list_projects",
@@ -1111,6 +1114,15 @@ async function handleMessage(message) {
     const startedAt = Date.now();
     let result;
     try {
+      const workspaceTool = [...workspaceReadTools, ...workspaceWriteTools].find(tool => tool.name === toolName);
+      if (workspaceTool) {
+        const allowed = workspaceTool.inputSchema.properties;
+        for (const name of Object.keys(args)) {
+          if (!Object.hasOwn(allowed, name)) {
+            throw new McpError(-32602, `Unsupported workspace argument '${name}'. It was not saved.`);
+          }
+        }
+      }
       result = await callTool(toolName, args);
     } catch (error) {
       usageLogger.record({ tool: toolName, args, outcome: "error", ms: Date.now() - startedAt, error });
@@ -1533,6 +1545,92 @@ async function callTool(toolName, args) {
         body: { actor: optionalString(args, "actor")?.trim() || "mcp-agent" }
       });
 
+    case "get_workspace_capabilities":
+      return restJson("/api/workspace-capabilities");
+    case "create_workspace": {
+      const body = { operationId: workspaceRequiredString(args, "operationId"), actor: optionalString(args, "actor") ?? "mcp-agent" };
+      for (const key of ["title", "body", "plan", "tags", "priority"]) {
+        const value = optionalString(args, key);
+        if (value !== undefined) body[key] = value;
+      }
+      const projectId = optionalInt(args, "projectId", { min: 1 });
+      if (projectId !== undefined) body.projectId = projectId;
+      return restJson("/api/workspaces", { method: "POST", body });
+    }
+    case "workspace_command":
+    case "create_workspace_component":
+    case "update_workspace_component":
+    case "remove_workspace_component":
+    case "add_workspace_placement":
+    case "remove_component_placement":
+    case "move_workspace_components":
+    case "add_workspace_connector":
+    case "remove_workspace_connector":
+    case "add_workspace_comment":
+    case "save_workspace_checkpoint":
+    case "propose_workspace_plan":
+    case "accept_workspace_plan":
+    case "link_workspace_project":
+    case "create_workspace_project":
+    case "publish_workspace_plan": {
+      if (!isPlainObject(args.payload)) throw new McpError(-32602, "payload must be a JSON object.");
+      const action = workspaceWriteActions[toolName] ?? workspaceRequiredString(args, "action");
+      return restJson(`/api/workspaces/${encodeURIComponent(workspaceRequiredString(args, "workspaceId"))}/commands`, {
+        method: "POST",
+        body: { operationId: workspaceRequiredString(args, "operationId"), expectedRevision: requiredInt(args, "expectedRevision", { min: 0 }),
+          action, payload: args.payload, actor: optionalString(args, "actor") ?? "mcp-agent" },
+      });
+    }
+    case "preview_workspace_publication": {
+      const body = {
+        expectedRevision: requiredInt(args, "expectedRevision", { min: 0 }),
+        expectedProjectPlanRevision: requiredInt(args, "expectedProjectPlanRevision", { min: 0 }),
+      };
+      if (args.itemIds !== undefined && args.itemIds !== null) {
+        if (!Array.isArray(args.itemIds) || !args.itemIds.every(item => typeof item === "string")) {
+          throw new McpError(-32602, "itemIds must be an array of canonical item identifiers.");
+        }
+        body.itemIds = args.itemIds;
+      }
+      const featureId = optionalInt(args, "featureId", { min: 1 });
+      const featureName = optionalString(args, "featureName");
+      if (featureId !== undefined) body.featureId = featureId;
+      if (featureName !== undefined) body.featureName = featureName;
+      return restJson(`/api/workspaces/${encodeURIComponent(workspaceRequiredString(args, "workspaceId"))}/publication-preview`, {
+        method: "POST", body,
+      });
+    }
+    case "list_workspaces": {
+      const query = new URLSearchParams();
+      for (const key of ["kind", "status", "q", "cursor"]) {
+        const value = optionalString(args, key);
+        if (value !== undefined) query.set(key, value);
+      }
+      const limit = optionalInt(args, "limit", { min: 1, max: 500 });
+      if (limit !== undefined) query.set("limit", String(limit));
+      return restJson(`/api/workspaces?${query}`);
+    }
+    case "get_workspace_context":
+      return restJson(`/api/workspaces/${encodeURIComponent(workspaceRequiredString(args, "workspaceId"))}/context`);
+    case "list_workspace_components":
+    case "get_workspace_changes": {
+      const query = new URLSearchParams();
+      const cursor = optionalString(args, "cursor");
+      const limit = optionalInt(args, "limit", { min: 1, max: 500 });
+      if (cursor !== undefined) query.set("cursor", cursor);
+      if (limit !== undefined) query.set("limit", String(limit));
+      if (toolName === "get_workspace_changes") {
+        const after = optionalInt(args, "afterActivityId", { min: 0 });
+        if (after !== undefined) query.set("afterActivityId", String(after));
+      }
+      const collection = toolName === "get_workspace_changes" ? "changes" : "components";
+      return restJson(`/api/workspaces/${encodeURIComponent(workspaceRequiredString(args, "workspaceId"))}/${collection}?${query}`);
+    }
+    case "get_workspace_component": {
+      const query = new URLSearchParams({ componentId: workspaceRequiredString(args, "componentId") });
+      return restJson(`/api/workspaces/${encodeURIComponent(workspaceRequiredString(args, "workspaceId"))}/component?${query}`);
+    }
+
     // ── Knowledge-graph memory tools (#224) — forwarded to the native MCP server ──
     // The graph semantics live in the native tools; the wrapper forwards the call verbatim so
     // stdio clients get exactly the same behavior (single source of truth, no drift).
@@ -1823,6 +1921,16 @@ function requiredString(args, name, { preserveWhitespace = false } = {}) {
     throw new McpError(-32602, `${name} is required.`);
   }
   return preserveWhitespace ? value : value.trim();
+}
+
+// Workspace receipt/target identities belong to the shared domain validator. Never
+// silently trim them into a different operation or target than the caller supplied.
+function workspaceRequiredString(args, name) {
+  const value = args[name];
+  if (typeof value !== "string" || value.length === 0) {
+    throw new McpError(-32602, `${name} is required.`);
+  }
+  return value;
 }
 
 // `hint` is optional: when a value is rejected for a reason the allowed-list alone does not explain

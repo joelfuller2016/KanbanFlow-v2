@@ -2,23 +2,25 @@
 
 Deep detail moved out of [`README.md`](../README.md) so the front page stays skimmable.
 The README is the *product* view (what KanbanFlow is, how the GitHub sync works, how to run it).
-This file is the *engineering* view: entity model, write paths, the full REST surface, the MCP
-tool inventory, and the capability requirements matrix.
+This file is the *engineering* view: entity model, write paths, current surface discovery,
+baseline route/tool maps, and the capability requirements matrix.
 
-Every count in this file was derived from the code at the commit that introduced it, with the
-command shown. If a number here disagrees with the code, the code wins — re-derive it.
+Current REST and MCP totals were measured on the combined workflow/workspace application on
+November 1, 2026 UTC. Earlier static inventories are labeled as baselines. If a number here
+disagrees with the code, the code wins — re-derive it with the commands below.
 
 ---
 
 ## Contents
 
 - [Request workflows](request-workflow.md) — integrated idea/brief/plan/task/result graph, shared services and MCP contracts
+- [Idea and project workspaces](idea-workspaces.md) — persistent canvas, shared project plans, delivery and transport contracts
 
 - [Runtime shape](#runtime-shape)
 - [Entity model](#entity-model)
 - [The write path & audit boundary](#the-write-path--audit-boundary)
-- [REST surface (77 endpoints)](#rest-surface-77-endpoints)
-- [MCP surface (36 native / 54 wrapper)](#mcp-surface-36-native--54-wrapper)
+- [REST surface (102 operations)](#rest-surface-102-operations)
+- [MCP surface (60 native / 79 wrapper)](#mcp-surface-60-native--79-wrapper)
 - [Who owns what](#who-owns-what)
 - [Running it locally](#running-it-locally)
   - [Keeping it running: the scheduled task](#keeping-it-running-the-scheduled-task)
@@ -36,19 +38,19 @@ service mesh, no message bus, no container, and no build pipeline to reason abou
 
 ```mermaid
 flowchart TD
-    H["Human"] -->|"kanban board, outline, ideas, memory map"| UI["Blazor Server<br/>Components/ (38 .razor, 6 routes)"]
-    A["AI agent"] -->|"JSON-RPC over stdio"| NODE["Node MCP wrapper<br/>scripts/mcp-server.mjs (54 tools)"]
-    A -->|"JSON-RPC over HTTP"| NATIVE["Native in-process MCP<br/>POST /mcp (36 tools)"]
-    A -->|"HTTP / JSON"| REST["REST minimal API<br/>ApiEndpoints.cs + AdminEndpoints.cs + WorkflowEndpoints.cs (77)"]
+    H["Human"] -->|"kanban, outline, ideas, workspaces, memory"| UI["Blazor Server<br/>Components/ (60 .razor, 8 routes)"]
+    A["AI agent"] -->|"JSON-RPC over stdio"| NODE["Node MCP wrapper<br/>scripts/mcp-server.mjs (79 tools)"]
+    A -->|"JSON-RPC over HTTP"| NATIVE["Native in-process MCP<br/>POST /mcp (60 tools)"]
+    A -->|"HTTP / JSON"| REST["REST minimal API<br/>Legacy, workflow and workspace endpoint groups<br/>(102 operations)"]
     NODE -->|"HTTP"| REST
 
     UI --> EF
     UI --> SVC
     REST --> EF
     REST --> SVC
-    NATIVE --> SVC["ITaskService / IIdeaService<br/>audit-aware service layer"]
+    NATIVE --> SVC["Shared task/idea, workflow<br/>and idea-workspace services"]
 
-    SVC -->|"mutation + ActivityEvent<br/>in one SaveChanges"| EF["AppDbContext (EF Core 10)"]
+    SVC -->|"mutation + ActivityEvent<br/>atomic save or transaction"| EF["AppDbContext (EF Core 10)"]
     EF --> SQLITE[("SQLite - single file")]
 ```
 
@@ -145,9 +147,30 @@ grep -rln 'ITaskService\|IIdeaService' src/KanbanFlow/Components/
 
 ---
 
-## REST surface (77 endpoints)
+## REST surface (102 operations)
 
 The five additive workflow routes are documented with complete typed payloads in [the request workflow reference](request-workflow.md#mcp-and-rest-reference) and [workflows.http](../src/KanbanFlow/Requests/workflows.http). The original routes below remain available.
+
+The route groups below describe the earlier base checkpoint. The current workspace-inclusive
+surface is measured from the combined running app: 97 application and five admin operations, 102 total (November 1, 2026).
+Use an explicit disposable instance to reproduce the OpenAPI and both MCP counts:
+
+```powershell
+node scripts/workspace-surface-inventory.mjs http://127.0.0.1:5123
+```
+
+The [inventory script](../scripts/workspace-surface-inventory.mjs) counts actual HTTP methods
+under `/api/` in `/openapi/v1.json`; `/api/admin/` is counted separately. It also performs
+actual native and stdio `tools/list`, without calling a data-writing tool.
+
+| Current feature family | Routes and complete contracts |
+|---|---|
+| Request workflows | Five operations under `/api/workflows`: request list/context, idea/task context and commands. See the [workflow reference](request-workflow.md#mcp-and-rest-reference) and executable [HTTP examples](../src/KanbanFlow/Requests/workflows.http). |
+| Idea and project workspaces | `/api/workspaces` and `/api/workspace-capabilities`: catalog, full context/detail, changes, creation, canvas commands, plans and publication. See the [public surface](idea-workspaces.md#public-surface) and [write contracts](idea-workspaces.md#creation-and-write-surfaces). |
+
+The route tables below retain the earlier base inventory. They are not an exhaustive list
+of the 102 current operations; use OpenAPI and the feature references above for that list.
+The earlier single-file static counts were:
 
 ```bash
 grep -cE '\.Map(Get|Post|Put|Patch|Delete)\(' src/KanbanFlow/ApiEndpoints.cs    # 67
@@ -155,7 +178,7 @@ grep -cE '\.Map(Get|Post|Put|Patch|Delete)\(' src/KanbanFlow/AdminEndpoints.cs  
 ```
 
 The machine-readable source of truth is the OpenAPI document at `/openapi/v1.json`
-(`/openapi.json` 302s to it). The route map:
+(`/openapi.json` 302s to it). The baseline route map follows.
 
 ### Projects
 
@@ -370,19 +393,23 @@ Plus `GET /openapi.json` in `Program.cs`, which 302s to `/openapi/v1.json`.
 
 ---
 
-## MCP surface (36 native / 54 wrapper)
+## MCP surface (60 native / 79 wrapper)
 
-The integrated source declares 36 native and 54 wrapper tools. September 6 transport discovery verified the earlier 33-native/54-wrapper surface. Both expose `list_requests`, `get_request_context`, `get_task_workflow` and `workflow_command`; native additionally gained `update_task`, and `get_task` now includes comments. See the [workflow contract](request-workflow.md#mcp-and-rest-reference). The original inventory below describes the earlier surface.
+The combined source exposes 60 native and 79 wrapper tools, measured from both running transports on November 1, 2026. The earlier workflow-only source declared 36 native and 54 wrapper tools. September 6 transport discovery verified the earlier 33-native/54-wrapper surface. Both expose `list_requests`, `get_request_context`, `get_task_workflow` and `workflow_command`; native additionally gained `update_task`, and `get_task` now includes comments. See the [workflow contract](request-workflow.md#mcp-and-rest-reference). The original inventory below describes the earlier surface.
+
+These group tables describe the earlier base surface. The workspace-inclusive totals are
+60 native and 79 wrapper tools; reproduce them with the read-only inventory command above.
 
 Two MCP servers ship, and they are **not** at parity. Tracked in
 [#231](https://github.com/joelfuller2016/KanbanFlow-v2/issues/231).
 
 ```bash
-grep -c '\[McpServerTool(' src/KanbanFlow/Mcp/KanbanMcpTools.cs   # 28 (native, in-process)
+# Single legacy class only; workspace tools live in additional classes.
+grep -c '\[McpServerTool(' src/KanbanFlow/Mcp/KanbanMcpTools.cs
 ```
 
 ```bash
-# 50 (Node wrapper) - ask the server itself, no parsing guesswork:
+# Ask the wrapper itself; the November 1 combined checkpoint returned 79.
 printf '%s\n' \
   '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"c","version":"1"}}}' \
   '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}' \
@@ -390,7 +417,7 @@ printf '%s\n' \
   | node -e 'let b="";process.stdin.on("data",d=>b+=d).on("end",()=>{for(const l of b.split("\n").filter(Boolean)){try{const m=JSON.parse(l);if(m.id===2)console.log(m.result.tools.length)}catch{}}})'
 ```
 
-### Native (28) — `POST /mcp`, in-process, no HTTP hop
+### Baseline native inventory (28) — `POST /mcp`, in-process, no HTTP hop
 
 | Group | Tools |
 |---|---|
@@ -400,9 +427,9 @@ printf '%s\n' \
 | Ideas (5) | `create_idea`, `list_ideas`, `get_idea`, `update_idea`, `promote_idea` |
 | Knowledge graph (9) | `create_entities`, `create_relations`, `add_observations`, `delete_entities`, `delete_observations`, `delete_relations`, `read_graph`, `search_nodes`, `open_nodes` |
 
-### Node wrapper (50) — `scripts/mcp-server.mjs`, stdio, forwards to REST
+### Baseline Node wrapper inventory (50) — `scripts/mcp-server.mjs`, stdio, forwards to REST
 
-Everything native has, **plus**: `get_project`, `list_project_tasks`, `get_project_board`,
+At this baseline, the wrapper included the native inventory **plus**: `get_project`, `list_project_tasks`, `get_project_board`,
 `create_project`, `update_project`, `create_feature`, `update_feature`, `delete_feature`,
 `update_task`, `reassign_task`, `get_step_context`, the five subtask tools, `delete_acceptance_criterion`,
 the three dependency tools, and `list_project_activity` /
@@ -410,9 +437,10 @@ the three dependency tools, and `list_project_activity` /
 
 ### The parity gap that bites
 
-The native server has **no `create_project`**. An agent connected only to `/mcp` cannot onboard
-a repo — which is exactly why `scripts/portfolio-sync.mjs` uses REST (`POST /api/projects`)
-rather than MCP.
+The native server has no dedicated `create_project` tool. It now supports project creation
+through `workflow_command` with `operation:"create_project"` and the required actor/key;
+see the [workflow contract](request-workflow.md#mcp-and-rest-reference).
+`scripts/portfolio-sync.mjs` continues to use REST (`POST /api/projects`).
 
 **Closed in #438:** the native server also had no acceptance-criteria tools, which stopped being
 cosmetic the moment #428 gated `Done` on unmet criteria. An agent on `/mcp` could be refused the
@@ -710,6 +738,12 @@ curl http://127.0.0.1:5123/api/admin/embed-ping
 Requirements are organised by **capability**, not by entity. Every capability should be
 reachable from both REST and MCP.
 
+The rows retain the earlier legacy-domain capability audit. Current REST/MCP totals in
+R-2.1 and R-2.2 include workflows and idea workspaces; the other statuses were not all
+re-audited during the November 1 integration. Current feature contracts and their observed
+verification are in the [request workflow](request-workflow.md) and
+[workspace guide](idea-workspaces.md#verification-boundaries).
+
 ### C-1. Read everything
 
 | # | Requirement | Status |
@@ -725,8 +759,8 @@ reachable from both REST and MCP.
 
 | # | Requirement | Status |
 |---|---|---|
-| R-2.1 | Full REST CRUD for every entity. | ⚠️ 77 endpoints, but not *full* CRUD everywhere: `TaskComment` has create/list/delete and **no update route**, and `ActivityEvent` is read-only by design (append-only, R-7.3) |
-| R-2.2 | Every REST capability has at least one MCP tool. | ❌ native 36, wrapper 54 — neither covers requirements (#231) |
+| R-2.1 | Full REST CRUD for every entity. | ⚠️ 102 operations, but not *full* CRUD everywhere: `TaskComment` has create/list/delete and **no update route**, and `ActivityEvent` is read-only by design (append-only, R-7.3) |
+| R-2.2 | Every REST capability has at least one MCP tool. | ❌ native 60, wrapper 79 — neither covers requirements (#231) |
 | R-2.3 | UI mutations go through the same service layer as REST. | ✅ #88 closed; components call `ITaskService`/`IIdeaService` |
 | R-2.4 | All entity mutations produce an `ActivityEvent`. | ❌ tasks + ideas only (#149) |
 | R-2.5 | Project-boundary integrity across features, tasks, requirements. | ✅ #82 and #83 both closed — `CrossProjectReassignmentException` (`TaskService.cs:166`) plus 422 on cross-project requirement links |

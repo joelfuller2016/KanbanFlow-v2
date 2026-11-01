@@ -1,0 +1,39 @@
+@if (removedDrafts.Count > 0)
+{
+    <section class="workspace-panel mt-3" aria-labelledby="workspace-removed-drafts-heading" data-testid="workspace-removed-drafts">
+        <h2 id="workspace-removed-drafts-heading" class="h5">Unsaved cards removed from the workspace</h2>
+        <p class="text-muted small">Your unsaved text is still available. Select a draft to review it and keep it as a new card.</p>
+        <ul class="list-unstyled mb-0">
+            @foreach (var removed in removedDrafts)
+            {
+                <li @key="removed.Key" class="mb-2">
+                    <button class="btn text-start w-100 @(removed.ComponentId == SelectedComponentId ? "btn-primary" : "btn-outline-secondary")"
+                            disabled="@Busy" aria-pressed="@(removed.ComponentId == SelectedComponentId ? "true" : "false")"
+                            @onclick="() => SelectDraft(removed)" data-testid="removed-draft-@removed.Key">
+                        <span class="d-block">@(string.IsNullOrWhiteSpace(removed.Title) ? "Untitled unsaved card" : removed.Title)</span>
+                        <span class="small">Removed card · unsaved draft</span>
+                    </button>
+                </li>
+            }
+        </ul>
+    </section>
+}
+
+@code {
+    [Parameter, EditorRequired] public IdeaWorkspaceDocument Document { get; set; } = default!;
+    [Parameter, EditorRequired] public IReadOnlyDictionary<string, WorkspaceContentDraft> Drafts { get; set; } = default!;
+    [Parameter] public string? SelectedComponentId { get; set; }
+    [Parameter] public bool Busy { get; set; }
+    [Parameter] public EventCallback<WorkspaceSelection> OnSelect { get; set; }
+    private IReadOnlyList<WorkspaceContentDraft> removedDrafts = [];
+
+    protected override void OnParametersSet()
+    {
+        var savedIds = Document.Components.Select(component => component.Id).ToHashSet(StringComparer.Ordinal);
+        removedDrafts = Drafts.Values.Where(value => value.Dirty && value.ComponentId is not null && !savedIds.Contains(value.ComponentId))
+            .OrderBy(value => value.Title, StringComparer.Ordinal).ThenBy(value => value.Key, StringComparer.Ordinal).ToArray();
+    }
+
+    private Task SelectDraft(WorkspaceContentDraft removed)
+        => Busy ? Task.CompletedTask : OnSelect.InvokeAsync(new(removed.ComponentId));
+}

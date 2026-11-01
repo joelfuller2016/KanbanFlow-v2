@@ -1,0 +1,5 @@
+section { min-width: 0; }
+section ::deep .workspace-gallery-card { border-color: #d4dde7; border-radius: .8rem; box-shadow: 0 2px 8px #1f334a09; }
+section ::deep .workspace-gallery-card h2, section ::deep .workspace-gallery-card p { overflow-wrap: anywhere; }
+section ::deep .workspace-gallery-card:focus-within { outline: 2px solid #2563eb; outline-offset: 3px; }
+@media (max-width: 600px) { section ::deep .btn { min-height: 44px; } }

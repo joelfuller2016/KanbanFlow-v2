@@ -1,4 +1,5 @@
 using KanbanFlow.Models;
+using KanbanFlow.Models.IdeaWorkspaces;
 using KanbanFlow.Models.Workflows;
 using Microsoft.EntityFrameworkCore;
 
@@ -35,6 +36,8 @@ public class AppDbContext : DbContext
     public DbSet<TaskDependency> TaskDependencies => Set<TaskDependency>();
     public DbSet<ActivityEvent> ActivityEvents => Set<ActivityEvent>();
     public DbSet<Idea> Ideas => Set<Idea>();
+    public DbSet<IdeaWorkspaceState> IdeaWorkspaceStates => Set<IdeaWorkspaceState>();
+    public DbSet<IdeaWorkspaceReceipt> IdeaWorkspaceReceipts => Set<IdeaWorkspaceReceipt>();
     public DbSet<MemoryNode> MemoryNodes => Set<MemoryNode>();
     public DbSet<Observation> Observations => Set<Observation>();
     public DbSet<MemoryRelation> MemoryRelations => Set<MemoryRelation>();
@@ -43,6 +46,7 @@ public class AppDbContext : DbContext
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
+        IdeaWorkspaceModelConfiguration.Configure(modelBuilder);
         WorkflowModelConfiguration.Configure(modelBuilder);
         modelBuilder.Entity<Project>(e =>
         {

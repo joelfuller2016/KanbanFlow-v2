@@ -1,0 +1,14 @@
+.workspace-canvas-viewport { overflow: auto; height: min(75vh, 850px); min-height: 420px; border: 1px solid var(--bs-border-color); border-radius: .7rem; background: var(--bs-tertiary-bg); }
+.workspace-canvas { position: relative; width: var(--canvas-width); height: var(--canvas-height); background-image: radial-gradient(var(--bs-border-color) .8px, transparent .8px); background-size: 20px 20px; }
+.workspace-canvas-card { position: absolute; left: var(--card-x); top: var(--card-y); width: var(--preview-width, var(--card-width)); height: var(--preview-height, var(--card-height)); transform: translate(var(--preview-dx, 0), var(--preview-dy, 0)); z-index: var(--card-layer); display: flex; flex-direction: column; border: 1px solid var(--bs-border-color); border-radius: .6rem; color: var(--bs-body-color); background: var(--bs-body-bg); box-shadow: var(--bs-box-shadow-sm); min-width: 0; }
+.workspace-frame { background: rgba(var(--bs-primary-rgb), .08); border: 2px dashed var(--bs-primary-border-subtle); }
+.workspace-card-selected { outline: 3px solid var(--bs-primary); outline-offset: 2px; }
+.workspace-drag-handle { border: 0; border-bottom: 1px solid var(--bs-border-color); color: var(--bs-body-color); background: var(--bs-tertiary-bg); border-radius: .6rem .6rem 0 0; padding: .65rem .8rem; display: flex; align-items: start; flex-direction: column; text-align: left; width: 100%; cursor: grab; touch-action: none; overflow-wrap: anywhere; }
+.workspace-drag-handle:focus-visible { outline: 3px solid var(--bs-primary); outline-offset: 2px; }
+.workspace-card-preview { padding: .8rem; overflow: auto; flex: 1; font-size: .9rem; overflow-wrap: anywhere; }
+.workspace-frame .workspace-card-preview { pointer-events: none; }
+.workspace-resize-handle { position: absolute; right: 0; bottom: 0; padding: 0 .2rem; color: var(--bs-secondary-color); cursor: nwse-resize; touch-action: none; background: var(--bs-body-bg); }
+.workspace-connectors { position: absolute; inset: 0; overflow: visible; pointer-events: none; z-index: 0; }
+.workspace-connectors line { stroke: var(--bs-secondary-color); stroke-width: 2; }
+.workspace-connectors text { fill: var(--bs-body-color); font-size: 12px; paint-order: stroke; stroke: var(--bs-tertiary-bg); stroke-width: 4px; stroke-linejoin: round; }
+@media (max-width: 600px) { .workspace-canvas-viewport { height: 55vh; min-height: 320px; } }

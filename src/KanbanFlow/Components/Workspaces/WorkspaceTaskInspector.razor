@@ -1,0 +1,21 @@
+<section class="workspace-panel mt-3" aria-labelledby="workspace-task-heading" data-testid="workspace-task-inspector">
+    <div class="d-flex flex-wrap justify-content-between gap-2"><h2 id="workspace-task-heading" class="h5">Current Kanban task</h2><button class="btn btn-sm btn-outline-secondary" @onclick="() => OnClose.InvokeAsync()">Close task details</button></div>
+    @if (Busy) { <p role="status">Reading current task…</p> }
+    @if (Error is not null) { <p class="alert alert-warning" role="alert">@Error</p> }
+    @if (Task is { } task)
+    {
+        <h3 class="h6">#@task.Id · @task.Name</h3>
+        <p data-testid="workspace-task-status">@task.Status · @task.Priority · @(task.Assignee ?? "Unassigned")</p>
+        <MarkdownContent Markdown="@task.Description" EmptyText="No task description." />
+        <div class="d-flex flex-wrap align-items-center gap-3 mt-3"><a href="@($"/project/{task.ProjectId}")" data-testid="workspace-task-kanban">Open Kanban ↗</a><button class="btn btn-outline-secondary btn-sm" disabled="@Busy" @onclick="() => OnRefresh.InvokeAsync(task.Id)" data-testid="workspace-task-refresh">Refresh current task</button></div>
+        <p class="small text-muted mt-2 mb-0">Read from the task at @task.UpdatedAt.ToLocalTime().ToString("g"). Plan publication preserves human edits to this task.</p>
+    }
+</section>
+
+@code {
+    [Parameter] public IdeaWorkspaceTaskReference? Task { get; set; }
+    [Parameter] public string? Error { get; set; }
+    [Parameter] public bool Busy { get; set; }
+    [Parameter] public EventCallback<int> OnRefresh { get; set; }
+    [Parameter] public EventCallback OnClose { get; set; }
+}

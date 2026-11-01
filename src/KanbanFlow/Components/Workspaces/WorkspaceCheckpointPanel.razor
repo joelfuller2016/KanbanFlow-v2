@@ -1,0 +1,63 @@
+<section class="workspace-panel" aria-labelledby="workspace-checkpoint-heading" data-testid="workspace-checkpoints">
+    <h2 id="workspace-checkpoint-heading" class="h5">Leave a place to resume</h2>
+    <p class="text-muted small">Saved per browser client and tab session. Other people and AI callers keep their own checkpoints.</p>
+    <label class="form-label" for="checkpoint-objective">Current objective</label>
+    <textarea id="checkpoint-objective" rows="2" class="form-control mb-2" @bind:get="editing.Objective" @bind:set="value => Change(editing with { Objective = value })" @bind:event="oninput" data-testid="checkpoint-objective"></textarea>
+    <label class="form-label" for="checkpoint-completed">Completed changes (one per line)</label>
+    <textarea id="checkpoint-completed" rows="2" class="form-control mb-2" @bind:get="editing.CompletedChanges" @bind:set="value => CompletedChanged(new ChangeEventArgs { Value = value })" @bind:event="oninput" data-testid="checkpoint-completed"></textarea>
+    <label class="form-label" for="checkpoint-questions">Open questions (one per line)</label>
+    <textarea id="checkpoint-questions" rows="2" class="form-control mb-2" @bind:get="editing.OpenQuestions" @bind:set="value => QuestionsChanged(new ChangeEventArgs { Value = value })" @bind:event="oninput" data-testid="checkpoint-questions"></textarea>
+    <label class="form-label" for="checkpoint-next">Next actions (one per line)</label>
+    <textarea id="checkpoint-next" rows="3" class="form-control mb-2" @bind:get="editing.NextActions" @bind:set="value => NextChanged(new ChangeEventArgs { Value = value })" @bind:event="oninput" data-testid="checkpoint-next"></textarea>
+    <fieldset class="mb-3"><legend class="h6">Focus components</legend>
+        @foreach (var c in Context.Document.Components)
+        {
+            <label class="d-block" @key="c.Id"><input type="checkbox" class="form-check-input me-2" checked="@editing.FocusedComponentIds.Contains(c.Id)" @onchange="e => FocusChanged(c.Id, (bool)(e.Value ?? false))" data-testid="checkpoint-focus-@c.Id" />@c.Title</label>
+        }
+        @foreach (var id in editing.FocusedComponentIds.Where(id => !Context.Document.Components.Any(c => c.Id == id)).Distinct())
+        {
+            <label class="d-block" @key="id"><input type="checkbox" class="form-check-input me-2" checked="true" @onchange="e => FocusChanged(id, (bool)(e.Value ?? false))" data-testid="checkpoint-missing-focus-@id" />Removed component · @id</label>
+            <p class="text-muted small">This selected component was removed. Uncheck it before saving this checkpoint; your objective and next actions are retained.</p>
+        }
+    </fieldset>
+    <button class="btn btn-primary" disabled="@(Busy || string.IsNullOrEmpty(ClientId))" @onclick="Save" data-testid="checkpoint-save">Save resume checkpoint</button>
+    <p class="text-muted small mt-2">Acknowledges changes through activity @Context.LastActivityId. Client <code>@ClientId</code> · session <code>@SessionId</code>.</p>
+    <details class="mt-3"><summary>Saved checkpoints (@Context.Document.Checkpoints.Count)</summary>
+        @foreach (var checkpoint in Context.Document.Checkpoints.OrderByDescending(c => c.UpdatedAt))
+        {
+            <article class="border-top pt-2 mt-2" @key="(checkpoint.ClientId, checkpoint.SessionId)" data-testid="saved-checkpoint-@checkpoint.ClientId-@checkpoint.SessionId">
+                <p class="small text-muted">@checkpoint.Actor · @checkpoint.UpdatedAt.ToLocalTime().ToString("g") · through @checkpoint.LastAcknowledgedActivityId</p>
+                <p class="workspace-preserve-text">@checkpoint.Objective</p>
+                <p class="small">Next actions</p><ul>@foreach (var action in checkpoint.NextActions) { <li class="workspace-preserve-text">@action</li> }</ul>
+                <button class="btn btn-outline-secondary btn-sm" @onclick="() => Resume(checkpoint)" data-testid="checkpoint-resume-@checkpoint.ClientId-@checkpoint.SessionId">Use this resume context</button>
+            </article>
+        }
+    </details>
+</section>
+
+@code {
+    [Parameter, EditorRequired] public IdeaWorkspaceContext Context { get; set; } = default!;
+    [Parameter, EditorRequired] public WorkspaceCheckpointDraft Draft { get; set; } = default!;
+    [Parameter] public string ClientId { get; set; } = "";
+    [Parameter] public string SessionId { get; set; } = "";
+    [Parameter] public bool Busy { get; set; }
+    [Parameter] public EventCallback<WorkspaceCheckpointDraft> OnDraftChanged { get; set; }
+    [Parameter] public EventCallback<WorkspaceSelection> OnSelect { get; set; }
+    [Parameter] public EventCallback<WorkspaceUiCommand> OnCommand { get; set; }
+    private readonly WorkspaceDraftInput<WorkspaceCheckpointDraft> input = new(new());
+    private WorkspaceCheckpointDraft editing => input.Value;
+    protected override void OnParametersSet() => input.Receive(Draft, Context.WorkspaceId, Context.Revision);
+    private static string Text(ChangeEventArgs e) => e.Value?.ToString() ?? "";
+    private Task Change(WorkspaceCheckpointDraft draft) => input.ChangeAsync(draft, OnDraftChanged);
+    private Task CompletedChanged(ChangeEventArgs args) => Change(editing with { CompletedChanges = Text(args), OriginalCompletedChanges = null });
+    private Task QuestionsChanged(ChangeEventArgs args) => Change(editing with { OpenQuestions = Text(args), OriginalOpenQuestions = null });
+    private Task NextChanged(ChangeEventArgs args) => Change(editing with { NextActions = Text(args), OriginalNextActions = null });
+    private Task FocusChanged(string id, bool selected) => Change(editing with { FocusedComponentIds = selected ? [.. editing.FocusedComponentIds.Where(i => i != id), id] : [.. editing.FocusedComponentIds.Where(i => i != id)] });
+    private Task Save() => OnCommand.InvokeAsync(WorkspaceUiCommand.Create("save_checkpoint", new { clientId = ClientId, sessionId = SessionId, objective = editing.Objective, focusedComponentIds = editing.FocusedComponentIds, completedChanges = editing.OriginalCompletedChanges ?? WorkspaceUiText.Lines(editing.CompletedChanges), openQuestions = editing.OriginalOpenQuestions ?? WorkspaceUiText.Lines(editing.OpenQuestions), nextActions = editing.OriginalNextActions ?? WorkspaceUiText.Lines(editing.NextActions), lastAcknowledgedActivityId = Context.LastActivityId }, Context.Revision));
+    private async Task Resume(IdeaWorkspaceCheckpoint checkpoint)
+    {
+        await Change(WorkspaceCheckpointDraft.From(checkpoint));
+        var componentId = checkpoint.FocusedComponentIds.FirstOrDefault(id => Context.Document.Components.Any(c => c.Id == id));
+        if (componentId is not null) await OnSelect.InvokeAsync(new(componentId, Context.Document.Placements.FirstOrDefault(p => p.ComponentId == componentId)?.Id));
+    }
+}

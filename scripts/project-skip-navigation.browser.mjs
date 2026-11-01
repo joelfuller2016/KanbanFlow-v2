@@ -40,6 +40,10 @@ export async function projectSkipNavigation(page, api) {
         const targetId = testId === 'skip-to-board-search' ? 'board-filter-search' : 'kanban-board-heading';
         await fallbackPage.goto(filteredUrl);
         await fallbackPage.getByTestId('board-filter-search').waitFor();
+        // Wait for the interactive board before testing its native keyboard order. The
+        // prerendered target can otherwise be replaced between fragment focus and Tab.
+        await fallbackPage.waitForFunction(() => window.KanbanFlow?._boardSortables?.some(
+          (sortable) => sortable.el?.isConnected));
         assert.ok(blockedModules > 0, 'fallback test must block the skip-link module');
         assert.equal(await fallbackPage.getByTestId(testId).evaluate((el) => el.href),
           `${filteredUrl}#${targetId}`, 'native fallback must retain project/query and bypass the outline');
@@ -63,13 +67,14 @@ export async function projectSkipNavigation(page, api) {
     assert.equal(await focusedTestId(), 'skip-to-board-search', 'first Tab must bypass navigation and outline');
     await page.keyboard.press('Enter');
     await page.waitForFunction(() => document.activeElement?.id === 'board-filter-search');
-    assert.equal(await focusedId(), 'board-filter-search');
+    assert.equal(await focusedId(), 'board-filter-search', 'desktop initial bypass must retain search focus');
 
     await open('?q=Keyboard&hideDone=true');
     const filteredUrl = page.url();
     await page.keyboard.press('Tab');
     await page.keyboard.press('Enter');
-    assert.equal(await focusedId(), 'board-filter-search');
+    await page.waitForFunction(() => document.activeElement?.id === 'board-filter-search');
+    assert.equal(await focusedId(), 'board-filter-search', 'desktop filtered bypass must retain search focus');
     assert.equal(page.url(), filteredUrl, 'bypass must not change filter/deep-link URL state');
     assert.equal(await page.getByTestId('board-filter-search').inputValue(), 'Keyboard');
 
@@ -78,7 +83,8 @@ export async function projectSkipNavigation(page, api) {
     await page.keyboard.press('Tab');
     assert.equal(await focusedTestId(), 'skip-to-board-cards');
     await page.keyboard.press('Enter');
-    assert.equal(await focusedId(), 'kanban-board-heading');
+    await page.waitForFunction(() => document.activeElement?.id === 'kanban-board-heading');
+    assert.equal(await focusedId(), 'kanban-board-heading', 'desktop cards bypass must retain heading focus');
     let tabs = 2;
     while (tabs < 5 && await focusedTestId() !== `board-card-${firstTask.id}-title`) {
       await page.keyboard.press('Tab');
@@ -107,12 +113,14 @@ export async function projectSkipNavigation(page, api) {
     assert.ok(box && box.x >= 0 && box.y >= 0 && box.x + box.width <= 390, 'focused link must fit narrow viewport');
     assert.equal(await link.evaluate((el) => getComputedStyle(el).outlineStyle), 'solid');
     await page.keyboard.press('Enter');
-    assert.equal(await focusedId(), 'board-filter-search');
+    await page.waitForFunction(() => document.activeElement?.id === 'board-filter-search');
+    assert.equal(await focusedId(), 'board-filter-search', 'narrow empty-results bypass must retain search focus');
     assert.equal(await page.locator('#project-outline').getAttribute('inert'), '');
     await open('?q=no-matching-task');
     await page.keyboard.press('Tab');
     await page.keyboard.press('Tab');
     await page.keyboard.press('Enter');
+    await page.waitForFunction(() => document.activeElement?.id === 'kanban-board-heading');
     assert.equal(await focusedId(), 'kanban-board-heading', 'empty results still have a safe board target');
     assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'no page-wide overflow');
 
@@ -139,16 +147,20 @@ export async function projectSkipNavigation(page, api) {
       }
     }
     await page.getByTestId('board-filter-search').waitFor();
+    await page.waitForFunction(() => window.KanbanFlow?._boardSortables?.some(
+      (sortable) => sortable.el?.isConnected));
     assert.equal(await page.evaluate(() => window.skipNavigationDocument), true,
       'fixture must exercise enhanced navigation without replacing the document');
     // Directly activate the existing link after route reuse; keyboard counts are proven above.
     await page.getByTestId('skip-to-board-search').dispatchEvent('click');
-    assert.equal(await focusedId(), 'board-filter-search');
+    await page.waitForFunction(() => document.activeElement?.id === 'board-filter-search');
+    assert.equal(await focusedId(), 'board-filter-search', 'enhanced-navigation bypass must focus search');
 
     await page.goto(`${origin}/project/2147483647`);
     await page.getByText('Project not found', { exact: true }).waitFor();
     await page.keyboard.press('Tab');
     await page.keyboard.press('Enter');
+    await page.waitForFunction(() => document.activeElement?.id === 'project-content');
     assert.equal(await focusedId(), 'project-content', 'missing board must focus safe page fallback');
     assert.deepEqual(errors, [], 'no uncaught browser errors');
   } finally {

@@ -31,7 +31,7 @@ public sealed partial class WorkspaceService
         var repositories = await RepositoriesAsync(request.ProjectId, ct);
         return new(request.Id, request.IdeaId, request.ProjectId, request.FeatureId, request.Title,
             request.Idea.Status.ToString(), request.Version, request.Archived,
-            request.Briefs.MaxBy(b => b.Number)?.IntentHash != IntentHash(request), $"/ideas?idea={request.IdeaId}",
+            request.Briefs.MaxBy(b => b.Number)?.IntentHash != IntentHash(request), $"/ideas/board?idea={request.IdeaId}",
             request.ProjectId is int projectId ? $"/project/{projectId}?request={request.Id}" : null,
             request.Messages.OrderBy(m => m.CreatedAt).ThenBy(m => m.Id).Select(m => new MessageContext(m.Id, m.Kind, m.Text, m.Author, m.Source, m.CreatedAt)).ToArray(),
             request.Briefs.OrderBy(b => b.Number).Select(b => new BriefContext(b.Id, b.Number, b.Outcome, b.Scope, b.Constraints, b.Acceptance, b.Author, b.CreatedAt)).ToArray(),

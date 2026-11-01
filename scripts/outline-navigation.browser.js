@@ -215,7 +215,9 @@ async page => {
   await page.screenshot({ path: 'outline-mobile.png', fullPage: true, animations: 'disabled' });
   await page.getByTestId('close-project-outline-button').click();
   await page.waitForFunction(() => document.querySelector('#project-outline').inert);
-  console.log(JSON.stringify({ passed: true, selection: 'feature/task/nested subtask', history: 'boundaries, duplicates, branching, deletion, project reset',
+  const result = { passed: true, selection: 'feature/task/nested subtask', history: 'boundaries, duplicates, branching, deletion, project reset',
     reveal: 'collapsed ancestors, fixed header, scoped scroll, focus, desktop/full panel/mobile', drag: 'task identity and status preserved',
-    mutations: 'navigation left workflow and task data unchanged', humanApproval: 'pending' }));
+    mutations: 'navigation left workflow and task data unchanged', humanApproval: 'pending' };
+  console.log(JSON.stringify(result));
+  return result;
 }

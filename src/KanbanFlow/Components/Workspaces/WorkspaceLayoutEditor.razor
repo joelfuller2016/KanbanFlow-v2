@@ -1,0 +1,80 @@
+@{ var renderedPlacementId = editing?.PlacementId; }
+<section class="workspace-panel" aria-labelledby="layout-editor-heading" data-testid="workspace-layout-editor">
+    <h2 id="layout-editor-heading" class="h5">Canvas placement</h2>
+    <label class="form-label" for="workspace-placement-select">Appearance of this component</label>
+    <select id="workspace-placement-select" class="form-select mb-3" value="@editing?.PlacementId" @onchange="SelectPlacement" data-testid="layout-placement">
+        <option value="">Select an appearance</option>
+        @foreach (var placement in Placements) { <option value="@placement.Id">@placement.Id</option> }
+    </select>
+    @if (editing is not null)
+    {
+        @if (editing.Dirty && editing.BaseRevision != Context.Revision)
+        {
+            <div class="alert alert-warning" role="alert">Layout draft is from revision @editing.BaseRevision. Compare the current canvas, then <button class="btn btn-link p-0" @onclick="() => Reapply(renderedPlacementId)" data-testid="layout-reapply">reapply these values to revision @Context.Revision</button>.</div>
+        }
+        <div class="row g-2">
+            <div class="col-6"><label class="form-label" for="layout-x">X</label><input id="layout-x" type="number" step="any" class="form-control" value="@Number(editing.X)" @onchange="e => NumberChanged(e, nameof(editing.X), renderedPlacementId)" data-testid="layout-x" /></div>
+            <div class="col-6"><label class="form-label" for="layout-y">Y</label><input id="layout-y" type="number" step="any" class="form-control" value="@Number(editing.Y)" @onchange="e => NumberChanged(e, nameof(editing.Y), renderedPlacementId)" data-testid="layout-y" /></div>
+            <div class="col-6"><label class="form-label" for="layout-width">Width</label><input id="layout-width" type="number" min="1" step="any" class="form-control" value="@Number(editing.Width)" @onchange="e => NumberChanged(e, nameof(editing.Width), renderedPlacementId)" data-testid="layout-width" /></div>
+            <div class="col-6"><label class="form-label" for="layout-height">Height</label><input id="layout-height" type="number" min="1" step="any" class="form-control" value="@Number(editing.Height)" @onchange="e => NumberChanged(e, nameof(editing.Height), renderedPlacementId)" data-testid="layout-height" /></div>
+            <div class="col-6"><label class="form-label" for="layout-order">Outline order</label><input id="layout-order" type="number" class="form-control" value="@editing.Order" @onchange="e => OrderChanged(e, renderedPlacementId)" data-testid="layout-order" /></div>
+            <div class="col-6"><label class="form-label" for="layout-layer">Layer</label><input id="layout-layer" type="number" class="form-control" value="@editing.ZIndex" @onchange="e => LayerChanged(e, renderedPlacementId)" data-testid="layout-layer" /></div>
+            <div class="col-12"><label class="form-label" for="layout-parent">Group inside frame appearance</label><select id="layout-parent" class="form-select" value="@(editing.ParentId ?? "")" @onchange="e => ParentChanged(e, renderedPlacementId)" data-testid="layout-parent"><option value="">Canvas root</option>@foreach (var frame in ParentFrames) { <option value="@frame.Id">@FrameTitle(frame) · @frame.Id</option> }</select></div>
+        </div>
+        <p class="text-muted small mt-2">X and Y are relative to the selected parent. Changing parent keeps these local values. Moving a frame moves its descendants with their offsets intact.</p>
+        @if (inputError is not null) { <p class="text-danger" role="alert">@inputError</p> }
+        <button class="btn btn-primary" disabled="@(Busy || !editing.Dirty || editing.BaseRevision != Context.Revision)" @onclick="() => Apply(renderedPlacementId)" data-testid="layout-apply">Apply layout</button>
+        <button class="btn btn-outline-danger ms-2" disabled="@Busy" @onclick="() => Remove(renderedPlacementId)" data-testid="layout-remove">Remove appearance</button>
+    }
+    else { <p class="text-muted">This component has no selected canvas appearance.</p> }
+    <button class="btn btn-outline-secondary mt-3" disabled="@Busy" @onclick="() => Add(renderedPlacementId)" data-testid="layout-add-placement">Add another appearance</button>
+    <p class="text-muted small mt-2 mb-0">Appearances share the same component content. Removing an appearance preserves the component.</p>
+</section>
+
+@code {
+    [Parameter, EditorRequired] public IdeaWorkspaceContext Context { get; set; } = default!;
+    [Parameter, EditorRequired] public string ComponentId { get; set; } = "";
+    [Parameter] public WorkspaceLayoutDraft? Draft { get; set; }
+    [Parameter] public bool Busy { get; set; }
+    [Parameter] public EventCallback<WorkspaceLayoutDraft> OnDraftChanged { get; set; }
+    [Parameter] public EventCallback<WorkspaceSelection> OnSelect { get; set; }
+    [Parameter] public EventCallback<string> OnReapply { get; set; }
+    [Parameter] public EventCallback<WorkspaceUiCommand> OnCommand { get; set; }
+    private readonly WorkspaceDraftInput<WorkspaceLayoutDraft> input = new(new());
+    private WorkspaceLayoutDraft? editing => Draft is null ? null : input.Value;
+    protected override void OnParametersSet() { if (Draft is not null) input.Receive(Draft, Context.WorkspaceId + ":" + Draft.PlacementId, (Context.Revision, Draft.BaseRevision)); }
+    private Task Change(WorkspaceLayoutDraft value) => input.ChangeAsync(value, OnDraftChanged);
+    private string? inputError;
+    private IEnumerable<IdeaWorkspacePlacement> Placements => Context.Document.Placements.Where(p => p.ComponentId == ComponentId);
+    private IEnumerable<IdeaWorkspacePlacement> ParentFrames => Context.Document.Placements.Where(p => p.Id != editing?.PlacementId && Context.Document.Components.Any(c => c.Id == p.ComponentId && c.Type == "frame") && !IsDescendant(p.Id));
+    private string FrameTitle(IdeaWorkspacePlacement p) => Context.Document.Components.First(c => c.Id == p.ComponentId).Title;
+    private static string Number(double value) => value.ToString(System.Globalization.CultureInfo.InvariantCulture);
+    private bool IsDescendant(string id)
+    {
+        var seen = new HashSet<string>();
+        var current = Context.Document.Placements.FirstOrDefault(p => p.Id == id);
+        while (current?.ParentId is { } parent && seen.Add(current.Id))
+        {
+            if (parent == editing?.PlacementId) return true;
+            current = Context.Document.Placements.FirstOrDefault(p => p.Id == parent);
+        }
+        return false;
+    }
+    private Task SelectPlacement(ChangeEventArgs e) => OnSelect.InvokeAsync(new(ComponentId, e.Value?.ToString()));
+    private bool IsCurrentPlacement(string? placementId) => placementId == editing?.PlacementId;
+    private Task NumberChanged(ChangeEventArgs e, string name, string? placementId)
+    {
+        if (editing is null || !IsCurrentPlacement(placementId)) return Task.CompletedTask;
+        if (!double.TryParse(e.Value?.ToString(), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var value) || !double.IsFinite(value) || (name is "Width" or "Height" && value <= 0))
+        { inputError = "Enter a finite number; width and height must be positive."; return Task.CompletedTask; }
+        inputError = null;
+        return Change(name switch { "X" => editing with { X = value, Dirty = true }, "Y" => editing with { Y = value, Dirty = true }, "Width" => editing with { Width = value, Dirty = true }, _ => editing with { Height = value, Dirty = true } });
+    }
+    private Task OrderChanged(ChangeEventArgs e, string? placementId) => editing is not null && IsCurrentPlacement(placementId) && int.TryParse(e.Value?.ToString(), out var value) ? Change(editing with { Order = value, Dirty = true }) : Task.CompletedTask;
+    private Task LayerChanged(ChangeEventArgs e, string? placementId) => editing is not null && IsCurrentPlacement(placementId) && int.TryParse(e.Value?.ToString(), out var value) ? Change(editing with { ZIndex = value, Dirty = true }) : Task.CompletedTask;
+    private Task ParentChanged(ChangeEventArgs e, string? placementId) => editing is null || !IsCurrentPlacement(placementId) ? Task.CompletedTask : Change(editing with { ParentId = string.IsNullOrEmpty(e.Value?.ToString()) ? null : e.Value!.ToString(), Dirty = true });
+    private Task Apply(string? placementId) => editing is null || !IsCurrentPlacement(placementId) ? Task.CompletedTask : OnCommand.InvokeAsync(WorkspaceUiCommand.Create("move_components", new { placements = new[] { new { placementId = editing.PlacementId, x = editing.X, y = editing.Y, width = editing.Width, height = editing.Height, parentId = editing.ParentId, order = editing.Order, zIndex = editing.ZIndex } } }, editing.BaseRevision, "layout:" + editing.PlacementId));
+    private Task Reapply(string? placementId) => editing is null || !IsCurrentPlacement(placementId) ? Task.CompletedTask : OnReapply.InvokeAsync(editing.PlacementId);
+    private Task Remove(string? placementId) => editing is null || !IsCurrentPlacement(placementId) ? Task.CompletedTask : OnCommand.InvokeAsync(WorkspaceUiCommand.Create("remove_placement", new { placementId = editing.PlacementId }, Context.Revision, "layout:" + editing.PlacementId));
+    private Task Add(string? placementId) => !IsCurrentPlacement(placementId) ? Task.CompletedTask : OnCommand.InvokeAsync(WorkspaceUiCommand.Create("add_placement", new { placement = new { componentId = ComponentId, x = 80 + Context.Document.Placements.Count * 24, y = 80 + Context.Document.Placements.Count * 24, width = 320, height = 220, zIndex = WorkspaceUiText.NextCanvasLayer(Context.Document) } }, Context.Revision));
+}

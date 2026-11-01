@@ -1,0 +1,110 @@
+<section class="workspace-panel" aria-labelledby="workspace-plan-heading" data-testid="workspace-plan">
+    <h2 id="workspace-plan-heading" class="h5">Develop the project plan</h2>
+    @if (Context.AcceptedPlan is { } accepted)
+    {
+        <h3 class="h6">Current accepted plan · v@(accepted.Version)</h3>
+        <WorkspacePlanVersion Plan="accepted" KanbanUrl="@Context.KanbanUrl" Current="true" OnInspectTask="OnInspectTask" />
+        <button class="btn btn-outline-secondary mb-3" disabled="@Busy" @onclick="() => CopyPlan(accepted)" data-testid="plan-copy-accepted">Expand this accepted plan in a new draft</button>
+    }
+    @foreach (var plan in Context.Document.PlanRevisions.OrderByDescending(p => p.Version))
+    {
+        var renderedWorkspaceRevision = Context.Revision;
+        var renderedProjectPlanRevision = Context.ProjectPlanRevision;
+        var renderedProposalBaseline = plan.ExpectedProjectPlanRevision;
+        <details class="border rounded p-3 mb-2" @key="plan.Id" data-testid="plan-version-@plan.Id">
+            <summary>@plan.Title · v@(plan.Version) · @plan.Status</summary>
+            <WorkspacePlanVersion Plan="plan" KanbanUrl="@Context.KanbanUrl" OnInspectTask="OnInspectTask" />
+            <button class="btn btn-sm btn-outline-secondary mt-2" disabled="@Busy" @onclick="() => CopyPlan(plan)" data-testid="plan-copy-@plan.Id">Use as a new draft</button>
+            @if (plan.Status == "Draft")
+            {
+                <button class="btn btn-outline-success mt-2" disabled="@(Busy || (Context.ProjectId is not null && plan.ExpectedProjectPlanRevision != Context.ProjectPlanRevision))" @onclick="() => Accept(plan.Id, renderedProposalBaseline, renderedWorkspaceRevision)" data-testid="plan-accept-@plan.Id">Accept this plan</button>
+                @if (Context.ProjectId is not null && plan.ExpectedProjectPlanRevision != Context.ProjectPlanRevision)
+                {
+                    <p class="text-warning-emphasis small mt-2">This proposal used project-plan revision @(plan.ExpectedProjectPlanRevision?.ToString() ?? "none"). The loaded shared plan is revision @Context.ProjectPlanRevision. Review the current accepted plan above before rebasing acceptance.</p>
+                    <button class="btn btn-outline-secondary" disabled="@Busy" @onclick="() => Accept(plan.Id, renderedProjectPlanRevision, renderedWorkspaceRevision)" data-testid="plan-rebase-accept-@plan.Id">Accept after reviewing shared revision @Context.ProjectPlanRevision</button>
+                }
+            }
+        </details>
+    }
+    @if (pendingCopy is { } requested)
+    {
+        <div class="alert alert-warning" role="alert" data-testid="plan-copy-confirmation">
+            <p>Replace your current browser plan draft with “@requested.Title”? Your unsaved title, items and acceptance criteria will be replaced.</p>
+            <button class="btn btn-warning" disabled="@Busy" @onclick="ConfirmCopy" data-testid="plan-copy-confirm">Replace current draft</button>
+            <button class="btn btn-outline-secondary ms-2" @onclick="CancelCopy" data-testid="plan-copy-cancel">Keep my current draft</button>
+        </div>
+    }
+    <h3 class="h6 mt-4">Propose a new version</h3>
+    @if (editing.BaseRevision is { } original && PlanStale)
+    {
+        <div class="alert alert-warning">Plan draft began at workspace revision @original and shared plan revision @(editing.BaseProjectPlanRevision?.ToString() ?? "none"). Review the current versions, then <button class="btn btn-link p-0" @onclick="Reapply" data-testid="plan-reapply">reapply to workspace revision @Context.Revision and shared plan revision @(Context.ProjectPlanRevision?.ToString() ?? "none")</button>.</div>
+    }
+    <label class="form-label" for="workspace-plan-title">Plan title</label>
+    <input id="workspace-plan-title" class="form-control mb-3" @bind:get="editing.Title" @bind:set="value => TitleChanged(new ChangeEventArgs { Value = value })" @bind:event="oninput" data-testid="plan-title" />
+    @foreach (var item in editing.Items) { <WorkspacePlanItemEditor @key="item.Id" Item="item" OtherItems="editing.Items" WorkspaceId="@Context.WorkspaceId" ResetVersion="@itemResetVersion" OnChanged="ItemChanged" OnRemove="RemoveItem" /> }
+    <div class="d-flex flex-wrap gap-2">
+        <button class="btn btn-outline-secondary" @onclick="AddItem" data-testid="plan-add-item">Add plan item</button>
+        <button class="btn btn-primary" disabled="@(Busy || string.IsNullOrWhiteSpace(editing.Title) || editing.Items.Count == 0 || editing.Items.Any(i => string.IsNullOrWhiteSpace(i.Title)) || PlanStale)" @onclick="Propose" data-testid="plan-propose">Save draft version</button>
+    </div>
+</section>
+
+@code {
+    [Parameter, EditorRequired] public IdeaWorkspaceContext Context { get; set; } = default!;
+    [Parameter, EditorRequired] public WorkspacePlanDraft Draft { get; set; } = default!;
+    [Parameter] public bool Busy { get; set; }
+    [Parameter] public EventCallback<WorkspacePlanDraft> OnDraftChanged { get; set; }
+    [Parameter] public EventCallback<WorkspaceUiCommand> OnCommand { get; set; }
+    [Parameter] public EventCallback<int> OnInspectTask { get; set; }
+    private readonly WorkspaceDraftInput<WorkspacePlanDraft> input = new(new());
+    private WorkspacePlanDraft editing => input.Value;
+    private IdeaWorkspacePlanRevision? pendingCopy;
+    private string? copyWorkspaceId;
+    private long copyRevision;
+    private long itemResetVersion;
+    protected override void OnParametersSet()
+    {
+        if (copyWorkspaceId != Context.WorkspaceId || copyRevision != Context.Revision) pendingCopy = null;
+        input.Receive(Draft, Context.WorkspaceId, (Context.Revision, Draft.BaseRevision, Draft.BaseProjectPlanRevision));
+    }
+    private bool PlanStale => editing.BaseRevision.HasValue && (editing.BaseRevision != Context.Revision || editing.BaseProjectPlanRevision != Context.ProjectPlanRevision);
+    private Task Change(WorkspacePlanDraft draft)
+    {
+        pendingCopy = null;
+        return input.ChangeAsync(draft with { BaseRevision = draft.BaseRevision ?? Context.Revision, BaseProjectPlanRevision = editing.BaseRevision.HasValue ? draft.BaseProjectPlanRevision : Context.ProjectPlanRevision }, OnDraftChanged);
+    }
+    private Task TitleChanged(ChangeEventArgs e) => Change(editing with { Title = e.Value?.ToString() ?? "" });
+    private Task Reapply()
+    {
+        itemResetVersion++;
+        return Change(editing with { BaseRevision = Context.Revision, BaseProjectPlanRevision = Context.ProjectPlanRevision,
+            Items = [.. editing.Items.Select(item => item with { Provenance = item.Provenance?.ProjectId == Context.ProjectId ? item.Provenance : null })] });
+    }
+    private Task AddItem() => Change(editing with { Items = [.. editing.Items, new()], BaseRevision = editing.BaseRevision ?? Context.Revision });
+    private Task ItemChanged(WorkspacePlanItemDraft item)
+    {
+        var currentIds = editing.Items.Select(value => value.Id).ToHashSet(StringComparer.Ordinal);
+        var currentItem = item with { DependsOn = [.. item.DependsOn.Where(currentIds.Contains)] };
+        return Change(editing with { Items = [.. editing.Items.Select(value => value.Id == item.Id ? currentItem : value)], BaseRevision = editing.BaseRevision ?? Context.Revision });
+    }
+    private Task RemoveItem(string id) => Change(editing with { Items = [.. editing.Items.Where(i => i.Id != id).Select(i => i with { DependsOn = [.. i.DependsOn.Where(d => d != id)] })] });
+    private Task Propose() => OnCommand.InvokeAsync(WorkspaceUiCommand.Create("propose_plan", new { title = editing.Title, items = editing.Items.Select(i => new { id = i.Id, title = i.Title, description = i.Description, acceptanceCriteria = i.OriginalAcceptanceCriteria ?? WorkspaceUiText.Lines(i.AcceptanceCriteria), dependsOn = i.DependsOn, provenance = i.Provenance }), expectedProjectPlanRevision = editing.BaseProjectPlanRevision }, editing.BaseRevision ?? Context.Revision, "plan"));
+    private Task Accept(string id, long? baseline, long workspaceRevision) => OnCommand.InvokeAsync(WorkspaceUiCommand.Create("accept_plan", new { planRevisionId = id, expectedProjectPlanRevision = baseline }, workspaceRevision));
+    private Task CopyPlan(IdeaWorkspacePlanRevision plan)
+    {
+        pendingCopy = plan;
+        copyWorkspaceId = Context.WorkspaceId;
+        copyRevision = Context.Revision;
+        return Task.CompletedTask;
+    }
+    private void CancelCopy() => pendingCopy = null;
+    private Task ConfirmCopy()
+    {
+        if (Busy || pendingCopy is not { } plan) return Task.CompletedTask;
+        itemResetVersion++;
+        return Change(new() { Title = plan.Title, BaseRevision = Context.Revision,
+        BaseProjectPlanRevision = Context.ProjectPlanRevision,
+        Items = plan.Items.Select(i => new WorkspacePlanItemDraft { Id = i.Id, Title = i.Title, Description = i.Description,
+            AcceptanceCriteria = string.Join('\n', i.AcceptanceCriteria), OriginalAcceptanceCriteria = [.. i.AcceptanceCriteria],
+            DependsOn = [.. i.DependsOn], Provenance = i.Provenance?.ProjectId == Context.ProjectId ? i.Provenance : null }).ToList() });
+    }
+}
