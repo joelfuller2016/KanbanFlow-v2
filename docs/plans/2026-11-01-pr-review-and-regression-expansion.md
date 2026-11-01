@@ -4,6 +4,8 @@ Date: 2026-11-01. Source: `origin/master` at `789c6b4743f42663365cc04d1bb1e54297
 
 The owner requested: “review all prs and fix and test what possible. Merge when green the run unit tests. build out testing as much as posisble”. The live request `9327981b-5625-4912-90ee-efdae8ad9928` in project 2 owns execution and result status. This is the single design/acceptance plan for this pass; root `JOURNAL.md` owns work history.
 
+Pinned Spec Kit `converge.md` guidance maps governing principles to `AGENTS.md`, intent and acceptance to this plan's R1–R7, execution units to T1–T6, and actual status to that existing app request. The gap assessment uses current code and executed evidence. No separate Spec Kit runtime, hooks or task tracker is installed or invoked.
+
 ## Outcome and boundaries
 
 Audit every current open PR, repair demonstrated failures and strengthen meaningful regression coverage. Publish a focused change, complete independent and configured bot review, merge when the exact head is green, and freshly run units on the actual merged primary. The initial GitHub queue is empty, so the executable increment is a testing/repair PR based on current primary.
@@ -47,7 +49,7 @@ Acceptance: the queue/head readback, baseline result, source/test inventory and 
 
 Add `RecordEvidence_MirrorsCompleteAuthoredReportIntoMessageAndTaskComment`, asserting exact independently constructed multiline Markdown/Unicode report text in both the request `assistant-report` and task `Verification` comment, author/source/identity, unaccepted evidence and Review status.
 
-Add parameterized `RecordEvidence_FieldLengthBoundary_PreservesOrRejectsAtomically` for Summary 20,000, Checks 20,000 and CodeReference 2,000, and `Conclude_FieldLengthBoundary_PreservesOrRejectsAtomically` for Conclusion 50,000 and Limitations 10,000. Exercise limit−1, limit and limit+1 for every field. Valid text remains exact. Rejection leaves request version, results/evidence, messages/comments, audit rows and receipt state unchanged. These are tests of existing limits, not new limits.
+Add parameterized `RecordEvidence_FieldLengthBoundary_PreservesOrRejectsAtomically` for Summary 20,000, Checks 20,000 and CodeReference 2,000, and `Conclude_FieldLengthBoundary_PreservesOrRejectsAtomically` for Conclusion 50,000 and Limitations 10,000. Exercise limit−1, limit and limit+1 for every field. Valid text remains exact, including both mirrored reports in every accepted report-field case. Rejection leaves request version, results/evidence, messages/comments, audit rows and receipt state unchanged. These are tests of existing limits, not new limits.
 
 Add `ContextAsync_ConcurrentTaskEdit_DoesNotPairOldFieldsWithNewEditToken` using existing EF/SQLite interceptors and an independent bounded writer at the graph/snapshot boundary. Assert coherent returned fields/token, actual writer participation, and a fresh new description/different token after the writer completes. Use deterministic synchronization and public outcomes; do not use arbitrary sleeps or widen production code merely for a test.
 
@@ -68,6 +70,10 @@ Acceptance: the production-wrapper regressions fail against the original parser,
 Run the unchanged existing UI suite first. If the expected empty-project failure is reproduced, preserve its original receipt and compare the rendered recency with the actual API/creation audit. An API-created empty project has `ProjectCreated` activity: retain absence checks for progress, next-task and claim placeholders, but assert that displayed recency equals the real API instant. Keep the genuine zero-audit service case and existing keyboard behavior assertions intact.
 
 Acceptance: the owning stale expectation is demonstrated, the smallest harness-only correction passes, and no Home/audit behavior or unrelated UI presentation is changed to satisfy the fixture.
+
+The first corrected broad run passed creation-recency but timed out waiting 15 seconds for Settings Run all. An artifact-only probe on the same application source held the actual Blazor negotiation: one early DOM click was ignored and not replayed after connection. One subsequent connected click returned all 56 embedded checks without failures in 20.787 seconds. The original failed run retained no action-acceptance trace, so its individual cause is unknown.
+
+Use the existing check-before-click helper with Running state or completed results as the action-acceptance witness, then a separate bounded 30-second completion wait. Preserve failed-row, green-summary and nonempty-result assertions. Prove that an accepted slow run is not restarted and that failed/empty output remains a failure. No product page or general timeout changes belong to this correction. The app's revised T4 specification was published before affected implementation.
 
 ### T5. Verify, review, publish and merge the exact change
 

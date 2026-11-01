@@ -4022,13 +4022,17 @@ async function main() {
     // ── Scenario E: Settings -> Run all shows an all-passed result table ──
     await test("Settings 'Run all' reports an all-passed result", async () => {
       await page.goto(`${baseUrl}/settings`);
-      await page.getByRole("button", { name: "Run all" }).click();
-      await page.locator('[data-testid="settings-test-results"]').waitFor({ state: "visible" });
+      const resultsTable = page.locator('[data-testid="settings-test-results"]');
+      // A prerendered click can be ignored. Once accepted, do not restart a suite
+      // while its server checks are running; completion has its own wait budget.
+      await clickUntil(
+        () => page.getByRole("button", { name: "Run all", exact: true }).click(),
+        page.getByRole("button", { name: "Running…", exact: true }).or(resultsTable).first());
+      await resultsTable.waitFor({ state: "visible", timeout: 30_000 });
       // green summary badge present, and no failing rows
       await page.locator(".badge.text-bg-success").first().waitFor({ state: "visible" });
       // Count rows inside the results table (not the header summary badge). Passed rows carry
       // no marker class; only failed rows get `table-danger`, so passed = total - failed.
-      const resultsTable = page.locator('[data-testid="settings-test-results"]');
       const totalRows = await resultsTable.locator("tbody tr").count();
       // Scope failed rows to the SAME tbody as totalRows so passedRows can never go negative if a
       // non-body element ever carries table-danger (#168 review).

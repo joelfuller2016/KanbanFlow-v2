@@ -242,6 +242,10 @@ public sealed partial class WorkspaceServiceTests
         Assert.Equal(input.Checks, evidence.Checks);
         Assert.Equal(input.CodeReference, evidence.CodeReference);
         Assert.Equal(WorkStatus.Review, after.WorkItems.Single().Task.Status);
+        var expectedReport = $"Reported result for task #{item.TaskItemId}\n\n{input.Summary}\n\nChecks: {input.Checks}\n\nReference: {input.CodeReference}";
+        Assert.Equal(expectedReport, Assert.Single(after.Messages, message => message.Kind == "assistant-report").Text);
+        Assert.Equal(expectedReport, Assert.Single(after.WorkItems.Single().Task.Comments,
+            comment => comment.Type == CommentType.Verification).Text);
         Assert.Null(evidence.AcceptedAt);
         Assert.Null(evidence.AcceptedBy);
         Assert.Equal(request.Version + 1, after.Version);

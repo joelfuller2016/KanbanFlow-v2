@@ -27,13 +27,14 @@ Workflow service behavior is unchanged. New real-SQLite assertions protect compl
 | Contract | Exact test name or family | Distinguishing assertion |
 |---|---|---|
 | Complete report reaches both human surfaces | `RecordEvidence_MirrorsCompleteAuthoredReportIntoMessageAndTaskComment` | Entire independently constructed Markdown/Unicode report equals both request message and task comment; author/source/identity, Review and unaccepted evidence also checked |
-| Existing report-field boundaries | `RecordEvidence_FieldLengthBoundary_PreservesOrRejectsAtomically` | Nine cases: Summary/Checks 20,000 and CodeReference 2,000, each at limit−1/limit/limit+1; exact accepted text and unchanged rejected version/rows/audit/receipt |
+| Existing report-field boundaries | `RecordEvidence_FieldLengthBoundary_PreservesOrRejectsAtomically` | Nine cases: Summary/Checks 20,000 and CodeReference 2,000, each at limit−1/limit/limit+1; exact accepted evidence and both complete mirrored reports, plus unchanged rejected version/rows/audit/receipt |
 | Existing conclusion-field boundaries | `Conclude_FieldLengthBoundary_PreservesOrRejectsAtomically` | Six cases: Conclusion 50,000 and Limitations 10,000, before/at/after; exact accepted content and atomic rejection |
 | Graph and token share one read snapshot | `ContextAsync_ConcurrentTaskEdit_DoesNotPairOldFieldsWithNewEditToken` | Actual independent SQLite writer at the graph/snapshot boundary; coherent old fields/token, then committed new description/different fresh token; no sleeps |
 | Mixed SSE selects the real response | `wrapper selects the matching terminal SSE response after unrelated traffic` | Heartbeat/progress, foreign result and same-ID server request precede exact full Markdown/Unicode result |
 | Invalid or unmatched envelopes cannot become receipts | `wrapper rejects native responses without a matching terminal ID (...)` | Sixteen partitions in both JSON/SSE; no successful result, explicit recovery, exactly one HTTP call per client call and unchanged business key |
 | Correlated errors remain complete | `wrapper preserves correlated native errors in JSON (...)` and `wrapper preserves correlated native errors after unrelated SSE traffic (...)` | Exact code/message/nested data, code zero/empty message, and absence of optional data |
 | New empty project has truthful recency | `A new empty project shows creation recency without work placeholders` | No progress/next-task/claim placeholder; displayed time equals actual API creation activity |
+| Settings diagnostic action and completion are distinct | `Settings 'Run all' reports an all-passed result` | Running state or completed results proves action acceptance before separately awaiting completion; retain failure-row and nonempty-result assertions |
 
 Sources: [workflow result tests](../../tests/KanbanFlow.Tests/Services/WorkspaceService.ResultsTests.cs), [query tests](../../tests/KanbanFlow.Tests/Services/WorkspaceService.QueryTests.cs), [real wrapper tests](../../scripts/workflow-tools.test.mjs), and [existing browser suite](../../scripts/ui-e2e.mjs).
 
@@ -46,6 +47,8 @@ Seventeen new workflow cases across four methods passed as part of a fresh **123
 Nine focused controls proved that the new assertions can fail: shortened report copy, narrowed Summary maximum, widened Conclusion maximum, removed context read transaction, loose native ID comparison, removed method guard, dropped error data, falsey error-code fallback and fractional-code acceptance. Each landed mutation was observed failing its intended check and then restored. Raw TRX, logs, source hashes and red/green receipts remain under ignored `_sandbox/testing-expansion-20261101/{workflow,transport}/`.
 
 The unmodified current-primary UI baseline was **55/56**, exit 1, with only the creation-recency assertion failing. All 459 pinned inputs and HEAD stayed unchanged. The small browser fix retains keyboard assertions and actual Home/audit behavior; its full verification belongs to the final gate receipts. The retained baseline database is a cold post-suite copy after normal fixture cleanup, not a claim that its failing project remains.
+
+The next broad run on `a97b3c20b6e7585ee54447ef75aad3a0851c0819` passed creation-recency but returned **55/56**, exit 1, after the Settings results wait exceeded its default 15 seconds. A real application probe showed an ignored click while Blazor negotiation was held, no replay after release, then a single connected click returning **56/56** embedded diagnostic rows in **20,787 ms**. The original failure lacked an acceptance-state trace, so neither hazard is claimed as its proven individual cause. The harness correction separates accepted action from bounded 30-second completion without changing the product page or general timeout. Raw before/after harness controls and full rerun receipts belong under ignored `final-gates/`.
 
 ## Rerun and recovery
 
