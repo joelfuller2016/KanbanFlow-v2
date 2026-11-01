@@ -112,6 +112,20 @@ public sealed class MemoryServiceTests
     }
 
     [Fact]
+    public async Task CreateNode_ProjectScope_CanonicalizesZeroPaddedScopeKey()
+    {
+        using var f = new SqliteTestFactory();
+        var svc = new MemoryService(f);
+
+        var node = await svc.CreateNodeAsync(
+            new MemoryNodeCreate(MemoryType.Decision, MemoryScope.Project, "042", "zero-padded key"), null);
+
+        using var db = f.CreateDbContext();
+        var persisted = await db.MemoryNodes.FindAsync(node.Id);
+        Assert.Equal("42", persisted!.ScopeKey);
+    }
+
+    [Fact]
     public async Task CreateNode_TrimsContent_AndNullsBlankOptionalFields()
     {
         using var f = new SqliteTestFactory();
