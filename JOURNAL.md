@@ -52,6 +52,13 @@ A review of the repository and a test run on 2026-09-26 filed findings as issues
 
 ## Entries (newest first)
 
+- 2026-11-01 02:30Z (PR #580 — Copilot findings from 5cf4438 review, 4 fixed + 2 deferred; Codex clean on 91999ee):
+  - Fix 91999ee — 4 Copilot findings resolved: Commands.cs:129 normalize DraftAtSend through same JsonSerializer options before GetRawText() comparison (comment 4433942976); Delivery.cs:105 clear inspectedTask before async db read in InspectPublishedTask (comment 4433942988); WorkspaceCanvas.razor.js:36 build parentMap once O(n) before descendant loop instead of inner querySelectorAll O(n²×d) (comment 4433943006); WorkspacePlanPanel.razor:75 filter incoming DependsOn to existing item IDs in ItemChanged (comment 4433943055).
+  - Deferred to owner: canvas drag scroll-delta (comment 4433943018) — fix requires canvas-scroll/transform-coordinate accounting; WorkspacePlanItemEditor reset generation on copy confirm (comment 4433943033) — two-component lifecycle change.
+  - CodeRabbit JOURNAL.md spacing finding (comment 4433579820) resolved as by-design per append-only rule. All 5 Copilot/CodeRabbit threads replied to and resolved (PRRT_kwDOSA8y6s6yWLa9, WLbB, WLbN, WLbx, WGAV).
+  - Codex code + security reviews on 91999ee both complete: has_unresolved_findings:false, no security findings.
+  - 0 unresolved threads. PR #580 is clean. Head: 91999ee. Owner action needed: rebase feat/579-idea-workspaces onto master and merge.
+
 - 2026-11-01 02:00Z (PR #580 — Codex P2 review findings on 5cf4438, 1 fixed + 1 deferred):
   - Codex P2 IdeaWorkspace.razor.cs:182 fix: 53b75f6 — Refresh() now captures context before GET and bails on ReferenceEquals mismatch, matching PollForChanges guard (e7acca6). Replied to comment 4433930515.
   - Codex P2 WorkspaceDeliveryPanel.razor.cs:28: feature choices empty on first publication_target_missing — deferred to owner. Requires new GetPublicationFeaturesAsync method or embedding features in error payload. Replied to comment 4433930518.
