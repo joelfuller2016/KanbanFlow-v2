@@ -51,6 +51,14 @@ A review of the repository and a test run on 2026-09-26 filed findings as issues
   - S7, for #549.
 
 ## Entries (newest first)
+- 2026-11-01 02:34Z (PR monitor — Copilot review on #511, three findings addressed):
+  - New Copilot review on #511 (feat/unified-workflow-509, HEAD ed205efd) with 3 findings.
+  - Finding 1 (High): Subtask.Completed excluded from StateHash — valid, but changing the hash format invalidates all previously recorded evidence; versioned hash or startup migration needed. Replied to thread; flagged to owner.
+  - Finding 2 (Medium): `<a>` link nested inside `<details><summary>` — confirmed accessibility issue. Fixed in a6e7b49ca5b0a88b0e3a5a2c5e57f4de2bdf7a9c: link removed from summary, added as first visible item in expanded body. Pushed to feat/unified-workflow-509.
+  - Finding 3 (Medium): repository path dedup case-sensitive on Windows — valid, requires SQLite index collation change + startup migration. Replied to thread; flagged to owner.
+  - PR #521 (review/520-project-memory-ownership): 1 open thread (Copilot: MemoryService key normalization), last reply is mine from prior run; flagged to owner.
+  - Build gate still DOWN (.NET 10 install blocked by proxy). No merges.
+
 - 2026-11-01 02:28Z - Published verified repairs to existing PR branches with guarded fast-forward-only pushes: #511 ed205efdca4b39ce3703ab6d220744c35531ebff, #521 ef34d61f2a1e64f73442515afc93567ae1140b40, #564 0dadff673698e05f0de4ad65fc028015a69e5ddc. Product source matches each independently verified local head; final default-branch integration changed JOURNAL.md only. #511 passed1634 .NET/389 script tests, native+stdio workflow smoke,28 live API checks and3 browser cases; #521 passed1273 .NET/329 script tests plus native HTTP pagination/content and framing; #564 passed1259 .NET/371 script/169 targeted tests. Fresh source review found no actionable defect in these repair deltas. Current captured threads remain resolved (511:91,521:3,564:9); no new approval is inferred. #580 initial repaired gate passed1574 .NET/362 script tests, then fresh review found two edge cases: early-state retirement after explicit preservation and placement-selector focus. Corrections and focused regressions are in progress before final build/browser checks. No PR merges or human usability approval. Process lesson: source restored after mutation must be rebuilt without stale timestamp reuse; validate every observed gate against its recorded tree. A small ignored journal-only publisher now enforces fetch, single-file staging and remote ancestry verification.
 
 - 2026-11-01 03:30Z (Automated PR monitor run — build gate DOWN, no merges):
