@@ -160,6 +160,33 @@ public sealed class IdeaWorkspaceUiRecoveryTests
         Assert.Null(Field<object?>(panel, "pendingCopy"));
     }
 
+    [Fact]
+    public async Task EditingCriteriaOnCopiedItem_ProposesEditedCriteriaNotTheOriginal()
+    {
+        var context = Context();
+        var panel = new WorkspacePlanPanel();
+        WorkspaceUiCommand? command = null;
+        SetParameter(panel, "Context", context);
+        SetParameter(panel, "Draft", new WorkspacePlanDraft { BaseRevision = 12 });
+        SetParameter(panel, "OnDraftChanged", EventCallback.Factory.Create<WorkspacePlanDraft>(this, (WorkspacePlanDraft v) => { }));
+        SetParameter(panel, "OnCommand", EventCallback.Factory.Create<WorkspaceUiCommand>(this, (WorkspaceUiCommand v) => { command = v; }));
+        Invoke(panel, "OnParametersSet");
+
+        var source = new IdeaWorkspacePlanRevision { Id = "saved-plan", Version = 1, Title = "Saved plan",
+            Items = [new() { Id = "item-a", Title = "Step", Description = "Detail", AcceptanceCriteria = ["Original criterion"] }] };
+        await (Task)Invoke(panel, "CopyPlan", source)!;
+        await (Task)Invoke(panel, "ConfirmCopy")!;
+
+        var item = Property<WorkspacePlanDraft>(panel, "editing").Items[0] with { AcceptanceCriteria = "Edited criterion", OriginalAcceptanceCriteria = null };
+        await (Task)Invoke(panel, "ItemChanged", item)!;
+        await (Task)Invoke(panel, "Propose")!;
+
+        Assert.NotNull(command);
+        var proposedItem = command!.Payload.GetProperty("items").EnumerateArray().Single();
+        var criteria = proposedItem.GetProperty("acceptanceCriteria").EnumerateArray().Select(e => e.GetString()!).ToArray();
+        Assert.Equal(["Edited criterion"], criteria);
+    }
+
     // Invoke the real component state transitions without adding a renderer dependency. Actual DOM
     // input, confirmation and recovery controls are exercised separately by the browser regressions.
     private static void Prepare(IdeaWorkspace component, WorkspaceBrowserDraft draft)
