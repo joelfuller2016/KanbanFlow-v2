@@ -655,10 +655,10 @@ const GIT_REMOTE_HELPER = /^[a-z0-9][a-z0-9+.-]*::/i;
  */
 export function normalizeRemoteUrl(url, { platform = process.platform } = {}) {
   if (typeof url !== "string" || url.trim().length === 0) return null;
-  const raw = url.trim();
+  const raw = url.replace(/\r?\n$/, "");
   const u = raw;
   // Explicit remote-helper syntax is not the SCP host named before the double colon.
-  if (GIT_REMOTE_HELPER.test(u)) return url.trim();
+  if (GIT_REMOTE_HELPER.test(u)) return raw;
   const githubKey = repository => `github.com/${repository.toLowerCase().replace(/\/+$/, "").replace(/\.git$/, "")}`;
   const sshKey = (authority, commandPath) => {
     const at = authority.lastIndexOf("@");
@@ -676,7 +676,7 @@ export function normalizeRemoteUrl(url, { platform = process.platform } = {}) {
   const scheme = u.match(GIT_URL_SCHEME);
   if (scheme) {
     const protocol = scheme[1].toLowerCase();
-    if (!Object.hasOwn(DEFAULT_PORTS, protocol)) return protocol + url.trim().slice(scheme[1].length);
+    if (!Object.hasOwn(DEFAULT_PORTS, protocol)) return protocol + raw.slice(scheme[1].length);
     if (protocol === "ssh") {
       let location;
       try { location = decodeURIComponent(raw.slice(scheme[0].length)); }

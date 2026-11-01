@@ -1326,6 +1326,16 @@ test("normalizeRemoteUrl folds case, a trailing .git, and https/ssh/scp syntax t
   assert.equal(normalizeRemoteUrl(undefined), null);
 });
 
+test("normalizeRemoteUrl strips only record line endings, preserving meaningful URL whitespace", () => {
+  // Git preserves leading/trailing spaces in remote get-url output; a space-padded URL is distinct.
+  const plain = normalizeRemoteUrl("https://example.invalid/org/repo.git");
+  assert.notEqual(normalizeRemoteUrl("https://example.invalid/org/repo.git "), plain, "trailing space is a distinct remote URL");
+  assert.notEqual(normalizeRemoteUrl(" https://example.invalid/org/repo.git"), plain, "leading space is a distinct remote URL");
+  // Line endings (\n, \r\n) come from the line reader and must be removed transparently.
+  assert.equal(normalizeRemoteUrl("https://example.invalid/org/repo.git\n"), plain, "trailing \\n is a record line ending, not payload");
+  assert.equal(normalizeRemoteUrl("https://example.invalid/org/repo.git\r\n"), plain, "trailing \\r\\n is a record line ending, not payload");
+});
+
 test("normalizeRemoteUrl preserves case-sensitive repository paths while normalizing network hosts", () => {
   const forms = [
     "git://EXAMPLE.invalid/Org/Main.git",
