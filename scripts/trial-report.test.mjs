@@ -1462,6 +1462,28 @@ test("a candidate listing MORE than 16 remotes is left inconclusive before any o
   assert.match(s4.caveat, /1 checked cwd\(s\) listed more than 16 remotes/);
 });
 
+test("a remote with more than 64 urls has its url list capped per read — the candidate still confirms when all urls are the main repo", () => {
+  // MAX_URLS_PER_REMOTE caps unbounded `remote.<name>.url`/`pushurl` entries from a hostile cwd.
+  // When all 65 urls are the main repo's own url the candidate confirms; the cap drops only the
+  // 65th entry, which is the same as the first 64.
+  const mainRoot = path.resolve("C:\\real\\KanbanFlow-v2");
+  const MAIN = "https://github.com/joel/kanbanflow-v2.git";
+  const candidate = path.resolve("C:\\scratch\\many-urls");
+  const manyUrls = Array.from({ length: 65 }, () => MAIN).join("\n");
+  const git = fakeGitByCwd({
+    [mainRoot]: { "remote": "origin", "rev-list --max-parents=0 HEAD": "aaa111", "remote get-url origin": MAIN },
+    [candidate]: {
+      "rev-parse --show-toplevel": candidate,
+      "rev-list --max-parents=0 HEAD": "aaa111",
+      "remote": "origin",
+      "remote get-url --all origin": manyUrls,
+      "remote get-url --push --all origin": manyUrls
+    }
+  });
+  const { confirmed } = withConfirmedCloneRoots([candidate], [mainRoot], { git });
+  assert.deepEqual([...confirmed.keys()], [candidate], "65-url remote confirms when all urls match main");
+});
+
 test("the probe pass has a 60 s budget — once it is spent the pass stops, the rest stay outside, and the caveat says so", () => {
   // A cwd on a hung mount makes each git call wait out GIT_TIMEOUT_MS, and fifty such cwds block the
   // report for minutes before a single signal is computed. The clock is injected, so the deadline

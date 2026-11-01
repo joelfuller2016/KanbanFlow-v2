@@ -744,10 +744,14 @@ const MAX_CLONE_PROBES = 50;
 // The rest of the work, bounded too, because the usage log can name a repository with any number
 // of remotes, and every git call may take up to GIT_TIMEOUT_MS. A candidate whose `git remote`
 // lists more than MAX_REMOTES_PER_CANDIDATE is left inconclusive before a single url of it is read.
+// MAX_URLS_PER_REMOTE caps how many urls each `get-url --all` read may contribute: git allows an
+// unbounded number of `remote.<name>.url` and `pushurl` entries per remote name, and materializing
+// every one before the set is built would consume unbounded memory/time on a hostile cwd.
 // PROBE_BUDGET_MS is one deadline for the whole pass, the main root's fingerprint included, checked
-// before every git call, so a pass stops within one call of it. Both fail closed: whatever either
-// leaves unread stays outside, and the caveat and the NOTE say how many.
+// before every git call, so a pass stops within one call of it. All three fail closed: whatever
+// any of them leaves unread stays outside, and the caveat and the NOTE say how many.
 const MAX_REMOTES_PER_CANDIDATE = 16;
+const MAX_URLS_PER_REMOTE = 64;
 const PROBE_BUDGET_MS = 60_000;
 
 /**
@@ -902,7 +906,7 @@ export function withConfirmedCloneRoots(cwds, roots, { git = gitOutput, now = ()
       let reads;
       try {
         reads = urlReads.map(flags =>
-          call(["remote", "get-url", ...flags, name], cwd).split(/\r?\n/).map(u => u.trim()).filter(Boolean));
+          call(["remote", "get-url", ...flags, name], cwd).split(/\r?\n/).map(u => u.trim()).filter(Boolean).slice(0, MAX_URLS_PER_REMOTE));
       } catch {
         return { everyUrl: new Set(), fetchUrls: new Set(), inconclusive: true };
       }
