@@ -574,6 +574,9 @@ export function resolveRepoRoots(override, { cwd = process.cwd(), git = gitOutpu
 // and matching it would fold a different checkout in as this repository. Unlisted transports
 // retain their complete scheme-qualified identity; a remote helper need not share Git URL rules.
 const DEFAULT_PORTS = { ssh: 22, https: 443, http: 80, git: 9418 };
+// Match Git's URL/helper grammar, including digit-leading protocols (url.c:is_urlschemechar).
+const GIT_URL_SCHEME = /^([a-z0-9][a-z0-9+.-]*):\/\//i;
+const GIT_REMOTE_HELPER = /^[a-z0-9][a-z0-9+.-]*::/i;
 
 /**
  * Normalize a git remote URL for same-repo comparison: lower-case the host, drop a trailing slash
@@ -595,7 +598,7 @@ export function normalizeRemoteUrl(url) {
   if (typeof url !== "string" || url.trim().length === 0) return null;
   const u = url.trim().replace(/\/+$/, "");
   // Explicit remote-helper syntax is not the SCP host named before the double colon.
-  if (/^[^:/\\]+::/.test(u)) return url.trim();
+  if (GIT_REMOTE_HELPER.test(u)) return url.trim();
   const key = (host, repository) => {
     const authority = host.toLowerCase();
     // GitHub repository names ignore case. Arbitrary Git servers can expose Main and main
@@ -603,7 +606,7 @@ export function normalizeRemoteUrl(url) {
     const repositoryPath = authority === "github.com" ? repository.toLowerCase() : repository;
     return `${authority}/${repositoryPath.replace(/\/+$/, "").replace(/\.git$/, "")}`;
   };
-  const scheme = u.match(/^([a-z][a-z0-9+.-]*):\/\//i);
+  const scheme = u.match(GIT_URL_SCHEME);
   if (scheme) {
     const protocol = scheme[1].toLowerCase();
     if (!Object.hasOwn(DEFAULT_PORTS, protocol)) return protocol + url.trim().slice(scheme[1].length);
@@ -648,9 +651,9 @@ export function normalizeRemoteUrl(url) {
 export function isLocalPathRemote(rawUrl) {
   if (typeof rawUrl !== "string" || rawUrl.trim().length === 0) return false;
   const u = rawUrl.trim();
-  if (/^[^:/\\]+::/.test(u)) return false;
+  if (GIT_REMOTE_HELPER.test(u)) return false;
   if (/^file:\/\//i.test(u)) return true;
-  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(u)) return false;
+  if (GIT_URL_SCHEME.test(u)) return false;
   const colon = u.indexOf(":");
   if (colon === -1) return true;
   const beforeColon = u.slice(0, colon);

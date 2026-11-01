@@ -784,6 +784,8 @@ test("normalizeRemoteUrl folds scp WITHOUT a userinfo and an ssh:// port to the 
   // ssh.github.com:443 (GitHub's over-443 SSH endpoint) is a DIFFERENT host from github.com, so it
   // must NOT normalize the same as a plain github.com remote — see the caveat's gap list.
   assert.notEqual(normalizeRemoteUrl("ssh://git@ssh.github.com:443/x/y.git"), normalizeRemoteUrl("https://github.com/x/y.git"));
+  assert.equal(normalizeRemoteUrl("git@host::path"), normalizeRemoteUrl("ssh://git@host/:path"),
+    "userinfo is SCP syntax, not a remote-helper prefix");
 });
 
 test("a NON-default port is another service, not a spelling — only the scheme's default port folds away", () => {
@@ -1283,9 +1285,17 @@ test("unrecognized remote schemes retain distinct nonempty identities", () => {
   assert.equal(normalizeRemoteUrl("SoFtP://example.invalid/Org/Main.git"), custom);
   assert.notEqual(normalizeRemoteUrl("softp://github.com/Org/Main.git"),
     normalizeRemoteUrl("softp://github.com/Org/main.git"), "an unfamiliar transport gets no GitHub path assumptions");
-  assert.notEqual(normalizeRemoteUrl("softp::host/org/repo"), normalizeRemoteUrl("ssh://softp/:host/org/repo"),
-    "an explicit remote helper must not become an SCP host alias");
-  assert.equal(isLocalPathRemote("x::host/org/repo"), false, "one-letter explicit helpers remain network identities");
+  // Git permits an alphanumeric first character, followed by alphanumerics or +.-.
+  for (const prefix of ["custom", "1custom", "x", "1", "x+helper.-2"]) {
+    const uri = `${prefix}://example.invalid/Org/Main.git`;
+    const helper = `${prefix}::host/org/repo`;
+    assert.equal(isLocalPathRemote(uri), false, prefix + ": explicit URI stays network");
+    assert.equal(isLocalPathRemote(helper), false, prefix + ": explicit helper stays network");
+    assert.equal(normalizeRemoteUrl(uri), uri, "unknown URI identity stays complete and nonempty");
+    assert.equal(normalizeRemoteUrl(helper), helper, "unknown helper identity stays complete and nonempty");
+    assert.notEqual(normalizeRemoteUrl(helper), normalizeRemoteUrl(`ssh://${prefix}/:host/org/repo`),
+      "a helper must not become an SCP host alias");
+  }
   assert.equal(isLocalPathRemote("C:\\work\\repo"), true, "an actual Windows drive path remains local");
 });
 
@@ -1561,7 +1571,9 @@ test("real Git evidence keeps an unfamiliar transport outside despite shared his
     for (const [custom, known] of [
       ["softp://example.invalid/org/repo.git", "https://example.invalid/org/repo.git"],
       ["softp::host/org/repo", "ssh://softp/:host/org/repo"],
-      ["x::host/org/repo", "ssh://x/:host/org/repo"]
+      ["x::host/org/repo", "ssh://x/:host/org/repo"],
+      ["1x://host/org/repo", "ssh://1x///host/org/repo"],
+      ["1::host/org/repo", "ssh://1/:host/org/repo"]
     ]) {
       gitOutput(["remote", "set-url", "origin", known], a);
       gitOutput(["remote", "set-url", "origin", custom], b);
