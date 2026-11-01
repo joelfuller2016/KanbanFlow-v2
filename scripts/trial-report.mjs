@@ -2386,10 +2386,10 @@ async function main(argv) {
       // The confirmed CWDS — the map's keys — never the toplevels they resolved to: a toplevel as a
       // prefix root also covers a nested repository the check rejected, and misses a cwd reached
       // through a junction (see withConfirmedCloneRoots's Returns, and the note at signal 4).
-      cloneRoots = [...new Set(confirmed.keys())];
+      cloneRoots = gitIncompatibility ? [] : [...new Set(confirmed.keys())];
       cloneProbe = gitIncompatibility ? null : { probed, capped: cloneCapped, candidates: distinctOutsideCwds.length, budgetSpent, tooManyRemotes,
         tooManyUrls, outputTooLarge, limitedMainRoots };
-      if (confirmed.size > 0) {
+      if (!gitIncompatibility && confirmed.size > 0) {
         // Lists exactly the cwd strings signal 4 folds in — it folds in by exact string — so this
         // NOTE and the scoring cannot disagree, as they did when it listed toplevels: a clone reached
         // through a junction was named here as folded in while signal 4 still scored its cwd outside.

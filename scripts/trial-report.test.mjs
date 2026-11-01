@@ -1432,7 +1432,7 @@ test("unrecognized remote schemes retain distinct nonempty identities", () => {
     assert.notEqual(normalizeRemoteUrl(helper), normalizeRemoteUrl(`ssh://${prefix}/:host/org/repo`),
       "a helper must not become an SCP host alias");
   }
-  assert.equal(isLocalPathRemote("C:\\work\\repo"), true, "an actual Windows drive path remains local");
+  assert.equal(isLocalPathRemote("C:\\work\\repo"), process.platform === "win32", "an actual Windows drive path is local on Windows");
 });
 
 test("confirmed cwd disclosure is printable literal data without changing membership", () => {
@@ -1449,6 +1449,53 @@ test("confirmed cwd disclosure is printable literal data without changing member
   assert.ok(literal, "literal disclosure must decode to the original path");
   assert.doesNotMatch(literal, /[`*_\[\]<>|&~#!]/u);
   assert.doesNotMatch(renderReport(summary), /^## INJECTED VERDICT/m);
+});
+
+test("remote locality and clone veto follow each native platform's Git grammar", () => {
+  const main = path.resolve("platform-main"), candidate = path.resolve("platform-candidate");
+  const drive = ["C:repo", "C:/repo", "C:\\repo"];
+  const local = ["./C:repo", "dir/part:repo"];
+  const network = ["foo\\bar:repo", "git@C:repo", "C::repo"];
+  const script = [
+    `import { isLocalPathRemote, normalizeRemoteUrl, withConfirmedCloneRoots } from ${JSON.stringify(new URL("./trial-report.mjs", import.meta.url).href)};`,
+    `const main = ${JSON.stringify(main)}, candidate = ${JSON.stringify(candidate)}, remotes = ${JSON.stringify([...drive, ...local, ...network])};`,
+    'const native = process.platform, results = [];',
+    'for (const platform of ["linux", "darwin", "win32"]) {',
+    '  Object.defineProperty(process, "platform", { value: platform });',
+    '  try { for (const remote of remotes) {',
+    '    const git = (args, cwd) => {',
+    '      if (args[0] === "rev-parse") return cwd;',
+    '      if (args[0] === "rev-list") return "shared-root";',
+    '      if (args.length === 1 && args[0] === "remote") return "origin";',
+    '      if (args[0] === "remote" && args[1] === "get-url") return cwd === main ? "https://example.invalid/org/main.git" : remote;',
+    '      throw new Error("unexpected Git command");',
+    '    };',
+    '    results.push({ platform, remote, local: isLocalPathRemote(remote), confirmed: withConfirmedCloneRoots([candidate], [main], { git }).confirmed.has(candidate),',
+    '      driveUriAlias: normalizeRemoteUrl("C:/repo") === normalizeRemoteUrl("ssh://c/repo") });',
+    '  } } finally { Object.defineProperty(process, "platform", { value: native }); }',
+    '}',
+    'console.log(JSON.stringify(results));'
+  ].join("\n");
+  const child = spawnSync(process.execPath, ["--input-type=module", "--eval", script], {
+    encoding: "utf8", timeout: 20_000, windowsHide: true, env: scrubGitEnv(process.env)
+  });
+  assert.equal(child.status, 0, child.stderr);
+  for (const result of JSON.parse(child.stdout)) {
+    const expected = local.includes(result.remote) || drive.includes(result.remote) && result.platform === "win32";
+    assert.equal(result.local, expected, `${result.platform}: ${result.remote}`);
+    assert.equal(result.confirmed, expected, "a nonmatching network remote vetoes shared history: " + result.platform + ": " + result.remote);
+    assert.equal(result.driveUriAlias, result.platform !== "win32", "single-letter POSIX hosts normalize as SSH");
+  }
+});
+
+test("native Git backslash host spelling cannot bypass a shared-root clone veto", () => {
+  const { a, b, cleanup } = buildCloneFixture();
+  try {
+    assert.equal(withConfirmedCloneRoots([b], [a]).confirmed.has(b), true);
+    gitOutput(["remote", "add", "origin", "foo\\bar:repo"], b);
+    assert.equal(gitOutput(["remote", "get-url", "origin"], b), "foo\\bar:repo");
+    assert.equal(withConfirmedCloneRoots([b], [a]).confirmed.has(b), false);
+  } finally { cleanup(); }
 });
 
 test("clone confirmation FAILS CLOSED: a cwd git cannot examine stays counted as outside", () => {
@@ -2935,6 +2982,78 @@ function quotedValues(text) {
 function quotedLiterals(text) {
   return [...text.matchAll(/"(?:[^"\\]|\\.)*"/g)].map(match => match[0]);
 }
+
+test("a deleted logged cwd does not poison valid clone probes or a trusted measured boundary", () => {
+  const { a, b, make, cleanup } = buildCloneFixture();
+  const gone = path.join(b, "deleted-session-cwd"), log = path.join(make(), "usage.jsonl");
+  try {
+    fs.mkdirSync(gone);
+    assert.equal(real(gitOutput(["rev-parse", "--show-toplevel"], gone)), real(b));
+    fs.rmdirSync(gone);
+    fs.writeFileSync(log, [
+      row({ ts: "2026-11-01T00:00:02Z", session: "gone", cwd: gone }),
+      row({ ts: "2026-11-01T00:00:01Z", session: "valid", cwd: b })
+    ].map(value => JSON.stringify(value)).join("\n") + "\n");
+    const child = runCliJson(log, a), summary = JSON.parse(child.stdout);
+    assert.equal(child.status, 1, child.stderr);
+    assert.equal(summary.repoRootSource, "override");
+    assert.equal(find(summary, 4).verdict, "ADOPT", "only the missing cwd remains outside; the available log and boundary remain measurable");
+    assert.equal(summary.sources.cloneProbe.probed, 2);
+    assert.match(child.stderr, /1 of 2 outside cwd\(s\) confirmed/);
+    assert.doesNotMatch(child.stderr, /Git 2\.39 or newer is required/);
+    assert.throws(() => gitOutput(["rev-parse", "--show-toplevel"], gone), error => error.code === "git_cwd_missing" && /ENOENT|ENOTDIR/.test(error.cause?.code));
+  } finally { cleanup(); }
+});
+
+test("a missing Git binary in an existing cwd remains a compatibility failure", () => {
+  const { a, make, cleanup } = buildCloneFixture();
+  try {
+    assert.equal(real(gitOutput(["rev-parse", "--show-toplevel"], a)), real(a));
+    const env = scrubGitEnv(process.env);
+    for (const key of Object.keys(env)) if (/^path$/i.test(key)) delete env[key];
+    env.PATH = make();
+    assert.equal(fs.statSync(a).isDirectory(), true);
+    assert.throws(() => gitOutput(["rev-parse", "--show-toplevel"], a, { env }), error => {
+      assert.equal(error.code, "git_unsupported");
+      assert.equal(error.cause?.code, "ENOENT");
+      return true;
+    });
+  } finally { cleanup(); }
+});
+
+test("late Git incompatibility discards earlier clone confirmations and folded notes", () => {
+  const { a, b, d, make, cleanup } = buildCloneFixture();
+  const log = path.join(make(), "usage.jsonl"), trace = path.join(make(), "trace.jsonl"), preload = path.join(make(), "late-version.cjs");
+  try {
+    fs.writeFileSync(log, [
+      row({ ts: "2026-11-01T00:00:02Z", session: "valid", cwd: b }),
+      row({ ts: "2026-11-01T00:00:01Z", session: "later", cwd: d })
+    ].map(value => JSON.stringify(value)).join("\n") + "\n");
+    for (const version of ["git version 2.38.9", "unknown Git"]) {
+      fs.writeFileSync(trace, "");
+      fs.writeFileSync(preload, [
+        'const fs = require("node:fs"), cp = require("node:child_process"), original = cp.execFileSync;',
+        'cp.execFileSync = function (file, args, options) {',
+        `  if (file === "git") fs.appendFileSync(${JSON.stringify(trace)}, JSON.stringify({ args, cwd: options.cwd }) + "\\n");`,
+        `  if (file === "git" && args[0] === "--version" && options.cwd === ${JSON.stringify(d)}) return ${JSON.stringify(version + "\n")};`,
+        '  return original.apply(this, arguments);',
+        '};',
+        'require("node:module").syncBuiltinESMExports();'
+      ].join("\n"));
+      const child = runCliJson(log, a, [], ["--require", preload]), summary = JSON.parse(child.stdout);
+      assert.equal(child.status, 1, child.stderr);
+      assert.equal(find(summary, 4).verdict, "UNMEASURED");
+      assert.equal(summary.sources.cloneProbe, null);
+      assert.doesNotMatch(child.stderr, /folded into signal 4/);
+      assert.doesNotMatch(find(summary, 4).caveat, /outside cwd\(s\) were confirmed as separate clones/);
+      assert.deepEqual(find(summary, 4).detail.flatMap(entry => entry.cwds).sort(), [b, d].sort(), "unmeasured evidence must retain both unconfirmed cwd strings");
+      const calls = fs.readFileSync(trace, "utf8").trim().split(/\r?\n/).map(line => JSON.parse(line));
+      const accepted = calls.findIndex(call => call.cwd === b && call.args.includes("rev-list"));
+      const incompatible = calls.findIndex(call => call.cwd === d && call.args[0] === "--version");
+      assert.ok(accepted >= 0 && incompatible > accepted, "the control must confirm a valid clone before the later failure");
+    }
+  } finally { cleanup(); }
+});
 
 test("CLI checks Git compatibility before each operation and leaves old or unknown versions unmeasured", () => {
   const { a, b, d, make, cleanup } = buildCloneFixture();
