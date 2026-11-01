@@ -52,6 +52,15 @@ A review of the repository and a test run on 2026-09-26 filed findings as issues
 
 ## Entries (newest first)
 
+- 2026-11-01 00:30Z (PR #580 — Copilot findings from fead50b: 2 fixed, 3 deferred to owner):
+  - Copilot review on fead50b posted 5 new findings. Handled in commit a1bdb32 on feat/579-idea-workspaces.
+  - Finding 2 (PRRT_kwDOSA8y6s6yVxfl — WorkspaceCanvas.razor.js multi-touch drag race): REAL BUG. Added `|| this.#gesture` guard to `#start` so a second `pointerdown` while a gesture is active is rejected. Replied + resolved.
+  - Finding 3 (PRRT_kwDOSA8y6s6yVxf7 — WorkspaceCanvasInterop.cs DisposeAsync incomplete): REAL BUG. Split DisposeAsync into two separate try blocks so `module.DisposeAsync()` always runs even when `InvokeVoidAsync` throws. Also ensured module ref is cleared before awaiting. Replied + resolved.
+  - Finding 1 (PRRT_kwDOSA8y6s6yVxfg — delivery field clobber during publication): P2, left for owner — requires ClearSavedSection pattern to capture delivery buffer at dispatch.
+  - Finding 4 (PRRT_kwDOSA8y6s6yVxgA — WorkspaceCheckpointPanel.razor checkpoint list normalization): P2, left for owner — requires preserving original arrays rather than join/split round-trip.
+  - Finding 5 (PRRT_kwDOSA8y6s6yVxgU — ValidateIdentifier accepting `$new` service-level): owner fix in progress per their comment on the thread.
+  - 2 threads resolved (PRRT_kwDOSA8y6s6yVxfl, PRRT_kwDOSA8y6s6yVxf7). 3 P2 threads remain open.
+
 - 2026-11-01 00:06Z (PR #580 — owner resolved all deferred findings, final review clean):
   - Owner pushed fead50b (merge of cceb1d0 + journal). cceb1d0 addressed ALL previously-deferred P2 issues:
     (1) RetryDraftStorage data-loss race: RestoreDraft now distinguishes cache restored before/after init; if unread stored draft and untrusted cache both exist, writes pause until explicit recovery verifies the full original. Browser-reproduced and confirmed.
