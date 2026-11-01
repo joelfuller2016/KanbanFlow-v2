@@ -14,16 +14,14 @@
 | | |
 |---|---|
 | **Stack** | .NET 10 · Blazor Server · SQLite (EF Core 10) · Minimal APIs · Node 18+ for the MCP wrapper |
-| **Surfaces** | 8 UI routes · 97 REST operations · 53 native MCP tools · 75 Node-wrapper MCP tools (measured in the disposable app, October 31, 2026) |
+| **Surfaces** | 8 UI routes · 102 REST operations · 60 native MCP tools · 79 Node-wrapper MCP tools (measured in the disposable app, November 1, 2026 UTC) |
 | **Sync** | GitHub → board projection, plus one explicit additive board → GitHub issue-create path. Preview is the default; live create requires `--allow-write --task <id>` and a durable journal. No edit/close/delete path — see [Who owns what](#who-owns-what) |
-| **Tests** | 1,721 xUnit · 56 in-app integration · 56 Playwright e2e · 374 script unit · 2 smoke suites — [all local, no CI](#deliberate-non-features) |
+| **Tests** | 2,135 xUnit · 56 in-app integration · 56 Playwright e2e · 434 script unit · 2 smoke suites — [all local, no CI](#deliberate-non-features); dated execution and source inventories [below](#surfaces-verified) |
 | **Runs at** | `http://127.0.0.1:5123` — localhost only, no auth, no Docker, no cloud |
 | **Log book** | [`docs/BACKLOG.md`](docs/BACKLOG.md) — the authoritative record of what happened |
 | **Deep detail** | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) |
 
-The 1,572 .NET tests passed on September 14, 2026 at source `440c0ed07e51` ([run record](docs/test-cases/509-unified-workflow/runs/2026-09-14-440c0ed07e51.md)). The unchanged script suite last passed all 358 tests at `9fe16aaa1b04`; it was not repeated for this Razor/documentation correction. Native/wrapper source inventories are 36/54; September 6 transport discovery measured 33/54, not the current live surface. Other inventories retain their existing baseline. The commands that produced
-them are in [Surfaces, verified](#surfaces-verified) — run them yourself; do not trust the
-table alone.
+The November 1 combined workflow/workspace checkpoint passed 2,135 .NET tests and 434 script tests, with zero failures/skips and zero build warnings/errors. Runtime discovery measured the REST and MCP counts above. The 56 in-app and 56 Playwright counts remain source inventories; the full 56-scenario browser receipt is from October 31. Current targeted browser and transport checks, source pins and earlier receipts are recorded in the [workspace verification guide](docs/idea-workspaces.md#verification-boundaries). Commands and dates are in [Surfaces, verified](#surfaces-verified).
 
 ---
 
@@ -65,7 +63,7 @@ graph and gives that graph three surfaces:
    pastes into chat as a link. Filtering never reorders anything: a drag under an active filter
    anchors on the next *visible* card's identity and the server resolves that against the full
    persisted column. For you.
-2. **A REST API** — 97 operations over the same graph, including workspace composition and plan publication. For scripts.
+2. **A REST API** — 102 operations over the same graph, including request workflows, workspace composition and plan publication. For scripts.
 3. **An MCP server** — the same capabilities as first-class agent tools, plus a direction
    engine that answers *"what next, and why"* with a human-readable reason. For agents.
 
@@ -142,8 +140,8 @@ flowchart LR
     subgraph OUT["surfaces over the same graph"]
         direction TB
         UI["Blazor UI<br/>/ · /project/{id} · /ideas · /memory"]
-        REST["REST · 97 operations"]
-        MCP["MCP · 53 native / 75 wrapper"]
+        REST["REST · 102 operations"]
+        MCP["MCP · 60 native / 79 wrapper"]
     end
 
     REPO --> READ
@@ -179,9 +177,11 @@ The right-hand box is the part that makes this a projection rather than a mirror
 entities are created by you and by agents doing real work, live only on the board, and are
 invisible to GitHub.
 
-The sync also **cannot** run over the native MCP server: the 53 native tools include
-`list_projects` and `get_project_context` but **no `create_project`**, so an agent on `/mcp`
-cannot onboard a repo. That parity gap is [#231](https://github.com/joelfuller2016/KanbanFlow-v2/issues/231).
+The portfolio sync uses REST. The 60 native MCP tools include `list_projects` and
+`get_project_context` but no dedicated `create_project` tool; project creation is available
+through `workflow_command` with `operation:"create_project"` and its required actor/key.
+See the [workflow contract](docs/request-workflow.md#mcp-and-rest-reference) and the remaining
+transport parity gaps in [#231](https://github.com/joelfuller2016/KanbanFlow-v2/issues/231).
 
 ---
 
@@ -712,22 +712,23 @@ the same comment stream and history.
 ## Surfaces, verified
 
 [Issue #277](https://github.com/joelfuller2016/KanbanFlow-v2/issues/277) exists because this
-README under-reported its own surface. Each number below was re-derived for this revision by
-the command beside it — not copied from the previous README, and not copied from the issue.
+README under-reported its own surface. REST and MCP counts below were measured against the
+November 1 combined workflow/workspace application. UI inventories were checked in source;
+test receipts retain their execution dates and do not imply a new full browser run.
 
 | Surface | Count | Command that produced it |
 |---|---:|---|
-| REST operations (app) | 92 | [Run the inventory below](#reproduce-surface-counts): `rest.application` |
+| REST operations (app) | 97 | [Run the inventory below](#reproduce-surface-counts): `rest.application` |
 | REST operations (admin) | 5 | [Run the inventory below](#reproduce-surface-counts): `rest.admin` |
-| **REST operations total** | **97** | [Run the inventory below](#reproduce-surface-counts): `rest.total` |
-| Native MCP tools (`POST /mcp`) | 53 | [Actual native `tools/list`](#reproduce-surface-counts): `nativeMcpTools` |
-| Node-wrapper MCP tools | 75 | [Actual stdio `tools/list`](#reproduce-surface-counts): `stdioMcpTools` |
+| **REST operations total** | **102** | [Run the inventory below](#reproduce-surface-counts): `rest.total` |
+| Native MCP tools (`POST /mcp`) | 60 | [Actual native `tools/list`](#reproduce-surface-counts): `nativeMcpTools` |
+| Node-wrapper MCP tools | 79 | [Actual stdio `tools/list`](#reproduce-surface-counts): `stdioMcpTools` |
 | Blazor routes | 8 | `rg '^@page' src/KanbanFlow/Components` includes the gallery, preserved `/ideas/board` and `/ideas/workspace/{Kind}/{SourceId:int}` |
-| Razor components | 49 | `rg --files src/KanbanFlow/Components -g '*.razor'` |
-| xUnit tests | 1,721 | `scripts/verify.ps1`, November 1, 2026 UTC: 1,721 passed, 0 failed/skipped |
-| In-app integration tests | 56 | `grep -c 'results.Add(await RunTest' src/KanbanFlow/Services/TestRunnerService.cs` (28 API + 22 service + 6 UI) |
-| Playwright e2e scenarios | 56 | `npm run test:ui`, October 31, 2026: 56 passed, including gallery and preserved board checks in Settings |
-| Script unit tests (`scripts/*.mjs`) | 374 | `npm run test:scripts`, November 1, 2026 UTC: 374 passed, 0 failed/skipped |
+| Razor components | 60 | `rg --files src/KanbanFlow/Components -g '*.razor'` |
+| xUnit tests | 2,135 | `scripts/verify.ps1`, November 1, 2026 UTC: 2,135 passed, 0 failed/skipped; zero build warnings/errors |
+| In-app integration tests | 56 | Source inventory: `rg -c 'results.Add\(await RunTest' src/KanbanFlow/Services/TestRunnerService.cs` (28 API + 22 service + 6 UI) |
+| Playwright e2e scenarios | 56 | Source inventory: `rg -c 'await test\(' scripts/ui-e2e.mjs`; historical full run: `npm run test:ui`, October 31, 2026, 56 passed, including gallery and preserved board checks in Settings |
+| Script unit tests (`scripts/*.mjs`) | 434 | `npm run test:scripts`, November 1, 2026 UTC: 434 passed, 0 failed/skipped |
 
 ### Reproduce surface counts
 
@@ -740,14 +741,20 @@ node scripts/workspace-surface-inventory.mjs http://127.0.0.1:5123
 
 The [inventory implementation](scripts/workspace-surface-inventory.mjs) counts OpenAPI HTTP
 operations, separating `/api/admin/` from other `/api/` routes. See the
-[REST document location and route map](docs/ARCHITECTURE.md#rest-surface-71-endpoints) for API details.
+[REST document location and route map](docs/ARCHITECTURE.md#rest-surface-102-operations) for API details.
+
+Earlier verification receipts remain historical: 1,572 .NET tests passed on September 14,
+2026 at source `440c0ed07e51` ([run record](docs/test-cases/509-unified-workflow/runs/2026-09-14-440c0ed07e51.md)).
+The 358-test script receipt at `9fe16aaa1b04` was not repeated for that Razor/documentation
+correction. The 36-native/54-wrapper source inventory and September 6 discovery of 33/54
+describe earlier checkpoints, rather than the current combined surface.
 
 Historical inventory corrections from the original README revision: **53 → 60** endpoints (both memory
 endpoints and `GET /api/tasks/{id}/context` were missing from the route list entirely);
 **41 → 50** wrapper tools; native tool count stated for the first time (**24**); in-app suite
 **40 → 56**; and `GET /api/subtasks/{id}`, `GET /api/acceptance-criteria/{id}`,
 `GET /api/requirements/{id}` were listed as existing — **they do not exist**. The route map in
-[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md#rest-surface-77-endpoints) now marks them.
+[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md#rest-surface-102-operations) now marks them.
 
 Also corrected: `#82`, `#83`, `#85`, `#88`, and `#89` were all cited as open/broken. All five
 are **closed**, and the code enforces what they asked for.
@@ -860,7 +867,7 @@ All local. There is no CI — [on purpose](#deliberate-non-features).
 ```
 
 ```bash
-dotnet test tests/KanbanFlow.Tests/KanbanFlow.Tests.csproj # 1,721 xUnit tests
+dotnet test tests/KanbanFlow.Tests/KanbanFlow.Tests.csproj # 2,135 xUnit tests at the November 1 checkpoint
 ```
 
 ```powershell
