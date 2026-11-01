@@ -44,10 +44,13 @@ class CanvasController {
             }
         }
         const descendants = placements.filter(candidate => candidate !== card && descendantIds.has(candidate.dataset.placementId));
-        this.#gesture = { card, handle, descendants, pointerId: event.pointerId, clientX: event.clientX, clientY: event.clientY,
+        const gesture = this.#gesture = { card, handle, descendants, pointerId: event.pointerId, clientX: event.clientX, clientY: event.clientY,
             lastClientX: event.clientX, lastClientY: event.clientY, scrollLeft: this.#viewport?.scrollLeft ?? 0, scrollTop: this.#viewport?.scrollTop ?? 0,
             x: Number(card.dataset.localX), y: Number(card.dataset.localY), width: Number(card.dataset.width), height: Number(card.dataset.height),
             resize: handle.classList.contains('workspace-resize-handle'), workspaceId: this.#root.dataset.workspaceId, revision: Number(this.#root.dataset.revision), dx: 0, dy: 0 };
+        gesture.ownerDocument = this.#root.ownerDocument;
+        gesture.captureLost = event => { if (this.#gesture === gesture && event.pointerId === gesture.pointerId) this.#reset(); };
+        gesture.ownerDocument.addEventListener('lostpointercapture', gesture.captureLost, { capture: true, signal: this.#abort.signal });
         handle.setPointerCapture(event.pointerId);
         event.preventDefault();
         handle.focus?.({ preventScroll: true });
@@ -119,6 +122,7 @@ class CanvasController {
     #reset() {
         const gesture = this.#gesture;
         if (!gesture) return;
+        gesture.ownerDocument.removeEventListener('lostpointercapture', gesture.captureLost, true);
         for (const node of [gesture.card, ...gesture.descendants]) {
             for (const property of ['--preview-dx', '--preview-dy', '--preview-width', '--preview-height']) node.style.removeProperty(property);
         }

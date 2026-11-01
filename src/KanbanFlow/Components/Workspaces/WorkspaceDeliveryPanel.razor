@@ -39,7 +39,7 @@
             }
         </fieldset>
         <label class="form-label" for="delivery-feature-select">Task feature</label>
-        <select id="delivery-feature-select" class="form-select mb-2" value="@editing.FeatureId" @onchange="e => FeatureChangedFromProject(renderedProjectId, e)" data-testid="delivery-feature-select"><option value="">Use the existing publication feature, or create one named after the plan</option>@foreach (var feature in features) { <option value="@feature.Id">@feature.Name · @feature.Id</option> }</select>
+        <select id="delivery-feature-select" class="form-select mb-2" value="@editing.FeatureId" @onchange="e => FeatureChangedFromProject(renderedProjectId, e)" data-testid="delivery-feature-select"><option value="">Use the existing publication feature, or create one named after the plan</option>@foreach (var feature in features) { <option @key="feature.Id" value="@feature.Id">@feature.Name · @feature.Id</option> }</select>
         @if (featuresError is not null) { <p class="text-warning" role="alert" data-testid="delivery-feature-error">@featuresError</p> }
         @if (featuresBusy) { <p class="small text-muted" role="status">Loading project features…</p> }
         <button class="btn btn-sm btn-outline-secondary mb-3" disabled="@(Busy || featuresBusy)" @onclick="ReloadFeatures" data-testid="delivery-reload-features">Reload feature choices</button>
