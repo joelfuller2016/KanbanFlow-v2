@@ -584,12 +584,14 @@ public sealed class TestRunnerService(
                     var create = await PostCreateAsync(http, "/api/ideas", new { title = $"{runMarker} before rename" }, ct);
                     if (create.StatusCode != HttpStatusCode.Created)
                         throw new Exception($"Create idea expected 201, got {(int)create.StatusCode}");
-                    ideaId = (await create.Content.ReadFromJsonAsync<JsonElement>(Json, CancellationToken.None)).GetProperty("id").GetInt32();
+                    var created = await create.Content.ReadFromJsonAsync<JsonElement>(Json, CancellationToken.None);
+                    ideaId = created.GetProperty("id").GetInt32();
+                    var wv = created.GetProperty("workflowVersion").GetInt32();
                     ct.ThrowIfCancellationRequested();
 
                     var renamedTitle = $"{runMarker} renamed";
                     var patch = await http.PatchAsJsonAsync($"/api/ideas/{ideaId}",
-                        new { title = renamedTitle, status = IdeaStatus.Triaging.ToString() }, Json, ct);
+                        new { title = renamedTitle, status = IdeaStatus.Triaging.ToString(), expectedWorkflowVersion = wv }, Json, ct);
                     if (patch.StatusCode != HttpStatusCode.OK)
                         throw new Exception($"PATCH /api/ideas/{ideaId} expected 200, got {(int)patch.StatusCode}");
 
@@ -700,11 +702,13 @@ public sealed class TestRunnerService(
                     var create = await PostCreateAsync(http, "/api/ideas", new { title = $"{runMarker} audit idea" }, ct);
                     if (create.StatusCode != HttpStatusCode.Created)
                         throw new Exception($"Create idea expected 201, got {(int)create.StatusCode}");
-                    ideaId = (await create.Content.ReadFromJsonAsync<JsonElement>(Json, CancellationToken.None)).GetProperty("id").GetInt32();
+                    var created = await create.Content.ReadFromJsonAsync<JsonElement>(Json, CancellationToken.None);
+                    ideaId = created.GetProperty("id").GetInt32();
+                    var wv = created.GetProperty("workflowVersion").GetInt32();
                     ct.ThrowIfCancellationRequested();
 
                     // PATCH writes an IdeaUpdated activity event.
-                    var patch = await http.PatchAsJsonAsync($"/api/ideas/{ideaId}", new { title = $"{runMarker} audit idea (edited)" }, Json, ct);
+                    var patch = await http.PatchAsJsonAsync($"/api/ideas/{ideaId}", new { title = $"{runMarker} audit idea (edited)", expectedWorkflowVersion = wv }, Json, ct);
                     if (patch.StatusCode != HttpStatusCode.OK)
                         throw new Exception($"PATCH idea expected 200, got {(int)patch.StatusCode}");
 

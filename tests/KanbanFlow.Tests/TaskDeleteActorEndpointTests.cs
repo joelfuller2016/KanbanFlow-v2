@@ -49,43 +49,30 @@ public sealed class TaskDeleteActorEndpointTests
     /// to "mcp-agent" is each CALLER's job — the wrapper's <c>delete_task</c> case handler, or a
     /// native tool method — not the REST route's; proven for the wrapper by
     /// scripts/mcp-parity.test.mjs's "stdio delete_task defaults actor to mcp-agent when omitted".
+    /// Missing/blank attribution falls back through the shared audit boundary to the request's
+    /// <c>X-KanbanFlow-Actor</c> header, then <c>api</c>, as it does for other saved board changes.
     /// </summary>
-    [Fact]
-    public async Task Delete_WithoutActorQueryParameter_LeavesTheAuditEventActorNull()
+    [Theory]
+    [InlineData(null, null, "api")]
+    [InlineData("  ", null, "api")]
+    [InlineData(null, "header-actor", "header-actor")]
+    [InlineData("  ", "header-actor", "header-actor")]
+    [InlineData("  query-actor  ", "header-actor", "query-actor")]
+    public async Task Delete_ActorSelection_UsesQueryThenRequestAuditDefault(string? actor, string? header, string expected)
     {
         using var f = new SqliteTestFactory();
         var taskId = Seed(f);
 
         await using var host = await TaskHost.StartAsync(f);
-        using var response = await host.Client.DeleteAsync($"/api/tasks/{taskId}");
+        var query = actor is null ? "" : "?actor=" + Uri.EscapeDataString(actor);
+        using var request = new HttpRequestMessage(HttpMethod.Delete, $"/api/tasks/{taskId}{query}");
+        if (header is not null) request.Headers.Add("X-KanbanFlow-Actor", header);
+        using var response = await host.Client.SendAsync(request);
 
         Assert.Equal(HttpStatusCode.NoContent, response.StatusCode);
         using var db = f.CreateDbContext();
         var audit = await db.ActivityEvents.SingleAsync(e => e.EntityId == taskId && e.EventType == "TaskDeleted");
-        Assert.Null(audit.Actor);
-    }
-
-    /// <summary>A whitespace-only actor is not a meaningful attribution. The ROUTE forwards it raw
-    /// (no local normalization — same thin pass-through as the sibling test above); this is an
-    /// end-to-end guard that the SERVICE layer's own normalization
-    /// (<c>TaskService</c>'s shared <c>AddActivityEvent</c>:
-    /// <c>string.IsNullOrWhiteSpace(actor) ? null : actor.Trim()</c>) still reduces it to the same
-    /// "nothing was said" null as an omitted actor. NOT analogous to the <c>release</c> route's
-    /// <c>IsNullOrWhiteSpace</c> guard (<c>POST /api/tasks/{id}/release</c> in <c>ApiEndpoints.cs</c>)
-    /// — that route REJECTS a blank actor with 422; it does not null it.</summary>
-    [Fact]
-    public async Task Delete_WithWhitespaceOnlyActor_NormalizesToNull()
-    {
-        using var f = new SqliteTestFactory();
-        var taskId = Seed(f);
-
-        await using var host = await TaskHost.StartAsync(f);
-        using var response = await host.Client.DeleteAsync($"/api/tasks/{taskId}?actor=%20%20");
-
-        Assert.Equal(HttpStatusCode.NoContent, response.StatusCode);
-        using var db = f.CreateDbContext();
-        var audit = await db.ActivityEvents.SingleAsync(e => e.EntityId == taskId && e.EventType == "TaskDeleted");
-        Assert.Null(audit.Actor);
+        Assert.Equal(expected, audit.Actor);
     }
 
     private static int Seed(SqliteTestFactory f)
@@ -118,11 +105,13 @@ public sealed class TaskDeleteActorEndpointTests
             builder.Logging.ClearProviders();
             builder.WebHost.UseUrls("http://127.0.0.1:0"); // ephemeral port: tests can run in parallel
 
-            // Every MapTaskEndpoints route needs only these two — a scoped AppDbContext sharing
-            // the factory's single open in-memory connection (so the route sees what the test
-            // seeded), and the same real TaskService the service-level tests use.
-            builder.Services.AddScoped(_ => factory.CreateDbContext());
-            builder.Services.AddSingleton<ITaskService>(new TaskService(factory));
+            // Share the seeded connection while retaining Program.cs's HTTP-aware context
+            // construction, so the real audit boundary sees request headers and its API default.
+            using var shared = factory.CreateDbContext();
+            var connection = shared.Database.GetDbConnection();
+            builder.Services.AddHttpContextAccessor();
+            builder.Services.AddDbContextFactory<AppDbContext>(options => options.UseSqlite(connection));
+            builder.Services.AddScoped<ITaskService>(sp => new TaskService(sp.GetRequiredService<IDbContextFactory<AppDbContext>>()));
 
             var app = builder.Build();
             try

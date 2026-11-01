@@ -42,6 +42,25 @@ namespace KanbanFlow.Tests;
 public sealed class TestRunnerServiceCancellationTests
 {
     [Fact]
+    public async Task RunApiTestsAsync_IdeaUpdatesUseWorkflowVersion_AndLeaveNoFixtures()
+    {
+        await using var host = await ApiHost.StartAsync();
+        using var handler = new FaultInjectingHandler(host.BaseAddress, _ => false, faultOnNthMatch: 0);
+        var runner = host.NewRunner(handler);
+
+        var suite = await runner.RunApiTestsAsync();
+
+        foreach (var name in new[] { "Idea PATCH updates title + status; unknown id 404", "Idea activity survives delete (#85 audit pattern)" })
+        {
+            var result = Assert.Single(suite.Tests, test => test.Name == name);
+            Assert.True(result.Passed, $"{name}: {result.Error}");
+        }
+        await using var db = await host.DbFactory.CreateDbContextAsync();
+        Assert.False(await db.Ideas.AnyAsync());
+        Assert.Equal(host.BaselineProjectCount, await db.Projects.CountAsync());
+    }
+
+    [Fact]
     public async Task CreateProjectFeatureTaskAsync_HappyPath_NameCarriesRunMarker_AndCleansUpNormally()
     {
         await using var host = await ApiHost.StartAsync();
@@ -487,8 +506,12 @@ public sealed class TestRunnerServiceCancellationTests
         // The two titles the runner reaches only by PATCH: the stored value after the rename is what counts.
         foreach (var (original, renamed) in new[] { ("before rename", "renamed"), ("audit idea", "audit idea (edited)") })
         {
-            var ideaId = await CreatedIdAsync(http.PostAsJsonAsync("/api/ideas", new { title = $"{marker} {original}" }));
-            using var patch = await http.PatchAsJsonAsync($"/api/ideas/{ideaId}", new { title = $"{marker} {renamed}" });
+            using var create = await http.PostAsJsonAsync("/api/ideas", new { title = $"{marker} {original}" });
+            Assert.Equal(HttpStatusCode.Created, create.StatusCode);
+            var created = await create.Content.ReadFromJsonAsync<JsonElement>();
+            var ideaId = created.GetProperty("id").GetInt32();
+            var expectedWorkflowVersion = created.GetProperty("workflowVersion").GetInt32();
+            using var patch = await http.PatchAsJsonAsync($"/api/ideas/{ideaId}", new { title = $"{marker} {renamed}", expectedWorkflowVersion });
             Assert.Equal(HttpStatusCode.OK, patch.StatusCode);
             await CheckIdeaAsync($"\"{original}\" PATCHed to \"{renamed}\"", ideaId);
         }

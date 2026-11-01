@@ -92,6 +92,10 @@
                             </time>
                         </div>
 
+                        @if (entry.Subject is not null)
+                        {
+                            <div class="text-muted small" data-testid="activity-timeline-subject">@entry.Subject</div>
+                        }
                         @if (entry.Changes.Count > 0)
                         {
                             <ul class="kf-timeline-changes" data-testid="activity-timeline-changes">
@@ -119,6 +123,22 @@
                             @* No derivable diff (create/delete carry only one side) — the audit
                                message is the fallback, exactly as recorded. *@
                             <div class="kf-timeline-headline">@entry.Headline</div>
+                        }
+                        @if (entry.BeforeDetails is not null || entry.AfterDetails is not null)
+                        {
+                            <details class="small mt-1" data-testid="activity-saved-details">
+                                <summary aria-label="Saved details for @entry.Subject, @entry.Badge, event @entry.SourceId">Saved details</summary>
+                                @if (entry.BeforeDetails is not null)
+                                {
+                                    <div class="fw-semibold">Before</div>
+                                    <pre class="small text-wrap">@entry.BeforeDetails</pre>
+                                }
+                                @if (entry.AfterDetails is not null)
+                                {
+                                    <div class="fw-semibold">After</div>
+                                    <pre class="small text-wrap">@entry.AfterDetails</pre>
+                                }
+                            </details>
                         }
                     </div>
                 </li>
@@ -154,6 +174,10 @@
 @code {
     /// <summary>Task whose audit events to load. 0 / null means "nothing to show".</summary>
     [Parameter] public int? TaskId { get; set; }
+    [Parameter] public int? ProjectId { get; set; }
+    [Parameter] public string? EntityType { get; set; }
+    [Parameter] public int? EntityId { get; set; }
+    [Parameter] public string? EntityKey { get; set; }
 
     /// <summary>
     /// Comments, owned by the parent (both parents already load and mutate them — e.g. an
@@ -196,13 +220,14 @@
     // Guards against a stale in-flight load overwriting a newer one when the user opens task A
     // then immediately task B.
     private int loadVersion;
-    private int? loadedTaskId;
+    private CancellationTokenSource? loadCancellation;
+    private (int? Task, int? Project, string? Type, int? Entity, string? Key)? loadedScope;
 
     protected override void OnParametersSet()
     {
-        var taskId = TaskId is > 0 ? TaskId : null;
+        var scope = (Task: TaskId, Project: ProjectId, Type: EntityType, Entity: EntityId, Key: EntityKey);
 
-        if (taskId != loadedTaskId || RefreshToken != loadedRefreshToken)
+        if (scope != loadedScope || RefreshToken != loadedRefreshToken)
         {
             // Only a genuinely different task resets the READING POSITION — both halves of it.
             // A refresh-token bump is a save on the SAME task (adding a comment bumps it), and it
@@ -212,21 +237,23 @@
             // rule was enforced and half was not: every comment the user posted collapsed the rail
             // back to CollapseAfter rows underneath them. Both are the same invariant — keep them
             // together so neither can be moved out again on its own.
-            if (taskId != loadedTaskId)
+            if (scope != loadedScope)
             {
                 eventLimit = EventPageSize;
                 expanded = false;
             }
 
-            loadedTaskId = taskId;
+            loadedScope = scope;
             loadedRefreshToken = RefreshToken;
             events = [];
             totalEvents = 0;
             loadFailed = false;
-            if (taskId is int id)
-                _ = LoadEventsAsync(id, ++loadVersion);
+            if (scope.Task is > 0 || scope.Project is > 0 || scope.Entity is > 0 || scope.Type is not null || scope.Key is not null)
+                _ = LoadEventsAsync(scope, ++loadVersion);
             else
-                loadVersion++;
+            {
+                loadVersion++; loadCancellation?.Cancel();
+            }
         }
 
         // The merge itself is pure and cheap — rebuild every parameter set so an optimistically
@@ -236,18 +263,21 @@
 
     private int loadedRefreshToken = -1;
 
-    private async Task LoadEventsAsync(int taskId, int version)
+    private async Task LoadEventsAsync((int? Task, int? Project, string? Type, int? Entity, string? Key) scope, int version)
     {
+        if (disposed) return;
+        loadCancellation?.Cancel(); loadCancellation?.Dispose();
+        var source = loadCancellation = new CancellationTokenSource();
+        var ct = source.Token;
         try
         {
-            await using var db = await DbFactory.CreateDbContextAsync();
-            var query = db.ActivityEvents
-                .Where(e => e.EntityType == "Task" && e.EntityId == taskId);
+            await using var db = await DbFactory.CreateDbContextAsync(ct);
+            var query = ActivityLogReader.Query(db, scope.Project, scope.Task, scope.Type, scope.Entity, scope.Key);
 
             // The total is what makes the "showing N of M" boundary honest — without it the panel
             // cannot tell a complete history from a truncated one, and would claim completeness
             // it does not have.
-            var total = await query.CountAsync();
+            var total = await query.CountAsync(ct);
 
             // Same predicate the REST surface serves at GET /api/tasks/{id}/activity
             // (ApiEndpoints.cs:522-540), with an Id tiebreak: ordering by CreatedAt ALONE is
@@ -258,12 +288,13 @@
                 .OrderByDescending(e => e.CreatedAt)
                 .ThenByDescending(e => e.Id)
                 .Take(eventLimit)
-                .ToListAsync();
+                .ToListAsync(ct);
 
             if (version != loadVersion) return;   // superseded by a newer open
             events = loaded;
             totalEvents = total;
         }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { return; }
         catch (Exception ex)
         {
             if (version != loadVersion) return;
@@ -271,7 +302,7 @@
             // SAY so, rather than silently presenting a partial history as complete. The user
             // gets the banner; the operator gets this line. A bare `catch {}` here would make an
             // audit-trail outage invisible on both sides.
-            Logger.LogWarning(ex, "Failed to load activity events for task {TaskId}.", taskId);
+            Logger.LogWarning(ex, "Failed to load activity events for {Scope}.", scope);
             events = [];
             totalEvents = 0;
             loadFailed = true;
@@ -288,7 +319,10 @@
 
     private bool disposed;
 
-    public void Dispose() => disposed = true;
+    public void Dispose()
+    {
+        disposed = true; ++loadVersion; loadCancellation?.Cancel(); loadCancellation?.Dispose();
+    }
 
     /// <summary>
     /// Raises the audit-event window and re-reads. Offset-style paging by a growing take: this
@@ -298,9 +332,9 @@
     /// </summary>
     private async Task LoadOlderAsync()
     {
-        if (loadedTaskId is not int id) return;
+        if (loadedScope is not { } scope) return;
         eventLimit += EventPageSize;
-        await LoadEventsAsync(id, ++loadVersion);
+        await LoadEventsAsync(scope, ++loadVersion);
     }
 
     /// <summary>

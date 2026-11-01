@@ -1,0 +1,15 @@
+flowchart TB
+    Human[Person scanning, reading or deciding] --> View[Existing ProjectView]
+    View --> Outline[ProjectOutline: hierarchy, selection and row context]
+    View --> Board[Existing status board]
+    Outline --> JS[Collocated reveal / resize module: local presentation only]
+    Outline --> Detail[Existing task panel / edit modal]
+    Detail --> Request[Existing request workspace and history]
+    AI[AI client] --> MCP[Native / stdio MCP]
+    Request --> Commands[Shared validated workflow and task commands]
+    MCP --> Commands
+    Commands --> Audit[Existing atomic data and audit save]
+    Audit --> DB[(Same SQLite database)]
+    DB --> Reads[Shared task and workflow context reads]
+    Reads --> View
+    Reads --> MCP

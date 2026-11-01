@@ -2271,7 +2271,7 @@ async function main() {
     // why both #290's overlay contract and the placeholder's own geometry could break silently.
     await test("Ideas board: an empty column's add affordance is contained, hit-testable, and opens the modal (#322/#290)", async () => {
       const parked = await api("POST", "/api/ideas", { title: `E2E Empty ${stamp}` });
-      await api("PATCH", `/api/ideas/${parked.id}`, { status: "Triaging" });   // vacate New
+      await api("PATCH", `/api/ideas/${parked.id}`, { status: "Triaging", expectedWorkflowVersion: parked.workflowVersion });   // vacate New
       await page.goto(`${baseUrl}/ideas`);
       await page.locator('[data-testid="add-idea-New-button"]').waitFor({ state: "visible" });
 
@@ -2332,7 +2332,7 @@ async function main() {
       const mid = await mkIdea("Mid", "High");    // the one we drag — deliberately NOT last
       const bottom = await mkIdea("Bottom", "Medium");
       const parked = await mkIdea("Parked", "Low"); // a bystander in the destination column
-      await api("PATCH", `/api/ideas/${parked.id}`, { status: "Archived" });
+      await api("PATCH", `/api/ideas/${parked.id}`, { status: "Archived", expectedWorkflowVersion: parked.workflowVersion });
 
       await page.goto(`${baseUrl}/ideas`);
       await page.locator(`[data-testid="idea-card-${top.id}"]`).waitFor({ state: "visible" });

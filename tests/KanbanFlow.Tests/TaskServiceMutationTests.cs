@@ -312,7 +312,7 @@ public sealed class TaskServiceMutationTests
 
     private sealed class ThrowOnSaveContext(DbContextOptions<AppDbContext> options) : AppDbContext(options)
     {
-        public override Task<int> SaveChangesAsync(CancellationToken cancellationToken = default)
+        public override Task<int> SaveChangesAsync(bool acceptAllChangesOnSuccess, CancellationToken cancellationToken = default)
             => throw new InvalidOperationException("simulated audit-write failure");
     }
 
@@ -323,7 +323,7 @@ public sealed class TaskServiceMutationTests
     /// a 5-minute cadence cannot flood the timeline or fake task activity on Home.
     /// </summary>
     [Fact]
-    public async Task Claim_SameActorReclaim_RenewsClaimedAt_ButWritesNoSecondEvent()
+    public async Task Claim_SameActorReclaim_LogsHeartbeatWithoutUpdatedAtChurn()
     {
         using var f = new SqliteTestFactory();
         var (_, taskId) = SeedFeatureWithTask(f);
@@ -341,11 +341,15 @@ public sealed class TaskServiceMutationTests
         // The fix: the lease moves.
         Assert.Equal(now, second.ClaimedAt);
         Assert.NotEqual(firstClaimedAt, second.ClaimedAt);
-        // The part of "idempotent" that must NOT change: no churn, no extra audit row.
+        // Renewals retain the original work-activity timestamp and log the lease separately.
         Assert.Equal(firstUpdatedAt, second.UpdatedAt);
         using var db = f.CreateDbContext();
         Assert.Equal(1, await db.ActivityEvents.CountAsync(e => e.EventType == "TaskClaimed"));
         Assert.Equal(0, await db.ActivityEvents.CountAsync(e => e.EventType == "TaskClaimRenewed"));
+        var heartbeat = await db.ActivityEvents.SingleAsync(e => e.EventType == "TaskClaimHeartbeat");
+        Assert.Equal("alice", heartbeat.Actor);
+        using var heartbeatBefore = System.Text.Json.JsonDocument.Parse(heartbeat.BeforeJson!);
+        Assert.Equal(firstClaimedAt, heartbeatBefore.RootElement.GetProperty("claimedAt").GetDateTime());
     }
 
     [Fact]
@@ -473,15 +477,23 @@ public sealed class TaskServiceMutationTests
         Assert.Equal(0, await db.ActivityEvents.CountAsync(e => e.EntityId == taskId));
     }
 
-    [Fact]
-    public async Task AddComment_BlankText_ThrowsValidation()
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    [InlineData("\t\r\n\u2003")]
+    public async Task AddComment_BlankText_ThrowsValidation(string? text)
     {
         using var f = new SqliteTestFactory();
         var (_, taskId) = SeedFeatureWithTask(f);
         var svc = new TaskService(f);
 
         await Assert.ThrowsAsync<ValidationException>(
-            () => svc.AddCommentAsync(taskId, "   ", "x", CommentType.Note, "x"));
+            () => svc.AddCommentAsync(taskId, text!, "x", CommentType.Note, "x"));
+
+        using var persisted = f.CreateDbContext();
+        Assert.Empty(await persisted.TaskComments.ToListAsync());
+        Assert.Empty(await persisted.ActivityEvents.ToListAsync());
     }
 
     [Fact]
@@ -552,9 +564,9 @@ public sealed class TaskServiceMutationTests
         Assert.DoesNotContain("SortOrder", note.Text);
     }
 
-    // #88 guard: a SortOrder-only update saves the row + bumps UpdatedAt but writes ZERO audit.
+    // A SortOrder-only update persists its rank change and a TaskReordered audit event.
     [Fact]
-    public async Task Update_SortOrderOnlyChange_PersistsWithoutAuditEvent()
+    public async Task Update_SortOrderOnlyChange_PersistsWithReorderAudit()
     {
         using var f = new SqliteTestFactory();
         var (taskId, seededUpdatedAt) = SeedTaskForUpdate(f, name: "Original", sortOrder: 5);
@@ -570,8 +582,12 @@ public sealed class TaskServiceMutationTests
         Assert.Equal(9, task!.SortOrder);
         Assert.Equal("Original", task.Name);          // audited fields untouched
         Assert.True(task.UpdatedAt > seededUpdatedAt); // row really was saved
-        // The audit boundary: no TaskUpdated (or any) event, and no comment, for a bare reorder.
-        Assert.Equal(0, await db.ActivityEvents.CountAsync(e => e.EntityId == taskId));
+        // A bare reorder records its actual rank change without adding a discussion comment.
+        var reordered = await db.ActivityEvents.SingleAsync(e => e.EntityId == taskId);
+        Assert.Equal("TaskReordered", reordered.EventType);
+        Assert.Equal("svc-test", reordered.Actor);
+        using var reorderBefore = System.Text.Json.JsonDocument.Parse(reordered.BeforeJson!);
+        Assert.Equal(5d, reorderBefore.RootElement.GetProperty("sortOrder").GetDouble());
         Assert.Equal(0, await db.TaskComments.CountAsync(c => c.TaskItemId == taskId));
     }
 

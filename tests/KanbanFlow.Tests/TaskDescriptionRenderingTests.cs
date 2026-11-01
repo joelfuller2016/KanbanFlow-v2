@@ -1,6 +1,10 @@
+using System.Reflection;
+using System.Text.Json;
 using AngleSharp.Html.Parser;
+using KanbanFlow.Components.Shared;
 using KanbanFlow.Models;
 using KanbanFlow.Services;
+using Microsoft.AspNetCore.Components;
 using Microsoft.EntityFrameworkCore;
 
 namespace KanbanFlow.Tests;
@@ -237,8 +241,83 @@ public sealed class TaskDescriptionRenderingTests
         Assert.StartsWith(original, stored, StringComparison.Ordinal);
         // …and the edit actually landed, so this cannot pass by the update having been a no-op.
         Assert.Contains("Added by a human.", stored, StringComparison.Ordinal);
-        // TaskService owns normalization: trailing transport/editor whitespace is not persisted.
-        Assert.Equal(intended, stored);
+        // Preserve the complete authored source, including whitespace that can carry Markdown meaning.
+        Assert.Equal(edited, stored);
+    }
+
+    [Fact]
+    public async Task TaskDetailDescriptionCommit_PreservesIndentationAndTrailingMarkdownWhitespace()
+    {
+        using var factory = new SqliteTestFactory();
+        const string original = "Keep **Markdown** 🧭";
+        const string edited = "    Keep **Markdown** 🧭  \r\n\t";
+        TaskItem task;
+        await using (var seed = factory.CreateDbContext())
+        {
+            task = new TaskItem
+            {
+                Name = "Description editing", Description = original,
+                Feature = new Feature { Name = "Feature", Project = new Project { Name = "Project" } },
+                Status = WorkStatus.InProgress, Priority = TaskPriority.High, SortOrder = 2.5
+            };
+            seed.Tasks.Add(task);
+            await seed.SaveChangesAsync();
+        }
+
+        // There is no rendered component-event harness in this project. Invoke the real panel
+        // commit handler with the buffer normally supplied by EditableMarkdown's binding, so
+        // a component-only Trim regression cannot hide behind the service round-trip test above.
+        await using var panel = new TaskDetailPanel();
+        var notifications = 0;
+        ParameterView.FromDictionary(new Dictionary<string, object?>
+        {
+            [nameof(TaskDetailPanel.Task)] = task,
+            [nameof(TaskDetailPanel.OnTaskUpdated)] = EventCallback.Factory.Create(
+                new object(), (Action)(() => notifications++))
+        }).SetParameterProperties(panel);
+        var serviceProperty = typeof(TaskDetailPanel).GetProperty("TaskSvc", BindingFlags.Instance | BindingFlags.NonPublic);
+        var editingField = typeof(TaskDetailPanel).GetField("editingDescription", BindingFlags.Instance | BindingFlags.NonPublic);
+        var commit = typeof(TaskDetailPanel).GetMethod("SaveDescriptionAsync", BindingFlags.Instance | BindingFlags.NonPublic);
+        Assert.NotNull(serviceProperty);
+        Assert.NotNull(editingField);
+        Assert.NotNull(commit);
+        serviceProperty.SetValue(panel, new TaskService(factory));
+        editingField.SetValue(panel, edited);
+
+        await Assert.IsAssignableFrom<Task>(commit.Invoke(panel, null));
+
+        Assert.Equal(1, notifications);
+        Assert.Equal(edited, panel.Task!.Description);
+        Assert.Equal(edited, editingField.GetValue(panel));
+        DateTime savedAt;
+        await using (var persisted = factory.CreateDbContext())
+        {
+            var saved = await persisted.Tasks.SingleAsync(t => t.Id == task.Id);
+            Assert.Equal(edited, saved.Description);
+            Assert.Equal("Description editing", saved.Name);
+            Assert.Equal(WorkStatus.InProgress, saved.Status);
+            Assert.Equal(TaskPriority.High, saved.Priority);
+            Assert.Equal(2.5, saved.SortOrder);
+            savedAt = saved.UpdatedAt;
+            var activity = Assert.Single(await persisted.ActivityEvents.ToListAsync());
+            Assert.Equal("TaskUpdated", activity.EventType);
+            Assert.Equal("User", activity.Actor);
+            using var before = JsonDocument.Parse(activity.BeforeJson!);
+            using var after = JsonDocument.Parse(activity.AfterJson!);
+            Assert.Equal(original, before.RootElement.GetProperty("description").GetString());
+            Assert.Equal(edited, after.RootElement.GetProperty("description").GetString());
+            Assert.Equal("Updated: Description", Assert.Single(await persisted.TaskComments.ToListAsync()).Text);
+        }
+
+        await Assert.IsAssignableFrom<Task>(commit.Invoke(panel, null));
+
+        Assert.Equal(1, notifications);
+        await using var repeated = factory.CreateDbContext();
+        var repeatedTask = await repeated.Tasks.SingleAsync(t => t.Id == task.Id);
+        Assert.Equal(edited, repeatedTask.Description);
+        Assert.Equal(savedAt, repeatedTask.UpdatedAt);
+        Assert.Single(await repeated.ActivityEvents.ToListAsync());
+        Assert.Single(await repeated.TaskComments.ToListAsync());
     }
 
 }

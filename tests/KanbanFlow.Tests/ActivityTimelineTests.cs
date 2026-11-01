@@ -960,9 +960,12 @@ public class ActivityTimelineTests
             new[]
             {
                 "status", "priority", "assignee", "claimedBy", "name",
-                "featureId", "description", "sortOrder", "completedAt", "claimedAt"
+                "featureId", "description", "sortOrder", "completedAt", "claimedAt",
+                "text", "completed", "goals", "readme", "projectId", "taskItemId", "dependsOnTaskItemId",
+                "parentFeatureId", "parentSubtaskId", "promotedProjectId", "archived"
             },
             ActivityTimelineBuilder.DisplayFields.Select(f => f.Json).ToArray());
+        Assert.Equal(DisplayLabels, ActivityTimelineBuilder.DisplayFields.Select(f => f.Label).ToArray());
     }
 
     /// <summary>The reported case, against the real producer's output shape.</summary>
@@ -1253,11 +1256,13 @@ public class ActivityTimelineTests
             "back to its audit Message. Changes derived from an unparseable payload are invented.");
     }
 
-    /// <summary>The labels <c>DisplayFields</c> can emit — mirrored here so a whitelist change is loud.</summary>
+    /// <summary>Expected display-label contract, independent of the production definitions.</summary>
     private static readonly string[] DisplayLabels =
     [
         "Status", "Priority", "Assigned", "Claimed by", "Name",
-        "Feature", "Description", "Order", "Completed", "Claimed at"
+        "Feature", "Description", "Order", "Completed", "Claimed at",
+        "Text", "Complete", "Goals", "Readme", "Project", "Task", "Depends on task",
+        "Parent feature", "Parent subtask", "Linked project", "Archived"
     ];
 
     // AC6's fifth shape — a STRUCTURED (object/array) value in a whitelisted slot — is NOT
