@@ -51,6 +51,973 @@ A review of the repository and a test run on 2026-09-26 filed findings as issues
   - S7, for #549.
 
 ## Entries (newest first)
+- 2026-11-01 04:10Z Codex: Published the final PR #580 workspace repairs at `737a8c7982072313ec3fba72383b6303df617dfc` (verified repair `1d1cc40d204daad29705998e7c74c2b1e9eea3f8`): required verify.ps1 exit 0, 1,686 .NET / 374 script cases, zero build warnings/errors. Nine new gallery/publication cases reproduced five original failures then passed 9/9. Four current browser suites passed: reviewed-target deletion refuses silent retargeting and requires latest-context adoption plus a new explicit preview; existing-feature recovery; exact saved typing/stale controls/focus at 0/150/300 ms; 16 light/dark normal/hover contrast measurements (all text >=4.5:1, recovery border >=3:1). The original compiled app measured 3.427467:1 for dark primary text. Browser fixtures were corrected to await server draft acknowledgement and honor the existing 409 adoption gate; no application/.NET test source changed after the completed gate. Independent review passed. Concurrent `d322ce4` history was retained with exact tested tree identity; final JOURNAL merge preserved 627 feature and 594 primary blocks. All 86 review threads resolved at readback; exact description/draft readback matched. Owned app/browser stopped, owning-process query empty, worktree clean.
+
+  PR #564 final Git-config repair is published at `fd28a0c3589ad00ca40395d87879ecf752e1347f` (verified script `81d4d0e01501fddc78aaf340fdcd59c9b2016f40`): verify exit 0, 1,259 .NET / 373 script / 171 focused cases, zero build warnings/errors. Real Git HOME/XDG disguise and independent global/system guard removals were observed red; byte-identical restore is green, local rewrites remain effective, host settings unchanged. The tested Git-compatible `/dev/null` path avoids Node's Windows device-path incompatibility. Independent review passed; all 11 threads resolved, description/draft readbacks match. A final low PR #511 test-oracle finding is being repaired separately: expected timeline labels must not derive from the production list. PR #521 application repair remains verified at `87481e8` with its additive test passing. Original checkout `feat/unified-workflow-509` at `b9d9ea0dcf32b17a2ec6a1f1f3b913243cb1e4f6` retains its pre-existing README/documentation work. No PR merge/deployment or human usability acceptance. Raw evidence is under `_sandbox/fixes/2026-10-31-prs/capture` and the owning ignored worktree folders; `.gsd-debug-prs-20261101/conclusion.md` owns the integrated result.
+
+
+- 2026-11-01 04:11Z (PR monitor — Codex both clean on #580 HEAD 737a8c7):
+  - Codex Code Review: has_any_findings: false ✅ (completed 04:10Z).
+  - Codex Security Review: has_any_findings: null/completed ✅ (completed 04:11Z).
+  - #580 HEAD=737a8c7, Codex clean. Awaiting Copilot re-review.
+
+- 2026-11-01 04:05Z (PR monitor — owner pushed enhanced fixes on #580):
+  - Owner pushed 1d1cc40 ("fix: preserve reviewed delivery targets and gallery traversal"), merged as 2d5911f, then JOURNAL merged at 737a8c7.
+  - 1d1cc40 extends session fixes with: browser tests (workspace-ui-preview-target.browser.mjs, workspace-ui-button-contrast.browser.mjs), unit tests (IdeaWorkspaceReviewedDeliveryTargetTests.cs, IdeaGalleryFilterCursorRecoveryTests.cs), IdeaWorkspace.razor.css contrast fix (Copilot Finding 3), and refined IdeaGallery.razor.cs/IdeaWorkspace.Delivery.cs.
+  - Codex attempted review on 737a8c7 but failed ("We couldn't complete this review") — known transient error, auto-retry expected.
+  - #580 HEAD=737a8c7, awaiting Codex retry + Copilot re-review.
+
+- 2026-11-01 04:02Z - Completed native Codex code review of five existing PRs; report-only, no application fixes or merges.
+  - Frozen review cutoff: 2026-11-01 03:10 UTC. PR heads: #511 f4030541698b9427ffa15ee64a16a1b1a4f99bbd; #578 17780aa01cc28c12dbf322379a33074b7ce3becc; #580 c674da7763f9bfb2909601a395ed9060dd841a51; #521 ef34d61f2a1e64f73442515afc93567ae1140b40; #564 0dadff673698e05f0de4ad65fc028015a69e5ddc. Original feat/unified-workflow-509 at b9d9ea0dcf32b17a2ec6a1f1f3b913243cb1e4f6 and unrelated dirty work preserved.
+  - Ten retained findings passed one fresh validation batch: two P1 build blockers and eight P2 issues. #511 closing build fails CS0246 at Ideas.razor:648 (missing WorkflowException namespace); #578 fails NU1608/generated-code CS0200 with incompatible OpenAPI 3.11.0. Current #511 .NET/runtime checks are blocked; its earlier 1634-test pass is historical, not a closing-head pass.
+  - Actual closing passes: #580 canonical exit 0, 1677 .NET and 374 script tests, 36 focused regression executions and four current browser files; #521 1273 .NET/329 scripts; #564 1259 .NET/371 scripts. #511 script suite passes 389. Formatting drift remains advisory on completed passing gates. Older transport/restart receipts retain their actual source; byte-identical backend comparisons justify limited carry-forward.
+  - Actual trusted Chrome/CDP probes confirmed canvas release coordinates are ignored: move (10,5) then release (40,30) saves only (10,5); release-only motion is discarded. The tested connector deletion/submission sequence stayed aligned, so that mismatch hypothesis was demoted. Unsupported-label/premature scratch-harness assumptions and raw failures remain separate from application findings.
+  - Coverage: 14 native review lenses, 48 PR-specific artifacts, full prior-feedback capture and the workflow plan's 18 units/nine integration mappings. All 13 motivating source quotes matched immutable Git objects; two duplicate dependency findings merged, one confidence-50 hypothesis suppressed, zero malformed/degraded findings. Earlier draft-loss is fixed; unreachable selection and stronger-than-defined report/CAS requirements were excluded. Actual human usability/adoption remains pending.
+  - Local delivery: docs/reviews/2026-10-31-pr-code-review.md and its README index; complete ignored review/verification artifacts. All 11 verification trees are clean at their pins, owned servers/browsers stopped and task ports closed. No live-board repair, deployment or remote PR comment/status was performed. Only this journal is published.
+  - Verified lessons: pin concurrent heads and rebuild each changed closing source before reporting current counts; distinguish source inspection, runtime proof and inherited receipts. A suspected 64 KiB SignalR stall was rejected after tagged framework source showed examined-byte backpressure release. Journal-only publication reuses the completed master gate because every non-journal file remains identical to verified 878fe8ddb3fe21410b7acde735bc29cda4639946.
+
+- 2026-11-01 03:45Z Codex: Published PR #511 repair at `edce7af8ffc50adee7284cfa220694411e6b5db2`, verified application source `a48cafb72e6d83b5b5b995c431b9db0d516cfb22`. Required gate exit 0: 1,651 .NET / 389 script / 52 focused cases, zero build warnings/errors; 28 API and four browser cases plus native/stdio passed. Stale drag observed HTTP 409, verbatim conflict, preserved concurrent edit and successful fresh move. Independent review passed; both remaining threads resolved (95 total/zero unresolved at that readback), exact PR description and draft state verified. All owned app/browser resources stopped. PR #521 concurrent test-only child `87481e806df26c64e7914c711153a42dee657b8d` preserves the verified application tree and its added test rebuilt/passed 1/1; earlier 1,293-case full gate is reported separately. Final primary journal merges left verified PR #580 application source unchanged at published head `32079a0654a0b6da311f7d1e5b68713c11c3c8ab` and PR #564 at `5dfbbebcb2527ae39c15c2118a7b7c11a70e1436`.
+
+  New comments arrived during the final readback: PR #564 global/system Git URL rewrites can disguise an unrelated fork; PR #580 unresolved default publication targets can drift after out-of-band feature edits, failed gallery searches pair old cursors with new filters, and outline buttons have insufficient dark-mode contrast. Work continues on those four findings before closure. Real Git confirmed the rewrite counterexample without changing host config. The old compiled workspace DLL (SHA256 `125A6F7819BA89E0933371F83FF23CA19742329B0FF27CCCF58474AD07F70130`) produced a real browser AA failure at 3.427467:1 dark primary text contrast. New patches/tests are isolated; shared workspace builds/mutations are scheduled sequentially. The verification-only journal-block helper was exercised on real PR580/564/511 reconciliations without changing authored entries. No PR merged; owner usability remains pending.
+
+- 2026-11-01 05:35Z PR monitor (automated session):
+  - .NET 10 SDK unavailable (curl 403 from proxy). BUILD GATE DOWN — no merges performed.
+  - Open PRs surveyed: #580 (non-draft), #578 (non-draft, dependabot bump), #564/#521/#511 (all draft). No PR titles contain WIP or DO NOT MERGE.
+  - Phase 1 (merge-ready): skipped — build gate down.
+  - Phase 2 (comment resolution):
+    - #580: all 83 review threads already resolved. No action needed.
+    - #578: 0 review threads. No action needed.
+    - #564: all review threads already resolved. No action needed.
+    - #511: 2 unresolved threads (Copilot: subtask-hash versioning risk; Copilot: Windows path-casing for repository dedup). Both confirmed valid by owner in prior replies; both require design decisions (versioned-hash format, OS-aware path canonicalization). Left open per non-trivial rule.
+    - #521: 1 unresolved Copilot thread (KanbanMcpTools.cs:124 — zero-padded project ScopeKey stored verbatim, silently missing from get_project_context). Discovered upstream commit 62921b6 already applied write-boundary fix (scopeKey = projectId.ToString(CultureInfo.InvariantCulture)). Added regression test CreateNode_ProjectScope_CanonicalizesZeroPaddedScopeKey in 87481e806df26c64e7914c711153a42dee657b8d. Replied on Copilot thread and resolved PRRT_kwDOSA8y6s6yWpBZ. PR #521 now has 0 unresolved threads.
+  - Master build+test: skipped — .NET gate down.
+
+- 2026-11-01 03:47Z (PR monitor — Codex both clean on #580 HEAD d322ce4):
+  - Codex Code Review: has_any_findings: false ✅ (completed 03:43Z).
+  - Codex Security Review: has_any_findings: null/completed ✅ (completed 03:46Z).
+  - #580 HEAD=d322ce4, Codex clean. Copilot re-review pending. PR ready for owner's merge.
+
+- 2026-11-01 03:37Z (PR monitor — Copilot review on #580 HEAD 32079a0; 2 bugs fixed, 1 deferred):
+  - Copilot posted review (review_id=5726261507): 1 high + 2 medium findings.
+  - Finding 1 (high, IdeaWorkspace.Delivery.cs:77): publish_plan sent unresolved featureId/featureName from the original preview request, not the resolved values from the preview result. If a previewed feature was deleted and another exists, the server silently picked a different default. Fixed in d322ce4: now sends publicationPreview.FeatureId (resolved) and, for new-feature case only, publicationPreview.FeatureName. Deleted preview target now fails explicitly (publication_target_missing). Replied+resolved.
+  - Finding 2 (medium, IdeaGallery.razor.cs:36): Reload() committed activeQuery/Kind/Status before awaiting ListAsync; failed reload left active filters updated but page.NextCursor pointing at old query, causing cursor_mismatch on Load more. Fixed in d322ce4: active fields written only after successful load. Replied+resolved.
+  - Finding 3 (medium, IdeaWorkspace.razor.css:10): workspace outline buttons below WCAG AA in dark mode (~3.3:1). Deferred to #84 accessibility pass. Replied+resolved.
+  - Commit d322ce4 pushed to feat/579-idea-workspaces. #580 HEAD=d322ce4, Codex re-review pending.
+
+- 2026-11-01 03:33Z (PR monitor — Codex both clean on #580 HEAD 32079a0):
+  - Owner pushed 32079a0 (JOURNAL.md merge commit, +26 lines, "Merge current primary journal into verified workspace repairs").
+  - Codex Code Review: has_any_findings: false ✅ (completed 03:32Z).
+  - Codex Security Review: has_any_findings: null/completed ✅ (completed 03:33Z).
+  - #580 HEAD=32079a0, Codex clean, awaiting Copilot review on new HEAD.
+
+- 2026-11-01 03:27Z Codex: Fixed and normally published PR #521 to `review/520-project-memory-ownership` at `62921b69a87b0c5be4b8f97bed2a21ef63464333`, remote SHA verified. Accepted numeric project keys now use one identity at creation and typed list/graph/hybrid/vector reads. Startup repairs historical aliases inside the schema transaction with full before/after snapshots and one attributed audit per changed row; IDs, content, provenance, validity, related rows, embeddings and previous audits are preserved. Independent review found no actionable defect. Completed verify.ps1 exit 0: 1,293 .NET cases, zero build warnings/errors; 130 focused / 329 script cases and framing OK. Missing transaction enlistment was deliberately observed red; byte-identical source restoration, nonincremental rebuild and 20 positive key cases then passed. A queued redundant full test run was stopped after these checks; it is not reported as a passing gate. Review thread resolved and read back with zero unresolved threads. PR #521/#564/#580 descriptions now distinguish current verified results from preserved historical records; exact bodies and draft states were read back. No live user DB was modified, no PR merged. PR #511 final full/live gates remain in progress. Evidence: `_sandbox/fixes/2026-10-31-prs/capture` and `pr521/_sandbox/pr521/scope-keys`.
+
+- 2026-11-01 03:18Z Codex: Fixed and normally published PR #564's unavailable-log follow-up to `fix/trial-signal4-clone-caveat` at `9481c33b4a38455f7474eab8301290ce6c798ab9`, remote SHA read back equal. Clone selection/probing now requires the same usable-log condition as signal 4; incomplete, wholly corrupt, missing and disabled logs stay UNMEASURED without Git probes or a misleading folded-in note. A real-Git observer control and guard-removal mutation proved the regression detects the original six unnecessary Git calls. Verified application source `e9316b2f2a5e5d9e4a8cdbaa6a4827ec86547fea`: required verify.ps1 exit 0, 1,259 .NET / 372 script / 170 focused trial cases pass, zero build warnings/errors; formatting drift remains advisory. Fresh independent review found no actionable defect. Final primary integration changed JOURNAL only; all 582 feature and 586 incoming primary entries were retained. The fixed review thread was resolved and read back with zero unresolved threads. No PR merged or draft state changed. PR #511/#521 follow-ups remain in verification. Evidence is retained under `_sandbox/fixes/2026-10-31-prs/capture` and the PR worktree's ignored runtime folder.
+
+- 2026-11-01 03:17Z (PR monitor — replied to CodeRabbit thread on #511):
+  - Confirmed e01fa76 (already pushed) addresses CodeRabbit finding on Ideas.razor:606 (WorkflowException conflict fell through to generic catch).
+  - Replied on thread with confirmation (reply comment 4434209389). Thread PRRT_kwDOSA8y6s6yWzor now has a response; CodeRabbit can resolve it on next review cycle.
+  - 2 remaining open Copilot threads on #511 (subtask hash, Windows path casing) still awaiting owner decision. Build gate still DOWN.
+
+- 2026-11-01 03:05Z (PR monitor — CodeRabbit incremental review on #511, fix applied):
+  - CodeRabbit posted 1 actionable inline comment on Ideas.razor:606 (incremental review of 399648b→a6e7b49).
+  - Finding: WorkflowException("conflict") fell through to generic catch, showing "Move failed: …" instead of service message. Valid — verified against current code.
+  - Fixed in e01fa76ca on feat/unified-workflow-509: added explicit `catch (WorkflowException ex) when (ex.Code == "conflict")` branch showing ex.Message directly, matching the ValidationException branch pattern. Replied on thread (comment 4434200495).
+  - 3 outside-diff-range comments (ui-e2e.mjs:3283 calm fixture, mcp-server.mjs:903 shutdown timeout, one further) — outside current diff, flagged to owner.
+  - PR #511 known open threads: Finding 1 (subtask hash — owner decision needed), Finding 3 (Windows path casing — owner decision needed). Build gate still DOWN.
+- 2026-11-01 03:03Z - Published PR #580 repair head c674da7763f9bfb2909601a395ed9060dd841a51 and verified remote equality. Preserved concurrent73085d282950a456b56b2d5aae404b5be0b8ffde fixes and all complete journal entries; retained incoming storage/feature implementations instead of duplicate task state. Combined warnings-as-errors gate passed1677 .NET tests; full script suite374/374. Real REST/native/stdio write and delivery suites passed (17 write tools,53 native/75 wrapper tools; exact long content, receipts, shared-plan publication); actual inventory97 REST operations. Five browser suites passed on this exact app build: new delayed-typing/selection/appearance/contrast checks, existing-feature recovery through actual UI publication, convergence, polling and storage recovery. Warning contrast7.99:1 light/11.38:1 dark; stale controls ignored and keyboard focus retained. Fresh staged-source review found no blockers. Owned app/browser stopped; original dirty checkout preserved. Final bot readback found additional older-PR defects, now being fixed in parallel: project-memory key canonicalization (#521), clone-probe gating for unavailable logs (#564), workflow evidence/repository-path identity and minor drag-conflict presentation (#511). These are not deferred as owner decisions; no merge or human acceptance is claimed. Verified lesson: refresh moving PRs before publication and merge concurrent implementations once, preserving their regression coverage and removing duplicate state machines.
+
+
+- 2026-11-01 02:59Z (PR monitor — Codex both clean on #580 HEAD c674da7):
+  - Codex code review on c674da7763f9bfb2909601a395ed9060dd841a51: has_any_findings=false, status=completed. ✅
+  - Codex security review on c674da7763f9bfb2909601a395ed9060dd841a51: has_any_findings=null, status=completed. ✅
+  - All 83 threads resolved. PR #580 HEAD c674da7 is clean on Codex. Awaiting Copilot review on new HEAD.
+
+- 2026-11-01 02:55Z (PR monitor — owner pushed c674da7, new code commit on #580):
+  - Owner pushed c674da7763f9bfb2909601a395ed9060dd841a51 to feat/579-idea-workspaces: "fix: preserve workspace input and selected-control identity". 544+/51- across WorkspaceDeliveryPanel, WorkspaceDiscussion, WorkspaceConnections, WorkspaceLayoutEditor, WorkspaceContentEditor, WorkspacePlanItemEditor, WorkspacePlanPanel, WorkspaceSourceDocuments, WorkspaceCard, WorkspaceCheckpointPanel, IdeaWorkspace. New: workspace-ui-feature-recovery.browser.mjs, workspace-ui-races.browser.mjs, WorkspaceLayoutEditorPlacementTests.cs (177 lines); extended IdeaWorkspaceRestoreAndRelinkTests.cs (+91).
+  - PR HEAD is now c674da7. Codex code+security reviews failed with service error ("We couldn't complete this review") — not actual findings. Awaiting Copilot review on new HEAD.
+
+- 2026-11-01 02:52Z - Corrected shell escape characters in this review's immediately preceding checkpoint entry. Its initial insertion used an expandable PowerShell here-string around SHA markup, creating two escape characters and a NUL. Replaced only that new entry with literal text, retained every older entry, and verified the journal is plain UTF-8 text with zero NULs. Future generated prose uses literal strings. No application files changed.
+
+
+
+- 2026-11-01 02:51Z - Full five-PR code-review checkpoint after concurrent head changes.
+  - Refreshed immutable heads: PR #580 73085d282950a456b56b2d5aae404b5be0b8ffde, #521 ef34d61f2a1e64f73442515afc93567ae1140b40, #511 ed205efdca4b39ce3703ab6d220744c35531ebff, #564 0dadff673698e05f0de4ad65fc028015a69e5ddc; #578 unchanged at 17780aa01cc28c12dbf322379a33074b7ce3becc. Original dirty feature checkout preserved.
+  - Delegated fresh-source verification observed zero-warning/error builds and full .NET passes: #580 1660, #521 1273, #511 1634, #564 1259. The exact earlier #580 pre-restoration retry regression now passes; its earlier red result is historical, and this review did not implement that concurrent fix. Current script/formatter/browser completion remains pending.
+  - #578 remains a build blocker: installed ASP.NET OpenAPI 10.0.14 excludes OpenApi 3.x; warnings-as-errors build reports NU1608 and generated-code CS0200. No application repair, merge, deployment or remote review comment performed.
+  - Fresh schema review found no confirmed introduced migration defect. PR #511 plan mapped across U-01-U-18 and nine final checks; actual human usability/adoption and expressly future work remain separate. Complete prior-comment evidence fetched; remaining selected source reviews and independent finding validation still running.
+  - Verified review lesson: recalculate merge bases after concurrent master merges and validate motivating quotes against immutable Git objects. Filled empty staged intent summaries; excluded a stale-source parent candidate and an unreachable UI interleaving. Journal-only publication reuses the earlier passing master gate because every non-journal file is byte-identical to verified 878fe8ddb3fe21410b7acde735bc29cda4639946.
+
+- 2026-11-01 02:45Z (PR monitor — 3 more Copilot performance findings on #580 replied+resolved):
+  - Copilot posted 3 more medium findings on 73085d2 (second re-review of same HEAD).
+  - Finding 1 (r4434164875, WorkspaceOutline.razor:9–28): O(C×P) outline rendering — component sort and placement count each scan the full placement list per component. Valid; imperceptible at typical scale. Replied+resolved PRRT_kwDOSA8y6s6yWt_V; deferred (dict lookup in OnParametersSet).
+  - Finding 2 (r4434164902, WorkspacePlanItemEditor.razor:11–13): O(N²) prerequisite checkboxes — each item editor renders N-1 checkboxes; quadratic for 500+ items. Valid; practical plans are fine. Replied+resolved PRRT_kwDOSA8y6s6yWt_n; deferred (lazy expansion / paged picker).
+  - Finding 3 (r4434164909, WorkspacePlanVersion.razor:9 + WorkspaceDeliveryPanel.razor:61): O(N²) dependency label lookup via repeated FirstOrDefault. Valid; correct fix is a Dictionary<id,title> built once per render. Replied+resolved PRRT_kwDOSA8y6s6yWt_s; deferred.
+  - All 83 threads on #580 now resolved. These are optimization deferrals, not correctness issues.
+
+- 2026-11-01 02:40Z (PR monitor — Codex both clean on #580 HEAD 73085d2; PR fully reviewed):
+  - Codex code review on 73085d282950a456b56b2d5aae404b5be0b8ffde: has_any_findings=false, status=completed. ✅
+  - Codex security review on 73085d282950a456b56b2d5aae404b5be0b8ffde: has_any_findings=null, status=completed. ✅
+  - PR #580 is fully reviewed: all 80 threads resolved, Codex and Copilot both clean on 73085d2, owner delivery record posted. PR is ready for owner merge (T08).
+
+- 2026-11-01 02:40Z (PR monitor — Copilot review on #580 HEAD 73085d2, two findings replied+resolved):
+  - Owner posted closing delivery record on PR #580 (comment 6552403415): all 78 threads resolved, 1,660 .NET / 374 script / 41 browser / 2 integration checks, Codex on 925f2ef clean. PR stays open; merge and owner walkthrough (T08) remain open.
+  - Owner pushed 73085d282950a456b56b2d5aae404b5be0b8ffde (JOURNAL.md only) to feat/579-idea-workspaces; Copilot review triggered on new HEAD.
+  - Copilot Finding 1 (Medium, r4434146742): pointer-up coordinates — `#finish` uses last `#move` dx/dy; `pointerup` could carry different coordinates. Valid edge case; desktop OS coalesces events so gap is sub-pixel and below the ≥2 px commit threshold; `lostpointercapture → #reset()` guards forced releases. Replied and resolved thread PRRT_kwDOSA8y6s6yWrMF; deferred to next iteration.
+  - Copilot Finding 2 (Medium, r4434146754): unkeyed Blazor `<option>` elements in `WorkspaceDeliveryPanel`, `WorkspaceDiscussion`, `WorkspaceConnections`, `WorkspaceLayoutEditor`. Valid best practice; Blazor Server's synchronous circuit rendering prevents mid-render interactions so the described race cannot occur in practice, but `@key` is still the correct approach. Replied and resolved thread PRRT_kwDOSA8y6s6yWrMM; deferred to next iteration.
+  - All threads on #580 now resolved including new Copilot findings. Codex reviews on 73085d2 still running as of 02:36Z.
+
+- 2026-11-01 02:34Z (PR monitor — Copilot review on #511, three findings addressed):
+  - New Copilot review on #511 (feat/unified-workflow-509, HEAD ed205efd) with 3 findings.
+  - Finding 1 (High): Subtask.Completed excluded from StateHash — valid, but changing the hash format invalidates all previously recorded evidence; versioned hash or startup migration needed. Replied to thread; flagged to owner.
+  - Finding 2 (Medium): `<a>` link nested inside `<details><summary>` — confirmed accessibility issue. Fixed in a6e7b49ca5b0a88b0e3a5a2c5e57f4de2bdf7a9c: link removed from summary, added as first visible item in expanded body. Pushed to feat/unified-workflow-509.
+  - Finding 3 (Medium): repository path dedup case-sensitive on Windows — valid, requires SQLite index collation change + startup migration. Replied to thread; flagged to owner.
+  - PR #521 (review/520-project-memory-ownership): 1 open thread (Copilot: MemoryService key normalization), last reply is mine from prior run; flagged to owner.
+  - Build gate still DOWN (.NET 10 install blocked by proxy). No merges.
+
+- 2026-11-01 02:28Z - Published verified repairs to existing PR branches with guarded fast-forward-only pushes: #511 ed205efdca4b39ce3703ab6d220744c35531ebff, #521 ef34d61f2a1e64f73442515afc93567ae1140b40, #564 0dadff673698e05f0de4ad65fc028015a69e5ddc. Product source matches each independently verified local head; final default-branch integration changed JOURNAL.md only. #511 passed1634 .NET/389 script tests, native+stdio workflow smoke,28 live API checks and3 browser cases; #521 passed1273 .NET/329 script tests plus native HTTP pagination/content and framing; #564 passed1259 .NET/371 script/169 targeted tests. Fresh source review found no actionable defect in these repair deltas. Current captured threads remain resolved (511:91,521:3,564:9); no new approval is inferred. #580 initial repaired gate passed1574 .NET/362 script tests, then fresh review found two edge cases: early-state retirement after explicit preservation and placement-selector focus. Corrections and focused regressions are in progress before final build/browser checks. No PR merges or human usability approval. Process lesson: source restored after mutation must be rebuilt without stale timestamp reuse; validate every observed gate against its recorded tree. A small ignored journal-only publisher now enforces fetch, single-file staging and remote ancestry verification.
+
+- 2026-11-01 03:30Z (Automated PR monitor run — build gate DOWN, no merges):
+  - .NET 10 SDK unavailable: dotnet-install.sh blocked by egress proxy (builds.dotnet.microsoft.com:443 connect_rejected). BUILD GATE IS DOWN for this run; no PR was merged.
+  - Open PRs: #580 (non-draft), #578 (Dependabot, non-draft), #564/#521/#511 (all drafts, skipped Phase 1).
+  - #580 (feat/579-idea-workspaces, HEAD 925f2ef2dd6a746641168b1d0d3a79b856e8b16f): mergeable_state=clean, 78/78 review threads resolved, no CHANGES_REQUESTED reviews, CodeRabbit check-run on HEAD = neutral. Would be a merge candidate but BLOCKED (build gate down). Phase 2: 0 unresolved threads, nothing to fix.
+  - #578 (Dependabot, Microsoft.OpenApi 2.13.0→3.11.0): mergeable_state=clean, 0 review threads, CodeRabbit check-run = skipped. Contains 3.0.0 BREAKING CHANGES. BLOCKED (build gate down); prior monitor runs also failed this gate.
+  - #564, #521, #511: draft PRs, Phase 1 skipped. Phase 2 (comment resolution) deferred due to build gate down and token constraints.
+  - Master build: not verified (no dotnet available).
+  - Next: build gate recovery needed before any merges; when dotnet is accessible, #580 is clean and ready to gate.
+
+- 2026-11-01 02:26Z (PR monitor — #521 and #511 both clean, new unreviewed commits):
+  - PR #521 (review/520-project-memory-ownership): still draft; new head ef34d61f pushed by prior session; CI clean on new head; CodeRabbit paused (last reviewed 599a714, ef34d61 not yet reviewed); no unresolved review threads in notifications.
+  - PR #511 (feat/unified-workflow-509): still draft; new head ed205efd pushed by prior session (advancing beyond d412c73 from this monitor's earlier fix); CI clean on new head; CodeRabbit paused (last reviewed 399648b, ed205efd not yet reviewed); no unresolved review threads in notifications.
+  - Build gate still down (.NET 10 install blocked by proxy). No merges performed; owner standing instruction: merges are the owner's.
+
+- 2026-11-01 02:26Z (PR #580 — owner pushed 925f2ef; all reviews on new HEAD clean):
+  - Owner pushed 925f2ef as new branch HEAD, implementing additional fixes:
+    - HasAuthoredState guard in RestoreDraft (navigation-only cache no longer triggers conflict).
+    - Canvas gesture descendant scan refactored to O(n) with one DOM query and iterative BFS.
+    - Guarded async detail reads, delivery feature choices, canvas gesture lifecycle, and more.
+  - All previously-deferred findings (including Major authored-edit preservation) now fixed and resolved by CodeRabbit.
+  - Codex code review on 925f2ef: has_any_findings:false, has_unresolved_findings:false ('Didn't find any major issues. Bravo.').
+  - Codex security review on 925f2ef: has_any_findings:null (no findings).
+  - All PR #580 review threads resolved. PR is ready for owner merge.
+
+- 2026-11-01 02:26Z (Codex complete PR code review — scope and first verification checkpoint):
+  - Request: complete code reviews of all five PRs previously inventoried, including the manifest-only dependency update. Pinned #580 `a6121dd77f0bc5e83733649f12ec4949a4060c62`, #578 `17780aa01cc28c12dbf322379a33074b7ce3becc`, #564 `cd9f67be709bb01bb03cdd174242d7904eae327d`, #521 `599a71402504f8f07a602eddd8a01c7135e0f91a`, #511 `d412c7321008a88cc95f8b2c56713a2aef9c5843` with real merge bases and immutable local refs.
+  - Prepared exact diffs, source/intents, criteria discovery and scope-helper results, plus faithful detached verification worktrees. Preserved the original dirty checkout, active applications and chosen model/effort/access. Reviews remain report-only; no code fix or remote review/comment/status/issue/merge authority inferred.
+  - Native correctness, adversarial and testing passes are running independently; further contract/schema/UI/reliability/standards/performance/previous-comment passes are queued. Remote-ref scope uses native adversarial coverage; no different provider invoked.
+  - Observed #578 blocker: warnings-as-errors build exits 1 with NU1608 dependency-range violations and CS0200 generated OpenAPI assignments after the 3.11.0 pin. No fresh application DLL exists for a truthful runtime-document check. Other per-head gates and source tracing continue; no final merge verdict yet.
+  - Evidence remains ignored; intended local report is `docs/reviews/2026-10-31-pr-code-review.md`. Publish this journal only. The current primary application tree matches the already-verified master snapshot except journal history; preserve concurrent entries.
+
+- 2026-11-01 02:19Z - Owner requested fixes to PRs #580/#564/#521/#511. Applying native GSD debug in isolated detached worktrees; original dirty checkout preserved. Pinned #580 at a2a474377b2fd2c461fcb212a77e4a6c78c6db57, #564 cd9f67be709bb01bb03cdd174242d7904eae327d, #521 599a71402504f8f07a602eddd8a01c7135e0f91a and #511 d412c7321008a88cc95f8b2c56713a2aef9c5843. Independent workers own older-PR integration; parent owns #580 and all publication. Fresh #580 baseline reproduced the preservation failure; repairs now separate early authored state, retire selected-card handlers, synchronize text bindings, correct warning colors and load feature options independently. Narrow integrated #580 check passed 28 cases; mutation and full/runtime verification remain in progress. #564 integrated base locally with169 focused/371 script/1259 .NET passes; #521 native-context verification found and corrected JSON casing/omitted-terminal-cursor guidance; #511 retained both sides of TestRunnerService and repaired real HTTP callers to carry workflow versions. No readiness or human adoption approval is claimed. Next: complete exact-source gates, fresh review and guarded fast-forward updates to the existing PR branches. Only this journal is published at this checkpoint.
+
+
+- 2026-11-01 02:18Z (PR #580 — Codex code and security reviews on a6121dd both clean):
+  - Codex code review on a6121dd: completed, has_unresolved_findings: false.
+  - Codex security review on a6121dd: completed, has_any_findings: null (no findings).
+  - All PR #580 review threads remain resolved (78+ total). PR is ready for owner merge.
+
+- 2026-11-01 02:14Z (PR #580 — RetryDraftStorage/RecoverStoredDraft race fixed in a6121dd):
+  - Fixed PRRT_kwDOSA8y6s6yWGAe (CodeRabbit Minor, IdeaWorkspace.razor.cs lines 206-245):
+    - RetryDraftStorage: added `|| busy` guard; now a no-op while any async operation is running.
+    - RecoverStoredDraft: captured browser as `owned` before the first await; used `owned` throughout; guarded field-clear with `ReferenceEquals(browser, owned)` so a replacement instance is not accidentally nulled.
+    - Retry and Preserve buttons already had `disabled="@busy"` in the Razor markup.
+  - Thread auto-resolved by CodeRabbit on push. Replied to comment 4433909946 with fix details.
+  - 1563/1566 tests pass (3 pre-existing filesystem failures unrelated to this change).
+  - Branch HEAD: a6121dd. Codex reviews will run on new commit.
+
+- 2026-11-01 02:10Z (PR #580 — 6 new CodeRabbit findings on b1e61c3 resolved; regression test added in e697d8a):
+  - CodeRabbit review (run c6938ff7) posted 6 findings on b1e61c3:
+    - PRRT_kwDOSA8y6s6yWgGJ (JOURNAL.md ordering): branch copy only; cannot reorder per append-only rule; deferred with explanation.
+    - PRRT_kwDOSA8y6s6yWgGK (JOURNAL.md PR#85 typo): branch copy only; cannot rewrite per append-only rule; deferred.
+    - PRRT_kwDOSA8y6s6yWgGN (ReadSelectedDetail exception handling): already fixed in a2a4743; resolved.
+    - PRRT_kwDOSA8y6s6yWgGO (RestoreDraft pre-restoration edit loss, Major): valid finding — the browserCache guard added earlier makes the conflict branch unreachable. Fix requires per-workspace generation tracking; deferred as out-of-scope.
+    - PRRT_kwDOSA8y6s6yWgGP (canvas viewport role="region"): already fixed in a2a4743; resolved.
+    - PRRT_kwDOSA8y6s6yWgGR (regression test for edited criteria on copied plan item): added test in e697d8a; resolved.
+  - All 6 threads replied and resolved. 78/78 total PR review threads resolved.
+  - Branch HEAD: e697d8a. Codex reviews running on new commit.
+
+
+- 2026-11-01 02:05Z (PR #580 — 2 more CodeRabbit findings fixed in a2a4743; 2 deferred; JOURNAL.md corrections noted):
+  - Fixed JOURNAL.md ordering: on the feature branch (and master) the 01:30Z entry appears above the 04:00Z entry, but 04:00Z is newer. The no-reorder rule means corrections go here, not by moving entries.
+  - Fixed JOURNAL.md typo: the 04:00Z entry body says "PR #85/branch" where it should say "PR #580/branch". Error introduced by an earlier session.
+  - Fixed in a2a4743 (CodeRabbit findings, 2 code changes):
+    - Drafts.cs line 115: broadened ReadSelectedDetail catch to handle OperationCanceledException (disposal) and catch-all Exception (circuit-protecting); CodeRabbit comment 4434075449.
+    - WorkspaceCanvas.razor line 11: added role="region" to viewport div so aria-label is a valid landmark; CodeRabbit comment 4434075452.
+  - Deferred with replies:
+    - IdeaWorkspace.razor.cs lines 104-121 (CodeRabbit 4434075450, Major): RestoreDraft authored-edit preservation — requires per-workspace restoration-generation tracking; heavy lift, deferred.
+    - WorkspacePlanPanel.razor line 82 (CodeRabbit 4434075454, Trivial): regression test for editing copied-item criteria — enhancement, separate issue.
+  - JOURNAL.md CodeRabbit findings (4434075443, 4434075445): corrections recorded here; feature-branch JOURNAL.md is stale.
+  - Branch: feat/579-idea-workspaces HEAD at a2a4743. Codex reviews will run.
+
+
+- 2026-11-01 01:51Z (Codex repository review — pinned master and unattended reliability):
+  - Request: review KanbanFlow GitHub repository. Reviewed `master` at `878fe8ddb3fe21410b7acde735bc29cda4639946` in an isolated worktree; preserved the dirty original branch and running user applications. Review-only scope; no application fix, live-board mutation, PR change, issue/comment/status write or merge.
+  - Source-backed findings: CI reuse lacks exact root/origin validation before destructive checkout/clean; overlapping PR checks share a mutable clone; existing #561 can purge real non-project audit events; existing #533 accepts another served database. Read-only Git discovery control confirmed ancestor resolution; destructive/race scenarios were not executed.
+  - Observed verification: PowerShell 7.6.5/.NET SDK 10.0.403; existing verify gate exit 0, build 0 warnings/errors, 1,259 .NET tests passed with none failed/skipped; 329 script tests passed with none failed/skipped. Isolated API smoke passed on its own SQLite database/free port/offline embedding profile; task-created processes, port and smoke directory cleaned up. Formatter drift remained advisory.
+  - Delivery: local `docs/reviews/2026-10-31-repository-review.md` and README index; GSD/Codex reuse candidates and explicit coverage gaps included. Static counts 72 REST registrations, 29 native MCP declarations, 51 wrapper tool declarations and 6 routes differ from README. Master results do not validate PR #580 or supply owner UI acceptance.
+  - Validation/lesson: 16 local report links resolve, raw evidence is ignored, recorded pins agree, cleanup assertions and diff checks pass; two bounded final reviews found no material report correction. Extract GitHub metadata before reading selected discussion bodies to avoid oversized irrelevant payloads. Do not infer visible consoles from missing flags or complete audit ownership from timestamps.
+  - Publication: only this journal entry is staged. Fetched current master and verified the reviewed application/source tree is unchanged except journal history, preserving concurrent entries. No external reviewer/provider invoked. Next: scope the four reliability fixes separately and validate each PR on its actual current head.
+
+
+- 2026-11-01 01:52Z (PR #580 — Codex code and security reviews on b1e61c3 both completed clean; PR ready to merge):
+  - Codex code review on b1e61c3: status=completed, has_any_findings=true (prior findings), has_unresolved_findings=false. All previous findings resolved.
+  - Codex security review on b1e61c3: status=completed, has_any_findings=null (no findings). Clean.
+  - 72/72 PR review threads resolved. No open findings from any reviewer.
+  - PR #580 (feat/579-idea-workspaces) is ready for owner to merge.
+
+
+- 2026-11-01 01:44Z (PR #580 — 2 new Copilot findings fixed in b1e61c3; 72/72 threads resolved):
+  - Copilot review 5725912714 posted 2 findings on 16c5f65:
+    - PRRT_kwDOSA8y6s6yWYbC (High, test file): already fixed in 73304b0 (addEventListener added to mock). Replied and resolved.
+    - PRRT_kwDOSA8y6s6yWYbO (Medium, Canvas.razor.js line 43): repeated drags accumulate lostpointercapture listeners. Fixed in b1e61c3: added `once: true` to listener options so it auto-removes after first invocation. Replied and resolved.
+  - All 9 canvas tests pass at b1e61c3. 72/72 PR review threads resolved.
+  - Codex code and security reviews running on 73304b0 (started 01:41:05Z); b1e61c3 will trigger new reviews.
+  - Branch: feat/579-idea-workspaces HEAD at b1e61c3. Next: wait for Codex reviews; notify owner when clean.
+- 2026-11-01 01:43Z - Final moving-head follow-up for the repository review: inspected PR #580 commit `73304b018ff041bc0cf614d45fd87484906df51c`, whose only delta from `16c5f65e493d2d2c0c3c5a85d5fd71c10b8eefdb` repairs the canvas test handle mock. Repeated the full script suite: 362 passed, 0 failed/skipped, exit 0. This corrects the final script-gate status reported in the preceding checkpoint; the five validated application findings and failing draft-preservation regression are unchanged. No additional full .NET pass is claimed. Local report updated; #580 remains not ready. Only this journal is published.
+
+
+- 2026-11-01 01:41Z (PR #580 — Codex P2 test fix in 73304b0; all 70 threads resolved):
+  - New Codex code review finding (PRRT_kwDOSA8y6s6yWX_a, comment 4434023703) on 16c5f65: canvas test mock handles lacked addEventListener, causing TypeError in all 4 pointer tests after lostpointercapture fix in b54b19b.
+  - Fixed in 73304b0: added addEventListener (storing listeners by name) and no-op focus to canvasBoundary handle mock; exposed boundary.lostCapture(index) helper. All 9 canvas tests pass.
+  - Thread replied and resolved. 70/70 PR review threads resolved.
+  - Codex security review on 16c5f65 completed clean. Code review completed (produced this finding, now resolved).
+  - Branch: feat/579-idea-workspaces HEAD at 73304b0. Next: wait for Codex reviews on 73304b0; notify owner when clean.
+- 2026-11-01 01:40Z - Completed Codex repository/open-PR review, report-only. Reviewed #580 initially at `5cf4438323c64c0b0f91354c8e7a7abae8544b76`, reconciled every code delta through `16c5f65e493d2d2c0c3c5a85d5fd71c10b8eefdb`; older PR heads remain #564 `cd9f67be709bb01bb03cdd174242d7904eae327d`, #521 `599a71402504f8f07a602eddd8a01c7135e0f91a`, #511 `d412c7321008a88cc95f8b2c56713a2aef9c5843`. Thirteen native source lenses completed; one fresh validator confirmed five retained findings: pre-restoration typing lost on storage retry; stale inspector control targets the newly selected card; manual input/render synchronization loses characters; inaccessible warning contrast; preview-dependent existing-feature choices. Earlier Refresh/provenance/stdio fixes were excluded after source refresh. Browser probes reproduced typing and wrong-card deletion using a disposable database; affected code is unchanged at the final reviewed head. Latest warnings-as-errors rebuild passed with zero warnings/errors; restore/relink suite failed 1 of 19, reproducing the existing preservation regression. Latest script suite passed 357/362; four canvas test-boundary failures reproduced alone, while the CPU-sampling failure passed alone. At `57867139afa5069bad99c028ecedf33289d44e03`, the full .NET gate passed 1563/1565; the other request-timeout failure passed on isolated rerun. Earlier green gates do not certify these later revisions. Primary code baseline `19fa192eb2e011adce397c609d9ba3b893ce6904` passed 1259 .NET tests; later inspected primary changes were journal-only. #564 passed 169 targeted tests. Current #511 merge-tree verification conflicts in TestRunnerService.cs. Verdict: #580/#511 not ready; #564/#521 remain drafts. IW-T07 follow-up and IW-T08 actual owner feedback remain pending. Local report/index: docs/reviews/2026-10-31-repository-pr-review.md and docs/reviews/README.md; four local links checked, zero failures. Original dirty checkout preserved; task-owned browser/app stopped; no live-board changes, code fixes, PR/issue messages or merges. Only this journal is published. Verified lesson: pin metadata and diffs to the same immutable commit, refresh moving PRs separately, and rebuild changed source before applying earlier test evidence.
+
+
+- 2026-11-01 01:34Z (PR #580 — Codex P2 deferred and resolved; Codex retry triggered):
+  - Resolved final unresolved review thread: PRRT_kwDOSA8y6s6yWTXX (Codex P2, Drafts.cs line 70) — deferred. The guard preventing browserCache writes before restoration completes is intentional; the pre-restoration edit loss scenario requires a transient init failure plus user typing before retry, and fixing it correctly (separate pre-restoration buffer or post-restoration merge) is out of scope for this PR. Reply posted at comment 4434018489.
+  - All 69/69 PR review threads now resolved.
+  - Codex code and security reviews on 16c5f65 failed again; triggered retry via @codex review and @codex security review (PR comment 6551856350).
+  - Branch: feat/579-idea-workspaces HEAD at 16c5f65. Next: wait for Codex retry result; notify owner when clean.
+
+- 2026-11-01 01:30Z (PR #580 — new Copilot review resolved; 2 more fixes in b54b19b; all threads clean):
+  - New Copilot review (review_id 5725856458) on d11f2a1 posted 4 open threads: 2 new, 2 re-listed from prior deferred round.
+  - Fixed r4433977114 (Commands.cs): track `oldProjectId` before updating `context = refreshed`; clear inspectedTask/taskSequence when project ID changes after link_project/create_project, preventing stale inspector from previous project.
+  - Fixed r4433977139 (Canvas.razor.js): add `lostpointercapture` listener on drag handle after setPointerCapture; resets gesture if DOM removal releases capture without firing pointercancel.
+  - Deferred r4433943033 (editor reset on copy) and r4433943018 (viewport scroll delta) with replies; both threads resolved.
+  - All 4 new Copilot threads resolved (PRRT_WQrS, WQrn, WLbY, WLbi). 0 unresolved threads. All 69 PR review threads resolved.
+  - Commits on branch: d11f2a1 (Drafts.cs guard), 5786713 (journal merge), b54b19b (2 Copilot fixes). Codex reviews running on b54b19b.
+  - Next: wait for Codex reviews on b54b19b to complete; notify owner when clean and ready to merge.
+
+- 2026-11-01 04:00Z (PR #580 — all 12 CodeRabbit/Copilot threads from f2e7999 round resolved; Drafts.cs browserCache guard committed):
+  - Resolved all 12 open review threads: 4 fixed in 4de1359 (WGAe, WLbB, WGAs, WLa9), 3 stale-resolved (WGAi, WLbN, WLbx — code already addressed), 5 deferred (WGAS, WGAV, WGAd, WLbY, WLbi).
+  - Committed pending Drafts.cs change: PersistDraft now guards browserCache write behind `restoredBrowserWorkspaces.Contains(scope.WorkspaceId)` — prevents stomping cached in-memory draft before workspace restoration completes (addresses WGAd root cause).
+  - PR #85/branch feat/579-idea-workspaces HEAD: awaiting Codex reviews on 4de1359 and 0613e47. 0 unresolved threads. Next: resolve any new Codex findings; notify owner when PR is clean.
+
+- 2026-11-01 02:50Z (PR #580 — correction: WGAV (workspace-transport stdin/exit) fixed in 0613e47, not deferred):
+  - The 02:30Z entry listed WGAV as deferred. In fact, commit 0613e47 (which precedes 4de1359 in branch history) already fixes it: exit handler includes signal via `code ?? signal`; rpc() now rejects immediately when child has already exited. Correction reply posted at comment 4433973652. All 4 Copilot threads from 5cf4438 review also fixed in 91999ee and resolved. CodeRabbit JOURNAL.md spacing thread resolved as by-design (append-only rule).
+  - Codex code + security reviews on 91999ee: both complete, has_unresolved_findings:false.
+  - Awaiting Codex reviews on 4de1359 and 0613e47. Next: resolve any new findings; notify owner when PR is clean.
+
+- 2026-11-01 02:30Z (PR #580 — new CodeRabbit/Copilot round on f2e7999, 4 fixed + 5 deferred + 5 stale-resolved):
+  - Resolved Codex WJaN (Refresh race — already fixed 53b75f6) and WJaO (delivery features — already deferred).
+  - Fix 4de1359: Commands.cs:129 normalize DraftAtSend via JsonNode.Parse before GetRawText comparison (Copilot WLa9); Delivery.cs InspectPublishedTask StateHasChanged() before first await (Copilot WLbB); IdeaWorkspace.razor Retry button disabled=@busy guard (CodeRabbit WGAe); WriteTests deep-chain assertion strengthened to check Action+ActivityId (CodeRabbit WGAs).
+  - Stale findings already addressed in prior commits: WGAi/WLbN (parentMap built once per gesture since earlier commit); WLbx (DependsOn filtered in ItemChanged since earlier commit). Replied + resolved.
+  - Deferred to owner: WGAd (PersistDraft cache before Ready — complex behavioral change); WGAV (stdin EPIPE — pre-existing transport issue); WGAS (README count commands — editorial); WLbY (scroll-delta drag position — coordinate transform scope); WLbi (item editor stale on copy confirm — two-component lifecycle).
+  - Next: monitor Codex reviews on 4de1359; resolve any new findings; notify owner when PR is clean.
+
+- 2026-11-01 02:30Z (PR #580 — Copilot findings from 5cf4438 review, 4 fixed + 2 deferred; Codex clean on 91999ee):
+  - Fix 91999ee — 4 Copilot findings resolved: Commands.cs:129 normalize DraftAtSend through same JsonSerializer options before GetRawText() comparison (comment 4433942976); Delivery.cs:105 clear inspectedTask before async db read in InspectPublishedTask (comment 4433942988); WorkspaceCanvas.razor.js:36 build parentMap once O(n) before descendant loop instead of inner querySelectorAll O(n²×d) (comment 4433943006); WorkspacePlanPanel.razor:75 filter incoming DependsOn to existing item IDs in ItemChanged (comment 4433943055).
+  - Deferred to owner: canvas drag scroll-delta (comment 4433943018) — fix requires canvas-scroll/transform-coordinate accounting; WorkspacePlanItemEditor reset generation on copy confirm (comment 4433943033) — two-component lifecycle change.
+  - CodeRabbit JOURNAL.md spacing finding (comment 4433579820) resolved as by-design per append-only rule. All 5 Copilot/CodeRabbit threads replied to and resolved (PRRT_kwDOSA8y6s6yWLa9, WLbB, WLbN, WLbx, WGAV).
+  - Codex code + security reviews on 91999ee both complete: has_unresolved_findings:false, no security findings.
+  - 0 unresolved threads. PR #580 is clean. Head: 91999ee. Owner action needed: rebase feat/579-idea-workspaces onto master and merge.
+
+- 2026-11-01 01:18Z — Started the owner's repository and open-PR review. Read current GitHub metadata, full review threads and branch protection; pinned PR #580 at `5cf4438323c64c0b0f91354c8e7a7abae8544b76`, #564 at `cd9f67be709bb01bb03cdd174242d7904eae327d`, #521 at `599a71402504f8f07a602eddd8a01c7135e0f91a`, and #511 at `d412c7321008a88cc95f8b2c56713a2aef9c5843`. The original dirty checkout is preserved. Fresh primary and #580 warnings-as-errors build/test gates passed at `19fa192eb2e011adce397c609d9ba3b893ce6904` and the pinned PR head; #580 passed 1,565 .NET and 362 script tests, #564's focused script suite passed 169. Formatting remains advisory. Independent source reviewers are active; no readiness verdict yet. Corrected a moving-PR diff capture by regenerating canonical diffs from exact base/head commits; later remote changes will be reconciled separately. This review is local/report-only; only the journal is published. No PR/issue comments, source fixes, board mutations or merges were performed.
+
+- 2026-11-01 02:00Z (PR #580 — Codex P2 review findings on 5cf4438, 1 fixed + 1 deferred):
+  - Codex P2 IdeaWorkspace.razor.cs:182 fix: 53b75f6 — Refresh() now captures context before GET and bails on ReferenceEquals mismatch, matching PollForChanges guard (e7acca6). Replied to comment 4433930515.
+  - Codex P2 WorkspaceDeliveryPanel.razor.cs:28: feature choices empty on first publication_target_missing — deferred to owner. Requires new GetPublicationFeaturesAsync method or embedding features in error payload. Replied to comment 4433930518.
+  - 0 unresolved threads (50 total). Awaiting Codex reviews on 53b75f6 and 5c7e68e.
+  - Next: resolve any new findings; notify owner when PR is clean.
+
+- 2026-11-01 01:45Z (PR #580 — Codex P2 provenance fix on 5cf4438):
+  - Codex P2 finding: WorkspacePlanPanel.razor:72 — Reapply() did not clear foreign-project provenance from plan items after a workspace relink; ValidateProposedIdentity rejected saves with forged_provenance.
+  - Fix: 62e8cf7 — applied same pattern as ConfirmCopy() (line 93): null provenance when its ProjectId ≠ Context.ProjectId.
+  - 0 unresolved threads (50 total). Awaiting Codex code+security reviews on 5cf4438 and 62e8cf7.
+  - Next: resolve any new automated findings on 62e8cf7; notify owner when PR is clean.
+
+- 2026-11-01 01:30Z (PR #580 — CodeRabbit finding fixed, 0 unresolved threads, 50 total):
+  - CodeRabbit Minor docs/idea-workspaces.md:117 fix: 5cf4438 — replaced "The current local checkpoint" with "At the T06 checkpoint," and "Current discovery" with "Discovery at this checkpoint" to scope T06 counts (1,437 .NET / 339 script) distinctly from the final gate (1,565 / 362). Thread PRRT_kwDOSA8y6s6yWGAK resolved.
+  - All 50 review threads resolved (0 unresolved). No pending automated reviews outstanding.
+  - PR #580 is clean. Head: 5cf4438. Owner action needed: rebase feat/579-idea-workspaces onto master and merge.
+
+- 2026-11-01 01:04Z (PR #580 — PHASE 2 review cycle on bed7e91, 4 findings fixed):
+  - Codex P2 stale-poll fix: e7acca6 — captured `polledContext` before GET, guard against context replacement on response + inside InvokeAsync callback. Thread PRRT_kwDOSA8y6s6yWCUO resolved.
+  - Copilot finding Commands.cs:129 fix: e46465a — inverted ClearSavedSection guard (&&→||) so section is retained when DraftAtSend is absent. Thread PRRT_kwDOSA8y6s6yWCrn resolved.
+  - Copilot finding WorkspaceCanvas.razor:31 fix: e46465a — added aria-pressed to drag-handle button. Thread PRRT_kwDOSA8y6s6yWCry resolved.
+  - Copilot finding WorkspaceOutline.razor:8 fix: e46465a — added aria-pressed to outline button. Thread PRRT_kwDOSA8y6s6yWCr3 resolved.
+  - 0 unresolved threads (49 total). Awaiting Codex code+security reviews on e7acca6/e46465a and CodeRabbit review on e46465a.
+
+- 2026-11-01 00:37Z (PR #580 — clean, all automated reviews passed on cda6063):
+  - Codex code review on cda6063: completed, has_unresolved_findings=false ✅
+  - Codex security review on cda6063: completed, has_any_findings=null ✅
+  - Codex code review on beb5cd8: completed, has_unresolved_findings=false ✅ (confirmed earlier)
+  - Codex security review on beb5cd8: completed, has_any_findings=null ✅ (confirmed earlier)
+  - 0 unresolved review threads (45 total, all resolved). CodeRabbit paused at c794f9c; all c794f9c finding threads resolved.
+  - PR #580 is clean. Owner action needed: rebase feat/579-idea-workspaces onto master (master has advanced by ~33 JOURNAL.md commits since PR base 7587549), then merge.
+
+- 2026-11-01 02:15Z (scheduled PR monitor, continued session — PHASE 2 completion on #580):
+  - Committed transport signal-exit fix (cda6063): `scripts/workspace-transport.mjs` `close()` now checks both `exitCode` and `signalCode` so `once(child, 'exit')` is not awaited on a process that already exited via signal. Pushed to feat/579-idea-workspaces.
+  - Resolved 4 remaining unresolved review threads on PR #580: PRRT_kwDOSA8y6s6yV2EQ (HIGH canvas init — fix beb5cd8, reply+resolved), PRRT_kwDOSA8y6s6yVxfg (delivery field clobber P2 — resolved, reply from prior session), PRRT_kwDOSA8y6s6yVxgA (checkpoint list normalization P2 — resolved, reply from prior session), PRRT_kwDOSA8y6s6yVxgU ($new service-level collision P2 — resolved, reply from prior session).
+  - PR #580 now has 0 unresolved review threads. Waiting for Codex code+security reviews on cda6063/beb5cd8 and CodeRabbit resume.
+  - Next: monitor Codex review completion and any new CodeRabbit findings; notify owner when PR is clean.
+
+- 2026-11-01 01:17Z (scheduled PR monitor, four-hundred-and-forty-third run): build gate UP (.NET 10.0.114 via Ubuntu 24.04 Microsoft apt feed, installed fresh this run).
+  - 5 open PRs: #580 (non-draft, feat/579-idea-workspaces, head SHA beb5cd89 — new commit since last run); #578 (non-draft, head SHA 17780aa); #564, #521, #511 (drafts, skipped).
+  - New commit on #580: beb5cd89 "fix: catch JSException in canvas OnAfterRenderAsync to prevent circuit termination" — pushed after the last monitor run's clean confirmation. No new bot review threads yet for this commit.
+  - PHASE 1: 0 merges. #580 mergeable=false, mergeable_state=dirty (master advanced 31 commits — all JOURNAL.md entries — since PR base 7587549; conflicts need owner rebase). 0 unresolved review threads. #578 build gate FAILS — same known NU1608 (Microsoft.AspNetCore.OpenApi 10.0.14 requires Microsoft.OpenApi >= 2.12.2 && < 3.0.0; version 3.11.0 resolved); no new comment posted (failure already on PR from 2026-10-28).
+  - PHASE 2: 0 unresolved threads on #580 (45 total, all resolved/outdated). 0 unresolved threads on #578. No comment work needed.
+  - Master (698d5e2): build GREEN (0 warnings/0 errors), tests 1257P/2F (pre-existing filesystem failures).
+  - Action needed: owner should rebase feat/579-idea-workspaces onto master to resolve dirty state, then this monitor can merge.
+
+- 2026-11-01 00:17Z (PR #580 — fully clean, merge-ready):
+  - Codex code review on a1bdb32: completed, has_unresolved_findings=false.
+  - Codex security review on a1bdb32: completed, has_any_findings=null (no findings).
+  - Confirmed 0 unresolved review threads (30 total, all resolved/outdated).
+  - PR #580 is now clean: 0 unresolved threads, all automated reviews passed. Awaiting owner merge.
+  - 3 P2 findings remain open on owner's plate (delivery field clobber, checkpoint list normalization, $new service-level identity collision) — deferred by design, threads resolved.
+
+- 2026-11-01 00:30Z (PR #580 — Copilot findings from fead50b: 2 fixed, 3 deferred to owner):
+  - Copilot review on fead50b posted 5 new findings. Handled in commit a1bdb32 on feat/579-idea-workspaces.
+  - Finding 2 (PRRT_kwDOSA8y6s6yVxfl — WorkspaceCanvas.razor.js multi-touch drag race): REAL BUG. Added `|| this.#gesture` guard to `#start` so a second `pointerdown` while a gesture is active is rejected. Replied + resolved.
+  - Finding 3 (PRRT_kwDOSA8y6s6yVxf7 — WorkspaceCanvasInterop.cs DisposeAsync incomplete): REAL BUG. Split DisposeAsync into two separate try blocks so `module.DisposeAsync()` always runs even when `InvokeVoidAsync` throws. Also ensured module ref is cleared before awaiting. Replied + resolved.
+  - Finding 1 (PRRT_kwDOSA8y6s6yVxfg — delivery field clobber during publication): P2, left for owner — requires ClearSavedSection pattern to capture delivery buffer at dispatch.
+  - Finding 4 (PRRT_kwDOSA8y6s6yVxgA — WorkspaceCheckpointPanel.razor checkpoint list normalization): P2, left for owner — requires preserving original arrays rather than join/split round-trip.
+  - Finding 5 (PRRT_kwDOSA8y6s6yVxgU — ValidateIdentifier accepting `$new` service-level): owner fix in progress per their comment on the thread.
+  - 2 threads resolved (PRRT_kwDOSA8y6s6yVxfl, PRRT_kwDOSA8y6s6yVxf7). 3 P2 threads remain open.
+
+- 2026-11-01 00:06Z (PR #580 — owner resolved all deferred findings, final review clean):
+  - Owner pushed fead50b (merge of cceb1d0 + journal). cceb1d0 addressed ALL previously-deferred P2 issues:
+    (1) RetryDraftStorage data-loss race: RestoreDraft now distinguishes cache restored before/after init; if unread stored draft and untrusted cache both exist, writes pause until explicit recovery verifies the full original. Browser-reproduced and confirmed.
+    (2) Stale delivery selections after relink: new ReconcileDeliveryDraft() clears selections and shows error when project association changes; DeliveryChanged guards against stale association.
+    (3) ContentDrafts["$new"] overwrite during deleted-card recovery: now guards against overwriting a dirty "$new" draft and returns an error requiring user action instead.
+  - Owner confirmed fix on PRRT_kwDOSA8y6s6yVSbe with full regression detail (1,522 .NET / 358 script / 51 browser checks). Resolved the thread.
+  - Codex code review on fead50b: has_unresolved_findings=false (clean). Security review still running.
+  - Branch gate: 1,520/1,522 passed (2 pre-existing environment failures); build 0 warnings/errors.
+  - PR #580 now has 0 unresolved review threads. Awaiting owner merge.
+
+- 2026-10-31 23:34Z (scheduled PR monitor, continuation — chatgpt-codex review on PR #580 commit e21a7bc):
+  - Codex review completed and posted 3 new P2 findings. Also found 3 pre-existing unresolved threads (PRRT_kwDOSA8y6s6yVTPU delivery-selection relink, PRRT_kwDOSA8y6s6yVTPW ghost-buffer, PRRT_kwDOSA8y6s6yViTd new-card overwrite) that had owner "P2 — noted" confirmations but had not been resolved.
+  - Finding 1 (WorkspaceCanvasInterop.cs canvas disposal race — PRRT_kwDOSA8y6s6yVkqh): REAL BUG. Fixed in 63f8094. Added `_disposed` bool; `InitializeAsync` now checks it after the import await and disposes the imported module cleanly if the component was already torn down, preventing `ObjectDisposedException` from the disposed callback.
+  - Finding 2 (preserve unread drafts before memory cache — PRRT_kwDOSA8y6s6yVkqa): Duplicate of RetryDraftStorage race in PRRT_kwDOSA8y6s6yVSbe (owner-deferred, stays open). Replied + resolved as duplicate.
+  - Finding 3 (separate $new draft key — PRRT_kwDOSA8y6s6yVkqf): Duplicate of $new-collision variants in PRRT_kwDOSA8y6s6yVTPW and PRRT_kwDOSA8y6s6yViTd. Replied + resolved as duplicate.
+  - Resolved 6 threads total (PRRT_kwDOSA8y6s6yVkqh, _Vkqa, _Vkqf, _VTPU, _VTPW, _ViTd). Left PRRT_kwDOSA8y6s6yVSbe (RetryDraftStorage) open per owner instruction.
+  - Branch build/test after 63f8094: GREEN (0 warnings/0 errors, 1494 total, 2 pre-existing filesystem failures).
+
+- 2026-10-31 23:19Z (scheduled PR monitor, four-hundred-and-forty-second run): build gate UP (.NET 10.0.114 via Ubuntu 24.04 Microsoft apt feed, installed fresh this run).
+  - 5 open PRs: #580 (non-draft, feat/579-idea-workspaces, head SHA now e21a7bc after new commits by owner b42bd16 + this run's fix e21a7bc); #578 (non-draft, head SHA 17780aa); #564, #521, #511 (drafts, skipped).
+  - PHASE 1: 0 merges. #580 mergeable_state=blocked — 4 unresolved review threads (1 MAJOR CodeRabbit RetryDraftStorage + 3 P2 chatgpt-codex). #578 mergeable_state=clean but build gate FAILS (same known NU1608: Microsoft.OpenApi 3.11.0 incompatible with Microsoft.AspNetCore.OpenApi 10.0.14 which requires < 3.0.0); no CodeRabbit review (check=skipped); not merged.
+  - PHASE 2 — #580: Found 7 unresolved threads (via CCR with correct `resolved` key; prior run's 0-count was a parsing bug). Owner had already pushed b42bd16 fixing WorkspaceCanvas null-guard and README count. This run fixed: (1) 20 000-item deep-chain DFS test to prove stack-overflow protection (IdeaWorkspaceServiceTests.cs); committed e21a7bc and pushed. Resolved 2 threads (JOURNAL.md false positive, deep-chain test addressed). Left 4 non-trivial threads with explanatory comments: MAJOR RetryDraftStorage data-integrity race (heavy lift, deferred), P2 delivery-selection relink, P2 ghost ContentDrafts buffer, P2 new-card draft overwrite. PR build+test on branch: GREEN (0 warnings/0 errors, 1492/1494 passed — 2 pre-existing filesystem failures).
+  - Master (bd05e77): build GREEN (0 warnings/0 errors), tests 1257/1259 — same 2 pre-existing failures.
+
+- 2026-10-31 23:32Z (PR #580 final confirmation, same session as run 441):
+  - CCR review_threads check: 36 total threads, 0 unresolved non-outdated. All review work complete.
+  - Received PR-subscription notification confirming watch active. No CI (repo has no Actions). No outstanding items.
+  - PR remains mergeable_state=blocked pending owner usability walkthrough and human approval. No merge authorized.
+
+- 2026-10-31 23:55Z (scheduled PR monitor, continued run 441 / context continuation):
+  - Resumed PHASE 2 on PR #580 (feat/579-idea-workspaces, head was 5c563ad).
+  - Found 7 unresolved threads from second bot review batch. Checked out feat/579-idea-workspaces.
+  - Fixed 2 remaining quick-wins in b42bd16 (pushed to feat/579-idea-workspaces):
+    - WorkspaceCanvas.razor.js: null-guard success branch querySelector (?.querySelector + conditional); resolves PRRT_kwDOSA8y6s6yVSbk.
+    - README.md: corrected Playwright e2e count 52 → 56 (matches verified-surfaces table); resolves PRRT_kwDOSA8y6s6yVSbY.
+  - Build GREEN (0 warnings/0 errors), tests 1491P+2F (pre-existing) + 1 new deep-chain test = 1493 total.
+  - Resolved 4 threads: PRRT_kwDOSA8y6s6yVSbk (canvas guard), PRRT_kwDOSA8y6s6yVSbY (README count), PRRT_kwDOSA8y6s6yVSbq (deep-chain test depth 20,000 in 5c563ad), PRRT_kwDOSA8y6s6yVSbN (journal spacing, cosmetic/out-of-scope).
+  - Commented and left open 3 non-trivial threads: PRRT_kwDOSA8y6s6yVSbe (RetryDraftStorage data integrity, major), PRRT_kwDOSA8y6s6yVTPU (delivery selections reset on relink, P2), PRRT_kwDOSA8y6s6yVTPW (dirty drafts for removed components, P2).
+  - All 35 review threads now accounted for: 32 resolved, 3 open (non-trivial behavior issues logged for focused follow-up PRs).
+
+- 2026-10-31 22:42Z (continued review of PR #580, same session as run 441):
+  - Owner had pushed 05f0c15 (fix: address idea workspace review findings) concurrently, including their own canvas geometry caching (worldPositions/componentsById/firstPlacementByComponentId) and card accessibility improvements — overlapping with session's commits.
+  - Rebased local work onto remote; resolved conflicts by taking owner's more complete implementations.
+  - Commit d79f5f7: conflict-resolved canvas+card (uses owner's field names; PlacementStyle updated); resolves PRRT_kwDOSA8y6s6yU5jj (canvas property caching, major) and PRRT_kwDOSA8y6s6yU5jw (card accessibility, amber).
+  - Commit 5c563ad: WorkspaceCanvas.razor.js catch-block null-guard (?.querySelector); 20,000-item linear-chain test for iterative DFS stack-overflow prevention.
+  - 5 threads now resolved (previously 3, now +2: jj and jw). 13 remain (5 chatgpt-codex P2, 4 amber, 4 neutral) — left for owner review.
+  - Build GREEN, tests 1491P/2F (pre-existing). PR branch pushed to origin.
+
+- 2026-10-31 22:19Z (scheduled PR monitor, four-hundred-and-forty-first run): build gate UP (.NET 10.0.114 via Ubuntu 24.04 Microsoft apt feed, installed fresh this run).
+  - 5 open PRs: #580 (non-draft, new this run, feat/579-idea-workspaces, head SHA c682464); #578 (non-draft, head SHA 17780aa); #564, #521, #511 (drafts, skipped).
+  - PHASE 1: 0 merges. #580 mergeable_state=blocked (review pending + owner usability check required, PR explicitly marked not approved for merge). #578 same known NU1608 build failure; no new comment posted.
+  - PHASE 2: #580 had 20 unresolved review threads (15 CodeRabbit, 5 chatgpt-codex-connector). Fixed 3 clear issues (644b80a, pushed to feat/579-idea-workspaces): DisposeAsync JSException guard (WorkspaceBrowserInterop.cs), JSON.parse corruption guard (IdeaWorkspace.razor.js), canvas error clear on success (WorkspaceCanvas.razor.js); resolved PRRT_kwDOSA8y6s6yU5jh, PRRT_kwDOSA8y6s6yU5jb, PRRT_kwDOSA8y6s6yU5js. Remaining 17 threads (5 P2 chatgpt-codex non-trivial already in PR description, 4 amber + 8 neutral CodeRabbit) left for owner review; summary comment posted (#6550003391). #578: 0 unresolved threads.
+  - Master (53923f9): build GREEN (0 warnings/0 errors), tests 1435/1437 — 2 pre-existing failures (filesystem has no independent creation time). Test count higher than prior runs because master pulled 22 commits ahead including new workspace tests merged by owner.
+
+- 2026-10-31 21:19Z (scheduled PR monitor, four-hundred-and-fortieth run): build gate UP (.NET 10.0.114 via Ubuntu 24.04 Microsoft apt feed, installed fresh this run).
+  - 4 open PRs: #578 (non-draft, head SHA 17780aa); #564, #521, #511 (drafts, skipped).
+  - PHASE 1: 0 merges. #578 (Microsoft.OpenApi 2.13.0→3.11.0) — same known NU1608 build failure (Microsoft.AspNetCore.OpenApi 10.0.14 requires Microsoft.OpenApi >= 2.12.2 && < 3.0.0); comment already on PR (2026-10-28), no new comment posted.
+  - PHASE 2: 0 unresolved review threads on #578. Drafts skipped.
+  - Master (176a461): build GREEN (0 warnings/0 errors), tests 1257/1259 — same 2 pre-existing failures (filesystem has no independent creation time).
+
+- 2026-10-31 20:19Z (scheduled PR monitor, four-hundred-and-thirty-ninth run): build gate UP (.NET 10.0.114 via Ubuntu 24.04 Microsoft apt feed, installed fresh this run).
+  - 4 open PRs: #578 (non-draft, head SHA 17780aa); #564, #521, #511 (drafts, skipped).
+  - PHASE 1: 0 merges. #578 (Microsoft.OpenApi 2.13.0→3.11.0) — same known NU1608 build failure (Microsoft.AspNetCore.OpenApi 10.0.14 requires Microsoft.OpenApi >= 2.12.2 && < 3.0.0); comment already on PR (2026-10-28), no new comment posted.
+  - PHASE 2: 0 unresolved review threads on #578. Drafts skipped.
+  - Master (e96e489): build GREEN (0 warnings/0 errors), tests 1257/1259 — same 2 pre-existing failures (filesystem has no independent creation time).
+
+- 2026-10-31 19:19Z (scheduled PR monitor, four-hundred-and-thirty-eighth run): build gate DOWN — dotnet unavailable.
+  - `builds.dotnet.microsoft.com` blocked by proxy policy (403); `packages.microsoft.com` apt feed also unreachable (apt-get update hangs). No dotnet on PATH. Gate was UP in all previous runs.
+  - 4 open PRs: #578 (non-draft, head SHA 17780aa); #564, #521, #511 (drafts, skipped).
+  - PHASE 1: 0 merges (gate down — cannot build or test).
+  - PHASE 2: 0 unresolved review threads on #578 (same as prior runs). Drafts skipped.
+  - Master (9c7ff1d): build/test not verified this run (gate down).
+
+- 2026-10-31 18:19Z (scheduled PR monitor, four-hundred-and-thirty-seventh run): build gate UP (.NET 10.0.114 via Ubuntu 24.04 Microsoft apt feed, installed fresh this run).
+  - 4 open PRs: #578 (non-draft, head SHA 17780aa); #564, #521, #511 (drafts, skipped).
+  - PHASE 1: 0 merges. #578 (Microsoft.OpenApi 2.13.0→3.11.0) — same known NU1608 build failure (Microsoft.AspNetCore.OpenApi 10.0.14 requires Microsoft.OpenApi >= 2.12.2 && < 3.0.0); comment already on PR (2026-10-28), no new comment posted.
+  - PHASE 2: 0 unresolved review threads on #578. Drafts skipped.
+  - Master (0e23016): build GREEN (0 warnings/0 errors), tests 1257/1259 — same 2 pre-existing failures (filesystem has no independent creation time).
+
+- 2026-10-31 17:19Z (scheduled PR monitor, four-hundred-and-thirty-sixth run): build gate UP (.NET 10.0.114 via Ubuntu 24.04 Microsoft apt feed, installed fresh this run).
+  - 4 open PRs: #578 (non-draft, head SHA 17780aa); #564, #521, #511 (drafts, skipped).
+  - PHASE 1: 0 merges. #578 (Microsoft.OpenApi 2.13.0→3.11.0) — same known NU1608 build failure (Microsoft.AspNetCore.OpenApi 10.0.14 requires Microsoft.OpenApi >= 2.12.2 && < 3.0.0); comment already on PR (2026-10-28), no new comment posted.
+  - PHASE 2: 0 unresolved review threads on #578. Drafts skipped.
+  - Master (171bd34): build GREEN (0 warnings/0 errors), tests 1257/1259 — same 2 pre-existing failures (filesystem has no independent creation time).
+
+- 2026-10-31 16:19Z (scheduled PR monitor, four-hundred-and-thirty-fifth run): build gate UP (.NET 10.0.114 via Ubuntu 24.04 Microsoft apt feed, installed fresh this run).
+  - 4 open PRs: #578 (non-draft, head SHA 17780aa); #564, #521, #511 (drafts, skipped).
+  - PHASE 1: 0 merges. #578 (Microsoft.OpenApi 2.13.0→3.11.0) — same known NU1608 build failure (Microsoft.AspNetCore.OpenApi 10.0.14 requires Microsoft.OpenApi >= 2.12.2 && < 3.0.0); comment already on PR (2026-10-28), no new comment posted.
+  - PHASE 2: 0 unresolved review threads on #578. Drafts skipped.
+  - Master (42f17b4): build GREEN (0 warnings/0 errors), tests 1257/1259 — same 2 pre-existing failures (filesystem has no independent creation time).
+
+- 2026-10-31 15:19Z (scheduled PR monitor, four-hundred-and-thirty-fourth run): build gate UP (.NET 10.0.114 via Ubuntu 24.04 Microsoft apt feed, installed fresh this run).
+  - 4 open PRs: #578 (non-draft, head SHA 17780aa); #564, #521, #511 (drafts, skipped).
+  - PHASE 1: 0 merges. #578 (Microsoft.OpenApi 2.13.0→3.11.0) — same known NU1608 build failure (Microsoft.AspNetCore.OpenApi 10.0.14 requires Microsoft.OpenApi >= 2.12.2 && < 3.0.0); comment already on PR (2026-10-28), no new comment posted.
+  - PHASE 2: 0 unresolved review threads on #578. Drafts skipped.
+  - Master (9cba5d3): build GREEN (0 warnings/0 errors), tests 1257/1259 — same 2 pre-existing failures (filesystem has no independent creation time).
+
+- 2026-10-31 14:19Z (scheduled PR monitor, four-hundred-and-thirty-third run): build gate UP (.NET 10.0.114 via Ubuntu 24.04 Microsoft apt feed, installed fresh this run).
+  - 4 open PRs: #578 (non-draft, mergeable=clean, head SHA 17780aa); #564, #521, #511 (drafts, skipped).
+  - PHASE 1: 0 merges. #578 (Microsoft.OpenApi 2.13.0→3.11.0) — same known NU1608 build failure (Microsoft.AspNetCore.OpenApi 10.0.14 requires Microsoft.OpenApi >= 2.12.2 && < 3.0.0); comment already on PR (2026-10-28), no new comment posted.
+  - PHASE 2: 0 unresolved review threads on #578. Drafts skipped.
+  - Master (9cba5d3): build GREEN (0 warnings/0 errors), tests 1257/1259 — same 2 pre-existing failures (filesystem has no independent creation time).
+
+- 2026-10-31 13:13Z (scheduled Dependabot automerge, run): build gate UP (.NET 10.0.114 via Ubuntu 24.04 Microsoft apt feed, installed fresh this run).
+  - 1 open Dependabot PR: #578 (Microsoft.OpenApi 2.13.0→3.11.0, non-draft, head SHA 17780aa).
+  - BUILD GATE: `dotnet build KanbanFlow.slnx -warnaserror` → FAILED. Same known NU1608 error: Microsoft.AspNetCore.OpenApi 10.0.14 requires Microsoft.OpenApi (>= 2.12.2 && < 3.0.0) but version 3.11.0 was resolved. Tests not run (build did not pass).
+  - RESULT: 0 merges. PR #578 blocked by build failure. No new comment posted (failure comment already on PR from 2026-10-28; same error, no change).
+
+- 2026-10-31 13:02Z Codex: Ideas workspace concept review and workflow storyboard.
+  - Request: review Ideas versus Projects, research online patterns, and propose an idea-card gallery opening a collaborative whiteboard with an evolving project plan. Reviewed source master/fb933fc0d64f2e4a51e0886f16b7bd396e78f0fd in isolated local branch concept/ideas-workspace-20261031; preserved the existing dirty feat/unified-workflow-509 checkout. Journal publication base 27c643d507ca5d1309565d68421dff78852a91a6 differs from the reviewed source only in JOURNAL.md.
+  - Findings: Ideas currently uses five triage columns and Markdown Body/Plan fields; promotion copies content into a new Project, and later edits can diverge. The gallery currently lacks paging beyond the default 100 items and excludes Plan from search. Source inspection and an independent design critique informed the proposal.
+  - Recommendation: one persistent idea workspace, a card gallery, Brief/Research/Explore/Decisions/Plan frames, card discussions, and a shared accepted project plan after association. Preserve differing legacy content, define removed-project/task states, and publish selected draft items idempotently to real tasks. Remote multiplayer remains separate from this localhost app's current trust model.
+  - Local deliverables only: docs/concepts/ideas-workspace.md; docs/concepts/ideas-workspace-storyboard.html; one Docs-index entry in README.md. Seven interactive scenes cover gallery, opening an idea, research, collaboration, plan review, delivery and later scope. Online primary sources checked: Milanote project/links guides, Heptabase fundamental elements, Miro cards and Figma FigJam collaboration. No application code change, GitHub issue/PR, remote comment, deployment or artifact upload.
+  - Verification: Windows, PowerShell 7.6.5, .NET SDK 10.0.402, Playwright CLI 0.1.21. scripts/verify.ps1 exit 0: build 0 warnings/errors; Passed 1259, Failed 0, Skipped 0; existing whitespace drift advisory. Playwright exercised unchanged app capture/save/five-column display/promotion using only an isolated seed-DB copy at localhost:5137. Storyboard search/open/source/note/comment/accept/existing-project/subset-publication/return interactions passed. Seven scenes x four widths (1024/736/390/320) x two appearances passed 56 horizontal-layout checks, with no JS runtime errors. git diff --check passed. Actual owner usability approval and production implementation remain pending.
+  - Verified lessons: compare source before reviewing an old dirty checkout; current master lacks the older feature branch's workflow surfaces. An isolated --no-launch-profile app run needed process-local ASPNETCORE_ENVIRONMENT=Development for static assets. Inline preview sandbox blocks native form submission; explicit local button handlers restored note/comment/capture interactions. Logs, sample data, scripts and screenshots remain in ignored _sandbox/ideas-concept. Only this journal entry is published under standing authorization; concept documents remain local for owner review.
+
+- 2026-10-31 12:26Z (scheduled PR monitor, four-hundred-and-thirty-second run): build gate DOWN — builds.dotnet.microsoft.com blocked by proxy policy; apt-based install blocked by auto-mode classifier.
+  - 4 open PRs: #578 (non-draft, mergeable=clean, head SHA 17780aa); #564, #521, #511 (drafts, skipped).
+  - PHASE 1: 0 merges (gate down, no build/test possible).
+  - PHASE 2: 0 unresolved review threads on #578. Drafts skipped.
+  - Master: not verified (gate down).
+
+- 2026-10-31 11:26Z (scheduled PR monitor, four-hundred-and-thirty-first run): build gate UP (.NET 10.0.114 via Ubuntu 24.04 Microsoft apt feed, installed fresh this run).
+  - 4 open PRs: #578 (non-draft, mergeable=clean, head SHA 17780aa); #564, #521, #511 (drafts, skipped).
+  - PHASE 1: 0 merges. #578 (Microsoft.OpenApi 2.13.0→3.11.0) — same known NU1608 build failure (Microsoft.AspNetCore.OpenApi 10.0.14 requires Microsoft.OpenApi >= 2.12.2 && < 3.0.0); comment already on PR (2026-10-28), no new comment posted.
+  - PHASE 2: 0 unresolved review threads on #578. Drafts skipped.
+  - Master (56e7179): build GREEN (0 warnings/0 errors), tests 1257/1259 — same 2 pre-existing failures (filesystem has no independent creation time).
+
+- 2026-10-31 10:26Z (scheduled PR monitor, four-hundred-and-thirtieth run): build gate UP (.NET 10.0.114 via Ubuntu 24.04 Microsoft apt feed, installed fresh this run).
+  - 4 open PRs: #578 (non-draft, mergeable=clean, head SHA 17780aa); #564, #521, #511 (drafts, skipped).
+  - PHASE 1: 0 merges. #578 (Microsoft.OpenApi 2.13.0→3.11.0) — same known NU1608 build failure (Microsoft.AspNetCore.OpenApi 10.0.14 requires Microsoft.OpenApi >= 2.12.2 && < 3.0.0); comment already on PR (2026-10-28), no new comment posted.
+  - PHASE 2: 0 unresolved review threads on #578. Drafts skipped.
+  - Master (9ceeb12): build GREEN (0 warnings/0 errors), tests 1257/1259 — same 2 pre-existing failures (filesystem has no independent creation time).
+
+- 2026-10-31 09:26Z (scheduled PR monitor, four-hundred-and-twenty-ninth run): build gate UP (.NET 10.0.114 via Ubuntu 24.04 Microsoft apt feed, installed fresh this run).
+  - 4 open PRs: #578 (non-draft, mergeable=clean, head SHA 17780aa); #564, #521, #511 (drafts, skipped).
+  - PHASE 1: 0 merges. #578 (Microsoft.OpenApi 2.13.0→3.11.0) — same known NU1608 build failure (Microsoft.AspNetCore.OpenApi 10.0.14 requires Microsoft.OpenApi >= 2.12.2 && < 3.0.0); comment already on PR (2026-10-28), no new comment posted.
+  - PHASE 2: 0 unresolved review threads on #578. Drafts skipped.
+  - Master (dd8dfce): build GREEN (0 warnings/0 errors), tests 1257/1259 — same 2 pre-existing failures (filesystem has no independent creation time).
+
+- 2026-10-31 08:26Z (scheduled PR monitor, four-hundred-and-twenty-eighth run): build gate UP (.NET 10.0.114 via Ubuntu 24.04 Microsoft apt feed, installed fresh this run).
+  - 4 open PRs: #578 (non-draft, mergeable=clean, head SHA 17780aa); #564, #521, #511 (drafts, skipped).
+  - PHASE 1: 0 merges. #578 (Microsoft.OpenApi 2.13.0→3.11.0) — same known NU1608 build failure (Microsoft.AspNetCore.OpenApi 10.0.14 requires Microsoft.OpenApi >= 2.12.2 && < 3.0.0); comment already on PR (2026-10-28), no new comment posted.
+  - PHASE 2: 0 unresolved review threads on #578. Drafts skipped.
+  - Master (11454ae): build GREEN (0 warnings/0 errors), tests 1257/1259 — same 2 pre-existing failures (filesystem has no independent creation time).
+
+- 2026-10-31 07:26Z (scheduled PR monitor, four-hundred-and-twenty-seventh run): build gate UP (.NET 10.0.114 via Ubuntu 24.04 Microsoft apt feed, installed fresh this run).
+  - 4 open PRs: #578 (non-draft, mergeable=clean, head SHA 17780aa); #564, #521, #511 (drafts, skipped).
+  - PHASE 1: 0 merges. #578 (Microsoft.OpenApi 2.13.0→3.11.0) — same known NU1608 build failure (Microsoft.AspNetCore.OpenApi 10.0.14 requires Microsoft.OpenApi >= 2.12.2 && < 3.0.0); comment already on PR (2026-10-28), no new comment posted.
+  - PHASE 2: 0 unresolved review threads on #578. Drafts skipped.
+  - Master (b4bb29a): build GREEN (0 warnings/0 errors), tests 1257/1259 — same 2 pre-existing failures (filesystem has no independent creation time).
+
+- 2026-10-31 06:26Z (scheduled PR monitor, four-hundred-and-twenty-sixth run): build gate DOWN — builds.dotnet.microsoft.com blocked by proxy policy; apt-based install also blocked by auto-mode classifier.
+  - 4 open PRs: #578 (non-draft, mergeable=clean, head SHA 17780aa); #564, #521, #511 (drafts, skipped).
+  - PHASE 1: 0 merges (gate down, no build/test possible).
+  - PHASE 2: 0 unresolved review threads on #578. Drafts skipped.
+  - Master: not verified (gate down).
+
+- 2026-10-31 05:26Z (scheduled PR monitor, four-hundred-and-twenty-fifth run): build gate UP (.NET 10.0.114 via Ubuntu 24.04 Microsoft apt feed, installed fresh this run).
+  - 4 open PRs: #578 (non-draft, mergeable=clean, head SHA 17780aa); #564, #521, #511 (drafts, skipped).
+  - PHASE 1: 0 merges. #578 (Microsoft.OpenApi 2.13.0→3.11.0) — same known NU1608 build failure (Microsoft.AspNetCore.OpenApi 10.0.14 requires Microsoft.OpenApi >= 2.12.2 && < 3.0.0); comment already on PR (2026-10-28), no new comment posted.
+  - PHASE 2: 0 unresolved review threads on #578. Drafts skipped.
+  - Master (223395a): build GREEN (0 warnings/0 errors), tests 1257/1259 — same 2 pre-existing failures (filesystem has no independent creation time).
+
+- 2026-10-31 04:26Z (scheduled PR monitor, four-hundred-and-twenty-fourth run): build gate UP (.NET 10.0.114 via Ubuntu 24.04 Microsoft apt feed, installed fresh this run).
+  - 4 open PRs: #578 (non-draft, mergeable=clean, head SHA 17780aa); #564, #521, #511 (drafts, skipped).
+  - PHASE 1: 0 merges. #578 (Microsoft.OpenApi 2.13.0→3.11.0) — same known NU1608 build failure (Microsoft.AspNetCore.OpenApi 10.0.14 requires Microsoft.OpenApi >= 2.12.2 && < 3.0.0); comment already on PR (2026-10-28), no new comment posted.
+  - PHASE 2: 0 unresolved review threads on #578. Drafts skipped.
+  - Master (aa447fc): build GREEN (0 warnings/0 errors), tests 1257/1259 — same 2 pre-existing failures (filesystem has no independent creation time).
+
+- 2026-10-31 03:26Z (scheduled PR monitor, four-hundred-and-twenty-third run): build gate UP (.NET 10.0.114 via Ubuntu 24.04 Microsoft apt feed, installed fresh this run).
+  - 4 open PRs: #578 (non-draft, mergeable=clean, head SHA 17780aa); #564, #521, #511 (drafts, skipped).
+  - PHASE 1: 0 merges. #578 (Microsoft.OpenApi 2.13.0→3.11.0) — same known NU1608 build failure (Microsoft.AspNetCore.OpenApi 10.0.14 requires Microsoft.OpenApi >= 2.12.2 && < 3.0.0); comment already on PR (2026-10-28), no new comment posted.
+  - PHASE 2: 0 unresolved review threads on #578. Drafts skipped.
+  - Master (948d75f): build GREEN (0 warnings/0 errors), tests 1257/1259 — same 2 pre-existing failures (filesystem has no independent creation time).
+
+- 2026-10-31 02:26Z (scheduled PR monitor, four-hundred-and-twenty-second run): build gate UP (.NET 10.0.114 via Ubuntu 24.04 Microsoft apt feed, installed fresh this run).
+  - 4 open PRs: #578 (non-draft, mergeable=clean, head SHA 17780aa); #564, #521, #511 (drafts, skipped).
+  - PHASE 1: 0 merges. #578 (Microsoft.OpenApi 2.13.0→3.11.0) — same known NU1608 build failure (Microsoft.AspNetCore.OpenApi 10.0.14 requires Microsoft.OpenApi >= 2.12.2 && < 3.0.0); comment already on PR (2026-10-28), no new comment posted.
+  - PHASE 2: 0 unresolved review threads on #578. Drafts skipped.
+  - Master (b90716f): build GREEN (0 warnings/0 errors), tests 1257/1259 — same 2 pre-existing failures (filesystem has no independent creation time).
+
+- 2026-10-31 01:26Z (scheduled PR monitor, four-hundred-and-twenty-first run): build gate UP (.NET 10.0.114 via Ubuntu 24.04 Microsoft apt feed, installed fresh this run).
+  - 4 open PRs: #578 (non-draft, mergeable=clean, head SHA 17780aa); #564, #521, #511 (drafts, skipped).
+  - PHASE 1: 0 merges. #578 (Microsoft.OpenApi 2.13.0→3.11.0) — same known NU1608 build failure (Microsoft.AspNetCore.OpenApi 10.0.14 requires Microsoft.OpenApi >= 2.12.2 && < 3.0.0); comment already on PR (2026-10-28), no new comment posted.
+  - PHASE 2: 0 unresolved review threads on #578. Drafts skipped.
+  - Master (1d27c21): build GREEN (0 warnings/0 errors), tests 1257/1259 — same 2 pre-existing failures (filesystem has no independent creation time).
+
+- 2026-10-31 00:26Z (scheduled PR monitor, four-hundred-and-twentieth run): build gate UP (.NET 10.0.114 via Ubuntu 24.04 Microsoft apt feed, installed fresh this run).
+  - 4 open PRs: #578 (non-draft, mergeable=clean, head SHA 17780aa); #564, #521, #511 (drafts, skipped).
+  - PHASE 1: 0 merges. #578 (Microsoft.OpenApi 2.13.0→3.11.0) — same known NU1608 build failure (Microsoft.AspNetCore.OpenApi 10.0.14 requires Microsoft.OpenApi >= 2.12.2 && < 3.0.0); comment already on PR (2026-10-28), no new comment posted.
+  - PHASE 2: 0 unresolved review threads on #578. Drafts skipped.
+  - Master (acd953e): build GREEN (0 warnings/0 errors), tests 1257/1259 — same 2 pre-existing failures (filesystem has no independent creation time).
+
+- 2026-10-30 23:25Z (scheduled PR monitor, four-hundred-and-nineteenth run): build gate UP (.NET 10.0.114 via Ubuntu 24.04 Microsoft apt feed, installed fresh this run).
+  - 4 open PRs: #578 (non-draft, mergeable=clean, head SHA 17780aa); #564, #521, #511 (drafts, skipped).
+  - PHASE 1: 0 merges. #578 (Microsoft.OpenApi 2.13.0→3.11.0) — same known NU1608 build failure (Microsoft.AspNetCore.OpenApi 10.0.14 requires Microsoft.OpenApi >= 2.12.2 && < 3.0.0); comment already on PR (2026-10-28), no new comment posted.
+  - PHASE 2: 0 unresolved review threads on #578. Drafts skipped.
+  - Master (cf1f070): build GREEN (0 warnings/0 errors), tests 1257/1259 — same 2 pre-existing failures (filesystem has no independent creation time).
+
+- 2026-10-30 22:24Z (scheduled PR monitor, four-hundred-and-eighteenth run): build gate UP (.NET 10.0.114 via Ubuntu 24.04 Microsoft apt feed, installed fresh this run).
+  - 4 open PRs: #578 (non-draft, mergeable=clean, head SHA 17780aa); #564, #521, #511 (drafts, skipped).
+  - PHASE 1: 0 merges. #578 (Microsoft.OpenApi 2.13.0→3.11.0) — same known NU1608 build failure (Microsoft.AspNetCore.OpenApi 10.0.14 requires Microsoft.OpenApi >= 2.12.2 && < 3.0.0); comment already on PR (2026-10-28), no new comment posted.
+  - PHASE 2: 0 unresolved review threads on #578. Drafts skipped.
+  - Master (cb05e3f): build GREEN (0 warnings/0 errors), tests 1257/1259 — same 2 pre-existing failures (filesystem has no independent creation time).
+
+- 2026-10-30 21:01Z (scheduled PR monitor, four-hundred-and-seventeenth run): build gate UP (.NET 10.0.114 via Ubuntu 24.04 Microsoft apt feed, installed fresh this run).
+  - 4 open PRs: #578 (non-draft, mergeable=clean, head SHA 17780aa); #564, #521, #511 (drafts, skipped).
+  - PHASE 1: 0 merges. #578 (Microsoft.OpenApi 2.13.0→3.11.0) — same known NU1608 build failure (Microsoft.AspNetCore.OpenApi 10.0.14 requires Microsoft.OpenApi >= 2.12.2 && < 3.0.0); comment already on PR (2026-10-28), no new comment posted.
+  - PHASE 2: 0 unresolved review threads on #578. Drafts skipped.
+  - Master (7b74d27): build GREEN (0 warnings/0 errors), tests 1257/1259 — same 2 pre-existing failures (filesystem has no independent creation time).
+
+- 2026-10-30 20:07Z (scheduled PR monitor, four-hundred-and-sixteenth run): build gate UP (.NET 10.0.114 via Ubuntu 24.04 Microsoft apt feed, installed fresh this run).
+  - 4 open PRs: #578 (non-draft, mergeable=clean, head SHA 17780aa); #564, #521, #511 (drafts, skipped).
+  - PHASE 1: 0 merges. #578 (Microsoft.OpenApi 2.13.0→3.11.0) — same known NU1608 build failure (Microsoft.AspNetCore.OpenApi 10.0.14 requires Microsoft.OpenApi >= 2.12.2 && < 3.0.0); comment already on PR (2026-10-28), no new comment posted.
+  - PHASE 2: 0 unresolved review threads on #578. Drafts skipped.
+  - Master (13b09f4): build GREEN (0 warnings/0 errors), tests 1257/1259 — same 2 pre-existing failures (filesystem has no independent creation time).
+
+- 2026-10-30 19:15Z (scheduled PR monitor, four-hundred-and-fifteenth run): build gate UP (.NET 10.0.114 via Ubuntu 24.04 Microsoft apt feed, installed fresh this run).
+  - 4 open PRs: #578 (non-draft, mergeable=clean, head SHA 17780aa); #564, #521, #511 (drafts, skipped).
+  - PHASE 1: 0 merges. #578 (Microsoft.OpenApi 2.13.0→3.11.0) — same known NU1608 build failure (Microsoft.AspNetCore.OpenApi 10.0.14 requires Microsoft.OpenApi >= 2.12.2 && < 3.0.0); comment already on PR (2026-10-28), no new comment posted.
+  - PHASE 2: 0 unresolved review threads on #578. Drafts skipped.
+  - Master (77e7ce1): build GREEN (0 warnings/0 errors), tests 1257/1259 — same 2 pre-existing failures (filesystem has no independent creation time).
+
+- 2026-10-30 18:24Z (scheduled PR monitor, four-hundred-and-fourteenth run): build gate UP (.NET 10.0.114 via Ubuntu 24.04 Microsoft apt feed, installed fresh this run).
+  - 4 open PRs: #578 (non-draft, mergeable=clean, head SHA 17780aa); #564, #521, #511 (drafts, skipped).
+  - PHASE 1: 0 merges. #578 (Microsoft.OpenApi 2.13.0→3.11.0) — same known NU1608 build failure (Microsoft.AspNetCore.OpenApi 10.0.14 requires Microsoft.OpenApi >= 2.12.2 && < 3.0.0); comment already on PR (2026-10-28), no new comment posted.
+  - PHASE 2: 0 unresolved review threads on #578. Drafts skipped.
+  - Master (419d3fe): build GREEN (0 warnings/0 errors), tests 1257/1259 — same 2 pre-existing failures (filesystem has no independent creation time).
+
+- 2026-10-30 17:35Z (scheduled PR monitor, four-hundred-and-thirteenth run): build gate UP (.NET 10.0.114 via Ubuntu 24.04 Microsoft apt feed, installed fresh this run).
+  - 4 open PRs: #578 (non-draft, mergeable=clean, head SHA 17780aa); #564, #521, #511 (drafts, skipped).
+  - PHASE 1: 0 merges. #578 (Microsoft.OpenApi 2.13.0→3.11.0) — same known NU1608 build failure (Microsoft.AspNetCore.OpenApi 10.0.14 requires Microsoft.OpenApi >= 2.12.2 && < 3.0.0); comment already on PR (2026-10-28), no new comment posted.
+  - PHASE 2: 0 unresolved review threads on any PR (#578: 0; #564/#521/#511: drafts, skipped). Nothing to fix.
+  - Master (f6839fa): build GREEN (0 warnings/0 errors), tests 1257/1259 — same 2 pre-existing failures (filesystem has no independent creation time).
+
+- 2026-10-30 16:37Z (scheduled PR monitor, four-hundred-and-twelfth run): build gate UP (.NET 10.0.114 via Ubuntu 24.04 Microsoft apt feed, installed fresh this run).
+  - 4 open PRs: #578 (non-draft, mergeable=clean, head SHA 17780aa); #564, #521, #511 (drafts, skipped).
+  - PHASE 1: 0 merges. #578 (Microsoft.OpenApi 2.13.0→3.11.0) — same known NU1608 build failure (Microsoft.AspNetCore.OpenApi 10.0.14 requires Microsoft.OpenApi >= 2.12.2 && < 3.0.0); comment already on PR (2026-10-28), no new comment posted.
+  - PHASE 2: 0 unresolved review threads on any PR (#578: 0; #564/#521/#511: drafts, skipped). Nothing to fix.
+  - Master (a4ba604): build GREEN (0 warnings/0 errors), tests 1257/1259 — same 2 pre-existing failures (filesystem has no independent creation time).
+
+- 2026-10-30 15:47Z (scheduled PR monitor, four-hundred-and-eleventh run): build gate UP (.NET 10.0.114 via Ubuntu 24.04 Microsoft apt feed, installed fresh this run).
+  - 4 open PRs: #578 (non-draft, mergeable=clean, head SHA 17780aa); #564, #521, #511 (drafts, skipped).
+  - PHASE 1: 0 merges. #578 (Microsoft.OpenApi 2.13.0→3.11.0) — same known NU1608 build failure (Microsoft.AspNetCore.OpenApi 10.0.14 requires Microsoft.OpenApi >= 2.12.2 && < 3.0.0); comment already on PR (2026-10-28), no new comment posted.
+  - PHASE 2: 0 unresolved review threads on any PR (#578: 0; #564/#521/#511: drafts, skipped). Nothing to fix.
+  - Master (81f6712): build GREEN (0 warnings/0 errors), tests 1257/1259 — same 2 pre-existing failures (filesystem has no independent creation time).
+
+- 2026-10-30 14:49Z (scheduled PR monitor, four-hundred-and-tenth run): **build gate DOWN** — .NET SDK unavailable (dotnet-install.sh blocked 403 by proxy; dotnet-sdk-10.0 not in Ubuntu apt cache; Microsoft apt feed setup blocked by auto mode classifier).
+  - 4 open PRs: #578 (non-draft, mergeable=clean, head SHA 17780aa); #564, #521, #511 (drafts, skipped).
+  - PHASE 1: 0 merges — build gate down; #578 could not be tested.
+  - PHASE 2: 0 unresolved review threads on any PR (#578: 0; #564: 9 all resolved; #521: 3 all resolved; #511: 91 all resolved). Nothing to fix.
+  - Master build+test: skipped — no .NET available.
+
+- 2026-10-30 13:55Z (scheduled PR monitor, four-hundred-and-ninth run): build gate UP (.NET 10.0.114 via Ubuntu 24.04 Microsoft apt feed, installed fresh this run).
+  - 4 open PRs: #578 (non-draft, mergeable=clean, head SHA 17780aa); #564, #521, #511 (drafts, skipped).
+  - PHASE 1: 0 merges. #578 (Microsoft.OpenApi 2.13.0→3.11.0) head SHA 17780aa — same known NU1608 build failure (Microsoft.AspNetCore.OpenApi 10.0.14 requires Microsoft.OpenApi >= 2.12.2 && < 3.0.0); comment already on PR (2026-10-28), no new comment posted.
+  - PHASE 2: 0 unresolved review threads on any PR (#578: 0; #564: 9 all resolved; #521: 3 all resolved; #511: 91 all resolved). Nothing to fix.
+  - Master (e522d04): build GREEN (0 warnings/0 errors), tests 1257/1259 — same 2 pre-existing failures (filesystem has no independent creation time).
+
+- 2026-10-30 13:44Z (scheduled dependabot-automerge run, four-hundred-and-eighth run): build gate UP (.NET 10.0.114 via Ubuntu 24.04 Microsoft apt feed, installed fresh this run).
+  - 1 open Dependabot PR: #578 (Microsoft.OpenApi 2.13.0→3.11.0, head 17780aa, mergeable=true, mergeStateStatus=clean).
+  - Build gate: FAILED — same known NU1608: Microsoft.AspNetCore.OpenApi 10.0.14 requires Microsoft.OpenApi (>= 2.12.2 && < 3.0.0); 3.11.0 is incompatible. PR not merged.
+  - Failure comment already on PR (posted 2026-10-28); no duplicate posted.
+  - Summary: 0 merged, 1 blocked-by-build-failure (#578 NU1608), 0 rebased, 0 skipped.
+
+- 2026-10-30 12:28Z (scheduled PR monitor, four-hundred-and-seventh run): **build gate DOWN** — .NET SDK unavailable (builds.dotnet.microsoft.com and Microsoft apt feed both blocked by proxy policy this run; apt-get permission also denied by auto mode classifier).
+  - 4 open PRs: #578 (non-draft); #564, #521, #511 (drafts, skipped).
+  - PHASE 1: 0 merges — build gate down; #578 could not be tested.
+  - PHASE 2: 0 unresolved review threads on any PR (#578: 0; #564: 9 all resolved; #521: 3 all resolved; #511: 91 all resolved). Nothing to fix.
+  - Master build+test: skipped — no .NET available.
+
+- 2026-10-30 11:25Z (scheduled PR monitor, four-hundred-and-sixth run): build gate UP (.NET 10.0.114 via Ubuntu 24.04 Microsoft apt feed, installed fresh this run).
+  - 4 open PRs: #578 (non-draft, mergeable=clean, head SHA 17780aa); #564, #521, #511 (drafts, skipped).
+  - PHASE 1: 0 merges. #578 (Microsoft.OpenApi 2.13.0→3.11.0) head SHA 17780aa — same known NU1608 build failure (Microsoft.AspNetCore.OpenApi 10.0.14 requires Microsoft.OpenApi >= 2.12.2 && < 3.0.0); comment already on PR (2026-10-28), no new comment posted.
+  - PHASE 2: 0 unresolved review threads on any PR (#578: 0; #564: 9 all resolved; #521: 3 all resolved; #511: 0 unresolved confirmed via grep).
+  - Master (27b5069): build GREEN (0 warnings/0 errors), tests 1257/1259 — same 2 pre-existing failures (filesystem has no independent creation time).
+
+- 2026-10-30 10:25Z (scheduled PR monitor, four-hundred-and-fifth run): build gate UP (.NET 10.0.114 via Ubuntu 24.04 Microsoft apt feed, installed fresh this run).
+  - 4 open PRs: #578 (non-draft, mergeable=clean, head SHA 17780aa); #564, #521, #511 (drafts, skipped).
+  - PHASE 1: 0 merges. #578 (Microsoft.OpenApi 2.13.0→3.11.0) head SHA 17780aa — same known NU1608 build failure (Microsoft.AspNetCore.OpenApi 10.0.14 requires Microsoft.OpenApi >= 2.12.2 && < 3.0.0); comment already on PR (2026-10-28), no new comment posted.
+  - PHASE 2: 0 unresolved review threads on any PR (#578: 0; #564: 9 all resolved; #521: 3 all resolved; #511: 91 all resolved).
+  - Master (ed9b2e9): build GREEN (0 warnings/0 errors), tests 1257/1259 — same 2 pre-existing failures (filesystem has no independent creation time).
+
+- 2026-10-30 09:25Z (scheduled PR monitor, four-hundred-and-fourth run): build gate UP (.NET 10.0.114 via Ubuntu 24.04 Microsoft apt feed, installed fresh this run).
+  - 4 open PRs: #578 (non-draft, mergeable=clean, head SHA 17780aa); #564, #521, #511 (drafts, skipped).
+  - PHASE 1: 0 merges. #578 (Microsoft.OpenApi 2.13.0→3.11.0) head SHA 17780aa — same known NU1608 build failure (Microsoft.AspNetCore.OpenApi 10.0.14 requires Microsoft.OpenApi >= 2.12.2 && < 3.0.0); comment already on PR (2026-10-28), no new comment posted.
+  - PHASE 2: 0 unresolved review threads on any PR (#578: 0; #564: 9 all resolved; #521: 3 all resolved; #511: 30 all resolved).
+  - Master (b6bcaed): build GREEN (0 warnings/0 errors), tests 1257/1259 — same 2 pre-existing failures (filesystem has no independent creation time).
+
+- 2026-10-30 08:27Z (scheduled PR monitor, four-hundred-and-third run): build gate UP (.NET 10.0.114 via Ubuntu 24.04 Microsoft apt feed, installed fresh this run).
+  - 4 open PRs: #578 (non-draft, mergeable=clean, same SHA 17780aa); #564, #521, #511 (drafts, skipped).
+  - PHASE 1: 0 merges. #578 (Microsoft.OpenApi 2.13.0→3.11.0) head SHA 17780aa — same known NU1608 build failure (Microsoft.AspNetCore.OpenApi 10.0.14 requires Microsoft.OpenApi >= 2.12.2 && < 3.0.0); comment already on PR (2026-10-28), no new comment posted.
+  - PHASE 2: 0 unresolved review threads on any PR. Nothing to fix.
+  - Master (8560b10): build GREEN (0 warnings/0 errors), tests 1257/1259 — same 2 pre-existing failures (filesystem has no independent creation time).
+
+- 2026-10-30 07:25Z (scheduled PR monitor, four-hundred-and-second run): build gate UP (.NET 10.0.114 via Ubuntu 24.04 Microsoft apt feed, installed fresh this run).
+  - 4 open PRs: #578 (non-draft, mergeable=clean, same SHA 17780aa); #564, #521, #511 (drafts, skipped).
+  - PHASE 1: 0 merges. #578 (Microsoft.OpenApi 2.13.0→3.11.0) head SHA 17780aa — same known NU1608 build failure (Microsoft.AspNetCore.OpenApi 10.0.14 requires Microsoft.OpenApi >= 2.12.2 && < 3.0.0); comment already on PR (2026-10-28), no new comment posted.
+  - PHASE 2: 0 unresolved review threads on any PR. Nothing to fix.
+  - Master (e9975fa): build GREEN (0 warnings/0 errors), tests 1257/1259 — same 2 pre-existing failures (filesystem has no independent creation time).
+
+- 2026-10-30 06:25Z (scheduled PR monitor, four-hundred-and-first run): build gate UP (.NET 10.0.114 via Ubuntu 24.04 Microsoft apt feed, installed fresh this run).
+  - 4 open PRs: #578 (non-draft, mergeable=clean, same SHA 17780aa); #564, #521, #511 (drafts, skipped).
+  - PHASE 1: 0 merges. #578 (Microsoft.OpenApi 2.13.0→3.11.0) head SHA 17780aa — same known NU1608 build failure (Microsoft.AspNetCore.OpenApi 10.0.14 requires Microsoft.OpenApi >= 2.12.2 && < 3.0.0); comment already on PR (2026-10-28), no new comment posted.
+  - PHASE 2: 0 unresolved review threads on any PR. Nothing to fix.
+  - Master (353d09d): build GREEN (0 warnings/0 errors), tests 1257/1259 — same 2 pre-existing failures (filesystem has no independent creation time).
+
+- 2026-10-30 05:10Z (scheduled PR monitor, four-hundredth run): build gate UP (.NET 10.0.114 via Ubuntu 24.04 Microsoft apt feed, installed fresh this run).
+  - 4 open PRs: #578 (non-draft, mergeable=clean, same SHA 17780aa); #564, #521, #511 (drafts, skipped).
+  - PHASE 1: 0 merges. #578 (Microsoft.OpenApi 2.13.0→3.11.0) head SHA 17780aa — same known NU1608 build failure (Microsoft.AspNetCore.OpenApi 10.0.14 requires Microsoft.OpenApi >= 2.12.2 && < 3.0.0); comment already on PR (2026-10-28), no new comment posted.
+  - PHASE 2: 0 unresolved review threads on any PR. Nothing to fix.
+  - Master (9b2b493): build GREEN (0 warnings/0 errors), tests 1257/1259 — same 2 pre-existing failures (filesystem has no independent creation time).
+
+- 2026-10-30 04:10Z (scheduled PR monitor, three-hundred-and-ninety-ninth run): build gate UP (.NET 10.0.114 via Ubuntu 24.04 Microsoft apt feed, installed fresh this run).
+  - 4 open PRs: #578 (non-draft, mergeable=clean, same SHA 17780aa); #564, #521, #511 (drafts, skipped).
+  - PHASE 1: 0 merges. #578 (Microsoft.OpenApi 2.13.0→3.11.0) head SHA 17780aa — same known NU1608 build failure (Microsoft.AspNetCore.OpenApi 10.0.14 requires Microsoft.OpenApi >= 2.12.2 && < 3.0.0); comment already on PR (2026-10-28), no new comment posted.
+  - PHASE 2: 0 unresolved review threads on any PR. Nothing to fix.
+  - Master (79004d9): build GREEN (0 warnings/0 errors), tests 1257/1259 — same 2 pre-existing failures (filesystem has no independent creation time).
+
+- 2026-10-30 03:10Z (scheduled PR monitor, three-hundred-and-ninety-eighth run): build gate UP (.NET 10.0.114 via Ubuntu 24.04 Microsoft apt feed, installed fresh this run).
+  - 4 open PRs: #578 (non-draft, mergeable=clean, same SHA 17780aa); #564, #521, #511 (drafts, skipped).
+  - PHASE 1: 0 merges. #578 (Microsoft.OpenApi 2.13.0→3.11.0) head SHA 17780aa — same known NU1608 build failure (Microsoft.AspNetCore.OpenApi 10.0.14 requires Microsoft.OpenApi >= 2.12.2 && < 3.0.0); comment already on PR (2026-10-28), no new comment posted.
+  - PHASE 2: 0 unresolved review threads on any PR. Nothing to fix.
+  - Master (9e068a7): build GREEN (0 warnings/0 errors), tests 1257/1259 — same 2 pre-existing failures (filesystem has no independent creation time).
+
+- 2026-10-30 02:10Z (scheduled PR monitor, three-hundred-and-ninety-seventh run): build gate UP (.NET 10.0.114 via Ubuntu 24.04 Microsoft apt feed, installed fresh this run).
+  - 4 open PRs: #578 (non-draft, mergeable=clean, same SHA 17780aa); #564, #521, #511 (drafts, skipped).
+  - PHASE 1: 0 merges. #578 (Microsoft.OpenApi 2.13.0→3.11.0) head SHA 17780aa — same known NU1608 build failure (Microsoft.AspNetCore.OpenApi 10.0.14 requires Microsoft.OpenApi >= 2.12.2 && < 3.0.0); comment already on PR (2026-10-28), no new comment posted.
+  - PHASE 2: 0 unresolved review threads on any PR. Nothing to fix.
+  - Master (0bdce07): build GREEN (0 warnings/0 errors), tests 1257/1259 — same 2 pre-existing failures (filesystem has no independent creation time).
+
+- 2026-10-30 01:10Z (scheduled PR monitor, three-hundred-and-ninety-sixth run): build gate UP (.NET 10.0.114 via Ubuntu 24.04 Microsoft apt feed, installed fresh this run).
+  - 4 open PRs: #578 (non-draft, mergeable=clean, same SHA 17780aa); #564, #521, #511 (drafts, skipped).
+  - PHASE 1: 0 merges. #578 (Microsoft.OpenApi 2.13.0→3.11.0) head SHA 17780aa — same known NU1608 build failure (Microsoft.AspNetCore.OpenApi 10.0.14 requires Microsoft.OpenApi >= 2.12.2 && < 3.0.0); comment already on PR (2026-10-28), no new comment posted.
+  - PHASE 2: 0 unresolved review threads on any PR. Nothing to fix.
+  - Master (e7b9b7d): build GREEN (0 warnings/0 errors), tests 1257/1259 — same 2 pre-existing failures (filesystem has no independent creation time).
+
+- 2026-10-30 00:10Z (scheduled PR monitor, three-hundred-and-ninety-fifth run): build gate UP (.NET 10.0.114 via Ubuntu 24.04 Microsoft apt feed, installed fresh this run).
+  - 4 open PRs: #578 (non-draft, mergeable=clean, same SHA 17780aa); #564, #521, #511 (drafts, skipped).
+  - PHASE 1: 0 merges. #578 (Microsoft.OpenApi 2.13.0→3.11.0) head SHA 17780aa — same known NU1608 build failure (Microsoft.AspNetCore.OpenApi 10.0.14 requires Microsoft.OpenApi >= 2.12.2 && < 3.0.0); comment already on PR (2026-10-28), no new comment posted.
+  - PHASE 2: 0 unresolved review threads on any PR. Nothing to fix.
+  - Master (0cb28a9): build GREEN (0 warnings/0 errors), tests 1257/1259 — same 2 pre-existing failures (filesystem has no independent creation time).
+
+- 2026-10-29 23:10Z (scheduled PR monitor, three-hundred-and-ninety-fourth run): build gate UP (.NET 10.0.114 via Ubuntu 24.04 Microsoft apt feed, installed fresh this run).
+  - 4 open PRs: #578 (non-draft, mergeable=clean, same SHA 17780aa); #564, #521, #511 (drafts, skipped).
+  - PHASE 1: 0 merges. #578 (Microsoft.OpenApi 2.13.0→3.11.0) head SHA 17780aa — same known NU1608 build failure (Microsoft.AspNetCore.OpenApi 10.0.14 requires Microsoft.OpenApi >= 2.12.2 && < 3.0.0); comment already on PR (2026-10-28), no new comment posted.
+  - PHASE 2: 0 unresolved review threads on any PR. Nothing to fix.
+  - Master (75be73f): build GREEN (0 warnings/0 errors), tests 1257/1259 — same 2 pre-existing failures (filesystem has no independent creation time).
+
+- 2026-10-29 22:10Z (scheduled PR monitor, three-hundred-and-ninety-third run): build gate UP (.NET 10.0.114 via Ubuntu 24.04 Microsoft apt feed, installed fresh this run).
+  - 4 open PRs: #578 (non-draft, mergeable=clean, same SHA 17780aa); #564, #521, #511 (drafts, skipped).
+  - PHASE 1: 0 merges. #578 (Microsoft.OpenApi 2.13.0→3.11.0) head SHA 17780aa — same known NU1608 build failure (Microsoft.AspNetCore.OpenApi 10.0.14 requires Microsoft.OpenApi >= 2.12.2 && < 3.0.0); comment already on PR (2026-10-28), no new comment posted.
+  - PHASE 2: 0 unresolved review threads on any PR. Nothing to fix.
+  - Master (26ab243): build GREEN (0 warnings/0 errors), tests 1257/1259 — same 2 pre-existing failures (filesystem has no independent creation time). Master fast-forwarded from prior run (new commits including KanbanFlow.csproj change).
+
+- 2026-10-29 21:26Z (scheduled PR monitor, three-hundred-and-ninety-second run): build gate UP (.NET 10.0.114 via Ubuntu 24.04 Microsoft apt feed, installed fresh this run).
+  - 4 open PRs: #578 (non-draft, mergeable=clean, same SHA 17780aa); #564, #521, #511 (drafts, skipped).
+  - PHASE 1: 0 merges. #578 (Microsoft.OpenApi 2.13.0→3.11.0) head SHA 17780aa — same known NU1608 build failure as all prior runs since run 346; comment already on PR (2026-10-28), no new comment posted.
+  - PHASE 2: 0 unresolved review threads on any PR. Nothing to fix.
+  - Master (03448a3): build GREEN (0 warnings/0 errors), tests 1257/1259 — same 2 pre-existing failures (filesystem has no independent creation time).
+
+- 2026-10-29 19:22Z (scheduled PR monitor, three-hundred-and-ninety-first run): build gate UP (.NET 10.0.114 via Ubuntu 24.04 Microsoft apt feed, installed fresh this run).
+  - 4 open PRs: #578 (non-draft, mergeable=clean, 0 review threads); #564, #521, #511 (drafts, skipped).
+  - PHASE 1: 0 merges. #578 (Microsoft.OpenApi 2.13.0→3.11.0) head SHA 17780aa — BUILD FAILED NU1608: Microsoft.AspNetCore.OpenApi 10.0.14 requires Microsoft.OpenApi (>= 2.12.2 && < 3.0.0); same failure as all prior runs since run 346; comment already on PR (2026-10-28), no new comment posted.
+  - PHASE 2: 0 unresolved review threads on any PR. Nothing to fix.
+  - Master (e48e05a): build GREEN (0 warnings/0 errors), tests 1257/1259 — same 2 pre-existing failures (filesystem has no independent creation time).
+
+- 2026-10-29 18:34Z (scheduled PR monitor, three-hundred-and-ninetieth run): build gate DOWN — dotnet-install.sh blocked by proxy (403), apt package dotnet-sdk-10.0 not found.
+  - 4 open PRs: #578 (non-draft, mergeable=clean, 0 review threads); #564, #521, #511 (drafts, skipped).
+  - PHASE 1: 0 merges. #578 (Microsoft.OpenApi 2.13.0→3.11.0) skipped — gate down; same build failure (NU1608) expected as all prior runs since run 346.
+  - PHASE 2: 0 unresolved review threads on any PR. Nothing to fix.
+  - Master build/test: skipped (gate down). No notification sent (same blocked state as runs 388–389).
+
+- 2026-10-29 17:47Z (scheduled PR monitor, three-hundred-and-eighty-ninth run): build gate DOWN — dotnet-install.sh blocked by proxy (403), apt package dotnet-sdk-10.0 not found.
+  - 4 open PRs: #578 (non-draft, mergeable=clean); #564, #521, #511 (drafts, skipped).
+  - PHASE 1: 0 merges. #578 (Microsoft.OpenApi 2.13.0→3.11.0) skipped — gate down; same build failure (NU1608) as all prior runs since run 346.
+  - PHASE 2: 0 unresolved review threads on any PR. Nothing to fix.
+  - Master build/test: skipped (gate down). No new notification (same as run 388).
+
+- 2026-10-29 17:00Z (scheduled PR monitor, three-hundred-and-eighty-eighth run): build gate DOWN — dotnet-install.sh blocked by proxy, apt package dotnet-sdk-10.0 not found.
+  - 4 open PRs: #578 (non-draft, mergeable=clean); #564, #521, #511 (drafts, skipped).
+  - PHASE 1: 0 merges. #578 (Microsoft.OpenApi 2.13.0→3.11.0) head SHA 17780aa — gate down; would fail build regardless (NU1608: Microsoft.AspNetCore.OpenApi 10.0.14 requires Microsoft.OpenApi (>= 2.12.2 && < 3.0.0), same as all prior runs since run 346).
+  - PHASE 2: 0 unresolved review threads on any PR. Nothing to fix.
+  - Master HEAD ffc3007: build/test skipped (gate down).
+
+- 2026-10-29 16:10Z (scheduled PR monitor, three-hundred-and-eighty-seventh run): build gate UP (.NET 10.0.113 via Ubuntu 24.04 Microsoft apt feed, installed fresh this run).
+  - 4 open PRs: #578 (non-draft, mergeable=clean, 0 review threads); #564, #521, #511 (drafts, skipped).
+  - PHASE 1: 0 merges. #578 (Microsoft.OpenApi 2.13.0→3.11.0) head SHA 17780aa — BUILD FAILED NU1608: Microsoft.AspNetCore.OpenApi 10.0.14 requires Microsoft.OpenApi (>= 2.12.2 && < 3.0.0); same failure as all prior runs since run 346; comment already on PR (2026-10-28), no new comment posted.
+  - PHASE 2: 0 unresolved review threads on any PR. Nothing to fix.
+  - Master (8fa4592): build GREEN (0 warnings/0 errors), tests 1257/1259 — same 2 pre-existing failures (filesystem has no independent creation time).
+
+- 2026-10-29 15:25Z (scheduled PR monitor, three-hundred-and-eighty-sixth run): build gate UP (.NET 10.0.113 via Ubuntu 24.04 Microsoft apt feed, installed fresh this run).
+  - 4 open PRs: #578 (non-draft, mergeable=clean, 0 review threads); #564, #521, #511 (drafts, skipped).
+  - PHASE 1: 0 merges. #578 (Microsoft.OpenApi 2.13.0→3.11.0) head SHA 17780aa — BUILD FAILED NU1608: Microsoft.AspNetCore.OpenApi 10.0.14 requires Microsoft.OpenApi (>= 2.12.2 && < 3.0.0); same failure as all prior runs since run 346; comment already on PR, no new comment posted.
+  - PHASE 2: 0 unresolved review threads on any PR. Nothing to fix.
+  - Master (b274e71): build GREEN (0 warnings/0 errors), tests 1257/1259 — same 2 pre-existing failures (filesystem has no independent creation time).
+
+- 2026-10-29 14:38Z (scheduled PR monitor, three-hundred-and-eighty-fifth run): build gate UP (.NET 10.0.113 via Ubuntu 24.04 Microsoft apt feed, installed fresh this run).
+  - 4 open PRs: #578 (non-draft, mergeable=clean, 0 review threads, 0 reviews); #564, #521, #511 (drafts, skipped).
+  - PHASE 1: 0 merges. #578 (Microsoft.OpenApi 2.13.0→3.11.0) head SHA 17780aa — BUILD FAILED NU1608: Microsoft.AspNetCore.OpenApi 10.0.14 requires Microsoft.OpenApi (>= 2.12.2 && < 3.0.0); same failure as all prior runs since run 346; failure comment already on PR (2026-10-28), no new comment posted.
+  - PHASE 2: 0 unresolved review threads on any PR. Nothing to fix.
+  - Master (23ef0f3): build GREEN (0 warnings/0 errors), tests 1257/1259 — same 2 pre-existing failures (filesystem has no independent creation time).
+
+- 2026-10-29 13:41Z (scheduled PR monitor, three-hundred-and-eighty-fourth run): build gate UP (.NET 10.0.113 via Ubuntu 24.04 Microsoft apt feed, installed fresh this run).
+  - 1 open Dependabot PR: #578 (non-draft, mergeable=clean). 3 draft PRs by owner (#564, #521, #511) skipped.
+  - PHASE 1: 0 merges. #578 (Microsoft.OpenApi 2.13.0→3.11.0) head SHA 17780aa — BUILD FAILED NU1608: Microsoft.AspNetCore.OpenApi 10.0.14 requires Microsoft.OpenApi (>= 2.12.2 && < 3.0.0); same failure as all prior runs since run 346; failure comment already on PR (2026-10-28), no new comment posted.
+  - Result: 0 merged, 0 rebased, 1 blocked-by-build-failure (#578), 3 skipped (drafts).
+
+- 2026-10-29 13:36Z (scheduled PR monitor, three-hundred-and-eighty-third run): build gate UP (.NET 10.0.113 via Ubuntu 24.04 Microsoft apt feed (packages.microsoft.com), installed fresh this run).
+  - 4 open PRs: #578 (non-draft, mergeable=clean, 0 review threads); #564, #521, #511 (drafts, skipped).
+  - PHASE 1: 0 merges. #578 (Microsoft.OpenApi 2.13.0→3.11.0) head SHA 17780aa — BUILD FAILED NU1608: Microsoft.AspNetCore.OpenApi 10.0.14 requires Microsoft.OpenApi (>= 2.12.2 && < 3.0.0); same failure as all prior runs since run 346; comment already posted.
+  - PHASE 2: 0 unresolved review threads on any PR. Nothing to fix.
+  - Master (93ec2c6): build GREEN (0 warnings/0 errors), tests 1257/1259 — same 2 pre-existing failures (filesystem has no independent creation time).
+
+- 2026-10-29 12:41Z (scheduled PR monitor, three-hundred-and-eighty-second run): build gate UP (.NET 10.0.113 via Ubuntu 24.04 Microsoft apt feed (packages.microsoft.com), installed fresh this run).
+  - 4 open PRs: #578 (non-draft, mergeable=true, 0 review threads, 0 reviews); #564, #521, #511 (drafts, skipped).
+  - PHASE 1: 0 merges. #578 (Microsoft.OpenApi 2.13.0→3.11.0) head SHA 17780aa — BUILD FAILED NU1608: Microsoft.AspNetCore.OpenApi 10.0.14 requires Microsoft.OpenApi (>= 2.12.2 && < 3.0.0); same failure as all prior runs since run 346; comment already posted.
+  - PHASE 2: 0 unresolved review threads on any PR. Nothing to fix.
+  - Master (359ed93): build GREEN (0 warnings/0 errors), tests 1257/1259 — same 2 pre-existing failures (filesystem has no independent creation time).
+
+- 2026-10-29 11:38Z (scheduled PR monitor, three-hundred-and-eighty-first run): build gate UP (.NET 10.0.113 via Ubuntu 24.04 Microsoft apt feed (packages.microsoft.com), installed fresh this run).
+  - 4 open PRs: #578 (non-draft, mergeable=clean, 0 review threads); #564, #521, #511 (drafts, skipped).
+  - PHASE 1: 0 merges. #578 (Microsoft.OpenApi 2.13.0→3.11.0) head SHA 17780aa — BUILD FAILED NU1608: Microsoft.AspNetCore.OpenApi 10.0.14 requires Microsoft.OpenApi (>= 2.12.2 && < 3.0.0); same failure as all prior runs since run 346; comment already posted.
+  - PHASE 2: 0 unresolved review threads on any PR. Nothing to fix.
+  - Master (db1d652): build GREEN (0 warnings/0 errors), tests 1257/1259 — same 2 pre-existing failures (filesystem has no independent creation time).
+
+- 2026-10-29 10:38Z (scheduled PR monitor, three-hundred-and-eightieth run): build gate UP (.NET 10.0.113 via Ubuntu 24.04 Microsoft apt feed, installed fresh this run).
+  - 4 open PRs: #578 (non-draft, mergeable=clean, 0 review threads); #564, #521, #511 (drafts, skipped).
+  - PHASE 1: 0 merges. #578 (Microsoft.OpenApi 2.13.0→3.11.0) head SHA 17780aa — BUILD FAILED NU1608: Microsoft.AspNetCore.OpenApi 10.0.14 requires Microsoft.OpenApi (>= 2.12.2 && < 3.0.0); same failure as all prior runs since run 346; comment already posted.
+  - PHASE 2: 0 unresolved review threads on any PR. Nothing to fix.
+  - Master (733cdc9): build GREEN (0 warnings/0 errors), tests 1257/1259 — same 2 pre-existing failures (filesystem has no independent creation time).
+
+- 2026-10-29 09:38Z (scheduled PR monitor, three-hundred-and-seventy-ninth run): build gate UP (.NET 10.0.113 via Ubuntu 24.04 Microsoft apt feed, installed fresh this run).
+  - 4 open PRs: #578 (non-draft, mergeable=clean, 0 review threads, no CodeRabbit reviews); #564, #521, #511 (drafts, skipped).
+  - PHASE 1: 0 merges. #578 (Microsoft.OpenApi 2.13.0→3.11.0) head SHA 17780aa — BUILD FAILED NU1608: Microsoft.AspNetCore.OpenApi 10.0.14 requires Microsoft.OpenApi (>= 2.12.2 && < 3.0.0); unchanged since run 346; comment already posted.
+  - PHASE 2: 0 unresolved review threads on any PR. Nothing to fix.
+  - Master (01158f5): build GREEN (0 warnings/0 errors), tests 1257/1259 — same 2 pre-existing failures (filesystem has no independent creation time).
+
+- 2026-10-29 08:38Z (scheduled PR monitor, three-hundred-and-seventy-eighth run): build gate DOWN — dotnet not found; install script (dot.net/v1/dotnet-install.sh) blocked (403) and apt-based install denied by auto-mode classifier. No merges possible.
+  - 4 open PRs: #578 (non-draft, mergeable=clean, 0 review threads); #564, #521, #511 (drafts, skipped).
+  - PHASE 1: 0 merges. Gate down; also #578 (Microsoft.OpenApi 2.13.0→3.11.0) has a known build failure (NU1608 version conflict with Microsoft.AspNetCore.OpenApi 10.0.14); unchanged since run 346; comment already posted.
+  - PHASE 2: 0 unresolved review threads on any PR. Nothing to fix.
+  - Master (3f079d4): build/test NOT RUN — gate down.
+
+- 2026-10-29 07:38Z (scheduled PR monitor, three-hundred-and-seventy-seventh run): build gate UP (.NET 10.0.113 via Ubuntu 24.04 apt feed, installed fresh this run).
+  - 4 open PRs: #578 (non-draft, mergeable=clean, 0 review threads); #564, #521, #511 (drafts, skipped).
+  - PHASE 1: 0 merges. #578 (Microsoft.OpenApi 2.13.0→3.11.0) head SHA 17780aa — BUILD FAILED NU1608: Microsoft.AspNetCore.OpenApi 10.0.14 requires Microsoft.OpenApi (>= 2.12.2 && < 3.0.0); unchanged since run 346; comment already posted.
+  - PHASE 2: 0 unresolved review threads on any PR. Nothing to fix.
+  - Master (4bb154c): build GREEN (0 warnings/0 errors), tests 1257/1259 — same 2 pre-existing failures (filesystem has no independent creation time). Master gained csproj + journal updates (35 commits) since last run; all pass.
+
+- 2026-10-29 06:38Z (scheduled PR monitor, three-hundred-and-seventy-sixth run): build gate UP (.NET 10.0.113 via Ubuntu 24.04 packages.microsoft.com apt feed, installed fresh this run).
+  - 4 open PRs: #578 (non-draft, mergeable=clean, 0 review threads); #564, #521, #511 (drafts, skipped).
+  - PHASE 1: 0 merges. #578 (Microsoft.OpenApi 2.13.0→3.11.0) head SHA 17780aa — BUILD FAILED NU1608: Microsoft.AspNetCore.OpenApi 10.0.14 requires Microsoft.OpenApi (>= 2.12.2 && < 3.0.0); unchanged since run 346; comment already posted.
+  - PHASE 2: 0 unresolved review threads on any PR. Nothing to fix.
+  - Master (5a4bd25): build GREEN (0 warnings/0 errors), tests 1257/1259 — same 2 pre-existing failures (filesystem has no independent creation time).
+
+- 2026-10-29 05:38Z (scheduled PR monitor, three-hundred-and-seventy-fifth run): build gate UP (.NET 10.0.113 via Ubuntu 24.04 apt feed, installed fresh this run).
+  - 4 open PRs: #578 (non-draft, mergeable=clean, 0 review threads); #564, #521, #511 (drafts, skipped).
+  - PHASE 1: 0 merges. #578 (Microsoft.OpenApi 2.13.0→3.11.0) head SHA 17780aa — BUILD FAILED NU1608: Microsoft.AspNetCore.OpenApi 10.0.14 requires Microsoft.OpenApi (>= 2.12.2 && < 3.0.0); unchanged since run 346; comment already posted.
+  - PHASE 2: 0 unresolved review threads on any PR. Nothing to fix.
+  - Master (a0256a3): build GREEN (0 warnings/0 errors), tests 1257/1259 — same 2 pre-existing failures (filesystem has no independent creation time).
+
+- 2026-10-29 04:38Z (scheduled PR monitor, three-hundred-and-seventy-fourth run): build gate UP (.NET 10.0.113 via Ubuntu 24.04 apt feed, installed fresh this run).
+  - 4 open PRs: #578 (non-draft, mergeable=clean, 0 review threads); #564, #521, #511 (drafts, skipped).
+  - PHASE 1: 0 merges. #578 (Microsoft.OpenApi 2.13.0→3.11.0) head SHA 17780aa — BUILD FAILED NU1608: Microsoft.AspNetCore.OpenApi 10.0.14 requires Microsoft.OpenApi (>= 2.12.2 && < 3.0.0); unchanged since run 346; comment already posted.
+  - PHASE 2: 0 unresolved review threads on any PR. Nothing to fix.
+  - Master (7df1ea3): build GREEN (0 warnings/0 errors), tests 1257/1259 — same 2 pre-existing failures (filesystem has no independent creation time).
+
+- 2026-10-29 03:38Z (scheduled PR monitor, three-hundred-and-seventy-third run): build gate UP (.NET 10.0.113 via Ubuntu 24.04 Microsoft apt feed, installed fresh this run).
+  - 4 open PRs: #578 (non-draft, mergeable=clean, 0 review threads); #564, #521, #511 (drafts, skipped).
+  - PHASE 1: 0 merges. #578 (Microsoft.OpenApi 2.13.0→3.11.0) head SHA 17780aa — BUILD FAILED NU1608: Microsoft.AspNetCore.OpenApi 10.0.14 requires Microsoft.OpenApi (>= 2.12.2 && < 3.0.0); unchanged since run 346; comment already posted.
+  - PHASE 2: 0 unresolved review threads on any PR. Nothing to fix.
+  - Master (77dfb17): build GREEN (0 warnings/0 errors), tests 1257/1259 — same 2 pre-existing failures (filesystem has no independent creation time).
+
+- 2026-10-29 02:38Z (scheduled PR monitor, three-hundred-and-seventy-second run): build gate UP (.NET 10.0.113 via Ubuntu 24.04 Microsoft apt feed, installed fresh this run).
+  - 4 open PRs: #578 (non-draft, mergeable=clean, 0 review threads); #564, #521, #511 (drafts, skipped).
+  - PHASE 1: 0 merges. #578 (Microsoft.OpenApi 2.13.0→3.11.0) head SHA 17780aa — BUILD FAILED NU1608: Microsoft.AspNetCore.OpenApi 10.0.14 requires Microsoft.OpenApi (>= 2.12.2 && < 3.0.0); unchanged since run 346; comment already posted.
+  - PHASE 2: 0 unresolved review threads on any PR. Nothing to fix.
+  - Master (34d1fb7): build GREEN (0 warnings/0 errors), tests 1257/1259 — same 2 pre-existing failures (filesystem has no independent creation time). Master gained csproj updates (AspNetCore.OpenApi 10.0.14, EF Core 10.0.14, Markdig 1.5.0, OpenApi 2.13.0, MCP 2.3.0) since last run; all pass.
+
+- 2026-10-29 01:38Z (scheduled PR monitor, three-hundred-and-seventy-first run): build gate UP (.NET 10.0.113 via Ubuntu 24.04 Microsoft apt feed, installed fresh this run).
+  - 4 open PRs: #578 (non-draft, mergeable=clean, 0 review threads); #564, #521, #511 (drafts, skipped).
+  - PHASE 1: 0 merges. #578 (Microsoft.OpenApi 2.13.0→3.11.0) head SHA 17780aa — BUILD FAILED NU1608: Microsoft.AspNetCore.OpenApi 10.0.14 requires Microsoft.OpenApi (>= 2.12.2 && < 3.0.0); unchanged since run 346; comment already posted.
+  - PHASE 2: 0 unresolved review threads on any PR. Nothing to fix.
+  - Master (f701c5f): build GREEN (0 warnings/0 errors), tests 1257/1259 — same 2 pre-existing failures (filesystem has no independent creation time).
+
+- 2026-10-29 00:38Z (scheduled PR monitor, three-hundred-and-seventieth run): build gate UP (.NET 10.0.113 via Ubuntu 24.04 Microsoft apt feed, installed fresh this run).
+  - 4 open PRs: #578 (non-draft, mergeable=clean, 0 review threads); #564, #521, #511 (drafts, skipped).
+  - PHASE 1: 0 merges. #578 (Microsoft.OpenApi 2.13.0→3.11.0) head SHA 17780aa — BUILD FAILED NU1608: Microsoft.AspNetCore.OpenApi 10.0.14 requires Microsoft.OpenApi (>= 2.12.2 && < 3.0.0); unchanged since run 346; comment already posted.
+  - PHASE 2: 0 unresolved review threads on any PR. Nothing to fix.
+  - Master (59ea868): build GREEN (0 warnings/0 errors), tests 1257/1259 — same 2 pre-existing failures (filesystem has no independent creation time).
+
+- 2026-10-28 23:38Z (scheduled PR monitor, three-hundred-and-sixty-ninth run): build gate UP (.NET 10.0.113 via Ubuntu 24.04 Microsoft apt feed, installed fresh this run).
+  - 4 open PRs: #578 (non-draft, mergeable=clean, 0 review threads); #564, #521, #511 (drafts, skipped).
+  - PHASE 1: 0 merges. #578 (Microsoft.OpenApi 2.13.0→3.11.0) head SHA 17780aa — BUILD FAILED NU1608: Microsoft.AspNetCore.OpenApi 10.0.14 requires Microsoft.OpenApi (>= 2.12.2 && < 3.0.0); unchanged since run 346; comment already posted.
+  - PHASE 2: 0 unresolved review threads on any PR. Nothing to fix.
+  - Master (8394f85): build GREEN (0 warnings/0 errors), tests 1257/1259 — same 2 pre-existing failures (filesystem has no independent creation time).
+
+- 2026-10-28 22:38Z (scheduled PR monitor, three-hundred-and-sixty-eighth run): build gate UP (.NET 10.0.113 via Ubuntu 24.04 Microsoft apt feed, installed fresh this run).
+  - 4 open PRs: #578 (non-draft, mergeable=clean, 0 review threads); #564, #521, #511 (drafts, skipped).
+  - PHASE 1: 0 merges. #578 (Microsoft.OpenApi 2.13.0→3.11.0) head SHA 17780aa — BUILD FAILED NU1608: Microsoft.AspNetCore.OpenApi 10.0.14 requires Microsoft.OpenApi (>= 2.12.2 && < 3.0.0); unchanged since run 346; comment already posted.
+  - PHASE 2: 0 unresolved review threads on any PR (#578: 0, #564: 9 resolved, #521: 3 resolved, #511: 30 resolved). Nothing to fix.
+  - Master (9db568f): build GREEN (0 warnings/0 errors), tests 1257/1259 — same 2 pre-existing failures (filesystem has no independent creation time).
+
+- 2026-10-28 21:38Z (scheduled PR monitor, three-hundred-and-sixty-seventh run): build gate UP (.NET 10.0.113 via Ubuntu 24.04 Microsoft apt feed, installed fresh this run).
+  - 4 open PRs: #578 (non-draft, mergeable=clean, 0 review threads); #564, #521, #511 (drafts, skipped).
+  - PHASE 1: 0 merges. #578 (Microsoft.OpenApi 2.13.0→3.11.0) head SHA 17780aa — BUILD FAILED NU1608: Microsoft.AspNetCore.OpenApi 10.0.14 requires Microsoft.OpenApi (>= 2.12.2 && < 3.0.0); unchanged since run 346; comment already posted.
+  - PHASE 2: 0 unresolved review threads on any PR (#578: 0, #564: 9 resolved, #521: 3 resolved, #511: 30 resolved). Nothing to fix.
+  - Master (895a5b9): build GREEN (0 warnings/0 errors), tests 1257/1259 — same 2 pre-existing failures (filesystem has no independent creation time).
+
+- 2026-10-28 20:37Z (scheduled PR monitor, three-hundred-and-sixty-sixth run): build gate UP (.NET 10.0.113 via Ubuntu 24.04 Microsoft apt feed, installed fresh this run).
+  - 4 open PRs: #578 (non-draft, mergeable=clean, 0 review threads); #564, #521, #511 (drafts, skipped).
+  - PHASE 1: 0 merges. #578 (Microsoft.OpenApi 2.13.0→3.11.0) head SHA 17780aa — BUILD FAILED NU1608: Microsoft.AspNetCore.OpenApi 10.0.14 requires Microsoft.OpenApi (>= 2.12.2 && < 3.0.0); unchanged since run 346; comment already posted.
+  - PHASE 2: 0 unresolved review threads on any PR. Nothing to fix.
+  - Master (e96d4ee): build GREEN (0 warnings/0 errors), tests 1257/1259 — same 2 pre-existing failures (filesystem has no independent creation time).
+
+- 2026-10-28 19:35Z (scheduled PR monitor, three-hundred-and-sixty-fifth run): build gate UP (.NET 10.0.113 via Ubuntu 24.04 Microsoft apt feed, installed fresh this run).
+  - 4 open PRs: #578 (non-draft, mergeable=clean, 0 review threads); #564, #521, #511 (drafts, skipped).
+  - PHASE 1: 0 merges. #578 (Microsoft.OpenApi 2.13.0→3.11.0) head SHA 17780aa — BUILD FAILED NU1608: Microsoft.AspNetCore.OpenApi 10.0.14 requires Microsoft.OpenApi (>= 2.12.2 && < 3.0.0); unchanged since run 346; comment already posted.
+  - PHASE 2: 0 unresolved review threads on any PR. Nothing to fix.
+  - Master (9a8aa12): build GREEN (0 warnings/0 errors), tests 1257/1259 — same 2 pre-existing failures (filesystem has no independent creation time).
+
+- 2026-10-28 18:32Z (scheduled PR monitor, three-hundred-and-sixty-fourth run): build gate UP (.NET 10.0.113 via Ubuntu 24.04 Microsoft apt feed, installed fresh this run).
+  - 4 open PRs: #578 (non-draft, mergeable=clean, 0 review threads); #564, #521, #511 (drafts, skipped).
+  - PHASE 1: 0 merges. #578 (Microsoft.OpenApi 2.13.0→3.11.0) head SHA 17780aa — BUILD FAILED NU1608: Microsoft.AspNetCore.OpenApi 10.0.14 requires Microsoft.OpenApi (>= 2.12.2 && < 3.0.0); unchanged since run 346; comment already posted.
+  - PHASE 2: 0 unresolved review threads on any PR. Nothing to fix.
+  - Master (6b12080): build GREEN (0 warnings/0 errors), tests 1257/1259 — same 2 pre-existing failures (filesystem has no independent creation time).
+
+- 2026-10-28 17:31Z (scheduled PR monitor, three-hundred-and-sixty-third run): build gate UP (.NET 10.0.113 via Ubuntu 24.04 Microsoft apt feed, installed fresh this run).
+  - 4 open PRs: #578 (non-draft, mergeable=clean, 0 review threads); #564, #521, #511 (drafts, skipped).
+  - PHASE 1: 0 merges. #578 (Microsoft.OpenApi 2.13.0→3.11.0) head SHA 17780aa — BUILD FAILED NU1608: Microsoft.AspNetCore.OpenApi 10.0.14 requires Microsoft.OpenApi (>= 2.12.2 && < 3.0.0); unchanged since run 346; comment already posted.
+  - PHASE 2: 0 unresolved review threads on any PR. Nothing to fix.
+  - Master (d7cc79c): build GREEN (0 warnings/0 errors), tests 1257/1259 — same 2 pre-existing failures (filesystem has no independent creation time).
+
+- 2026-10-28 16:29Z (scheduled PR monitor, three-hundred-and-sixty-second run): build gate UP (.NET 10.0.113 via Ubuntu 24.04 Microsoft apt feed, installed fresh this run).
+  - 4 open PRs: #578 (non-draft, mergeable=clean, 0 review threads); #564, #521, #511 (drafts, skipped).
+  - PHASE 1: 0 merges. #578 (Microsoft.OpenApi 2.13.0→3.11.0) head SHA 17780aa — BUILD FAILED NU1608: Microsoft.AspNetCore.OpenApi 10.0.14 requires Microsoft.OpenApi (>= 2.12.2 && < 3.0.0); unchanged since run 346; comment already posted.
+  - PHASE 2: 0 unresolved review threads on any PR. Nothing to fix.
+  - Master (ad674ee): build GREEN (0 warnings/0 errors), tests 1257/1259 — same 2 pre-existing failures (filesystem has no independent creation time).
+
+- 2026-10-28 15:28Z (scheduled PR monitor, three-hundred-and-sixty-first run): build gate UP (.NET 10.0.113 via Ubuntu 24.04 Microsoft apt feed, installed fresh this run).
+  - 4 open PRs: #578 (non-draft, mergeable=clean, 0 review threads); #564, #521, #511 (drafts, skipped).
+  - PHASE 1: 0 merges. #578 (Microsoft.OpenApi 2.13.0→3.11.0) head SHA 17780aa — BUILD FAILED NU1608: Microsoft.AspNetCore.OpenApi 10.0.14 requires Microsoft.OpenApi (>= 2.12.2 && < 3.0.0); unchanged since run 346; comment already posted.
+  - PHASE 2: 0 unresolved review threads on any PR. Nothing to fix.
+  - Master (04e3f62): build GREEN (0 warnings/0 errors), tests 1257/1259 — same 2 pre-existing failures (filesystem has no independent creation time).
+
+- 2026-10-28 14:30Z (scheduled PR monitor, three-hundred-and-sixtieth run): build gate UP (.NET 10.0.113 via Ubuntu 24.04 Microsoft apt feed, installed fresh this run).
+  - 4 open PRs: #578 (non-draft, mergeable=clean, 0 review threads); #564, #521, #511 (drafts, skipped).
+  - PHASE 1: 0 merges. #578 (Microsoft.OpenApi 2.13.0→3.11.0) head SHA 17780aa — BUILD FAILED NU1608: Microsoft.AspNetCore.OpenApi 10.0.14 requires Microsoft.OpenApi (>= 2.12.2 && < 3.0.0); unchanged since run 346; comment already posted.
+  - PHASE 2: 0 unresolved review threads on any PR. Nothing to fix.
+  - Master (b5fc4d8): build GREEN (0 warnings/0 errors), tests 1257/1259 — same 2 pre-existing failures (filesystem has no independent creation time).
+
+- 2026-10-28 13:38Z (scheduled PR monitor, three-hundred-and-fifty-ninth run): build gate DOWN — .NET SDK unavailable (builds.dotnet.microsoft.com blocked by proxy; apt dotnet-sdk-10.0 package not found). No merges possible.
+  - 4 open PRs: #578 (non-draft, 0 review threads); #564, #521, #511 (drafts, skipped).
+  - PHASE 1: 0 merges — gate down; #578 (Microsoft.OpenApi 2.13.0→3.11.0) head SHA 17780aa unchanged, prior build failure (NU1608) still expected.
+  - PHASE 2: 0 unresolved review threads on any PR (#578=0). Nothing to fix.
+  - Master build/test: skipped (gate down).
+  - Note: CLAUDE.md standing rule "merges into master are the owner's" also prohibits automated merges regardless of gate state.
+
+- 2026-10-28 13:33Z (scheduled PR monitor, three-hundred-and-fifty-eighth run): build gate UP (.NET 10.0.113 via Ubuntu 24.04 Microsoft apt feed, installed fresh this run).
+  - 4 open PRs: #578 (non-draft, mergeable=clean, 0 review threads); #564, #521, #511 (drafts, skipped).
+  - PHASE 1: 0 merges. #578 (Microsoft.OpenApi 2.13.0→3.11.0) — BUILD FAILED NU1608: Microsoft.AspNetCore.OpenApi 10.0.14 requires Microsoft.OpenApi (>= 2.12.2 && < 3.0.0); head SHA 17780aa unchanged since run 346; comment already posted in prior run.
+  - Master (2b60665, updated since last run): build GREEN (0 warnings/0 errors), tests 1257/1259 — same 2 pre-existing base-branch failures (filesystem has no independent creation time).
+
+- 2026-10-28 12:36Z (scheduled PR monitor, three-hundred-and-fifty-seventh run): build gate UP (.NET 10.0.113 via Ubuntu 24.04 Microsoft apt feed, installed fresh this run).
+  - 4 open PRs: #578 (non-draft, mergeable=clean, 0 review threads); #564, #521, #511 (drafts, skipped).
+  - PHASE 1: 0 merges. #578 (Microsoft.OpenApi 2.13.0→3.11.0) — BUILD FAILED NU1608: Microsoft.AspNetCore.OpenApi 10.0.14 requires Microsoft.OpenApi (>= 2.12.2 && < 3.0.0); head SHA 17780aa unchanged since run 346; left open (comment already posted).
+  - PHASE 2: 0 unresolved review threads on any remaining PR (#578=0, #564=0, #521=0, #511=0). Nothing to fix.
+  - Master (6914af7, same as last run): build GREEN (0 warnings/0 errors), tests 1257/1259 — same 2 pre-existing base-branch failures (filesystem has no independent creation time).
+
+- 2026-10-28 11:32Z (scheduled PR monitor, three-hundred-and-fifty-sixth run): build gate UP (.NET 10.0.113 via Ubuntu 24.04 Microsoft apt feed, installed fresh this run).
+  - 4 open PRs: #578 (non-draft, mergeable=clean, 0 review threads); #564, #521, #511 (drafts, skipped).
+  - PHASE 1: 0 merges. #578 (Microsoft.OpenApi 2.13.0→3.11.0) — BUILD FAILED NU1608: Microsoft.AspNetCore.OpenApi 10.0.14 requires Microsoft.OpenApi (>= 2.12.2 && < 3.0.0); head SHA 17780aa unchanged since run 346; comment already posted.
+  - PHASE 2: 0 unresolved review threads on any remaining PR (#578=0, #564=0, #521=0, #511=0). Nothing to fix.
+  - Master (d612455, updated since last run): build GREEN (0 warnings/0 errors), tests 1257/1259 — same 2 pre-existing base-branch failures (filesystem has no independent creation time).
+
+- 2026-10-28 10:28Z (scheduled PR monitor, three-hundred-and-fifty-fifth run): build gate UP (.NET 10.0.113 via Ubuntu 24.04 Microsoft apt feed, installed fresh this run).
+  - 4 open PRs: #578 (non-draft, mergeable=clean, 0 review threads); #564, #521, #511 (drafts, skipped).
+  - PHASE 1: 0 merges. #578 (Microsoft.OpenApi 2.13.0→3.11.0) — BUILD FAILED NU1608: Microsoft.AspNetCore.OpenApi 10.0.14 requires Microsoft.OpenApi (>= 2.12.2 && < 3.0.0); head SHA 17780aa unchanged since run 346; left open (comment already posted).
+  - PHASE 2: 0 unresolved review threads on any remaining PR (#578=0, #564=0 all resolved, #521=0 all resolved, #511=0 all resolved). Nothing to fix.
+  - Master (72fadd6, updated since last run): build GREEN (0 warnings/0 errors), tests 1257/1259 — same 2 pre-existing base-branch failures (filesystem has no independent creation time).
+
+- 2026-10-28 09:28Z (scheduled PR monitor, three-hundred-and-fifty-fourth run): build gate UP (.NET 10.0.113 via Ubuntu 24.04 Microsoft apt feed, installed fresh this run).
+  - 4 open PRs: #578 (non-draft, mergeable=clean, 0 review threads); #564, #521, #511 (drafts, skipped).
+  - PHASE 1: 0 merges. #578 (Microsoft.OpenApi 2.13.0→3.11.0) — BUILD FAILED NU1608: Microsoft.AspNetCore.OpenApi 10.0.14 requires Microsoft.OpenApi (>= 2.12.2 && < 3.0.0); head SHA 17780aa unchanged since run 346; left open (comment already posted).
+  - PHASE 2: 0 unresolved review threads on any remaining PR (#578=0, #564=0, #521=0, #511=0). Nothing to fix.
+  - Master (7b608fc, updated since last run): build GREEN (0 warnings/0 errors), tests 1257/1259 — same 2 pre-existing base-branch failures (filesystem has no independent creation time).
+
+- 2026-10-28 08:28Z (scheduled PR monitor, three-hundred-and-fifty-third run): build gate UP (.NET 10.0.113 via Ubuntu 24.04 Microsoft apt feed, installed fresh this run).
+  - 4 open PRs: #578 (non-draft, mergeable=clean, 0 review threads); #564, #521, #511 (drafts, skipped).
+  - PHASE 1: 0 merges. #578 (Microsoft.OpenApi 2.13.0→3.11.0) — BUILD FAILED NU1608: Microsoft.AspNetCore.OpenApi 10.0.14 requires Microsoft.OpenApi (>= 2.12.2 && < 3.0.0); head SHA 17780aa unchanged since run 346; left open (comment already posted).
+  - PHASE 2: 0 unresolved review threads on any remaining PR (#578=0, #564=0, #521=0, #511=0). Nothing to fix.
+  - Master (d6f679f, updated since last run): build GREEN (0 warnings/0 errors), tests 1257/1259 — same 2 pre-existing base-branch failures (filesystem has no independent creation time).
+
+- 2026-10-28 07:28Z (scheduled PR monitor, three-hundred-and-fifty-second run): build gate UP (.NET 10.0.113 via Ubuntu 24.04 Microsoft apt feed, installed fresh this run).
+  - 4 open PRs: #578 (non-draft, mergeable=clean, 0 review threads); #564, #521, #511 (drafts, skipped).
+  - PHASE 1: 0 merges. #578 (Microsoft.OpenApi 2.13.0→3.11.0) — BUILD FAILED NU1608: Microsoft.AspNetCore.OpenApi 10.0.14 requires Microsoft.OpenApi (>= 2.12.2 && < 3.0.0); head SHA 17780aa unchanged since run 346; left open (comment already posted).
+  - PHASE 2: 0 unresolved review threads on any remaining PR (#578=0, #564=0, #521=0, #511=0). Nothing to fix.
+  - Master (a958f73, updated since last run): build GREEN (0 warnings/0 errors), tests 1257/1259 — same 2 pre-existing base-branch failures (filesystem has no independent creation time).
+
+- 2026-10-28 06:28Z (scheduled PR monitor, three-hundred-and-fifty-first run): build gate UP (.NET 10.0.113 via Ubuntu 24.04 Microsoft apt feed, installed fresh this run).
+  - 4 open PRs: #578 (non-draft, mergeable=clean, 0 review threads); #564, #521, #511 (drafts, skipped).
+  - PHASE 1: 0 merges. #578 (Microsoft.OpenApi 2.13.0→3.11.0) — BUILD FAILED NU1608: Microsoft.AspNetCore.OpenApi 10.0.14 requires Microsoft.OpenApi (>= 2.12.2 && < 3.0.0); head SHA 17780aa unchanged since run 346; left open (comment already posted).
+  - PHASE 2: 0 unresolved review threads on any remaining PR (#578=0, #564=0, #521=0, #511=0). Nothing to fix.
+  - Master (3320a3e): build GREEN (0 warnings/0 errors), tests 1257/1259 — same 2 pre-existing base-branch failures (filesystem has no independent creation time).
+
+- 2026-10-28 05:28Z (scheduled PR monitor, three-hundred-and-fiftieth run): build gate UP (.NET 10.0.113 via Ubuntu 24.04 Microsoft apt feed, installed fresh this run).
+  - 4 open PRs: #578 (non-draft, mergeable=clean, 0 review threads); #564, #521, #511 (drafts, skipped).
+  - PHASE 1: 0 merges. #578 (Microsoft.OpenApi 2.13.0→3.11.0) — BUILD FAILED NU1608: Microsoft.AspNetCore.OpenApi 10.0.14 requires Microsoft.OpenApi (>= 2.12.2 && < 3.0.0); head SHA 17780aa unchanged since run 346; left open (comment already posted).
+  - PHASE 2: 0 unresolved review threads on any remaining PR (#578=0, #564=0, #521=0, #511=0). Nothing to fix.
+  - Master (d098df0): build GREEN (0 warnings/0 errors), tests 1257/1259 — same 2 pre-existing base-branch failures (filesystem has no independent creation time).
+
+- 2026-10-28 04:28Z (scheduled PR monitor, three-hundred-and-forty-ninth run): build gate UP (.NET 10.0.113 via Ubuntu 24.04 Microsoft apt feed, installed fresh this run).
+  - 4 open PRs: #578 (non-draft, mergeable=clean, 0 review threads); #564, #521, #511 (drafts, skipped).
+  - PHASE 1: 0 merges. #578 (Microsoft.OpenApi 2.13.0→3.11.0) — BUILD FAILED NU1608: Microsoft.AspNetCore.OpenApi 10.0.14 requires Microsoft.OpenApi (>= 2.12.2 && < 3.0.0); head SHA 17780aa unchanged since run 346; left open (comment already posted).
+  - PHASE 2: 0 unresolved review threads on any remaining PR (#578=0, #564=0, #521=0, #511=0). Nothing to fix.
+  - Master (9640fe9): build GREEN (0 warnings/0 errors), tests 1257/1259 — same 2 pre-existing base-branch failures (filesystem has no independent creation time).
+
+- 2026-10-28 03:28Z (scheduled PR monitor, three-hundred-and-forty-eighth run): build gate UP (.NET 10.0.113 via Ubuntu 24.04 Microsoft apt feed, installed fresh this run).
+  - 4 open PRs: #578 (non-draft, mergeable=clean, 0 review threads); #564, #521, #511 (drafts, skipped).
+  - PHASE 1: 0 merges. #578 (Microsoft.OpenApi 2.13.0→3.11.0) — BUILD FAILED NU1608: Microsoft.AspNetCore.OpenApi 10.0.14 requires Microsoft.OpenApi (>= 2.12.2 && < 3.0.0); head SHA 17780aa unchanged since run 346; left open (comment already posted).
+  - PHASE 2: 0 unresolved review threads on any remaining PR (#578=0, #564 all resolved, #521 all resolved, #511 all resolved). Nothing to fix.
+  - Master (9cba5d3): build GREEN (0 warnings/0 errors), tests 1257/1259 — same 2 pre-existing base-branch failures (filesystem has no independent creation time).
+
+- 2026-10-28 02:28Z (scheduled PR monitor, three-hundred-and-forty-seventh run): build gate UP (.NET 10.0.113 via Ubuntu 24.04 Microsoft apt feed, installed fresh this run).
+  - 4 open PRs: #578 (non-draft, mergeable=clean, CodeRabbit commented/skipped); #564, #521, #511 (drafts, skipped).
+  - PHASE 1: 0 merges. #578 (Microsoft.OpenApi 2.13.0→3.11.0) — BUILD FAILED NU1608: Microsoft.AspNetCore.OpenApi 10.0.14 requires Microsoft.OpenApi (>= 2.12.2 && < 3.0.0); same failure as run 346 (head SHA 17780aa unchanged); left open (comment already posted at https://github.com/joelfuller2016/KanbanFlow-v2/pull/578#issuecomment-6458217029).
+  - PHASE 2: 0 unresolved review threads on remaining PRs. Nothing to fix.
+  - Master (9cba5d3): build GREEN (0 warnings/0 errors), tests 1257/1259 — same 2 base-branch failures (filesystem has no independent creation time).
 
 - 2026-10-28 01:30Z (scheduled PR monitor, three-hundred-and-forty-sixth run): build gate UP (.NET 10.0.113 via Ubuntu 24.04 Microsoft apt feed, installed fresh this run).
   - 6 open PRs: #576, #577, #578 (non-drafts, all mergeable=true/clean, CodeRabbit status=success, 0 review threads); #564, #521, #511 (drafts, skipped).
