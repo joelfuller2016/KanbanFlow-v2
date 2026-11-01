@@ -2695,12 +2695,15 @@ function remoteLimitFixture() {
   const { a, b, d } = fixture;
   for (const repo of [a, d]) gitOutput(["remote", "remove", "origin"], repo);
   const configs = new Map([a, b, d].map(repo => [repo, fs.readFileSync(path.join(repo, ".git", "config"), "utf8")]));
+  // Git config supports these escapes; CR remains a literal payload character, not JSON's \\r.
+  const quoteConfig = value => '"' + value.replaceAll("\\", "\\\\").replaceAll('"', '\\"')
+    .replaceAll("\n", "\\n").replaceAll("\t", "\\t").replaceAll("\b", "\\b") + '"';
   const configure = (repo, remotes) => {
     let text = configs.get(repo);
     for (const { name = "origin", urls, push = [] } of remotes) {
       text += `\n[remote "${name}"]\n`;
-      for (const url of urls) text += `\turl = ${JSON.stringify(url)}\n`;
-      for (const url of push) text += `\tpushurl = ${JSON.stringify(url)}\n`;
+      for (const url of urls) text += `\turl = ${quoteConfig(url)}\n`;
+      for (const url of push) text += `\tpushurl = ${quoteConfig(url)}\n`;
     }
     fs.writeFileSync(path.join(repo, ".git", "config"), text);
   };
@@ -2726,7 +2729,7 @@ test("native Git whitespace fetch and push payloads veto a matching repo without
   const env = { ...scrubGitEnv(process.env), GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_SYSTEM: "/dev/null", GIT_CONFIG_NOSYSTEM: "1" };
   const ssh = "git@example.invalid:org/repo.git";
   try {
-    for (const [base, padded] of [[mainUrl, mainUrl + " "], [mainUrl, " " + mainUrl], [mainUrl, mainUrl + "\r"],
+    for (const [base, padded] of [[mainUrl, mainUrl + " "], [mainUrl, " " + mainUrl], [mainUrl, mainUrl + "\r"], [mainUrl, mainUrl + "\\r"],
       [ssh, ssh + " "], [ssh, "git@example.invalid: org/repo.git"]]) {
       configure(a, [{ urls: [base] }]);
       for (const role of ["fetch", "push"]) {
