@@ -20,6 +20,7 @@
 // Usage:
 //   npm run trial:report
 //   npm run trial:report -- --since 2026-08-30 --json
+// Repository identity probes require Git 2.38+; unsupported Git leaves signal 4 unmeasured.
 //   npm run trial:report -- --repo-root C:\Users\Owner\Documents\Claude\KanbanFlow-v2
 
 import fs from "node:fs";
@@ -479,7 +480,7 @@ function protectedSafeDirectoryArgs(cwd, env, remainingTimeout) {
   for (const scope of systemDisabled ? ["global"] : ["system", "global"]) {
     try {
       const output = execFileSync("git", ["config", `--${scope}`, "--includes", "--null", "--get-all", "safe.directory"], {
-        cwd, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: remainingTimeout(), env: configEnv
+        cwd, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: remainingTimeout(), env: configEnv, windowsHide: true
       });
       values.push(...output.split("\0").slice(0, -1));
     } catch (error) {
@@ -498,27 +499,44 @@ function protectedSafeDirectoryArgs(cwd, env, remainingTimeout) {
  * contaminated environment without mutating this PROCESS's real process.env.
  */
 export function gitOutput(args, cwd, { env = process.env } = {}) {
-  // Ownership lookup and identity plumbing share the original per-command bound.
-  const deadline = performance.now() + GIT_TIMEOUT_MS;
-  const remainingTimeout = () => {
-    const remaining = deadline - performance.now();
-    if (remaining <= 0) throw new Error("Git command exceeded its five-second deadline.");
-    return Math.ceil(remaining);
+  return createGitRunner({ env })(args, cwd);
+}
+
+/** A report owns its version check; protected trust settings are reread on EVERY command. */
+export function createGitRunner({ env = process.env } = {}) {
+  const captured = Object.freeze({ ...env });
+  let compatible = false;
+  return (args, cwd) => {
+    // The first call also includes its version check inside this one monotonic budget.
+    const deadline = performance.now() + GIT_TIMEOUT_MS;
+    const remainingTimeout = () => {
+      const remaining = Math.floor(deadline - performance.now());
+      if (remaining < 1) throw new Error("Git command exceeded its five-second deadline.");
+      return remaining;
+    };
+    const isolated = { ...scrubGitEnv(captured), GIT_CONFIG_NOSYSTEM: "1",
+      GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_SYSTEM: "/dev/null" };
+    if (!compatible) {
+      let version = "unavailable";
+      try {
+        version = execFileSync("git", ["--version"], {
+          cwd, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"],
+          timeout: remainingTimeout(), env: isolated, windowsHide: true
+        }).trim();
+      } catch { /* An unknown binary/version cannot establish the isolation capabilities. */ }
+      const parsed = version.match(/^git version (\d+)\.(\d+)(?:\.|\s|$)/);
+      if (!parsed || Number(parsed[1]) < 2 || Number(parsed[1]) === 2 && Number(parsed[2]) < 38) {
+        throw Object.assign(new Error(`Git 2.38 or newer is required for isolated repository probes (found ${quotedPathForReport(version)}). Clone confirmation was not run.`),
+          { code: "git_unsupported" });
+      }
+      compatible = true;
+    }
+    const safeDirectories = protectedSafeDirectoryArgs(cwd, captured, remainingTimeout);
+    return execFileSync("git", [...safeDirectories, ...args], {
+      cwd, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"],
+      timeout: remainingTimeout(), env: isolated, windowsHide: true
+    }).trim();
   };
-  const safeDirectories = protectedSafeDirectoryArgs(cwd, env, remainingTimeout);
-  const scrubbed = { ...scrubGitEnv(env), GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null" };
-  // `timeout` for the same reason the fetches carry one: an unbounded blocking call in a report
-  // that has no other way to finish. `git rev-parse` on a network path, or against a repository
-  // whose index lock is held, can sit indefinitely — and a hung git here hangs the whole run before
-  // a single signal is computed. A timeout kills the child and throws, which this file already
-  // treats as "git was unavailable".
-  return execFileSync("git", [...safeDirectories, ...args], {
-    cwd,
-    encoding: "utf8",
-    stdio: ["ignore", "pipe", "ignore"],
-    timeout: remainingTimeout(),
-    env: scrubbed
-  }).trim();
 }
 
 /**
@@ -579,11 +597,10 @@ const GIT_URL_SCHEME = /^([a-z0-9][a-z0-9+.-]*):\/\//i;
 const GIT_REMOTE_HELPER = /^[a-z0-9][a-z0-9+.-]*::/i;
 
 /**
- * Normalize a git remote URL for same-repo comparison: lower-case the host, drop a trailing slash
- * or `.git`, and fold `https://host/owner/repo`, `ssh://git@host:22/owner/repo` and the SCP
- * shorthand `[user@]host:owner/repo` (git accepts it WITHOUT a userinfo too, e.g.
- * `example.invalid:org/repo`) to the same `host/owner/repo` key, so the only forms the clone check
- * below needs to tell apart are actually-different repos, not spelling. A port is dropped only
+ * Normalize a git remote URL for same-repo comparison. Generic SSH keeps its login and effective
+ * command path, including relative/absolute/tilde namespaces and `.git` suffixes. The documented
+ * git@github.com virtual-repository forms retain their HTTPS aliases; other transports use the
+ * existing host/path identity. A port is dropped only
  * when it is its scheme's default (see `DEFAULT_PORTS`); any other port stays in the key.
  * `null`/non-string in, `null` out — a remote that could not be read is "cannot compare", never an
  * accidental match.
@@ -596,7 +613,8 @@ const GIT_REMOTE_HELPER = /^[a-z0-9][a-z0-9+.-]*::/i;
  */
 export function normalizeRemoteUrl(url) {
   if (typeof url !== "string" || url.trim().length === 0) return null;
-  const u = url.trim().replace(/\/+$/, "");
+  const raw = url.trim();
+  const u = raw.replace(/\/+$/, "");
   // Explicit remote-helper syntax is not the SCP host named before the double colon.
   if (GIT_REMOTE_HELPER.test(u)) return url.trim();
   const key = (host, repository) => {
@@ -606,10 +624,31 @@ export function normalizeRemoteUrl(url) {
     const repositoryPath = authority === "github.com" ? repository.toLowerCase() : repository;
     return `${authority}/${repositoryPath.replace(/\/+$/, "").replace(/\.git$/, "")}`;
   };
+  const sshKey = (authority, commandPath) => {
+    const at = authority.lastIndexOf("@");
+    const account = at === -1 ? null : authority.slice(0, at);
+    const host = (at === -1 ? authority : authority.slice(at + 1)).toLowerCase()
+      .replace(/:(\d+)$/, (portPart, port) => Number(port) === DEFAULT_PORTS.ssh ? "" : portPart);
+    // Git connect.c removes the character before ~ at this position for SSH URL/SCP paths.
+    const effectivePath = commandPath[1] === "~" ? commandPath.slice(1) : commandPath;
+    const hostedPath = effectivePath.replace(/^\//, "");
+    if (host === "github.com" && account === "git" && /^[^/~.][^/]*\/[^/]+\/?$/.test(hostedPath))
+      return key(host, hostedPath);
+    // Account-specific chroots can also give absolute paths different meanings. Preserve both.
+    return JSON.stringify(["ssh", account, host, effectivePath]);
+  };
   const scheme = u.match(GIT_URL_SCHEME);
   if (scheme) {
     const protocol = scheme[1].toLowerCase();
     if (!Object.hasOwn(DEFAULT_PORTS, protocol)) return protocol + url.trim().slice(scheme[1].length);
+    if (protocol === "ssh") {
+      let location;
+      try { location = decodeURIComponent(raw.slice(scheme[0].length)); }
+      catch { return JSON.stringify(["ssh-opaque", raw]); }
+      const separator = location.indexOf("/");
+      if (separator === -1) return JSON.stringify(["ssh-opaque", raw]);
+      return sshKey(location.slice(0, separator), location.slice(separator));
+    }
     const defaultPort = DEFAULT_PORTS[protocol];
     const location = u.slice(scheme[0].length).replace(/^[^/@]+@/, "");
     const separator = location.indexOf("/");
@@ -617,8 +656,8 @@ export function normalizeRemoteUrl(url) {
       .replace(/:(\d+)$/, (portPart, port) => Number(port) === defaultPort ? "" : portPart);
     return separator === -1 ? authority.toLowerCase() : key(authority, location.slice(separator + 1));
   }
-  const scp = u.match(/^(?:[a-z0-9._-]+@)?([a-z0-9.-]{2,}):(.+)$/i);
-  if (scp) return key(scp[1], scp[2]);
+  const scp = raw.match(/^(?:([a-z0-9._-]+)@)?([a-z0-9.-]+):(.+)$/i);
+  if (scp && !isLocalPathRemote(raw)) return sshKey(scp[1] ? `${scp[1]}@${scp[2]}` : scp[2], scp[3]);
   return u;
 }
 
@@ -1289,9 +1328,9 @@ export function summarize({
     // With NO root at all nothing can be outside anything, and the signal scored REVERT: the one
     // outcome this file's header says a missing source must never produce.
     repoRoot: {
-      ok: roots.length > 0 && repoRootSource !== "fallback",
+      ok: roots.length > 0 && repoRootSource !== "fallback" && sources.git !== false,
       why:
-        roots.length === 0
+        sources.git === false ? sources.gitReason || "supported Git was unavailable for repository identity checks" : roots.length === 0
           ? "no repo root was supplied, so there is no boundary to be outside OF — every session reads as inside and the signal would score REVERT while measuring nothing"
           : "the repo root came from a FALLBACK (git could not be run, or this is not a git repository), so it is the parent of this script's own directory rather than the repository git would name. Run from a linked worktree, that root is the WORKTREE and every ordinary session in the main checkout reads as outside it — fabricating this signal's adopt condition out of where the script was launched. Pass --repo-root to measure it"
     }
@@ -2132,9 +2171,22 @@ async function main(argv) {
     console.error(`NOTE: the usage log is misconfigured, so signals derived from it CANNOT BE MEASURED.\n      ${logConfigError}\n`);
   }
   const here = path.dirname(fileURLToPath(import.meta.url));
+  const runner = createGitRunner();
+  let gitIncompatibility = null;
+  const reportGit = (args, cwd) => {
+    if (gitIncompatibility) throw gitIncompatibility;
+    try { return runner(args, cwd); }
+    catch (error) {
+      if (error.code === "git_unsupported") {
+        gitIncompatibility = error;
+        console.error(`NOTE: ${error.message}\n`);
+      }
+      throw error;
+    }
+  };
   const { roots: repoRoots, source: repoRootSource } = resolveRepoRoots(repoRootOverride, {
     cwd: here,
-    fallbackRoot: path.resolve(here, "..")
+    fallbackRoot: path.resolve(here, ".."), git: reportGit
   });
 
   const { text, files, generations, discovered, unreadable } = readLogGenerations(logPath);
@@ -2205,12 +2257,12 @@ async function main(argv) {
       // `summarize()` call) — a `const` this name would shadow only inside this block, harmlessly,
       // but a reader skimming past the shadow could easily mix the two up.
       const { confirmed, probed, capped: cloneCapped, budgetSpent, tooManyRemotes } =
-        withConfirmedCloneRoots(distinctOutsideCwds, repoRoots.slice(0, 1));
+        withConfirmedCloneRoots(distinctOutsideCwds, repoRoots.slice(0, 1), { git: reportGit });
       // The confirmed CWDS — the map's keys — never the toplevels they resolved to: a toplevel as a
       // prefix root also covers a nested repository the check rejected, and misses a cwd reached
       // through a junction (see withConfirmedCloneRoots's Returns, and the note at signal 4).
       cloneRoots = [...new Set(confirmed.keys())];
-      cloneProbe = { probed, capped: cloneCapped, candidates: distinctOutsideCwds.length, budgetSpent, tooManyRemotes };
+      cloneProbe = gitIncompatibility ? null : { probed, capped: cloneCapped, candidates: distinctOutsideCwds.length, budgetSpent, tooManyRemotes };
       if (confirmed.size > 0) {
         // Lists exactly the cwd strings signal 4 folds in — it folds in by exact string — so this
         // NOTE and the scoring cannot disagree, as they did when it listed toplevels: a clone reached
@@ -2230,7 +2282,8 @@ async function main(argv) {
 
   const summary = summarize({
     rows, events, repoRoots, repoRootSource, cloneRoots, cloneProbe, since, truncated, truncatedCovered, capped,
-    sources: { log: logAvailable && !nothingParsed, activity: activityAvailable }
+    sources: { log: logAvailable && !nothingParsed, activity: activityAvailable,
+      git: gitIncompatibility === null, gitReason: gitIncompatibility?.message }
   });
   console.log(asJson
     ? jsonForReport(summary, 2)
