@@ -1344,6 +1344,18 @@ test("normalizeRemoteUrl preserves case-sensitive repository paths while normali
     normalizeRemoteUrl("https://github.com:8443/Org/main.git"), "a non-default port denotes a different service");
 });
 
+test("remote URL identity preserves payload whitespace instead of trimming it into an alias", () => {
+  for (const url of ["https://example.invalid/org/repo.git", "https://github.com/org/repo.git",
+    "ssh://alice@host/repo.git", "alice@host:repo.git", "softp://host/repo", "x::host/repo"]) {
+    for (const payload of [url + " ", url + "\t", url + "\r", url + "\n", " " + url, "\t" + url])
+      assert.notEqual(normalizeRemoteUrl(payload), normalizeRemoteUrl(url), JSON.stringify(payload));
+  }
+  assert.notEqual(normalizeRemoteUrl(" "), normalizeRemoteUrl(""), "a space is payload, not an absent value");
+  assert.equal(isLocalPathRemote(" https://host/repo"), false, "leading whitespace must not be removed before classifying a network-shaped value");
+  assert.equal(isLocalPathRemote(" C:/repo", { platform: "win32" }), false,
+    "a leading payload space must not be removed to manufacture a Windows drive prefix");
+});
+
 test("generic SSH equivalences preserve the account and effective command path", () => {
   for (const [left, right] of [
     ["alice@host:/repo.git", "ssh://alice@HOST:22/repo.git"],
@@ -1882,6 +1894,75 @@ test("real Git clone evidence does not collapse differently cased network reposi
   } finally {
     cleanup();
   }
+});
+
+test("real Git URL payload whitespace cannot confirm unrelated or shared-history candidates", () => {
+  const { a, b, c, d, cleanup } = buildCloneFixture();
+  try {
+    gitOutput(["remote", "add", "origin", "https://example.invalid/org/repo.git"], b);
+    for (const [url, different] of [
+      ["https://example.invalid/org/repo.git", "https://example.invalid/org/repo.git "],
+      ["https://github.com/Org/Repo.git", "https://github.com/Org/Repo.git\t"],
+      ["ssh://alice@host/repo.git", " ssh://alice@host/repo.git"]
+    ]) {
+      gitOutput(["remote", "set-url", "origin", url], a);
+      for (const cwd of [b, d]) {
+        gitOutput(["config", "remote.origin.url", different], cwd);
+        assert.equal(gitOutput(["config", "--null", "--get-all", "remote.origin.url"], cwd), different + "\0",
+          "NUL-framed native config proves the exact configured payload");
+      }
+      gitOutput(["remote", "set-url", "origin", url], c);
+      const { confirmed } = withConfirmedCloneRoots([b, c, d], [a]);
+      assert.equal(confirmed.has(b), false, "meaningful URL bytes veto shared-root fallback");
+      assert.equal(confirmed.has(d), false, "trimming must not manufacture a match for unrelated history");
+      assert.equal(confirmed.has(c), true, "the exact supported URL still confirms an independent repository");
+      assert.equal(gitOutput(["remote", "get-url", "origin"], d), different,
+        "the Git reader removes only its own record terminator");
+    }
+    const exactPayload = "https://example.invalid/org/repo.git ";
+    for (const cwd of [a, c]) gitOutput(["config", "remote.origin.url", exactPayload], cwd);
+    assert.equal(withConfirmedCloneRoots([c], [a]).confirmed.has(c), true,
+      "identical whitespace-bearing values remain comparable without inventing an alias");
+  } finally { cleanup(); }
+});
+
+test("real Git multiline URL framing cannot forge candidate or reference clone evidence", () => {
+  const { a, b, c, d, cleanup } = buildCloneFixture();
+  const url = "https://example.invalid/org/repo.git";
+  try {
+    gitOutput(["remote", "add", "origin", url], b);
+    gitOutput(["config", "remote.origin.url", url + "\n" + url], d);
+    assert.equal(gitOutput(["config", "--null", "--get-all", "remote.origin.url"], d), url + "\n" + url + "\0",
+      "the two printed lines are one actual config value");
+    const ordinary = withConfirmedCloneRoots([d], [a]);
+    assert.equal(ordinary.confirmed.has(d), false, "one multiline URL is not two matching remote records");
+    gitOutput(["config", "remote.origin.url", url], d);
+    for (const [key, value] of [["remote.origin.pushurl", url + "\n" + url],
+      ["url." + url + ".pushInsteadOf", "unused:\r"]]) {
+      gitOutput(["config", key, value], d);
+      assert.equal(withConfirmedCloneRoots([d], [a]).confirmed.has(d), false, key + " must not bypass native framing validation");
+      gitOutput(["config", "--unset", key], d);
+    }
+    gitOutput(["config", "remote.origin.url", url + "\n" + url], b);
+    assert.equal(withConfirmedCloneRoots([b], [a]).confirmed.has(b), false, "ambiguous framing also vetoes shared history");
+
+    gitOutput(["config", "remote.origin.url", url], d);
+    gitOutput(["remote", "remove", "origin"], b);
+    for (const ambiguous of [url + "\n" + url, url + "\n", url + "\r"]) {
+      gitOutput(["config", "remote.origin.url", ambiguous], a);
+      assert.equal(withConfirmedCloneRoots([b, d], [a]).confirmed.size, 0,
+        "an ambiguously framed reference contributes neither URL nor root-history proof");
+    }
+    gitOutput(["config", "remote.origin.url", url], a);
+    gitOutput(["config", "remote.origin.url", ""], b);
+    assert.equal(withConfirmedCloneRoots([b], [a]).confirmed.has(b), false, "an empty configured URL cannot fall back to shared history as absent evidence");
+    gitOutput(["config", "remote.origin.url", "short:repo"], c);
+    gitOutput(["config", "url." + url + ".insteadOf", "short:repo"], c);
+    assert.equal(withConfirmedCloneRoots([c], [a]).confirmed.has(c), true, "ordinary repository-local rewriting remains native Git behavior");
+    gitOutput(["config", "url." + url + ".insteadOf", "short:repo\n"], c);
+    gitOutput(["config", "remote.origin.url", url], c);
+    assert.equal(withConfirmedCloneRoots([c], [a]).confirmed.has(c), false, "rewrite controls with line breaks cannot authorize ambiguous framing");
+  } finally { cleanup(); }
 });
 
 test("real Git evidence keeps an unfamiliar transport outside despite shared history", () => {
@@ -2671,10 +2752,11 @@ test("protected safe.directory exceptions survive isolated Git probes without re
   }
 });
 
-function runGitDeadlineFixture(stepMs, timeoutMs = 5000) {
+function runGitDeadlineFixture(stepMs, timeoutMs = 5000, urlRead = false) {
   const fixture = buildInto(make => {
     const a = make();
     initRealRepo(a, "deadline.txt");
+    if (urlRead) gitOutput(["config", "remote.origin.url", "https://example.invalid/org/repo.git"], a);
     return { a };
   });
   try {
@@ -2698,7 +2780,7 @@ function runGitDeadlineFixture(stepMs, timeoutMs = 5000) {
     const script = [
       `import { gitOutput } from ${JSON.stringify(new URL("./trial-report.mjs", import.meta.url).href)};`,
       'let success = false, message = null;',
-      `try { success = Boolean(gitOutput(["rev-parse", "--show-toplevel"], ${JSON.stringify(fixture.a)}, { timeoutMs: ${JSON.stringify(timeoutMs)} })); } catch (error) { message = error.message; }`,
+      `try { success = Boolean(gitOutput(${JSON.stringify(urlRead ? ["remote", "get-url", "origin"] : ["rev-parse", "--show-toplevel"])}, ${JSON.stringify(fixture.a)}, { timeoutMs: ${JSON.stringify(timeoutMs)} })); } catch (error) { message = error.message; }`,
       'console.log(JSON.stringify({ success, message, timeouts: globalThis.gitTimeouts, maxBuffers: globalThis.gitMaxBuffers }));'
     ].join("\n");
     const child = spawnSync(process.execPath, ["--require", preload, "--input-type=module", "--eval", script], {
@@ -2717,6 +2799,17 @@ test("Git config reads and identity share one five-second deadline", () => {
   const result = runGitDeadlineFixture(1000.25);
   assert.equal(result.success, true, result.message);
   assert.deepEqual(result.timeouts, [5000, 3999, 2999], "version, protected capture and identity share the same budget; timeouts round down");
+});
+
+test("Git URL framing metadata and the URL read share the original bounded deadline", () => {
+  const result = runGitDeadlineFixture(1000.25, 5000, true);
+  assert.equal(result.success, true, result.message);
+  assert.deepEqual(result.timeouts, [5000, 3999, 2999, 1999], "the metadata child receives only the same budget's remaining time");
+  assert.deepEqual(result.maxBuffers, Array(4).fill(256 * 1024), "URL metadata has the same native byte cap");
+  const exhausted = runGitDeadlineFixture(1666.5, 5000, true);
+  assert.equal(exhausted.success, false);
+  assert.deepEqual(exhausted.timeouts, [5000, 3333, 1667], "metadata cannot grant the final read a sub-millisecond remainder");
+  assert.match(exhausted.message, /deadline/i);
 });
 
 test("Git identity is not started after config reads exhaust its deadline", () => {
@@ -2887,24 +2980,27 @@ test("real Git main-root limits discard remote and shared-root-commit proof toge
     assert.equal(summary.sources.cloneProbe.limitedMainRoots, 1);
     assert.match(cli.stderr, /1 main-root fingerprint.*discarded/);
     assert.match(find(summary, 4).caveat, /1 main-root fingerprint.*discarded/);
-    // Git permits line breaks in a config value and prints them in plain get-url output.
-    // Those answers need the same per-remote and total line bounds as candidate --all reads.
+    // A single multiline value is ambiguous before line-count limits can classify its records.
+    // Native NUL metadata rejects the whole reference, including its root history.
     configure(a, [{ urls: [Array(65).fill(mainUrl).join("\n")] }]);
-    assert.equal(withConfirmedCloneRoots([b, d], [a]).limitedMainRoots, 1);
+    assert.equal(withConfirmedCloneRoots([b, d], [a]).confirmed.size, 0);
+    assert.throws(() => gitOutput(["remote", "get-url", "origin"], a), error => error.code === "git_url_framing");
     const many = Array.from({ length: 4 }, (_, i) => ({ name: `r${i}`, urls: [Array(64).fill(mainUrl).join("\n")] }));
     configure(a, [...many, { name: "r4", urls: [mainUrl] }]);
     const total = withConfirmedCloneRoots([b, d], [a]);
-    assert.equal(total.limitedMainRoots, 1);
     assert.equal(total.confirmed.size, 0);
+    assert.throws(() => gitOutput(["remote", "get-url", "origin"], a), error => error.code === "git_url_framing");
   } finally { cleanup(); }
 });
 
 test("real Git command output is limited to 256 KiB on both sides of clone confirmation", () => {
   const { a, b, d, configure, mainUrl, cleanup } = remoteLimitFixture();
   try {
-    const prefix = mainUrl + "/", capacity = 256 * 1024 - 4 - Buffer.byteLength(prefix);
+    const metadataOverhead = Buffer.byteLength("remote.origin.url\n\0");
+    const prefix = mainUrl + "/", capacity = 256 * 1024 - metadataOverhead - Buffer.byteLength(prefix);
     const near = prefix + "é".repeat(Math.floor(capacity / 2)) + (capacity % 2 ? "x" : "");
-    assert.equal(Buffer.byteLength(near), 256 * 1024 - 4);
+    assert.equal(Buffer.byteLength(near) + metadataOverhead, 256 * 1024,
+      "the complete native NUL metadata record sits exactly at the byte bound");
     configure(a, [{ urls: [near] }]); configure(d, [{ urls: [near] }]);
     assert.equal(gitOutput(["remote", "get-url", "origin"], a), near);
     assert.deepEqual([...withConfirmedCloneRoots([b, d], [a]).confirmed.keys()], [b, d]);

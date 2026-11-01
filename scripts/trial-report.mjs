@@ -520,6 +520,34 @@ function protectedSafeDirectoryArgs(cwd, env, remainingTimeout) {
   return values.flatMap(value => ["-c", `safe.directory=${value}`]);
 }
 
+// get-url has only newline framing. Inspect the effective local URL/rewrite configuration with
+// native NUL records first, so a newline inside one value cannot impersonate several URLs.
+function checkRemoteUrlFraming(cwd, safeDirectories, env, remainingTimeout) {
+  let output;
+  try {
+    output = execFileSync("git", [...safeDirectories, "config", "--includes", "--null", "--get-regexp",
+      "^(remote\\..*\\.(url|pushurl)|url\\..*\\.(insteadof|pushinsteadof))$"], {
+      cwd, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"],
+      timeout: remainingTimeout(), maxBuffer: GIT_MAX_OUTPUT_BYTES, env, windowsHide: true
+    });
+  } catch (error) {
+    if (error.status === 1 && error.stdout === "") return; // No URL/rewrite keys.
+    throw error;
+  }
+  const invalid = () => { throw Object.assign(new Error("Git remote URL configuration has ambiguous record framing."), { code: "git_url_framing" }); };
+  if (!output.endsWith("\0")) invalid();
+  for (let start = 0; start < output.length;) {
+    const end = output.indexOf("\0", start);
+    if (end === -1) invalid();
+    const record = output.slice(start, end);
+    const separator = record.indexOf("\n");
+    if (separator <= 0 || record.indexOf("\n", separator + 1) !== -1 || record.includes("\r")) invalid();
+    const key = record.slice(0, separator), value = record.slice(separator + 1);
+    if (/^remote\..*\.(?:url|pushurl)$/.test(key) && value.length === 0) invalid();
+    start = end + 1;
+  }
+}
+
 /**
  * Run one git plumbing command against `cwd`, scrubbed of inherited GIT_* variables and isolated
  * from system/global identity config, so caller-wide url rewrites cannot change its evidence.
@@ -574,10 +602,13 @@ export function createGitRunner({ env = process.env, timeoutMs = GIT_TIMEOUT_MS 
         { code: "git_unsupported" });
     }
     const safeDirectories = protectedSafeDirectoryArgs(cwd, captured, remainingTimeout);
-    return execFileSync("git", [...safeDirectories, ...args], {
+    if (args[0] === "remote" && args[1] === "get-url")
+      checkRemoteUrlFraming(cwd, safeDirectories, isolated, remainingTimeout);
+    const output = execFileSync("git", [...safeDirectories, ...args], {
       cwd, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"],
       timeout: remainingTimeout(), maxBuffer: GIT_MAX_OUTPUT_BYTES, env: isolated, windowsHide: true
-    }).trim();
+    });
+    return output.endsWith("\n") ? output.slice(0, -1) : output;
   };
 }
 
@@ -654,11 +685,11 @@ const GIT_REMOTE_HELPER = /^[a-z0-9][a-z0-9+.-]*::/i;
  * keeps Windows drive paths out while permitting unambiguous account/host forms.
  */
 export function normalizeRemoteUrl(url, { platform = process.platform } = {}) {
-  if (typeof url !== "string" || url.trim().length === 0) return null;
-  const raw = url.trim();
+  if (typeof url !== "string" || url.length === 0) return null;
+  const raw = url;
   const u = raw;
   // Explicit remote-helper syntax is not the SCP host named before the double colon.
-  if (GIT_REMOTE_HELPER.test(u)) return url.trim();
+  if (GIT_REMOTE_HELPER.test(u)) return raw;
   const githubKey = repository => `github.com/${repository.toLowerCase().replace(/\/+$/, "").replace(/\.git$/, "")}`;
   const sshKey = (authority, commandPath) => {
     const at = authority.lastIndexOf("@");
@@ -676,7 +707,7 @@ export function normalizeRemoteUrl(url, { platform = process.platform } = {}) {
   const scheme = u.match(GIT_URL_SCHEME);
   if (scheme) {
     const protocol = scheme[1].toLowerCase();
-    if (!Object.hasOwn(DEFAULT_PORTS, protocol)) return protocol + url.trim().slice(scheme[1].length);
+    if (!Object.hasOwn(DEFAULT_PORTS, protocol)) return protocol + raw.slice(scheme[1].length);
     if (protocol === "ssh") {
       let location;
       try { location = decodeURIComponent(raw.slice(scheme[0].length)); }
@@ -730,8 +761,8 @@ export function normalizeRemoteUrl(url, { platform = process.platform } = {}) {
  * — it stays outside, exactly as an alias- or IP-spelled clone of this very repo would on master.
  */
 export function isLocalPathRemote(rawUrl, { platform = process.platform } = {}) {
-  if (typeof rawUrl !== "string" || rawUrl.trim().length === 0) return false;
-  const u = rawUrl.trim();
+  if (typeof rawUrl !== "string" || rawUrl.length === 0) return false;
+  const u = rawUrl;
   if (GIT_REMOTE_HELPER.test(u)) return false;
   if (/^file:\/\//i.test(u)) return true;
   if (GIT_URL_SCHEME.test(u)) return false;
@@ -752,7 +783,7 @@ export function isLocalPathRemote(rawUrl, { platform = process.platform } = {}) 
 
 function ambiguousWindowsDrive(rawUrl, platform) {
   if (platform !== "win32") return false;
-  const value = rawUrl.trim();
+  const value = rawUrl;
   if (GIT_URL_SCHEME.test(value) || GIT_REMOTE_HELPER.test(value)) return false;
   const colon = value.indexOf(":");
   return colon > 0 && [...value.slice(0, colon)].length === 1 && !isLocalPathRemote(value, { platform });
@@ -781,16 +812,14 @@ const MAX_URLS_PER_REMOTE = 64;
 const MAX_URLS_PER_FINGERPRINT = 256;
 const PROBE_BUDGET_MS = 60_000;
 
-// Stop at the first excess nonempty line, before allocating an array for the full answer.
+// Stop at the first excess record, preserving its payload bytes, including whitespace.
 function boundedGitLines(text, limit) {
   const lines = [];
   for (let start = 0; start < text.length;) {
     const newline = text.indexOf("\n", start);
-    const line = text.slice(start, newline === -1 ? text.length : newline).trim();
-    if (line) {
-      if (lines.length >= limit) return null;
-      lines.push(line);
-    }
+    const line = text.slice(start, newline === -1 ? text.length : newline);
+    if (lines.length >= limit) return null;
+    lines.push(line);
     if (newline === -1) break;
     start = newline + 1;
   }
@@ -966,8 +995,9 @@ export function withConfirmedCloneRoots(cwds, roots, { git = gitOutput, now = ()
         try {
           urls = boundedGitLines(call(["remote", "get-url", ...urlReads[read], name], cwd),
             Math.min(MAX_URLS_PER_REMOTE - remoteUrls, MAX_URLS_PER_FINGERPRINT - totalUrls));
-        } catch {
-          return { everyUrl: new Set(), fetchUrls: new Set(), inconclusive: true };
+        } catch (error) {
+          return { everyUrl: new Set(), fetchUrls: new Set(), inconclusive: true,
+            ambiguousUrls: error.code === "git_url_framing" };
         }
         if (urls === null) return { everyUrl: new Set(), fetchUrls: new Set(), inconclusive: true, tooManyUrls: true };
         if (urls.some(url => ambiguousWindowsDrive(url, platform)))
@@ -998,7 +1028,7 @@ export function withConfirmedCloneRoots(cwds, roots, { git = gitOutput, now = ()
     const commits = rootCommitsOf(main);
     if (outputLimited) { limits.limitedMainRoots++; continue; }
     const remotes = networkRemotesOf(main, MAIN_URL_READS);
-    if (remotes.ambiguousDrive) continue;
+    if (remotes.ambiguousDrive || remotes.ambiguousUrls) continue;
     if (outputLimited || remotes.tooManyRemotes || remotes.tooManyUrls) {
       limits.limitedMainRoots++;
       continue; // The whole fingerprint, including its root commits, is unusable.

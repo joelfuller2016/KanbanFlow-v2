@@ -676,10 +676,14 @@ logged working path is instead left unconfirmed outside without disabling Git fo
 Remote drive syntax follows the host platform: single-letter SCP forms are network
 remotes on POSIX, and ambiguous Windows drive forms cannot prove a clone fingerprint. Every operation's
 five-second monotonic deadline includes that check, a protected configuration read and the identity
-command; later operations get the same bound and reread protected configuration without repository
+command. Remote URL reads also inspect bounded NUL-framed URL and rewrite configuration within
+that same deadline: embedded line breaks and empty URL values make the fingerprint inconclusive,
+including its reference root history. URL payload whitespace is preserved; only Git's final output
+record terminator is removed. Ordinary repository-local rewrites still come from Git's `get-url`.
+Later operations get the same bound and reread protected configuration without repository
 context, so `gitdir`/`onbranch` conditional includes cannot grant ownership trust. The report does
 not install Git or change global settings. Git child output is capped at 256 KiB. Reference and
-candidate fingerprints scan at most 16 remote names, 64 nonempty URL entries per remote across
+candidate fingerprints scan at most 16 remote names, 64 URL entries per remote across
 fetch and push reads together, and 256 URL entries across the entire fingerprint; duplicates count. Exceeding
 a bound rejects the whole fingerprint and is disclosed in the report, rather than trusting a
 truncated prefix. Other servers retain their transport, account and exact
