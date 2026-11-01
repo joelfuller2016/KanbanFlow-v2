@@ -32,8 +32,11 @@ export async function openWorkspaceStdio(baseUrl, { usageLog = "off" } = {}) {
   });
   child.stderr.resume();
   child.on("error", fail);
-  child.on("exit", code => fail(new Error(`Workspace MCP process exited ${code}`)));
+  child.on("exit", (code, signal) => fail(new Error(`Workspace MCP process exited ${code ?? signal}`)));
+  child.stdin.on("error", fail);
   const rpc = (method, params) => new Promise((resolve, reject) => {
+    if (child.exitCode !== null || child.signalCode !== null)
+      return reject(new Error(`Workspace MCP process already exited: ${method}`));
     const id = ++sequence;
     const timeout = setTimeout(() => { pending.delete(id); reject(new Error(`Workspace MCP timeout: ${method}`)); }, 20000);
     pending.set(id, { resolve, reject, timeout });
