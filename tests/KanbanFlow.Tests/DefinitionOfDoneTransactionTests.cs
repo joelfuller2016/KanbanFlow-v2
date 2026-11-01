@@ -75,6 +75,13 @@ public sealed class DefinitionOfDoneTransactionTests
         {
             var sql = command.CommandText;
 
+            if (sql.Contains("ActivityEvents", StringComparison.OrdinalIgnoreCase)
+                && sql.TrimStart().StartsWith("INSERT", StringComparison.OrdinalIgnoreCase))
+            {
+                lock (_lock) _observations.Add(("AuditInsert", command.Transaction));
+                return;
+            }
+
             // The gate's read: any SELECT against AcceptanceCriteria.
             if (sql.Contains("AcceptanceCriteria", StringComparison.OrdinalIgnoreCase)
                 && sql.TrimStart().StartsWith("SELECT", StringComparison.OrdinalIgnoreCase))
@@ -213,12 +220,11 @@ public sealed class DefinitionOfDoneTransactionTests
     }
 
     /// <summary>
-    /// The write lock is scoped to Done-bound transitions. SQLite permits a single pending writer,
-    /// so locking on every status change or every field edit would make unrelated work queue behind
-    /// any other writer for a gate that never runs. A non-Done transition must not take it.
+    /// Non-Done transitions load the entity without a transaction and never read acceptance
+    /// criteria. They still reserve the SQLite writer for the later atomic audit write.
     /// </summary>
     [Fact]
-    public async Task NonDoneTransition_DoesNotOpenATransaction()
+    public async Task NonDoneTransition_ReservesWriterForAuditWithoutRunningDoneGate()
     {
         var probe = new GateSpanProbe();
         using var f = new SqliteFileTestFactory(probe);
@@ -230,7 +236,8 @@ public sealed class DefinitionOfDoneTransactionTests
         // No explicit transaction was open when the entity was loaded.
         var reads = probe.Observations.Where(o => o.Kind == "TaskRead").ToArray();
         Assert.NotEmpty(reads);
-        Assert.All(reads, r => Assert.Null(r.Tx));
+        Assert.Null(reads[0].Tx);
+        AssertAuditedWriteUsesReservedReadTransaction(probe);
 
         // ...and the gate never touched AcceptanceCriteria, so there was nothing to serialize.
         Assert.DoesNotContain(probe.Observations, o => o.Kind == "CriteriaRead");
@@ -239,9 +246,9 @@ public sealed class DefinitionOfDoneTransactionTests
         Assert.Contains(probe.Observations, o => o.Kind == "TaskUpdate");
     }
 
-    /// <summary>A field-only edit must not take the writer lock either — see <see cref="UpdateAsync"/>.</summary>
+    /// <summary>A field-only edit loads without a transaction, skips acceptance criteria, then reserves the writer for its atomic audit.</summary>
     [Fact]
-    public async Task UpdateAsync_WithoutADoneStatusChange_DoesNotOpenATransaction()
+    public async Task UpdateAsync_FieldEdit_ReservesWriterForAuditWithoutRunningDoneGate()
     {
         var probe = new GateSpanProbe();
         using var f = new SqliteFileTestFactory(probe);
@@ -252,9 +259,24 @@ public sealed class DefinitionOfDoneTransactionTests
 
         var reads = probe.Observations.Where(o => o.Kind == "TaskRead").ToArray();
         Assert.NotEmpty(reads);
-        Assert.All(reads, r => Assert.Null(r.Tx));
+        Assert.Null(reads[0].Tx);
+        AssertAuditedWriteUsesReservedReadTransaction(probe);
         Assert.DoesNotContain(probe.Observations, o => o.Kind == "CriteriaRead");
         Assert.Contains(probe.Observations, o => o.Kind == "TaskUpdate");
+    }
+
+    private static void AssertAuditedWriteUsesReservedReadTransaction(GateSpanProbe probe)
+    {
+        var reads = probe.Observations.Where(o => o.Kind == "TaskRead" && o.Tx is not null).ToArray();
+        var writes = probe.Observations.Where(o => o.Kind == "TaskUpdate").ToArray();
+        var audits = probe.Observations.Where(o => o.Kind == "AuditInsert").ToArray();
+        Assert.NotEmpty(reads);
+        Assert.NotEmpty(writes);
+        Assert.NotEmpty(audits);
+        var transaction = reads[0].Tx;
+        Assert.All(reads, read => Assert.Same(transaction, read.Tx));
+        Assert.All(writes, write => Assert.Same(transaction, write.Tx));
+        Assert.All(audits, audit => Assert.Same(transaction, audit.Tx));
     }
 
     /// <summary>Drag-to-Done through MoveOnBoardAsync also runs the DoD gate inside the same transaction, so the board path cannot bypass it either.</summary>

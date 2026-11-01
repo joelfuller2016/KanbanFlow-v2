@@ -1,0 +1,18 @@
+flowchart LR
+    subgraph Before[Current outline]
+        B1[Feature row at left edge]
+        B2[Task row at same left edge]
+        B3[Subtask row at same left edge]
+    end
+    subgraph Proposed[Same items with visible relationships]
+        P[Project header and fixed Back / Forward]
+        F[Feature at depth 0]
+        T[Task at depth 1: title and status]
+        S[Subtask at depth 2: text and completion]
+        N[Nested subtask at depth 3]
+        P --> F --> T --> S --> N
+    end
+    Before -->|Presentation changes; stable IDs| Proposed
+    T --> Peek[Temporary in-place description]
+    T --> Eye[Eye pins full inline description]
+    Eye --> Panel[Existing task panel and request context]

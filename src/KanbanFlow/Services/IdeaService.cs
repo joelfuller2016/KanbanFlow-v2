@@ -1,6 +1,7 @@
 using System.Text.Json;
 using KanbanFlow.Data;
 using KanbanFlow.Models;
+using KanbanFlow.Models.Workflows;
 using Microsoft.EntityFrameworkCore;
 
 namespace KanbanFlow.Services;
@@ -50,6 +51,15 @@ public sealed class IdeaService(IDbContextFactory<AppDbContext> dbFactory) : IId
 
     public async Task<Idea> CreateAsync(IdeaCreate dto, string? actor, CancellationToken ct = default)
     {
+        await using var db = await dbFactory.CreateDbContextAsync(ct);
+        await using var tx = await db.Database.BeginTransactionAsync(ct);
+        var idea = await CreateInContextAsync(db, dto, actor, ct);
+        await tx.CommitAsync(ct);
+        return idea;
+    }
+
+    internal static async Task<Idea> CreateInContextAsync(AppDbContext db, IdeaCreate dto, string? actor, CancellationToken ct, string source = "idea")
+    {
         ArgumentNullException.ThrowIfNull(dto);
 
         // Service is the trust boundary — REST, MCP, and Blazor callers all flow through here (#88).
@@ -61,7 +71,6 @@ public sealed class IdeaService(IDbContextFactory<AppDbContext> dbFactory) : IId
         if (dto.Priority is not null && !Enum.IsDefined(dto.Priority.Value))
             throw new ValidationException($"Invalid priority '{dto.Priority.Value}'.");
 
-        await using var db = await dbFactory.CreateDbContextAsync(ct);
 
         var idea = new Idea
         {
@@ -76,9 +85,10 @@ public sealed class IdeaService(IDbContextFactory<AppDbContext> dbFactory) : IId
         // Atomic create + audit: first save assigns idea.Id (needed by the activity event),
         // second persists the audit row. One transaction so a failure can't leave an idea
         // without its IdeaCreated event.
-        await using var tx = await db.Database.BeginTransactionAsync(ct);
 
         db.Ideas.Add(idea);
+        var workflow = Workflows.IdeaWorkflowCapture.Add(db, idea, string.IsNullOrWhiteSpace(dto.Body) ? dto.Title : dto.Body, actor, source);
+        idea.WorkflowVersion = workflow.Version;
         await db.SaveChangesAsync(ct);
 
         AddActivityEvent(
@@ -87,14 +97,24 @@ public sealed class IdeaService(IDbContextFactory<AppDbContext> dbFactory) : IId
             $"Idea '{idea.Title}' created");
 
         await db.SaveChangesAsync(ct);
-        await tx.CommitAsync(ct);
         return idea;
     }
 
     public async Task<Idea?> GetByIdAsync(int ideaId, CancellationToken ct = default)
     {
         await using var db = await dbFactory.CreateDbContextAsync(ct);
-        return await db.Ideas.AsNoTracking().FirstOrDefaultAsync(i => i.Id == ideaId, ct);
+        var row = await WithVersion(db, db.Ideas.AsNoTracking().Where(i => i.Id == ideaId)).FirstOrDefaultAsync(ct);
+        return row?.WithVersion();
+    }
+
+    // One SQL statement keeps the fields and concurrency token in the same snapshot, also for lists.
+    private static IQueryable<VersionedIdea> WithVersion(AppDbContext db, IQueryable<Idea> query) =>
+        query.Select(i => new VersionedIdea(i, db.WorkRequests.Where(r => r.IdeaId == i.Id)
+            .Select(r => (int?)r.Version).SingleOrDefault() ?? 0));
+
+    private sealed record VersionedIdea(Idea Idea, int Version)
+    {
+        public Idea WithVersion() { Idea.WorkflowVersion = Version; return Idea; }
     }
 
     public async Task<IReadOnlyList<Idea>> ListAsync(
@@ -122,12 +142,13 @@ public sealed class IdeaService(IDbContextFactory<AppDbContext> dbFactory) : IId
                 i.Title.ToLower().Contains(s) || (i.Body != null && i.Body.ToLower().Contains(s)));
         }
 
-        return await query
+        var rows = await WithVersion(db, query
             .OrderByDescending(i => i.CreatedAt)
             .ThenByDescending(i => i.Id)
             .Skip(skip)
-            .Take(take)
+            .Take(take))
             .ToListAsync(ct);
+        return rows.Select(row => row.WithVersion()).ToList();
     }
 
     public async Task<Idea> UpdateAsync(int ideaId, IdeaUpdate dto, string? actor, CancellationToken ct = default)
@@ -135,11 +156,15 @@ public sealed class IdeaService(IDbContextFactory<AppDbContext> dbFactory) : IId
         ArgumentNullException.ThrowIfNull(dto);
 
         await using var db = await dbFactory.CreateDbContextAsync(ct);
+        await using var transaction = await db.Database.BeginTransactionAsync(ct);
         var idea = await db.Ideas.FirstOrDefaultAsync(i => i.Id == ideaId, ct);
         if (idea is null)
             throw new IdeaNotFoundException(ideaId);
 
         var before = IdeaActivitySnapshot(idea);
+        var originalTitle = idea.Title;
+        var originalBody = idea.Body;
+        var originalPlan = idea.Plan;
         var changed = false;
 
         if (dto.Title is not null)
@@ -184,22 +209,48 @@ public sealed class IdeaService(IDbContextFactory<AppDbContext> dbFactory) : IId
             if (idea.Priority != dto.Priority.Value) { idea.Priority = dto.Priority.Value; changed = true; }
         }
 
+        if (dto.ExpectedWorkflowVersion is not int expectedVersion || expectedVersion < 0)
+            throw new ValidationException("ExpectedWorkflowVersion is required. Read the idea and send its workflowVersion with your edit.");
+        var workflow = await db.WorkRequests.Include(r => r.Messages).SingleOrDefaultAsync(r => r.IdeaId == ideaId, ct);
+        idea.WorkflowVersion = workflow?.Version ?? 0;
+        if (expectedVersion != idea.WorkflowVersion)
+            throw new WorkflowException("conflict", "This idea was modified by another client. Reload before saving again.");
         if (!changed)
             return idea; // idempotent: nothing to persist, no audit noise
 
+        workflow ??= Workflows.IdeaWorkflowCapture.Add(db, idea, originalBody ?? originalTitle, actor, "legacy", exact: false);
+        workflow.Title = idea.Title;
+        // Promotion is terminal for ideas; archiving its workflow is an independent action.
+        // A routine title/notes edit must not restore an explicitly archived promoted request.
+        if (idea.Status != IdeaStatus.Promoted)
+            workflow.Archived = idea.Status is IdeaStatus.Archived or IdeaStatus.Rejected;
+        if (originalBody != idea.Body) Workflows.IdeaWorkflowCapture.RecordSummaryEdit(workflow, actor, "notes", idea.Body);
+        if (originalPlan != idea.Plan) Workflows.IdeaWorkflowCapture.RecordSummaryEdit(workflow, actor, "plan notes", idea.Plan);
+        if (originalBody == idea.Body && originalPlan == idea.Plan) workflow.Version++;
+        workflow.UpdatedAt = DateTime.UtcNow;
         idea.UpdatedAt = DateTime.UtcNow;
         AddActivityEvent(
             db, IdeaProjectId(idea), "Idea", idea.Id, actor,
             "IdeaUpdated", before, IdeaActivitySnapshot(idea),
             $"Idea '{idea.Title}' updated");
 
-        await db.SaveChangesAsync(ct);
+        try
+        {
+            await db.SaveChangesAsync(ct);
+            await transaction.CommitAsync(ct);
+        }
+        catch (DbUpdateConcurrencyException)
+        {
+            throw new WorkflowException("conflict", "This idea was modified by another client. Reload before saving again.");
+        }
+        idea.WorkflowVersion = workflow.Version;
         return idea;
     }
 
     public async Task DeleteAsync(int ideaId, string? actor, CancellationToken ct = default)
     {
         await using var db = await dbFactory.CreateDbContextAsync(ct);
+        await using var transaction = await db.Database.BeginTransactionAsync(ct);
         var idea = await db.Ideas.FirstOrDefaultAsync(i => i.Id == ideaId, ct);
         if (idea is null)
             throw new IdeaNotFoundException(ideaId);
@@ -211,17 +262,27 @@ public sealed class IdeaService(IDbContextFactory<AppDbContext> dbFactory) : IId
             db, IdeaProjectId(idea), "Idea", idea.Id, actor,
             "IdeaDeleted", IdeaActivitySnapshot(idea), null,
             $"Idea '{idea.Title}' deleted");
+        await ProjectGraphDeleter.DeleteIdeaRequestsAsync(db, ideaId, ct);
         db.Ideas.Remove(idea);
 
         // Single SaveChanges so the audit insert and the delete commit atomically in one EF
         // transaction (matches TaskService.DeleteAsync) — never an IdeaDeleted row with the idea
         // still present.
-        await db.SaveChangesAsync(ct);
+        await db.SaveChangesWithAuditAsync(actor, ct);
+        await transaction.CommitAsync(ct);
     }
 
-    public async Task<IdeaPromoteResult> PromoteAsync(int ideaId, string? actor, CancellationToken ct = default)
+    public async Task<IdeaPromoteResult> PromoteAsync(int ideaId, string? actor, int? existingProjectId = null, CancellationToken ct = default)
     {
         await using var db = await dbFactory.CreateDbContextAsync(ct);
+        await using var tx = await db.Database.BeginTransactionAsync(ct);
+        var result = await PromoteInContextAsync(db, ideaId, actor, ct, existingProjectId);
+        await tx.CommitAsync(ct);
+        return result;
+    }
+
+    internal static async Task<IdeaPromoteResult> PromoteInContextAsync(AppDbContext db, int ideaId, string? actor, CancellationToken ct, int? existingProjectId = null)
+    {
         var idea = await db.Ideas.FirstOrDefaultAsync(i => i.Id == ideaId, ct);
         if (idea is null)
             throw new IdeaNotFoundException(ideaId);
@@ -229,24 +290,24 @@ public sealed class IdeaService(IDbContextFactory<AppDbContext> dbFactory) : IId
         // guard is the conditional UPDATE below — this snapshot read can go stale under a
         // concurrent promote, so it is an optimization, not the race protection.
         if (idea.Status == IdeaStatus.Promoted || idea.PromotedProjectId is not null)
+        {
+            if (existingProjectId is int sameProject && idea.PromotedProjectId == sameProject)
+                return new IdeaPromoteResult(idea.Id, sameProject);
             throw AlreadyPromoted(idea);
+        }
 
         var ideaBefore = IdeaActivitySnapshot(idea);
 
-        var project = new Project
-        {
-            Name = idea.Title,
-            Description = idea.Body,
-            Goals = idea.Plan,
-            Readme = ComposeProjectReadme(idea)
-        };
+        var project = existingProjectId is int target
+            ? await db.Projects.SingleOrDefaultAsync(p => p.Id == target, ct) ?? throw new ProjectNotFoundException(target)
+            : new Project { Name = idea.Title, Description = idea.Body, Goals = idea.Plan, Readme = ComposeProjectReadme(idea) };
+        var createdProject = existingProjectId is null;
 
         // Atomic promote: create the project (assigns its id), then flip the idea with a
         // conditional UPDATE, then audit both sides — one transaction so we never leave a
         // half-promoted idea.
-        await using var tx = await db.Database.BeginTransactionAsync(ct);
 
-        db.Projects.Add(project);
+        if (createdProject) db.Projects.Add(project);
         await db.SaveChangesAsync(ct);
 
         // Conditional flip closes the check-then-act race: only promote while the idea is still
@@ -264,7 +325,6 @@ public sealed class IdeaService(IDbContextFactory<AppDbContext> dbFactory) : IId
         {
             // A concurrent promote won: undo our just-inserted project (no orphan) and report
             // against the now-committed state.
-            await tx.RollbackAsync(ct);
             var current = await db.Ideas.AsNoTracking().FirstOrDefaultAsync(i => i.Id == ideaId, ct);
             throw current is null ? new IdeaNotFoundException(ideaId) : AlreadyPromoted(current);
         }
@@ -280,7 +340,13 @@ public sealed class IdeaService(IDbContextFactory<AppDbContext> dbFactory) : IId
         var ideaAfter = IdeaActivitySnapshot(idea);
         db.Entry(idea).State = EntityState.Unchanged;
 
-        AddActivityEvent(
+        var workflow = await db.WorkRequests.SingleOrDefaultAsync(r => r.IdeaId == ideaId, ct)
+            ?? Workflows.IdeaWorkflowCapture.Add(db, idea, idea.Body ?? idea.Title, actor, "legacy", exact: false);
+        workflow.ProjectId = project.Id;
+        workflow.Version++;
+        workflow.UpdatedAt = now;
+
+        if (createdProject) AddActivityEvent(
             db, project.Id, "Project", project.Id, actor,
             "ProjectCreatedFromIdea", null,
             new { project.Id, project.Name, FromIdeaId = idea.Id },
@@ -290,8 +356,14 @@ public sealed class IdeaService(IDbContextFactory<AppDbContext> dbFactory) : IId
             "IdeaPromoted", ideaBefore, ideaAfter,
             $"Idea '{idea.Title}' promoted to project {project.Id}");
 
-        await db.SaveChangesAsync(ct);
-        await tx.CommitAsync(ct);
+        try
+        {
+            await db.SaveChangesAsync(ct);
+        }
+        catch (DbUpdateConcurrencyException)
+        {
+            throw new WorkflowException("conflict", "This idea was modified by another client while being promoted. Reload before trying again.");
+        }
         return new IdeaPromoteResult(idea.Id, project.Id);
     }
 
