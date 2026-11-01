@@ -52,6 +52,19 @@ A review of the repository and a test run on 2026-09-26 filed findings as issues
 
 ## Entries (newest first)
 
+- 2026-11-01 02:05Z (PR #580 — 2 more CodeRabbit findings fixed in a2a4743; 2 deferred; JOURNAL.md corrections noted):
+  - Fixed JOURNAL.md ordering: on the feature branch (and master) the 01:30Z entry appears above the 04:00Z entry, but 04:00Z is newer. The no-reorder rule means corrections go here, not by moving entries.
+  - Fixed JOURNAL.md typo: the 04:00Z entry body says "PR #85/branch" where it should say "PR #580/branch". Error introduced by an earlier session.
+  - Fixed in a2a4743 (CodeRabbit findings, 2 code changes):
+    - Drafts.cs line 115: broadened ReadSelectedDetail catch to handle OperationCanceledException (disposal) and catch-all Exception (circuit-protecting); CodeRabbit comment 4434075449.
+    - WorkspaceCanvas.razor line 11: added role="region" to viewport div so aria-label is a valid landmark; CodeRabbit comment 4434075452.
+  - Deferred with replies:
+    - IdeaWorkspace.razor.cs lines 104-121 (CodeRabbit 4434075450, Major): RestoreDraft authored-edit preservation — requires per-workspace restoration-generation tracking; heavy lift, deferred.
+    - WorkspacePlanPanel.razor line 82 (CodeRabbit 4434075454, Trivial): regression test for editing copied-item criteria — enhancement, separate issue.
+  - JOURNAL.md CodeRabbit findings (4434075443, 4434075445): corrections recorded here; feature-branch JOURNAL.md is stale.
+  - Branch: feat/579-idea-workspaces HEAD at a2a4743. Codex reviews will run.
+
+
 - 2026-11-01 01:51Z (Codex repository review — pinned master and unattended reliability):
   - Request: review KanbanFlow GitHub repository. Reviewed `master` at `878fe8ddb3fe21410b7acde735bc29cda4639946` in an isolated worktree; preserved the dirty original branch and running user applications. Review-only scope; no application fix, live-board mutation, PR change, issue/comment/status write or merge.
   - Source-backed findings: CI reuse lacks exact root/origin validation before destructive checkout/clean; overlapping PR checks share a mutable clone; existing #561 can purge real non-project audit events; existing #533 accepts another served database. Read-only Git discovery control confirmed ancestor resolution; destructive/race scenarios were not executed.
