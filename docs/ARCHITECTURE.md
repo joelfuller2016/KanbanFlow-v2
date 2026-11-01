@@ -674,7 +674,7 @@ check finds an older or unrecognizable version, it produces one diagnostic and l
 five-second monotonic deadline includes that check, a protected configuration read and the identity
 command; later operations get the same bound and reread protected configuration without repository
 context, so `gitdir`/`onbranch` conditional includes cannot grant ownership trust. The report does
-not install Git or change global settings. Git child output is capped at 256 KiB. Reference and
+not install Git or change global settings. A deleted session directory remains an unconfirmed outside candidate; it does not invalidate supported Git for other sessions. Git child output is capped at 256 KiB. Reference and
 candidate fingerprints scan at most 16 remote names, 64 nonempty URL entries per remote across
 fetch and push reads together, and 256 URL entries across the entire fingerprint; duplicates count. Exceeding
 a bound rejects the whole fingerprint and is disclosed in the report, rather than trusting a
@@ -682,7 +682,7 @@ truncated prefix. Other servers retain their transport, account and exact
 repository path; generic SSH comparison preserves the login and effective
 command path (including `.git` and relative, absolute or tilde forms); GitHub's documented `git`
 account clone URLs retain their hosted HTTPS aliases. Paths printed in reports are reversible
-quoted literals, and report JSON escapes control characters that could alter its presentation.
+quoted literals, and report JSON escapes control characters that could alter its presentation. Drive-letter paths are local only on Windows; on POSIX, a single-letter SCP host remains network evidence.
 
 The report takes each signal from whichever source can actually answer it — the log for who called
 what from where, the board's `ActivityEvent` rows for what changed — and it says what it could not

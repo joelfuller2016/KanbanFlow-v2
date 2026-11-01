@@ -558,6 +558,18 @@ export function createGitRunner({ env = process.env, timeoutMs = GIT_TIMEOUT_MS 
     const numbers = parsed?.slice(1, 4).map(Number);
     // Protected configuration follows ordinary includes from Git 2.39 onward.
     if (!numbers?.every(Number.isSafeInteger) || !(numbers[0] > 2 || numbers[0] === 2 && numbers[1] >= 39)) {
+      if (versionCause?.code === "ENOENT" || versionCause?.code === "ENOTDIR") {
+        // The same launch error can mean either a missing cwd or a missing Git executable.
+        // Only a directory lookup can justify quarantining this one cwd rather than Git itself.
+        const directory = cwd ?? process.cwd();
+        let cwdMissing = false;
+        try { cwdMissing = !fs.statSync(directory).isDirectory(); }
+        catch (error) { cwdMissing = error.code === "ENOENT" || error.code === "ENOTDIR"; }
+        if (cwdMissing) {
+          throw Object.assign(new Error(`Git version probe could not start: cwd does not exist or is not a directory (${quotedPathForReport(directory)}).`,
+            { cause: versionCause }), { code: "git_cwd_missing" });
+        }
+      }
       throw Object.assign(new Error(`${GIT_VERSION_REQUIREMENT} Found ${quotedPathForReport(version)}. Clone confirmation was not run.`, { cause: versionCause }),
         { code: "git_unsupported" });
     }
@@ -706,10 +718,9 @@ export function normalizeRemoteUrl(url) {
  * network):
  *   - `file://…` is local (it names a path, just spelled as a URL).
  *   - any OTHER `scheme://` (`https://`, `ssh://`, `git://`, …) is network.
- *   - otherwise, a remote is local only if it has no colon at all, has a `/` or `\` BEFORE its
- *     first colon (that colon cannot be introducing a host, since a hostname never contains a path
- *     separator), or the text before the first colon is a single letter (a Windows drive, `C:\…`
- *     or `C:/…`).
+ *   - otherwise, a remote is local only if it has no colon at all, has a `/` BEFORE its first
+ *     colon, or runs on Windows with a single-letter drive prefix (`C:…`). A backslash before
+ *     a colon does not make a path local, even on Windows. On POSIX, `C:repo` is SCP too.
  *   - anything else with a colon is SCP-style ssh — network — including an alias
  *     (`git@example-work:…`), an IPv4 host (`git@192.168.1.10:…`), and a single-label host
  *     (`gitserver:…`).
@@ -727,8 +738,8 @@ export function isLocalPathRemote(rawUrl) {
   const colon = u.indexOf(":");
   if (colon === -1) return true;
   const beforeColon = u.slice(0, colon);
-  if (beforeColon.includes("/") || beforeColon.includes("\\")) return true;
-  if (/^[a-z]$/i.test(beforeColon)) return true;
+  if (beforeColon.includes("/")) return true;
+  if (process.platform === "win32" && /^[a-z]$/i.test(beforeColon)) return true;
   return false;
 }
 
@@ -2357,10 +2368,10 @@ async function main(argv) {
       // The confirmed CWDS — the map's keys — never the toplevels they resolved to: a toplevel as a
       // prefix root also covers a nested repository the check rejected, and misses a cwd reached
       // through a junction (see withConfirmedCloneRoots's Returns, and the note at signal 4).
-      cloneRoots = [...new Set(confirmed.keys())];
+      cloneRoots = gitIncompatibility ? [] : [...new Set(confirmed.keys())];
       cloneProbe = gitIncompatibility ? null : { probed, capped: cloneCapped, candidates: distinctOutsideCwds.length, budgetSpent, tooManyRemotes,
         tooManyUrls, outputTooLarge, limitedMainRoots };
-      if (confirmed.size > 0) {
+      if (!gitIncompatibility && confirmed.size > 0) {
         // Lists exactly the cwd strings signal 4 folds in — it folds in by exact string — so this
         // NOTE and the scoring cannot disagree, as they did when it listed toplevels: a clone reached
         // through a junction was named here as folded in while signal 4 still scored its cwd outside.
