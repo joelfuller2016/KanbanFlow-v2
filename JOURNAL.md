@@ -67,6 +67,11 @@ A review of the repository and a test run on 2026-09-26 filed findings as issues
     - #521: 1 unresolved Copilot thread (KanbanMcpTools.cs:124 — zero-padded project ScopeKey stored verbatim, silently missing from get_project_context). Discovered upstream commit 62921b6 already applied write-boundary fix (scopeKey = projectId.ToString(CultureInfo.InvariantCulture)). Added regression test CreateNode_ProjectScope_CanonicalizesZeroPaddedScopeKey in 87481e806df26c64e7914c711153a42dee657b8d. Replied on Copilot thread and resolved PRRT_kwDOSA8y6s6yWpBZ. PR #521 now has 0 unresolved threads.
   - Master build+test: skipped — .NET gate down.
 
+- 2026-11-01 03:47Z (PR monitor — Codex both clean on #580 HEAD d322ce4):
+  - Codex Code Review: has_any_findings: false ✅ (completed 03:43Z).
+  - Codex Security Review: has_any_findings: null/completed ✅ (completed 03:46Z).
+  - #580 HEAD=d322ce4, Codex clean. Copilot re-review pending. PR ready for owner's merge.
+
 - 2026-11-01 03:37Z (PR monitor — Copilot review on #580 HEAD 32079a0; 2 bugs fixed, 1 deferred):
   - Copilot posted review (review_id=5726261507): 1 high + 2 medium findings.
   - Finding 1 (high, IdeaWorkspace.Delivery.cs:77): publish_plan sent unresolved featureId/featureName from the original preview request, not the resolved values from the preview result. If a previewed feature was deleted and another exists, the server silently picked a different default. Fixed in d322ce4: now sends publicationPreview.FeatureId (resolved) and, for new-feature case only, publicationPreview.FeatureName. Deleted preview target now fails explicitly (publication_target_missing). Replied+resolved.
