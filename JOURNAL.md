@@ -92,16 +92,10 @@ A review of the repository and a test run on 2026-09-26 filed findings as issues
     - #521: 1 unresolved Copilot thread (KanbanMcpTools.cs:124 — zero-padded project ScopeKey stored verbatim, silently missing from get_project_context). Discovered upstream commit 62921b6 already applied write-boundary fix (scopeKey = projectId.ToString(CultureInfo.InvariantCulture)). Added regression test CreateNode_ProjectScope_CanonicalizesZeroPaddedScopeKey in 87481e806df26c64e7914c711153a42dee657b8d. Replied on Copilot thread and resolved PRRT_kwDOSA8y6s6yWpBZ. PR #521 now has 0 unresolved threads.
   - Master build+test: skipped — .NET gate down.
 
-- 2026-11-01 03:44Z (PR monitor — new Copilot review on #511, Low finding replied):
-  - Copilot posted new review on #511 (commit edce7af8, "Lite" effort). Shows 2 previously-escalated threads (subtask hash, Windows path casing) as "resolved since last review".
-  - 1 new Low finding (comment 4434291354, ActivityTimelineTests.cs:1259): DisplayLabels derived from ActivityTimelineBuilder.DisplayFields dynamically — tautological, can't catch label regressions. Verified valid. Low severity (optional per policy). Replied (comment 4434293695): will carry explicit 21-label list into next code push to PR #511.
-
-
 - 2026-11-01 03:47Z (PR monitor — Codex both clean on #580 HEAD d322ce4):
   - Codex Code Review: has_any_findings: false ✅ (completed 03:43Z).
   - Codex Security Review: has_any_findings: null/completed ✅ (completed 03:46Z).
   - #580 HEAD=d322ce4, Codex clean. Copilot re-review pending. PR ready for owner's merge.
-
 
 - 2026-11-01 03:44Z (PR monitor — new Copilot review on #511, Low finding replied):
   - Copilot posted new review on #511 (commit edce7af8, "Lite" effort). Shows 2 previously-escalated threads (subtask hash, Windows path casing) as "resolved since last review".
@@ -113,8 +107,6 @@ A review of the repository and a test run on 2026-09-26 filed findings as issues
   - Finding 2 (medium, IdeaGallery.razor.cs:36): Reload() committed activeQuery/Kind/Status before awaiting ListAsync; failed reload left active filters updated but page.NextCursor pointing at old query, causing cursor_mismatch on Load more. Fixed in d322ce4: active fields written only after successful load. Replied+resolved.
   - Finding 3 (medium, IdeaWorkspace.razor.css:10): workspace outline buttons below WCAG AA in dark mode (~3.3:1). Deferred to #84 accessibility pass. Replied+resolved.
   - Commit d322ce4 pushed to feat/579-idea-workspaces. #580 HEAD=d322ce4, Codex re-review pending.
-
-
 
 - 2026-11-01 03:33Z (PR monitor — Codex both clean on #580 HEAD 32079a0):
   - Owner pushed 32079a0 (JOURNAL.md merge commit, +26 lines, "Merge current primary journal into verified workspace repairs").

@@ -131,6 +131,44 @@ public sealed class WorkflowComponentRecoveryTests
     }
 
     [Fact]
+    public async Task ProjectCreation_AttachConflictThenRefreshAndNewAuthor_ReusesTheCreatedProject()
+    {
+        var fault = new ProviderFault();
+        using var f = new WorkflowSqliteTestFactory(new CommitFault(fault));
+        var capture = await f.Service.CaptureAsync(new("Original project title", "Original", null), "seed", "capture");
+        using var component = Workspace(f, out _);
+        Set(component, "current", (await f.Service.ContextAsync(capture.RequestId))!);
+        Set(component, "actor", "original creator");
+        fault.AfterNextCommit = () => f.Service.AddMessageAsync(capture.RequestId, capture.Version, "progress",
+            "Concurrent change after project commit", "other writer", "concurrent-change");
+
+        await Invoke(component, "CreateProject");
+
+        Assert.Contains("changed in another tab", Assert.IsType<string>(Field(component, "error")));
+        Assert.Null(Field(component, "pendingCommand"));
+        int createdId;
+        await using (var db = f.CreateDbContext()) createdId = Assert.Single(await db.Projects.ToArrayAsync()).Id;
+        Assert.Null((await f.Service.ContextAsync(capture.RequestId))!.ProjectId);
+        var ideaService = new KanbanFlow.Services.IdeaService(f);
+        var idea = (await ideaService.GetByIdAsync((await f.Service.ContextAsync(capture.RequestId))!.IdeaId))!;
+        await ideaService.UpdateAsync(idea.Id, new KanbanFlow.Services.IdeaUpdate(Title: "Changed title after conflict", ExpectedWorkflowVersion: idea.WorkflowVersion), "other writer");
+        await Invoke(component, "Refresh");
+        Set(component, "actor", "new attachment author");
+
+        await Invoke(component, "CreateProject");
+
+        Assert.Null(Field(component, "error"));
+        var attached = (await f.Service.ContextAsync(capture.RequestId))!;
+        Assert.Equal(createdId, attached.ProjectId);
+        await using var verify = f.CreateDbContext();
+        Assert.Equal(createdId, Assert.Single(await verify.Projects.ToArrayAsync()).Id);
+        var createReceipt = Assert.Single(await verify.WorkflowReceipts.Where(receipt => receipt.Operation == "project.create").ToArrayAsync());
+        Assert.Equal("original creator", createReceipt.Actor);
+        var attachReceipt = Assert.Single(await verify.WorkflowReceipts.Where(receipt => receipt.Operation == "request.project").ToArrayAsync());
+        Assert.Equal("new attachment author", attachReceipt.Actor);
+    }
+
+    [Fact]
     public async Task Capture_AfterCommitReadFailure_RetriesReceiptAndFinishesOriginalCapture()
     {
         var fault = new ProviderFault();
@@ -198,6 +236,48 @@ public sealed class WorkflowComponentRecoveryTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
+    public async Task BriefAndPlanEditors_LateConfirmationAdoptsSavedVersionAndPreservesDraft(bool plan)
+    {
+        var fault = new ProviderFault();
+        using var f = new WorkflowSqliteTestFactory(new QueryFault(fault), new CommitFault(fault));
+        var request = await f.PublishedAsync(WorkflowSqliteTestFactory.Draft());
+        using var workspace = Workspace(f, out _);
+        var before = (await f.Service.ContextAsync(request.Id))!;
+        Set(workspace, "current", before);
+        object editor = plan ? new RequestPlanEditor() : new RequestBriefEditor();
+        ParameterView.FromDictionary(new Dictionary<string, object?>
+        {
+            ["Context"] = before,
+            ["OnSubmit"] = EventCallback.Factory.Create<WorkflowSubmission>(new object(), submission => Invoke(workspace, "Submit", submission))
+        }).SetParameterProperties(editor);
+        editor.GetType().GetMethod("OnInitialized", Members)!.Invoke(editor, null);
+        if (!plan) Set(editor, "outcome", "Keep the authored brief draft");
+        fault.FailAfterCommit = true;
+        await Invoke(editor, "Save");
+        Assert.Equal(before.Version, Field(editor, "version"));
+        var pending = Assert.IsType<WorkflowSubmission>(Field(workspace, "pendingSubmission"));
+        if (plan) pending.Command.Tasks![0] = pending.Command.Tasks[0] with { Title = "Mutated after commit" };
+        else pending.Command.Brief = WorkflowSqliteTestFactory.Brief("Mutated after commit");
+        await Invoke(workspace, "RetryPending");
+        var after = (await f.Service.ContextAsync(request.Id))!;
+        Assert.Equal(before.Version + 1, after.Version);
+        Assert.Equal(after.Version, Field(editor, "version"));
+        if (plan)
+        {
+            Assert.Equal(before.Plans.Last().Tasks.Single().Title, after.Plans.Last().Tasks.Single().Title);
+            var tokens = Assert.IsType<Dictionary<int, string>>(Field(editor, "taskBaselines"));
+            Assert.Equal(after.Tasks.ToDictionary(task => task.TaskId, task => task.EditToken), tokens);
+        }
+        else
+        {
+            Assert.Equal("Keep the authored brief draft", Field(editor, "outcome"));
+            Assert.Equal("Keep the authored brief draft", after.Briefs.Last().Outcome);
+        }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
     public async Task TaskContext_ReadFailureIsVisibleAndRetryable_AndPreservesExistingContext(bool initiallyLoaded)
     {
         var fault = new ProviderFault();
@@ -254,6 +334,7 @@ public sealed class WorkflowComponentRecoveryTests
     {
         public bool FailNextRead;
         public bool FailAfterCommit;
+        public Func<Task>? AfterNextCommit;
     }
     private sealed class QueryFault(ProviderFault fault) : DbCommandInterceptor
     {
@@ -270,11 +351,11 @@ public sealed class WorkflowComponentRecoveryTests
     }
     private sealed class CommitFault(ProviderFault fault) : DbTransactionInterceptor
     {
-        public override Task TransactionCommittedAsync(DbTransaction transaction, TransactionEndEventData eventData,
+        public override async Task TransactionCommittedAsync(DbTransaction transaction, TransactionEndEventData eventData,
             CancellationToken cancellationToken = default)
         {
             if (fault.FailAfterCommit) { fault.FailAfterCommit = false; fault.FailNextRead = true; }
-            return Task.CompletedTask;
+            if (fault.AfterNextCommit is { } action) { fault.AfterNextCommit = null; await action(); }
         }
     }
 }

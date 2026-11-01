@@ -11,7 +11,7 @@
             @if (IdeaId is null)
             {
                 <div class="flex-grow-1"><label class="form-label" for="workflow-select">Request</label>
-                    <select id="workflow-select" class="form-select" value="@current?.Id" disabled="@WritesBlocked" @onchange="SelectRequest">
+                    <select @key="_refreshGen" id="workflow-select" class="form-select" value="@current?.Id" disabled="@WritesBlocked" @onchange="SelectRequest">
                         <option value="">Choose a request</option>
                         @foreach (var request in requests) { <option @key="request.Id" value="@request.Id">@request.Title · @request.DoneCount/@request.TaskCount done @(request.Archived ? "(archived)" : "")</option> }
                     </select>
@@ -58,7 +58,7 @@
                         @foreach (var project in projects) { <option @key="project.Id" value="@project.Id">@project.Name</option> }
                     </select></div>
                     <button class="btn btn-outline-primary" @onclick="Attach" disabled="@(WritesBlocked || attachProject == 0)">Promote into project</button>
-                    <button class="btn btn-outline-primary" @onclick="CreateProject" disabled="@WritesBlocked">Create project from request</button>
+                    <button class="btn btn-outline-primary" @onclick="CreateProject" disabled="@WritesBlocked">@(createdProjects.ContainsKey(current.Id) ? "Attach created project" : "Create project from request")</button>
                 </div>
             }
             @if (current.NeedsBriefReview && current.Briefs.Count > 0) { <p class="alert alert-info">New clarification or a decision needs review in the brief and plan before publishing or concluding.</p> }
@@ -90,6 +90,7 @@
     private bool disposed;
     private WorkflowCommandInput? pendingCommand;
     private WorkflowSubmission? pendingSubmission;
+    private readonly Dictionary<Guid, int> createdProjects = [];
     private bool WritesBlocked => busy || pendingCommand is not null;
 
     protected override async Task OnParametersSetAsync()
@@ -190,13 +191,17 @@
             var result = await Workflow.ExecuteAsync(command, Options, ct);
             if (command.Operation == "create_project")
             {
+                if (command.RequestId is not Guid requestId || result.ResourceId is not int projectId)
+                    throw new InvalidOperationException("Project creation returned no request or project identity.");
+                createdProjects[requestId] = projectId;
                 result = await Workflow.ExecuteAsync(new() { Operation = "attach_project", Actor = command.Actor,
                     Key = command.Key + "-attach", RequestId = command.RequestId, ExpectedVersion = command.ExpectedVersion,
-                    ProjectId = result.ResourceId }, Options, ct);
+                    ProjectId = projectId }, Options, ct);
             }
             var updated = result.RequestId is Guid id ? await Workflow.ContextAsync(id, ct) : current;
             ct.ThrowIfCancellationRequested();
             current = updated;
+            if (current?.ProjectId is not null) createdProjects.Remove(current.Id);
             pendingCommand = null; pendingSubmission = null;
             if (command.Operation == "capture") { creating = false; title = original = ""; }
             submission.Succeeded = true; submission.Version = result.Version; submission.Context = current; notice = "Saved to this board.";
@@ -212,6 +217,8 @@
             {
                 pendingCommand = null; pendingSubmission = null;
                 error = ex.Message;
+                if (command.Operation == "create_project" && command.RequestId is Guid requestId && createdProjects.ContainsKey(requestId))
+                    error += " The project was created. Refresh saved details, then choose Attach created project.";
             }
         }
         catch (Exception ex)
@@ -228,6 +235,11 @@
     private Task Adopt() => Submit(new(new() { Operation = "adopt_idea", IdeaId = IdeaId }));
     private Task Attach() => Submit(new(new() { Operation = "attach_project", ProjectId = attachProject }));
     private Task Archive() => Submit(new(new() { Operation = "archive", Archived = !current!.Archived }));
-    private Task CreateProject() => current is null ? Task.CompletedTask :
-        Submit(new(new() { Operation = "create_project", Name = current.Title }));
+    private Task CreateProject()
+    {
+        if (current is null || current.ProjectId is not null || WritesBlocked) return Task.CompletedTask;
+        return createdProjects.TryGetValue(current.Id, out var projectId)
+            ? Submit(new(new() { Operation = "attach_project", ProjectId = projectId }))
+            : Submit(new(new() { Operation = "create_project", Name = current.Title, Key = $"request-project-{current.Id}" }));
+    }
 }

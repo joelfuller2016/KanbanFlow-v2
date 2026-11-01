@@ -74,6 +74,8 @@ even when its write succeeded before the connection failed. The original author 
 with that attempt. Once confirmation arrives, the editor acknowledges the saved revision; pending
 draft text remains available until then. A version conflict still requires reviewing the latest
 saved request before resubmitting changed content.
+If creating a project succeeded but attaching it conflicts with a newer request version,
+refresh saved details and choose **Attach created project** to finish with that same project.
 
 1. **Capture the actual request.** Open Ideas, create an idea using the existing form, then use its **Request & plan** link. New ideas automatically preserve the exact original body (or original title when no body was supplied). For an older idea, choose **Start request history**; the app explicitly labels the available notes as a legacy snapshot because earlier exact input cannot be recovered.
 2. **Refine the brief.** In **Brief**, write the desired outcome, scope, constraints and acceptance outcomes. Choose **Save brief revision**. The original stays intact and previous brief revisions remain readable. Add later clarification or scope decisions under **Updates**, then revise the brief and plan to acknowledge them.
