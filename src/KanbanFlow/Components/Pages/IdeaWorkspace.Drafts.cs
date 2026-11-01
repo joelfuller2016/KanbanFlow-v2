@@ -113,6 +113,8 @@ public partial class IdeaWorkspace
             if (IsCurrent(scope) && id == draft.SelectedComponentId) selectedDetail = detail;
         }
         catch (IdeaWorkspaceException ex) { if (IsCurrent(scope)) error = ex.Message; }
+        catch (OperationCanceledException) when (lifetime.IsCancellationRequested) { }
+        catch (Exception ex) { if (IsCurrent(scope)) error = $"The component detail could not be loaded: {ex.Message}"; }
     }
 
     private async Task ContentChanged(WorkspaceUiScope scope, WorkspaceContentDraft value)

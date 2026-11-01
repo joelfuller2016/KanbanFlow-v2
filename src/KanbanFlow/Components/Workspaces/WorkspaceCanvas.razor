@@ -8,7 +8,7 @@
         <p class="alert alert-warning" role="alert" data-testid="canvas-init-error">Canvas drag and resize are unavailable. Use the layout fields to adjust positions and sizes, or switch to Outline and back to Canvas to retry.</p>
     }
     <p class="small text-muted">Drag a card's title to move it; drag its corner to resize. Focus the title and use arrow keys to move 10px, or Shift + arrows to resize. The layout fields provide precise grouping, order and layer controls.</p>
-    <div class="workspace-canvas-viewport" tabindex="0" aria-label="Scrollable canvas" data-testid="workspace-canvas-viewport">
+    <div class="workspace-canvas-viewport" role="region" tabindex="0" aria-label="Scrollable canvas" data-testid="workspace-canvas-viewport">
         <div class="workspace-canvas" @ref="canvasElement" style="@CanvasStyle" data-busy="@(Busy ? "true" : "false")" data-workspace-id="@WorkspaceId" data-revision="@Revision" data-origin-x="@N(OriginX)" data-origin-y="@N(OriginY)" data-testid="workspace-canvas">
             <svg class="workspace-connectors" aria-hidden="true" width="@CanvasWidth" height="@CanvasHeight">
                 @foreach (var connector in Document.Connectors)
