@@ -42,7 +42,7 @@ public sealed partial class MemorySearch(
             throw new ValidationException("RrfK must be greater than zero.");
         if (opts.VectorWeight < 0 || opts.KeywordWeight < 0 || opts.RecencyWeight < 0 || opts.UsefulnessWeight < 0)
             throw new ValidationException("Signal weights cannot be negative.");
-        var key = (scopeKey ?? string.Empty).Trim();
+        var key = MemoryService.NormalizeScopeKey(scope, (scopeKey ?? string.Empty).Trim());
         if (key.Length == 0)
             throw new ValidationException("scopeKey must not be blank.");
         var now = DateTime.UtcNow;
