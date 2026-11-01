@@ -1,6 +1,7 @@
 using System.Text.Json;
 using KanbanFlow.Models;
 using KanbanFlow.Models.IdeaWorkspaces;
+using KanbanFlow.Models.Workflows;
 using Microsoft.EntityFrameworkCore;
 
 namespace KanbanFlow.Services.IdeaWorkspaces;
@@ -80,6 +81,7 @@ public sealed partial class IdeaWorkspaceService
         }
         var targetWorkspace = await writes.CaptureProjectAsync(targetId, required: true, ct);
         await ValidateAssociationTaskReferencesAsync(writes, source, targetId, ct);
+        await SynchronizeWorkflowProjectAsync(writes, idea.Id, targetId, ct);
         var before = source.Source;
         idea.Status = IdeaStatus.Promoted;
         idea.PromotedProjectId = targetId;
@@ -97,6 +99,22 @@ public sealed partial class IdeaWorkspaceService
             var accepted = source.Document.PlanRevisions.Single(p => p.Id == acceptedId);
             MergeAcceptedContribution(writes, source, targetWorkspace!, accepted);
         }
+    }
+
+    private static async Task SynchronizeWorkflowProjectAsync(WorkspaceWrites writes, int ideaId, int projectId, CancellationToken ct)
+    {
+        var workflow = await writes.Db.WorkRequests.SingleOrDefaultAsync(request => request.IdeaId == ideaId, ct);
+        if (workflow is null) return; // Uncaptured legacy ideas retain their explicit adoption flow.
+        var foreignFeature = workflow.FeatureId is { } featureId && !await writes.Db.Features
+            .AnyAsync(feature => feature.Id == featureId && feature.ProjectId == projectId, ct);
+        var foreignTask = await writes.Db.Set<PlannedTask>()
+            .AnyAsync(item => item.RequestId == workflow.Id && item.Task.Feature.ProjectId != projectId, ct);
+        if (foreignFeature || foreignTask)
+            throw Conflict("project_link_workflow_conflict", $"Project {projectId} cannot be linked while the request workflow has a feature or published tasks outside that project. Reconcile the existing workflow project and published work before relinking.");
+        if (workflow.ProjectId == projectId) return;
+        workflow.ProjectId = projectId;
+        workflow.Version++;
+        workflow.UpdatedAt = writes.Now;
     }
 
     private static async Task ValidateAssociationTaskReferencesAsync(

@@ -35,7 +35,7 @@ try {
   const ideas = [];
   for (const status of ["New", "Triaging", "Archived", "Rejected"]) {
     const idea = await api("POST", "/api/ideas", { title: `${prefix} ${status}`, body: source, plan: "Plan-only search marker", tags: prefix }, 201);
-    if (status !== "New") await api("PATCH", `/api/ideas/${idea.id}`, { status });
+    if (status !== "New") await api("PATCH", `/api/ideas/${idea.id}`, { status, expectedWorkflowVersion: idea.workflowVersion });
     ideas.push(idea);
   }
   const project = await api("POST", "/api/projects", { name: `${prefix} standalone project`, description: "Existing project with no idea" }, 201);

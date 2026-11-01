@@ -2,6 +2,7 @@ using System.Data;
 using System.Text.Json;
 using KanbanFlow.Models;
 using KanbanFlow.Models.IdeaWorkspaces;
+using KanbanFlow.Services.Workflows;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 
@@ -76,6 +77,8 @@ public sealed partial class IdeaWorkspaceService
                     CreatedAt = now, UpdatedAt = now
                 };
                 db.Ideas.Add(idea);
+                IdeaWorkflowCapture.Add(db, idea, string.IsNullOrWhiteSpace(request.Body) ? request.Title! : request.Body,
+                    request.Actor, "idea-workspace");
                 await db.SaveChangesAsync(ct);
                 key = new IdeaWorkspaceKey("idea", idea.Id);
                 source = new IdeaWorkspaceSource("idea", idea.Id, idea.Title, idea.Body, idea.Plan,

@@ -151,7 +151,8 @@ async page => {
     await page.getByTestId('workspace-tab-source').click();
     check(await currentSourceText() === originalSource, 'The loaded current source must match the original body before the legacy edit.');
     const changedSource = 'Changed legacy source body Ω\n' + full('Complete legacy body changed without a workspace command') + 'END COMPLETE SOURCE Ω';
-    await api('PATCH', `/api/ideas/${key.split(':')[1]}`, { body: changedSource, actor: 'other-legacy-api-caller' });
+    const observedIdea = await api('GET', `/api/ideas/${key.split(':')[1]}`);
+    await api('PATCH', `/api/ideas/${key.split(':')[1]}`, { body: changedSource, actor: 'other-legacy-api-caller', expectedWorkflowVersion: observedIdea.workflowVersion });
     const changed = await context(key);
     check(changed.revision === remote.revision && changed.source.body === changedSource
       && JSON.stringify(changed.document) === JSON.stringify(remote.document), 'Legacy body edit must change Source without changing workspace revision or document.');
