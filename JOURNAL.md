@@ -51,6 +51,21 @@ A review of the repository and a test run on 2026-09-26 filed findings as issues
   - S7, for #549.
 
 ## Entries (newest first)
+- 2026-11-01 04:24Z (PR monitor — CodeRabbit review on #580 HEAD 5b7c7a9):
+  - CodeRabbit posted 4 actionable comments on HEAD 737a8c7 at 04:17Z.
+  - Applied all 4 per session policy. Commit 5b7c7a9 on feat/579-idea-workspaces:
+    - WorkspaceDeliveryPanel: added CancellationTokenSource lifetime; threaded lifetime.Token
+      through CreateDbContextAsync and ToListAsync in ReadFeatures; swallow
+      OperationCanceledException only when lifetime cancelled; made Dispose idempotent
+      (prevents double-dispose error, existing test DisposingDuringFeatureRead passes).
+    - WorkspaceLayoutEditorPlacementTests: set Second.BaseRevision = 11 for "Apply" case
+      (was same as Context.Revision = 12, masking wrong-source use); updated ExpectedRevision
+      assertion to check second.BaseRevision for Apply, 12 otherwise.
+    - docs/idea-workspaces.md, docs/idea-workspaces-storyboard.md: added 4 missing browser
+      scripts (convergence, polling, preview-target, button-contrast) to repeatable-script
+      lists; updated storyboard gate counts to 1,686 .NET / 374 script tests.
+  - Build clean, 20 affected tests pass. #580 awaiting owner review.
+
 - 2026-11-01 04:20Z Codex: The owner explicitly requested repairs to all open reviewed PRs, testing, and merging when verified green, and then requested Spec Kit. This task-specific authorization covers code delivery and merges for PRs #511, #521, #564, #578 and #580; it supersedes the earlier owner-only merge convention for this batch. No live-board deployment is requested.
   - Applied pinned Spec Kit v1.2.5 built-in task, consistency-analysis and convergence guidance inside GSD-debug. One ignored execution plan maps the ten validated findings to source paths and observable acceptance checks; the existing workflow feature plan remains authoritative. No new Spec Kit engine, specification tree, provider configuration or security-policy change was installed.
   - Fetched current heads and created five isolated repair worktrees. Current primary source was 9ae0ade5e8278c6a369ec6d9bec890a8c02ccd23; original feature checkout b9d9ea0dcf32b17a2ec6a1f1f3b913243cb1e4f6 and unrelated edits are preserved. Newer concurrent repairs are being inspected and tested rather than overwritten.
