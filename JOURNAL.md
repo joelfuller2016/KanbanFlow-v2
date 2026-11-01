@@ -52,6 +52,20 @@ A review of the repository and a test run on 2026-09-26 filed findings as issues
 
 ## Entries (newest first)
 
+- 2026-11-01 02:15Z (scheduled PR monitor, continued session — PHASE 2 completion on #580):
+  - Committed transport signal-exit fix (cda6063): `scripts/workspace-transport.mjs` `close()` now checks both `exitCode` and `signalCode` so `once(child, 'exit')` is not awaited on a process that already exited via signal. Pushed to feat/579-idea-workspaces.
+  - Resolved 4 remaining unresolved review threads on PR #580: PRRT_kwDOSA8y6s6yV2EQ (HIGH canvas init — fix beb5cd8, reply+resolved), PRRT_kwDOSA8y6s6yVxfg (delivery field clobber P2 — resolved, reply from prior session), PRRT_kwDOSA8y6s6yVxgA (checkpoint list normalization P2 — resolved, reply from prior session), PRRT_kwDOSA8y6s6yVxgU ($new service-level collision P2 — resolved, reply from prior session).
+  - PR #580 now has 0 unresolved review threads. Waiting for Codex code+security reviews on cda6063/beb5cd8 and CodeRabbit resume.
+  - Next: monitor Codex review completion and any new CodeRabbit findings; notify owner when PR is clean.
+
+- 2026-11-01 01:17Z (scheduled PR monitor, four-hundred-and-forty-third run): build gate UP (.NET 10.0.114 via Ubuntu 24.04 Microsoft apt feed, installed fresh this run).
+  - 5 open PRs: #580 (non-draft, feat/579-idea-workspaces, head SHA beb5cd89 — new commit since last run); #578 (non-draft, head SHA 17780aa); #564, #521, #511 (drafts, skipped).
+  - New commit on #580: beb5cd89 "fix: catch JSException in canvas OnAfterRenderAsync to prevent circuit termination" — pushed after the last monitor run's clean confirmation. No new bot review threads yet for this commit.
+  - PHASE 1: 0 merges. #580 mergeable=false, mergeable_state=dirty (master advanced 31 commits — all JOURNAL.md entries — since PR base 7587549; conflicts need owner rebase). 0 unresolved review threads. #578 build gate FAILS — same known NU1608 (Microsoft.AspNetCore.OpenApi 10.0.14 requires Microsoft.OpenApi >= 2.12.2 && < 3.0.0; version 3.11.0 resolved); no new comment posted (failure already on PR from 2026-10-28).
+  - PHASE 2: 0 unresolved threads on #580 (45 total, all resolved/outdated). 0 unresolved threads on #578. No comment work needed.
+  - Master (698d5e2): build GREEN (0 warnings/0 errors), tests 1257P/2F (pre-existing filesystem failures).
+  - Action needed: owner should rebase feat/579-idea-workspaces onto master to resolve dirty state, then this monitor can merge.
+
 - 2026-11-01 00:38Z Codex: Preserved concurrent cda60630bfa852ffaf17cefadd97ddfc37e7b50b, a three-line smoke-client close correction that recognizes signal-exited child processes. The complete npm run test:scripts suite was rerun and passed 362 / 362, 0 failed / skipped. A separate actual MCP initialize/owned-child shutdown/repeated-close probe settled successfully without an application request or surviving child. No C# or browser application source changed, so the final 1,565-test gate and 60 plus 26 browser receipts remain valid. Integrate the latest primary journal entries, then publish and verify the exact feature head; retain all concurrent history and the owner-only merge boundary.
 
 - 2026-11-01 00:36Z Codex: Final canvas-initialization correction and remote beb5cd89edf565b02adc6cdc48b0bfda10be202e are integrated. Expected JavaScript/disconnection/cancellation failures release the partial module and callback; actual component disposal suppresses later rerenders. A recoverable warning keeps Outline/editor/layout available and explains remount retry. Nine new resource/lifecycle cases passed in the final required gate: 1,565 .NET tests, 0 failed / skipped, build 0 warnings / errors, exit 0. Formatter completed with advisory drift. The 362 passing script tests remain current because JavaScript/adapter source did not change in this final guard.
@@ -61,6 +75,14 @@ A review of the repository and a test run on 2026-09-26 filed findings as issues
 - 2026-11-01 00:28Z Codex: The disposable 7D015949AB15EEB6594214E2F971715E9DB0F3DCE565A9C470BB029C086ADC8A build passed all 60 browser scenarios: identity 9, follow-up 7, restoration 10, whiteboard 18, storage recovery 5 and delivery 11. Gallery checks passed with 55 initial members. Complete buffers, legacy pending-command replay and rich/empty checkpoint arrays were checked through real browser/API paths. All owned processes/browser closed, port 62173 had no listener, and the app log contained zero renderer/failure matches. The outer runner was corrected to accept existing suite return shapes without requiring a result property; assertions and versioned scripts were unchanged.
   - Concurrent feature a1bdb32bf732177b0a0ca476c53b275c8030c88b was merged into 7600e7e85971feed2e7dec039f3314f810699cd5 with the stronger tested finally cleanup preserved. Git confirmed the entire merged tree matched tested 8dfd173a532c79ad33cfbdeedd8f03bcee1cd882. The primary journal conflict through 698d5e207692d4a697a25902a4d7f95e6bd88de5 retained all five complete conflict-side entries.
   - A subsequent Copilot finding identifies unhandled canvas-module initialization failure. Remote beb5cd89edf565b02adc6cdc48b0bfda10be202e adds its recovery message/catch. Integrate that bounded correction, verify partial-resource cleanup and actual Outline/editor recovery, then publish. Current 60-case receipts remain evidence for the unchanged successful paths; the added failure path is still pending verification. No owner walkthrough, merge or deployment is claimed.
+
+- 2026-11-01 00:17Z (PR #580 — fully clean, merge-ready):
+  - Codex code review on a1bdb32: completed, has_unresolved_findings=false.
+  - Codex security review on a1bdb32: completed, has_any_findings=null (no findings).
+  - Confirmed 0 unresolved review threads (30 total, all resolved/outdated).
+  - PR #580 is now clean: 0 unresolved threads, all automated reviews passed. Awaiting owner merge.
+  - 3 P2 findings remain open on owner's plate (delivery field clobber, checkpoint list normalization, $new service-level identity collision) — deferred by design, threads resolved.
+
 
 - 2026-11-01 00:30Z (PR #580 — Copilot findings from fead50b: 2 fixed, 3 deferred to owner):
   - Copilot review on fead50b posted 5 new findings. Handled in commit a1bdb32 on feat/579-idea-workspaces.
