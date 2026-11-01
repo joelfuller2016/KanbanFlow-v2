@@ -51,6 +51,10 @@ A review of the repository and a test run on 2026-09-26 filed findings as issues
   - S7, for #549.
 
 ## Entries (newest first)
+- 2026-11-01 02:26Z (PR monitor — #521 and #511 both clean, new unreviewed commits):
+  - PR #521 (review/520-project-memory-ownership): still draft; new head ef34d61f pushed by prior session; CI clean on new head; CodeRabbit paused (last reviewed 599a714, ef34d61 not yet reviewed); no unresolved review threads in notifications.
+  - PR #511 (feat/unified-workflow-509): still draft; new head ed205efd pushed by prior session (advancing beyond d412c73 from this monitor's earlier fix); CI clean on new head; CodeRabbit paused (last reviewed 399648b, ed205efd not yet reviewed); no unresolved review threads in notifications.
+  - Build gate still down (.NET 10 install blocked by proxy). No merges performed; owner standing instruction: merges are the owner's.
 
 - 2026-11-01 02:26Z (PR #580 — owner pushed 925f2ef; all reviews on new HEAD clean):
   - Owner pushed 925f2ef as new branch HEAD, implementing additional fixes:
