@@ -29,7 +29,7 @@ public sealed class WorkspaceLayoutEditorPlacementTests
     {
         var fixture = new Fixture();
         var first = control == "Reapply" ? First with { BaseRevision = 11 } : First;
-        var second = control == "Reapply" ? Second with { BaseRevision = 11 } : Second;
+        var second = control is "Apply" or "Reapply" ? Second with { BaseRevision = 11 } : Second;
         fixture.Receive(first);
         var queued = Callback(fixture.Editor, control, first.PlacementId);
 
@@ -67,7 +67,7 @@ public sealed class WorkspaceLayoutEditorPlacementTests
             Assert.Empty(fixture.Reapplied);
             var command = Assert.Single(fixture.Commands);
             Assert.Equal(control switch { "Apply" => "move_components", "Remove" => "remove_placement", _ => "add_placement" }, command.Action);
-            Assert.Equal(12, command.ExpectedRevision);
+            Assert.Equal(control == "Apply" ? second.BaseRevision : 12, command.ExpectedRevision);
             Assert.Equal(control == "Add" ? null : "layout:" + second.PlacementId, command.DraftSection);
             if (control == "Apply")
             {
