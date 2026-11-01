@@ -51,6 +51,7 @@ const ACTIVITY_PROBE = ACTIVITY_PAGE + 1;
 // source-unavailable case the report already knows how to report honestly.
 export const FETCH_TIMEOUT_MS = 10_000;
 const GIT_TIMEOUT_MS = 5_000;
+const GIT_MAX_OUTPUT_BYTES = 256 * 1024;
 const GIT_VERSION_REQUIREMENT = "Git 2.38 or newer is required for isolated repository probes.";
 
 // A tool that itself invokes git — a pre-commit hook running in a LINKED WORKTREE (git sets these
@@ -502,7 +503,8 @@ function protectedSafeDirectoryArgs(cwd, env, remainingTimeout) {
   let output;
   try {
     output = execFileSync("git", ["config", "--includes", "--null", "--show-scope", "--get-all", "safe.directory"], {
-      cwd, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: remainingTimeout(), env: configEnv
+      cwd, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: remainingTimeout(), env: configEnv,
+      maxBuffer: GIT_MAX_OUTPUT_BYTES
     });
   } catch (error) {
     if (error.status === 1 && error.stdout === "") return []; // No key, including absent optional files.
@@ -539,7 +541,8 @@ export function gitOutput(args, cwd, { env = process.env, timeoutMs = GIT_TIMEOU
   let version;
   try {
     version = execFileSync("git", ["--version"], {
-      cwd, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: versionTimeout, env: scrubbed
+      cwd, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: versionTimeout, env: scrubbed,
+      maxBuffer: GIT_MAX_OUTPUT_BYTES
     }).trim();
   } catch (cause) {
     throw Object.assign(new Error(`${GIT_VERSION_REQUIREMENT} Unable to read git --version.`, { cause }), { code: "GIT_VERSION_UNSUPPORTED" });
@@ -560,6 +563,7 @@ export function gitOutput(args, cwd, { env = process.env, timeoutMs = GIT_TIMEOU
   return execFileSync("git", [...safeDirectories, ...args], {
     cwd,
     encoding: "utf8",
+    maxBuffer: GIT_MAX_OUTPUT_BYTES,
     stdio: ["ignore", "pipe", "ignore"],
     timeout: remainingTimeout(),
     env: scrubbed
@@ -718,19 +722,38 @@ export function isLocalPathRemote(rawUrl) {
 // URL; ordinarily 1–2 remotes, but not fixed — every remote is checked, not only `origin`)
 // + at most one `rev-list`, each at GIT_TIMEOUT_MS, and this function is fed straight from the
 // usage log, a file this report does not control the size or contents of. This caps the number of
-// DISTINCT DIRECTORIES probed; the two bounds below cap the rest. A trial window's session count is
+// DISTINCT DIRECTORIES probed; the bounds below cap the rest. A trial window's session count is
 // ordinarily far below this cap; hitting it is disclosed by the caller rather than silently probing
 // forever.
 const MAX_CLONE_PROBES = 50;
 
 // The rest of the work, bounded too, because the usage log can name a repository with any number
-// of remotes, and every git call may take up to GIT_TIMEOUT_MS. A candidate whose `git remote`
-// lists more than MAX_REMOTES_PER_CANDIDATE is left inconclusive before a single url of it is read.
+// of remotes, and every git call may take up to GIT_TIMEOUT_MS. Both main and candidate
+// fingerprints cap remote names, raw URL entries (duplicates count) and command output bytes.
+// Fetch and push reads share each remote's allowance; all remotes share a fingerprint allowance.
 // PROBE_BUDGET_MS is one deadline for the whole pass, the main root's fingerprint included, checked
 // before every git call, so a pass stops within one call of it. Both fail closed: whatever either
 // leaves unread stays outside, and the caveat and the NOTE say how many.
-const MAX_REMOTES_PER_CANDIDATE = 16;
+const MAX_REMOTES_PER_FINGERPRINT = 16;
+const MAX_URLS_PER_REMOTE = 64;
+const MAX_URLS_PER_FINGERPRINT = 256;
 const PROBE_BUDGET_MS = 60_000;
+
+// Stop at the first excess nonempty line, before allocating an array for the full answer.
+function boundedGitLines(text, limit) {
+  const lines = [];
+  for (let start = 0; start < text.length;) {
+    const newline = text.indexOf("\n", start);
+    const line = text.slice(start, newline === -1 ? text.length : newline).trim();
+    if (line) {
+      if (lines.length >= limit) return null;
+      lines.push(line);
+    }
+    if (newline === -1) break;
+    start = newline + 1;
+  }
+  return lines;
+}
 
 /**
  * Of the DISTINCT `cwds` that read as outside `roots`, which are actually a separate `git clone`
@@ -781,12 +804,15 @@ const PROBE_BUDGET_MS = 60_000;
  * strongest proof available, and leaves everything it cannot prove outside, as on master —
  * PROVIDED the caller folds in exactly the cwds it confirmed and nothing wider (see Returns).
  *
- * Returns `{ confirmed, probed, capped, budgetSpent, tooManyRemotes }`: `confirmed` maps each
+ * Returns the confirmed map, probe counts and resource-limit counters: `confirmed` maps each
  * proven cwd to the toplevel git resolved it to; `probed` is how many distinct cwds were probed to
  * the end; `capped` says whether any distinct cwd was left unprobed, by `MAX_CLONE_PROBES` or by
  * `PROBE_BUDGET_MS`; `budgetSpent` says whether the budget was the one that ran out; and
  * `tooManyRemotes` counts the probed cwds left inconclusive for listing more than
- * `MAX_REMOTES_PER_CANDIDATE` remotes. `now` (milliseconds, `performance.now` by default) is the
+ * `MAX_REMOTES_PER_FINGERPRINT` remotes. `tooManyUrls` and `outputTooLarge` count candidates
+ * whose entire fingerprint was discarded at those bounds; `limitedMainRoots` counts main-root
+ * fingerprints discarded at any resource bound, including their root-commit evidence.
+ * `now` (milliseconds, `performance.now` by default) is the
  * budget's clock, an option so a test can run the deadline without waiting for it. What is proven
  * is the KEY — that exact cwd string — so the key is what a caller folds in, by EXACT STRING: never
  * as a root for the tree beneath it, and never case-folded or re-spelled (see the note at signal 4
@@ -801,8 +827,9 @@ const PROBE_BUDGET_MS = 60_000;
 export function withConfirmedCloneRoots(cwds, roots, { git = gitOutput, now = () => performance.now() } = {}) {
   const mainRoots = (Array.isArray(roots) ? roots : []).filter(r => typeof r === "string" && r.length > 0);
   const distinct = [...new Set((Array.isArray(cwds) ? cwds : []).filter(c => typeof c === "string" && c.length > 0))];
+  const limits = { tooManyRemotes: 0, tooManyUrls: 0, outputTooLarge: 0, limitedMainRoots: 0 };
   if (mainRoots.length === 0 || distinct.length === 0) {
-    return { confirmed: new Map(), probed: 0, capped: false, budgetSpent: false, tooManyRemotes: 0 };
+    return { confirmed: new Map(), probed: 0, capped: false, budgetSpent: false, ...limits };
   }
 
   const probeList = distinct.slice(0, MAX_CLONE_PROBES);
@@ -812,13 +839,24 @@ export function withConfirmedCloneRoots(cwds, roots, { git = gitOutput, now = ()
   // to confirms nothing.
   const deadline = now() + PROBE_BUDGET_MS;
   let budgetSpent = false;
+  let outputLimited = false;
   const outOfBudget = () => budgetSpent || (budgetSpent = now() > deadline);
   // Every git call here answers a question about a SPECIFIC directory — a candidate cwd, or one of
   // the main roots — never about the process's own cwd, for the same reason `gitOutput`'s callers
   // always pass one explicitly: this report can run from anywhere.
   const call = (args, cwd) => {
     if (outOfBudget()) throw new Error(`clone probe budget of ${PROBE_BUDGET_MS} ms spent`);
-    return git(args, cwd);
+    try {
+      const output = git(args, cwd);
+      if (typeof output === "string" && Buffer.byteLength(output, "utf8") > GIT_MAX_OUTPUT_BYTES) {
+        throw Object.assign(new Error("Git command output exceeded its byte bound."), { code: "GIT_OUTPUT_LIMIT" });
+      }
+      return output;
+    } catch (error) {
+      const cause = error?.cause ?? error;
+      if (error?.code === "GIT_OUTPUT_LIMIT" || cause?.code === "ENOBUFS" || cause?.code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER") outputLimited = true;
+      throw error;
+    }
   };
   const safeGit = (args, cwd) => {
     try { return call(args, cwd); } catch { return null; } // Inconclusive, not fatal — see the doc comment above.
@@ -864,35 +902,40 @@ export function withConfirmedCloneRoots(cwds, roots, { git = gitOutput, now = ()
    * treat that as unconfirmable, never as an absent remote (#5c — a failed `get-url` used to read
    * as `null`, which the old gate treated exactly like "no remote configured" and confirmed the
    * candidate anyway). A push read that fails while the fetch read succeeded is just as
-   * inconclusive: the url it could not read is where a fork would hide. More remote names than
-   * `maxRemotes` is inconclusive too, with `tooManyRemotes: true`, decided from the listing alone,
-   * before any url is read.
+   * inconclusive: the url it could not read is where a fork would hide. An answer beyond the
+   * name or URL-entry allowance is inconclusive too, before any matching prefix is used.
    */
-  const networkRemotesOf = (cwd, urlReads, maxRemotes = Infinity) => {
+  const networkRemotesOf = (cwd, urlReads) => {
     let names;
     try {
-      const out = call(["remote"], cwd);
-      names = out ? out.split(/\r?\n/).map(s => s.trim()).filter(Boolean) : [];
+      names = boundedGitLines(call(["remote"], cwd), MAX_REMOTES_PER_FINGERPRINT);
     } catch {
       return { everyUrl: new Set(), fetchUrls: new Set(), inconclusive: true };
     }
-    if (names.length > maxRemotes) return { everyUrl: new Set(), fetchUrls: new Set(), inconclusive: true, tooManyRemotes: true };
+    if (names === null) return { everyUrl: new Set(), fetchUrls: new Set(), inconclusive: true, tooManyRemotes: true };
     const network = rawUrl => (isLocalPathRemote(rawUrl) ? null : normalizeRemoteUrl(rawUrl));
     const everyUrl = new Set();
     const fetchUrls = new Set();
+    let totalUrls = 0;
     for (const name of names) {
-      let reads;
-      try {
-        reads = urlReads.map(flags =>
-          call(["remote", "get-url", ...flags, name], cwd).split(/\r?\n/).map(u => u.trim()).filter(Boolean));
-      } catch {
-        return { everyUrl: new Set(), fetchUrls: new Set(), inconclusive: true };
-      }
-      const fetchUrl = reads[0].length > 0 ? network(reads[0][0]) : null;
-      if (fetchUrl) fetchUrls.add(fetchUrl);
-      for (const rawUrl of reads.flat()) {
-        const normalized = network(rawUrl);
-        if (normalized) everyUrl.add(normalized);
+      let remoteUrls = 0;
+      for (let read = 0; read < urlReads.length; read++) {
+        let urls;
+        try {
+          urls = boundedGitLines(call(["remote", "get-url", ...urlReads[read], name], cwd),
+            Math.min(MAX_URLS_PER_REMOTE - remoteUrls, MAX_URLS_PER_FINGERPRINT - totalUrls));
+        } catch {
+          return { everyUrl: new Set(), fetchUrls: new Set(), inconclusive: true };
+        }
+        if (urls === null) return { everyUrl: new Set(), fetchUrls: new Set(), inconclusive: true, tooManyUrls: true };
+        remoteUrls += urls.length;
+        totalUrls += urls.length;
+        const fetchUrl = read === 0 && urls.length > 0 ? network(urls[0]) : null;
+        if (fetchUrl) fetchUrls.add(fetchUrl);
+        for (const rawUrl of urls) {
+          const normalized = network(rawUrl);
+          if (normalized) everyUrl.add(normalized);
+        }
       }
     }
     return { everyUrl, fetchUrls, inconclusive: false };
@@ -907,12 +950,19 @@ export function withConfirmedCloneRoots(cwds, roots, { git = gitOutput, now = ()
   const mainRootCommits = new Set();
   const mainNetworkRemotes = new Set();
   for (const main of mainRoots) {
-    for (const c of rootCommitsOf(main) ?? []) mainRootCommits.add(c);
-    for (const r of networkRemotesOf(main, MAIN_URL_READS).fetchUrls) mainNetworkRemotes.add(r);
+    outputLimited = false;
+    const commits = rootCommitsOf(main);
+    if (outputLimited) { limits.limitedMainRoots++; continue; }
+    const remotes = networkRemotesOf(main, MAIN_URL_READS);
+    if (outputLimited || remotes.tooManyRemotes || remotes.tooManyUrls) {
+      limits.limitedMainRoots++;
+      continue; // The whole fingerprint, including its root commits, is unusable.
+    }
+    for (const c of commits ?? []) mainRootCommits.add(c);
+    for (const r of remotes.fetchUrls) mainNetworkRemotes.add(r);
   }
 
   const confirmed = new Map();
-  let tooManyRemotes = 0;
   const probe = cwd => {
     // Gates "is this even a repo git can see", and names the repository whose remotes and history
     // are checked below. It is NOT what gets folded in — the cwd is (see Returns above).
@@ -920,9 +970,10 @@ export function withConfirmedCloneRoots(cwds, roots, { git = gitOutput, now = ()
     if (!toplevel) return;
     const resolvedTop = path.resolve(toplevel);
 
-    const remotes = networkRemotesOf(resolvedTop, CANDIDATE_URL_READS, MAX_REMOTES_PER_CANDIDATE);
+    const remotes = networkRemotesOf(resolvedTop, CANDIDATE_URL_READS);
     const { everyUrl, fetchUrls, inconclusive } = remotes;
-    if (remotes.tooManyRemotes) tooManyRemotes++;
+    if (remotes.tooManyRemotes) limits.tooManyRemotes++;
+    if (remotes.tooManyUrls) limits.tooManyUrls++;
     if (inconclusive) return; // #5c: fails closed — not "no remote", just unconfirmable.
 
     // Rule (A), the VETO, checked FIRST so it binds both paths below: ANY network url — any fetch or
@@ -950,14 +1001,16 @@ export function withConfirmedCloneRoots(cwds, roots, { git = gitOutput, now = ()
   let probed = 0;
   for (const cwd of probeList) {
     if (outOfBudget()) break;
+    outputLimited = false;
     probe(cwd);
+    if (outputLimited) limits.outputTooLarge++;
     // The budget ran out part-way through this probe. The refused call left it unconfirmed — a probe
     // confirms only after its last call has answered — so it counts as unprobed, like the rest.
     if (budgetSpent) break;
     probed++;
   }
 
-  return { confirmed, probed, capped: probed < distinct.length, budgetSpent, tooManyRemotes };
+  return { confirmed, probed, capped: probed < distinct.length, budgetSpent, ...limits };
 }
 
 /**
@@ -980,9 +1033,22 @@ export function describeCloneProbeLimits(probe) {
   }
   if (probe.tooManyRemotes > 0) {
     out.push(
-      `${probe.tooManyRemotes} checked cwd(s) listed more than ${MAX_REMOTES_PER_CANDIDATE} remotes and were left ` +
+      `${probe.tooManyRemotes} checked cwd(s) listed more than ${MAX_REMOTES_PER_FINGERPRINT} remotes and were left ` +
       "unconfirmed, counted as outside, without their urls being read."
     );
+  }
+  if (probe.tooManyUrls > 0) {
+    out.push(`${probe.tooManyUrls} checked cwd(s) exceeded ${MAX_URLS_PER_REMOTE} URL entries per remote ` +
+      `(fetch and push reads together) or ${MAX_URLS_PER_FINGERPRINT} per fingerprint; the whole fingerprint was discarded, counted as outside.`);
+  }
+  if (probe.outputTooLarge > 0) {
+    out.push(`${probe.outputTooLarge} checked cwd(s) exceeded the ${GIT_MAX_OUTPUT_BYTES / 1024} KiB Git command-output bound; ` +
+      "the whole fingerprint was discarded, counted as outside.");
+  }
+  if (probe.limitedMainRoots > 0) {
+    out.push(`${probe.limitedMainRoots} main-root fingerprint(s) exceeded a bound ` +
+      `(${MAX_REMOTES_PER_FINGERPRINT} remote names, ${MAX_URLS_PER_REMOTE} URL entries per remote, ` +
+      `${MAX_URLS_PER_FINGERPRINT} per fingerprint, ${GIT_MAX_OUTPUT_BYTES / 1024} KiB command output) and were discarded, including root-commit proof.`);
   }
   return out.join(" ");
 }
@@ -1779,7 +1845,7 @@ export function summarize({
     // `upstream`, or whose own fetch url, matches this repository is outside on purpose.
     " A clone this check cannot confirm — its directory no longer exists, git is unavailable or unsupported " +
     "(Git 2.38 or newer is required), a call " +
-    "exceeded GIT_TIMEOUT_MS, it listed more remotes than the check reads, it was left unprobed by " +
+    "exceeded GIT_TIMEOUT_MS or a remote-name, URL-entry or command-output bound, it was left unprobed by " +
     "the cap or the time budget above (and that includes a cwd INSIDE a " +
     "clone that was confirmed, or one that merely spells a confirmed cwd differently: a cwd is folded " +
     "in only when that exact cwd string was itself checked, never because it sits beneath, or " +
@@ -1872,13 +1938,15 @@ export function summarize({
       activityCapped: capped.length > 0,
       repoRootTrusted: availability.repoRoot.ok,
       cloneProbeCapped,
-      // The full { probed, capped, candidates, budgetSpent, tooManyRemotes } main() measured this
+      // The full probe counts and resource-limit counters main() measured this
       // run, not just the boolean above — exposed so an operator (or a test) can see the actual
       // counts without parsing them back out of caveat prose, which only mentions them at all when a
       // bound was hit. `null` when no probing ran (no cloneProbe was passed in).
       cloneProbe: cloneProbe && {
         probed: cloneProbe.probed, capped: cloneProbeCapped, candidates: cloneProbe.candidates,
-        budgetSpent: Boolean(cloneProbe.budgetSpent), tooManyRemotes: cloneProbe.tooManyRemotes ?? 0
+        budgetSpent: Boolean(cloneProbe.budgetSpent), tooManyRemotes: cloneProbe.tooManyRemotes ?? 0,
+        tooManyUrls: cloneProbe.tooManyUrls ?? 0, outputTooLarge: cloneProbe.outputTooLarge ?? 0,
+        limitedMainRoots: cloneProbe.limitedMainRoots ?? 0
       }
     },
     repoRoots: roots,
@@ -2264,13 +2332,14 @@ async function main(argv) {
       // activity-page-capped project list from `fetchActivity`, used a few lines below in the
       // `summarize()` call) — a `const` this name would shadow only inside this block, harmlessly,
       // but a reader skimming past the shadow could easily mix the two up.
-      const { confirmed, probed, capped: cloneCapped, budgetSpent, tooManyRemotes } =
+      const { confirmed, probed, capped: cloneCapped, budgetSpent, tooManyRemotes, tooManyUrls, outputTooLarge, limitedMainRoots } =
         withConfirmedCloneRoots(distinctOutsideCwds, repoRoots.slice(0, 1), { git: reportGit });
       // The confirmed CWDS — the map's keys — never the toplevels they resolved to: a toplevel as a
       // prefix root also covers a nested repository the check rejected, and misses a cwd reached
       // through a junction (see withConfirmedCloneRoots's Returns, and the note at signal 4).
       cloneRoots = [...new Set(confirmed.keys())];
-      cloneProbe = { probed, capped: cloneCapped, candidates: distinctOutsideCwds.length, budgetSpent, tooManyRemotes };
+      cloneProbe = { probed, capped: cloneCapped, candidates: distinctOutsideCwds.length, budgetSpent, tooManyRemotes,
+        tooManyUrls, outputTooLarge, limitedMainRoots };
       if (confirmed.size > 0) {
         // Lists exactly the cwd strings signal 4 folds in — it folds in by exact string — so this
         // NOTE and the scoring cannot disagree, as they did when it listed toplevels: a clone reached
