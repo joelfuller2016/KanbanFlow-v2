@@ -56,6 +56,11 @@ A review of the repository and a test run on 2026-09-26 filed findings as issues
   PR #564 final Git-config repair is published at `fd28a0c3589ad00ca40395d87879ecf752e1347f` (verified script `81d4d0e01501fddc78aaf340fdcd59c9b2016f40`): verify exit 0, 1,259 .NET / 373 script / 171 focused cases, zero build warnings/errors. Real Git HOME/XDG disguise and independent global/system guard removals were observed red; byte-identical restore is green, local rewrites remain effective, host settings unchanged. The tested Git-compatible `/dev/null` path avoids Node's Windows device-path incompatibility. Independent review passed; all 11 threads resolved, description/draft readbacks match. A final low PR #511 test-oracle finding is being repaired separately: expected timeline labels must not derive from the production list. PR #521 application repair remains verified at `87481e8` with its additive test passing. Original checkout `feat/unified-workflow-509` at `b9d9ea0dcf32b17a2ec6a1f1f3b913243cb1e4f6` retains its pre-existing README/documentation work. No PR merge/deployment or human usability acceptance. Raw evidence is under `_sandbox/fixes/2026-10-31-prs/capture` and the owning ignored worktree folders; `.gsd-debug-prs-20261101/conclusion.md` owns the integrated result.
 
 
+- 2026-11-01 04:11Z (PR monitor — Codex both clean on #580 HEAD 737a8c7):
+  - Codex Code Review: has_any_findings: false ✅ (completed 04:10Z).
+  - Codex Security Review: has_any_findings: null/completed ✅ (completed 04:11Z).
+  - #580 HEAD=737a8c7, Codex clean. Awaiting Copilot re-review.
+
 - 2026-11-01 04:05Z (PR monitor — owner pushed enhanced fixes on #580):
   - Owner pushed 1d1cc40 ("fix: preserve reviewed delivery targets and gallery traversal"), merged as 2d5911f, then JOURNAL merged at 737a8c7.
   - 1d1cc40 extends session fixes with: browser tests (workspace-ui-preview-target.browser.mjs, workspace-ui-button-contrast.browser.mjs), unit tests (IdeaWorkspaceReviewedDeliveryTargetTests.cs, IdeaGalleryFilterCursorRecoveryTests.cs), IdeaWorkspace.razor.css contrast fix (Copilot Finding 3), and refined IdeaGallery.razor.cs/IdeaWorkspace.Delivery.cs.
