@@ -52,6 +52,16 @@ A review of the repository and a test run on 2026-09-26 filed findings as issues
 
 ## Entries (newest first)
 
+- 2026-11-01 00:06Z (PR #580 — owner resolved all deferred findings, final review clean):
+  - Owner pushed fead50b (merge of cceb1d0 + journal). cceb1d0 addressed ALL previously-deferred P2 issues:
+    (1) RetryDraftStorage data-loss race: RestoreDraft now distinguishes cache restored before/after init; if unread stored draft and untrusted cache both exist, writes pause until explicit recovery verifies the full original. Browser-reproduced and confirmed.
+    (2) Stale delivery selections after relink: new ReconcileDeliveryDraft() clears selections and shows error when project association changes; DeliveryChanged guards against stale association.
+    (3) ContentDrafts["$new"] overwrite during deleted-card recovery: now guards against overwriting a dirty "$new" draft and returns an error requiring user action instead.
+  - Owner confirmed fix on PRRT_kwDOSA8y6s6yVSbe with full regression detail (1,522 .NET / 358 script / 51 browser checks). Resolved the thread.
+  - Codex code review on fead50b: has_unresolved_findings=false (clean). Security review still running.
+  - Branch gate: 1,520/1,522 passed (2 pre-existing environment failures); build 0 warnings/errors.
+  - PR #580 now has 0 unresolved review threads. Awaiting owner merge.
+
 - 2026-10-31 23:34Z (scheduled PR monitor, continuation — chatgpt-codex review on PR #580 commit e21a7bc):
   - Codex review completed and posted 3 new P2 findings. Also found 3 pre-existing unresolved threads (PRRT_kwDOSA8y6s6yVTPU delivery-selection relink, PRRT_kwDOSA8y6s6yVTPW ghost-buffer, PRRT_kwDOSA8y6s6yViTd new-card overwrite) that had owner "P2 — noted" confirmations but had not been resolved.
   - Finding 1 (WorkspaceCanvasInterop.cs canvas disposal race — PRRT_kwDOSA8y6s6yVkqh): REAL BUG. Fixed in 63f8094. Added `_disposed` bool; `InitializeAsync` now checks it after the import await and disposes the imported module cleanly if the component was already torn down, preventing `ObjectDisposedException` from the disposed callback.
