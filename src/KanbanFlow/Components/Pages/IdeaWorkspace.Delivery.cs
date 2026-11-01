@@ -92,13 +92,21 @@ public partial class IdeaWorkspace
     private async Task PublishReviewed(WorkspaceUiScope scope, IdeaWorkspacePublicationPreview reviewedPreview)
     {
         if (!IsCurrent(scope) || context is null) return;
-        if (!ReferenceEquals(reviewedPreview, publicationPreview))
+        if (previewBusy)
         {
-            deliveryError = "The publication preview changed. Review the current selection and destination before publishing.";
+            deliveryError = "A publication preview is loading. Review the completed preview before publishing.";
             return;
         }
-        if (publicationRequest is not { } request) return;
-        if (reviewedPreview.WorkspaceId != scope.WorkspaceId || request.ExpectedRevision != context.Revision ||
+        // Equal revision tokens do not identify a preview: its selected items or feature can differ.
+        // Only the request paired with the exact preview captured by this rendered button may be sent.
+        if (!ReferenceEquals(reviewedPreview, publicationPreview) || publicationRequest is not { } request)
+        {
+            deliveryError = "The publication preview changed. Review the current preview before publishing.";
+            return;
+        }
+        if (reviewedPreview.WorkspaceId != scope.WorkspaceId || reviewedPreview.ProjectId != context.ProjectId ||
+            reviewedPreview.Revision != request.ExpectedRevision || reviewedPreview.ProjectPlanRevision != request.ExpectedProjectPlanRevision ||
+            request.ExpectedRevision != context.Revision ||
             request.ExpectedProjectPlanRevision != context.ProjectPlanRevision)
         {
             deliveryError = "The reviewed context has advanced. Preview the selected tasks again before publishing.";
