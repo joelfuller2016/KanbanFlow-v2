@@ -52,6 +52,13 @@ A review of the repository and a test run on 2026-09-26 filed findings as issues
 
 ## Entries (newest first)
 
+- 2026-11-01 02:30Z (PR #580 — new CodeRabbit/Copilot round on f2e7999, 4 fixed + 5 deferred + 5 stale-resolved):
+  - Resolved Codex WJaN (Refresh race — already fixed 53b75f6) and WJaO (delivery features — already deferred).
+  - Fix 4de1359: Commands.cs:129 normalize DraftAtSend via JsonNode.Parse before GetRawText comparison (Copilot WLa9); Delivery.cs InspectPublishedTask StateHasChanged() before first await (Copilot WLbB); IdeaWorkspace.razor Retry button disabled=@busy guard (CodeRabbit WGAe); WriteTests deep-chain assertion strengthened to check Action+ActivityId (CodeRabbit WGAs).
+  - Stale findings already addressed in prior commits: WGAi/WLbN (parentMap built once per gesture since earlier commit); WLbx (DependsOn filtered in ItemChanged since earlier commit). Replied + resolved.
+  - Deferred to owner: WGAd (PersistDraft cache before Ready — complex behavioral change); WGAV (stdin EPIPE — pre-existing transport issue); WGAS (README count commands — editorial); WLbY (scroll-delta drag position — coordinate transform scope); WLbi (item editor stale on copy confirm — two-component lifecycle).
+  - Next: monitor Codex reviews on 4de1359; resolve any new findings; notify owner when PR is clean.
+
 - 2026-11-01 02:00Z (PR #580 — Codex P2 review findings on 5cf4438, 1 fixed + 1 deferred):
   - Codex P2 IdeaWorkspace.razor.cs:182 fix: 53b75f6 — Refresh() now captures context before GET and bails on ReferenceEquals mismatch, matching PollForChanges guard (e7acca6). Replied to comment 4433930515.
   - Codex P2 WorkspaceDeliveryPanel.razor.cs:28: feature choices empty on first publication_target_missing — deferred to owner. Requires new GetPublicationFeaturesAsync method or embedding features in error payload. Replied to comment 4433930518.
