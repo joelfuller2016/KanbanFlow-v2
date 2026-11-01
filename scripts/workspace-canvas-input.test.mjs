@@ -24,15 +24,18 @@ function canvasBoundary(callback) {
       properties, style: { setProperty: (name, value) => properties.set(name, value), removeProperty: name => properties.delete(name) } };
   });
   const handles = boundary.cards.map(card => ({
-    captured: [], resized: false,
+    captured: [], resized: false, listeners: new Map(),
     closest(selector) { return selector === "[data-placement-id]" ? card : this; },
     classList: { contains: name => name === "workspace-resize-handle" && handles[boundary.cards.indexOf(card)].resized },
     setPointerCapture(pointerId) { this.captured.push(pointerId); },
+    addEventListener(name, handler) { this.listeners.set(name, handler); },
+    focus() {},
   }));
   const context = createContext({ AbortController });
   script.runInContext(context);
   context.canvasModule.initialize(root, { invokeMethodAsync: callback });
   boundary.handles = handles;
+  boundary.lostCapture = (index = 0) => handles[index].listeners.get("lostpointercapture")?.();
   boundary.key = () => handlers.get("keydown")({ target: handles[0], key: "ArrowRight", shiftKey: false, preventDefault() {} });
   boundary.pointer = (name, pointerId, index = 0, clientX = 0, clientY = 0) => handlers.get(name)({
     target: handles[index], pointerId, clientX, clientY, button: 0, preventDefault() {},
