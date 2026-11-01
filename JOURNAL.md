@@ -51,6 +51,21 @@ A review of the repository and a test run on 2026-09-26 filed findings as issues
   - S7, for #549.
 
 ## Entries (newest first)
+- 2026-11-01 04:10Z Codex: Published the final PR #580 workspace repairs at `737a8c7982072313ec3fba72383b6303df617dfc` (verified repair `1d1cc40d204daad29705998e7c74c2b1e9eea3f8`): required verify.ps1 exit 0, 1,686 .NET / 374 script cases, zero build warnings/errors. Nine new gallery/publication cases reproduced five original failures then passed 9/9. Four current browser suites passed: reviewed-target deletion refuses silent retargeting and requires latest-context adoption plus a new explicit preview; existing-feature recovery; exact saved typing/stale controls/focus at 0/150/300 ms; 16 light/dark normal/hover contrast measurements (all text >=4.5:1, recovery border >=3:1). The original compiled app measured 3.427467:1 for dark primary text. Browser fixtures were corrected to await server draft acknowledgement and honor the existing 409 adoption gate; no application/.NET test source changed after the completed gate. Independent review passed. Concurrent `d322ce4` history was retained with exact tested tree identity; final JOURNAL merge preserved 627 feature and 594 primary blocks. All 86 review threads resolved at readback; exact description/draft readback matched. Owned app/browser stopped, owning-process query empty, worktree clean.
+
+  PR #564 final Git-config repair is published at `fd28a0c3589ad00ca40395d87879ecf752e1347f` (verified script `81d4d0e01501fddc78aaf340fdcd59c9b2016f40`): verify exit 0, 1,259 .NET / 373 script / 171 focused cases, zero build warnings/errors. Real Git HOME/XDG disguise and independent global/system guard removals were observed red; byte-identical restore is green, local rewrites remain effective, host settings unchanged. The tested Git-compatible `/dev/null` path avoids Node's Windows device-path incompatibility. Independent review passed; all 11 threads resolved, description/draft readbacks match. A final low PR #511 test-oracle finding is being repaired separately: expected timeline labels must not derive from the production list. PR #521 application repair remains verified at `87481e8` with its additive test passing. Original checkout `feat/unified-workflow-509` at `b9d9ea0dcf32b17a2ec6a1f1f3b913243cb1e4f6` retains its pre-existing README/documentation work. No PR merge/deployment or human usability acceptance. Raw evidence is under `_sandbox/fixes/2026-10-31-prs/capture` and the owning ignored worktree folders; `.gsd-debug-prs-20261101/conclusion.md` owns the integrated result.
+
+
+- 2026-11-01 04:11Z (PR monitor — Codex both clean on #580 HEAD 737a8c7):
+  - Codex Code Review: has_any_findings: false ✅ (completed 04:10Z).
+  - Codex Security Review: has_any_findings: null/completed ✅ (completed 04:11Z).
+  - #580 HEAD=737a8c7, Codex clean. Awaiting Copilot re-review.
+
+- 2026-11-01 04:05Z (PR monitor — owner pushed enhanced fixes on #580):
+  - Owner pushed 1d1cc40 ("fix: preserve reviewed delivery targets and gallery traversal"), merged as 2d5911f, then JOURNAL merged at 737a8c7.
+  - 1d1cc40 extends session fixes with: browser tests (workspace-ui-preview-target.browser.mjs, workspace-ui-button-contrast.browser.mjs), unit tests (IdeaWorkspaceReviewedDeliveryTargetTests.cs, IdeaGalleryFilterCursorRecoveryTests.cs), IdeaWorkspace.razor.css contrast fix (Copilot Finding 3), and refined IdeaGallery.razor.cs/IdeaWorkspace.Delivery.cs.
+  - Codex attempted review on 737a8c7 but failed ("We couldn't complete this review") — known transient error, auto-retry expected.
+  - #580 HEAD=737a8c7, awaiting Codex retry + Copilot re-review.
 
 - 2026-11-01 04:02Z - Completed native Codex code review of five existing PRs; report-only, no application fixes or merges.
   - Frozen review cutoff: 2026-11-01 03:10 UTC. PR heads: #511 f4030541698b9427ffa15ee64a16a1b1a4f99bbd; #578 17780aa01cc28c12dbf322379a33074b7ce3becc; #580 c674da7763f9bfb2909601a395ed9060dd841a51; #521 ef34d61f2a1e64f73442515afc93567ae1140b40; #564 0dadff673698e05f0de4ad65fc028015a69e5ddc. Original feat/unified-workflow-509 at b9d9ea0dcf32b17a2ec6a1f1f3b913243cb1e4f6 and unrelated dirty work preserved.
