@@ -52,6 +52,7 @@ const ACTIVITY_PROBE = ACTIVITY_PAGE + 1;
 // source-unavailable case the report already knows how to report honestly.
 export const FETCH_TIMEOUT_MS = 10_000;
 const GIT_TIMEOUT_MS = 5_000;
+const GIT_VERSION_REQUIREMENT = "Git 2.39 or newer is required for isolated repository probes.";
 
 // A tool that itself invokes git — a pre-commit hook running in a LINKED WORKTREE (git sets these
 // for exactly that hook invocation, pointing at the worktree it fired in), another script, a
@@ -530,12 +531,11 @@ export function gitOutput(args, cwd, { env = process.env, timeoutMs = GIT_TIMEOU
   return createGitRunner({ env, timeoutMs })(args, cwd);
 }
 
-/** A report owns its version check; protected trust settings are reread on EVERY command. */
+/** Capture the report environment; version and protected trust are checked on EVERY command. */
 export function createGitRunner({ env = process.env, timeoutMs = GIT_TIMEOUT_MS } = {}) {
   const captured = Object.freeze({ ...env });
-  let compatible = false;
   return (args, cwd) => {
-    // The first call also includes its version check inside this one monotonic budget.
+    // Relative PATH entries can select another binary when cwd changes. Never cache its version.
     const deadline = performance.now() + Math.min(GIT_TIMEOUT_MS, timeoutMs);
     const remainingTimeout = () => {
       const remaining = Math.floor(deadline - performance.now());
@@ -544,21 +544,20 @@ export function createGitRunner({ env = process.env, timeoutMs = GIT_TIMEOUT_MS 
     };
     const isolated = { ...scrubGitEnv(captured), GIT_CONFIG_NOSYSTEM: "1",
       GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_SYSTEM: "/dev/null" };
-    if (!compatible) {
-      let version = "unavailable";
-      try {
-        version = execFileSync("git", ["--version"], {
-          cwd, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"],
-          timeout: remainingTimeout(), env: isolated, windowsHide: true
-        }).trim();
-      } catch { /* An unknown binary/version cannot establish the isolation capabilities. */ }
-      const parsed = version.match(/^git version (\d+)\.(\d+)(?:\.|\s|$)/);
-      // Protected configuration follows ordinary includes from Git 2.39 onward.
-      if (!parsed || Number(parsed[1]) < 2 || Number(parsed[1]) === 2 && Number(parsed[2]) < 39) {
-        throw Object.assign(new Error(`Git 2.39 or newer is required for isolated repository probes (found ${quotedPathForReport(version)}). Clone confirmation was not run.`),
-          { code: "git_unsupported" });
-      }
-      compatible = true;
+    const versionTimeout = remainingTimeout();
+    let version = "unavailable";
+    try {
+      version = execFileSync("git", ["--version"], {
+        cwd, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"],
+        timeout: versionTimeout, env: isolated, windowsHide: true
+      }).trim();
+    } catch { /* An unknown binary/version cannot establish the isolation capabilities. */ }
+    const parsed = /^git version (\d+)\.(\d+)\.(\d+)(?:[. +\-][^\r\n]*)?$/.exec(version);
+    const numbers = parsed?.slice(1, 4).map(Number);
+    // Protected configuration follows ordinary includes from Git 2.39 onward.
+    if (!numbers?.every(Number.isSafeInteger) || !(numbers[0] > 2 || numbers[0] === 2 && numbers[1] >= 39)) {
+      throw Object.assign(new Error(`${GIT_VERSION_REQUIREMENT} Found ${quotedPathForReport(version)}. Clone confirmation was not run.`),
+        { code: "git_unsupported" });
     }
     const safeDirectories = protectedSafeDirectoryArgs(cwd, captured, remainingTimeout);
     return execFileSync("git", [...safeDirectories, ...args], {
@@ -1796,7 +1795,8 @@ export function summarize({
     // master, rather than being guessed into "the same repository". The last sentence states the
     // veto itself, because it is the one exclusion a reader could mistake for a bug: a fork whose
     // `upstream`, or whose own fetch url, matches this repository is outside on purpose.
-    " A clone this check cannot confirm — its directory no longer exists, git is unavailable, a call " +
+    " A clone this check cannot confirm — its directory no longer exists, git is unavailable or unsupported " +
+    "(Git 2.39 or newer is required), a call " +
     "exceeded GIT_TIMEOUT_MS, it listed more remotes than the check reads, it was left unprobed by " +
     "the cap or the time budget above (and that includes a cwd INSIDE a " +
     "clone that was confirmed, or one that merely spells a confirmed cwd differently: a cwd is folded " +
