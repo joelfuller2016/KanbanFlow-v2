@@ -8,6 +8,7 @@
     }
     @foreach (var plan in Context.Document.PlanRevisions.OrderByDescending(p => p.Version))
     {
+        var renderedPlanRevision = Context.ProjectPlanRevision;
         <details class="border rounded p-3 mb-2" @key="plan.Id" data-testid="plan-version-@plan.Id">
             <summary>@plan.Title · v@(plan.Version) · @plan.Status</summary>
             <WorkspacePlanVersion Plan="plan" KanbanUrl="@Context.KanbanUrl" OnInspectTask="OnInspectTask" />
@@ -17,8 +18,8 @@
                 <button class="btn btn-outline-success mt-2" disabled="@(Busy || (Context.ProjectId is not null && plan.ExpectedProjectPlanRevision != Context.ProjectPlanRevision))" @onclick="() => Accept(plan.Id, plan.ExpectedProjectPlanRevision)" data-testid="plan-accept-@plan.Id">Accept this plan</button>
                 @if (Context.ProjectId is not null && plan.ExpectedProjectPlanRevision != Context.ProjectPlanRevision)
                 {
-                    <p class="text-warning-emphasis small mt-2">This proposal used project-plan revision @(plan.ExpectedProjectPlanRevision?.ToString() ?? "none"). The loaded shared plan is revision @Context.ProjectPlanRevision. Review the current accepted plan above before rebasing acceptance.</p>
-                    <button class="btn btn-outline-secondary" disabled="@Busy" @onclick="() => Accept(plan.Id, Context.ProjectPlanRevision)" data-testid="plan-rebase-accept-@plan.Id">Accept after reviewing shared revision @Context.ProjectPlanRevision</button>
+                    <p class="text-warning-emphasis small mt-2">This proposal used project-plan revision @(plan.ExpectedProjectPlanRevision?.ToString() ?? "none"). The loaded shared plan is revision @renderedPlanRevision. Review the current accepted plan above before rebasing acceptance.</p>
+                    <button class="btn btn-outline-secondary" disabled="@Busy" @onclick="() => Accept(plan.Id, renderedPlanRevision)" data-testid="plan-rebase-accept-@plan.Id">Accept after reviewing shared revision @renderedPlanRevision</button>
                 }
             }
         </details>
