@@ -1,10 +1,13 @@
 using KanbanFlow.Services.IdeaWorkspaces;
+using KanbanFlow.Data;
 using Microsoft.AspNetCore.Components;
+using Microsoft.EntityFrameworkCore;
 
 namespace KanbanFlow.Components.Workspaces;
 
-public partial class WorkspaceDeliveryPanel
+public partial class WorkspaceDeliveryPanel : IDisposable
 {
+    [Inject] private IDbContextFactory<AppDbContext> DbFactory { get; set; } = default!;
     [Parameter, EditorRequired] public IdeaWorkspaceContext Context { get; set; } = default!;
     [Parameter, EditorRequired] public WorkspaceDeliveryDraft Draft { get; set; } = default!;
     [Parameter] public IReadOnlyList<IdeaWorkspaceSummary> Projects { get; set; } = [];
@@ -18,15 +21,70 @@ public partial class WorkspaceDeliveryPanel
     [Parameter] public EventCallback<WorkspaceUiCommand> OnCommand { get; set; }
     private readonly WorkspaceDraftInput<WorkspaceDeliveryDraft> input = new(new());
     private IReadOnlyList<IdeaWorkspaceFeatureOption> features = [];
-    private int? featureProjectId;
+    private (string WorkspaceId, int? ProjectId, long? PlanRevision, bool Missing) featureScope;
+    private Task? featureRead;
+    private long featureReadSequence;
+    private bool featuresLoaded, featuresBusy, disposed;
+    private string? featuresError;
+    private IdeaWorkspacePublicationPreview? appliedFeaturePreview;
+    private (string WorkspaceId, int? ProjectId, long? PlanRevision, bool Missing) CurrentFeatureScope
+        => (Context.WorkspaceId, Context.ProjectId, Context.ProjectPlanRevision, Context.ProjectMissing);
     private WorkspaceDeliveryDraft editing => input.Value;
     protected override void OnParametersSet()
     {
         input.Receive(Draft, Context.WorkspaceId, (Context.Revision, Context.ProjectId, Context.ProjectPlanRevision));
-        if (featureProjectId != Context.ProjectId) { features = []; featureProjectId = Context.ProjectId; }
-        if (Preview is not null && Preview.WorkspaceId == Context.WorkspaceId && Preview.ProjectId == Context.ProjectId)
+        if (featureScope != CurrentFeatureScope)
+        {
+            featureScope = CurrentFeatureScope;
+            features = [];
+            featuresLoaded = featuresBusy = false; featuresError = null; featureRead = null; featureReadSequence++;
+            appliedFeaturePreview = null;
+        }
+        if (Preview is not null && Preview.WorkspaceId == Context.WorkspaceId && Preview.ProjectId == Context.ProjectId
+            && Preview.Revision == Context.Revision && Preview.ProjectPlanRevision == Context.ProjectPlanRevision
+            && !ReferenceEquals(Preview, appliedFeaturePreview))
+        {
+            appliedFeaturePreview = Preview;
             features = Preview.Features;
+            featuresLoaded = true; featuresBusy = false; featuresError = null;
+            featureRead = null; featureReadSequence++;
+        }
     }
+    protected override Task OnParametersSetAsync() => disposed || Context.ProjectId is null || Context.ProjectMissing || featuresLoaded
+        ? Task.CompletedTask : featureRead ??= ReadFeatures();
+    private Task ReloadFeatures()
+    {
+        if (disposed || featuresBusy || Context.ProjectId is null || Context.ProjectMissing) return Task.CompletedTask;
+        featuresLoaded = false;
+        return featureRead = ReadFeatures();
+    }
+    private async Task ReadFeatures()
+    {
+        var scope = CurrentFeatureScope;
+        if (scope.ProjectId is not { } projectId || scope.Missing || disposed) return;
+        var sequence = ++featureReadSequence;
+        featuresBusy = true;
+        featuresError = null;
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+            var loaded = await db.Features.AsNoTracking().Where(feature => feature.ProjectId == projectId)
+                .OrderBy(feature => feature.Name).ThenBy(feature => feature.Id)
+                .Select(feature => new IdeaWorkspaceFeatureOption(feature.Id, feature.Name)).ToListAsync();
+            if (!FeatureReadIsCurrent(scope, sequence)) return;
+            features = loaded;
+            featuresLoaded = true;
+        }
+        catch (Exception)
+        {
+            if (FeatureReadIsCurrent(scope, sequence))
+                featuresError = "Project feature choices could not be loaded. Reload the choices to retry.";
+        }
+        finally { if (FeatureReadIsCurrent(scope, sequence)) featuresBusy = false; }
+    }
+    private bool FeatureReadIsCurrent((string WorkspaceId, int? ProjectId, long? PlanRevision, bool Missing) scope, long sequence)
+        => !disposed && sequence == featureReadSequence && scope == CurrentFeatureScope;
+    public void Dispose() { disposed = true; featureReadSequence++; }
     private Task Change(WorkspaceDeliveryDraft value) => input.ChangeAsync(value, OnDraftChanged);
     private Task TargetChanged(ChangeEventArgs e) => Change(editing with { TargetProjectId = int.TryParse(e.Value?.ToString(), out var id) ? id : null });
     private Task ProjectNameChanged(ChangeEventArgs e) => Change(editing with { ProjectName = e.Value?.ToString() ?? "" });

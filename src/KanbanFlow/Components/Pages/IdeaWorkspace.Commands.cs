@@ -126,7 +126,7 @@ public partial class IdeaWorkspace
     private static WorkspaceBrowserDraft ClearSavedSection(WorkspaceBrowserDraft value, WorkspacePendingCommand pending)
     {
         var section = pending.DraftSection;
-        if (pending.DraftAtSend is not { } saved || JsonSerializer.SerializeToElement(DraftSectionValue(value, section), WorkspaceUiCommand.Json).GetRawText() != saved.GetRawText())
+        if (pending.DraftAtSend is not { } saved || !JsonElement.DeepEquals(JsonSerializer.SerializeToElement(DraftSectionValue(value, section), WorkspaceUiCommand.Json), saved))
             return value; // Only a matching send snapshot authorizes clearing a complete current buffer.
         if (section?.StartsWith("content:", StringComparison.Ordinal) == true)
         {

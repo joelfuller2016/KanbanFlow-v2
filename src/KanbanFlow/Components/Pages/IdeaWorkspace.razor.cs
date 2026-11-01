@@ -104,9 +104,14 @@ public partial class IdeaWorkspace
         var cached = browserCache.GetValueOrDefault(scope.WorkspaceId);
         if (cached is not null && session.Draft is not null && !restoredBrowserWorkspaces.Contains(scope.WorkspaceId))
         {
-            clientId = "";
-            storageHealthy = false;
-            throw new System.Text.Json.JsonException("New edits were entered before the existing browser draft could be restored. Preserve the original stored draft before continuing; neither draft has been replaced.");
+            cached.Validate();
+            if (HasAuthoredState(cached))
+            {
+                clientId = "";
+                storageHealthy = false;
+                throw new System.Text.Json.JsonException("New edits were entered before the existing browser draft could be restored. Preserve the original stored draft before continuing; neither draft has been replaced.");
+            }
+            cached = null;
         }
         var restored = cached ?? session.Draft ?? DraftFromCheckpointFor(session.ClientId, session.SessionId);
         restored.Validate();
@@ -117,8 +122,20 @@ public partial class IdeaWorkspace
         ReconcileDeliveryDraft();
         UpdateCleanDrafts();
         EnsureSelectedDrafts();
+        browserCache[scope.WorkspaceId] = draft;
         restoredBrowserWorkspaces.Add(scope.WorkspaceId);
     }
+
+    private static bool HasAuthoredState(WorkspaceBrowserDraft value)
+        => value.ContentDrafts.Values.Any(content => content.Dirty) || value.LayoutDrafts.Values.Any(layout => layout.Dirty)
+            || value.Pending is not null || value.Discussion.Text.Length > 0
+            || value.Connector.FromComponentId.Length > 0 || value.Connector.ToComponentId.Length > 0 || value.Connector.Label != "related"
+            || value.Plan.Title.Length > 0 || value.Plan.Items.Count > 0 || value.Plan.BaseRevision.HasValue || value.Plan.BaseProjectPlanRevision.HasValue
+            || value.Checkpoint.Objective.Length > 0 || value.Checkpoint.CompletedChanges.Length > 0 || value.Checkpoint.OpenQuestions.Length > 0
+            || value.Checkpoint.NextActions.Length > 0 || value.Checkpoint.FocusedComponentIds.Count > 0
+            || value.Checkpoint.OriginalCompletedChanges is not null || value.Checkpoint.OriginalOpenQuestions is not null || value.Checkpoint.OriginalNextActions is not null
+            || value.Delivery.ProjectName.Length > 0 || value.Delivery.FeatureName.Length > 0 || value.Delivery.TargetProjectId.HasValue
+            || value.Delivery.SelectedItemIds is not null || value.Delivery.FeatureId.HasValue;
 
     private async Task LoadCatalog()
     {
@@ -220,7 +237,7 @@ public partial class IdeaWorkspace
 
     private async Task RetryDraftStorage(WorkspaceUiScope scope)
     {
-        if (!IsCurrent(scope)) return;
+        if (!IsCurrent(scope) || busy) return;
         if (clientId.Length == 0)
         {
             var oldBrowser = browser;
@@ -234,12 +251,13 @@ public partial class IdeaWorkspace
 
     private async Task RecoverStoredDraft(WorkspaceUiScope scope)
     {
-        if (!IsCurrent(scope) || busy || browser is null) return;
+        var recoveryBrowser = browser;
+        if (!IsCurrent(scope) || busy || recoveryBrowser is null) return;
         busy = true;
         try
         {
             draft.Validate();
-            var preserved = await browser.PreserveAndClearDraftAsync(scope.WorkspaceId);
+            var preserved = await recoveryBrowser.PreserveAndClearDraftAsync(scope.WorkspaceId);
             if (!IsCurrent(scope)) return;
             draftRecoveries[scope.WorkspaceId] = preserved;
             browserCache[scope.WorkspaceId] = draft;
@@ -248,9 +266,8 @@ public partial class IdeaWorkspace
             clientId = sessionId = "";
             storageError = error = null;
             restoredGeneration = -1;
-            var oldBrowser = browser;
-            browser = null;
-            await oldBrowser.DisposeAsync();
+            if (ReferenceEquals(browser, recoveryBrowser)) browser = null;
+            await recoveryBrowser.DisposeAsync();
             notice = "The original stored draft was preserved. Your current unsaved edits are retained while browser storage is restored; the preserved text remains available below.";
         }
         catch (Exception ex)

@@ -1,4 +1,5 @@
 using System.Reflection;
+using System.Text.Encodings.Web;
 using System.Text.Json;
 using KanbanFlow.Components.Pages;
 using KanbanFlow.Components.Workspaces;
@@ -9,6 +10,29 @@ namespace KanbanFlow.Tests;
 public sealed class IdeaWorkspaceAcknowledgmentTests
 {
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
+
+    [Theory]
+    [InlineData("content:card")]
+    [InlineData("discussion")]
+    [InlineData("plan")]
+    public void BrowserRoundTrippedSendSnapshot_ClearsUnchangedUnicodeSection_DespiteDifferentJsonEscaping(string section)
+    {
+        var draft = CurrentDraft();
+        object sent = section switch { "content:card" => draft.ContentDrafts["card"], "discussion" => draft.Discussion, _ => draft.Plan };
+        var roundTrip = JsonSerializer.SerializeToElement(sent, new JsonSerializerOptions(JsonSerializerDefaults.Web) { Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping });
+        Assert.NotEqual(JsonSerializer.SerializeToElement(sent, Json).GetRawText(), roundTrip.GetRawText());
+        var pending = new WorkspacePendingCommand(new("same-operation", 7, "update_component", JsonSerializer.SerializeToElement(new { }), "human"), section, roundTrip);
+
+        var acknowledged = Clear(draft, pending);
+
+        if (section == "content:card") Assert.False(acknowledged.ContentDrafts.ContainsKey("card"));
+        else if (section == "discussion") Assert.Equal("", acknowledged.Discussion.Text);
+        else { Assert.Equal("", acknowledged.Plan.Title); Assert.Empty(acknowledged.Plan.Items); }
+        Assert.Same(draft.ContentDrafts["$new"], acknowledged.ContentDrafts["$new"]);
+        Assert.Same(draft.ContentDrafts[""], acknowledged.ContentDrafts[""]);
+        Assert.Same(draft.LayoutDrafts, acknowledged.LayoutDrafts);
+        Assert.Same(draft.Checkpoint, acknowledged.Checkpoint);
+    }
 
     [Theory]
     [InlineData("content:card")]

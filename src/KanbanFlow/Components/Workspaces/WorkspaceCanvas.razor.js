@@ -3,6 +3,7 @@ const controllers = new WeakMap();
 
 class CanvasController {
     #root;
+    #viewport;
     #callback;
     #abort = new AbortController();
     #gesture;
@@ -12,6 +13,8 @@ class CanvasController {
         this.#root = root;
         this.#callback = callback;
         const options = { signal: this.#abort.signal };
+        this.#viewport = root.closest('.workspace-canvas-viewport');
+        this.#viewport?.addEventListener('scroll', () => this.#preview(), options);
         root.addEventListener('pointerdown', event => this.#start(event), options);
         root.addEventListener('pointermove', event => this.#move(event), options);
         root.addEventListener('pointerup', event => this.#finish(event), options);
@@ -24,17 +27,25 @@ class CanvasController {
         const handle = event.target.closest('.workspace-drag-handle, .workspace-resize-handle');
         const card = handle?.closest('[data-placement-id]');
         if (!card || event.button !== 0 || !this.#available()) return;
-        const descendants = [...this.#root.querySelectorAll('[data-placement-id]')].filter(candidate => {
-            const seen = new Set();
-            let parent = candidate.dataset.parentId;
-            while (parent && !seen.has(parent)) {
-                if (parent === card.dataset.placementId) return true;
-                seen.add(parent);
-                parent = [...this.#root.querySelectorAll('[data-placement-id]')].find(node => node.dataset.placementId === parent)?.dataset.parentId;
+        const placements = [...this.#root.querySelectorAll('[data-placement-id]')];
+        const children = new Map();
+        for (const placement of placements) {
+            const parent = placement.dataset.parentId;
+            if (!children.has(parent)) children.set(parent, []);
+            children.get(parent).push(placement.dataset.placementId);
+        }
+        const descendantIds = new Set([card.dataset.placementId]);
+        const pending = [card.dataset.placementId];
+        for (let index = 0; index < pending.length; index++) {
+            for (const id of children.get(pending[index]) ?? []) {
+                if (descendantIds.has(id)) continue;
+                descendantIds.add(id);
+                pending.push(id);
             }
-            return false;
-        });
+        }
+        const descendants = placements.filter(candidate => candidate !== card && descendantIds.has(candidate.dataset.placementId));
         this.#gesture = { card, handle, descendants, pointerId: event.pointerId, clientX: event.clientX, clientY: event.clientY,
+            lastClientX: event.clientX, lastClientY: event.clientY, scrollLeft: this.#viewport?.scrollLeft ?? 0, scrollTop: this.#viewport?.scrollTop ?? 0,
             x: Number(card.dataset.localX), y: Number(card.dataset.localY), width: Number(card.dataset.width), height: Number(card.dataset.height),
             resize: handle.classList.contains('workspace-resize-handle'), workspaceId: this.#root.dataset.workspaceId, revision: Number(this.#root.dataset.revision), dx: 0, dy: 0 };
         handle.setPointerCapture(event.pointerId);
@@ -44,8 +55,15 @@ class CanvasController {
     #move(event) {
         const gesture = this.#gesture;
         if (!gesture || event.pointerId !== gesture.pointerId) return;
-        gesture.dx = event.clientX - gesture.clientX;
-        gesture.dy = event.clientY - gesture.clientY;
+        gesture.lastClientX = event.clientX;
+        gesture.lastClientY = event.clientY;
+        this.#preview();
+    }
+    #preview() {
+        const gesture = this.#gesture;
+        if (!gesture) return;
+        gesture.dx = gesture.lastClientX - gesture.clientX + (this.#viewport?.scrollLeft ?? 0) - gesture.scrollLeft;
+        gesture.dy = gesture.lastClientY - gesture.clientY + (this.#viewport?.scrollTop ?? 0) - gesture.scrollTop;
         if (gesture.resize) {
             gesture.card.style.setProperty('--preview-width', `${Math.max(1, gesture.width + gesture.dx)}px`);
             gesture.card.style.setProperty('--preview-height', `${Math.max(1, gesture.height + gesture.dy)}px`);
@@ -59,6 +77,7 @@ class CanvasController {
     async #finish(event) {
         const gesture = this.#gesture;
         if (!gesture || event.pointerId !== gesture.pointerId) return;
+        this.#preview();
         const changed = Math.abs(gesture.dx) + Math.abs(gesture.dy) >= 2;
         const update = gesture.resize
             ? { placementId: gesture.card.dataset.placementId, width: Math.max(1, gesture.width + gesture.dx), height: Math.max(1, gesture.height + gesture.dy) }

@@ -40,6 +40,9 @@
         </fieldset>
         <label class="form-label" for="delivery-feature-select">Task feature</label>
         <select id="delivery-feature-select" class="form-select mb-2" value="@editing.FeatureId" @onchange="e => FeatureChangedFromProject(renderedProjectId, e)" data-testid="delivery-feature-select"><option value="">Use the existing publication feature, or create one named after the plan</option>@foreach (var feature in features) { <option value="@feature.Id">@feature.Name · @feature.Id</option> }</select>
+        @if (featuresError is not null) { <p class="text-warning" role="alert" data-testid="delivery-feature-error">@featuresError</p> }
+        @if (featuresBusy) { <p class="small text-muted" role="status">Loading project features…</p> }
+        <button class="btn btn-sm btn-outline-secondary mb-3" disabled="@(Busy || featuresBusy)" @onclick="ReloadFeatures" data-testid="delivery-reload-features">Reload feature choices</button>
         <label class="form-label" for="delivery-feature-name">New feature name (optional)</label>
         <input id="delivery-feature-name" class="form-control mb-3" value="@editing.FeatureName" @oninput="FeatureNameChanged" data-testid="delivery-feature-name" />
         <button class="btn btn-outline-primary" disabled="@(Busy || PreviewBusy || (editing.SelectedItemIds is { Count: 0 }))" @onclick="PreviewSelection" data-testid="delivery-preview">@(PreviewBusy ? "Reading preview…" : "Preview task publication")</button>
