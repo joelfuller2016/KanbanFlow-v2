@@ -52,6 +52,12 @@ A review of the repository and a test run on 2026-09-26 filed findings as issues
 
 ## Entries (newest first)
 
+- 2026-11-01 01:34Z (PR #580 — Codex P2 deferred and resolved; Codex retry triggered):
+  - Resolved final unresolved review thread: PRRT_kwDOSA8y6s6yWTXX (Codex P2, Drafts.cs line 70) — deferred. The guard preventing browserCache writes before restoration completes is intentional; the pre-restoration edit loss scenario requires a transient init failure plus user typing before retry, and fixing it correctly (separate pre-restoration buffer or post-restoration merge) is out of scope for this PR. Reply posted at comment 4434018489.
+  - All 69/69 PR review threads now resolved.
+  - Codex code and security reviews on 16c5f65 failed again; triggered retry via @codex review and @codex security review (PR comment 6551856350).
+  - Branch: feat/579-idea-workspaces HEAD at 16c5f65. Next: wait for Codex retry result; notify owner when clean.
+
 - 2026-11-01 01:30Z (PR #580 — new Copilot review resolved; 2 more fixes in b54b19b; all threads clean):
   - New Copilot review (review_id 5725856458) on d11f2a1 posted 4 open threads: 2 new, 2 re-listed from prior deferred round.
   - Fixed r4433977114 (Commands.cs): track `oldProjectId` before updating `context = refreshed`; clear inspectedTask/taskSequence when project ID changes after link_project/create_project, preventing stale inspector from previous project.
