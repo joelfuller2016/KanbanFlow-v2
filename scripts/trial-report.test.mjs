@@ -1563,7 +1563,7 @@ test("clone confirmation FAILS CLOSED: a cwd git cannot examine stays counted as
   // "the directory no longer exists", "git is not installed", or any other inconclusive failure.
   const mainRoot = path.resolve("C:\\real\\KanbanFlow-v2");
   const goneCwd = path.resolve("C:\\scratch\\deleted-worktree");
-  const git = fakeGitByCwd({ [mainRoot]: { "rev-list --max-parents=0 HEAD": "aaa111" } });
+  const git = fakeGitByCwd({ [mainRoot]: { remote: "", "rev-list --max-parents=0 HEAD": "aaa111" } });
 
   const { confirmed, probed } = withConfirmedCloneRoots([goneCwd], [mainRoot], { git });
   assert.equal(confirmed.size, 0, "an inconclusive check must not confirm a clone");
@@ -2491,12 +2491,12 @@ function runGitHarness(make, settings, body) {
     '    if (current.referenceFault === "invalid-utf8" && command[0] === "remote" && command.length === 1) return Buffer.from([255]);',
     '    if (current.referenceFault === "output-cap" && command[0] === "remote" && command.length === 1) fail({ code: "ENOBUFS", signal: "SIGTERM" });',
     '    if (current.referenceFault === "name-cap" && command[0] === "remote" && command.length === 1) return reply(Array.from({ length: 17 }, (_, i) => "remote" + i).join("\\n") + "\\n");',
-    '    if (current.referenceFault === "resolution" && command[0] === "rev-parse") fail({ status: 128 });',
+    '    if (current.referenceFault === "resolution" && command[0] === "rev-parse" && command[1] === "--git-common-dir") fail({ status: 128 });',
     '  }',
     '  if (current.trace) fs.appendFileSync(current.trace, JSON.stringify({ args, cwd: options.cwd }) + "\\n");',
     '  if (args[0] === "--version" && options.cwd === current.failureCwd && current.versionFailure) throw Object.assign(new Error("fixture version launch failed"), current.versionFailure);',
     '  const phase = args[0] === "--version" ? "version" : args[0] === "config" && args.includes("safe.directory") ? "config" : "identity";',
-    '  if (current.outputErrorPhase === phase) throw Object.assign(new Error("fixture output exceeded maxBuffer"), { code: "ENOBUFS" });',
+    '  if (current.outputErrorPhase === phase && (!current.outputErrorCwd || options.cwd === current.outputErrorCwd)) throw Object.assign(new Error("fixture output exceeded maxBuffer"), { code: "ENOBUFS" });',
     '  if (args[0] === "--version" && (Object.hasOwn(current, "versionReply") || current.versionByPath || current.versionByCwd)) {',
     '    if (current.versionReply === "ERROR") throw Object.assign(new Error("version read failed"), { status: 1 });',
     '    if (current.versionByCwd) return reply(options.cwd === current.oldCwd ? "git version 2.38.4\\n" : "git version 2.39.0\\n");',
@@ -2701,6 +2701,11 @@ test("logged candidate directories cannot select the report's Git executable", (
   const { a, b, make, cleanup } = buildCloneFixture();
   const log = path.join(make(), "usage.jsonl"), executable = process.platform === "win32" ? "git.exe" : "git";
   const pathKey = Object.keys(process.env).find(key => process.platform === "win32" ? key.toLowerCase() === "path" : key === "PATH");
+  const marker = path.join(make(), "git-launches.jsonl"), preload = path.join(make(), "observe-git.cjs");
+  fs.writeFileSync(preload, 'const cp = require("node:child_process"), fs = require("node:fs"), original = cp.execFileSync;\n' +
+    'cp.execFileSync = function(file, args, options) { if (/^git(?:\\.(?:exe|com))?$/i.test(require("node:path").basename(file))) ' +
+    'fs.appendFileSync(' + JSON.stringify(marker) + ', JSON.stringify({file,cwd:options.cwd}) + "\\n"); return original.apply(this, arguments); };\n' +
+    'require("node:module").syncBuiltinESMExports();\n');
   fs.writeFileSync(log, JSON.stringify(row({ cwd: b })) + "\n");
   const copyNode = target => {
     fs.mkdirSync(path.dirname(target), { recursive: true });
@@ -2711,29 +2716,41 @@ test("logged candidate directories cannot select the report's Git executable", (
     assert.equal(control.stdout.trim(), process.version, "the harmless candidate executable is Node, not Git");
   };
   try {
-    const cases = process.platform === "win32" ? ["implicit-cwd", "relative-path", "no-default-cwd"] : ["relative-path"];
+    const cases = ["absolute-path", "relative-and-absolute", "relative-only",
+      ...(process.platform === "win32" ? ["implicit-cwd", "no-default-cwd"] : [])];
     for (const mode of cases) {
-      const target = path.join(mode === "no-default-cwd" ? a : mode === "relative-path" ? path.join(b, "tools") : b, executable);
+      const relative = mode.startsWith("relative-");
+      const target = path.join(mode === "no-default-cwd" ? a : relative ? path.join(b, "tools") : b, executable);
       copyNode(target);
       try {
+        fs.writeFileSync(marker, "");
         const env = scrubGitEnv(process.env);
         for (const key of Object.keys(env)) if (/^(path|NoDefaultCurrentDirectoryInExePath)$/i.test(key)) delete env[key];
-        env.PATH = (mode === "relative-path" ? "tools" + path.delimiter : "") + (process.env[pathKey] ?? "");
+        env.PATH = mode === "relative-only" ? "tools" : (relative ? "tools" + path.delimiter : "") + (process.env[pathKey] ?? "");
         if (mode === "no-default-cwd") env.NoDefaultCurrentDirectoryInExePath = "1";
-        const child = spawnSync(process.execPath, [path.join(HERE, "trial-report.mjs"), "--repo-root", a, "--json"], {
+        const child = spawnSync(process.execPath, ["--require", preload, path.join(HERE, "trial-report.mjs"), "--repo-root", a, "--json"], {
           cwd: a, encoding: "utf8", timeout: 30_000, windowsHide: true,
           env: { ...env, KANBANFLOW_USAGE_LOG: log, KANBANFLOW_API_URL: "http://127.0.0.1:1" }
         });
         assert.equal(child.status, 1, child.stderr);
         const summary = JSON.parse(child.stdout);
-        assert.equal(find(summary, 4).verdict, "REVERT", mode + ": the trusted Git must prove the genuine clone instead of running candidate Node");
-        assert.match(child.stderr, /1 of 1 outside cwd\(s\) confirmed/);
+        if (mode === "relative-only") {
+          assert.equal(find(summary, 4).verdict, "UNMEASURED", "relative-only PATH is refused rather than resolved against the logged cwd");
+          assert.match(child.stderr, /No trusted absolute executable is available/);
+          assert.doesNotMatch(child.stderr, /folded into signal 4/);
+        } else {
+          assert.equal(find(summary, 4).verdict, "REVERT", mode + ": the trusted Git must prove the genuine clone instead of running candidate Node");
+          assert.match(child.stderr, /1 of 1 outside cwd\(s\) confirmed/);
+        }
+        const launches = fs.readFileSync(marker, "utf8").split("\n").filter(Boolean).map(line => JSON.parse(line));
+        assert.equal(launches.length === 0, mode === "relative-only", mode + ": refused lookup must not launch any Git child");
+        assert.ok(launches.every(call => path.isAbsolute(call.file) && call.file !== target), mode + ": every launch must bypass candidate-owned executables");
       } finally { fs.unlinkSync(target); }
     }
   } finally { cleanup(); }
 });
 
-test("Git version checks are fresh for each caller PATH", () => {
+test("each new runner pins its captured PATH and still checks fresh version replies", () => {
   const { a, make, cleanup } = buildCloneFixture();
   const home = make(), xdg = make();
   const system = path.join(make(), "empty.gitconfig");
@@ -2756,14 +2773,14 @@ test("Git version checks are fresh for each caller PATH", () => {
   } finally { cleanup(); }
 });
 
-test("one captured report runner checks the selected Git again when cwd changes", () => {
+test("one captured report runner keeps its executable pin and rechecks versions when cwd changes", () => {
   const { a, c, make, cleanup } = buildCloneFixture();
   const home = make(), xdg = make();
   const system = path.join(make(), "empty.gitconfig");
   fs.writeFileSync(system, "");
   try {
     // Only version replies vary at the real child boundary; supported config/identity reads
-    // still use the installed Git. One frozen relative PATH can select another binary by cwd.
+    // still use the installed pin. The ignored relative prefix is a fixture marker, not discovery.
     const results = runGitHarness(make, { a, c, home, xdg, system, foreign: false, versionByCwd: true, oldCwd: c, pathDelimiter: path.delimiter },
       (trial, fs, stateFile, settings) => {
         const git = trial.createGitRunner({ env: { ...process.env, PATH: "relative-tools" + settings.pathDelimiter + process.env.PATH } });
@@ -2780,6 +2797,72 @@ test("one captured report runner checks the selected Git again when cwd changes"
     assert.deepEqual(results[1].calls.map(call => call.args), [["--version"]], "the second cwd cannot inherit the first binary's capabilities");
     assert.equal(path.resolve(results[2].value), path.resolve(a));
     assert.equal(results[2].calls[0].args[0], "--version");
+    const files = results.flatMap(result => result.calls.map(call => call.file));
+    assert.ok(files.every(file => path.isAbsolute(file)));
+    assert.equal(new Set(files).size, 1, "version replies may change, but the selected executable cannot");
+  } finally { cleanup(); }
+});
+
+test("a report runner pins one absolute executable across version, trust, metadata and identity", () => {
+  const { a, c, make, cleanup } = buildCloneFixture();
+  const home = make(), xdg = make(), system = path.join(make(), "empty.gitconfig");
+  fs.writeFileSync(system, "");
+  try {
+    const result = runGitHarness(make, { a, c, home, xdg, system, foreign: false }, (trial, fs, stateFile, settings) => {
+      const env = { ...process.env }, git = trial.createGitRunner({ env });
+      for (const key of Object.keys(env)) if (/^path$/i.test(key)) delete env[key];
+      env.PATH = "missing-after-capture";
+      globalThis.resetGitHarness();
+      const first = git(["remote", "get-url", "origin"], settings.a);
+      const second = git(["rev-parse", "--show-toplevel"], settings.c);
+      return { first, second, calls: globalThis.gitCalls };
+    });
+    assert.equal(result.first, "https://example.invalid/org/repo.git");
+    assert.equal(path.resolve(result.second), path.resolve(c));
+    assert.ok(result.calls.every(call => path.isAbsolute(call.file)), "no phase may execute a bare command");
+    assert.equal(new Set(result.calls.map(call => call.file)).size, 1);
+    assert.equal(result.calls.filter(call => call.args[0] === "--version").length, 2, "capabilities stay fresh after pinning");
+    assert.ok(result.calls.some(call => call.args.includes("--get-regexp")), "the NUL metadata guard must use the pin too");
+  } finally { cleanup(); }
+});
+
+test("native current-directory and relative PATH shadows cannot replace the pinned Git", () => {
+  const { a, b, make, cleanup } = buildCloneFixture();
+  const windows = process.platform === "win32", name = windows ? "git.exe" : "git";
+  const fake = path.join(b, name), relative = path.join(b, "relative-tools");
+  const link = (from, to) => { try { fs.linkSync(from, to); } catch (error) {
+    if (!["EPERM", "EACCES", "EXDEV", "ENOTSUP"].includes(error.code)) throw error;
+    fs.copyFileSync(from, to);
+  } };
+  try {
+    link(process.execPath, fake);
+    fs.mkdirSync(relative); link(fake, path.join(relative, name));
+    const env = scrubGitEnv(process.env);
+    const key = windows ? Object.keys(env).sort().find(value => value.toUpperCase() === "PATH") : "PATH";
+    const originalPath = env[key];
+    for (const value of Object.keys(env)) if (/^path$/i.test(value)) delete env[value];
+    for (const prefix of windows ? ["relative-tools", "", null] : ["relative-tools", ""]) {
+      const selected = { ...env, PATH: prefix === null ? originalPath : prefix + path.delimiter + originalPath };
+      const bare = spawnSync("git", ["--version"], { cwd: b, env: selected, encoding: "utf8", timeout: 5_000, windowsHide: true });
+      assert.equal(bare.status, 0, bare.stderr);
+      assert.equal(bare.stdout.trim(), process.version, "the native bare-name control must actually select candidate-owned Node");
+      assert.equal(real(createGitRunner({ env: selected })(["rev-parse", "--show-toplevel"], b)), real(b));
+    }
+    const quoted = path.join(make(), "trusted;tools with spaces");
+    fs.mkdirSync(quoted); link(fake, path.join(quoted, name));
+    for (const quote of windows ? ['"', "'"] : [""]) {
+      const selected = { ...env, PATH: quote + quoted + quote };
+      assert.throws(() => createGitRunner({ env: selected })(["rev-parse", "--show-toplevel"], a),
+        error => error.code === "git_unsupported" && error.message.includes(process.version), "a quoted absolute field must select its native file before version rejection");
+    }
+    if (windows) {
+      const selected = { ...env, PATH: ["", ".", "relative-tools", "C:tools", "\\tools"].join(path.delimiter), Path: originalPath };
+      assert.throws(() => createGitRunner({ env: selected })(["rev-parse", "--show-toplevel"], b),
+        error => error.code === "git_unsupported" && error.cause?.code === "ENOENT", "the first casefolded PATH key cannot fall back to Path or drive-dependent fields");
+    } else {
+      const noExecute = make(); fs.writeFileSync(path.join(noExecute, "git"), "not executable", { mode: 0o644 });
+      assert.throws(() => createGitRunner({ env: { ...env, PATH: noExecute } })(["rev-parse", "--show-toplevel"], a), error => error.code === "git_unsupported");
+    }
   } finally { cleanup(); }
 });
 
@@ -3285,6 +3368,39 @@ test("native Git whitespace remote names retain their selector and cannot hide a
   } finally { cleanup(); }
 });
 
+test("native Git rewrites to empty effective URLs reject the whole candidate or reference fingerprint", () => {
+  const { a, b, d, configure, mainUrl, cleanup } = remoteLimitFixture();
+  const foreign = "https://fork.invalid/repo";
+  const env = { ...scrubGitEnv(process.env), GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_SYSTEM: "/dev/null" };
+  const assertEmptyUrl = (repo, push = false) => {
+    const args = ["remote", "get-url", ...(push ? ["--push"] : []), "--all", "origin"];
+    const native = spawnSync("git", args, { cwd: repo, env, encoding: "utf8", timeout: 5_000, windowsHide: true });
+    assert.equal(native.status, 0, native.stderr);
+    assert.equal(native.stdout, "\n", "native Git permits a nonempty configured URL to rewrite to an empty effective URL");
+    assert.throws(() => gitOutput(args, repo), error => error.code === "git_url_framing");
+  };
+  try {
+    configure(a, [{ urls: [mainUrl] }]);
+    for (const push of [false, true]) {
+      configure(b, [{ urls: [push ? mainUrl : foreign], push: push ? [foreign] : [] }]);
+      gitOutput(["config", "url..insteadOf", foreign], b);
+      assertEmptyUrl(b, push);
+      assert.equal(withConfirmedCloneRoots([b], [a]).confirmed.has(b), false, "an empty effective URL cannot be mistaken for a local-only shared-history candidate");
+    }
+    configure(a, [{ urls: [mainUrl] }]);
+    gitOutput(["config", "url..insteadOf", mainUrl], a);
+    configure(b, [{ urls: [a] }]);
+    configure(d, [{ urls: [mainUrl] }]);
+    assertEmptyUrl(a);
+    assert.equal(withConfirmedCloneRoots([b, d], [a]).confirmed.size, 0, "reject the reference's root commits as well as its remote proof");
+
+    configure(a, [{ urls: [mainUrl] }]);
+    configure(b, [{ urls: [foreign] }]);
+    gitOutput(["config", `url.${mainUrl}.insteadOf`, foreign], b);
+    assert.equal(withConfirmedCloneRoots([b], [a]).confirmed.has(b), true, "ordinary nonempty repository-local rewrites remain valid evidence");
+  } finally { cleanup(); }
+});
+
 test("whitespace-only native URL entries still consume the 64-entry remote allowance", () => {
   const { a, b, configure, mainUrl, cleanup } = remoteLimitFixture();
   try {
@@ -3354,7 +3470,9 @@ test("real Git main-root limits discard remote and shared-root-commit proof toge
     const log = path.join(make(), "usage.jsonl");
     fs.writeFileSync(log, JSON.stringify(row({ session: "main-limit", cwd: b })) + "\n");
     const cli = runCliJson(log, a), summary = JSON.parse(cli.stdout);
-    assert.equal(summary.sources.cloneProbe.limitedMainRoots, 1);
+    assert.equal(find(summary, 4).verdict, "UNMEASURED", "an incomplete reference must not turn genuine clones into outside-use evidence");
+    assert.equal(summary.sources.cloneProbe, null, "reference failure discards partial probe bookkeeping");
+    assert.doesNotMatch(cli.stderr, /folded into signal 4/);
     assert.match(cli.stderr, /1 main-root fingerprint.*discarded/);
     assert.match(find(summary, 4).caveat, /1 main-root fingerprint.*discarded/);
     // A single multiline value is ambiguous before line-count limits can classify its records.
@@ -3382,12 +3500,19 @@ test("real Git command output is limited to 256 KiB on both sides of clone confi
     assert.equal(gitOutput(["remote", "get-url", "origin"], a), near);
     assert.deepEqual([...withConfirmedCloneRoots([b, d], [a]).confirmed.keys()], [b, d]);
     const excessive = near + "xxxxxxxx";
+    configure(d, [{ urls: [excessive] }]);
+    const candidateOver = withConfirmedCloneRoots([b, d], [a]);
+    assert.deepEqual([...candidateOver.confirmed.keys()], [b], "a candidate output failure leaves the healthy local clone measurable");
+    assert.equal(candidateOver.outputTooLarge, 1);
+    assert.equal(candidateOver.referenceAvailable, true);
     configure(a, [{ urls: [excessive] }]); configure(d, [{ urls: [excessive] }]);
     assert.throws(() => gitOutput(["remote", "get-url", "origin"], a), error => /ENOBUFS|MAXBUFFER/.test(error.code), "the child output bound must reject bytes before report parsing");
     const over = withConfirmedCloneRoots([b, d], [a]);
     assert.equal(over.confirmed.size, 0);
     assert.equal(over.limitedMainRoots, 1);
-    assert.equal(over.outputTooLarge, 1);
+    assert.equal(over.outputTooLarge, 0, "a failed reference stops before candidate reads");
+    assert.equal(over.probed, 0);
+    assert.equal(over.referenceAvailable, false);
   } finally { cleanup(); }
 });
 
@@ -3397,17 +3522,19 @@ test("output limits from version, protected config and identity are disclosed fo
   fs.writeFileSync(system, "");
   try {
     const results = runGitHarness(make, { a, b, home, xdg, system, foreign: false }, (trial, fs, stateFile, settings) => {
-      return ["version", "config", "identity"].map(outputErrorPhase => {
-        fs.writeFileSync(stateFile, JSON.stringify({ ...settings, outputErrorPhase }));
+      return ["version", "config", "identity"].flatMap(outputErrorPhase => ["reference", "candidate"].map(role => {
+        fs.writeFileSync(stateFile, JSON.stringify({ ...settings, outputErrorPhase, outputErrorCwd: role === "reference" ? settings.a : settings.b }));
         globalThis.resetGitHarness();
         const result = trial.withConfirmedCloneRoots([settings.b], [settings.a]);
-        return { phase: outputErrorPhase, ...result, confirmed: [...result.confirmed.keys()] };
-      });
+        return { phase: outputErrorPhase, role, ...result, confirmed: [...result.confirmed.keys()] };
+      }));
     });
     for (const result of results) {
       assert.deepEqual(result.confirmed, [], result.phase);
-      assert.equal(result.limitedMainRoots, 1, result.phase);
-      assert.equal(result.outputTooLarge, 1, result.phase);
+      assert.equal(result.limitedMainRoots, result.role === "reference" ? 1 : 0, result.phase);
+      assert.equal(result.outputTooLarge, result.role === "candidate" ? 1 : 0, result.phase);
+      assert.equal(result.probed, result.role === "reference" ? 0 : 1, result.phase);
+      assert.equal(result.referenceAvailable, result.role === "candidate", result.phase);
     }
   } finally { cleanup(); }
 });

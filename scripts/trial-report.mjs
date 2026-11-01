@@ -487,38 +487,6 @@ function nativeGitText(bytes, code = "git_invalid_utf8") {
   }
 }
 
-// Resolve only against the captured startup context. Logged directories never select code.
-function resolveGitExecutable(env, startupCwd, parentEnv) {
-  const windows = process.platform === "win32";
-  const value = (source, name) => {
-    const key = windows ? Object.keys(source).sort().find(key => key.toUpperCase() === name.toUpperCase()) : name;
-    return key === undefined ? undefined : source[key];
-  };
-  const pathValue = value(env, "PATH") ?? (windows ? value(parentEnv, "PATH") ?? "" : "/usr/bin:/bin");
-  const directories = [];
-  // libuv asks the parent process's Windows policy before constructing the child environment.
-  if (windows && value(parentEnv, "NoDefaultCurrentDirectoryInExePath") === undefined) directories.push(startupCwd);
-  for (let directory of String(pathValue).split(path.delimiter)) {
-    if (windows && directory === "") continue;
-    if (windows && (directory.startsWith('"') || directory.startsWith("'"))) {
-      if (directory.at(-1) !== directory[0]) continue;
-      directory = directory.slice(1, -1);
-    }
-    directories.push(path.resolve(startupCwd, directory));
-  }
-  for (const directory of directories) {
-    for (const name of windows ? ["git.com", "git.exe"] : ["git"]) {
-      const candidate = path.join(directory, name);
-      try {
-        if (!fs.statSync(candidate).isFile()) continue;
-        fs.accessSync(candidate, fs.constants.X_OK);
-        return fs.realpathSync(candidate);
-      } catch { /* Try the next trusted startup search entry. */ }
-    }
-  }
-  throw Object.assign(new Error("Git could not be resolved from the trusted startup environment."), { code: "ENOENT" });
-}
-
 /**
  * Read only protected ownership exceptions, preserving system/global ordering and empty resets.
  * Explicit config-file locations and system-disable flags apply only to this key-only read.
@@ -601,27 +569,60 @@ export function gitOutput(args, cwd, { env = process.env, timeoutMs = GIT_TIMEOU
   return createGitRunner({ env, timeoutMs })(args, cwd);
 }
 
-/** Capture the report environment; version and protected trust are checked on EVERY command. */
+function resolveGitExecutable(env, remainingTimeout) {
+  const windows = process.platform === "win32";
+  const key = windows ? Object.keys(env).sort().find(name => name.toUpperCase() === "PATH") : "PATH";
+  const search = typeof env[key] === "string" ? env[key] : "";
+  for (let start = 0; start <= search.length;) {
+    remainingTimeout();
+    const quote = windows && (search[start] === '"' || search[start] === "'") ? search[start] : null;
+    const closing = quote ? search.indexOf(quote, start + 1) : start;
+    let end = closing === -1 ? -1 : search.indexOf(path.delimiter, closing);
+    if (end === -1) end = search.length;
+    let directory = search.slice(start, end);
+    start = end + 1;
+    if (quote && directory.endsWith(quote)) directory = directory.slice(1, -1);
+    if (!path.isAbsolute(directory) || windows && !/^(?:[a-z]:[\\/]|[\\/]{2}[^\\/]+[\\/][^\\/]+)/i.test(directory)) continue;
+    for (const name of windows ? ["git.com", "git.exe"] : ["git"]) {
+      const candidate = path.resolve(directory, name);
+      let usable = false;
+      try {
+        usable = fs.statSync(candidate).isFile();
+        if (usable && !windows) fs.accessSync(candidate, fs.constants.X_OK);
+      } catch { usable = false; }
+      remainingTimeout();
+      if (usable) return candidate;
+    }
+  }
+  throw Object.assign(new Error("No absolute Git executable was found on the captured PATH."), { code: "ENOENT" });
+}
+
+/** Capture the report environment and pin Git once; version and protected trust remain fresh. */
 export function createGitRunner({ env = process.env, timeoutMs = GIT_TIMEOUT_MS } = {}) {
   const captured = Object.freeze({ ...env });
-  let executable, executableError;
-  try { executable = resolveGitExecutable(captured, process.cwd(), { ...process.env }); }
-  catch (error) { executableError = error; } // Report unavailable Git through the normal lazy diagnostic path.
+  let executable, pinError, pinAttempted = false;
   return (args, cwd) => {
-    // Pin executable selection once, while checking its version and protected trust on every call.
     const deadline = performance.now() + Math.min(GIT_TIMEOUT_MS, timeoutMs);
     const remainingTimeout = () => {
       const remaining = Math.floor(deadline - performance.now());
       if (!(remaining >= 1)) throw Object.assign(new Error("Git command exceeded its five-second deadline."), { code: "git_cwd_unavailable" });
       return remaining;
     };
+    if (!pinAttempted) {
+      pinAttempted = true;
+      try { executable = resolveGitExecutable(captured, remainingTimeout); }
+      catch (cause) {
+        pinError = cause.code === "git_cwd_unavailable" ? cause : Object.assign(
+          new Error(`${GIT_VERSION_REQUIREMENT} No trusted absolute executable is available.`, { cause }), { code: "git_unsupported" });
+      }
+    }
+    if (pinError) throw pinError; // Never rediscover or fall back after a failed pin.
     const isolated = { ...scrubGitEnv(captured), GIT_CONFIG_NOSYSTEM: "1",
       GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_SYSTEM: "/dev/null" };
     const versionTimeout = remainingTimeout();
     let version = "unavailable";
     let versionCause;
     try {
-      if (executableError) throw executableError;
       version = nativeGitText(execFileSync(executable, ["--version"], {
         cwd, encoding: null, stdio: ["ignore", "pipe", "ignore"],
         timeout: versionTimeout, maxBuffer: GIT_MAX_OUTPUT_BYTES, env: isolated, windowsHide: true
@@ -662,7 +663,12 @@ export function createGitRunner({ env = process.env, timeoutMs = GIT_TIMEOUT_MS 
       cwd, encoding: null, stdio: ["ignore", "pipe", "ignore"],
       timeout: remainingTimeout(), maxBuffer: GIT_MAX_OUTPUT_BYTES, env: isolated, windowsHide: true
     }), args[0] === "remote" ? "git_url_framing" : "git_invalid_utf8");
-    return output.endsWith("\n") ? output.slice(0, -1) : output;
+    const payload = output.endsWith("\n") ? output.slice(0, -1) : output;
+    // A nonempty configured URL can rewrite to an empty effective URL. That is not a
+    // remote-free repository and must not unlock the shared-history confirmation path.
+    if (args[0] === "remote" && args[1] === "get-url" && (payload.length === 0 || payload.startsWith("\n") || payload.endsWith("\n") || payload.includes("\n\n")))
+      throw Object.assign(new Error("Git remote has an empty effective URL."), { code: "git_url_framing" });
+    return payload;
   };
 }
 
@@ -920,10 +926,10 @@ function boundedGitLines(text, limit) {
  * unconfirmed. An alias, an IP literal, or any other host-spelling this function cannot resolve to
  * a real hostname still counts as a "network remote that doesn't match" if it doesn't textually
  * match main's own, so it still vetoes — such a clone reads as outside, exactly as it would on
- * master, rather than being guessed into "the same repository". (If main's own remotes cannot be
- * read either, no network remote can ever match `mainNetworkRemotes` — empty — so any candidate
- * with a network remote of its own is vetoed and only a local-path-only or remote-less candidate
- * can still confirm.) What it confirms can still be wrong: a genuine clone of this repository that
+ * master, rather than being guessed into "the same repository". The reference's root history and
+ * complete remote fingerprint must both be read successfully before candidates are examined.
+ * Partial reference evidence cannot establish either a match or a veto. What it confirms can still
+ * be wrong: a genuine clone of this repository that
  * someone reuses for unrelated work is confirmed, and its sessions then score as inside. The
  * safeguard is how little it confirms: it only ever ADDS an entry to `confirmed`, only on the
  * strongest proof available, and leaves everything it cannot prove outside, as on master —
@@ -937,6 +943,8 @@ function boundedGitLines(text, limit) {
  * `MAX_REMOTES_PER_FINGERPRINT` remotes. `tooManyUrls` and `outputTooLarge` count candidates
  * whose entire fingerprint was discarded at those bounds; `limitedMainRoots` counts main-root
  * fingerprints discarded at any resource bound, including their root-commit evidence.
+ * `referenceAvailable` is false if any reference read failed or exceeded a bound; callers must
+ * then leave signal 4 unmeasured rather than count unexamined candidates as outside use.
  * `now` (milliseconds, `performance.now` by default) is the
  * budget's clock, an option so a test can run the deadline without waiting for it. What is proven
  * is the KEY — that exact cwd string — so the key is what a caller folds in, by EXACT STRING: never
