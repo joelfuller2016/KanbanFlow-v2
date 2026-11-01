@@ -5,30 +5,29 @@ namespace KanbanFlow.Components.Pages;
 
 public partial class IdeaWorkspace
 {
-    private string SelectedContentKey => draft.SelectedComponentId ?? "$new";
+    private string SelectedContentKey => WorkspaceContentDraft.KeyForComponent(draft.SelectedComponentId);
     private WorkspaceContentDraft SelectedContent => draft.ContentDrafts.GetValueOrDefault(SelectedContentKey)
         ?? new() { BaseRevision = context?.Revision ?? 0 };
     private WorkspaceLayoutDraft? SelectedLayout => draft.SelectedPlacementId is { } id ? draft.LayoutDrafts.GetValueOrDefault(id) : null;
-    private IReadOnlySet<string> DirtyIds => draft.ContentDrafts.Values.Where(d => d.Dirty).Select(d => d.Key).ToHashSet(StringComparer.Ordinal);
+    private IReadOnlySet<string> DirtyIds => draft.ContentDrafts.Values.Where(d => d.Dirty && d.ComponentId is not null).Select(d => d.ComponentId!).ToHashSet(StringComparer.Ordinal);
     private int DirtyCount => draft.ContentDrafts.Values.Count(d => d.Dirty) + draft.LayoutDrafts.Values.Count(d => d.Dirty) + (draft.Plan.BaseRevision.HasValue ? 1 : 0) + (draft.Discussion.Text.Length > 0 ? 1 : 0);
 
-    private WorkspaceBrowserDraft DraftFromCheckpoint()
+    private WorkspaceBrowserDraft DraftFromCheckpoint() => DraftFromCheckpointFor(clientId, sessionId);
+
+    private WorkspaceBrowserDraft DraftFromCheckpointFor(string checkpointClientId, string checkpointSessionId)
     {
-        var checkpoint = context!.Document.Checkpoints.FirstOrDefault(c => c.ClientId == clientId && c.SessionId == sessionId)
-            ?? context.Document.Checkpoints.Where(c => c.ClientId == clientId).MaxBy(c => c.UpdatedAt);
+        var checkpoint = context!.Document.Checkpoints.FirstOrDefault(c => c.ClientId == checkpointClientId && c.SessionId == checkpointSessionId)
+            ?? context.Document.Checkpoints.Where(c => c.ClientId == checkpointClientId).MaxBy(c => c.UpdatedAt);
         var id = checkpoint?.FocusedComponentIds.FirstOrDefault(c => context.Document.Components.Any(component => component.Id == c))
             ?? context.Document.Components.FirstOrDefault()?.Id;
-        return new() { SelectedComponentId = id, Checkpoint = checkpoint is null ? new() : new() {
-            Objective = checkpoint.Objective, CompletedChanges = string.Join('\n', checkpoint.CompletedChanges),
-            OpenQuestions = string.Join('\n', checkpoint.OpenQuestions), NextActions = string.Join('\n', checkpoint.NextActions),
-            FocusedComponentIds = [.. checkpoint.FocusedComponentIds] } };
+        return new() { SelectedComponentId = id, Checkpoint = checkpoint is null ? new() : WorkspaceCheckpointDraft.From(checkpoint) };
     }
 
     private void EnsureSelectedDrafts()
     {
         if (context is null) return;
         if (draft.SelectedComponentId is { } selected && !context.Document.Components.Any(c => c.Id == selected)
-            && (!draft.ContentDrafts.TryGetValue(selected, out var missing) || !missing.Dirty))
+            && (!draft.ContentDrafts.TryGetValue(WorkspaceContentDraft.KeyForComponent(selected), out var missing) || !missing.Dirty))
             draft = draft with { SelectedComponentId = null, SelectedPlacementId = null };
         var contents = new Dictionary<string, WorkspaceContentDraft>(draft.ContentDrafts);
         if (!contents.ContainsKey(SelectedContentKey))
@@ -53,7 +52,7 @@ public partial class IdeaWorkspace
         foreach (var (id, value) in contents.ToArray())
         {
             if (value.Dirty) continue;
-            var component = context.Document.Components.FirstOrDefault(c => c.Id == id);
+            var component = context.Document.Components.FirstOrDefault(c => c.Id == value.ComponentId);
             if (component is not null) contents[id] = WorkspaceContentDraft.From(component, context.Revision);
             else if (id == "$new") contents[id] = value with { BaseRevision = context.Revision };
         }

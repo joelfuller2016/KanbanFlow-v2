@@ -12,8 +12,9 @@ public partial class IdeaWorkspace
             (request.WorkspaceId is not null && request.WorkspaceId != scope.WorkspaceId)) return;
         var command = new IdeaWorkspaceCommand(Guid.NewGuid().ToString("N"), request.ExpectedRevision ?? context.Revision,
             request.Action, request.Payload.Clone(), "browser:" + clientId);
-        var sectionDraft = DraftSectionValue(draft, request.DraftSection);
-        var pending = new WorkspacePendingCommand(command, request.DraftSection,
+        var section = request.Action is "publish_plan" or "link_project" or "create_project" ? "delivery" : request.DraftSection;
+        var sectionDraft = DraftSectionValue(draft, section);
+        var pending = new WorkspacePendingCommand(command, section,
             sectionDraft is null ? null : JsonSerializer.SerializeToElement(sectionDraft, WorkspaceUiCommand.Json));
         draft = draft with { Pending = pending };
         await ExecutePending(scope, pending);
@@ -46,8 +47,7 @@ public partial class IdeaWorkspace
                 publicationPreview = null;
                 publicationRequest = null;
                 previewSequence++;
-                draft = draft with { Delivery = draft.Delivery with { SelectedItemIds = null, FeatureId = null, FeatureName = "",
-                    AssociationKnown = true, AssociationProjectId = context.ProjectId } };
+                draft = draft with { Delivery = CompleteDeliveryDraft(draft.Delivery, pending, context.ProjectId) };
             }
             latestContext = null;
             ReconcileDeliveryDraft();
@@ -100,7 +100,27 @@ public partial class IdeaWorkspace
             return value.ContentDrafts.GetValueOrDefault(section[8..]);
         if (section?.StartsWith("layout:", StringComparison.Ordinal) == true)
             return value.LayoutDrafts.GetValueOrDefault(section[7..]);
-        return section switch { "discussion" => value.Discussion, "connector" => value.Connector, "plan" => value.Plan, _ => null };
+        return section switch { "discussion" => value.Discussion, "connector" => value.Connector, "plan" => value.Plan, "delivery" => value.Delivery, _ => null };
+    }
+
+    private static WorkspaceDeliveryDraft CompleteDeliveryDraft(WorkspaceDeliveryDraft current, WorkspacePendingCommand pending, int? projectId)
+    {
+        WorkspaceDeliveryDraft? sent = null;
+        if (pending.DraftSection == "delivery" && pending.DraftAtSend is { ValueKind: JsonValueKind.Object } snapshot)
+        {
+            try { sent = snapshot.Deserialize<WorkspaceDeliveryDraft>(WorkspaceUiCommand.Json); }
+            catch (JsonException) { } // Legacy/incompatible acknowledgement metadata cannot authorize clearing authored fields.
+        }
+        var associationChanged = !current.AssociationKnown || current.AssociationProjectId != projectId;
+        var published = pending.Command.Action == "publish_plan" && sent is { AssociationKnown: true }
+            && current.AssociationKnown && sent.AssociationProjectId == projectId && current.AssociationProjectId == projectId;
+        var sameItems = sent is not null && (current.SelectedItemIds is null ? sent.SelectedItemIds is null
+            : sent.SelectedItemIds is not null && current.SelectedItemIds.SequenceEqual(sent.SelectedItemIds));
+        return current with {
+            AssociationKnown = true, AssociationProjectId = projectId,
+            SelectedItemIds = associationChanged || (published && sameItems) ? null : current.SelectedItemIds,
+            FeatureId = associationChanged || (published && current.FeatureId == sent!.FeatureId) ? null : current.FeatureId,
+            FeatureName = published && current.FeatureName == sent!.FeatureName ? "" : current.FeatureName };
     }
 
     private static WorkspaceBrowserDraft ClearSavedSection(WorkspaceBrowserDraft value, WorkspacePendingCommand pending)

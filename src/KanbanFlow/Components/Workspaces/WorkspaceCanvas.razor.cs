@@ -116,7 +116,14 @@ public partial class WorkspaceCanvas
 
     public async ValueTask DisposeAsync()
     {
-        if (interop is not null) await interop.DisposeAsync();
-        dotNet?.Dispose();
+        var ownedInterop = interop;
+        var ownedCallback = dotNet;
+        interop = null;
+        dotNet = null;
+        try
+        {
+            if (ownedInterop is not null) await ownedInterop.DisposeAsync();
+        }
+        finally { ownedCallback?.Dispose(); }
     }
 }

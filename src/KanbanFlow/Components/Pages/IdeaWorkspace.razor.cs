@@ -108,11 +108,12 @@ public partial class IdeaWorkspace
             storageHealthy = false;
             throw new System.Text.Json.JsonException("New edits were entered before the existing browser draft could be restored. Preserve the original stored draft before continuing; neither draft has been replaced.");
         }
+        var restored = cached ?? session.Draft ?? DraftFromCheckpointFor(session.ClientId, session.SessionId);
+        restored.Validate();
+        var normalized = restored.NormalizeContentIdentity();
         clientId = session.ClientId;
         sessionId = session.SessionId;
-        var restored = cached ?? session.Draft ?? DraftFromCheckpoint();
-        restored.Validate();
-        draft = restored;
+        draft = normalized;
         ReconcileDeliveryDraft();
         UpdateCleanDrafts();
         EnsureSelectedDrafts();

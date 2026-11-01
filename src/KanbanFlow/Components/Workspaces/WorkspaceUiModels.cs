@@ -29,8 +29,10 @@ public sealed record WorkspaceContentDraft
     public string OriginalContent { get; init; } = "";
     public bool Dirty { get; init; }
 
+    public static string KeyForComponent(string? componentId) => componentId switch { null => "$new", "$new" => "", _ => componentId };
+
     public static WorkspaceContentDraft From(IdeaWorkspaceComponent component, long revision)
-        => new() { Key = component.Id, ComponentId = component.Id, BaseRevision = revision,
+        => new() { Key = KeyForComponent(component.Id), ComponentId = component.Id, BaseRevision = revision,
             Type = component.Type, Title = component.Title, Content = component.Content,
             Url = component.Url, TaskId = component.TaskId,
             OriginalTitle = component.Title, OriginalContent = component.Content };
@@ -80,6 +82,17 @@ public sealed record WorkspaceCheckpointDraft
     public string OpenQuestions { get; init; } = "";
     public string NextActions { get; init; } = "";
     public List<string> FocusedComponentIds { get; init; } = [];
+    public List<string>? OriginalCompletedChanges { get; init; }
+    public List<string>? OriginalOpenQuestions { get; init; }
+    public List<string>? OriginalNextActions { get; init; }
+
+    public static WorkspaceCheckpointDraft From(IdeaWorkspaceCheckpoint checkpoint) => new()
+    {
+        Objective = checkpoint.Objective, CompletedChanges = string.Join('\n', checkpoint.CompletedChanges),
+        OpenQuestions = string.Join('\n', checkpoint.OpenQuestions), NextActions = string.Join('\n', checkpoint.NextActions),
+        FocusedComponentIds = [.. checkpoint.FocusedComponentIds], OriginalCompletedChanges = [.. checkpoint.CompletedChanges],
+        OriginalOpenQuestions = [.. checkpoint.OpenQuestions], OriginalNextActions = [.. checkpoint.NextActions]
+    };
 }
 public sealed record WorkspacePendingCommand(IdeaWorkspaceCommand Command, string? DraftSection, JsonElement? DraftAtSend = null);
 public sealed record WorkspaceDeliveryDraft
@@ -105,6 +118,55 @@ public sealed record WorkspaceBrowserDraft
     public WorkspaceDeliveryDraft Delivery { get; init; } = new();
     public WorkspacePendingCommand? Pending { get; init; }
 
+    public WorkspaceBrowserDraft NormalizeContentIdentity()
+    {
+        var contents = ContentDrafts;
+        if (contents.TryGetValue("$new", out var legacy) && legacy.ComponentId == "$new")
+        {
+            if (contents.ContainsKey(""))
+                throw new JsonException("Two stored browser buffers use the saved component's draft key. Their original contents have been retained for explicit recovery.");
+            contents = new Dictionary<string, WorkspaceContentDraft>(contents, contents.Comparer);
+            contents.Remove("$new");
+            contents[""] = legacy with { Key = "" };
+        }
+        var pending = Pending;
+        if (pending is { DraftSection: "content:$new" } && pending.Command.Action is "update_component" or "remove_component"
+            && IsSpecialComponent(pending.Command.Payload))
+        {
+            var snapshot = pending.DraftAtSend;
+            if (snapshot is { ValueKind: JsonValueKind.Object } saved && IsSpecialComponent(saved))
+                snapshot = RemapSnapshotKey(saved);
+            // A legacy command without its comparison snapshot must never clear a newer buffer.
+            else if (snapshot is null) snapshot = JsonSerializer.SerializeToElement<object?>(null);
+            pending = pending with { DraftSection = "content:", DraftAtSend = snapshot };
+        }
+        return ReferenceEquals(contents, ContentDrafts) && ReferenceEquals(pending, Pending)
+            ? this : this with { ContentDrafts = contents, Pending = pending };
+    }
+
+    private static bool IsSpecialComponent(JsonElement value)
+        => value.ValueKind == JsonValueKind.Object && value.TryGetProperty("componentId", out var id)
+            && id.ValueKind == JsonValueKind.String && id.GetString() == "$new";
+
+    private static JsonElement RemapSnapshotKey(JsonElement saved)
+    {
+        using var stream = new MemoryStream();
+        using (var writer = new Utf8JsonWriter(stream))
+        {
+            writer.WriteStartObject();
+            var found = false;
+            foreach (var property in saved.EnumerateObject())
+            {
+                if (property.NameEquals("key")) { writer.WriteString(property.Name, ""); found = true; }
+                else property.WriteTo(writer);
+            }
+            if (!found) writer.WriteString("key", "");
+            writer.WriteEndObject();
+        }
+        using var document = JsonDocument.Parse(stream.ToArray());
+        return document.RootElement.Clone();
+    }
+
     public void Validate()
     {
         static void Require(bool valid, string section)
@@ -129,7 +191,10 @@ public sealed record WorkspaceBrowserDraft
         Require(Plan.Items!.Select(item => item.Id).Distinct(StringComparer.Ordinal).Count() == Plan.Items.Count, "plan item identities");
         Require(Checkpoint!.Objective is not null && Checkpoint.CompletedChanges is not null && Checkpoint.OpenQuestions is not null
             && Checkpoint.NextActions is not null && Checkpoint.FocusedComponentIds is not null
-            && Checkpoint.FocusedComponentIds.All(id => id is not null), "checkpoint draft");
+            && Checkpoint.FocusedComponentIds.All(id => id is not null)
+            && (Checkpoint.OriginalCompletedChanges is null || Checkpoint.OriginalCompletedChanges.All(line => line is not null))
+            && (Checkpoint.OriginalOpenQuestions is null || Checkpoint.OriginalOpenQuestions.All(line => line is not null))
+            && (Checkpoint.OriginalNextActions is null || Checkpoint.OriginalNextActions.All(line => line is not null)), "checkpoint draft");
         Require(Delivery!.ProjectName is not null && Delivery.FeatureName is not null
             && (Delivery.AssociationProjectId is null || Delivery.AssociationProjectId > 0)
             && (Delivery.SelectedItemIds is null || Delivery.SelectedItemIds.All(id => id is not null)), "delivery draft");

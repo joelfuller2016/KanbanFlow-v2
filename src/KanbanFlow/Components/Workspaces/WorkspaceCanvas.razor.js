@@ -15,11 +15,11 @@ class CanvasController {
         root.addEventListener('pointerdown', event => this.#start(event), options);
         root.addEventListener('pointermove', event => this.#move(event), options);
         root.addEventListener('pointerup', event => this.#finish(event), options);
-        root.addEventListener('pointercancel', () => this.#reset(), options);
+        root.addEventListener('pointercancel', event => { if (event.pointerId === this.#gesture?.pointerId) this.#reset(); }, options);
         root.addEventListener('keydown', event => this.#key(event), options);
     }
 
-    #available() { return !this.#pending && this.#root.dataset.busy !== 'true'; }
+    #available() { return !this.#pending && !this.#gesture && this.#root.dataset.busy !== 'true'; }
     #start(event) {
         const handle = event.target.closest('.workspace-drag-handle, .workspace-resize-handle');
         const card = handle?.closest('[data-placement-id]');

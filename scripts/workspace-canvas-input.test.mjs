@@ -16,13 +16,27 @@ function canvasBoundary(callback) {
     dataset: { workspaceId: "idea:11", revision: "8", busy: "false" },
     addEventListener: (name, handler) => handlers.set(name, handler),
     closest: () => boundary.attached ? { querySelector: () => boundary.hasError ? error : null } : null,
+    querySelectorAll: () => boundary.cards,
   };
-  const card = { dataset: { placementId: "card-position", localX: "30", localY: "40", width: "320", height: "220" } };
-  const handle = { closest: selector => selector === "[data-placement-id]" ? card : handle };
+  boundary.cards = ["card-position", "second-position"].map(placementId => {
+    const properties = new Map();
+    return { dataset: { placementId, localX: "30", localY: "40", width: "320", height: "220" },
+      properties, style: { setProperty: (name, value) => properties.set(name, value), removeProperty: name => properties.delete(name) } };
+  });
+  const handles = boundary.cards.map(card => ({
+    captured: [], resized: false,
+    closest(selector) { return selector === "[data-placement-id]" ? card : this; },
+    classList: { contains: name => name === "workspace-resize-handle" && handles[boundary.cards.indexOf(card)].resized },
+    setPointerCapture(pointerId) { this.captured.push(pointerId); },
+  }));
   const context = createContext({ AbortController });
   script.runInContext(context);
   context.canvasModule.initialize(root, { invokeMethodAsync: callback });
-  boundary.key = () => handlers.get("keydown")({ target: handle, key: "ArrowRight", shiftKey: false, preventDefault() {} });
+  boundary.handles = handles;
+  boundary.key = () => handlers.get("keydown")({ target: handles[0], key: "ArrowRight", shiftKey: false, preventDefault() {} });
+  boundary.pointer = (name, pointerId, index = 0, clientX = 0, clientY = 0) => handlers.get(name)({
+    target: handles[index], pointerId, clientX, clientY, button: 0, preventDefault() {},
+  });
   boundary.dispose = () => context.canvasModule.dispose(root);
   return boundary;
 }
@@ -66,4 +80,75 @@ test("a later successful layout clears the prior transport failure and permits a
   await assert.doesNotReject(canvas.key());
   assert.equal(attempts, 3);
   canvas.dispose();
+});
+
+test("a second pointer cannot replace an active drag or leave either card offset", async () => {
+  const calls = [];
+  const canvas = canvasBoundary(async (...args) => calls.push(args));
+  canvas.pointer("pointerdown", 1);
+  canvas.pointer("pointermove", 1, 0, 25, 15);
+  canvas.pointer("pointerdown", 2, 1);
+  canvas.pointer("pointermove", 2, 1, 70, 80);
+
+  assert.deepEqual(canvas.handles[0].captured, [1]);
+  assert.deepEqual(canvas.handles[1].captured, []);
+  assert.equal(canvas.cards[0].properties.get("--preview-dx"), "25px");
+  assert.equal(canvas.cards[1].properties.size, 0);
+  await canvas.pointer("pointerup", 2, 1, 70, 80);
+  assert.equal(calls.length, 0);
+  await canvas.pointer("pointerup", 1, 0, 25, 15);
+
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0][2][0].placementId, "card-position");
+  assert.equal(calls[0][2][0].x, 55);
+  assert.equal(calls[0][2][0].y, 55);
+  assert.equal(canvas.cards[0].properties.size, 0);
+  assert.equal(canvas.cards[1].properties.size, 0);
+  canvas.dispose();
+});
+
+test("canceling a foreign pointer preserves the active drag until its own pointer completes", async () => {
+  const calls = [];
+  const canvas = canvasBoundary(async (...args) => calls.push(args));
+  canvas.pointer("pointerdown", 1);
+  canvas.pointer("pointermove", 1, 0, 25, 15);
+  canvas.pointer("pointercancel", 2, 1);
+  assert.equal(canvas.cards[0].properties.get("--preview-dx"), "25px");
+  await canvas.pointer("pointerup", 1, 0, 25, 15);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0][2][0].x, 55);
+  assert.equal(canvas.cards[0].properties.size, 0);
+  canvas.dispose();
+});
+
+test("keyboard layout commands wait until the active pointer gesture finishes", async () => {
+  const calls = [];
+  const canvas = canvasBoundary(async (...args) => calls.push(args));
+  canvas.pointer("pointerdown", 1);
+  canvas.pointer("pointermove", 1, 0, 25, 15);
+  await canvas.key();
+  assert.equal(calls.length, 0);
+  assert.equal(canvas.cards[0].properties.get("--preview-dx"), "25px");
+  await canvas.pointer("pointerup", 1, 0, 25, 15);
+  await canvas.key();
+  assert.equal(calls.length, 2);
+  assert.equal(calls[0][2][0].x, 55);
+  assert.equal(calls[1][2][0].x, 40);
+  canvas.dispose();
+});
+
+test("cancel and disposal clear the owning pointer preview without publishing it", async () => {
+  const calls = [];
+  const canvas = canvasBoundary(async (...args) => calls.push(args));
+  canvas.handles[0].resized = true;
+  canvas.pointer("pointerdown", 1);
+  canvas.pointer("pointermove", 1, 0, 25, 15);
+  assert.equal(canvas.cards[0].properties.get("--preview-width"), "345px");
+  canvas.pointer("pointercancel", 1);
+  assert.equal(canvas.cards[0].properties.size, 0);
+  canvas.pointer("pointerdown", 2);
+  canvas.pointer("pointermove", 2, 0, 10, 20);
+  canvas.dispose();
+  assert.equal(canvas.cards[0].properties.size, 0);
+  assert.equal(calls.length, 0);
 });
