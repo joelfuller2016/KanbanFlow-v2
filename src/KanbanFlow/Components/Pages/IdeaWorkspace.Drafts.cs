@@ -66,7 +66,8 @@ public partial class IdeaWorkspace
     {
         if (!IsCurrent(scope)) return false;
         var snapshot = draft;
-        browserCache[scope.WorkspaceId] = snapshot;
+        if (restoredBrowserWorkspaces.Contains(scope.WorkspaceId))
+            browserCache[scope.WorkspaceId] = snapshot;
         if (browser is null || !Ready) return false;
         var version = ++persistenceVersion;
         try

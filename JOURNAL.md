@@ -52,6 +52,16 @@ A review of the repository and a test run on 2026-09-26 filed findings as issues
 
 ## Entries (newest first)
 
+- 2026-11-01 04:00Z (PR #580 — all 12 CodeRabbit/Copilot threads from f2e7999 round resolved; Drafts.cs browserCache guard committed):
+  - Resolved all 12 open review threads: 4 fixed in 4de1359 (WGAe, WLbB, WGAs, WLa9), 3 stale-resolved (WGAi, WLbN, WLbx — code already addressed), 5 deferred (WGAS, WGAV, WGAd, WLbY, WLbi).
+  - Committed pending Drafts.cs change: PersistDraft now guards browserCache write behind `restoredBrowserWorkspaces.Contains(scope.WorkspaceId)` — prevents stomping cached in-memory draft before workspace restoration completes (addresses WGAd root cause).
+  - PR #85/branch feat/579-idea-workspaces HEAD: awaiting Codex reviews on 4de1359 and 0613e47. 0 unresolved threads. Next: resolve any new Codex findings; notify owner when PR is clean.
+
+- 2026-11-01 02:50Z (PR #580 — correction: WGAV (workspace-transport stdin/exit) fixed in 0613e47, not deferred):
+  - The 02:30Z entry listed WGAV as deferred. In fact, commit 0613e47 (which precedes 4de1359 in branch history) already fixes it: exit handler includes signal via `code ?? signal`; rpc() now rejects immediately when child has already exited. Correction reply posted at comment 4433973652. All 4 Copilot threads from 5cf4438 review also fixed in 91999ee and resolved. CodeRabbit JOURNAL.md spacing thread resolved as by-design (append-only rule).
+  - Codex code + security reviews on 91999ee: both complete, has_unresolved_findings:false.
+  - Awaiting Codex reviews on 4de1359 and 0613e47. Next: resolve any new findings; notify owner when PR is clean.
+
 - 2026-11-01 02:30Z (PR #580 — new CodeRabbit/Copilot round on f2e7999, 4 fixed + 5 deferred + 5 stale-resolved):
   - Resolved Codex WJaN (Refresh race — already fixed 53b75f6) and WJaO (delivery features — already deferred).
   - Fix 4de1359: Commands.cs:129 normalize DraftAtSend via JsonNode.Parse before GetRawText comparison (Copilot WLa9); Delivery.cs InspectPublishedTask StateHasChanged() before first await (Copilot WLbB); IdeaWorkspace.razor Retry button disabled=@busy guard (CodeRabbit WGAe); WriteTests deep-chain assertion strengthened to check Action+ActivityId (CodeRabbit WGAs).
