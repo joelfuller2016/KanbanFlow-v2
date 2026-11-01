@@ -157,6 +157,10 @@ A review of the repository and a test run on 2026-09-26 filed findings as issues
   - Codex Security Review: has_any_findings: null/completed ✅ (completed 03:46Z).
   - #580 HEAD=d322ce4, Codex clean. Copilot re-review pending. PR ready for owner's merge.
 
+- 2026-11-01 03:44Z (PR monitor — new Copilot review on #511, Low finding replied):
+  - Copilot posted new review on #511 (commit edce7af8, "Lite" effort). Shows 2 previously-escalated threads (subtask hash, Windows path casing) as "resolved since last review".
+  - 1 new Low finding (comment 4434291354, ActivityTimelineTests.cs:1259): DisplayLabels derived from ActivityTimelineBuilder.DisplayFields dynamically — tautological, can't catch label regressions. Verified valid. Low severity (optional per policy). Replied (comment 4434293695): will carry explicit 21-label list into next code push to PR #511.
+
 - 2026-11-01 03:37Z (PR monitor — Copilot review on #580 HEAD 32079a0; 2 bugs fixed, 1 deferred):
   - Copilot posted review (review_id=5726261507): 1 high + 2 medium findings.
   - Finding 1 (high, IdeaWorkspace.Delivery.cs:77): publish_plan sent unresolved featureId/featureName from the original preview request, not the resolved values from the preview result. If a previewed feature was deleted and another exists, the server silently picked a different default. Fixed in d322ce4: now sends publicationPreview.FeatureId (resolved) and, for new-feature case only, publicationPreview.FeatureName. Deleted preview target now fails explicitly (publication_target_missing). Replied+resolved.
@@ -178,6 +182,8 @@ A review of the repository and a test run on 2026-09-26 filed findings as issues
   - Confirmed e01fa76 (already pushed) addresses CodeRabbit finding on Ideas.razor:606 (WorkflowException conflict fell through to generic catch).
   - Replied on thread with confirmation (reply comment 4434209389). Thread PRRT_kwDOSA8y6s6yWzor now has a response; CodeRabbit can resolve it on next review cycle.
   - 2 remaining open Copilot threads on #511 (subtask hash, Windows path casing) still awaiting owner decision. Build gate still DOWN.
+
+
 
 - 2026-11-01 03:05Z (PR monitor — CodeRabbit incremental review on #511, fix applied):
   - CodeRabbit posted 1 actionable inline comment on Ideas.razor:606 (incremental review of 399648b→a6e7b49).
@@ -321,6 +327,50 @@ A review of the repository and a test run on 2026-09-26 filed findings as issues
   - T01 contract committed0f4eb5797e5f0c424edece83634a43c8eb6485f3 in docs/idea-workspaces.md. Source review of unmerged PR511 found request workflow tables/services; use separate IdeaWorkspace namespaces/tables and reuse current TaskService.CreateInContextAsync for future atomic publication. Independent critique resolved shared project-plan revision validation and linked-project full-source snapshot capture before deletion recovery. Five identity/recovery/concurrency walkthroughs recorded; git diff --check passed. No runtime feature claim for this contract-only checkpoint.
   - T02 ownership: storage worker new typed models/service/schema, test worker focused real-SQLite service/schema assertions, primary context/DI/startup wiring and integration. Test plan/research in non-stageable Git worktree metadata. Keep tasks sequential, source commits and actual results in this journal/issue. No code push, PR, merge or deployment authorized; primary journal direct push remains restricted by PR protection and no admin bypass will be used. Owner usability feedback remains pending.
 
+
+- 2026-11-01 02:52Z - Corrected shell escape characters in this review's immediately preceding checkpoint entry. Its initial insertion used an expandable PowerShell here-string around SHA markup, creating two escape characters and a NUL. Replaced only that new entry with literal text, retained every older entry, and verified the journal is plain UTF-8 text with zero NULs. Future generated prose uses literal strings. No application files changed.
+
+
+
+- 2026-11-01 02:51Z - Full five-PR code-review checkpoint after concurrent head changes.
+  - Refreshed immutable heads: PR #580 73085d282950a456b56b2d5aae404b5be0b8ffde, #521 ef34d61f2a1e64f73442515afc93567ae1140b40, #511 ed205efdca4b39ce3703ab6d220744c35531ebff, #564 0dadff673698e05f0de4ad65fc028015a69e5ddc; #578 unchanged at 17780aa01cc28c12dbf322379a33074b7ce3becc. Original dirty feature checkout preserved.
+  - Delegated fresh-source verification observed zero-warning/error builds and full .NET passes: #580 1660, #521 1273, #511 1634, #564 1259. The exact earlier #580 pre-restoration retry regression now passes; its earlier red result is historical, and this review did not implement that concurrent fix. Current script/formatter/browser completion remains pending.
+  - #578 remains a build blocker: installed ASP.NET OpenAPI 10.0.14 excludes OpenApi 3.x; warnings-as-errors build reports NU1608 and generated-code CS0200. No application repair, merge, deployment or remote review comment performed.
+  - Fresh schema review found no confirmed introduced migration defect. PR #511 plan mapped across U-01-U-18 and nine final checks; actual human usability/adoption and expressly future work remain separate. Complete prior-comment evidence fetched; remaining selected source reviews and independent finding validation still running.
+  - Verified review lesson: recalculate merge bases after concurrent master merges and validate motivating quotes against immutable Git objects. Filled empty staged intent summaries; excluded a stale-source parent candidate and an unreachable UI interleaving. Journal-only publication reuses the earlier passing master gate because every non-journal file is byte-identical to verified 878fe8ddb3fe21410b7acde735bc29cda4639946.
+
+- 2026-11-01 02:45Z (PR monitor — 3 more Copilot performance findings on #580 replied+resolved):
+  - Copilot posted 3 more medium findings on 73085d2 (second re-review of same HEAD).
+  - Finding 1 (r4434164875, WorkspaceOutline.razor:9–28): O(C×P) outline rendering — component sort and placement count each scan the full placement list per component. Valid; imperceptible at typical scale. Replied+resolved PRRT_kwDOSA8y6s6yWt_V; deferred (dict lookup in OnParametersSet).
+  - Finding 2 (r4434164902, WorkspacePlanItemEditor.razor:11–13): O(N²) prerequisite checkboxes — each item editor renders N-1 checkboxes; quadratic for 500+ items. Valid; practical plans are fine. Replied+resolved PRRT_kwDOSA8y6s6yWt_n; deferred (lazy expansion / paged picker).
+  - Finding 3 (r4434164909, WorkspacePlanVersion.razor:9 + WorkspaceDeliveryPanel.razor:61): O(N²) dependency label lookup via repeated FirstOrDefault. Valid; correct fix is a Dictionary<id,title> built once per render. Replied+resolved PRRT_kwDOSA8y6s6yWt_s; deferred.
+  - All 83 threads on #580 now resolved. These are optimization deferrals, not correctness issues.
+
+- 2026-11-01 02:40Z (PR monitor — Codex both clean on #580 HEAD 73085d2; PR fully reviewed):
+  - Codex code review on 73085d282950a456b56b2d5aae404b5be0b8ffde: has_any_findings=false, status=completed. ✅
+  - Codex security review on 73085d282950a456b56b2d5aae404b5be0b8ffde: has_any_findings=null, status=completed. ✅
+  - PR #580 is fully reviewed: all 80 threads resolved, Codex and Copilot both clean on 73085d2, owner delivery record posted. PR is ready for owner merge (T08).
+
+- 2026-11-01 02:40Z (PR monitor — Copilot review on #580 HEAD 73085d2, two findings replied+resolved):
+  - Owner posted closing delivery record on PR #580 (comment 6552403415): all 78 threads resolved, 1,660 .NET / 374 script / 41 browser / 2 integration checks, Codex on 925f2ef clean. PR stays open; merge and owner walkthrough (T08) remain open.
+  - Owner pushed 73085d282950a456b56b2d5aae404b5be0b8ffde (JOURNAL.md only) to feat/579-idea-workspaces; Copilot review triggered on new HEAD.
+  - Copilot Finding 1 (Medium, r4434146742): pointer-up coordinates — `#finish` uses last `#move` dx/dy; `pointerup` could carry different coordinates. Valid edge case; desktop OS coalesces events so gap is sub-pixel and below the ≥2 px commit threshold; `lostpointercapture → #reset()` guards forced releases. Replied and resolved thread PRRT_kwDOSA8y6s6yWrMF; deferred to next iteration.
+  - Copilot Finding 2 (Medium, r4434146754): unkeyed Blazor `<option>` elements in `WorkspaceDeliveryPanel`, `WorkspaceDiscussion`, `WorkspaceConnections`, `WorkspaceLayoutEditor`. Valid best practice; Blazor Server's synchronous circuit rendering prevents mid-render interactions so the described race cannot occur in practice, but `@key` is still the correct approach. Replied and resolved thread PRRT_kwDOSA8y6s6yWrMM; deferred to next iteration.
+  - All threads on #580 now resolved including new Copilot findings. Codex reviews on 73085d2 still running as of 02:36Z.
+
+
+- 2026-11-01 03:03Z - Published PR #580 repair head c674da7763f9bfb2909601a395ed9060dd841a51 and verified remote equality. Preserved concurrent73085d282950a456b56b2d5aae404b5be0b8ffde fixes and all complete journal entries; retained incoming storage/feature implementations instead of duplicate task state. Combined warnings-as-errors gate passed1677 .NET tests; full script suite374/374. Real REST/native/stdio write and delivery suites passed (17 write tools,53 native/75 wrapper tools; exact long content, receipts, shared-plan publication); actual inventory97 REST operations. Five browser suites passed on this exact app build: new delayed-typing/selection/appearance/contrast checks, existing-feature recovery through actual UI publication, convergence, polling and storage recovery. Warning contrast7.99:1 light/11.38:1 dark; stale controls ignored and keyboard focus retained. Fresh staged-source review found no blockers. Owned app/browser stopped; original dirty checkout preserved. Final bot readback found additional older-PR defects, now being fixed in parallel: project-memory key canonicalization (#521), clone-probe gating for unavailable logs (#564), workflow evidence/repository-path identity and minor drag-conflict presentation (#511). These are not deferred as owner decisions; no merge or human acceptance is claimed. Verified lesson: refresh moving PRs before publication and merge concurrent implementations once, preserving their regression coverage and removing duplicate state machines.
+
+
+- 2026-11-01 02:59Z (PR monitor — Codex both clean on #580 HEAD c674da7):
+  - Codex code review on c674da7763f9bfb2909601a395ed9060dd841a51: has_any_findings=false, status=completed. ✅
+  - Codex security review on c674da7763f9bfb2909601a395ed9060dd841a51: has_any_findings=null, status=completed. ✅
+  - All 83 threads resolved. PR #580 HEAD c674da7 is clean on Codex. Awaiting Copilot review on new HEAD.
+
+
+- 2026-11-01 02:55Z (PR monitor — owner pushed c674da7, new code commit on #580):
+  - Owner pushed c674da7763f9bfb2909601a395ed9060dd841a51 to feat/579-idea-workspaces: "fix: preserve workspace input and selected-control identity". 544+/51- across WorkspaceDeliveryPanel, WorkspaceDiscussion, WorkspaceConnections, WorkspaceLayoutEditor, WorkspaceContentEditor, WorkspacePlanItemEditor, WorkspacePlanPanel, WorkspaceSourceDocuments, WorkspaceCard, WorkspaceCheckpointPanel, IdeaWorkspace. New: workspace-ui-feature-recovery.browser.mjs, workspace-ui-races.browser.mjs, WorkspaceLayoutEditorPlacementTests.cs (177 lines); extended IdeaWorkspaceRestoreAndRelinkTests.cs (+91).
+  - PR HEAD is now c674da7. Codex code+security reviews failed with service error ("We couldn't complete this review") — not actual findings. Awaiting Copilot review on new HEAD.
 
 - 2026-11-01 02:52Z - Corrected shell escape characters in this review's immediately preceding checkpoint entry. Its initial insertion used an expandable PowerShell here-string around SHA markup, creating two escape characters and a NUL. Replaced only that new entry with literal text, retained every older entry, and verified the journal is plain UTF-8 text with zero NULs. Future generated prose uses literal strings. No application files changed.
 

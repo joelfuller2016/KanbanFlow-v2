@@ -1,0 +1,247 @@
+using System.Data.Common;
+using KanbanFlow.Models;
+using KanbanFlow.Models.Workflows;
+using KanbanFlow.Services.Workflows;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Diagnostics;
+using Xunit.Abstractions;
+using static KanbanFlow.Tests.WorkflowSqliteTestFactory;
+
+namespace KanbanFlow.Tests.Services;
+
+public sealed class WorkspaceQueryTests(ITestOutputHelper output)
+{
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ReportAndAccept_RejectMissingDependenciesWithoutEvidenceOrCompletion(bool legacyEvidence)
+    {
+        using var factory = new WorkflowSqliteTestFactory();
+        var prerequisite = Draft("Prerequisite");
+        var root = Draft("Root", prerequisite.Id);
+        var request = await factory.PublishedAsync(prerequisite, root);
+        var item = request.WorkItems.Single(t => t.DraftId == root.Id);
+        await using var db = factory.CreateDbContext();
+        await db.Database.OpenConnectionAsync();
+        await db.Database.ExecuteSqlRawAsync("PRAGMA foreign_keys = OFF");
+        await db.Database.ExecuteSqlInterpolatedAsync($"UPDATE TaskDependencies SET DependsOnTaskItemId = {int.MaxValue} WHERE TaskItemId = {item.TaskItemId}");
+
+        if (!legacyEvidence)
+        {
+            await RejectAsync("invalid", () => factory.Service.RecordEvidenceAsync(request.Id, request.Version, item.Id,
+                new EvidenceDraft("Claimed result", "Claimed checks", "src/Work.cs"), Actor, "missing-report"));
+            var unchanged = await factory.LoadAsync(request.Id);
+            Assert.Equal(request.Version, unchanged.Version);
+            Assert.Empty(unchanged.WorkItems.Single(t => t.Id == item.Id).Evidence);
+            Assert.Equal(WorkStatus.Todo, unchanged.WorkItems.Single(t => t.Id == item.Id).Task.Status);
+            Assert.False(await db.WorkflowReceipts.AnyAsync(r => r.Key == "missing-report"));
+            return;
+        }
+
+        // A legacy report may already carry the old sentinel. It must be historical in
+        // context and must not pass acceptance merely because both hashes are identical.
+        var evidence = new TaskEvidence { WorkItemId = item.Id, SpecificationVersion = item.SpecificationVersion,
+            SpecificationHash = item.SpecificationHash, TaskStateHash = "missing-task", Summary = "Legacy report",
+            Checks = "Claimed checks", CodeReference = "old-source", Author = Actor, CreatedAt = factory.Clock.GetUtcNow().UtcDateTime };
+        db.TaskEvidence.Add(evidence);
+        await db.SaveChangesAsync();
+        await RejectAsync("invalid", () => factory.Service.AcceptEvidenceAsync(request.Id, request.Version, item.Id,
+            evidence.Id, item.Task.AcceptanceCriteria.Select(c => c.Id).ToArray(), Actor, "missing-accept"));
+        var context = (await factory.Service.ContextAsync(request.Id))!;
+        Assert.False(context.Tasks.Single(t => t.Id == item.Id).Evidence.Single().Current);
+        Assert.Equal("missing-task", context.Tasks.Single(t => t.Id == item.Id).EditToken);
+        var after = await factory.LoadAsync(request.Id);
+        var task = after.WorkItems.Single(t => t.Id == item.Id);
+        Assert.Equal(WorkStatus.Todo, task.Task.Status);
+        Assert.All(task.Task.AcceptanceCriteria, c => Assert.False(c.Completed));
+        Assert.Null(task.Evidence.Single().AcceptedAt);
+        Assert.Equal(request.Version, after.Version);
+        Assert.False(await db.WorkflowReceipts.AnyAsync(r => r.Key == "missing-report" || r.Key == "missing-accept"));
+    }
+
+    [Fact]
+    public async Task SaveAndPublish_RejectIncompleteDependencyGraphWithoutChangingPlanOrTasks()
+    {
+        using var factory = new WorkflowSqliteTestFactory();
+        var prerequisite = Draft("Prerequisite");
+        var root = Draft("Root", prerequisite.Id);
+        var request = await factory.PublishedAsync(prerequisite, root);
+        var context = (await factory.Service.ContextAsync(request.Id))!;
+        var revised = new[] { prerequisite, root with { Description = "Revised scope" } };
+        var saved = await factory.Service.SavePlanAsync(request.Id, request.Version, revised, Actor, "valid-replan",
+            expectedTaskStates: context.Tasks.ToDictionary(t => t.TaskId, t => t.EditToken));
+        request = await factory.LoadAsync(request.Id);
+        var rootId = request.WorkItems.Single(t => t.DraftId == root.Id).TaskItemId;
+        await using (var corrupt = factory.CreateDbContext())
+        {
+            await corrupt.Database.OpenConnectionAsync();
+            await corrupt.Database.ExecuteSqlRawAsync("PRAGMA foreign_keys = OFF");
+            await corrupt.Database.ExecuteSqlInterpolatedAsync($"UPDATE TaskDependencies SET DependsOnTaskItemId = {int.MaxValue} WHERE TaskItemId = {rootId}");
+        }
+        var read = (await factory.Service.ContextAsync(request.Id))!;
+        var invalid = await RejectAsync("invalid", () => factory.Service.SavePlanAsync(request.Id, saved.Version, revised, Actor, "invalid-replan",
+            expectedTaskStates: read.Tasks.ToDictionary(t => t.TaskId, t => t.EditToken)));
+        Assert.Contains("missing task", invalid.Message);
+        await RejectAsync("invalid", () => factory.Service.PublishPlanAsync(request.Id, saved.Version,
+            request.Plans.MaxBy(p => p.Number)!.Id, Actor, "invalid-publish"));
+        var after = await factory.LoadAsync(request.Id);
+        Assert.Equal(saved.Version, after.Version);
+        Assert.Equal(2, after.Plans.Count);
+        Assert.Null(after.Plans.MaxBy(p => p.Number)!.PublishedAt);
+        Assert.Equal(root.Description, after.WorkItems.Single(t => t.TaskItemId == rootId).Task.Description);
+        await using var db = factory.CreateDbContext();
+        Assert.False(await db.WorkflowReceipts.AnyAsync(r => r.Key == "invalid-replan" || r.Key == "invalid-publish"));
+    }
+
+    [Theory]
+    [InlineData(12)]
+    [InlineData(100)]
+    public async Task RepublishManyChangedTasks_BatchesDependencyCleanup(int count)
+    {
+        var counter = new QueryCounter();
+        using var factory = new WorkflowSqliteTestFactory(counter);
+        var drafts = Enumerable.Range(0, count).Select(i => Draft($"Task {i}")).ToArray();
+        for (var i = 1; i < count; i++) drafts[i] = drafts[i] with { Dependencies = [drafts[i - 1].Id] };
+        var request = await factory.PublishedAsync(drafts);
+        var read = (await factory.Service.ContextAsync(request.Id))!;
+        var revised = drafts.Select(d => d with { Description = "Reviewed new scope" }).ToArray();
+        var saved = await factory.Service.SavePlanAsync(request.Id, request.Version, revised, Actor, "replan-all",
+            expectedTaskStates: read.Tasks.ToDictionary(t => t.TaskId, t => t.EditToken));
+        request = await factory.LoadAsync(request.Id);
+        counter.Reset();
+        await factory.Service.PublishPlanAsync(request.Id, saved.Version, request.Plans.MaxBy(p => p.Number)!.Id, Actor, "republish-all");
+        // Other domain mutations have their own reads. This is the direct cleanup query
+        // (not an Include/recursive graph read), which must run once for the whole set.
+        var dependencyReads = counter.Reads.Where(sql => sql.Contains("FROM \"TaskDependencies\" AS")
+            && !sql.Contains("JOIN", StringComparison.OrdinalIgnoreCase)
+            && sql.IndexOf("WHERE", StringComparison.Ordinal) is var where && where >= 0
+            && sql[where..].Contains("\"TaskItemId\"", StringComparison.Ordinal)).ToArray();
+        Assert.Single(dependencyReads);
+        var after = await factory.LoadAsync(request.Id);
+        Assert.All(after.WorkItems, t => Assert.Equal("Reviewed new scope", t.Task.Description));
+        Assert.Equal(count - 1, after.WorkItems.Sum(t => t.Task.Dependencies.Count));
+    }
+
+    [Fact]
+    public async Task TaskStateHash_CycleTerminatesAndMissingDependencyRejectsPartialGraph()
+    {
+        var counter = new QueryCounter();
+        using var factory = new WorkflowSqliteTestFactory(counter);
+        var a = Draft("A");
+        var b = Draft("B", a.Id);
+        var request = await factory.PublishedAsync(a, b);
+        var first = request.WorkItems.Single(t => t.DraftId == a.Id).TaskItemId;
+        var second = request.WorkItems.Single(t => t.DraftId == b.Id).TaskItemId;
+        await using var db = factory.CreateDbContext();
+        // Legacy corruption can bypass the domain cycle guard. Reads must still finish.
+        db.TaskDependencies.Add(new TaskDependency { ProjectId = request.ProjectId!.Value, TaskItemId = first, DependsOnTaskItemId = second });
+        await db.SaveChangesAsync();
+        counter.Reset();
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        var hash = await WorkspaceService.TaskStateHashAsync(db, first, timeout.Token);
+        Assert.Matches("^[0-9A-F]{64}$", hash);
+        Assert.InRange(counter.Reads.Count, 1, 5);
+
+        await db.Database.OpenConnectionAsync();
+        await db.Database.ExecuteSqlRawAsync("PRAGMA foreign_keys = OFF");
+        await db.Database.ExecuteSqlInterpolatedAsync($"UPDATE TaskDependencies SET DependsOnTaskItemId = {int.MaxValue} WHERE TaskItemId = {first}");
+        Assert.Equal("missing-task", await WorkspaceService.TaskStateHashAsync(db, first));
+        Assert.Equal("missing-task", await WorkspaceService.TaskStateHashAsync(db, int.MaxValue));
+    }
+
+    [Fact]
+    public async Task TaskStateHash_ReadsPersistedReachableStateAndNeverCachesAcrossOperations()
+    {
+        using var factory = new WorkflowSqliteTestFactory();
+        var request = await factory.PublishedAsync(Draft("Root"));
+        var unrelated = await factory.PublishedAsync(Draft("Unrelated"));
+        var taskId = request.WorkItems.Single().TaskItemId;
+        await using var db = factory.CreateDbContext();
+        var before = await WorkspaceService.TaskStateHashAsync(db, taskId);
+        var tracked = await db.Tasks.SingleAsync(t => t.Id == taskId);
+        tracked.Description = "Unsaved human draft";
+        Assert.Equal(before, await WorkspaceService.TaskStateHashAsync(db, taskId));
+        var unrelatedId = unrelated.WorkItems.Single().TaskItemId;
+        await db.Tasks.Where(t => t.Id == unrelatedId).ExecuteUpdateAsync(s => s.SetProperty(t => t.Description, "Other graph changed"));
+        Assert.Equal(before, await WorkspaceService.TaskStateHashAsync(db, taskId));
+        await db.SaveChangesAsync();
+        Assert.NotEqual(before, await WorkspaceService.TaskStateHashAsync(db, taskId));
+    }
+
+    [Fact]
+    public async Task TaskStateHashes_MatchPreviouslyPublishedHashFormat()
+    {
+        using var factory = new WorkflowSqliteTestFactory();
+        var first = Draft("First");
+        var second = Draft("Second", first.Id);
+        var third = Draft("Third", first.Id, second.Id);
+        var request = await factory.PublishedAsync(first, second, third);
+        await using var db = factory.CreateDbContext();
+        var hashes = new List<string>();
+        foreach (var task in request.WorkItems.OrderBy(t => t.TaskItemId))
+            hashes.Add(await WorkspaceService.TaskStateHashAsync(db, task.TaskItemId));
+        output.WriteLine(string.Join("\n", hashes));
+        // Captured from the pre-batch implementation at 77c44fc using this fixed graph.
+        Assert.Equal(new[] {
+            "D62554382EA39AE138710309AF7DF4C29BD6335F252C35D241214435BF18C2DD",
+            "B59D53C21150479CBA30CC4A6EEE231989E2DA73FF798063B51D02C71C60CF90",
+            "2CF56DF7578433B990A8C6074DA84FD5EEE27962E2FD225B35D27772D6EAA69F"
+        }, hashes);
+    }
+
+    [Theory]
+    [InlineData(1)]
+    [InlineData(12)]
+    [InlineData(100)]
+    public async Task ContextAndPlanRevision_BoundReadsAcrossDependencyChains(int count)
+    {
+        var counter = new QueryCounter();
+        using var factory = new WorkflowSqliteTestFactory(counter);
+        var drafts = new List<TaskDraft>();
+        for (var i = 0; i < count; i++)
+            drafts.Add(Draft($"Task {i}", i == 0 ? [] : [drafts[^1].Id]));
+        var request = await factory.PublishedAsync(drafts.ToArray());
+
+        counter.Reset();
+        var context = (await factory.Service.ContextAsync(request.Id))!;
+        var contextReads = counter.Reads.Count;
+        output.WriteLine($"Context {count} tasks: {contextReads} reads");
+        Assert.Equal(count, context.Tasks.Count);
+        Assert.All(context.Tasks, task => Assert.Matches("^[0-9A-F]{64}$", task.EditToken));
+
+        var revised = drafts.ToArray();
+        revised[^1] = revised[^1] with { Description = "Revised last task" };
+        counter.Reset();
+        var saved = await factory.Service.SavePlanAsync(request.Id, context.Version, revised, Actor, Key(),
+            expectedTaskStates: context.Tasks.ToDictionary(t => t.TaskId, t => t.EditToken));
+        var saveReads = counter.Reads.Count;
+        output.WriteLine($"Save {count} tasks: {saveReads} reads");
+        var savedRequest = await factory.LoadAsync(request.Id);
+
+        counter.Reset();
+        await factory.Service.PublishPlanAsync(request.Id, saved.Version, savedRequest.Plans.MaxBy(p => p.Number)!.Id, Actor, Key());
+        var publishReads = counter.Reads.Count;
+        output.WriteLine($"Publish {count} tasks (one changed): {publishReads} reads");
+        var published = await factory.LoadAsync(request.Id);
+        Assert.Equal("Revised last task", published.WorkItems.Single(t => t.DraftId == revised[^1].Id).Task.Description);
+        Assert.Equal(request.WorkItems.Select(t => t.TaskItemId).Order(), published.WorkItems.Select(t => t.TaskItemId).Order());
+
+        Assert.True(contextReads <= 30, $"Context issued {contextReads} reads for {count} tasks; expected a bounded batch (at most 30).");
+        Assert.True(saveReads <= 30, $"Save issued {saveReads} reads for {count} tasks; expected a bounded batch (at most 30).");
+        Assert.True(publishReads <= 40, $"Publish issued {publishReads} reads for {count} tasks; expected a bounded batch (at most 40).");
+    }
+
+    private sealed class QueryCounter : DbCommandInterceptor
+    {
+        public List<string> Reads { get; } = [];
+        public void Reset() => Reads.Clear();
+        public override ValueTask<InterceptionResult<DbDataReader>> ReaderExecutingAsync(DbCommand command,
+            CommandEventData eventData, InterceptionResult<DbDataReader> result, CancellationToken cancellationToken = default)
+        {
+            var sql = command.CommandText.TrimStart();
+            if (sql.StartsWith("SELECT", StringComparison.OrdinalIgnoreCase) || sql.StartsWith("WITH", StringComparison.OrdinalIgnoreCase))
+                Reads.Add(sql);
+            return base.ReaderExecutingAsync(command, eventData, result, cancellationToken);
+        }
+    }
+}

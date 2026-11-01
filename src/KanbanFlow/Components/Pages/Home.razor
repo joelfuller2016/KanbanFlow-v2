@@ -488,7 +488,7 @@ else
                     Goals = editingProject.Goals?.Trim()
                 };
                 db.Projects.Add(project);
-                await db.SaveChangesAsync();
+                await db.SaveChangesWithAuditAsync("User");
             }
             else
             {
@@ -500,7 +500,7 @@ else
                     project.Description = editingProject.Description?.Trim();
                     project.Goals = editingProject.Goals?.Trim();
                     project.UpdatedAt = DateTime.UtcNow;
-                    await db.SaveChangesAsync();
+                    await db.SaveChangesWithAuditAsync("User");
                 }
             }
 

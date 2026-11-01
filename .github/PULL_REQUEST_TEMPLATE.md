@@ -17,9 +17,19 @@ Closes #
 
 ## Test evidence
 <!-- How was this verified? Paste output or describe. -->
+- Tested source commit:
+- Rebuild command and result:
 - [ ] `./scripts/verify.ps1` passes locally (build + tests required; format advisory)
 - [ ] New/changed behavior is covered by tests (no fake/mock-only tests)
 - [ ] Smoke tests pass if API/MCP surface changed (`scripts/smoke-api.ps1`)
+
+## Human interaction and UI verification
+<!-- Use "not applicable" only with a reason. Automated checks are separate from actual user testing. -->
+- Existing UI areas affected and their before/after behavior:
+- Browser checks and regression evidence for each affected interaction:
+- Human walkthrough: where to find progress, make a decision, see the acknowledgement, and inspect the resulting change:
+- Actual user testing and feedback: <!-- Pending until a person tries it; include unresolved feedback. -->
+- [ ] Any major UI change has been verified and user-tested before adoption, or no major UI change is included.
 
 ## Checklist
 

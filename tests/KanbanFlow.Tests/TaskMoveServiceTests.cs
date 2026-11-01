@@ -121,7 +121,7 @@ public sealed class TaskMoveServiceTests
         AssertBystanderRanksUnchanged(ranksBefore, ranksAfter, seed.MovedId);
 
         await using var db = factory.CreateDbContext();
-        Assert.Equal(0, await db.ActivityEvents.CountAsync());
+        Assert.Equal("TaskReordered", (await db.ActivityEvents.SingleAsync()).EventType);
         Assert.Equal(0, await db.TaskComments.CountAsync());
     }
 
@@ -367,7 +367,7 @@ public sealed class TaskMoveServiceTests
     }
 
     [Fact]
-    public async Task MoveInOutline_ZeroAnchor_AppendsWithinSameFeatureWithoutAudit()
+    public async Task MoveInOutline_ZeroAnchor_AppendsWithinSameFeatureWithReorderAudit()
     {
         using var factory = new SqliteTestFactory();
         var seed = SeedDenseOutline(factory);
@@ -388,7 +388,7 @@ public sealed class TaskMoveServiceTests
         Assert.Equal(3d, ranksAfter[seed.DestinationFirstId]);
         AssertBystanderRanksUnchanged(ranksBefore, ranksAfter, seed.DestinationFirstId);
         await using var db = factory.CreateDbContext();
-        Assert.Equal(0, await db.ActivityEvents.CountAsync());
+        Assert.Equal("TaskReordered", (await db.ActivityEvents.SingleAsync()).EventType);
         Assert.Equal(0, await db.TaskComments.CountAsync());
     }
 
@@ -615,7 +615,7 @@ public sealed class TaskMoveServiceTests
 
     private sealed class ThrowOnSaveContext(DbContextOptions<AppDbContext> options) : AppDbContext(options)
     {
-        public override Task<int> SaveChangesAsync(CancellationToken cancellationToken = default)
+        public override Task<int> SaveChangesAsync(bool acceptAllChangesOnSuccess, CancellationToken cancellationToken = default)
             => throw new InvalidOperationException("simulated move save failure");
     }
 
@@ -636,10 +636,10 @@ public sealed class TaskMoveServiceTests
         DbContextOptions<AppDbContext> options,
         Action onSave) : AppDbContext(options)
     {
-        public override async Task<int> SaveChangesAsync(CancellationToken cancellationToken = default)
+        public override async Task<int> SaveChangesAsync(bool acceptAllChangesOnSuccess, CancellationToken cancellationToken = default)
         {
             onSave();
-            return await base.SaveChangesAsync(cancellationToken);
+            return await base.SaveChangesAsync(acceptAllChangesOnSuccess, cancellationToken);
         }
     }
 }

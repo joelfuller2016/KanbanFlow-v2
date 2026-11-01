@@ -1489,9 +1489,8 @@ public sealed partial class ExternalWorkItemService : IExternalWorkItemService
 
     private static string WithPushMarker(string body, Guid operationId)
     {
-        var content = body.TrimEnd();
         var marker = $"<!-- kanbanflow-push:{operationId:D} -->";
-        return content.Length == 0 ? marker : $"{content}\n\n{marker}";
+        return body.Length == 0 ? marker : $"{body}\n\n{marker}";
     }
 
     private DateTime UtcNow() => timeProvider.GetUtcNow().UtcDateTime;
