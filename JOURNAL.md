@@ -52,6 +52,13 @@ A review of the repository and a test run on 2026-09-26 filed findings as issues
 
 ## Entries (newest first)
 
+- 2026-11-01 01:52Z (PR #580 — Codex code and security reviews on b1e61c3 both completed clean; PR ready to merge):
+  - Codex code review on b1e61c3: status=completed, has_any_findings=true (prior findings), has_unresolved_findings=false. All previous findings resolved.
+  - Codex security review on b1e61c3: status=completed, has_any_findings=null (no findings). Clean.
+  - 72/72 PR review threads resolved. No open findings from any reviewer.
+  - PR #580 (feat/579-idea-workspaces) is ready for owner to merge.
+
+
 - 2026-11-01 01:44Z (PR #580 — 2 new Copilot findings fixed in b1e61c3; 72/72 threads resolved):
   - Copilot review 5725912714 posted 2 findings on 16c5f65:
     - PRRT_kwDOSA8y6s6yWYbC (High, test file): already fixed in 73304b0 (addEventListener added to mock). Replied and resolved.
