@@ -74,7 +74,11 @@ public partial class IdeaWorkspace
             var preview = await Workspaces.PreviewPublicationAsync(scope.WorkspaceId, exactRequest, lifetime.Token);
             if (!IsCurrent(scope) || sequence != previewSequence) return;
             publicationPreview = preview;
-            publicationRequest = exactRequest;
+            // Legacy feature edits do not advance workspace revisions. Freeze the reviewed
+            // destination, retaining an explicit authored name for the exact pending retry.
+            publicationRequest = exactRequest with {
+                FeatureId = preview.FeatureId,
+                FeatureName = preview.FeatureId is null ? exactRequest.FeatureName ?? preview.FeatureName : null };
         }
         catch (IdeaWorkspaceException ex)
         {
