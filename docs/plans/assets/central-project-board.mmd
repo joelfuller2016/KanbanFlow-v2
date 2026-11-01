@@ -1,0 +1,12 @@
+flowchart LR
+    H[Person] --> UI[Existing Ideas and Project pages]
+    AI[AI client] --> MCP[Native MCP /mcp]
+    AI --> NODE[Existing Node stdio wrapper]
+    NODE --> MCP
+    UI --> WS[WorkspaceService]
+    MCP --> WS
+    REST[Workflow REST endpoints] --> WS
+    WS --> SHARED[Existing idea and task services]
+    SHARED --> DB[(Existing SQLite board)]
+    WS --> DB
+    DB --> CARDS[Existing feature, task cards and comments]

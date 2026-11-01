@@ -1,0 +1,10 @@
+flowchart LR
+  N[Idea: New] --> TRI[Idea: Triaging]
+  TRI --> P[Promoted or attached project]
+  P --> D[Versioned draft plan]
+  D -->|atomic publication| TODO[Existing task: Todo]
+  TODO --> IP[Existing task: InProgress]
+  IP --> R[Existing task: Review]
+  R -->|existing Done checks / explicit recorded review| DONE[Existing task: Done]
+  DONE --> RESULT[Request conclusion with retained evidence]
+  DONE -->|reopen or revise| TODO

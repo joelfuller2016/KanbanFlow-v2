@@ -37,7 +37,9 @@ public interface IIdeaService
     /// <summary>
     /// Update mutable fields. <c>null</c> properties on <paramref name="dto"/> mean
     /// "leave unchanged". Idempotent when nothing actually changes (no event written).
-    /// Validates title/status/priority. Emits an <c>IdeaUpdated</c> event when a field changed.
+    /// Validates title/status/priority. ExpectedWorkflowVersion must match the version returned
+    /// with the original read; missing versions are invalid and stale versions are conflicts.
+    /// Emits an <c>IdeaUpdated</c> event when a field changed.
     /// </summary>
     /// <exception cref="IdeaNotFoundException">The idea does not exist.</exception>
     /// <exception cref="ValidationException">
@@ -69,10 +71,17 @@ public interface IIdeaService
     /// Plan → Goals, Body+Plan → Readme), set <see cref="IdeaStatus.Promoted"/> +
     /// <see cref="Idea.PromotedProjectId"/>, and emit audit events for both the idea
     /// (<c>IdeaPromoted</c>) and the new project (<c>ProjectCreatedFromIdea</c>).
+    /// When an existing project is supplied, reuse it without mapping idea fields or emitting
+    /// ProjectCreatedFromIdea. Repeating promotion to the same project returns the existing result.
     /// </summary>
+    /// <param name="ideaId">The idea to promote.</param>
+    /// <param name="actor">Audit attribution.</param>
+    /// <param name="existingProjectId">An existing project to reuse, or null to create a project.</param>
+    /// <param name="ct">Cancels the operation before its transaction commits.</param>
     /// <exception cref="IdeaNotFoundException">The idea does not exist.</exception>
-    /// <exception cref="ValidationException">The idea is already promoted.</exception>
-    Task<IdeaPromoteResult> PromoteAsync(int ideaId, string? actor, CancellationToken ct = default);
+    /// <exception cref="ProjectNotFoundException">The supplied target project does not exist.</exception>
+    /// <exception cref="ValidationException">The idea is already promoted to a different project.</exception>
+    Task<IdeaPromoteResult> PromoteAsync(int ideaId, string? actor, int? existingProjectId = null, CancellationToken ct = default);
 }
 
 /// <summary>Create payload for <see cref="IIdeaService.CreateAsync"/>.</summary>
@@ -90,7 +99,8 @@ public sealed record IdeaUpdate(
     string? Plan = null,
     IdeaStatus? Status = null,
     string? Tags = null,
-    TaskPriority? Priority = null);
+    TaskPriority? Priority = null,
+    int? ExpectedWorkflowVersion = null);
 
 /// <summary>Result of <see cref="IIdeaService.PromoteAsync"/>: the source idea and the created project.</summary>
 public sealed record IdeaPromoteResult(int IdeaId, int ProjectId);

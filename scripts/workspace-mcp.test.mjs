@@ -13,6 +13,7 @@ async function withAdapter(status, payload, run, options) {
   const requests = [];
   const server = createServer(async (request, response) => {
     let body = "";
+    request.setEncoding("utf8");
     for await (const chunk of request) body += chunk;
     requests.push({ method: request.method, url: request.url, body: body ? JSON.parse(body) : undefined });
     response.writeHead(status, { "Content-Type": "application/json" });

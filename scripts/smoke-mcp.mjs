@@ -280,6 +280,7 @@ try {
   }
   const updatedIdea = await callTool("update_idea", {
     ideaId: createdIdea.id,
+    expectedWorkflowVersion: fetchedIdea.workflowVersion,
     status: "Triaging",
     priority: "High"
   });

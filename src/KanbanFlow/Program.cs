@@ -5,11 +5,15 @@ using KanbanFlow.Components;
 using KanbanFlow.Data;
 using KanbanFlow.Services;
 using KanbanFlow.Services.IdeaWorkspaces;
+using KanbanFlow.Services.Workflows;
+using KanbanFlow.Models.Workflows;
+using Microsoft.AspNetCore.Http.Connections;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.AI;
 using OpenAI;
 
 var builder = WebApplication.CreateBuilder(args);
+const int editorMessageLimit = 8 * 1024 * 1024;
 
 // Database (#354): DbPathResolver owns which file is opened — KANBANFLOW_DB_PATH first, then a
 // probe for an existing kanbanflow.db, then a launch-directory-independent default. Resolving
@@ -26,8 +30,17 @@ var builder = WebApplication.CreateBuilder(args);
 var dbResolution = DbPathResolver.Resolve(builder.Environment.ContentRootPath);
 builder.Services.AddSingleton(dbResolution);
 
+builder.Services.AddHttpContextAccessor();
 builder.Services.AddDbContextFactory<AppDbContext>(
     options => options.UseSqlite(DbPathResolver.ToConnectionString(dbResolution.Path)));
+builder.Services.AddSingleton(TimeProvider.System);
+builder.Services.AddSingleton(new WorkflowOptions
+{
+    ProjectsRoot = builder.Configuration["Workflow:ProjectsRoot"]
+        ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Projects")
+});
+builder.Services.AddScoped<WorkspaceService>();
+builder.Services.AddScoped<IWorkspaceService>(sp => sp.GetRequiredService<WorkspaceService>());
 
 // Claim TTL: parse and validate once at startup so a malformed or non-positive value is rejected
 // before the first request, not on it. All consumers inject ClaimTtlSetting — never re-parse from
@@ -140,7 +153,10 @@ builder.Services.AddRazorComponents()
     .AddInteractiveServerComponents()
     // Full-content workspace editors can submit large Markdown documents. Raise
     // the circuit message boundary explicitly; domain saves never trim the text.
-    .AddHubOptions(options => options.MaximumReceiveMessageSize = 8 * 1024 * 1024);
+    // Full issue bodies/comments must survive an actual editor input event. The default 32KB
+    // inbound frame limit previously motivated lossy sync excerpts. This is a transport bound,
+    // never a storage clipping rule; 8MiB preserves the workspace editor limit.
+    .AddHubOptions(options => options.MaximumReceiveMessageSize = editorMessageLimit);
 
 // CORS for AI agents
 builder.Services.AddCors(options =>
@@ -178,6 +194,7 @@ using (var scope = app.Services.CreateScope())
     EnsureAcceptanceCriteriaTable(db);
     EnsureActivityEventTable(db);
     EnsureIdeaTable(db);
+    WorkflowSchema.EnsureTables(db);
     SchemaPatcher.EnsureMemoryTables(db);
     SchemaPatcher.EnsureMemoryFtsTable(db);
     SchemaPatcher.EnsureExternalWorkItemTables(db);
@@ -195,7 +212,15 @@ app.UseCors();
 app.UseAntiforgery();
 app.MapStaticAssets();
 app.MapRazorComponents<App>()
-    .AddInteractiveServerRenderMode();
+    .AddInteractiveServerRenderMode()
+    .Add(endpoint =>
+    {
+        // Keep the inbound pipe above a complete allowed frame so receiving one editor
+        // event does not pause behind the transport's default 64KB backpressure threshold.
+        var connection = endpoint.Metadata.OfType<HttpConnectionDispatcherOptions>().FirstOrDefault();
+        if (connection is not null)
+            connection.ApplicationMaxBufferSize = editorMessageLimit * 2;
+    });
 
 // OpenAPI: serve at /openapi/v1.json (default) and redirect /openapi.json → /openapi/v1.json
 // so the README-documented path works for agents doing discovery.
@@ -208,6 +233,7 @@ app.MapGet("/openapi.json", (HttpContext ctx) =>
 
 app.MapApiEndpoints();
 app.MapIdeaWorkspaceEndpoints();
+app.MapWorkflowEndpoints();
 app.MapAdminEndpoints();
 
 // Native MCP server (Streamable HTTP), prototype — agents connect at POST /mcp.
@@ -414,6 +440,7 @@ static void EnsureActivityEventTable(AppDbContext db)
             migrateTable.ExecuteNonQuery();
         }
 
+        SchemaPatcher.EnsureActivityContextColumns(connection);
         using var projectIndex = connection.CreateCommand();
         projectIndex.CommandText = "CREATE INDEX IF NOT EXISTS IX_ActivityEvents_ProjectId_CreatedAt ON ActivityEvents (ProjectId, CreatedAt)";
         projectIndex.ExecuteNonQuery();

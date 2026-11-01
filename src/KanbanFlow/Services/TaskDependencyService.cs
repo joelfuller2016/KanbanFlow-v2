@@ -76,7 +76,7 @@ public sealed class TaskDependencyService(IDbContextFactory<AppDbContext> dbFact
         };
 
         db.TaskDependencies.Add(dependency);
-        await db.SaveChangesAsync(ct);
+        await db.SaveChangesWithAuditAsync(ct: ct);
         await tx.CommitAsync(ct);
 
         return new TaskDependencyCreateResult(

@@ -124,7 +124,7 @@ public sealed class TaskServiceTests
     }
 
     [Fact]
-    public async Task ChangeStatus_NullActor_CommentAuthorIsSystem_EventActorIsNull()
+    public async Task ChangeStatus_NullActor_CommentAndEventUseSystemAttribution()
     {
         using var f = new SqliteTestFactory();
         var id = SeedTask(f, WorkStatus.Todo);
@@ -136,7 +136,7 @@ public sealed class TaskServiceTests
         var comment = await db.TaskComments.SingleAsync();
         Assert.Equal("System", comment.Author);
         var ev = await db.ActivityEvents.SingleAsync();
-        Assert.Null(ev.Actor);
+        Assert.Equal("System", ev.Actor);
     }
 
     [Fact]

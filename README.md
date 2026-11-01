@@ -21,7 +21,7 @@
 | **Log book** | [`docs/BACKLOG.md`](docs/BACKLOG.md) — the authoritative record of what happened |
 | **Deep detail** | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) |
 
-Every count above was re-derived from the code for this revision. The commands that produced
+The 1,572 .NET tests passed on September 14, 2026 at source `440c0ed07e51` ([run record](docs/test-cases/509-unified-workflow/runs/2026-09-14-440c0ed07e51.md)). The unchanged script suite last passed all 358 tests at `9fe16aaa1b04`; it was not repeated for this Razor/documentation correction. Native/wrapper source inventories are 36/54; September 6 transport discovery measured 33/54, not the current live surface. Other inventories retain their existing baseline. The commands that produced
 them are in [Surfaces, verified](#surfaces-verified) — run them yourself; do not trust the
 table alone.
 
@@ -46,6 +46,8 @@ table alone.
 ---
 
 ## The thesis
+
+For work that starts as a local idea, the [request workflow](docs/request-workflow.md) now connects the exact original ask to a refined brief, published cards and results inside these same boards. The GitHub import remains available for work that starts as an issue.
 
 GitHub already holds the work: the issues, the milestones, the review conversations, the
 closes. What it does not hold is a **picture**. `gh issue list` across six repos is 400 lines
@@ -740,13 +742,12 @@ The [inventory implementation](scripts/workspace-surface-inventory.mjs) counts O
 operations, separating `/api/admin/` from other `/api/` routes. See the
 [REST document location and route map](docs/ARCHITECTURE.md#rest-surface-71-endpoints) for API details.
 
-Corrections this revision made to the previous README: **53 → 60** endpoints previously (both memory
-endpoints and `GET /api/tasks/{id}/context` were missing), then **60 → 71** for the #336
-external-identity/write-journal routes;
-**41 → 50** wrapper tools; native tool count stated for the first time (**28**); in-app suite
+Historical inventory corrections from the original README revision: **53 → 60** endpoints (both memory
+endpoints and `GET /api/tasks/{id}/context` were missing from the route list entirely);
+**41 → 50** wrapper tools; native tool count stated for the first time (**24**); in-app suite
 **40 → 56**; and `GET /api/subtasks/{id}`, `GET /api/acceptance-criteria/{id}`,
 `GET /api/requirements/{id}` were listed as existing — **they do not exist**. The route map in
-[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md#rest-surface-71-endpoints) now marks them.
+[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md#rest-surface-77-endpoints) now marks them.
 
 Also corrected: `#82`, `#83`, `#85`, `#88`, and `#89` were all cited as open/broken. All five
 are **closed**, and the code enforces what they asked for.
@@ -911,6 +912,9 @@ them.
 
 | Doc | What it holds |
 |---|---|
+| [Requests, plans and results](docs/request-workflow.md) | Use the existing app and boards for original requests, briefs, real task cards, MCP updates, reviewed reports and conclusions |
+| [Central project board implementation specification](docs/plans/central-project-board-implementation.md) | Detailed issue checklist, four diagrams, existing-versus-new behavior, acceptance checks and explicit later Codex work |
+| [Central project board proposal](docs/plans/central-project-board.md) | Product direction, the same-board constraint and the proposed Codex execution path |
 | [`docs/BACKLOG.md`](docs/BACKLOG.md) | **The log book.** Authoritative record of what happened and why. Start here. |
 | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | Entity model, write path, full REST route map, MCP inventory, capability matrix, known gaps |
 | [`docs/GITHUB-SYNC.md`](docs/GITHUB-SYNC.md) | Full sync semantics, drift cases, comment mirroring |

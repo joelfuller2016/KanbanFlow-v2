@@ -14,6 +14,7 @@ node scripts/portfolio-sync.mjs --help
 |---|---|---|---|
 | `sync` (default) | GitHub → board | **No** | Mirror issues, milestones, labels and comments onto the board. |
 | `onboard <owner/repo>` | GitHub → board | **No** | Register a new repo: create/link its Project durably, then backfill everything. |
+| `restore-content <owner/repo>` | GitHub → existing descriptions | **No** | Recover incomplete legacy imports for one explicit repo, preserving differing board text and unrelated task fields. |
 | `push-issue <owner/repo>` | board → GitHub | Preview: **No**. Explicit live mode: **one issue** | Preview by default. `--allow-write --task <id>` enables one additive create through the durable journal; `--resume <uuid>` reconciles an interrupted operation. |
 | `backfill-links <owner/repo>` | GitHub → board identity | **No** | **Repair/audit, not a required migration step** — an ordinary `sync` promotes a legacy prefix by itself. Verifies authoritative URLs already stored in sync blocks, persists durable links, and quarantines ambiguous legacy candidates. |
 | `status` | both | **No** | Health check. Exit `0` clean · `1` drift · `2` incomplete/error. |
@@ -36,7 +37,7 @@ node scripts/portfolio-sync.mjs --help
 | *(no milestone)* | Feature `Unsorted` | the literal name `Unsorted` |
 | issue | TaskItem | Active `ExternalWorkItemLink`: immutable repository node id + issue node id; legacy `#<n> ` prefix only when no structured link exists |
 | issue labels | TaskItem.Priority | highest severity label wins; default `Medium` |
-| issue body | TaskItem.Description | provenance block + up to ~29,491 JSON-serialized UTF-8 bytes (`KANBANFLOW_BODY_EXCERPT_LIMIT`; bounded by SignalR’s default 32 KB receive limit); a truncated description is refreshed only while it retains the exact sync header and truncation footer |
+| issue body | TaskItem.Description | provenance block + **complete exact source body**, including Unicode and Markdown whitespace |
 | issue comment | TaskComment | `<!-- gh:<node-id> -->` stamped into `TaskComment.Text` |
 | PR conversation comment | TaskComment (`Comment`) | same node-id marker |
 | PR review `APPROVED` | TaskComment (`Verification`) | same node-id marker |
@@ -153,10 +154,10 @@ This table describes the code, not the aspiration. Read the status row carefully
 |---|---|---|
 | Task **name** | GitHub | Active linked tasks use the plain issue title; a legacy fallback task keeps `#<n> <issue title>` only until the sync that promotes it (see [Legacy prefix → durable link](#legacy-prefix--durable-link)). Identity never depends on a linked task's editable name. |
 | Task **priority** | GitHub | Always reconciled from the issue's labels. A board-side change is overwritten. |
-| Task **description** | GitHub | Written at creation. A truncated mirrored description is refreshed on the next sync only when it still carries the exact sync header and truncation footer; descriptions a human has edited (removing the footer) are never overwritten. |
+| Task **description** | GitHub source plus retained board edits | Complete text at creation. Identifiable legacy incomplete imports are repaired conservatively; differing old board text is retained. Later edits to already complete imports are *not* re-mirrored (#495). |
 | Task **feature** | GitHub | Follows the issue's milestone. A milestone change **moves** the task. |
 | Task **status** | **split — see below** | |
-| Task **comments** | GitHub | Additive only. Never edited or deleted. |
+| Task **comments** | GitHub | Complete, additive copies. An old incomplete copy permits one full replacement copy; the prior comment remains in history. Complete copies deduplicate by node id. |
 | Subtasks, acceptance criteria, dependencies, claims | **the board** | Never touched by the sync. |
 
 ### Status is not symmetric, and manual pinning does not exist yet
@@ -414,6 +415,73 @@ project, or check the existing feature names first.
 
 ---
 
+## Complete content and legacy recovery
+
+For board owners and agents, the invariant is complete saved text. The old importer replaced
+the remainder of long issue bodies with a generated cutoff footer. That was actual data loss,
+not a folded display. Current imports keep every source character, including Markdown
+indentation, trailing spaces, newlines and Unicode. The provenance header records
+`Content: complete` and a SHA-256 of the exact UTF-8 source body. It never replaces the body.
+
+```mermaid
+sequenceDiagram
+    participant G as GitHub (read only)
+    participant R as Restore command
+    participant A as Existing task REST API
+    participant D as Existing SQLite and audit
+    participant H as Human or MCP client
+    R->>A: Read existing project and incomplete descriptions
+    R->>G: Read complete issue sources
+    R->>R: Resolve every candidate and retain differing prior text
+    R->>A: Re-read each task before changing it
+    R->>A: Save description with actor
+    A->>D: Commit description and full before/after audit together
+    R->>A: Read back and compare exact full text
+    H->>A: Open same task, edit or read through MCP
+    A->>D: Read complete text and history
+```
+
+1. **Rebuild and verify the app that will receive the repair.** Run the repository gate and
+   the [TC-509 full-content checks](test-cases/509-unified-workflow/README.md). Expect actual
+   large browser input, save and reopening to preserve text. Task descriptions/comments and
+   the card editor preserve nonblank authored text; blank descriptions still clear the field.
+   Do not run a restoration against an older service that trims source whitespace.
+2. **Back up the existing database consistently.** Use SQLite's backup API and place the copy
+   in this repository's ignored `_sandbox` folder. Record source, time and process identity.
+   Expect a readable snapshot without changing any live rows. Keep it for comparison and
+   recovery; do not replace a live database while the application is running.
+3. **Preview one explicit repository.** Run
+   `node scripts/portfolio-sync.mjs restore-content owner/repo --dry-run --actor Codex`.
+   Expect task IDs, old/new character counts and any retained prior text; no writes occur.
+   Ambiguous project links, foreign provenance, missing source or a saturated GitHub page
+   bound fail before writes. A provenance-free legacy stub additionally requires a durable
+   matching project marker and issue-number title. Resolve the stated problem and preview again.
+4. **Apply that scoped recovery.** Remove `--dry-run` from the same command. Each existing
+   description is re-read, repaired through the audited task API and checked by exact
+   read-back. The command does not run ordinary status/title/priority/milestone sync and
+   does not create or delete tasks. If a card differs from the prepared version, recovery
+   refuses that write. Already verified repairs remain; re-read and retry after resolving
+   the reported change. The ordinary task API has no atomic compare-and-swap token, so the
+   fresh-read guard cannot exclude an edit in the brief interval before the PUT.
+5. **Verify saved content and unrelated data.** Compare all source hashes, prior text,
+   task identities/fields and audit before/after values against the backup. If retained board
+   text differs from GitHub, it appears in a labeled section after the complete current source;
+   a human can reconcile it later. Keep both until that decision is recorded.
+6. **Repeat the command.** Expect zero repairs and no new audit entries. Complete descriptions
+   are not overwritten, even when their source literally quotes the old footer. General
+   refresh of later changes to complete GitHub imports remains a separate concern (#495).
+
+Comment recovery stays additive: a genuinely incomplete legacy comment permits one complete
+copy with the same GitHub node identity; the old comment remains. The next sync detects the
+complete copy and does not duplicate it. An already complete legacy comment that literally
+quotes the old footer is compared with its source and is not duplicated.
+
+Transport limits are not content budgets. The editor uses a finite 4 MiB inbound SignalR
+message allowance and an 8 MiB inbound transport buffer. Import/storage code never clips a value to fit it. A failed or oversized
+operation must not be reported as a successful partial save. Very large future sources may
+need a streaming editor transport; do not bring back excerpts as a workaround. Browser
+textareas normalize line endings to LF; API/MCP imports preserve source CRLF exactly.
+
 ## Configuration
 
 | Variable | Default | Purpose |
@@ -423,6 +491,9 @@ project, or check the existing feature names first.
 | `KANBANFLOW_MCP_TIMEOUT_MS` | `15000` | REST timeout |
 | `KANBANFLOW_GH_PAGE_LIMIT` | `2000` | per-fetch item bound; saturating it is exit `2` |
 | `KANBANFLOW_EXTERNAL_WRITE_LEASE_SECONDS` | `300` | durable write lease; must be a positive integer. The real-GitHub harness sets `15` on its scratch instance so the post-Resume paginated scan has headroom, and polls the recorded expiry after intentional crashes |
+
+`KANBANFLOW_BODY_EXCERPT_LIMIT` is obsolete and ignored with a warning: it cannot shorten content.
+`--max-comment-chars` is rejected with exit `2`; remove it from old invocations.
 
 Requires `gh` authenticated with read access to the repos in the rotation.
 

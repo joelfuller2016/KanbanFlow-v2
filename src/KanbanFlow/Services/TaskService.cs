@@ -157,6 +157,14 @@ public sealed class TaskService(
     public async Task<TaskItem> ChangeStatusAsync(int taskId, WorkStatus newStatus, string? actor, CancellationToken ct = default, string? overrideReason = null)
     {
         await using var db = await dbFactory.CreateDbContextAsync(ct);
+        await using var tx = newStatus == WorkStatus.Done ? await db.Database.BeginTransactionAsync(ct) : null;
+        var task = await ChangeStatusInContextAsync(db, taskId, newStatus, actor, ct, overrideReason);
+        if (tx is not null) await tx.CommitAsync(ct);
+        return task;
+    }
+
+    internal static async Task<TaskItem> ChangeStatusInContextAsync(AppDbContext db, int taskId, WorkStatus newStatus, string? actor, CancellationToken ct, string? overrideReason = null)
+    {
 
         // Serialize the Definition-of-Done read-modify-write. The gate reads AcceptanceCriteria
         // and the status write happens at SaveChanges; without a lock spanning both, a concurrent
@@ -170,9 +178,6 @@ public sealed class TaskService(
         // the lock unconditionally would make every Backlog/Todo/Review move queue behind any other
         // writer and risk SQLITE_BUSY on a transition the gate never even inspects. A non-Done
         // transition cannot read criteria (the gate returns immediately), so it needs no span.
-        await using var tx = newStatus == WorkStatus.Done
-            ? await db.Database.BeginTransactionAsync(ct)
-            : null;
 
         var task = await db.Tasks
             .Include(t => t.Feature)
@@ -220,8 +225,7 @@ public sealed class TaskService(
         if (overriddenCriteria.Count > 0)
             AddDoneOverrideRecords(db, task, task.Feature.ProjectId, actor, overrideReason!, overriddenCriteria);
 
-        await db.SaveChangesAsync(ct);
-        if (tx is not null) await tx.CommitAsync(ct);
+        await db.SaveChangesWithAuditAsync(actor, ct);
         return task;
     }
 
@@ -327,7 +331,7 @@ public sealed class TaskService(
                 $"Task '{task.Name}' status changed from {oldStatus} to {newStatus}");
         }
 
-        await db.SaveChangesAsync(ct);
+        await db.SaveChangesWithAuditAsync(actor, ct);
         await tx.CommitAsync(ct);
         return task;
     }
@@ -388,7 +392,7 @@ public sealed class TaskService(
             "TaskStatusChanged", before, TaskActivitySnapshot(task),
             $"Task '{task.Name}' status changed from {oldStatus} to {newStatus}");
 
-        await db.SaveChangesAsync(ct);
+        await db.SaveChangesWithAuditAsync(actor, ct);
         await tx.CommitAsync(ct);
         return task;
     }
@@ -450,7 +454,7 @@ public sealed class TaskService(
             "TaskFeatureChanged", before, TaskActivitySnapshot(task),
             $"Task '{task.Name}' reassigned from feature {oldFeatureId} to feature {newFeatureId}");
 
-        await db.SaveChangesAsync(ct);
+        await db.SaveChangesWithAuditAsync(actor, ct);
         return task;
     }
 
@@ -545,7 +549,7 @@ public sealed class TaskService(
                 $"Task '{task.Name}' reassigned from feature {oldFeatureId} to feature {newFeatureId}");
         }
 
-        await db.SaveChangesAsync(ct);
+        await db.SaveChangesWithAuditAsync(actor, ct);
         await tx.CommitAsync(ct);
         return task;
     }
@@ -726,6 +730,14 @@ public sealed class TaskService(
             ? await db.Database.BeginTransactionAsync(ct)
             : null;
 
+        var result = await UpdateInContextAsync(db, taskId, dto, actor, ct);
+        if (tx is not null) await tx.CommitAsync(ct);
+        return result;
+    }
+
+    internal static async Task<TaskItem> UpdateInContextAsync(AppDbContext db, int taskId, TaskUpdate dto, string? actor, CancellationToken ct)
+    {
+
         var task = await db.Tasks
             .Include(t => t.Feature)
             .FirstOrDefaultAsync(t => t.Id == taskId, ct);
@@ -769,10 +781,12 @@ public sealed class TaskService(
 
         if (dto.Description is not null)
         {
-            var trimmed = string.IsNullOrWhiteSpace(dto.Description) ? null : dto.Description.Trim();
-            if (task.Description != trimmed)
+            // Nonblank bodies are authored content: indentation, hard breaks and trailing
+            // newlines can be meaningful Markdown. Only an explicit blank value clears it.
+            var description = string.IsNullOrWhiteSpace(dto.Description) ? null : dto.Description;
+            if (task.Description != description)
             {
-                task.Description = trimmed;
+                task.Description = description;
                 changedFields.Add("Description");
             }
         }
@@ -813,9 +827,8 @@ public sealed class TaskService(
 
         // #190: fold SortOrder into THIS save so the whole PUT is one atomic transaction
         // (the endpoint previously persisted it on a SECOND context, leaving a partial-write
-        // window). SortOrder is a UI reorder concern, so it is deliberately NOT added to
-        // changedFields — it rides along silently and must NOT emit an activity event or
-        // comment (the #88 audit boundary).
+        // window). U-13 records a bare reorder through ChangeAudit. It keeps the ordinary
+        // field-change comment contract and does not add a discussion comment for a drag.
         if (dto.SortOrder.HasValue && task.SortOrder != dto.SortOrder.Value)
         {
             task.SortOrder = dto.SortOrder.Value;
@@ -866,8 +879,7 @@ public sealed class TaskService(
                 $"Task '{task.Name}' updated: {string.Join(", ", nonStatusChanges)}");
         }
 
-        await db.SaveChangesAsync(ct);
-        if (tx is not null) await tx.CommitAsync(ct);
+        await db.SaveChangesWithAuditAsync(actor, ct);
         return task;
     }
 
@@ -875,7 +887,6 @@ public sealed class TaskService(
 
     public async Task<TaskItem> CreateAsync(TaskCreate dto, string? actor, CancellationToken ct = default)
     {
-        ArgumentNullException.ThrowIfNull(dto);
         await using var db = await dbFactory.CreateDbContextAsync(ct);
         await using var tx = await db.Database.BeginTransactionAsync(ct);
         var task = await CreateInContextAsync(db, dto, actor, ct);
@@ -912,7 +923,7 @@ public sealed class TaskService(
         {
             FeatureId = dto.FeatureId,
             Name = dto.Name.Trim(),
-            Description = dto.Description,
+            Description = string.IsNullOrWhiteSpace(dto.Description) ? null : dto.Description,
             Status = status,
             Priority = priority,
             Assignee = string.IsNullOrWhiteSpace(dto.Assignee) ? null : dto.Assignee.Trim(),
@@ -926,7 +937,7 @@ public sealed class TaskService(
         // TaskCreated event. EF Core + SQLite supports explicit transactions.
         db.Tasks.Add(task);
         // First save assigns task.Id so the comment + activity event can reference it.
-        await db.SaveChangesAsync(ct);
+        await db.SaveChangesWithAuditAsync(actor, ct);
 
         db.TaskComments.Add(new TaskComment
         {
@@ -944,7 +955,7 @@ public sealed class TaskService(
             "TaskCreated", null, TaskActivitySnapshot(task),
             $"Task '{task.Name}' created");
 
-        await db.SaveChangesAsync(ct);
+        await db.SaveChangesWithAuditAsync(actor, ct);
         return task;
     }
 
@@ -966,9 +977,7 @@ public sealed class TaskService(
     public async Task DeleteAsync(int taskId, string? actor, CancellationToken ct = default)
     {
         await using var db = await dbFactory.CreateDbContextAsync(ct);
-        // Serialize the operation guard and graph removal with PrepareAsync. Without one write
-        // transaction, a prepare could commit after the guard read and before this delete (#336).
-        await using var tx = await db.Database.BeginTransactionAsync(ct);
+        await using var transaction = await db.Database.BeginTransactionAsync(ct);
         var task = await db.Tasks
             .Include(t => t.Feature)
             .FirstOrDefaultAsync(t => t.Id == taskId, ct);
@@ -998,16 +1007,17 @@ public sealed class TaskService(
             .Where(c => c.TaskItemId == taskId)
             .ToListAsync(ct);
         db.AcceptanceCriteria.RemoveRange(criteria);
+        await ProjectGraphDeleter.DeleteTaskLinksAsync(db, [taskId], ct);
 
         db.Tasks.Remove(task);
-        await db.SaveChangesAsync(ct);
-        await tx.CommitAsync(ct);
+        await db.SaveChangesWithAuditAsync(actor, ct);
+        await transaction.CommitAsync(ct);
     }
 
     public async Task DeleteProjectAsync(int projectId, string? actor, CancellationToken ct = default)
     {
         await using var db = await dbFactory.CreateDbContextAsync(ct);
-        await using var tx = await db.Database.BeginTransactionAsync(ct);
+        await using var transaction = await db.Database.BeginTransactionAsync(ct);
         var project = await db.Projects.FirstOrDefaultAsync(p => p.Id == projectId, ct);
         if (project is null)
             throw new ProjectNotFoundException(projectId);
@@ -1026,8 +1036,8 @@ public sealed class TaskService(
         // atomic unit.
         await ProjectGraphDeleter.DeleteProjectChildrenAsync(db, projectId, ct);
         db.Projects.Remove(project);
-        await db.SaveChangesAsync(ct);
-        await tx.CommitAsync(ct);
+        await db.SaveChangesWithAuditAsync(actor, ct);
+        await transaction.CommitAsync(ct);
     }
 
     private static object ProjectActivitySnapshot(Project project) => new
@@ -1035,7 +1045,8 @@ public sealed class TaskService(
         project.Id,
         project.Name,
         project.Description,
-        project.Goals
+        project.Goals,
+        project.Readme
     };
 
     /// <summary>
@@ -1097,11 +1108,11 @@ public sealed class TaskService(
         // Renewing ONLY a stale claim (as #443's ACs literally read) does not fix that: a heartbeat
         // inside the TTL is by definition not stale, so it takes the no-op branch and ClaimedAt
         // never moves. That reading satisfies AC2 while defeating AC4. This implements AC2's own
-        // parenthetical instead: "no-op" means no audit churn and no UpdatedAt bump, not no write.
+        // parenthetical instead: the fresh renewal leaves UpdatedAt unchanged. U-13 now records its saved lease timestamp in the audit.
         if (string.Equals(task.ClaimedBy, trimmedActor, StringComparison.OrdinalIgnoreCase))
         {
             var renewedFromStale = existingClaimIsStale;
-            object? beforeRenew = renewedFromStale ? TaskActivitySnapshot(task) : null;
+            var beforeRenew = TaskActivitySnapshot(task);
             var heldBy = task.ClaimedBy;   // captured for the EF Core closure
 
             // Guarded by the holder, so a concurrent release or steal matches zero rows and falls
@@ -1120,7 +1131,7 @@ public sealed class TaskService(
             else
             {
                 // Fresh heartbeat: ClaimedAt ONLY. UpdatedAt stays put so a 5-minute cadence cannot
-                // fake task activity on Home or flood the timeline (AC2).
+                // fake task activity on Home. The saved lease timestamp has its own audit event.
                 renewed = await db.Tasks
                     .Where(t => t.Id == taskId && t.ClaimedBy == heldBy)
                     .ExecuteUpdateAsync(s => s
@@ -1152,7 +1163,7 @@ public sealed class TaskService(
                 if (renewedFromStale)
                 {
                     // Recovering an already-expired claim IS worth a timeline row: it explains why the
-                    // task did not get stolen. A fresh heartbeat deliberately writes no event.
+                    // task did not get stolen. Fresh renewals use a separate heartbeat event below.
                     task.UpdatedAt = now;
                     AddActivityEvent(
                         db, task.Feature.ProjectId, "Task", task.Id, trimmedActor,
@@ -1161,7 +1172,15 @@ public sealed class TaskService(
                         + (previousClaimedAt is { } staleSince
                             ? $"(claim was {(now - staleSince).TotalHours:0.##}h old; TTL {_claimTtl.TotalHours:0.##}h)"
                             : $"(claim had no timestamp; TTL {_claimTtl.TotalHours:0.##}h)"));
-                    await db.SaveChangesAsync(ct);
+                    await db.SaveChangesWithAuditAsync(trimmedActor, ct);
+                }
+
+                else
+                {
+                    AddActivityEvent(db, task.Feature.ProjectId, "Task", task.Id, trimmedActor,
+                        "TaskClaimHeartbeat", beforeRenew, TaskActivitySnapshot(task),
+                        $"Task '{task.Name}' claim heartbeat by {trimmedActor}");
+                    await db.SaveChangesWithAuditAsync(trimmedActor, ct);
                 }
 
                 // MUST commit. The early return this replaced left the BEGIN IMMEDIATE transaction to
@@ -1254,7 +1273,7 @@ public sealed class TaskService(
                 $"Task '{task.Name}' claimed by {trimmedActor}");
         }
 
-        await db.SaveChangesAsync(ct);
+        await db.SaveChangesWithAuditAsync(actor, ct);
         await tx.CommitAsync(ct);
         return task;
     }
@@ -1334,7 +1353,7 @@ public sealed class TaskService(
             "TaskReleased", before, TaskActivitySnapshot(task),
             $"Task '{task.Name}' released by {trimmedActor}");
 
-        await db.SaveChangesAsync(ct);
+        await db.SaveChangesWithAuditAsync(actor, ct);
         await tx.CommitAsync(ct);
         return task;
     }
@@ -1342,7 +1361,11 @@ public sealed class TaskService(
     public async Task<TaskComment> AddCommentAsync(int taskId, string text, string? author, CommentType type, string? actor, CancellationToken ct = default)
     {
         await using var db = await dbFactory.CreateDbContextAsync(ct);
+        return await AddCommentInContextAsync(db, taskId, text, author, type, actor, ct);
+    }
 
+    internal static async Task<TaskComment> AddCommentInContextAsync(AppDbContext db, int taskId, string text, string? author, CommentType type, string? actor, CancellationToken ct)
+    {
         // Resolve project (and prove the task exists) in one round-trip.
         var projectId = await db.Tasks
             .Where(t => t.Id == taskId)
@@ -1356,14 +1379,14 @@ public sealed class TaskService(
 
         // Only user-facing comment types may be authored directly; system types
         // (StatusChange/Created/FeatureChange/…) are emitted by the service itself.
-        if (!IsUserCommentType(type))
+        if (!AllowedUserCommentTypes.Contains(type.ToString()))
             throw new ValidationException(
                 $"Invalid comment type '{type}'. Allowed values: {string.Join(", ", AllowedUserCommentTypes)}.");
 
         var comment = new TaskComment
         {
             TaskItemId = taskId,
-            Text = text.Trim(),
+            Text = text,
             Author = string.IsNullOrWhiteSpace(author) ? null : author.Trim(),
             Type = type,
             CreatedAt = DateTime.UtcNow
@@ -1374,7 +1397,7 @@ public sealed class TaskService(
             db, projectId.Value, "Task", taskId, actor,
             "TaskCommentAdded", null, new { comment.Text, comment.Author }, "Comment added");
 
-        await db.SaveChangesAsync(ct);
+        await db.SaveChangesWithAuditAsync(actor, ct);
         return comment;
     }
 
