@@ -12,8 +12,9 @@ import { workspaceReadTools, workspaceWriteTools } from "./workspace-mcp-tools.m
 async function withAdapter(status, payload, run, options) {
   const requests = [];
   const server = createServer(async (request, response) => {
-    let body = "";
-    for await (const chunk of request) body += chunk;
+    const chunks = [];
+    for await (const chunk of request) chunks.push(chunk);
+    const body = Buffer.concat(chunks).toString("utf8");
     requests.push({ method: request.method, url: request.url, body: body ? JSON.parse(body) : undefined });
     response.writeHead(status, { "Content-Type": "application/json" });
     response.end(JSON.stringify(payload));
