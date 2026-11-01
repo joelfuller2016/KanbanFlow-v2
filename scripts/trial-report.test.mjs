@@ -1592,6 +1592,52 @@ test("resolveRepoRoots is not fooled by a leaked GIT_DIR either — same scrub, 
   }
 });
 
+test("global config rewrites cannot confirm an unrelated repo, while local rewrites still apply", () => {
+  const { a, c, make, cleanup } = buildCloneFixture();
+  const mainUrl = "https://example.invalid/org/repo.git";
+  const otherUrl = "https://example.invalid/other/thing.git";
+  const rewriteKey = "url." + mainUrl + ".insteadOf";
+  try {
+    for (const location of ["HOME", "XDG_CONFIG_HOME"]) {
+      const home = make();
+      const xdg = make();
+      fs.mkdirSync(path.join(xdg, "git"));
+      const config = location === "HOME" ? path.join(home, ".gitconfig") : path.join(xdg, "git", "config");
+      fs.writeFileSync(config, '[url "' + mainUrl + '"]\n\tinsteadOf = ' + otherUrl + "\n");
+      // Only this child's HOME/XDG paths change. The fixture uses the ordinary global config
+      // locations, rather than GIT_CONFIG_GLOBAL, which the existing prefix scrub already removes.
+      const env = scrubGitEnv({ ...process.env, HOME: home, USERPROFILE: home, XDG_CONFIG_HOME: xdg });
+      const raw = spawnSync("git", ["remote", "get-url", "origin"], {
+        cwd: c, env, encoding: "utf8", timeout: 5_000, windowsHide: true
+      });
+      assert.equal(raw.status, 0, raw.stderr);
+      assert.equal(raw.stdout.trim(), mainUrl, location + ": fixture must exercise a real global rewrite");
+
+      const git = (args, cwd) => gitOutput(args, cwd, { env });
+      const { confirmed } = withConfirmedCloneRoots([c], [a], { git });
+      assert.equal(confirmed.has(c), false, location + ": a global rewrite must not disguise a different repository");
+      const summary = summarize({
+        rows: [row({ session: "genuinely-external", cwd: c })], repoRoots: [a], repoRootSource: "git",
+        cloneRoots: [...confirmed.keys()]
+      });
+      assert.deepEqual(find(summary, 4).detail.map(detail => detail.session), ["genuinely-external"]);
+
+      // Check scopes without exposing config keys or values in a failure. This also observes
+      // system config when present: it must be excluded independently of the global fixture.
+      const scopes = git(["config", "--show-scope", "--list"], c)
+        .split(/\r?\n/).filter(Boolean).map(line => line.split("\t", 1)[0]);
+      assert.deepEqual([...new Set(scopes)], ["local"], "only repository-local config may reach a probe");
+
+      gitOutput(["config", "--local", rewriteKey, otherUrl], c);
+      assert.equal(withConfirmedCloneRoots([c], [a], { git }).confirmed.has(c), true,
+        "the same rewrite remains effective when explicitly configured in the candidate repository");
+      gitOutput(["config", "--local", "--unset", rewriteKey], c);
+    }
+  } finally {
+    cleanup();
+  }
+});
+
 test("an inherited GIT_* variable that would confirm a non-clone or hide a clone leaves the clone check's answer as a clean environment gives it", () => {
   // Each row injects, through the `env` option, one inherited GIT_* variable measured to move this
   // answer, and compares the result with the answer a clean environment gives. Reaching git, the

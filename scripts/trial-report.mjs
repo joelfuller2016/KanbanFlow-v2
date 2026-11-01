@@ -83,11 +83,10 @@ const GIT_TIMEOUT_MS = 5_000;
 // GIT_CONFIG_GLOBAL, GIT_CONFIG_SYSTEM, GIT_CEILING_DIRECTORIES and GIT_REDIRECT_STDOUT, so the
 // scrub is not a list. It drops every variable whose name starts with GIT_, in any ASCII case
 // (Windows reads environment names case-insensitively, so an inherited `Git_Dir` reaches git as
-// GIT_DIR), including a name a later git adds. No inherited GIT_* variable reaches git, so none can
-// change what it answers: in both directions the answer is the one an environment without any
-// GIT_* variable gives. The scrub touches nothing outside that prefix: HOME and XDG_CONFIG_HOME
-// still choose which global config git reads, and PATH which git runs, exactly as they do in a
-// clean run.
+// GIT_DIR), including a name a later git adds. No inherited GIT_* variable reaches git. gitOutput
+// then disables system/global config reads: a url rewrite in HOME's or XDG_CONFIG_HOME's ordinary
+// config file can disguise a fork just like an injected setting can. Repository-local rewrites
+// still apply. The scrub touches nothing outside that prefix, including PATH, which chooses git.
 const GIT_ENV_PREFIX = /^GIT_/i;
 
 // Tools that mutate ONE IDENTIFIED TASK, used to decide whether two sessions wrote the same task.
@@ -447,8 +446,8 @@ export function isOutsideAllRoots(cwd, roots) {
   return list.every(root => isOutsideRepo(cwd, root));
 }
 
-/** `env` as `gitOutput` hands it to git: every variable whose name starts with GIT_, in any ASCII
- * case, removed, and every other variable kept as it is (see GIT_ENV_PREFIX above). */
+/** Copy `env` without inherited GIT_* variables, in any ASCII case, keeping every other variable.
+ * gitOutput adds its own controlled config settings after this scrub (see GIT_ENV_PREFIX above). */
 export function scrubGitEnv(env) {
   const scrubbed = { ...env };
   for (const key of Object.keys(scrubbed)) {
@@ -458,15 +457,14 @@ export function scrubGitEnv(env) {
 }
 
 /**
- * Run one git plumbing command against `cwd`, scrubbed of every inherited GIT_* variable, so the
- * ANSWER is about `cwd` (see GIT_ENV_PREFIX above). It sets no GIT_* variable of its own; one it
- * ever needs has to go on the scrubbed copy, after the scrub, or the scrub removes it. Exported,
- * and takes `env` as an option, purely so a test can inject a contaminated environment (a fake
- * `GIT_DIR`) without mutating this PROCESS's real `process.env` — which several of this file's
- * tests pass on, whole, to the processes they spawn.
+ * Run one git plumbing command against `cwd`, scrubbed of inherited GIT_* variables and isolated
+ * from system/global config, so caller-wide url rewrites cannot change its identity evidence.
+ * Repository-local config, including its url rewrites, still applies. The controlled settings go
+ * on the copy AFTER the scrub. Exported, and takes `env` as an option, so tests can inject a
+ * contaminated environment without mutating this PROCESS's real process.env.
  */
 export function gitOutput(args, cwd, { env = process.env } = {}) {
-  const scrubbed = scrubGitEnv(env);
+  const scrubbed = { ...scrubGitEnv(env), GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null" };
   // `timeout` for the same reason the fetches carry one: an unbounded blocking call in a report
   // that has no other way to finish. `git rev-parse` on a network path, or against a repository
   // whose index lock is held, can sit indefinitely — and a hung git here hangs the whole run before
