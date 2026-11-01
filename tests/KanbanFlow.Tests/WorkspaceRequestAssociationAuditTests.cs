@@ -224,7 +224,15 @@ public sealed class WorkspaceRequestAssociationAuditTests
 
     private static string Row(WorkRequest row) => JsonSerializer.Serialize(new
     {
-        row.Id, row.IdeaId, row.ProjectId, row.FeatureId, row.Title, row.Version, row.Archived, row.CreatedAt, row.UpdatedAt
+        row.Id,
+        row.IdeaId,
+        row.ProjectId,
+        row.FeatureId,
+        row.Title,
+        row.Version,
+        row.Archived,
+        row.CreatedAt,
+        row.UpdatedAt
     }, Json);
 
     private static void AssertRow(string json, WorkRequest row)
