@@ -52,6 +52,12 @@ A review of the repository and a test run on 2026-09-26 filed findings as issues
 
 ## Entries (newest first)
 
+- 2026-11-01 02:15Z (scheduled PR monitor, continued session — PHASE 2 completion on #580):
+  - Committed transport signal-exit fix (cda6063): `scripts/workspace-transport.mjs` `close()` now checks both `exitCode` and `signalCode` so `once(child, 'exit')` is not awaited on a process that already exited via signal. Pushed to feat/579-idea-workspaces.
+  - Resolved 4 remaining unresolved review threads on PR #580: PRRT_kwDOSA8y6s6yV2EQ (HIGH canvas init — fix beb5cd8, reply+resolved), PRRT_kwDOSA8y6s6yVxfg (delivery field clobber P2 — resolved, reply from prior session), PRRT_kwDOSA8y6s6yVxgA (checkpoint list normalization P2 — resolved, reply from prior session), PRRT_kwDOSA8y6s6yVxgU ($new service-level collision P2 — resolved, reply from prior session).
+  - PR #580 now has 0 unresolved review threads. Waiting for Codex code+security reviews on cda6063/beb5cd8 and CodeRabbit resume.
+  - Next: monitor Codex review completion and any new CodeRabbit findings; notify owner when PR is clean.
+
 - 2026-11-01 01:17Z (scheduled PR monitor, four-hundred-and-forty-third run): build gate UP (.NET 10.0.114 via Ubuntu 24.04 Microsoft apt feed, installed fresh this run).
   - 5 open PRs: #580 (non-draft, feat/579-idea-workspaces, head SHA beb5cd89 — new commit since last run); #578 (non-draft, head SHA 17780aa); #564, #521, #511 (drafts, skipped).
   - New commit on #580: beb5cd89 "fix: catch JSException in canvas OnAfterRenderAsync to prevent circuit termination" — pushed after the last monitor run's clean confirmation. No new bot review threads yet for this commit.
