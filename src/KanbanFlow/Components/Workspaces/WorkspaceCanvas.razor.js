@@ -80,6 +80,10 @@ class CanvasController {
     async #finish(event) {
         const gesture = this.#gesture;
         if (!gesture || event.pointerId !== gesture.pointerId) return;
+        if (event.clientX !== 0 || event.clientY !== 0) {
+            gesture.lastClientX = event.clientX;
+            gesture.lastClientY = event.clientY;
+        }
         this.#preview();
         const changed = Math.abs(gesture.dx) + Math.abs(gesture.dy) >= 2;
         const update = gesture.resize
