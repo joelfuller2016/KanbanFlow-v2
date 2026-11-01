@@ -667,8 +667,9 @@ npm run trial:report -- --json
 ```
 
 Repository identity probes require **Git 2.39 or newer**, which follows ordinary includes when
-reading protected configuration. The report checks the selected binary before every Git identity
-operation, since relative `PATH` entries can resolve differently for each working directory. If a
+reading protected configuration. Each report runner lazily pins one absolute native executable from
+its captured `PATH`, ignoring empty, relative and Windows drive-dependent fields while preserving
+quoted absolute fields. Version checks still run before every Git identity operation. If a
 check finds an older or unrecognizable version, it produces one diagnostic and leaves signal 4
 **UNMEASURED**, including with an explicit repository root. If incompatibility is found later,
 earlier clone confirmations and their folding notes are discarded. A missing or non-directory
@@ -681,7 +682,7 @@ Remote drive syntax follows the host platform: single-letter SCP forms are netwo
 remotes on POSIX, and ambiguous Windows drive forms cannot prove a clone fingerprint. Every operation's
 five-second monotonic deadline includes that check, a protected configuration read and the identity
 command. Remote URL reads also inspect bounded NUL-framed URL and rewrite configuration within
-that same deadline: embedded LF and empty URL values make the fingerprint inconclusive,
+that same deadline: embedded LF and empty configured or effective URL values make the fingerprint inconclusive,
 including its reference root history. URL payload whitespace is preserved; only Git's final output
 record terminator is removed. Ordinary repository-local rewrites still come from Git's `get-url`.
 Native Git text is decoded as strict UTF-8 while preserving a valid BOM; malformed bytes cannot

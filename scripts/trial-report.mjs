@@ -493,7 +493,7 @@ function nativeGitText(bytes, code = "git_invalid_utf8") {
  * Like Git's ownership check, it has no repository/worktree context: local values and
  * gitdir/onbranch conditional includes cannot grant trust. Git performs interpolation.
  */
-function protectedSafeDirectoryArgs(cwd, env, remainingTimeout) {
+function protectedSafeDirectoryArgs(executable, cwd, env, remainingTimeout) {
   const configEnv = scrubGitEnv(env);
   for (const [key, value] of Object.entries(env)) {
     if (/^GIT_CONFIG_(GLOBAL|SYSTEM|NOSYSTEM)$/i.test(key)) configEnv[key.toUpperCase()] = value;
@@ -511,7 +511,7 @@ function protectedSafeDirectoryArgs(cwd, env, remainingTimeout) {
   configEnv.GIT_DIR = path.join(tmpdir(), "kanbanflow-protected-" + randomUUID());
   let output;
   try {
-    output = nativeGitText(execFileSync("git", ["config", "--includes", "--null", "--show-scope", "--get-all", "safe.directory"], {
+    output = nativeGitText(execFileSync(executable, ["config", "--includes", "--null", "--show-scope", "--get-all", "safe.directory"], {
       cwd, encoding: null, stdio: ["ignore", "pipe", "ignore"], timeout: remainingTimeout(), maxBuffer: GIT_MAX_OUTPUT_BYTES, env: configEnv, windowsHide: true
     }));
   } catch (error) {
@@ -530,10 +530,10 @@ function protectedSafeDirectoryArgs(cwd, env, remainingTimeout) {
 
 // get-url has only newline framing. Inspect the effective local URL/rewrite configuration with
 // native NUL records first, so a newline inside one value cannot impersonate several URLs.
-function checkRemoteUrlFraming(cwd, safeDirectories, env, remainingTimeout) {
+function checkRemoteUrlFraming(executable, cwd, safeDirectories, env, remainingTimeout) {
   let output;
   try {
-    output = nativeGitText(execFileSync("git", [...safeDirectories, "config", "--includes", "--null", "--get-regexp",
+    output = nativeGitText(execFileSync(executable, [...safeDirectories, "config", "--includes", "--null", "--get-regexp",
       "^(remote\\..*\\.(url|pushurl)|url\\..*\\.(insteadof|pushinsteadof))$"], {
       cwd, encoding: null, stdio: ["ignore", "pipe", "ignore"],
       timeout: remainingTimeout(), maxBuffer: GIT_MAX_OUTPUT_BYTES, env, windowsHide: true
@@ -569,24 +569,61 @@ export function gitOutput(args, cwd, { env = process.env, timeoutMs = GIT_TIMEOU
   return createGitRunner({ env, timeoutMs })(args, cwd);
 }
 
-/** Capture the report environment; version and protected trust are checked on EVERY command. */
+function resolveGitExecutable(env, remainingTimeout) {
+  const windows = process.platform === "win32";
+  const key = windows ? Object.keys(env).sort().find(name => name.toUpperCase() === "PATH") : "PATH";
+  const search = typeof env[key] === "string" ? env[key] : "";
+  for (let start = 0; start <= search.length;) {
+    remainingTimeout();
+    const quote = windows && (search[start] === '"' || search[start] === "'") ? search[start] : null;
+    const closing = quote ? search.indexOf(quote, start + 1) : start;
+    let end = closing === -1 ? -1 : search.indexOf(path.delimiter, closing);
+    if (end === -1) end = search.length;
+    let directory = search.slice(start, end);
+    start = end + 1;
+    if (quote && directory.endsWith(quote)) directory = directory.slice(1, -1);
+    if (!path.isAbsolute(directory) || windows && !/^(?:[a-z]:[\\/]|[\\/]{2}[^\\/]+[\\/][^\\/]+)/i.test(directory)) continue;
+    for (const name of windows ? ["git.com", "git.exe"] : ["git"]) {
+      const candidate = path.resolve(directory, name);
+      let usable = false;
+      try {
+        usable = fs.statSync(candidate).isFile();
+        if (usable && !windows) fs.accessSync(candidate, fs.constants.X_OK);
+      } catch { usable = false; }
+      remainingTimeout();
+      if (usable) return candidate;
+    }
+  }
+  throw Object.assign(new Error("No absolute Git executable was found on the captured PATH."), { code: "ENOENT" });
+}
+
+/** Capture the report environment and pin Git once; version and protected trust remain fresh. */
 export function createGitRunner({ env = process.env, timeoutMs = GIT_TIMEOUT_MS } = {}) {
   const captured = Object.freeze({ ...env });
+  let executable, pinError, pinAttempted = false;
   return (args, cwd) => {
-    // Relative PATH entries can select another binary when cwd changes. Never cache its version.
     const deadline = performance.now() + Math.min(GIT_TIMEOUT_MS, timeoutMs);
     const remainingTimeout = () => {
       const remaining = Math.floor(deadline - performance.now());
       if (!(remaining >= 1)) throw Object.assign(new Error("Git command exceeded its five-second deadline."), { code: "git_cwd_unavailable" });
       return remaining;
     };
+    if (!pinAttempted) {
+      pinAttempted = true;
+      try { executable = resolveGitExecutable(captured, remainingTimeout); }
+      catch (cause) {
+        pinError = cause.code === "git_cwd_unavailable" ? cause : Object.assign(
+          new Error(`${GIT_VERSION_REQUIREMENT} No trusted absolute executable is available.`, { cause }), { code: "git_unsupported" });
+      }
+    }
+    if (pinError) throw pinError; // Never rediscover or fall back after a failed pin.
     const isolated = { ...scrubGitEnv(captured), GIT_CONFIG_NOSYSTEM: "1",
       GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_SYSTEM: "/dev/null" };
     const versionTimeout = remainingTimeout();
     let version = "unavailable";
     let versionCause;
     try {
-      version = nativeGitText(execFileSync("git", ["--version"], {
+      version = nativeGitText(execFileSync(executable, ["--version"], {
         cwd, encoding: null, stdio: ["ignore", "pipe", "ignore"],
         timeout: versionTimeout, maxBuffer: GIT_MAX_OUTPUT_BYTES, env: isolated, windowsHide: true
       })).trim();
@@ -618,14 +655,19 @@ export function createGitRunner({ env = process.env, timeoutMs = GIT_TIMEOUT_MS 
       throw Object.assign(new Error(`${GIT_VERSION_REQUIREMENT} Found ${quotedPathForReport(version)}. Clone confirmation was not run.`, { cause: versionCause }),
         { code: "git_unsupported" });
     }
-    const safeDirectories = protectedSafeDirectoryArgs(cwd, captured, remainingTimeout);
+    const safeDirectories = protectedSafeDirectoryArgs(executable, cwd, captured, remainingTimeout);
     if (args[0] === "remote" && args[1] === "get-url")
-      checkRemoteUrlFraming(cwd, safeDirectories, isolated, remainingTimeout);
-    const output = nativeGitText(execFileSync("git", [...safeDirectories, ...args], {
+      checkRemoteUrlFraming(executable, cwd, safeDirectories, isolated, remainingTimeout);
+    const output = nativeGitText(execFileSync(executable, [...safeDirectories, ...args], {
       cwd, encoding: null, stdio: ["ignore", "pipe", "ignore"],
       timeout: remainingTimeout(), maxBuffer: GIT_MAX_OUTPUT_BYTES, env: isolated, windowsHide: true
     }), args[0] === "remote" ? "git_url_framing" : "git_invalid_utf8");
-    return output.endsWith("\n") ? output.slice(0, -1) : output;
+    const payload = output.endsWith("\n") ? output.slice(0, -1) : output;
+    // A nonempty configured URL can rewrite to an empty effective URL. That is not a
+    // remote-free repository and must not unlock the shared-history confirmation path.
+    if (args[0] === "remote" && args[1] === "get-url" && payload.split("\n").some(url => url.length === 0))
+      throw Object.assign(new Error("Git remote has an empty effective URL."), { code: "git_url_framing" });
+    return payload;
   };
 }
 

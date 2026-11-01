@@ -2433,13 +2433,13 @@ function runGitHarness(make, settings, body) {
     'globalThis.resetGitHarness();',
     'Object.defineProperty(performance, "now", { value: () => fakeClock ? clock : nativeNow() });',
     'cp.execFileSync = function (file, args, options) {',
-    '  if (file !== "git") return original.apply(this, arguments);',
+    '  if (!/^(?:git|git[.](?:exe|com))$/i.test(require("node:path").basename(String(file)))) return original.apply(this, arguments);',
     '  const current = state();',
     '  const reply = text => options.encoding === null ? Buffer.from(text) : text;',
     '  options = { ...options, env: { ...options.env, HOME: current.home, USERPROFILE: current.home,',
     '    XDG_CONFIG_HOME: current.xdg, GIT_CONFIG_SYSTEM: options.env.GIT_CONFIG_SYSTEM === "/dev/null" ? "/dev/null" : current.system,',
     '    GIT_TEST_ASSUME_DIFFERENT_OWNER: current.foreign ? "1" : "0" } };',
-    '  globalThis.gitCalls.push({ args, timeout: options.timeout });',
+    '  globalThis.gitCalls.push({ file, args, timeout: options.timeout });',
     '  if (current.trace) fs.appendFileSync(current.trace, JSON.stringify({ args, cwd: options.cwd }) + "\\n");',
     '  if (args[0] === "--version" && options.cwd === current.failureCwd && current.versionFailure) throw Object.assign(new Error("fixture version launch failed"), current.versionFailure);',
     '  const phase = args[0] === "--version" ? "version" : args[0] === "config" && args.includes("safe.directory") ? "config" : "identity";',
@@ -2609,7 +2609,7 @@ test("Git versions below the supported baseline, unknown versions and version fa
   } finally { cleanup(); }
 });
 
-test("Git version checks are fresh for each caller PATH", () => {
+test("each new runner pins its captured PATH and still checks fresh version replies", () => {
   const { a, make, cleanup } = buildCloneFixture();
   const home = make(), xdg = make();
   const system = path.join(make(), "empty.gitconfig");
@@ -2632,14 +2632,14 @@ test("Git version checks are fresh for each caller PATH", () => {
   } finally { cleanup(); }
 });
 
-test("one captured report runner checks the selected Git again when cwd changes", () => {
+test("one captured report runner keeps its executable pin and rechecks versions when cwd changes", () => {
   const { a, c, make, cleanup } = buildCloneFixture();
   const home = make(), xdg = make();
   const system = path.join(make(), "empty.gitconfig");
   fs.writeFileSync(system, "");
   try {
     // Only version replies vary at the real child boundary; supported config/identity reads
-    // still use the installed Git. One frozen relative PATH can select another binary by cwd.
+    // still use the installed pin. The ignored relative prefix is a fixture marker, not discovery.
     const results = runGitHarness(make, { a, c, home, xdg, system, foreign: false, versionByCwd: true, oldCwd: c, pathDelimiter: path.delimiter },
       (trial, fs, stateFile, settings) => {
         const git = trial.createGitRunner({ env: { ...process.env, PATH: "relative-tools" + settings.pathDelimiter + process.env.PATH } });
@@ -2656,6 +2656,72 @@ test("one captured report runner checks the selected Git again when cwd changes"
     assert.deepEqual(results[1].calls.map(call => call.args), [["--version"]], "the second cwd cannot inherit the first binary's capabilities");
     assert.equal(path.resolve(results[2].value), path.resolve(a));
     assert.equal(results[2].calls[0].args[0], "--version");
+    const files = results.flatMap(result => result.calls.map(call => call.file));
+    assert.ok(files.every(file => path.isAbsolute(file)));
+    assert.equal(new Set(files).size, 1, "version replies may change, but the selected executable cannot");
+  } finally { cleanup(); }
+});
+
+test("a report runner pins one absolute executable across version, trust, metadata and identity", () => {
+  const { a, c, make, cleanup } = buildCloneFixture();
+  const home = make(), xdg = make(), system = path.join(make(), "empty.gitconfig");
+  fs.writeFileSync(system, "");
+  try {
+    const result = runGitHarness(make, { a, c, home, xdg, system, foreign: false }, (trial, fs, stateFile, settings) => {
+      const env = { ...process.env }, git = trial.createGitRunner({ env });
+      for (const key of Object.keys(env)) if (/^path$/i.test(key)) delete env[key];
+      env.PATH = "missing-after-capture";
+      globalThis.resetGitHarness();
+      const first = git(["remote", "get-url", "origin"], settings.a);
+      const second = git(["rev-parse", "--show-toplevel"], settings.c);
+      return { first, second, calls: globalThis.gitCalls };
+    });
+    assert.equal(result.first, "https://example.invalid/org/repo.git");
+    assert.equal(path.resolve(result.second), path.resolve(c));
+    assert.ok(result.calls.every(call => path.isAbsolute(call.file)), "no phase may execute a bare command");
+    assert.equal(new Set(result.calls.map(call => call.file)).size, 1);
+    assert.equal(result.calls.filter(call => call.args[0] === "--version").length, 2, "capabilities stay fresh after pinning");
+    assert.ok(result.calls.some(call => call.args.includes("--get-regexp")), "the NUL metadata guard must use the pin too");
+  } finally { cleanup(); }
+});
+
+test("native current-directory and relative PATH shadows cannot replace the pinned Git", () => {
+  const { a, b, make, cleanup } = buildCloneFixture();
+  const windows = process.platform === "win32", name = windows ? "git.exe" : "git";
+  const fake = path.join(b, name), relative = path.join(b, "relative-tools");
+  const link = (from, to) => { try { fs.linkSync(from, to); } catch (error) {
+    if (!["EPERM", "EACCES", "EXDEV", "ENOTSUP"].includes(error.code)) throw error;
+    fs.copyFileSync(from, to);
+  } };
+  try {
+    link(process.execPath, fake);
+    fs.mkdirSync(relative); link(fake, path.join(relative, name));
+    const env = scrubGitEnv(process.env);
+    const key = windows ? Object.keys(env).sort().find(value => value.toUpperCase() === "PATH") : "PATH";
+    const originalPath = env[key];
+    for (const value of Object.keys(env)) if (/^path$/i.test(value)) delete env[value];
+    for (const prefix of windows ? ["relative-tools", "", null] : ["relative-tools", ""]) {
+      const selected = { ...env, PATH: prefix === null ? originalPath : prefix + path.delimiter + originalPath };
+      const bare = spawnSync("git", ["--version"], { cwd: b, env: selected, encoding: "utf8", timeout: 5_000, windowsHide: true });
+      assert.equal(bare.status, 0, bare.stderr);
+      assert.equal(bare.stdout.trim(), process.version, "the native bare-name control must actually select candidate-owned Node");
+      assert.equal(real(createGitRunner({ env: selected })(["rev-parse", "--show-toplevel"], b)), real(b));
+    }
+    const quoted = path.join(make(), "trusted;tools with spaces");
+    fs.mkdirSync(quoted); link(fake, path.join(quoted, name));
+    for (const quote of windows ? ['"', "'"] : [""]) {
+      const selected = { ...env, PATH: quote + quoted + quote };
+      assert.throws(() => createGitRunner({ env: selected })(["rev-parse", "--show-toplevel"], a),
+        error => error.code === "git_unsupported" && error.message.includes(process.version), "a quoted absolute field must select its native file before version rejection");
+    }
+    if (windows) {
+      const selected = { ...env, PATH: ["", ".", "relative-tools", "C:tools", "\\tools"].join(path.delimiter), Path: originalPath };
+      assert.throws(() => createGitRunner({ env: selected })(["rev-parse", "--show-toplevel"], b),
+        error => error.code === "git_unsupported" && error.cause?.code === "ENOENT", "the first casefolded PATH key cannot fall back to Path or drive-dependent fields");
+    } else {
+      const noExecute = make(); fs.writeFileSync(path.join(noExecute, "git"), "not executable", { mode: 0o644 });
+      assert.throws(() => createGitRunner({ env: { ...env, PATH: noExecute } })(["rev-parse", "--show-toplevel"], a), error => error.code === "git_unsupported");
+    }
   } finally { cleanup(); }
 });
 
@@ -2854,7 +2920,7 @@ test("protected safe.directory exceptions survive isolated Git probes without re
       'const cp = require("node:child_process");',
       'const original = cp.execFileSync;',
       'cp.execFileSync = function (file, args, options) {',
-      '  return original.call(this, file, args, file === "git" ? { ...options, env: { ...options.env, GIT_TEST_ASSUME_DIFFERENT_OWNER: "1" } } : options);',
+      '  return original.call(this, file, args, /^(?:git|git[.](?:exe|com))$/i.test(require("node:path").basename(String(file))) ? { ...options, env: { ...options.env, GIT_TEST_ASSUME_DIFFERENT_OWNER: "1" } } : options);',
       '};',
       'require("node:module").syncBuiltinESMExports();'
     ].join("\n"));
@@ -2942,7 +3008,7 @@ function runGitDeadlineFixture(stepMs, timeoutMs = 5000, urlRead = false, initia
       'const initial = JSON.parse(process.env.KBF_TEST_GIT_INITIAL_CLOCK_MS);',
       'Object.defineProperty(performance, "now", { value: () => initial.shift() ?? elapsed });',
       'cp.execFileSync = function (file, args, options) {',
-      '  if (file !== "git") return original.apply(this, arguments);',
+      '  if (!/^(?:git|git[.](?:exe|com))$/i.test(require("node:path").basename(String(file)))) return original.apply(this, arguments);',
       '  globalThis.gitTimeouts.push(options.timeout);',
       '  globalThis.gitMaxBuffers.push(options.maxBuffer);',
       '  try { return original.apply(this, arguments); } finally { elapsed += steps.shift() ?? 0; }',
@@ -3159,6 +3225,39 @@ test("native Git whitespace remote names retain their selector and cannot hide a
   } finally { cleanup(); }
 });
 
+test("native Git rewrites to empty effective URLs reject the whole candidate or reference fingerprint", () => {
+  const { a, b, d, configure, mainUrl, cleanup } = remoteLimitFixture();
+  const foreign = "https://fork.invalid/repo";
+  const env = { ...scrubGitEnv(process.env), GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_SYSTEM: "/dev/null" };
+  const assertEmptyUrl = (repo, push = false) => {
+    const args = ["remote", "get-url", ...(push ? ["--push"] : []), "--all", "origin"];
+    const native = spawnSync("git", args, { cwd: repo, env, encoding: "utf8", timeout: 5_000, windowsHide: true });
+    assert.equal(native.status, 0, native.stderr);
+    assert.equal(native.stdout, "\n", "native Git permits a nonempty configured URL to rewrite to an empty effective URL");
+    assert.throws(() => gitOutput(args, repo), error => error.code === "git_url_framing");
+  };
+  try {
+    configure(a, [{ urls: [mainUrl] }]);
+    for (const push of [false, true]) {
+      configure(b, [{ urls: [push ? mainUrl : foreign], push: push ? [foreign] : [] }]);
+      gitOutput(["config", "url..insteadOf", foreign], b);
+      assertEmptyUrl(b, push);
+      assert.equal(withConfirmedCloneRoots([b], [a]).confirmed.has(b), false, "an empty effective URL cannot be mistaken for a local-only shared-history candidate");
+    }
+    configure(a, [{ urls: [mainUrl] }]);
+    gitOutput(["config", "url..insteadOf", mainUrl], a);
+    configure(b, [{ urls: [a] }]);
+    configure(d, [{ urls: [mainUrl] }]);
+    assertEmptyUrl(a);
+    assert.equal(withConfirmedCloneRoots([b, d], [a]).confirmed.size, 0, "reject the reference's root commits as well as its remote proof");
+
+    configure(a, [{ urls: [mainUrl] }]);
+    configure(b, [{ urls: [foreign] }]);
+    gitOutput(["config", `url.${mainUrl}.insteadOf`, foreign], b);
+    assert.equal(withConfirmedCloneRoots([b], [a]).confirmed.has(b), true, "ordinary nonempty repository-local rewrites remain valid evidence");
+  } finally { cleanup(); }
+});
+
 test("whitespace-only native URL entries still consume the 64-entry remote allowance", () => {
   const { a, b, configure, mainUrl, cleanup } = remoteLimitFixture();
   try {
@@ -3299,7 +3398,7 @@ test("CLI exposes unsupported Git and version-read failures without probing or f
         'const fs = require("node:fs"), cp = require("node:child_process");',
         'const original = cp.execFileSync;',
         'cp.execFileSync = function (file, args, options) {',
-        '  if (file !== "git") return original.apply(this, arguments);',
+        '  if (!/^(?:git|git[.](?:exe|com))$/i.test(require("node:path").basename(String(file)))) return original.apply(this, arguments);',
         '  fs.appendFileSync(' + JSON.stringify(trace) + ', JSON.stringify(args) + "\\n");',
         '  if (args[0] === "--version") {',
         versionReply === null ? '    throw Object.assign(new Error("version read failed"), { status: 1 });' : '    return Buffer.from(' + JSON.stringify(versionReply) + ');',
@@ -3384,8 +3483,8 @@ function versionFailurePreload(dir, failCwd, failure, trace) {
   fs.writeFileSync(preload, [
     'const fs = require("node:fs"), path = require("node:path"), cp = require("node:child_process"), original = cp.execFileSync;',
     'cp.execFileSync = function (file, args, options) {',
-    `  if (file === "git") fs.appendFileSync(${JSON.stringify(trace)}, JSON.stringify({ args, cwd: options.cwd }) + "\\n");`,
-    `  if (file === "git" && args[0] === "--version" && path.resolve(options.cwd) === ${JSON.stringify(path.resolve(failCwd))})`,
+    `  if (/^(?:git|git[.](?:exe|com))$/i.test(require("node:path").basename(String(file)))) fs.appendFileSync(${JSON.stringify(trace)}, JSON.stringify({ args, cwd: options.cwd }) + "\\n");`,
+    `  if (/^(?:git|git[.](?:exe|com))$/i.test(require("node:path").basename(String(file))) && args[0] === "--version" && path.resolve(options.cwd) === ${JSON.stringify(path.resolve(failCwd))})`,
     `    throw Object.assign(new Error("controlled native version failure"), ${JSON.stringify(failure)});`,
     '  return original.apply(this, arguments);',
     '};',
@@ -3465,8 +3564,8 @@ test("late Git incompatibility discards earlier clone confirmations and folded n
       fs.writeFileSync(preload, [
         'const fs = require("node:fs"), cp = require("node:child_process"), original = cp.execFileSync;',
         'cp.execFileSync = function (file, args, options) {',
-        `  if (file === "git") fs.appendFileSync(${JSON.stringify(trace)}, JSON.stringify({ args, cwd: options.cwd }) + "\\n");`,
-        `  if (file === "git" && args[0] === "--version" && options.cwd === ${JSON.stringify(d)}) return Buffer.from(${JSON.stringify(version + "\n")});`,
+        `  if (/^(?:git|git[.](?:exe|com))$/i.test(require("node:path").basename(String(file)))) fs.appendFileSync(${JSON.stringify(trace)}, JSON.stringify({ args, cwd: options.cwd }) + "\\n");`,
+        `  if (/^(?:git|git[.](?:exe|com))$/i.test(require("node:path").basename(String(file))) && args[0] === "--version" && options.cwd === ${JSON.stringify(d)}) return Buffer.from(${JSON.stringify(version + "\n")});`,
         '  return original.apply(this, arguments);',
         '};',
         'require("node:module").syncBuiltinESMExports();'
@@ -3498,8 +3597,8 @@ test("CLI checks Git compatibility before each operation and leaves old or unkno
       'const fs = require("node:fs"), cp = require("node:child_process");',
       'const original = cp.execFileSync;',
       'cp.execFileSync = function (file, args, options) {',
-      `  if (file === "git") fs.appendFileSync(${JSON.stringify(trace)}, JSON.stringify(args) + "\\n");`,
-      '  if (file === "git" && args.length === 1 && args[0] === "--version") return Buffer.from(process.env.KBF_TEST_VERSION + "\\n");',
+      `  if (/^(?:git|git[.](?:exe|com))$/i.test(require("node:path").basename(String(file)))) fs.appendFileSync(${JSON.stringify(trace)}, JSON.stringify(args) + "\\n");`,
+      '  if (/^(?:git|git[.](?:exe|com))$/i.test(require("node:path").basename(String(file))) && args.length === 1 && args[0] === "--version") return Buffer.from(process.env.KBF_TEST_VERSION + "\\n");',
       '  return original.apply(this, arguments);',
       '};',
       'require("node:module").syncBuiltinESMExports();'
@@ -3552,7 +3651,7 @@ test("a report runner freezes its environment while rereading protected configur
       'const cp = require("node:child_process"), original = cp.execFileSync;',
       'globalThis.gitCalls = [];',
       'cp.execFileSync = function (file, args, options) {',
-      '  if (file === "git") globalThis.gitCalls.push({ args, system: options.env.GIT_CONFIG_SYSTEM, global: options.env.GIT_CONFIG_GLOBAL });',
+      '  if (/^(?:git|git[.](?:exe|com))$/i.test(require("node:path").basename(String(file)))) globalThis.gitCalls.push({ args, system: options.env.GIT_CONFIG_SYSTEM, global: options.env.GIT_CONFIG_GLOBAL });',
       '  return original.apply(this, arguments);',
       '};',
       'require("node:module").syncBuiltinESMExports();'
@@ -3682,7 +3781,7 @@ test("CLI integration: unavailable or corrupt usage logs skip clone probes and f
       'const cp = require("node:child_process");',
       'const original = cp.execFileSync;',
       'cp.execFileSync = function (file, args, options) {',
-      '  if (file === "git") fs.appendFileSync(' + JSON.stringify(trace) + ', JSON.stringify({ args, cwd: options?.cwd }) + "\\n");',
+      '  if (/^(?:git|git[.](?:exe|com))$/i.test(require("node:path").basename(String(file)))) fs.appendFileSync(' + JSON.stringify(trace) + ', JSON.stringify({ args, cwd: options?.cwd }) + "\\n");',
       '  return original.apply(this, arguments);',
       '};',
       'require("node:module").syncBuiltinESMExports();'
