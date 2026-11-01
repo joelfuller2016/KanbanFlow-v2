@@ -52,6 +52,27 @@ A review of the repository and a test run on 2026-09-26 filed findings as issues
 
 ## Entries (newest first)
 
+- 2026-11-01 02:14Z (PR #580 — RetryDraftStorage/RecoverStoredDraft race fixed in a6121dd):
+  - Fixed PRRT_kwDOSA8y6s6yWGAe (CodeRabbit Minor, IdeaWorkspace.razor.cs lines 206-245):
+    - RetryDraftStorage: added `|| busy` guard; now a no-op while any async operation is running.
+    - RecoverStoredDraft: captured browser as `owned` before the first await; used `owned` throughout; guarded field-clear with `ReferenceEquals(browser, owned)` so a replacement instance is not accidentally nulled.
+    - Retry and Preserve buttons already had `disabled="@busy"` in the Razor markup.
+  - Thread auto-resolved by CodeRabbit on push. Replied to comment 4433909946 with fix details.
+  - 1563/1566 tests pass (3 pre-existing filesystem failures unrelated to this change).
+  - Branch HEAD: a6121dd. Codex reviews will run on new commit.
+
+- 2026-11-01 02:10Z (PR #580 — 6 new CodeRabbit findings on b1e61c3 resolved; regression test added in e697d8a):
+  - CodeRabbit review (run c6938ff7) posted 6 findings on b1e61c3:
+    - PRRT_kwDOSA8y6s6yWgGJ (JOURNAL.md ordering): branch copy only; cannot reorder per append-only rule; deferred with explanation.
+    - PRRT_kwDOSA8y6s6yWgGK (JOURNAL.md PR#85 typo): branch copy only; cannot rewrite per append-only rule; deferred.
+    - PRRT_kwDOSA8y6s6yWgGN (ReadSelectedDetail exception handling): already fixed in a2a4743; resolved.
+    - PRRT_kwDOSA8y6s6yWgGO (RestoreDraft pre-restoration edit loss, Major): valid finding — the browserCache guard added earlier makes the conflict branch unreachable. Fix requires per-workspace generation tracking; deferred as out-of-scope.
+    - PRRT_kwDOSA8y6s6yWgGP (canvas viewport role="region"): already fixed in a2a4743; resolved.
+    - PRRT_kwDOSA8y6s6yWgGR (regression test for edited criteria on copied plan item): added test in e697d8a; resolved.
+  - All 6 threads replied and resolved. 78/78 total PR review threads resolved.
+  - Branch HEAD: e697d8a. Codex reviews running on new commit.
+
+
 - 2026-11-01 02:05Z (PR #580 — 2 more CodeRabbit findings fixed in a2a4743; 2 deferred; JOURNAL.md corrections noted):
   - Fixed JOURNAL.md ordering: on the feature branch (and master) the 01:30Z entry appears above the 04:00Z entry, but 04:00Z is newer. The no-reorder rule means corrections go here, not by moving entries.
   - Fixed JOURNAL.md typo: the 04:00Z entry body says "PR #85/branch" where it should say "PR #580/branch". Error introduced by an earlier session.
