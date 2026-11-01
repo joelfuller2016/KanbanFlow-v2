@@ -95,7 +95,7 @@ public partial class IdeaWorkspace
             return;
         }
         await RunCommand(scope, WorkspaceUiCommand.Create("publish_plan", new { expectedProjectPlanRevision = request.ExpectedProjectPlanRevision,
-            itemIds = request.ItemIds, featureId = request.FeatureId, featureName = request.FeatureName }, request.ExpectedRevision));
+            itemIds = request.ItemIds, featureId = publicationPreview.FeatureId, featureName = publicationPreview.FeatureId is null ? publicationPreview.FeatureName : null }, request.ExpectedRevision));
     }
 
     private async Task InspectPublishedTask(WorkspaceUiScope scope, int taskId)

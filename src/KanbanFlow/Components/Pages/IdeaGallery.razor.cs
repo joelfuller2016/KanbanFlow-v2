@@ -28,11 +28,14 @@ public partial class IdeaGallery : IDisposable
         error = null;
         try
         {
-            activeQuery = string.IsNullOrWhiteSpace(query) ? null : query;
-            activeKind = string.IsNullOrEmpty(kind) ? null : kind;
-            activeStatus = string.IsNullOrEmpty(status) ? null : status;
-            var loaded = await Workspaces.ListAsync(activeKind, activeStatus, activeQuery, ct: lifetime.Token);
+            var newActiveQuery = string.IsNullOrWhiteSpace(query) ? null : query;
+            var newActiveKind = string.IsNullOrEmpty(kind) ? null : kind;
+            var newActiveStatus = string.IsNullOrEmpty(status) ? null : status;
+            var loaded = await Workspaces.ListAsync(newActiveKind, newActiveStatus, newActiveQuery, ct: lifetime.Token);
             if (disposed) return;
+            activeQuery = newActiveQuery;
+            activeKind = newActiveKind;
+            activeStatus = newActiveStatus;
             page = loaded;
             items.Clear();
             items.AddRange(page.Items);
