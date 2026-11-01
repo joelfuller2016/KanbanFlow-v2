@@ -750,8 +750,10 @@ test("a root-commit match is still trusted when the candidate's remote is a LOCA
 });
 
 test("isLocalPathRemote tells a local path apart from a network remote, per git's own rule", () => {
-  assert.equal(isLocalPathRemote("C:\\Users\\joel.fuller\\repo"), process.platform === "win32", "a drive prefix is local only on Windows");
-  assert.equal(isLocalPathRemote("C:/Users/repo"), process.platform === "win32", "POSIX Git treats a single-letter host as SCP");
+  assert.equal(isLocalPathRemote("C:\\Users\\joel.fuller\\repo"), process.platform === "win32", "drive syntax is local only on Windows");
+  // C:/path: on Windows this is a drive path; on POSIX Git parses it as SCP (host "C", absolute
+  // path /Users/repo), which is a network remote.
+  assert.equal(isLocalPathRemote("C:/Users/repo"), process.platform === "win32", "forward-slash Windows drive path is local only on Windows");
   if (process.platform !== "win32") {
     assert.equal(isLocalPathRemote("C:repo"), false, "on POSIX, single-letter SCP host is a network remote, not a drive letter");
     assert.equal(isLocalPathRemote("D:/path/repo"), false, "on POSIX, D:/path is SCP (host D, absolute path), not a drive path");
@@ -774,6 +776,64 @@ test("isLocalPathRemote tells a local path apart from a network remote, per git'
   assert.equal(isLocalPathRemote("git@example-work:alice/repo.git"), false, "an SSH config alias is still network");
   assert.equal(isLocalPathRemote(null), false);
   assert.equal(isLocalPathRemote(""), false);
+});
+
+test("remote path classification follows both native Windows and POSIX Git parser rules", () => {
+  // Git url.c:url_is_local_not_ssh uses the first '/' and its platform DOS-drive predicate.
+  // On POSIX that predicate is false; backslashes are literal characters, not separators.
+  // https://github.com/git/git/blob/v2.55.0/url.c#L128-L134
+  for (const [url, windowsLocal, posixLocal] of [
+    ["C:repo", true, false], ["C:/repo", true, false], ["C:\\repo", true, false],
+    ["C:repo:other", false, false], ["C:re?po", false, false], ["C:CON", false, false], ["C:CON .txt", false, false], ["C:AUX .ext", false, false], ["C:LPT1 .ext", false, false],
+    ["before\\slash:repo", false, false], ["before/slash:repo", true, true],
+    ["user@C:repo", false, false], ["x::host/repo", false, false],
+    ["/local/repo", true, true], ["file:///local/repo", true, true]
+  ]) {
+    assert.equal(isLocalPathRemote(url, { platform: "win32" }), windowsLocal, "Windows: " + url);
+    assert.equal(isLocalPathRemote(url, { platform: "linux" }), posixLocal, "POSIX parser contract: " + url);
+  }
+  assert.equal(normalizeRemoteUrl("C:/repo", { platform: "linux" }),
+    normalizeRemoteUrl("ssh://c/repo", { platform: "linux" }), "the POSIX SCP form has an absolute SSH path");
+});
+
+test("native Git diagnostics verify the host platform's drive and backslash classification without connecting", () => {
+  for (const [url, validDrive] of [["C:repo", true], ["C:/repo", true], ["C:\\repo", true],
+      ["C:repo:other", false], ["C:re?po", false], ["C:CON", false], ["C:CON .txt", false], ["C:AUX .ext", false], ["C:LPT1 .ext", false], ["before\\slash:repo", false]]) {
+      // Git's CONNECT_DIAG_URL returns before opening the file/SSH transport.
+      const diagnostic = gitOutput(["fetch-pack", "--diag-url", url], HERE);
+      const local = process.platform === "win32" && validDrive;
+      assert.match(diagnostic, new RegExp("^Diag: protocol=" + (local ? "file" : "ssh") + "$", "m"), url);
+      assert.equal(isLocalPathRemote(url), local, "match this installed Git's parser for " + url);
+  }
+});
+
+test("real configured single-letter remotes veto shared history under the POSIX parser contract", () => {
+  const { a, b, cleanup } = buildCloneFixture();
+  try {
+    gitOutput(["remote", "add", "origin", "C:fork"], b);
+    for (const [url, windowsConfirmed] of [["C:fork", true], ["C:/fork", true], ["C:\\fork", true], ["before\\slash:fork", false],
+      ["C:fork:other", false], ["C:re?po", false], ["C:CON", false], ["C:CON .txt", false], ["C:AUX .ext", false], ["C:LPT1 .ext", false]]) {
+      gitOutput(["remote", "set-url", "origin", url], b);
+      assert.equal(gitOutput(["remote", "get-url", "origin"], b), url, "real Git stores the exact namespace being judged");
+      assert.equal(withConfirmedCloneRoots([b], [a], { platform: "win32" }).confirmed.has(b), windowsConfirmed, "Windows contract: " + url);
+      assert.equal(withConfirmedCloneRoots([b], [a], { platform: "linux" }).confirmed.has(b), false,
+        "a POSIX SCP remote must veto shared history: " + url);
+    }
+  } finally { cleanup(); }
+});
+
+test("ambiguous Windows drive forms cannot prove a matching remote or shared-root clone", () => {
+  const { a, b, c, cleanup } = buildCloneFixture();
+  try {
+    gitOutput(["remote", "add", "origin", "C:CON"], b);
+    for (const url of ["C:CON", "C:CON .txt", "C:AUX .ext", "C:LPT1 .ext", "C:repo:other", "1:repo", "ä:repo"]) {
+      for (const cwd of [a, b, c]) gitOutput(["remote", "set-url", "origin", url], cwd);
+      assert.equal(withConfirmedCloneRoots([b, c], [a], { platform: "win32" }).confirmed.size, 0,
+        "ambiguous Windows paths cannot contribute URL or root-commit proof: " + url);
+      assert.deepEqual([...withConfirmedCloneRoots([b, c], [a], { platform: "linux" }).confirmed.keys()], [b, c],
+        "the same explicit POSIX SSH namespace still supplies matching URL evidence: " + url);
+    }
+  } finally { cleanup(); }
 });
 
 test("normalizeRemoteUrl keeps unknown SCP, absolute SSH and HTTPS namespaces distinct", () => {
@@ -1264,6 +1324,15 @@ test("normalizeRemoteUrl folds case, a trailing .git, and https/ssh/scp syntax t
   assert.equal(normalizeRemoteUrl(null), null);
   assert.equal(normalizeRemoteUrl(""), null);
   assert.equal(normalizeRemoteUrl(undefined), null);
+});
+
+test("normalizeRemoteUrl preserves complete payloads after record framing is removed", () => {
+  const value = "https://example.invalid/org/repo.git";
+  const plain = normalizeRemoteUrl(value);
+  for (const payload of [value + " ", " " + value, value + "\n", value + "\r\n"]) {
+    assert.notEqual(normalizeRemoteUrl(payload), plain, "all supplied characters belong to the URL payload");
+  }
+  // Native get-url assertions below verify that the runner removes only Git's terminal LF.
 });
 
 test("normalizeRemoteUrl preserves case-sensitive repository paths while normalizing network hosts", () => {
@@ -2360,6 +2429,67 @@ test("createGitRunner throws git_cwd_missing, not git_unsupported, when the cwd 
   // gitIncompatibility globally and suppress all further clone-probe git calls.
   assert.equal(thrown.code, "git_cwd_missing", "code must be git_cwd_missing, not git_unsupported");
   assert.match(thrown.message, /does not exist/i);
+});
+
+test("a deleted logged cwd stays outside while a later valid clone is still probed", () => {
+  const { a, b, make, cleanup } = buildInto(make => {
+    const a = make(), b = make();
+    initRealRepo(a, "main.txt");
+    gitOutput(["clone", "-q", a, b], a);
+    return { a, b };
+  });
+  try {
+    const removed = make();
+    assert.equal(fs.statSync(removed).isDirectory(), true);
+    fs.rmdirSync(removed);
+    const log = path.join(make(), "usage.jsonl");
+    fs.writeFileSync(log, [
+      row({ session: "valid-clone", cwd: b, ts: "2026-09-01T10:00:00.000Z" }),
+      row({ session: "deleted-first", cwd: removed, ts: "2026-09-01T10:00:01.000Z" })
+    ].map(value => JSON.stringify(value)).join("\n") + "\n");
+    const result = runCliJson(log, a);
+    assert.equal(result.status, 1, result.stdout + result.stderr);
+    const summary = JSON.parse(result.stdout);
+    assert.notEqual(find(summary, 4).verdict, "UNMEASURED", "one deleted directory cannot disable the report's Git source");
+    assert.deepEqual(find(summary, 4).detail.map(detail => detail.session), ["deleted-first"]);
+    assert.equal(summary.sources.cloneProbe.probed, 2, "the valid clone is checked after the newer deleted cwd");
+    assert.match(result.stderr, /1 of 2 outside cwd\(s\) confirmed/);
+    assert.doesNotMatch(result.stderr, /Git 2\.39 or newer is required/);
+  } finally { cleanup(); }
+});
+
+test("an absent Git executable with an existing cwd remains an unsupported source", () => {
+  const { a, b, make, cleanup } = buildInto(make => ({ a: make(), b: make() }));
+  try {
+    const emptyPath = make();
+    const env = scrubGitEnv(process.env);
+    for (const key of Object.keys(env)) if (/^path$/i.test(key)) delete env[key];
+    env.PATH = emptyPath;
+    assert.equal(fs.statSync(a).isDirectory(), true);
+    const control = spawnSync("git", ["--version"], { cwd: a, env, encoding: "utf8", timeout: 5_000, windowsHide: true });
+    assert.equal(control.error?.code, "ENOENT", "the empty executable search path really cannot launch Git");
+    assert.throws(() => createGitRunner({ env })(["rev-parse", "--show-toplevel"], a), error => error.code === "git_unsupported");
+    const log = path.join(make(), "usage.jsonl");
+    fs.writeFileSync(log, JSON.stringify(row({ cwd: b })) + "\n");
+    const result = spawnSync(process.execPath, [path.join(HERE, "trial-report.mjs"), "--repo-root", a, "--json"], {
+      cwd: a, env: { ...env, KANBANFLOW_USAGE_LOG: log, KANBANFLOW_API_URL: "http://127.0.0.1:1" },
+      encoding: "utf8", timeout: 20_000, windowsHide: true
+    });
+    assert.equal(result.status, 1, result.stdout + result.stderr);
+    const summary = JSON.parse(result.stdout);
+    assert.equal(find(summary, 4).verdict, "UNMEASURED");
+    assert.equal(summary.sources.cloneProbe, null);
+    assert.equal((result.stderr.match(/Git 2\.39 or newer is required/g) ?? []).length, 1);
+  } finally { cleanup(); }
+});
+
+test("a non-directory cwd is a candidate-local launch failure", () => {
+  const { make, cleanup } = buildInto(() => ({}));
+  try {
+    const file = path.join(make(), "file.txt");
+    fs.writeFileSync(file, "fixture");
+    assert.throws(() => createGitRunner()(["rev-parse", "--show-toplevel"], file), error => error.code === "git_cwd_missing");
+  } finally { cleanup(); }
 });
 
 test("protected capture matches native ownership resets and excludes repository-context trust", () => {

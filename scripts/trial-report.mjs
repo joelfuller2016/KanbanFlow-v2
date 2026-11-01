@@ -558,17 +558,17 @@ export function createGitRunner({ env = process.env, timeoutMs = GIT_TIMEOUT_MS 
     const numbers = parsed?.slice(1, 4).map(Number);
     // Protected configuration follows ordinary includes from Git 2.39 onward.
     if (!numbers?.every(Number.isSafeInteger) || !(numbers[0] > 2 || numbers[0] === 2 && numbers[1] >= 39)) {
+      // ENOENT can mean a missing executable OR cwd. Only a proven unavailable directory is
+      // candidate-local; a missing Git executable must retain the unsupported-source diagnostic.
+      let cwdUnavailable = false;
       if (versionCause?.code === "ENOENT" || versionCause?.code === "ENOTDIR") {
-        // The same launch error can mean either a missing cwd or a missing Git executable.
-        // Only a directory lookup can justify quarantining this one cwd rather than Git itself.
-        const directory = cwd ?? process.cwd();
-        let cwdMissing = false;
-        try { cwdMissing = !fs.statSync(directory).isDirectory(); }
-        catch (error) { cwdMissing = error.code === "ENOENT" || error.code === "ENOTDIR"; }
-        if (cwdMissing) {
-          throw Object.assign(new Error(`Git version probe could not start: cwd does not exist or is not a directory (${quotedPathForReport(directory)}).`,
-            { cause: versionCause }), { code: "git_cwd_missing" });
-        }
+        try { cwdUnavailable = !fs.statSync(cwd ?? process.cwd()).isDirectory(); }
+        catch (error) { cwdUnavailable = error.code === "ENOENT" || error.code === "ENOTDIR"; }
+      }
+      if (cwdUnavailable) {
+        throw Object.assign(
+          new Error(`Git version probe could not start: cwd does not exist or is not a directory (${quotedPathForReport(cwd ?? "current directory")}).`, { cause: versionCause }),
+          { code: "git_cwd_missing" });
       }
       throw Object.assign(new Error(`${GIT_VERSION_REQUIREMENT} Found ${quotedPathForReport(version)}. Clone confirmation was not run.`, { cause: versionCause }),
         { code: "git_unsupported" });
@@ -656,7 +656,7 @@ const GIT_REMOTE_HELPER = /^[a-z0-9][a-z0-9+.-]*::/i;
  * Only after ruling out a scheme is a bare `host:path` considered scp. The local-path classifier
  * keeps Windows drive paths out while permitting unambiguous account/host forms.
  */
-export function normalizeRemoteUrl(url) {
+export function normalizeRemoteUrl(url, { platform = process.platform } = {}) {
   if (typeof url !== "string" || url.length === 0) return null;
   const raw = url;
   const u = raw;
@@ -703,7 +703,7 @@ export function normalizeRemoteUrl(url) {
     return `${protocol}://${userinfo}${authority}${separator === -1 ? "" : "/" + repository}`;
   }
   const scp = raw.match(/^(?:([a-z0-9._-]+)@)?([a-z0-9.-]+):(.+)$/i);
-  if (scp && !isLocalPathRemote(raw)) return sshKey(scp[1] ? `${scp[1]}@${scp[2]}` : scp[2], scp[3]);
+  if (scp && !isLocalPathRemote(raw, { platform })) return sshKey(scp[1] ? `${scp[1]}@${scp[2]}` : scp[2], scp[3]);
   return u;
 }
 
@@ -721,9 +721,9 @@ export function normalizeRemoteUrl(url) {
  * network):
  *   - `file://…` is local (it names a path, just spelled as a URL).
  *   - any OTHER `scheme://` (`https://`, `ssh://`, `git://`, …) is network.
- *   - otherwise, a remote is local only if it has no colon at all, has a `/` BEFORE its first
- *     colon, or runs on Windows with a single-letter drive prefix (`C:…`). A backslash before
- *     a colon does not make a path local, even on Windows. On POSIX, `C:repo` is SCP too.
+ *   - otherwise, a remote is local if it has no colon or a `/` BEFORE its first colon. Git's
+ *     additional DOS-drive rule applies only on Windows and requires a valid Windows path.
+ *     Backslashes are literal characters in Git's POSIX SSH parser.
  *   - anything else with a colon is SCP-style ssh — network — including an alias
  *     (`git@example-work:…`), an IPv4 host (`git@192.168.1.10:…`), and a single-label host
  *     (`gitserver:…`).
@@ -732,7 +732,7 @@ export function normalizeRemoteUrl(url) {
  * one, so treating an unresolvable alias as network (unable to match) is the fail-CLOSED direction
  * — it stays outside, exactly as an alias- or IP-spelled clone of this very repo would on master.
  */
-export function isLocalPathRemote(rawUrl) {
+export function isLocalPathRemote(rawUrl, { platform = process.platform } = {}) {
   if (typeof rawUrl !== "string" || rawUrl.length === 0) return false;
   const u = rawUrl;
   if (GIT_REMOTE_HELPER.test(u)) return false;
@@ -742,8 +742,23 @@ export function isLocalPathRemote(rawUrl) {
   if (colon === -1) return true;
   const beforeColon = u.slice(0, colon);
   if (beforeColon.includes("/")) return true;
-  if (process.platform === "win32" && /^[a-z]$/i.test(beforeColon)) return true;
+  if (platform === "win32" && /^[a-z]$/i.test(beforeColon)) {
+    const tail = u.slice(colon + 1);
+    // Recognize a conservative subset of Git's is_valid_win32_path. Ambiguous drive-looking
+    // forms are refused by fingerprinting below, never promoted into network identity proof.
+    if (/[\x00-\x1f<>:"|?*]/.test(tail)) return false;
+    return tail.split(/[\\/]/).every(part => part === "." || part === ".." ||
+      (!/[ .]$/.test(part) && !/^(?:con|prn|aux|nul|com[0-9¹²³]|lpt[0-9¹²³]|conin\$|conout\$) *(?:\..*)?$/i.test(part)));
+  }
   return false;
+}
+
+function ambiguousWindowsDrive(rawUrl, platform) {
+  if (platform !== "win32") return false;
+  const value = rawUrl;
+  if (GIT_URL_SCHEME.test(value) || GIT_REMOTE_HELPER.test(value)) return false;
+  const colon = value.indexOf(":");
+  return colon > 0 && [...value.slice(0, colon)].length === 1 && !isLocalPathRemote(value, { platform });
 }
 
 // Hard cap on how many DISTINCT cwds `withConfirmedCloneRoots` will run git against. "Bounded" is
@@ -854,7 +869,7 @@ function boundedGitLines(text, limit) {
  * toplevel — not a prefix of the cwd at all — and a confirmed clone scored outside while being
  * reported as folded in.
  */
-export function withConfirmedCloneRoots(cwds, roots, { git = gitOutput, now = () => performance.now() } = {}) {
+export function withConfirmedCloneRoots(cwds, roots, { git = gitOutput, now = () => performance.now(), platform = process.platform } = {}) {
   const mainRoots = (Array.isArray(roots) ? roots : []).filter(r => typeof r === "string" && r.length > 0);
   const distinct = [...new Set((Array.isArray(cwds) ? cwds : []).filter(c => typeof c === "string" && c.length > 0))];
   const limits = { tooManyRemotes: 0, tooManyUrls: 0, outputTooLarge: 0, limitedMainRoots: 0 };
@@ -943,7 +958,7 @@ export function withConfirmedCloneRoots(cwds, roots, { git = gitOutput, now = ()
       return { everyUrl: new Set(), fetchUrls: new Set(), inconclusive: true };
     }
     if (names === null) return { everyUrl: new Set(), fetchUrls: new Set(), inconclusive: true, tooManyRemotes: true };
-    const network = rawUrl => (isLocalPathRemote(rawUrl) ? null : normalizeRemoteUrl(rawUrl));
+    const network = rawUrl => (isLocalPathRemote(rawUrl, { platform }) ? null : normalizeRemoteUrl(rawUrl, { platform }));
     const everyUrl = new Set();
     const fetchUrls = new Set();
     let totalUrls = 0;
@@ -958,6 +973,8 @@ export function withConfirmedCloneRoots(cwds, roots, { git = gitOutput, now = ()
           return { everyUrl: new Set(), fetchUrls: new Set(), inconclusive: true };
         }
         if (urls === null) return { everyUrl: new Set(), fetchUrls: new Set(), inconclusive: true, tooManyUrls: true };
+        if (urls.some(url => ambiguousWindowsDrive(url, platform)))
+          return { everyUrl: new Set(), fetchUrls: new Set(), inconclusive: true, ambiguousDrive: true };
         remoteUrls += urls.length;
         totalUrls += urls.length;
         const fetchUrl = read === 0 && urls.length > 0 ? network(urls[0]) : null;
@@ -984,6 +1001,7 @@ export function withConfirmedCloneRoots(cwds, roots, { git = gitOutput, now = ()
     const commits = rootCommitsOf(main);
     if (outputLimited) { limits.limitedMainRoots++; continue; }
     const remotes = networkRemotesOf(main, MAIN_URL_READS);
+    if (remotes.ambiguousDrive) continue;
     if (outputLimited || remotes.tooManyRemotes || remotes.tooManyUrls) {
       limits.limitedMainRoots++;
       continue; // The whole fingerprint, including its root commits, is unusable.

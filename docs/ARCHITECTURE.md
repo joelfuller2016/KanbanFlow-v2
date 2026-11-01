@@ -670,11 +670,15 @@ Repository identity probes require **Git 2.39 or newer**, which follows ordinary
 reading protected configuration. The report checks the selected binary before every Git identity
 operation, since relative `PATH` entries can resolve differently for each working directory. If a
 check finds an older or unrecognizable version, it produces one diagnostic and leaves signal 4
-**UNMEASURED**, including with an explicit repository root. Every operation's
+**UNMEASURED**, including with an explicit repository root. If incompatibility is found later,
+earlier clone confirmations and their folding notes are discarded. A missing or non-directory
+logged working path is instead left unconfirmed outside without disabling Git for later candidates.
+Remote drive syntax follows the host platform: single-letter SCP forms are network
+remotes on POSIX, and ambiguous Windows drive forms cannot prove a clone fingerprint. Every operation's
 five-second monotonic deadline includes that check, a protected configuration read and the identity
 command; later operations get the same bound and reread protected configuration without repository
 context, so `gitdir`/`onbranch` conditional includes cannot grant ownership trust. The report does
-not install Git or change global settings. A deleted session directory remains an unconfirmed outside candidate; it does not invalidate supported Git for other sessions. Git child output is capped at 256 KiB. Reference and
+not install Git or change global settings. Git child output is capped at 256 KiB. Reference and
 candidate fingerprints scan at most 16 remote names, 64 nonempty URL entries per remote across
 fetch and push reads together, and 256 URL entries across the entire fingerprint; duplicates count. Exceeding
 a bound rejects the whole fingerprint and is disclosed in the report, rather than trusting a
@@ -682,7 +686,8 @@ truncated prefix. Other servers retain their transport, account and exact
 repository path; generic SSH comparison preserves the login and effective
 command path (including `.git` and relative, absolute or tilde forms); GitHub's documented `git`
 account clone URLs retain their hosted HTTPS aliases. Paths printed in reports are reversible
-quoted literals, and report JSON escapes control characters that could alter its presentation. Drive-letter paths are local only on Windows; on POSIX, a single-letter SCP host remains network evidence. Comparisons retain meaningful spaces in remote names and URL payloads.
+quoted literals, and report JSON escapes control characters that could alter its presentation.
+Comparisons retain meaningful spaces in remote names and URL payloads.
 
 The report takes each signal from whichever source can actually answer it — the log for who called
 what from where, the board's `ActivityEvent` rows for what changed — and it says what it could not
