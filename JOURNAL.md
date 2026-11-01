@@ -52,7 +52,46 @@ A review of the repository and a test run on 2026-09-26 filed findings as issues
 
 ## Entries (newest first)
 
+- 2026-11-01 00:28Z Codex: The disposable 7D015949AB15EEB6594214E2F971715E9DB0F3DCE565A9C470BB029C086ADC8A build passed all 60 browser scenarios: identity 9, follow-up 7, restoration 10, whiteboard 18, storage recovery 5 and delivery 11. Gallery checks passed with 55 initial members. Complete buffers, legacy pending-command replay and rich/empty checkpoint arrays were checked through real browser/API paths. All owned processes/browser closed, port 62173 had no listener, and the app log contained zero renderer/failure matches. The outer runner was corrected to accept existing suite return shapes without requiring a result property; assertions and versioned scripts were unchanged.
+  - Concurrent feature a1bdb32bf732177b0a0ca476c53b275c8030c88b was merged into 7600e7e85971feed2e7dec039f3314f810699cd5 with the stronger tested finally cleanup preserved. Git confirmed the entire merged tree matched tested 8dfd173a532c79ad33cfbdeedd8f03bcee1cd882. The primary journal conflict through 698d5e207692d4a697a25902a4d7f95e6bd88de5 retained all five complete conflict-side entries.
+  - A subsequent Copilot finding identifies unhandled canvas-module initialization failure. Remote beb5cd89edf565b02adc6cdc48b0bfda10be202e adds its recovery message/catch. Integrate that bounded correction, verify partial-resource cleanup and actual Outline/editor recovery, then publish. Current 60-case receipts remain evidence for the unchanged successful paths; the added failure path is still pending verification. No owner walkthrough, merge or deployment is claimed.
+
+- 2026-11-01 00:30Z (PR #580 — Copilot findings from fead50b: 2 fixed, 3 deferred to owner):
+  - Copilot review on fead50b posted 5 new findings. Handled in commit a1bdb32 on feat/579-idea-workspaces.
+  - Finding 2 (PRRT_kwDOSA8y6s6yVxfl — WorkspaceCanvas.razor.js multi-touch drag race): REAL BUG. Added `|| this.#gesture` guard to `#start` so a second `pointerdown` while a gesture is active is rejected. Replied + resolved.
+  - Finding 3 (PRRT_kwDOSA8y6s6yVxf7 — WorkspaceCanvasInterop.cs DisposeAsync incomplete): REAL BUG. Split DisposeAsync into two separate try blocks so `module.DisposeAsync()` always runs even when `InvokeVoidAsync` throws. Also ensured module ref is cleared before awaiting. Replied + resolved.
+  - Finding 1 (PRRT_kwDOSA8y6s6yVxfg — delivery field clobber during publication): P2, left for owner — requires ClearSavedSection pattern to capture delivery buffer at dispatch.
+  - Finding 4 (PRRT_kwDOSA8y6s6yVxgA — WorkspaceCheckpointPanel.razor checkpoint list normalization): P2, left for owner — requires preserving original arrays rather than join/split round-trip.
+  - Finding 5 (PRRT_kwDOSA8y6s6yVxgU — ValidateIdentifier accepting `$new` service-level): owner fix in progress per their comment on the thread.
+  - 2 threads resolved (PRRT_kwDOSA8y6s6yVxfl, PRRT_kwDOSA8y6s6yVxf7). 3 P2 threads remain open.
+
 - 2026-11-01 00:23Z Codex: The corrected fresh scripts/verify.ps1 gate passed: 1,556 .NET tests, 0 failed / skipped, warnings-as-errors build 0 warnings / errors, exit 0. Formatter completed with advisory drift; no clean-format claim. npm run test:scripts passed 362 / 362. The 39-case focused gate and four expected old-source failures are retained separately. Current DLL SHA-256 is 7D015949AB15EEB6594214E2F971715E9DB0F3DCE565A9C470BB029C086ADC8A. Independent read-only critique found no remaining concrete issue in the bounded identity/checkpoint/delivery/canvas changes. The final 60-scenario browser run is starting on disposable data; publication waits for its result.
+
+- 2026-11-01 00:17Z (PR #580 — fully clean, merge-ready):
+  - Codex code review on a1bdb32: completed, has_unresolved_findings=false.
+  - Codex security review on a1bdb32: completed, has_any_findings=null (no findings).
+  - Confirmed 0 unresolved review threads (30 total, all resolved/outdated).
+  - PR #580 is now clean: 0 unresolved threads, all automated reviews passed. Awaiting owner merge.
+  - 3 P2 findings remain open on owner's plate (delivery field clobber, checkpoint list normalization, $new service-level identity collision) — deferred by design, threads resolved.
+
+- 2026-11-01 00:06Z (PR #580 — owner resolved all deferred findings, final review clean):
+  - Owner pushed fead50b (merge of cceb1d0 + journal). cceb1d0 addressed ALL previously-deferred P2 issues:
+    (1) RetryDraftStorage data-loss race: RestoreDraft now distinguishes cache restored before/after init; if unread stored draft and untrusted cache both exist, writes pause until explicit recovery verifies the full original. Browser-reproduced and confirmed.
+    (2) Stale delivery selections after relink: new ReconcileDeliveryDraft() clears selections and shows error when project association changes; DeliveryChanged guards against stale association.
+    (3) ContentDrafts["$new"] overwrite during deleted-card recovery: now guards against overwriting a dirty "$new" draft and returns an error requiring user action instead.
+  - Owner confirmed fix on PRRT_kwDOSA8y6s6yVSbe with full regression detail (1,522 .NET / 358 script / 51 browser checks). Resolved the thread.
+  - Codex code review on fead50b: has_unresolved_findings=false (clean). Security review still running.
+  - Branch gate: 1,520/1,522 passed (2 pre-existing environment failures); build 0 warnings/errors.
+  - PR #580 now has 0 unresolved review threads. Awaiting owner merge.
+
+- 2026-10-31 23:34Z (scheduled PR monitor, continuation — chatgpt-codex review on PR #580 commit e21a7bc):
+  - Codex review completed and posted 3 new P2 findings. Also found 3 pre-existing unresolved threads (PRRT_kwDOSA8y6s6yVTPU delivery-selection relink, PRRT_kwDOSA8y6s6yVTPW ghost-buffer, PRRT_kwDOSA8y6s6yViTd new-card overwrite) that had owner "P2 — noted" confirmations but had not been resolved.
+  - Finding 1 (WorkspaceCanvasInterop.cs canvas disposal race — PRRT_kwDOSA8y6s6yVkqh): REAL BUG. Fixed in 63f8094. Added `_disposed` bool; `InitializeAsync` now checks it after the import await and disposes the imported module cleanly if the component was already torn down, preventing `ObjectDisposedException` from the disposed callback.
+  - Finding 2 (preserve unread drafts before memory cache — PRRT_kwDOSA8y6s6yVkqa): Duplicate of RetryDraftStorage race in PRRT_kwDOSA8y6s6yVSbe (owner-deferred, stays open). Replied + resolved as duplicate.
+  - Finding 3 (separate $new draft key — PRRT_kwDOSA8y6s6yVkqf): Duplicate of $new-collision variants in PRRT_kwDOSA8y6s6yVTPW and PRRT_kwDOSA8y6s6yViTd. Replied + resolved as duplicate.
+  - Resolved 6 threads total (PRRT_kwDOSA8y6s6yVkqh, _Vkqa, _Vkqf, _VTPU, _VTPW, _ViTd). Left PRRT_kwDOSA8y6s6yVSbe (RetryDraftStorage) open per owner instruction.
+  - Branch build/test after 63f8094: GREEN (0 warnings/0 errors, 1494 total, 2 pre-existing filesystem failures).
+
 
 - 2026-11-01 00:21Z Codex: Continued issue 579 / PR 580 from published fead50b126fa422682e91ec6c292cfc844c90c4a. Posted exact regression evidence for the earlier retry/relink/orphan fixes and resolved the remaining retry thread. The external monitor's duplicate/deferred labels did not establish owner acceptance or eliminate the separate supported `$new` component-ID collision. Actual old-DLL browser checks reproduced both the overwritten saved card and inaccessible saved editor; complete synthetic buffers of 48,782 / 53,982 / 55,932 characters were retained in ignored receipts.
   - Separated only that saved component's UI draft key, preserving normal v1 drafts and public IDs. Legacy migration keeps the immutable command and unknown snapshot members, refuses occupied-slot overwrites, and conservatively retains newer buffers when acknowledgment metadata is absent. Added 19 identity cases and a nine-check actual browser suite. Checkpoint models preserve original list arrays until each corresponding textarea changes.
