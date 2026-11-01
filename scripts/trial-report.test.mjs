@@ -1258,6 +1258,22 @@ test("normalizeRemoteUrl folds case, a trailing .git, and https/ssh/scp syntax t
   assert.equal(normalizeRemoteUrl(undefined), null);
 });
 
+test("normalizeRemoteUrl preserves case-sensitive repository paths while normalizing network hosts", () => {
+  const forms = [
+    "git://EXAMPLE.invalid/Org/Main.git",
+    "ssh://git@EXAMPLE.invalid/Org/Main.git",
+    "EXAMPLE.invalid:Org/Main.git",
+    "https://EXAMPLE.invalid/Org/Main.git"
+  ];
+  for (const form of forms) {
+    assert.equal(normalizeRemoteUrl(form), "example.invalid/Org/Main");
+    assert.notEqual(normalizeRemoteUrl(form), normalizeRemoteUrl(form.replace("Main", "main")),
+      "a case-sensitive server can host both paths as different repositories");
+  }
+  assert.notEqual(normalizeRemoteUrl("https://github.com:8443/Org/Main.git"),
+    normalizeRemoteUrl("https://github.com:8443/Org/main.git"), "a non-default port denotes a different service");
+});
+
 test("clone confirmation FAILS CLOSED: a cwd git cannot examine stays counted as outside", () => {
   // No fixture at all for `goneCwd` — every call the fake receives for it throws, standing in for
   // "the directory no longer exists", "git is not installed", or any other inconclusive failure.
@@ -1491,6 +1507,22 @@ test("withConfirmedCloneRoots really can drive git — root-commit-only, remote-
   }
 });
 
+test("real Git clone evidence does not collapse differently cased network repository paths", () => {
+  const { a, b, d, cleanup } = buildCloneFixture();
+  try {
+    gitOutput(["remote", "set-url", "origin", "git://example.invalid/Org/Main.git"], a);
+    gitOutput(["remote", "add", "origin", "git://example.invalid/Org/main.git"], b);
+    gitOutput(["remote", "set-url", "origin", "git://EXAMPLE.invalid/Org/Main.git"], d);
+
+    const { confirmed } = withConfirmedCloneRoots([b, d], [a]);
+
+    assert.equal(confirmed.has(b), false, "a different network path contradicts even shared root history");
+    assert.equal(confirmed.has(d), true, "host casing alone does not hide a matching remote");
+  } finally {
+    cleanup();
+  }
+});
+
 // --- 5c. Real git: a leaked GIT_DIR must not contaminate ANY answer ------------------------
 //
 // A pre-commit hook (or any git-invoking tool) commonly exports GIT_DIR/GIT_WORK_TREE/etc for its
@@ -1622,11 +1654,12 @@ test("global config rewrites cannot confirm an unrelated repo, while local rewri
       });
       assert.deepEqual(find(summary, 4).detail.map(detail => detail.session), ["genuinely-external"]);
 
-      // Check scopes without exposing config keys or values in a failure. This also observes
-      // system config when present: it must be excluded independently of the global fixture.
-      const scopes = git(["config", "--show-scope", "--list"], c)
-        .split(/\r?\n/).filter(Boolean).map(line => line.split("\t", 1)[0]);
-      assert.deepEqual([...new Set(scopes)], ["local"], "only repository-local config may reach a probe");
+      // Only protected ownership exceptions may accompany local identity configuration.
+      const settings = git(["config", "--show-scope", "--list"], c)
+        .split(/\r?\n/).filter(Boolean).map(line => line.split("\t"));
+      assert.ok(settings.every(([scope, setting]) => scope === "local"
+        || scope === "command" && setting.startsWith("safe.directory=")),
+      "global/system identity settings must not reach a probe");
 
       gitOutput(["config", "--local", rewriteKey, otherUrl], c);
       assert.equal(withConfirmedCloneRoots([c], [a], { git }).confirmed.has(c), true,
@@ -1757,6 +1790,85 @@ test("the scrub is by prefix: GIT_* names on no list are dropped before git read
   }
 });
 
+test("protected safe.directory exceptions survive isolated Git probes without restoring global URL rewrites", () => {
+  const { a, b, c, d, make, cleanup } = buildCloneFixture();
+  const mainUrl = "https://example.invalid/org/repo.git";
+  try {
+    // Git itself uses this test switch for ownership regressions:
+    // https://github.com/git/git/blob/master/t/t0033-safe-directory.sh
+    // Inject it after production scrubbing; every answer still comes from the real Git binary.
+    const preload = path.join(make(), "different-owner.cjs");
+    fs.writeFileSync(preload, [
+      'const cp = require("node:child_process");',
+      'const original = cp.execFileSync;',
+      'cp.execFileSync = function (file, args, options) {',
+      '  return original.call(this, file, args, file === "git" ? { ...options, env: { ...options.env, GIT_TEST_ASSUME_DIFFERENT_OWNER: "1" } } : options);',
+      '};',
+      'require("node:module").syncBuiltinESMExports();'
+    ].join("\n"));
+    gitOutput(["config", "--local", "safe.directory", d], d);
+    const moduleUrl = new URL("./trial-report.mjs", import.meta.url).href;
+    const script = [
+      `import { gitOutput, resolveRepoRoots, withConfirmedCloneRoots } from ${JSON.stringify(moduleUrl)};`,
+      `const [a, b, c, d] = ${JSON.stringify([a, b, c, d])};`,
+      'const git = (args, cwd) => gitOutput(args, cwd);',
+      'let remote = null; try { remote = git(["remote", "get-url", "origin"], c); } catch {}',
+      'const roots = resolveRepoRoots(null, { cwd: a, git });',
+      'const { confirmed } = withConfirmedCloneRoots([b, c, d], [a], { git });',
+      'console.log(JSON.stringify({ roots, remote, confirmed: [...confirmed.keys()] }));'
+    ].join("\n");
+
+    for (const location of ["HOME", "XDG_CONFIG_HOME", "GIT_CONFIG_GLOBAL", "SYSTEM", "INCLUDED"]) {
+      const home = make();
+      const xdg = make();
+      fs.mkdirSync(path.join(xdg, "git"));
+      const system = path.join(make(), "system.gitconfig");
+      const global = location === "XDG_CONFIG_HOME" ? path.join(xdg, "git", "config")
+        : location === "GIT_CONFIG_GLOBAL" ? path.join(make(), "explicit.gitconfig")
+          : path.join(home, ".gitconfig");
+      // An empty global value resets the system wildcard. Preserve that exact ordering;
+      // d's repository-local exception cannot opt itself into protected trust.
+      const exceptions = "[safe]\n" + [a, b, c]
+        .map(directory => "\tdirectory = " + JSON.stringify(directory.replaceAll("\\", "/")) + "\n").join("");
+      const rewrite = '[url "' + mainUrl + '"]\n\tinsteadOf = https://example.invalid/other/thing.git\n';
+      fs.writeFileSync(system, location === "SYSTEM" ? exceptions : "[safe]\n\tdirectory = *\n");
+      if (location === "INCLUDED") {
+        const included = path.join(make(), "included.gitconfig");
+        fs.writeFileSync(included, exceptions);
+        fs.writeFileSync(global, "[safe]\n\tdirectory =\n[include]\n\tpath = "
+          + JSON.stringify(included.replaceAll("\\", "/")) + "\n" + rewrite);
+      } else {
+        fs.writeFileSync(global, (location === "SYSTEM" ? "" : "[safe]\n\tdirectory =\n" + exceptions) + rewrite);
+      }
+      const env = { ...scrubGitEnv(process.env), HOME: home, USERPROFILE: home, XDG_CONFIG_HOME: xdg,
+        GIT_CONFIG_SYSTEM: system };
+      if (location === "GIT_CONFIG_GLOBAL") env.GIT_CONFIG_GLOBAL = global;
+      const rawEnv = { ...env, GIT_TEST_ASSUME_DIFFERENT_OWNER: "1" };
+      const raw = spawnSync("git", ["remote", "get-url", "origin"], {
+        cwd: c, env: rawEnv, encoding: "utf8", timeout: 5_000, windowsHide: true
+      });
+      assert.equal(raw.status, 0, raw.stderr);
+      assert.equal(raw.stdout.trim(), mainUrl, "control must observe an actual global URL rewrite");
+      const denied = spawnSync("git", ["rev-parse", "--show-toplevel"], {
+        cwd: d, env: rawEnv, encoding: "utf8", timeout: 5_000, windowsHide: true
+      });
+      assert.notEqual(denied.status, 0, "empty reset and missing protected exception must deny d");
+      assert.match(denied.stderr, /dubious ownership/);
+
+      const child = spawnSync(process.execPath, ["--require", preload, "--input-type=module", "--eval", script], {
+        cwd: a, env, encoding: "utf8", timeout: 20_000, windowsHide: true
+      });
+      assert.equal(child.status, 0, child.stderr);
+      const result = JSON.parse(child.stdout);
+      assert.equal(result.roots.source, "git", location + ": an explicitly trusted root must remain measurable");
+      assert.equal(result.remote, "https://example.invalid/other/thing.git", "URL rewrites remain isolated");
+      assert.deepEqual(result.confirmed, [b], "trust b's real clone, keep the distinct c and untrusted d outside");
+    }
+  } finally {
+    cleanup();
+  }
+});
+
 // --- 5d. Which candidates main() probes, and in what order (bounded-probe-budget priority) --
 
 test("selectCloneCandidates excludes rows outside --since, with no usable session/ts, or already inside roots", () => {
@@ -1765,7 +1877,7 @@ test("selectCloneCandidates excludes rows outside --since, with no usable sessio
   const beforeWindow = row({ session: "b", ts: "2026-09-01T00:00:00.000Z", cwd: path.resolve("C:\\outside\\b") });
   const noSession = row({ session: "", ts: "2026-09-10T00:00:00.000Z", cwd: path.resolve("C:\\outside\\c") });
   const badTs = row({ session: "d", ts: "not-a-date", cwd: path.resolve("C:\\outside\\d") });
-  const alreadyInside = row({ session: "e", ts: "2026-09-10T00:00:00.000Z", cwd: path.resolve("C:\\real\\src") });
+  const alreadyInside = row({ session: "e", ts: "2026-09-10T00:00:00.000Z", cwd: path.join(roots[0], "src") });
   const failed = row({ session: "f", ts: "2026-09-10T00:00:00.000Z", cwd: path.resolve("C:\\outside\\f"), outcome: "error" });
   const cutoff = Date.parse("2026-09-05T00:00:00.000Z");
   const candidates = selectCloneCandidates(
@@ -1909,7 +2021,7 @@ test("CLI integration: unavailable or corrupt usage logs skip clone probes and f
     assert.equal(control.summary.sources.log, true);
     assert.equal(find(control.summary, 4).verdict, "REVERT");
     assert.equal(control.summary.sources.cloneProbe.probed, 1);
-    assert.ok(control.calls.some(call => call.cwd === b && call.args[0] === "rev-parse"));
+    assert.ok(control.calls.some(call => call.cwd === b && call.args.includes("rev-parse")));
     assert.match(control.result.stderr, /folded into signal 4 as inside/);
 
     // A directory is discovered as an archive but cannot be read as a generation. The good

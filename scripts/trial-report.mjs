@@ -83,10 +83,11 @@ const GIT_TIMEOUT_MS = 5_000;
 // GIT_CONFIG_GLOBAL, GIT_CONFIG_SYSTEM, GIT_CEILING_DIRECTORIES and GIT_REDIRECT_STDOUT, so the
 // scrub is not a list. It drops every variable whose name starts with GIT_, in any ASCII case
 // (Windows reads environment names case-insensitively, so an inherited `Git_Dir` reaches git as
-// GIT_DIR), including a name a later git adds. No inherited GIT_* variable reaches git. gitOutput
-// then disables system/global config reads: a url rewrite in HOME's or XDG_CONFIG_HOME's ordinary
-// config file can disguise a fork just like an injected setting can. Repository-local rewrites
-// still apply. The scrub touches nothing outside that prefix, including PATH, which chooses git.
+// GIT_DIR), including a name a later git adds. Identity probes receive no inherited GIT_* values.
+// gitOutput disables system/global identity settings: even an ordinary HOME/XDG url rewrite can
+// disguise a fork. Only protected safe.directory values are copied through a separate key-only
+// read; explicit config-file locations apply solely to that read. Repository-local rewrites still
+// apply. The scrub touches nothing outside that prefix, including PATH, which chooses git.
 const GIT_ENV_PREFIX = /^GIT_/i;
 
 // Tools that mutate ONE IDENTIFIED TASK, used to decide whether two sessions wrote the same task.
@@ -457,20 +458,46 @@ export function scrubGitEnv(env) {
 }
 
 /**
+ * Read only protected ownership exceptions, preserving system/global ordering and empty resets.
+ * Explicit config-file locations apply only to this key-only read, never identity probes. A
+ * repository-local safe.directory cannot grant itself trust. Git performs its own interpolation.
+ */
+function protectedSafeDirectoryArgs(cwd, env) {
+  const configEnv = scrubGitEnv(env);
+  for (const [key, value] of Object.entries(env)) {
+    if (/^GIT_CONFIG_(GLOBAL|SYSTEM)$/i.test(key)) configEnv[key.toUpperCase()] = value;
+  }
+  const values = [];
+  for (const scope of ["system", "global"]) {
+    try {
+      const output = execFileSync("git", ["config", `--${scope}`, "--includes", "--null", "--get-all", "safe.directory"], {
+        cwd, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: GIT_TIMEOUT_MS, env: configEnv
+      });
+      values.push(...output.split("\0").slice(0, -1));
+    } catch (error) {
+      if (error.status !== 1) throw error; // no matching key is normal; an unreadable config is not
+    }
+  }
+  return values.flatMap(value => ["-c", `safe.directory=${value}`]);
+}
+
+/**
  * Run one git plumbing command against `cwd`, scrubbed of inherited GIT_* variables and isolated
- * from system/global config, so caller-wide url rewrites cannot change its identity evidence.
+ * from system/global identity config, so caller-wide url rewrites cannot change its evidence.
+ * Only explicit safe.directory values survive, unchanged; no new wildcard trust is introduced.
  * Repository-local config, including its url rewrites, still applies. The controlled settings go
  * on the copy AFTER the scrub. Exported, and takes `env` as an option, so tests can inject a
  * contaminated environment without mutating this PROCESS's real process.env.
  */
 export function gitOutput(args, cwd, { env = process.env } = {}) {
+  const safeDirectories = protectedSafeDirectoryArgs(cwd, env);
   const scrubbed = { ...scrubGitEnv(env), GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null" };
   // `timeout` for the same reason the fetches carry one: an unbounded blocking call in a report
   // that has no other way to finish. `git rev-parse` on a network path, or against a repository
   // whose index lock is held, can sit indefinitely — and a hung git here hangs the whole run before
   // a single signal is computed. A timeout kills the child and throws, which this file already
   // treats as "git was unavailable".
-  return execFileSync("git", args, {
+  return execFileSync("git", [...safeDirectories, ...args], {
     cwd,
     encoding: "utf8",
     stdio: ["ignore", "pipe", "ignore"],
@@ -534,8 +561,8 @@ export function resolveRepoRoots(override, { cwd = process.cwd(), git = gitOutpu
 const DEFAULT_PORTS = { ssh: 22, https: 443, http: 80, git: 9418 };
 
 /**
- * Normalize a git remote URL for same-repo comparison: lower-case, drop a trailing slash or
- * `.git`, and fold `https://host/owner/repo`, `ssh://git@host:22/owner/repo` and the SCP
+ * Normalize a git remote URL for same-repo comparison: lower-case the host, drop a trailing slash
+ * or `.git`, and fold `https://host/owner/repo`, `ssh://git@host:22/owner/repo` and the SCP
  * shorthand `[user@]host:owner/repo` (git accepts it WITHOUT a userinfo too, e.g.
  * `example.invalid:org/repo`) to the same `host/owner/repo` key, so the only forms the clone check
  * below needs to tell apart are actually-different repos, not spelling. A port is dropped only
@@ -551,18 +578,25 @@ const DEFAULT_PORTS = { ssh: 22, https: 443, http: 80, git: 9418 };
  */
 export function normalizeRemoteUrl(url) {
   if (typeof url !== "string" || url.trim().length === 0) return null;
-  const u = url.trim().toLowerCase().replace(/\/+$/, "").replace(/\.git$/, "");
-  const scheme = u.match(/^([a-z][a-z0-9+.-]*):\/\//);
+  const u = url.trim().replace(/\/+$/, "");
+  const key = (host, repository) => {
+    const authority = host.toLowerCase();
+    // GitHub repository names ignore case. Arbitrary Git servers can expose Main and main
+    // as different repositories, so their paths must retain the spelling Git reported.
+    const repositoryPath = authority === "github.com" ? repository.toLowerCase() : repository;
+    return `${authority}/${repositoryPath.replace(/\/+$/, "").replace(/\.git$/, "")}`;
+  };
+  const scheme = u.match(/^([a-z][a-z0-9+.-]*):\/\//i);
   if (scheme) {
-    const defaultPort = DEFAULT_PORTS[scheme[1]];
-    return u
-      .slice(scheme[0].length)                   // strip the scheme
-      .replace(/^[^/@]+@/, "")                   // strip userinfo, e.g. ssh://git@
-      // drop the port only when it is the scheme's default; any other port is treated as another service
-      .replace(/^([^/:]+):(\d+)(?=\/)/, (hostPort, host, port) => (Number(port) === defaultPort ? host : hostPort));
+    const defaultPort = DEFAULT_PORTS[scheme[1].toLowerCase()];
+    const location = u.slice(scheme[0].length).replace(/^[^/@]+@/, "");
+    const separator = location.indexOf("/");
+    const authority = (separator === -1 ? location : location.slice(0, separator))
+      .replace(/:(\d+)$/, (portPart, port) => Number(port) === defaultPort ? "" : portPart);
+    return separator === -1 ? authority.toLowerCase() : key(authority, location.slice(separator + 1));
   }
-  const scp = u.match(/^(?:[a-z0-9._-]+@)?([a-z0-9.-]{2,}):(.+)$/);
-  if (scp) return `${scp[1]}/${scp[2]}`;
+  const scp = u.match(/^(?:[a-z0-9._-]+@)?([a-z0-9.-]{2,}):(.+)$/i);
+  if (scp) return key(scp[1], scp[2]);
   return u;
 }
 
