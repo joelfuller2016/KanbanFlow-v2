@@ -152,6 +152,49 @@ public sealed class IdeaWorkspaceSelectedDetailTests
         scenario.AssertAuthoredDraft(scenario.Memory, Field<WorkspaceBrowserDraft>(scenario.Page, "draft"));
     }
 
+    [Theory]
+    [InlineData("success", false)]
+    [InlineData("success", true)]
+    [InlineData("domain", false)]
+    [InlineData("domain", true)]
+    [InlineData("io", false)]
+    [InlineData("io", true)]
+    public async Task Select_OlderSameComponentCompletionCannotReplaceNewerDetailsOrError(string oldCompletion, bool visitOtherComponent)
+    {
+        await using var scenario = await Scenario.Create();
+        if (oldCompletion != "success") scenario.Held.FailureKind = oldCompletion;
+        var selecting = scenario.SelectHeldCard();
+        try
+        {
+            await scenario.Held.Entered.Task.WaitAsync(Deadline);
+            var before = await scenario.Service.GetAsync(scenario.Scope.WorkspaceId);
+            var newerContent = CompleteText("newer saved A snapshot");
+            await scenario.Service.ExecuteAsync(scenario.Scope.WorkspaceId, new("newer-a-content", before.Revision, "update_component",
+                JsonSerializer.SerializeToElement(new { componentId = "card-a", title = "Newer saved A", content = newerContent }, Json), "test"));
+            if (visitOtherComponent) await Call(scenario.Page, "Select", scenario.Scope, new WorkspaceSelection("card-b", "place-b"));
+
+            await Call(scenario.Page, "Select", scenario.Scope, new WorkspaceSelection("card-a", "place-a"));
+
+            var newerDetail = Field<IdeaWorkspaceComponentDetail>(scenario.Page, "selectedDetail");
+            Assert.Equal("card-a", newerDetail.Component.Id); Assert.Equal(newerContent, newerDetail.Component.Content);
+            Assert.True(newerDetail.Revision > before.Revision);
+            Assert.Null(Field<string?>(scenario.Page, "error"));
+            Set(scenario.Page, "error", "Keep the current detail message.");
+            var completeDraft = Serialize(Field<WorkspaceBrowserDraft>(scenario.Page, "draft"));
+            scenario.Held.Release.TrySetResult();
+
+            await selecting.WaitAsync(Deadline);
+
+            Assert.Same(newerDetail, Field<IdeaWorkspaceComponentDetail>(scenario.Page, "selectedDetail"));
+            Assert.Equal(newerContent, Field<IdeaWorkspaceComponentDetail>(scenario.Page, "selectedDetail").Component.Content);
+            Assert.Equal("Keep the current detail message.", Field<string>(scenario.Page, "error"));
+            Assert.Equal(completeDraft, Serialize(Field<WorkspaceBrowserDraft>(scenario.Page, "draft")));
+            Assert.Equal(completeDraft, scenario.Runtime.Raw);
+            scenario.AssertAuthoredDraft(scenario.Memory, Field<WorkspaceBrowserDraft>(scenario.Page, "draft"));
+        }
+        finally { scenario.Held.Release.TrySetResult(); await selecting.WaitAsync(Deadline); }
+    }
+
     private static string CompleteText(string label) => "  # " + label + " Ω\r\n\r\n    retain indentation  \r\n" + new string('文', 12_000) + "\r\ncomplete final requirement  ";
     private static string Serialize(WorkspaceBrowserDraft value) => JsonSerializer.Serialize(value, Json);
     private static Task Call(object target, string name, params object?[] args) => (Task)target.GetType().GetMethod(name, Flags)!.Invoke(target, args)!;
