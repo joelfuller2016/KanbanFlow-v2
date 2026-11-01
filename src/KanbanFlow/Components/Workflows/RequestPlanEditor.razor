@@ -100,13 +100,14 @@
     private async Task Save()
     {
         var submission = new WorkflowSubmission(new() { Operation = "save_plan", ExpectedVersion = version, TaskBaselines = taskBaselines,
-            Tasks = drafts.Select(d => new TaskDraft(d.Id, d.Title, d.Description, d.Acceptance, d.RepositoryId, d.Files, d.Priority, d.Assignee, d.Dependencies.Order().ToArray())).ToArray() });
-        await OnSubmit.InvokeAsync(submission); if (submission.Succeeded) AdoptSavedTokens(submission);
+            Tasks = drafts.Select(d => new TaskDraft(d.Id, d.Title, d.Description, d.Acceptance, d.RepositoryId, d.Files, d.Priority, d.Assignee, d.Dependencies.Order().ToArray())).ToArray() })
+            { OnConfirmed = AdoptSavedTokens };
+        await OnSubmit.InvokeAsync(submission);
     }
     private async Task Publish(Guid id)
     {
-        var submission = new WorkflowSubmission(new() { Operation = "publish_plan", PlanId = id });
-        await OnSubmit.InvokeAsync(submission); if (submission.Succeeded) AdoptSavedTokens(submission);
+        var submission = new WorkflowSubmission(new() { Operation = "publish_plan", PlanId = id }) { OnConfirmed = AdoptSavedTokens };
+        await OnSubmit.InvokeAsync(submission);
     }
     private void AdoptSavedTokens(WorkflowSubmission submission)
     {

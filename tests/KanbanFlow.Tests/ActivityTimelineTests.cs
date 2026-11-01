@@ -965,6 +965,7 @@ public class ActivityTimelineTests
                 "parentFeatureId", "parentSubtaskId", "promotedProjectId", "archived"
             },
             ActivityTimelineBuilder.DisplayFields.Select(f => f.Json).ToArray());
+        Assert.Equal(DisplayLabels, ActivityTimelineBuilder.DisplayFields.Select(f => f.Label).ToArray());
     }
 
     /// <summary>The reported case, against the real producer's output shape.</summary>
@@ -1256,7 +1257,12 @@ public class ActivityTimelineTests
     }
 
     /// <summary>Labels accepted by the fuzz checks; explicit whitelist coverage above owns the expected field set.</summary>
-    private static readonly string[] DisplayLabels = ActivityTimelineBuilder.DisplayFields.Select(field => field.Label).ToArray();
+    private static readonly string[] DisplayLabels =
+    [
+        "Status", "Priority", "Assigned", "Claimed by", "Name", "Feature", "Description",
+        "Order", "Completed", "Claimed at", "Text", "Complete", "Goals", "Readme", "Project",
+        "Task", "Depends on task", "Parent feature", "Parent subtask", "Linked project", "Archived"
+    ];
 
     // AC6's fifth shape — a STRUCTURED (object/array) value in a whitelisted slot — is NOT
     // guarded here, deliberately. Writing that assertion proved it is a live defect rather than

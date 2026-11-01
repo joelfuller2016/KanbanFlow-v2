@@ -90,7 +90,7 @@ async page => {
       'outline-' + kind + '-' + id);
   }
   async function openOutline(kind, id, expectedName) {
-    const label = kind === 'feature' ? 'Edit feature ' : kind === 'subtask' ? 'Open parent task details for ' : 'Open task details for ';
+    const label = kind === 'feature' ? 'Edit feature ' : kind === 'subtask' ? 'Open subtask details for ' : 'Open task details for ';
     const name = kind === 'subtask' ? 'Outline nested subtask' : expectedName;
     await row(kind, id).getByRole('button', { name: label + name, exact: true }).click();
     await editor.waitFor();

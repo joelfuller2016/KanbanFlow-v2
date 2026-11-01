@@ -36,8 +36,8 @@
     }
     private async Task Save()
     {
-        var submission = new WorkflowSubmission(new() { Operation = "save_brief", ExpectedVersion = version, Brief = new(outcome, scope, constraints, acceptance) });
+        var submission = new WorkflowSubmission(new() { Operation = "save_brief", ExpectedVersion = version, Brief = new(outcome, scope, constraints, acceptance) })
+            { OnConfirmed = saved => version = saved.Version!.Value };
         await OnSubmit.InvokeAsync(submission);
-        if (submission.Succeeded) version = submission.Version!.Value;
     }
 }

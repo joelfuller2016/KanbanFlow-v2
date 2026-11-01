@@ -15,7 +15,9 @@
     private string name = "", path = "";
     private async Task Register()
     {
-        var submission = new WorkflowSubmission(new() { Operation = "register_repository", ProjectId = Context.ProjectId, Name = name, Path = path });
-        await OnSubmit.InvokeAsync(submission); if (submission.Succeeded) name = path = "";
+        var savedName = name; var savedPath = path;
+        var submission = new WorkflowSubmission(new() { Operation = "register_repository", ProjectId = Context.ProjectId, Name = name, Path = path })
+            { OnConfirmed = _ => { if (name == savedName && path == savedPath) name = path = ""; } };
+        await OnSubmit.InvokeAsync(submission);
     }
 }

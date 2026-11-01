@@ -721,6 +721,7 @@ public static class KanbanMcpTools
     public static async Task<IdeaResult> UpdateIdea(
         IIdeaService ideaService,
         [Description("The idea id to update.")] int ideaId,
+        [Description("Required: workflowVersion from the idea read you are editing. Reload after a conflict; never fetch a new version just to replay stale fields.")] int expectedWorkflowVersion,
         [Description("New title (<= 500 chars), or omit to leave unchanged.")] string? title = null,
         [Description("New markdown body, or omit.")] string? body = null,
         [Description("New markdown plan, or omit.")] string? plan = null,
@@ -728,7 +729,6 @@ public static class KanbanMcpTools
         [Description("New comma-separated tags, or omit.")] string? tags = null,
         [Description("New priority: Low | Medium | High | Critical (case-insensitive), or omit.")] string? priority = null,
         [Description("Optional actor label recorded in the audit trail (default 'mcp-agent').")] string? actor = null,
-        [Description("Required: workflowVersion from the idea read you are editing. Reload after a conflict; never fetch a new version just to replay stale fields.")] int? expectedWorkflowVersion = null,
         CancellationToken cancellationToken = default)
     {
         var parsedStatus = ParseIdeaStatus(status);

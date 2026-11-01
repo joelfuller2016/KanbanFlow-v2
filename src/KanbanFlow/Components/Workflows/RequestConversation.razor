@@ -17,7 +17,9 @@
     private readonly string[] kinds = ["clarification", "assistant-report", "progress", "question", "decision"];
     private async Task Save()
     {
-        var submission = new WorkflowSubmission(new() { Operation = "add_message", Kind = kind, Text = text });
-        await OnSubmit.InvokeAsync(submission); if (submission.Succeeded) text = "";
+        var savedText = text;
+        var submission = new WorkflowSubmission(new() { Operation = "add_message", Kind = kind, Text = text })
+            { OnConfirmed = _ => { if (text == savedText) text = ""; } };
+        await OnSubmit.InvokeAsync(submission);
     }
 }

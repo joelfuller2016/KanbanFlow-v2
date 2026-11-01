@@ -67,6 +67,14 @@ Repository file references are relative paths, one per line. Registry validation
 
 ## One complete human workflow
 
+If loading saved request details fails, the workspace keeps the details and drafts already on
+screen and offers a refresh or retry. If a save cannot be confirmed, use **Retry original save**
+before making another change. This checks the original save without creating a second operation,
+even when its write succeeded before the connection failed. The original author and content stay
+with that attempt. Once confirmation arrives, the editor acknowledges the saved revision; pending
+draft text remains available until then. A version conflict still requires reviewing the latest
+saved request before resubmitting changed content.
+
 1. **Capture the actual request.** Open Ideas, create an idea using the existing form, then use its **Request & plan** link. New ideas automatically preserve the exact original body (or original title when no body was supplied). For an older idea, choose **Start request history**; the app explicitly labels the available notes as a legacy snapshot because earlier exact input cannot be recovered.
 2. **Refine the brief.** In **Brief**, write the desired outcome, scope, constraints and acceptance outcomes. Choose **Save brief revision**. The original stays intact and previous brief revisions remain readable. Add later clarification or scope decisions under **Updates**, then revise the brief and plan to acknowledge them.
 3. **Choose the existing project or promote into a new one.** Use the project selector and **Promote into project**, or **Create project from request**. Already promoted ideas retain their existing project identity. A published request cannot silently move its work to another project.

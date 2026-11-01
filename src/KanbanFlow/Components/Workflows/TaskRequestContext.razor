@@ -1,5 +1,12 @@
 @implements IDisposable
 @inject WorkspaceService Workflow
+@inject ILogger<TaskRequestContext> Logger
+@if (error is not null)
+{
+    <div role="alert" class="alert alert-warning">
+        @error <button type="button" class="btn btn-sm btn-outline-primary" @onclick="Load">Try request context again</button>
+    </div>
+}
 @if (context is not null && task is not null)
 {
     <section class="border rounded p-2 mb-3 bg-light" aria-label="Task request context">
@@ -21,6 +28,7 @@
     private bool disposed;
     private WorkflowContext? context;
     private WorkflowTaskContext? task;
+    private string? error;
     protected override async Task OnParametersSetAsync()
     {
         if (loadedId != TaskId) { loadedId = TaskId; context = null; task = null; await Load(); }
@@ -39,8 +47,15 @@
             if (ct.IsCancellationRequested || disposed || id != TaskId) return;
             context = loaded;
             task = context?.Tasks.FirstOrDefault(t => t.TaskId == id);
+            error = null;
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Could not load the task request context");
+            if (!ct.IsCancellationRequested && !disposed && id == TaskId)
+                error = "Request context could not be loaded. Your task and previously loaded details are kept; try again.";
+        }
     }
     public void Dispose()
     {

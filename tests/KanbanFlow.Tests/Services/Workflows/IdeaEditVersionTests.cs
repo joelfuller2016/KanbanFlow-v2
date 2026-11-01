@@ -3,12 +3,44 @@ using KanbanFlow.Models;
 using KanbanFlow.Models.Workflows;
 using KanbanFlow.Services;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
 using ModelContextProtocol;
+using ModelContextProtocol.Server;
 
 namespace KanbanFlow.Tests.Services.Workflows;
 
 public sealed class IdeaEditVersionTests
 {
+    [Fact]
+    public void NativeUpdateSchema_RequiresANonNullableExpectedWorkflowVersion()
+    {
+        using var factory = new WorkflowSqliteTestFactory();
+        using var services = new ServiceCollection().AddSingleton<IIdeaService>(new IdeaService(factory)).BuildServiceProvider();
+        var tool = McpServerTool.Create(typeof(KanbanMcpTools).GetMethod(nameof(KanbanMcpTools.UpdateIdea))!,
+            options: new McpServerToolCreateOptions { Services = services });
+        var schema = tool.ProtocolTool.InputSchema;
+        Assert.Contains(schema.GetProperty("required").EnumerateArray(), item => item.GetString() == "expectedWorkflowVersion");
+        var properties = schema.GetProperty("properties");
+        Assert.Equal("integer", properties.GetProperty("expectedWorkflowVersion").GetProperty("type").GetString());
+        Assert.False(properties.TryGetProperty("ideaService", out _));
+    }
+
+    [Fact]
+    public async Task NativeUpdate_LegacyVersionZeroCanBeAdoptedOnlyOnce()
+    {
+        using var factory = new WorkflowSqliteTestFactory();
+        var service = new IdeaService(factory);
+        var legacy = new Idea { Title = "Legacy", Body = "Original legacy notes" };
+        await using (var db = factory.CreateDbContext()) { db.Ideas.Add(legacy); await db.SaveChangesAsync(); }
+        var updated = await KanbanMcpTools.UpdateIdea(service, legacy.Id, expectedWorkflowVersion: 0, title: "Adopted title");
+        Assert.True(updated.WorkflowVersion > 0);
+        var error = await Assert.ThrowsAsync<McpException>(() => KanbanMcpTools.UpdateIdea(service, legacy.Id,
+            expectedWorkflowVersion: 0, body: "Stale overwrite"));
+        Assert.StartsWith("conflict:", error.Message);
+        Assert.Equal("Original legacy notes", (await service.GetByIdAsync(legacy.Id))!.Body);
+        Assert.Equal("Original legacy notes", Assert.Single((await factory.Service.GetForIdeaAsync(legacy.Id))!.Messages, message => message.Kind == "original").Text);
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]

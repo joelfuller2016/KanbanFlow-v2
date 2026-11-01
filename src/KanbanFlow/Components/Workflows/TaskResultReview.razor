@@ -34,9 +34,10 @@
     private void Confirm(Guid evidence, int criterion, ChangeEventArgs e) { if (e.Value is true) confirmed.Add((evidence, criterion)); else confirmed.Remove((evidence, criterion)); }
     private async System.Threading.Tasks.Task Report()
     {
-        var submission = new WorkflowSubmission(new() { Operation = "report_result", ItemId = Task.Id, ExpectedVersion = Version, Evidence = new(summary, checks, source) });
+        var savedSummary = summary; var savedChecks = checks; var savedSource = source;
+        var submission = new WorkflowSubmission(new() { Operation = "report_result", ItemId = Task.Id, ExpectedVersion = Version, Evidence = new(summary, checks, source) })
+            { OnConfirmed = _ => { if (summary == savedSummary && checks == savedChecks && source == savedSource) summary = checks = source = ""; } };
         await OnSubmit.InvokeAsync(submission);
-        if (submission.Succeeded) summary = checks = source = "";
     }
     private System.Threading.Tasks.Task Accept(Guid id) => OnSubmit.InvokeAsync(new WorkflowSubmission(new() { Operation = "accept_result", ItemId = Task.Id, EvidenceId = id, ExpectedVersion = Version,
         CheckedCriterionIds = Task.AcceptanceCriteria.Where(c => confirmed.Contains((id, c.Id))).Select(c => c.Id).ToArray() }));
