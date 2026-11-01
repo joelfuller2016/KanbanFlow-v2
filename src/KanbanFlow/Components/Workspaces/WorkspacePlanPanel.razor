@@ -72,7 +72,12 @@
     private Task Reapply() => Change(editing with { BaseRevision = Context.Revision, BaseProjectPlanRevision = Context.ProjectPlanRevision,
         Items = [.. editing.Items.Select(i => i with { Provenance = i.Provenance?.ProjectId == Context.ProjectId ? i.Provenance : null })] });
     private Task AddItem() => Change(editing with { Items = [.. editing.Items, new()], BaseRevision = editing.BaseRevision ?? Context.Revision });
-    private Task ItemChanged(WorkspacePlanItemDraft item) => Change(editing with { Items = [.. editing.Items.Select(i => i.Id == item.Id ? item : i)], BaseRevision = editing.BaseRevision ?? Context.Revision });
+    private Task ItemChanged(WorkspacePlanItemDraft item)
+    {
+        var existingIds = editing.Items.Select(i => i.Id).ToHashSet();
+        var clean = item with { DependsOn = [.. item.DependsOn.Where(d => d != item.Id && existingIds.Contains(d))] };
+        return Change(editing with { Items = [.. editing.Items.Select(i => i.Id == item.Id ? clean : i)], BaseRevision = editing.BaseRevision ?? Context.Revision });
+    }
     private Task RemoveItem(string id) => Change(editing with { Items = [.. editing.Items.Where(i => i.Id != id).Select(i => i with { DependsOn = [.. i.DependsOn.Where(d => d != id)] })] });
     private Task Propose() => OnCommand.InvokeAsync(WorkspaceUiCommand.Create("propose_plan", new { title = editing.Title, items = editing.Items.Select(i => new { id = i.Id, title = i.Title, description = i.Description, acceptanceCriteria = i.OriginalAcceptanceCriteria ?? WorkspaceUiText.Lines(i.AcceptanceCriteria), dependsOn = i.DependsOn, provenance = i.Provenance }), expectedProjectPlanRevision = editing.BaseProjectPlanRevision }, editing.BaseRevision ?? Context.Revision, "plan"));
     private Task Accept(string id, long? baseline) => OnCommand.InvokeAsync(WorkspaceUiCommand.Create("accept_plan", new { planRevisionId = id, expectedProjectPlanRevision = baseline }, Context.Revision));

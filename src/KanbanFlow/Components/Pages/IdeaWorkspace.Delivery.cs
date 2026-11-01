@@ -103,6 +103,7 @@ public partial class IdeaWorkspace
         if (!IsCurrent(scope) || context?.ProjectId is not { } projectId) return;
         var sequence = ++taskSequence;
         inspectedTaskId = taskId;
+        inspectedTask = null;
         taskBusy = true;
         taskError = null;
         try

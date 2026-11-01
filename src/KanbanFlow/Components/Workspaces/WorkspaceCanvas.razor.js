@@ -24,13 +24,15 @@ class CanvasController {
         const handle = event.target.closest('.workspace-drag-handle, .workspace-resize-handle');
         const card = handle?.closest('[data-placement-id]');
         if (!card || event.button !== 0 || !this.#available()) return;
-        const descendants = [...this.#root.querySelectorAll('[data-placement-id]')].filter(candidate => {
+        const allPlacements = [...this.#root.querySelectorAll('[data-placement-id]')];
+        const parentMap = new Map(allPlacements.map(node => [node.dataset.placementId, node.dataset.parentId]));
+        const descendants = allPlacements.filter(candidate => {
             const seen = new Set();
             let parent = candidate.dataset.parentId;
             while (parent && !seen.has(parent)) {
                 if (parent === card.dataset.placementId) return true;
                 seen.add(parent);
-                parent = [...this.#root.querySelectorAll('[data-placement-id]')].find(node => node.dataset.placementId === parent)?.dataset.parentId;
+                parent = parentMap.get(parent);
             }
             return false;
         });
