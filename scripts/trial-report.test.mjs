@@ -3304,17 +3304,12 @@ test("a non-timeout fetch failure keeps its own message — only a stall is rewo
 });
 
 test("the git call is bounded too — the same unbounded-blocking shape", () => {
-  // `execFileSync` without a `timeout` blocks forever, and `git rev-parse` can sit indefinitely on
-  // a network path or against a held index lock — hanging the run before a single signal is
-  // computed. There is no seam to inject a hanging git through, so this guards the wiring itself.
-  const source = fs.readFileSync(path.join(HERE, "trial-report.mjs"), "utf8");
-  // 900, not 600: the env-scrub fix (a leaked GIT_DIR/GIT_INDEX_FILE must not contaminate a git
-  // call — see section 5c) added the `env` option and its own doc comment ahead of the timeout
-  // comment, pushing both matches further into the function than the old window covered.
-  const call = source.slice(source.indexOf("function gitOutput"), source.indexOf("function gitOutput") + 900);
-  assert.match(call, /execFileSync\(/);
-  assert.match(call, /timeout: GIT_TIMEOUT_MS/, "the git call must pass a timeout");
-  assert.match(source, /const GIT_TIMEOUT_MS = 5_000;/);
+  // Observe the real child-process boundary, rather than its position/spelling in source text.
+  const result = runGitDeadlineFixture(0);
+  assert.equal(result.success, true, result.message);
+  assert.equal(result.timeouts.length, 3, "both protected config reads and identity must be observed");
+  assert.ok(result.timeouts.every(timeout => Number.isInteger(timeout) && timeout > 0 && timeout <= 5000),
+    "every Git subprocess must have a finite positive timeout within the five-second bound");
 });
 
 test("a TRUNCATED activity fetch makes the event-derived signals UNMEASURED, not a lower bound", () => {
