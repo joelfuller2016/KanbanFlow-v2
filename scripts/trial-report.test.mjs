@@ -1884,7 +1884,8 @@ function runGitDeadlineFixture(stepMs) {
     fs.writeFileSync(preload, [
       'const cp = require("node:child_process");',
       'const original = cp.execFileSync;',
-      'let elapsed = 0; globalThis.gitTimeouts = []; Date.now = () => elapsed;',
+      'let elapsed = 0; globalThis.gitTimeouts = []; Date.now = () => 50000 - elapsed;',
+      'Object.defineProperty(performance, "now", { value: () => elapsed });',
       'cp.execFileSync = function (file, args, options) {',
       '  if (file !== "git") return original.apply(this, arguments);',
       '  globalThis.gitTimeouts.push(options.timeout);',
@@ -1911,9 +1912,9 @@ function runGitDeadlineFixture(stepMs) {
 }
 
 test("Git config reads and identity share one five-second deadline", () => {
-  const result = runGitDeadlineFixture(1000);
+  const result = runGitDeadlineFixture(1000.25);
   assert.equal(result.success, true, result.message);
-  assert.deepEqual(result.timeouts, [5000, 4000, 3000], "each real subprocess gets only the remaining budget");
+  assert.deepEqual(result.timeouts, [5000, 4000, 3000], "wall-clock rollback cannot extend the monotonic budget; timeouts stay integers");
 });
 
 test("Git identity is not started after config reads exhaust its deadline", () => {

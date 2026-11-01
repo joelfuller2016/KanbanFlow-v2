@@ -499,11 +499,11 @@ function protectedSafeDirectoryArgs(cwd, env, remainingTimeout) {
  */
 export function gitOutput(args, cwd, { env = process.env } = {}) {
   // Ownership lookup and identity plumbing share the original per-command bound.
-  const deadline = Date.now() + GIT_TIMEOUT_MS;
+  const deadline = performance.now() + GIT_TIMEOUT_MS;
   const remainingTimeout = () => {
-    const remaining = deadline - Date.now();
+    const remaining = deadline - performance.now();
     if (remaining <= 0) throw new Error("Git command exceeded its five-second deadline.");
-    return remaining;
+    return Math.ceil(remaining);
   };
   const safeDirectories = protectedSafeDirectoryArgs(cwd, env, remainingTimeout);
   const scrubbed = { ...scrubGitEnv(env), GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null" };
