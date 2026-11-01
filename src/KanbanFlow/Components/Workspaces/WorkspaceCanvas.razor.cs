@@ -24,6 +24,7 @@ public partial class WorkspaceCanvas
     private readonly Dictionary<string, IdeaWorkspacePlacement> firstPlacementByComponentId = [];
     private readonly Dictionary<string, (double X, double Y)> worldPositions = [];
     private IdeaWorkspacePlacement[] orderedPlacements = [];
+    private bool _canvasError;
     private double OriginX { get; set; }
     private double OriginY { get; set; }
     private double CanvasWidth { get; set; }
@@ -100,7 +101,21 @@ public partial class WorkspaceCanvas
         if (!firstRender) return;
         interop = new(JS);
         dotNet = DotNetObjectReference.Create(this);
-        await interop.InitializeAsync(canvasElement, dotNet);
+        try
+        {
+            await interop.InitializeAsync(canvasElement, dotNet);
+        }
+        catch (JSDisconnectedException) { }
+        catch (OperationCanceledException) { }
+        catch (JSException)
+        {
+            await interop.DisposeAsync();
+            dotNet.Dispose();
+            interop = null;
+            dotNet = null;
+            _canvasError = true;
+            await InvokeAsync(StateHasChanged);
+        }
     }
 
     [JSInvokable]
