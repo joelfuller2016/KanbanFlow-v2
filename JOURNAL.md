@@ -51,6 +51,8 @@ A review of the repository and a test run on 2026-09-26 filed findings as issues
   - S7, for #549.
 
 ## Entries (newest first)
+- 2026-11-01 01:43Z - Final moving-head follow-up for the repository review: inspected PR #580 commit `73304b018ff041bc0cf614d45fd87484906df51c`, whose only delta from `16c5f65e493d2d2c0c3c5a85d5fd71c10b8eefdb` repairs the canvas test handle mock. Repeated the full script suite: 362 passed, 0 failed/skipped, exit 0. This corrects the final script-gate status reported in the preceding checkpoint; the five validated application findings and failing draft-preservation regression are unchanged. No additional full .NET pass is claimed. Local report updated; #580 remains not ready. Only this journal is published.
+
 
 - 2026-11-01 01:41Z (PR #580 — Codex P2 test fix in 73304b0; all 70 threads resolved):
   - New Codex code review finding (PRRT_kwDOSA8y6s6yWX_a, comment 4434023703) on 16c5f65: canvas test mock handles lacked addEventListener, causing TypeError in all 4 pointer tests after lostpointercapture fix in b54b19b.
