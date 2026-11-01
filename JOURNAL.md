@@ -52,6 +52,11 @@ A review of the repository and a test run on 2026-09-26 filed findings as issues
 
 ## Entries (newest first)
 
+- 2026-11-01 02:59Z (PR monitor — Codex both clean on #580 HEAD c674da7):
+  - Codex code review on c674da7763f9bfb2909601a395ed9060dd841a51: has_any_findings=false, status=completed. ✅
+  - Codex security review on c674da7763f9bfb2909601a395ed9060dd841a51: has_any_findings=null, status=completed. ✅
+  - All 83 threads resolved. PR #580 HEAD c674da7 is clean on Codex. Awaiting Copilot review on new HEAD.
+
 - 2026-11-01 02:55Z (PR monitor — owner pushed c674da7, new code commit on #580):
   - Owner pushed c674da7763f9bfb2909601a395ed9060dd841a51 to feat/579-idea-workspaces: "fix: preserve workspace input and selected-control identity". 544+/51- across WorkspaceDeliveryPanel, WorkspaceDiscussion, WorkspaceConnections, WorkspaceLayoutEditor, WorkspaceContentEditor, WorkspacePlanItemEditor, WorkspacePlanPanel, WorkspaceSourceDocuments, WorkspaceCard, WorkspaceCheckpointPanel, IdeaWorkspace. New: workspace-ui-feature-recovery.browser.mjs, workspace-ui-races.browser.mjs, WorkspaceLayoutEditorPlacementTests.cs (177 lines); extended IdeaWorkspaceRestoreAndRelinkTests.cs (+91).
   - PR HEAD is now c674da7. Codex code+security reviews failed with service error ("We couldn't complete this review") — not actual findings. Awaiting Copilot review on new HEAD.
