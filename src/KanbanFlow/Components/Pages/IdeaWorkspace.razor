@@ -28,7 +28,7 @@
         </div>
     </header>
     @if (error is not null) { <div class="alert alert-danger" role="alert" data-testid="workspace-error">@error</div> }
-    @if (storageError is not null) { <div class="alert alert-danger" role="alert" data-testid="workspace-storage-error">@storageError <button class="btn btn-outline-dark ms-2" @onclick="() => RetryDraftStorage(renderedPageScope)" data-testid="workspace-retry-draft">Retry browser draft storage</button></div> }
+    @if (storageError is not null) { <div class="alert alert-danger" role="alert" data-testid="workspace-storage-error">@storageError <button class="btn btn-outline-dark ms-2" disabled="@busy" @onclick="() => RetryDraftStorage(renderedPageScope)" data-testid="workspace-retry-draft">Retry browser draft storage</button></div> }
     @if (storageError is not null && storedDraftRaw is not null)
     {
         <section class="alert alert-warning" aria-label="Browser draft recovery" data-testid="workspace-draft-recovery">

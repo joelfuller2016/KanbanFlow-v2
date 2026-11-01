@@ -561,7 +561,8 @@ public sealed class IdeaWorkspaceWriteTests
 
         var result = await service.ExecuteAsync(created.WorkspaceId, command);
 
-        Assert.NotNull(result);
+        Assert.Equal("propose_plan", result.Action);
+        Assert.True(result.ActivityId > 0);
     }
 
     private static IdeaWorkspaceCommand Change(string operationId, long revision, string action, object payload, string actor) =>

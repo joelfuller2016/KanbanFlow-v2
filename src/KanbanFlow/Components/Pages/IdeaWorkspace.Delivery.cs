@@ -106,6 +106,7 @@ public partial class IdeaWorkspace
         inspectedTask = null;
         taskBusy = true;
         taskError = null;
+        StateHasChanged();
         try
         {
             await using var db = await DbFactory.CreateDbContextAsync(lifetime.Token);
@@ -117,7 +118,7 @@ public partial class IdeaWorkspace
                 task.Priority.ToString(), task.Assignee, task.FeatureId, projectId, task.UpdatedAt);
             if (task is null) taskError = "This published task was removed or moved outside the project. It is not recreated.";
         }
-        catch (Exception ex) { if (IsCurrent(scope) && sequence == taskSequence) taskError = ex.Message; }
+        catch (Exception ex) { if (IsCurrent(scope) && sequence == taskSequence) { inspectedTask = null; taskError = ex.Message; } }
         finally { if (IsCurrent(scope) && sequence == taskSequence) taskBusy = false; }
     }
 
