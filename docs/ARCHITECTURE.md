@@ -670,7 +670,10 @@ Repository identity probes require **Git 2.39 or newer**, which follows ordinary
 reading protected configuration. The report checks the selected binary before every Git identity
 operation, since relative `PATH` entries can resolve differently for each working directory. If a
 check finds an older or unrecognizable version, it produces one diagnostic and leaves signal 4
-**UNMEASURED**, including with an explicit repository root. Every operation's
+**UNMEASURED**, including with an explicit repository root. An
+unavailable logged working directory is instead left unconfirmed without disabling Git for later
+candidates. Remote drive syntax follows the host platform: single-letter SCP forms are network
+remotes on POSIX, and ambiguous Windows drive forms cannot prove a clone fingerprint. Every operation's
 five-second monotonic deadline includes that check, a protected configuration read and the identity
 command; later operations get the same bound and reread protected configuration without repository
 context, so `gitdir`/`onbranch` conditional includes cannot grant ownership trust. The report does
