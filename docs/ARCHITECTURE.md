@@ -17,8 +17,8 @@ command shown. If a number here disagrees with the code, the code wins — re-de
 - [Runtime shape](#runtime-shape)
 - [Entity model](#entity-model)
 - [The write path & audit boundary](#the-write-path--audit-boundary)
-- [REST surface (77 endpoints)](#rest-surface-77-endpoints)
-- [MCP surface (36 native / 54 wrapper)](#mcp-surface-36-native--54-wrapper)
+- [REST surface (102 operations)](#rest-surface-102-operations)
+- [MCP surface (60 native / 79 wrapper)](#mcp-surface-60-native--79-wrapper)
 - [Who owns what](#who-owns-what)
 - [Running it locally](#running-it-locally)
   - [Keeping it running: the scheduled task](#keeping-it-running-the-scheduled-task)
@@ -145,12 +145,12 @@ grep -rln 'ITaskService\|IIdeaService' src/KanbanFlow/Components/
 
 ---
 
-## REST surface (77 endpoints)
+## REST surface (102 operations)
 
 The five additive workflow routes are documented with complete typed payloads in [the request workflow reference](request-workflow.md#mcp-and-rest-reference) and [workflows.http](../src/KanbanFlow/Requests/workflows.http). The original routes below remain available.
 
 The route groups below describe the earlier base checkpoint. The current workspace-inclusive
-surface is measured from the running app: 92 application and five admin operations, 97 total.
+surface is measured from the combined running app: 97 application and five admin operations, 102 total (November 1, 2026).
 Use an explicit disposable instance to reproduce the OpenAPI and both MCP counts:
 
 ```powershell
@@ -383,12 +383,12 @@ Plus `GET /openapi.json` in `Program.cs`, which 302s to `/openapi/v1.json`.
 
 ---
 
-## MCP surface (36 native / 54 wrapper)
+## MCP surface (60 native / 79 wrapper)
 
-The integrated source declares 36 native and 54 wrapper tools. September 6 transport discovery verified the earlier 33-native/54-wrapper surface. Both expose `list_requests`, `get_request_context`, `get_task_workflow` and `workflow_command`; native additionally gained `update_task`, and `get_task` now includes comments. See the [workflow contract](request-workflow.md#mcp-and-rest-reference). The original inventory below describes the earlier surface.
+The combined source exposes 60 native and 79 wrapper tools, measured from both running transports on November 1, 2026. The earlier workflow-only source declared 36 native and 54 wrapper tools. September 6 transport discovery verified the earlier 33-native/54-wrapper surface. Both expose `list_requests`, `get_request_context`, `get_task_workflow` and `workflow_command`; native additionally gained `update_task`, and `get_task` now includes comments. See the [workflow contract](request-workflow.md#mcp-and-rest-reference). The original inventory below describes the earlier surface.
 
 These group tables describe the earlier base surface. The workspace-inclusive totals are
-53 native and 75 wrapper tools; reproduce them with the read-only inventory command above.
+60 native and 79 wrapper tools; reproduce them with the read-only inventory command above.
 
 Two MCP servers ship, and they are **not** at parity. Tracked in
 [#231](https://github.com/joelfuller2016/KanbanFlow-v2/issues/231).

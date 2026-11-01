@@ -67,7 +67,7 @@ Owner usability feedback and adoption remain pending. No deployment, live-board 
 
 ## Evidence and limits
 
-The walkthrough describes implemented behavior. Runtime evidence, source commits, failed checks and corrections are recorded in [JOURNAL.md](../JOURNAL.md). The November 1, 2026 correction gate passed 1,701 .NET tests and 384 script tests with zero failed or skipped tests. The warnings-as-errors build passed; formatting drift remains advisory under the repository gate.
+The walkthrough describes implemented behavior. Runtime evidence, source commits, failed checks and corrections are recorded in [JOURNAL.md](../JOURNAL.md). The November 1, 2026 combined workflow/workspace gate passed 2,158 .NET tests and 444 script tests with zero failed or skipped tests. The warnings-as-errors build passed; formatting drift remains advisory under the repository gate.
 
 Repeatable browser scripts cover these flows:
 
