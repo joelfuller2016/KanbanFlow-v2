@@ -1133,29 +1133,30 @@ function buildInto(build) {
 function buildRuleAFixture() {
   return buildInto(make => {
     // Construct owned local repositories separately from the report's five-second read budget.
-    const clone = (source, dir, options = []) => {
-      const child = spawnSync("git", ["clone", "-q", ...options, source, dir], {
-        cwd: a, encoding: "utf8", timeout: 30_000, maxBuffer: 256 * 1024, windowsHide: true,
+    const setupGit = (args, cwd) => {
+      const child = spawnSync("git", args, {
+        cwd, encoding: "utf8", timeout: 30_000, maxBuffer: 256 * 1024, windowsHide: true,
         env: { ...scrubGitEnv(process.env), GIT_CONFIG_NOSYSTEM: "1",
           GIT_CONFIG_SYSTEM: "/dev/null", GIT_CONFIG_GLOBAL: "/dev/null" }
       });
       if (child.error) throw child.error;
       assert.equal(child.status, 0, child.stderr);
     };
+    const clone = (source, dir, options = []) => setupGit(["clone", "-q", ...options, source, dir], a);
     const cloneWithRemote = (remoteUrl, srcOrigin = "origin") => {
       const dir = make();
       clone(a, dir);
-      if (remoteUrl !== undefined) gitOutput(["remote", "set-url", srcOrigin, remoteUrl], dir);
+      if (remoteUrl !== undefined) setupGit(["remote", "set-url", srcOrigin, remoteUrl], dir);
       return dir;
     };
 
     const a = make();
-    initRealRepo(a, "a.txt");
-    gitOutput(["remote", "add", "origin", "https://example.invalid/org/repo.git"], a);
+    initRealRepo(a, "a.txt", setupGit);
+    setupGit(["remote", "add", "origin", "https://example.invalid/org/repo.git"], a);
     // a's origin carries a SECOND url as well. git fetches from the first url only, so a is matched on
     // that first url alone; `mainSecondUrlOnly` below, whose only remote is this second url, must stay
     // outside, exactly as it did before every url was read.
-    gitOutput(["remote", "set-url", "--add", "origin", "https://mirror.example.invalid/org/repo.git"], a);
+    setupGit(["remote", "set-url", "--add", "origin", "https://mirror.example.invalid/org/repo.git"], a);
 
     // --- CONFIRMED: shares a's root commit, and either the remote is local or matches a's ---------
     const localClone = cloneWithRemote(); // origin left as-is: git clone sets it to a's own local path
@@ -1168,7 +1169,7 @@ function buildRuleAFixture() {
     // network project, so it takes the root-commit path — decided on its fetch urls, never on every
     // url — and a's history confirms it: the push url is neither proof nor an obstacle.
     const localClonePushesToA = cloneWithRemote();
-    gitOutput(["remote", "set-url", "--push", "origin", "https://example.invalid/org/repo.git"], localClonePushesToA);
+    setupGit(["remote", "set-url", "--push", "origin", "https://example.invalid/org/repo.git"], localClonePushesToA);
 
     // --- OUTSIDE: shares a's root commit, but a network remote vetoes it (rule A) ------------------
     // Neither an unknown SSH account's home-relative SCP path nor its absolute SSH path proves
@@ -1186,11 +1187,11 @@ function buildRuleAFixture() {
     const aliasSpelledSameRepo = cloneWithRemote("git@example-work:org/repo.git");
     const derivNoOrigin = make();
     clone(a, derivNoOrigin, ["--origin", "upstream"]); // origin renamed away
-    gitOutput(["remote", "add", "github", "https://example.invalid/alice/derivative.git"], derivNoOrigin);
+    setupGit(["remote", "add", "github", "https://example.invalid/alice/derivative.git"], derivNoOrigin);
     // The ordinary fork layout: origin is the fork, upstream is a's own URL. The upstream MATCHES,
     // and the non-matching origin still vetoes — on the remote-match path, not only the root-commit one.
     const forkWithUpstream = cloneWithRemote("https://example.invalid/alice/repo.git");
-    gitOutput(["remote", "add", "upstream", "https://example.invalid/org/repo.git"], forkWithUpstream);
+    setupGit(["remote", "add", "upstream", "https://example.invalid/org/repo.git"], forkWithUpstream);
     // A fork kept as ONE remote. A single `get-url` reads the first fetch URL only; that misses the
     // fork in triangular, secondUrl and pushInsteadOfFork, and catches it in the other two:
     //   triangular: fetches from a, pushes to the fork (`set-url --push`);
@@ -1203,42 +1204,42 @@ function buildRuleAFixture() {
     //     fork. Its raw `remote.origin.url` still names a: read around git's rewriting, it would
     //     confirm.
     const triangular = cloneWithRemote("https://example.invalid/org/repo.git");
-    gitOutput(["remote", "set-url", "--push", "origin", "https://example.invalid/alice/repo.git"], triangular);
+    setupGit(["remote", "set-url", "--push", "origin", "https://example.invalid/alice/repo.git"], triangular);
     const secondUrl = cloneWithRemote("https://example.invalid/org/repo.git");
-    gitOutput(["remote", "set-url", "--add", "origin", "https://example.invalid/alice/repo.git"], secondUrl);
+    setupGit(["remote", "set-url", "--add", "origin", "https://example.invalid/alice/repo.git"], secondUrl);
     const reverseTriangular = cloneWithRemote("https://example.invalid/alice/repo.git");
-    gitOutput(["remote", "set-url", "--push", "origin", "https://example.invalid/org/repo.git"], reverseTriangular);
+    setupGit(["remote", "set-url", "--push", "origin", "https://example.invalid/org/repo.git"], reverseTriangular);
     const pushInsteadOfFork = cloneWithRemote("https://example.invalid/org/repo.git");
-    gitOutput(["config", "url.https://example.invalid/alice/.pushInsteadOf", "https://example.invalid/org/"], pushInsteadOfFork);
+    setupGit(["config", "url.https://example.invalid/alice/.pushInsteadOf", "https://example.invalid/org/"], pushInsteadOfFork);
     const insteadOfFork = cloneWithRemote("https://example.invalid/org/repo.git");
-    gitOutput(["config", "url.https://example.invalid/alice/.insteadOf", "https://example.invalid/org/"], insteadOfFork);
+    setupGit(["config", "url.https://example.invalid/alice/.insteadOf", "https://example.invalid/org/"], insteadOfFork);
     // EVERY url, not only the ones git would contact — a policy choice, locked in on purpose: the fork
     // is a second url that git neither fetches from (it fetches from the first url only) nor pushes to
     // (the pushurl pins pushes to a), and it still vetoes. A fork named anywhere in a remote's
     // configuration reads as a fork, which fails closed.
     const secondUrlPushPinned = cloneWithRemote("https://example.invalid/org/repo.git");
-    gitOutput(["remote", "set-url", "--add", "origin", "https://example.invalid/alice/repo.git"], secondUrlPushPinned);
-    gitOutput(["remote", "set-url", "--push", "origin", "https://example.invalid/org/repo.git"], secondUrlPushPinned);
+    setupGit(["remote", "set-url", "--add", "origin", "https://example.invalid/alice/repo.git"], secondUrlPushPinned);
+    setupGit(["remote", "set-url", "--push", "origin", "https://example.invalid/org/repo.git"], secondUrlPushPinned);
     // Its only remote is a's SECOND url, one a never fetches from. Main is matched on its first url
     // alone, so this is a different URL, and it vetoes — as it did when only one url was read.
     const mainSecondUrlOnly = cloneWithRemote("https://mirror.example.invalid/org/repo.git");
 
     // --- OUTSIDE: genuinely unrelated (its own history) -------------------------------------------
     const unrelated = make();
-    initRealRepo(unrelated, "unrelated.txt");
-    gitOutput(["remote", "add", "origin", "https://example.invalid/other/thing.git"], unrelated);
+    initRealRepo(unrelated, "unrelated.txt", setupGit);
+    setupGit(["remote", "add", "origin", "https://example.invalid/other/thing.git"], unrelated);
     // Its own history and NO remote at all: nothing to veto with and nothing to match, so the root-
     // commit comparison is the only thing keeping it out. Without it, forcing that comparison open
     // was caught by a single test elsewhere, and only incidentally.
     const unrelatedNoRemote = make();
-    initRealRepo(unrelatedNoRemote, "unrelated-no-remote.txt");
+    initRealRepo(unrelatedNoRemote, "unrelated-no-remote.txt", setupGit);
     // Its own history; fetches from a's local path and PUSHES to a's own URL. A match on where it pushes
     // is not proof, so it takes the root-commit path like any local-only checkout — and its history is
     // not a's. Matching on every url, instead of on fetch urls, confirms exactly this one.
     const unrelatedPushesToA = make();
-    initRealRepo(unrelatedPushesToA, "unrelated-pushes-to-a.txt");
-    gitOutput(["remote", "add", "origin", a], unrelatedPushesToA);
-    gitOutput(["remote", "set-url", "--push", "origin", "https://example.invalid/org/repo.git"], unrelatedPushesToA);
+    initRealRepo(unrelatedPushesToA, "unrelated-pushes-to-a.txt", setupGit);
+    setupGit(["remote", "add", "origin", a], unrelatedPushesToA);
+    setupGit(["remote", "set-url", "--push", "origin", "https://example.invalid/org/repo.git"], unrelatedPushesToA);
 
     return {
       a, localClone, fileUrlClone, sameRepoHttps, unprovenScpNamespace, unprovenSshNamespace, localClonePushesToA,
@@ -2172,16 +2173,16 @@ test("real Git namespace evidence retains SSH accounts and repository path seman
 // setup itself goes through `gitOutput` too, so it is protected by the SAME scrub being proven,
 // not by a second, separately-written one that could drift from the real one.
 
-function initRealRepo(dir, filename) {
+function initRealRepo(dir, filename, git = gitOutput) {
   fs.writeFileSync(path.join(dir, filename), filename);
-  gitOutput(["init", "-q"], dir);
-  gitOutput(["add", filename], dir);
+  git(["init", "-q"], dir);
+  git(["add", filename], dir);
   // -c commit.gpgsign=false / core.hooksPath= / --no-verify: a contributor's global git config can
   // have commit signing or a hooksPath configured (this repo's own CLAUDE.md documents exactly
   // that risk for git hooks). Any of those can prompt, shell out, or simply run slowly on an
   // unrelated temp repo — inside GIT_TIMEOUT_MS (5s), that reads as "git is unavailable" and turns
   // an unrelated local config difference into a flaky test.
-  gitOutput(
+  git(
     [
       "-c", "user.email=trial-report-test@example.com", "-c", "user.name=trial-report-test",
       "-c", "commit.gpgsign=false", "-c", "core.hooksPath=",
