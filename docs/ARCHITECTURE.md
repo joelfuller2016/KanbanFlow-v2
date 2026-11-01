@@ -666,6 +666,48 @@ npm run trial:report -- --since 2026-08-30
 npm run trial:report -- --json
 ```
 
+Repository identity probes require **Git 2.39 or newer**, which follows ordinary includes when
+reading protected configuration. Each report runner lazily pins one absolute native executable from
+its captured `PATH`, ignoring empty, relative and Windows drive-dependent fields while preserving
+quoted absolute fields. Version checks still run before every Git identity operation. A private
+Node helper performs PATH lookup and exceptional missing-directory checks within the same remaining
+deadline, with forced termination and bounded input/output.
+The helper uses the running Node executable and its installation directory; logged directories cannot
+select its executable or cwd. Only the selected PATH or the one directory being classified is sent
+on stdin. Node preload variables are excluded from this helper alone; parent and Git settings remain intact.
+If a check finds an older or unrecognizable version, it produces one diagnostic and leaves signal 4
+**UNMEASURED**, including with an explicit repository root. If incompatibility is found later,
+earlier clone confirmations and their folding notes are discarded. A missing or non-directory
+logged working path is instead left unconfirmed outside without disabling Git for later candidates.
+A version probe that times out, is killed or lacks permission stays local to an outside candidate.
+Any failed or incomplete read at a main repository boundary, including an explicit `--repo-root`,
+leaves signal 4 unmeasured. A reference's root history and entire remote fingerprint must both be
+available before candidate comparisons begin; a partial reference cannot establish a match or veto.
+Missing executables, nonzero version exits and unsupported versions remain global failures.
+Spent per-call deadlines follow the same reference/candidate availability scope, including before launch.
+Remote drive syntax follows the host platform: single-letter SCP forms are network
+remotes on POSIX, and ambiguous Windows drive forms cannot prove a clone fingerprint. Every operation's
+five-second monotonic deadline includes that check, a protected configuration read and the identity
+command. Remote URL reads also inspect bounded NUL-framed URL and rewrite configuration within
+that same deadline: embedded LF and empty configured or effective URL values make the fingerprint inconclusive,
+including its reference root history. URL payload whitespace is preserved; only Git's final output
+record terminator is removed. Ordinary repository-local rewrites still come from Git's `get-url`.
+Native Git text is decoded as strict UTF-8 while preserving a valid BOM; malformed bytes cannot
+coalesce into another URL or protected `safe.directory` path through replacement decoding.
+Later operations get the same bound and reread protected configuration without repository
+context, so `gitdir`/`onbranch` conditional includes cannot grant ownership trust. Config-location
+variables use exact uppercase names on POSIX and case-insensitive names on Windows. The report does
+not install Git or change global settings. Git child output is capped at 256 KiB. Reference and
+candidate fingerprints scan at most 16 remote names, 64 URL entries per remote across
+fetch and push reads together, and 256 URL entries across the entire fingerprint; duplicates count. Exceeding
+a bound rejects the whole fingerprint and is disclosed in the report, rather than trusting a
+truncated prefix. Other servers retain their transport, account and exact
+repository path; generic SSH comparison preserves the login and effective
+command path (including `.git` and relative, absolute or tilde forms); GitHub's documented `git`
+account clone URLs retain their hosted HTTPS aliases. Paths printed in reports are reversible
+quoted literals, and report JSON escapes control characters that could alter its presentation.
+Comparisons retain meaningful spaces in remote names and URL payloads.
+
 The report takes each signal from whichever source can actually answer it — the log for who called
 what from where, the board's `ActivityEvent` rows for what changed — and it says what it could not
 measure rather than scoring it as a pass. Two refusals matter most: it will not treat "unprompted"

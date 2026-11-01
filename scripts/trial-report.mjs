@@ -20,9 +20,12 @@
 // Usage:
 //   npm run trial:report
 //   npm run trial:report -- --since 2026-08-30 --json
+// Repository identity probes require Git 2.39+; unsupported Git leaves signal 4 unmeasured.
 //   npm run trial:report -- --repo-root C:\Users\Owner\Documents\Claude\KanbanFlow-v2
 
 import fs from "node:fs";
+import { randomUUID } from "node:crypto";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
@@ -49,6 +52,48 @@ const ACTIVITY_PROBE = ACTIVITY_PAGE + 1;
 // source-unavailable case the report already knows how to report honestly.
 export const FETCH_TIMEOUT_MS = 10_000;
 const GIT_TIMEOUT_MS = 5_000;
+const GIT_MAX_OUTPUT_BYTES = 256 * 1024; // Explicit Node child-output bound, also checked before parsing.
+const GIT_VERSION_REQUIREMENT = "Git 2.39 or newer is required for isolated repository probes.";
+
+// A tool that itself invokes git — a pre-commit hook running in a LINKED WORKTREE (git sets these
+// for exactly that hook invocation, pointing at the worktree it fired in), another script, a
+// wrapper CLI — can export these to point its OWN children at a specific repo/worktree. If THIS
+// process inherits them (it runs as a plain child process, so by default it does), every git call
+// this file makes silently answers for whatever repo the variable names instead of the `cwd`
+// argument actually passed — regardless of which directory is asked about. Measured for real (git
+// 2.55.0.windows.3): with `GIT_DIR` pointed at repo A, `git -C B rev-list --max-parents=0 HEAD`
+// returns A's root commit, not B's — so a genuinely unrelated repo B reads as sharing A's history.
+// For this file that is the FORBIDDEN direction: every candidate directory would "confirm" as a
+// clone of the main root, and signal 4 would score REVERT on genuine outside use, the one outcome
+// its own header says a measurement must never produce from contaminated input. The same
+// contamination also affects `resolveRepoRoots` on unpatched master: run this script from a linked
+// worktree whose hook set `GIT_DIR`, and `--show-toplevel` answers with the directory git was ASKED
+// FROM instead of the top of the working tree, because git takes the current directory as the top
+// when `GIT_DIR` is set without `GIT_WORK_TREE` (measured, same git: with `GIT_DIR=<repo>/.git`,
+// `git -C <repo>/scripts rev-parse --show-toplevel` returns `<repo>/scripts`). `resolveRepoRoots`
+// asks from this script's own directory, so roots[0] becomes `scripts/` rather than the checkout —
+// a second, independent false-ADOPT path this scrub closes as a side effect, not just the
+// clone-confirmation one it was written for.
+//
+// The location variables are not the only ones that change git's answer. Measured on the same
+// git: an inherited `url.<main>.insteadOf=<fork>` rewrites a fork's urls to main's, whether it
+// arrives in GIT_CONFIG_PARAMETERS or GIT_CONFIG_COUNT — which `git -c` and `--config-env` export
+// to every child, hooks included — or in the config file GIT_CONFIG_GLOBAL or GIT_CONFIG_SYSTEM
+// names, and an inherited GIT_GRAFT_FILE or GIT_REPLACE_REF_BASE hands an unrelated repository
+// main's root commit; each of those confirms a repository that is not a clone. The other way, an
+// inherited GIT_NO_REPLACE_OBJECTS or GIT_SHALLOW_FILE hides a clone's own history,
+// GIT_CEILING_DIRECTORIES stops git finding a clone from a directory inside it, and on Windows
+// GIT_REDIRECT_STDOUT sends git's output to a file; each of those hides a clone. git's own list of
+// local-repository variables (`git rev-parse --local-env-vars`, as of 2.55) leaves out
+// GIT_CONFIG_GLOBAL, GIT_CONFIG_SYSTEM, GIT_CEILING_DIRECTORIES and GIT_REDIRECT_STDOUT, so the
+// scrub is not a list. It drops every variable whose name starts with GIT_, in any ASCII case
+// (Windows reads environment names case-insensitively, so an inherited `Git_Dir` reaches git as
+// GIT_DIR), including a name a later git adds. Identity probes receive no inherited GIT_* values.
+// gitOutput disables system/global identity settings: even an ordinary HOME/XDG url rewrite can
+// disguise a fork. Only protected safe.directory values are copied through a separate key-only
+// read; explicit config-file locations apply solely to that read. Repository-local rewrites still
+// apply. The scrub touches nothing outside that prefix, including PATH, which chooses git.
+const GIT_ENV_PREFIX = /^GIT_/i;
 
 // Tools that mutate ONE IDENTIFIED TASK, used to decide whether two sessions wrote the same task.
 // Every name here takes a `taskId` argument or mutates a child of one; only the `taskId`-bearing
@@ -424,18 +469,259 @@ export function isOutsideAllRoots(cwd, roots) {
   return list.every(root => isOutsideRepo(cwd, root));
 }
 
-function gitOutput(args, cwd) {
-  // `timeout` for the same reason the fetches carry one: an unbounded blocking call in a report
-  // that has no other way to finish. `git rev-parse` on a network path, or against a repository
-  // whose index lock is held, can sit indefinitely — and a hung git here hangs the whole run before
-  // a single signal is computed. A timeout kills the child and throws, which this file already
-  // treats as "git was unavailable".
-  return execFileSync("git", args, {
-    cwd,
-    encoding: "utf8",
-    stdio: ["ignore", "pipe", "ignore"],
-    timeout: GIT_TIMEOUT_MS
-  }).trim();
+/** Copy `env` without inherited GIT_* variables, in any ASCII case, keeping every other variable.
+ * gitOutput adds its own controlled config settings after this scrub (see GIT_ENV_PREFIX above). */
+export function scrubGitEnv(env) {
+  const scrubbed = { ...env };
+  for (const key of Object.keys(scrubbed)) {
+    if (GIT_ENV_PREFIX.test(key)) delete scrubbed[key];
+  }
+  return scrubbed;
+}
+
+function nativeGitText(bytes, code = "git_invalid_utf8") {
+  try {
+    return new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes);
+  } catch (cause) {
+    throw Object.assign(new Error("Git command output is not valid UTF-8.", { cause }), { code });
+  }
+}
+
+/**
+ * Read only protected ownership exceptions, preserving system/global ordering and empty resets.
+ * Explicit config-file locations and system-disable flags apply only to this key-only read.
+ * Like Git's ownership check, it has no repository/worktree context: local values and
+ * gitdir/onbranch conditional includes cannot grant trust. Git performs interpolation.
+ */
+function protectedSafeDirectoryArgs(executable, cwd, env, remainingTimeout) {
+  const configEnv = scrubGitEnv(env);
+  for (const [key, value] of Object.entries(env)) {
+    const name = process.platform === "win32" ? key.toUpperCase() : key;
+    if (/^GIT_CONFIG_(GLOBAL|SYSTEM|NOSYSTEM)$/.test(name)) configEnv[name] = value;
+  }
+  const noSystem = configEnv.GIT_CONFIG_NOSYSTEM;
+  let systemDisabled = false;
+  if (noSystem !== undefined) {
+    if (/^(true|yes|on)$/i.test(noSystem)) systemDisabled = true;
+    else if (/^(false|no|off|)$/i.test(noSystem)) systemDisabled = false;
+    else if (/^[+-]?\d+$/.test(noSystem)) systemDisabled = Number(noSystem) !== 0;
+    else throw new Error("Invalid GIT_CONFIG_NOSYSTEM boolean.");
+  }
+  // A unique uncreated locator prevents repository discovery without creating files. It is
+  // used only here; identity probes must still discover the repository named by cwd.
+  configEnv.GIT_DIR = path.join(tmpdir(), "kanbanflow-protected-" + randomUUID());
+  let output;
+  try {
+    output = nativeGitText(execFileSync(executable, ["config", "--includes", "--null", "--show-scope", "--get-all", "safe.directory"], {
+      cwd, encoding: null, stdio: ["ignore", "pipe", "ignore"], timeout: remainingTimeout(), maxBuffer: GIT_MAX_OUTPUT_BYTES, env: configEnv, windowsHide: true
+    }));
+  } catch (error) {
+    if (error.status === 1 && error.stdout?.length === 0) return []; // No key, including absent optional files.
+    throw error;
+  }
+  if (!output.endsWith("\0")) throw new Error("Invalid protected safe.directory framing.");
+  const fields = output.split("\0").slice(0, -1);
+  if (fields.length % 2 !== 0) throw new Error("Invalid protected safe.directory scope/value framing.");
+  const values = [];
+  for (let i = 0; i < fields.length; i += 2) {
+    if (fields[i] === "global" || fields[i] === "system" && !systemDisabled) values.push(fields[i + 1]);
+  }
+  return values.flatMap(value => ["-c", `safe.directory=${value}`]);
+}
+
+// get-url has only newline framing. Inspect the effective local URL/rewrite configuration with
+// native NUL records first, so a newline inside one value cannot impersonate several URLs.
+function checkRemoteUrlFraming(executable, cwd, safeDirectories, env, remainingTimeout) {
+  let output;
+  try {
+    output = nativeGitText(execFileSync(executable, [...safeDirectories, "config", "--includes", "--null", "--get-regexp",
+      "^(remote\\..*\\.(url|pushurl)|url\\..*\\.(insteadof|pushinsteadof))$"], {
+      cwd, encoding: null, stdio: ["ignore", "pipe", "ignore"],
+      timeout: remainingTimeout(), maxBuffer: GIT_MAX_OUTPUT_BYTES, env, windowsHide: true
+    }), "git_url_framing");
+  } catch (error) {
+    if (error.status === 1 && error.stdout?.length === 0) return; // No URL/rewrite keys.
+    throw error;
+  }
+  const invalid = () => { throw Object.assign(new Error("Git remote URL configuration has ambiguous record framing."), { code: "git_url_framing" }); };
+  if (!output.endsWith("\0")) invalid();
+  for (let start = 0; start < output.length;) {
+    const end = output.indexOf("\0", start);
+    if (end === -1) invalid();
+    const record = output.slice(start, end);
+    const separator = record.indexOf("\n");
+    if (separator <= 0 || record.indexOf("\n", separator + 1) !== -1) invalid();
+    const key = record.slice(0, separator), value = record.slice(separator + 1);
+    const remoteUrlKey = key.startsWith("remote.") && (key.endsWith(".url") || key.endsWith(".pushurl"));
+    if (remoteUrlKey && value.length === 0) invalid();
+    start = end + 1;
+  }
+}
+
+/**
+ * Run one git plumbing command against `cwd`, scrubbed of inherited GIT_* variables and isolated
+ * from system/global identity config, so caller-wide url rewrites cannot change its evidence.
+ * Only explicit safe.directory values survive, unchanged; no new wildcard trust is introduced.
+ * Repository-local config, including its url rewrites, still applies. The controlled settings go
+ * on the copy AFTER the scrub. Exported, and takes `env` as an option, so tests can inject a
+ * contaminated environment without mutating this PROCESS's real process.env.
+ */
+export function gitOutput(args, cwd, { env = process.env, timeoutMs = GIT_TIMEOUT_MS } = {}) {
+  return createGitRunner({ env, timeoutMs })(args, cwd);
+}
+
+function findGitExecutable(search) {
+  const windows = process.platform === "win32";
+  for (let start = 0; start <= search.length;) {
+    const quote = windows && (search[start] === '"' || search[start] === "'") ? search[start] : null;
+    const closing = quote ? search.indexOf(quote, start + 1) : start;
+    let end = closing === -1 ? -1 : search.indexOf(path.delimiter, closing);
+    if (end === -1) end = search.length;
+    let directory = search.slice(start, end);
+    start = end + 1;
+    if (quote && directory.endsWith(quote)) directory = directory.slice(1, -1);
+    if (!path.isAbsolute(directory) || windows && !/^(?:[a-z]:[\\/]|[\\/]{2}[^\\/]+[\\/][^\\/]+)/i.test(directory)) continue;
+    for (const name of windows ? ["git.com", "git.exe"] : ["git"]) {
+      const candidate = path.resolve(directory, name);
+      let usable = false;
+      try {
+        usable = fs.statSync(candidate).isFile();
+        if (usable && !windows) fs.accessSync(candidate, fs.constants.X_OK);
+      } catch { usable = false; }
+      if (usable) return candidate;
+    }
+  }
+  return null;
+}
+
+// Filesystem calls can block on a network path. Keep them in a process whose lifetime the
+// report controls, rather than checking the clock only after a synchronous call returns.
+const GIT_FILESYSTEM_HELPER = `
+const fs = require("node:fs"), path = require("node:path");
+const value = JSON.parse(fs.readFileSync(0, "utf8"));
+let result;
+if (process.argv[1] === "lookup") result = (${findGitExecutable.toString()})(value);
+else {
+  try { result = fs.statSync(value).isDirectory() ? "directory" : "missing"; }
+  catch (error) { result = ["ENOENT", "ENOTDIR"].includes(error.code) ? "missing" : "inconclusive"; }
+}
+process.stdout.write(JSON.stringify(result));
+`;
+
+function gitFilesystemProbe(kind, value, env, remainingTimeout) {
+  const input = JSON.stringify(value);
+  if (Buffer.byteLength(input, "utf8") > GIT_MAX_OUTPUT_BYTES)
+    throw new Error("Git filesystem probe input exceeded its byte bound.");
+  const helperEnv = scrubGitEnv(env);
+  for (const key of Object.keys(helperEnv)) {
+    const name = process.platform === "win32" ? key.toUpperCase() : key;
+    if (name === "NODE_OPTIONS" || name === "NODE_PATH") delete helperEnv[key];
+  }
+  try {
+    return JSON.parse(nativeGitText(execFileSync(process.execPath,
+      ["--input-type=commonjs", "--eval", GIT_FILESYSTEM_HELPER, kind], {
+        cwd: path.dirname(process.execPath), env: helperEnv, input, encoding: null,
+        stdio: ["pipe", "pipe", "ignore"], timeout: remainingTimeout(), killSignal: "SIGKILL",
+        maxBuffer: GIT_MAX_OUTPUT_BYTES, windowsHide: true
+      })));
+  } catch (cause) {
+    if (cause.code === "ETIMEDOUT") throw Object.assign(
+      new Error("Git filesystem probe exceeded its deadline.", { cause }), { code: "git_cwd_unavailable" });
+    throw cause;
+  }
+}
+
+function resolveGitExecutable(env, remainingTimeout) {
+  const windows = process.platform === "win32";
+  const key = windows ? Object.keys(env).sort().find(name => name.toUpperCase() === "PATH") : "PATH";
+  const search = typeof env[key] === "string" ? env[key] : "";
+  const executable = gitFilesystemProbe("lookup", search, env, remainingTimeout);
+  if (executable === null)
+    throw Object.assign(new Error("No absolute Git executable was found on the captured PATH."), { code: "ENOENT" });
+  if (typeof executable !== "string" || !path.isAbsolute(executable) ||
+      windows && !/^(?:[a-z]:[\\/]|[\\/]{2}[^\\/]+[\\/][^\\/]+)/i.test(executable) ||
+      !(windows ? /^git\.(?:com|exe)$/i : /^git$/).test(path.basename(executable)))
+    throw new Error("Git executable lookup returned an invalid absolute pathname.");
+  return executable;
+}
+
+/** Capture the report environment and pin Git once; version and protected trust remain fresh. */
+export function createGitRunner({ env = process.env, timeoutMs = GIT_TIMEOUT_MS } = {}) {
+  const captured = Object.freeze({ ...env });
+  let executable, pinError, pinAttempted = false;
+  return (args, cwd) => {
+    const deadline = performance.now() + Math.min(GIT_TIMEOUT_MS, timeoutMs);
+    const remainingTimeout = () => {
+      const remaining = Math.floor(deadline - performance.now());
+      if (!(remaining >= 1)) throw Object.assign(new Error("Git command exceeded its five-second deadline."), { code: "git_cwd_unavailable" });
+      return remaining;
+    };
+    if (!pinAttempted) {
+      pinAttempted = true;
+      try { executable = resolveGitExecutable(captured, remainingTimeout); }
+      catch (cause) {
+        pinError = cause.code === "git_cwd_unavailable" ? cause : Object.assign(
+          new Error(`${GIT_VERSION_REQUIREMENT} No trusted absolute executable is available.`, { cause }), { code: "git_unsupported" });
+      }
+    }
+    if (pinError) throw pinError; // Never rediscover or fall back after a failed pin.
+    const isolated = { ...scrubGitEnv(captured), GIT_CONFIG_NOSYSTEM: "1",
+      GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_SYSTEM: "/dev/null" };
+    const versionTimeout = remainingTimeout();
+    let version = "unavailable";
+    let versionCause;
+    try {
+      version = nativeGitText(execFileSync(executable, ["--version"], {
+        cwd, encoding: null, stdio: ["ignore", "pipe", "ignore"],
+        timeout: versionTimeout, maxBuffer: GIT_MAX_OUTPUT_BYTES, env: isolated, windowsHide: true
+      })).trim();
+    } catch (cause) { versionCause = cause; }
+    const parsed = /^git version (\d+)\.(\d+)\.(\d+)(?:[. +\-][^\r\n]*)?$/.exec(version);
+    const numbers = parsed?.slice(1, 4).map(Number);
+    // Protected configuration follows ordinary includes from Git 2.39 onward.
+    if (!numbers?.every(Number.isSafeInteger) || !(numbers[0] > 2 || numbers[0] === 2 && numbers[1] >= 39)) {
+      // ENOENT can mean a missing executable OR cwd. Only a proven unavailable directory is
+      // candidate-local; a missing Git executable must retain the unsupported-source diagnostic.
+      let cwdUnavailable = false;
+      if (versionCause?.code === "ENOENT" || versionCause?.code === "ENOTDIR") {
+        let state;
+        try { state = gitFilesystemProbe("cwd", path.resolve(cwd ?? process.cwd()), captured, remainingTimeout); }
+        catch (cause) { throw Object.assign(new Error("Git cwd availability could not be determined.", { cause }), { code: "git_cwd_unavailable" }); }
+        if (state !== "missing" && state !== "directory") throw Object.assign(
+          new Error("Git cwd availability is inconclusive."), { code: "git_cwd_unavailable" });
+        cwdUnavailable = state === "missing";
+      }
+      if (cwdUnavailable) {
+        throw Object.assign(
+          new Error(`Git version probe could not start: cwd does not exist or is not a directory (${quotedPathForReport(cwd ?? "current directory")}).`, { cause: versionCause }),
+          { code: "git_cwd_missing" });
+      }
+      const outputLimit = versionCause?.code === "ENOBUFS" || versionCause?.code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER";
+      // Node may retain status 0 alongside an actual timeout or signal error.
+      const unavailable = (versionCause?.status == null || versionCause.status === 0) &&
+        (["ETIMEDOUT", "EACCES", "EPERM"].includes(versionCause?.code) ||
+          versionCause?.signal && versionCause.code !== "ENOENT" && versionCause.code !== "ENOTDIR");
+      if (!outputLimit && unavailable) {
+        throw Object.assign(new Error(`Git version probe could not complete for cwd ${quotedPathForReport(cwd ?? "current directory")} ` +
+          `(${quotedPathForReport(versionCause.code ?? versionCause.signal)}).`, { cause: versionCause }), { code: "git_cwd_unavailable" });
+      }
+      throw Object.assign(new Error(`${GIT_VERSION_REQUIREMENT} Found ${quotedPathForReport(version)}. Clone confirmation was not run.`, { cause: versionCause }),
+        { code: "git_unsupported" });
+    }
+    const safeDirectories = protectedSafeDirectoryArgs(executable, cwd, captured, remainingTimeout);
+    if (args[0] === "remote" && args[1] === "get-url")
+      checkRemoteUrlFraming(executable, cwd, safeDirectories, isolated, remainingTimeout);
+    const output = nativeGitText(execFileSync(executable, [...safeDirectories, ...args], {
+      cwd, encoding: null, stdio: ["ignore", "pipe", "ignore"],
+      timeout: remainingTimeout(), maxBuffer: GIT_MAX_OUTPUT_BYTES, env: isolated, windowsHide: true
+    }), args[0] === "remote" ? "git_url_framing" : "git_invalid_utf8");
+    const payload = output.endsWith("\n") ? output.slice(0, -1) : output;
+    // A nonempty configured URL can rewrite to an empty effective URL. That is not a
+    // remote-free repository and must not unlock the shared-history confirmation path.
+    if (args[0] === "remote" && args[1] === "get-url" && (payload.length === 0 || payload.startsWith("\n") || payload.endsWith("\n") || payload.includes("\n\n")))
+      throw Object.assign(new Error("Git remote has an empty effective URL."), { code: "git_url_framing" });
+    return payload;
+  };
 }
 
 /**
@@ -484,6 +770,479 @@ export function resolveRepoRoots(override, { cwd = process.cwd(), git = gitOutpu
   const unique = [...new Set(roots)];
   if (unique.length > 0) return { roots: unique, source: "git" };
   return { roots: [path.resolve(fallbackRoot ?? cwd)], source: "fallback" };
+}
+
+// The port each scheme uses when a URL names none. Only that port folds away: `https://h:443/o/r`
+// is `https://h/o/r` spelled out, while `https://h:8443/o/r` is another service on the same host,
+// and matching it would fold a different checkout in as this repository. Unlisted transports
+// retain their complete scheme-qualified identity; a remote helper need not share Git URL rules.
+const DEFAULT_PORTS = { ssh: 22, https: 443, http: 80, git: 9418 };
+// Match Git's URL/helper grammar, including digit-leading protocols (url.c:is_urlschemechar).
+const GIT_URL_SCHEME = /^([a-z0-9][a-z0-9+.-]*):\/\//i;
+const GIT_REMOTE_HELPER = /^[a-z0-9][a-z0-9+.-]*::/i;
+
+/**
+ * Normalize only proven remote aliases for same-repo comparison. GitHub's default HTTPS and
+ * git-account SSH endpoints share a case-insensitive owner/repo namespace and optional `.git`.
+ * Unknown servers retain their transport, SSH account and complete path: `alice@host:repo.git`
+ * is home-relative, not `ssh://alice@host/repo.git`, and Bob may own another repo at the same
+ * relative path. Named `~user` homes and a significant `.git` suffix must survive too.
+ * See https://git-scm.com/docs/git-clone#_git_urls. Hosts and known schemes ignore case; a port
+ * folds only when it is that scheme's default. Nondefault GitHub ports get no hosting aliases.
+ * `null`/non-string in, `null` out — an unreadable remote cannot accidentally compare equal.
+ *
+ * `scheme://` is resolved FIRST, before the SCP check even runs: an scp host can be bare (no
+ * userinfo), and testing scp first would misparse `https://…` as scp shorthand with host `https`.
+ * Only after ruling out a scheme is a bare `host:path` considered scp. The local-path classifier
+ * keeps Windows drive paths out while permitting unambiguous account/host forms.
+ */
+export function normalizeRemoteUrl(url, { platform = process.platform } = {}) {
+  if (typeof url !== "string" || url.length === 0) return null;
+  const raw = url;
+  const u = raw;
+  // Explicit remote-helper syntax is not the SCP host named before the double colon.
+  if (GIT_REMOTE_HELPER.test(u)) return raw;
+  const githubKey = repository => `github.com/${repository.toLowerCase().replace(/\/+$/, "").replace(/\.git$/, "")}`;
+  const sshKey = (authority, commandPath) => {
+    const at = authority.lastIndexOf("@");
+    const account = at === -1 ? null : authority.slice(0, at);
+    const host = (at === -1 ? authority : authority.slice(at + 1)).toLowerCase()
+      .replace(/:(\d+)$/, (portPart, port) => Number(port) === DEFAULT_PORTS.ssh ? "" : portPart);
+    // Git connect.c removes the character before ~ at this position for SSH URL/SCP paths.
+    const effectivePath = commandPath[1] === "~" ? commandPath.slice(1) : commandPath;
+    const hostedPath = effectivePath.replace(/^\//, "");
+    if (host === "github.com" && account === "git" && /^[^/~.][^/]*\/[^/]+\/?$/.test(hostedPath))
+      return githubKey(hostedPath);
+    // Account-specific chroots can also give absolute paths different meanings. Preserve both.
+    return JSON.stringify(["ssh", account, host, effectivePath]);
+  };
+  const scheme = u.match(GIT_URL_SCHEME);
+  if (scheme) {
+    const protocol = scheme[1].toLowerCase();
+    if (!Object.hasOwn(DEFAULT_PORTS, protocol)) return protocol + raw.slice(scheme[1].length);
+    if (protocol === "ssh") {
+      let location;
+      try { location = decodeURIComponent(raw.slice(scheme[0].length)); }
+      catch { return JSON.stringify(["ssh-opaque", raw]); }
+      const separator = location.indexOf("/");
+      if (separator === -1) return JSON.stringify(["ssh-opaque", raw]);
+      return sshKey(location.slice(0, separator), location.slice(separator));
+    }
+    const defaultPort = DEFAULT_PORTS[protocol];
+    const location = u.slice(scheme[0].length);
+    const separator = location.indexOf("/");
+    const rawAuthority = separator === -1 ? location : location.slice(0, separator);
+    const userEnd = rawAuthority.lastIndexOf("@");
+    const userinfo = userEnd === -1 ? "" : rawAuthority.slice(0, userEnd + 1);
+    const authority = rawAuthority.slice(userEnd + 1).toLowerCase()
+      .replace(/:(\d+)$/, (portPart, port) => Number(port) === defaultPort ? "" : portPart);
+    const repository = separator === -1 ? "" : location.slice(separator + 1);
+    if (authority === "github.com" && protocol === "https") {
+      return githubKey(repository);
+    }
+    return `${protocol}://${userinfo}${authority}${separator === -1 ? "" : "/" + repository}`;
+  }
+  const scp = raw.match(/^(?:([a-z0-9._-]+)@)?([a-z0-9.-]+):(.+)$/i);
+  if (scp && !isLocalPathRemote(raw, { platform })) return sshKey(scp[1] ? `${scp[1]}@${scp[2]}` : scp[2], scp[3]);
+  return u;
+}
+
+/**
+ * True when a RAW (un-normalized) git remote names a LOCAL FILESYSTEM PATH rather than a network
+ * project. Used to decide whether a candidate's remote CONTRADICTS a shared root commit: a fork or
+ * a renamed derivative can share history with the original while being pushed to a genuinely
+ * different network project, and that difference is real signal a bare root-commit match would
+ * throw away. A local-path remote (`git clone C:\...\repo local-copy`, this review fleet's own
+ * `SCRATCH/kf` pattern) contradicts nothing — it names no network project at all.
+ *
+ * Git's own rule, not a TLD-shaped guess (the earlier version of this function required a dotted,
+ * letters-only suffix before the colon, which misclassified an IPv4 host `192.168.1.10:owner/repo`
+ * and a single-label host `gitserver:owner/repo` as LOCAL — both are legitimate scp hosts and are
+ * network):
+ *   - `file://…` is local (it names a path, just spelled as a URL).
+ *   - any OTHER `scheme://` (`https://`, `ssh://`, `git://`, …) is network.
+ *   - otherwise, a remote is local if it has no colon or a `/` BEFORE its first colon. Git's
+ *     additional DOS-drive rule applies only on Windows and requires a valid Windows path.
+ *     Backslashes are literal characters in Git's POSIX SSH parser.
+ *   - anything else with a colon is SCP-style ssh — network — including an alias
+ *     (`git@example-work:…`), an IPv4 host (`git@192.168.1.10:…`), and a single-label host
+ *     (`gitserver:…`).
+ * An alias this rule cannot resolve to a real hostname is deliberately still "network": this
+ * function only ever removes a candidate's ability to contradict a shared root commit, never adds
+ * one, so treating an unresolvable alias as network (unable to match) is the fail-CLOSED direction
+ * — it stays outside, exactly as an alias- or IP-spelled clone of this very repo would on master.
+ */
+export function isLocalPathRemote(rawUrl, { platform = process.platform } = {}) {
+  if (typeof rawUrl !== "string" || rawUrl.length === 0) return false;
+  const u = rawUrl;
+  if (GIT_REMOTE_HELPER.test(u)) return false;
+  if (/^file:\/\//i.test(u)) return true;
+  if (GIT_URL_SCHEME.test(u)) return false;
+  const colon = u.indexOf(":");
+  if (colon === -1) return true;
+  const beforeColon = u.slice(0, colon);
+  if (beforeColon.includes("/")) return true;
+  if (platform === "win32" && /^[a-z]$/i.test(beforeColon)) {
+    const tail = u.slice(colon + 1);
+    // Recognize a conservative subset of Git's is_valid_win32_path. Ambiguous drive-looking
+    // forms are refused by fingerprinting below, never promoted into network identity proof.
+    if (/[\x00-\x1f<>:"|?*]/.test(tail)) return false;
+    return tail.split(/[\\/]/).every(part => part === "." || part === ".." ||
+      (!/[ .]$/.test(part) && !/^(?:con|prn|aux|nul|com[0-9¹²³]|lpt[0-9¹²³]|conin\$|conout\$) *(?:\..*)?$/i.test(part)));
+  }
+  return false;
+}
+
+function ambiguousWindowsDrive(rawUrl, platform) {
+  if (platform !== "win32") return false;
+  const value = rawUrl;
+  if (GIT_URL_SCHEME.test(value) || GIT_REMOTE_HELPER.test(value)) return false;
+  const colon = value.indexOf(":");
+  return colon > 0 && [...value.slice(0, colon)].length === 1 && !isLocalPathRemote(value, { platform });
+}
+
+// Hard cap on how many DISTINCT cwds `withConfirmedCloneRoots` will run git against. "Bounded" is
+// load-bearing, not a nicety: each candidate costs `rev-parse` + `remote` + TWO `get-url` calls per
+// configured remote (`--all` for every `url` it is configured with, `--push --all` for every push
+// URL; ordinarily 1–2 remotes, but not fixed — every remote is checked, not only `origin`)
+// + at most one `rev-list`, each at GIT_TIMEOUT_MS, and this function is fed straight from the
+// usage log, a file this report does not control the size or contents of. This caps the number of
+// DISTINCT DIRECTORIES probed; the bounds below cap the rest. A trial window's session count is
+// ordinarily far below this cap; hitting it is disclosed by the caller rather than silently probing
+// forever.
+const MAX_CLONE_PROBES = 50;
+
+// The rest of the work, bounded too, because the usage log can name a repository with any number
+// of remotes, and every git call may take up to GIT_TIMEOUT_MS. Both main and candidate
+// fingerprints cap remote names, raw URL entries (duplicates count) and command output bytes.
+// Fetch and push reads share each remote's allowance; all remotes share a fingerprint allowance.
+// PROBE_BUDGET_MS is one deadline for the whole pass, the main root's fingerprint included, checked
+// before every git call, so a pass stops within one call of it. Both fail closed: whatever either
+// leaves unread stays outside, and the caveat and the NOTE say how many.
+const MAX_REMOTES_PER_FINGERPRINT = 16;
+const MAX_URLS_PER_REMOTE = 64;
+const MAX_URLS_PER_FINGERPRINT = 256;
+const PROBE_BUDGET_MS = 60_000;
+
+// Stop at the first excess record, preserving its payload bytes, including whitespace.
+function boundedGitLines(text, limit) {
+  const lines = [];
+  for (let start = 0; start < text.length;) {
+    const newline = text.indexOf("\n", start);
+    const line = text.slice(start, newline === -1 ? text.length : newline);
+    if (lines.length >= limit) return null;
+    lines.push(line);
+    if (newline === -1) break;
+    start = newline + 1;
+  }
+  return lines;
+}
+
+/**
+ * Of the DISTINCT `cwds` that read as outside `roots`, which are actually a separate `git clone`
+ * of the SAME repository as one of `roots` — not a `git worktree add` (section 5's ancestry walk
+ * already maps those back to their main checkout), but a second, independent clone with no git-
+ * level link to it, such as this review fleet's own `SCRATCH/kf` sandbox.
+ *
+ * VETO RULE (deliberate design decision, not an oversight): a candidate with ANY network URL — any
+ * fetch or push URL of any of its remotes — that matches none of the main root's is a DIFFERENT
+ * project, and is never confirmed, whatever else it matches. Only a candidate that survives that
+ * veto can be confirmed, by (a) a remote's FETCH url normalizing to one of the main root's, which is
+ * proof on its own, or — when no fetch url names a network project — (b) a shared initial commit
+ * (`git rev-list --max-parents=0 HEAD`). The veto reads every url and the match only fetch urls, on
+ * purpose (see `networkRemotesOf`): a match on where a checkout pushes would confirm a repository
+ * with unrelated history. The veto binds BOTH paths. A fork or a renamed derivative shares history
+ * with the original up to the point it diverged, so root commit alone cannot tell it apart from a
+ * genuine clone; and the ordinary fork layout — `origin` the fork, `upstream` the original —
+ * carries a MATCHING remote as well, so a match alone cannot either: it shows the checkout knows
+ * this repository, not that it is it. (The veto used to run only after a match had already
+ * confirmed, so it guarded path (b) alone and such a fork was folded in as inside.) A candidate
+ * with a network URL pointing anywhere else is a REAL, DIFFERENT project someone may be doing
+ * unrelated work in. Every remote is checked (`git remote`, then two `get-url` reads per name), not
+ * only `origin`: a derivative can rename `origin` to anything and add its own under a different
+ * name (`derivNoOrigin` in this repo's own test fixtures) — checking one fixed name would miss
+ * exactly that. And every URL OF each remote is checked, not only its first: a fork kept as ONE
+ * remote can name this repository where a single `get-url` looks — the first fetch url — and the
+ * fork where it does not: a push url (`set-url --push`, or a `pushInsteadOf` rewrite) or a second
+ * url (`set-url --add`). Reading one url per remote confirmed both of those shapes as clones (a
+ * fork kept as one remote that names ITSELF there, and pushes here, was vetoed even then). See
+ * `CANDIDATE_URL_READS` for the reads, and for why the main root is read on its fetch url alone. A
+ * candidate with local-path-only remotes, or none at all, has nothing to veto with, so root commit
+ * alone still confirms it. The price, paid on purpose: a genuine clone that ALSO carries some other
+ * project's URL — as another remote, a push url or an extra url — is vetoed too, and reads as
+ * outside exactly as it would on master.
+ *
+ * FAILS CLOSED ON PURPOSE, in every direction: an inconclusive remote check — `git remote` itself
+ * fails, or either `get-url` read of any named remote fails — is NOT read as "no remote" (that
+ * would let a transient failure launder a fork past the veto); the WHOLE candidate is left
+ * unconfirmed. An alias, an IP literal, or any other host-spelling this function cannot resolve to
+ * a real hostname still counts as a "network remote that doesn't match" if it doesn't textually
+ * match main's own, so it still vetoes — such a clone reads as outside, exactly as it would on
+ * master, rather than being guessed into "the same repository". The reference's root history and
+ * complete remote fingerprint must both be read successfully before candidates are examined.
+ * Partial reference evidence cannot establish either a match or a veto. What it confirms can still
+ * be wrong: a genuine clone of this repository that
+ * someone reuses for unrelated work is confirmed, and its sessions then score as inside. The
+ * safeguard is how little it confirms: it only ever ADDS an entry to `confirmed`, only on the
+ * strongest proof available, and leaves everything it cannot prove outside, as on master —
+ * PROVIDED the caller folds in exactly the cwds it confirmed and nothing wider (see Returns).
+ *
+ * Returns the confirmed map, probe counts and resource-limit counters: `confirmed` maps each
+ * proven cwd to the toplevel git resolved it to; `probed` is how many distinct cwds were probed to
+ * the end; `capped` says whether any distinct cwd was left unprobed, by `MAX_CLONE_PROBES` or by
+ * `PROBE_BUDGET_MS`; `budgetSpent` says whether the budget was the one that ran out; and
+ * `tooManyRemotes` counts the probed cwds left inconclusive for listing more than
+ * `MAX_REMOTES_PER_FINGERPRINT` remotes. `tooManyUrls` and `outputTooLarge` count candidates
+ * whose entire fingerprint was discarded at those bounds; `limitedMainRoots` counts main-root
+ * fingerprints discarded at any resource bound, including their root-commit evidence.
+ * `referenceAvailable` is false if any reference read failed or exceeded a bound; callers must
+ * then leave signal 4 unmeasured rather than count unexamined candidates as outside use.
+ * `now` (milliseconds, `performance.now` by default) is the
+ * budget's clock, an option so a test can run the deadline without waiting for it. What is proven
+ * is the KEY — that exact cwd string — so the key is what a caller folds in, by EXACT STRING: never
+ * as a root for the tree beneath it, and never case-folded or re-spelled (see the note at signal 4
+ * for why not even that). The toplevel is context, never a root. It used to be folded in as an
+ * extra prefix root, which was
+ * wrong in both directions: a toplevel also covers any repository NESTED inside the clone's tree,
+ * which this function may just have REJECTED, so genuine outside use scored inside; and git
+ * resolves a junction or symlink, so a cwd reached through one has the link's TARGET as its
+ * toplevel — not a prefix of the cwd at all — and a confirmed clone scored outside while being
+ * reported as folded in.
+ */
+export function withConfirmedCloneRoots(cwds, roots, { git = gitOutput, now = () => performance.now(), platform = process.platform } = {}) {
+  const mainRoots = (Array.isArray(roots) ? roots : []).filter(r => typeof r === "string" && r.length > 0);
+  const distinct = [...new Set((Array.isArray(cwds) ? cwds : []).filter(c => typeof c === "string" && c.length > 0))];
+  const limits = { tooManyRemotes: 0, tooManyUrls: 0, outputTooLarge: 0, limitedMainRoots: 0 };
+  if (mainRoots.length === 0 || distinct.length === 0) {
+    return { confirmed: new Map(), probed: 0, capped: false, budgetSpent: false,
+      referenceAvailable: mainRoots.length > 0, ...limits };
+  }
+
+  const probeList = distinct.slice(0, MAX_CLONE_PROBES);
+
+  // PROBE_BUDGET_MS, enforced at every git call: once the deadline has passed, `call` refuses, and a
+  // refused call fails like any other git failure here — inconclusive — so the candidate it belonged
+  // to confirms nothing.
+  const deadline = now() + PROBE_BUDGET_MS;
+  let budgetSpent = false;
+  let outputLimited = false;
+  let probeRole = "reference";
+  const unavailableReference = () => ({ confirmed: new Map(), probed: 0, capped: false,
+    budgetSpent, referenceAvailable: false, ...limits });
+  const outOfBudget = () => budgetSpent || (budgetSpent = now() > deadline);
+  // Every git call here answers a question about a SPECIFIC directory — a candidate cwd, or one of
+  // the main roots — never about the process's own cwd, for the same reason `gitOutput`'s callers
+  // always pass one explicitly: this report can run from anywhere.
+  const call = (args, cwd) => {
+    if (outOfBudget()) throw new Error(`clone probe budget of ${PROBE_BUDGET_MS} ms spent`);
+    try {
+      const output = git(args, cwd, { probeRole });
+      if (typeof output === "string" && Buffer.byteLength(output, "utf8") > GIT_MAX_OUTPUT_BYTES) {
+        throw Object.assign(new Error("Git command output exceeded its byte bound."), { code: "GIT_OUTPUT_LIMIT" });
+      }
+      return output;
+    } catch (error) {
+      const cause = error?.cause ?? error;
+      if (error?.code === "GIT_OUTPUT_LIMIT" || cause?.code === "ENOBUFS" || cause?.code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER") outputLimited = true;
+      throw error;
+    }
+  };
+  const safeGit = (args, cwd) => {
+    try { return call(args, cwd); } catch { return null; } // Inconclusive, not fatal — see the doc comment above.
+  };
+  const rootCommitsOf = cwd => {
+    const out = safeGit(["rev-list", "--max-parents=0", "HEAD"], cwd);
+    // A repo can have more than one root commit (a graft, an `--allow-unrelated-histories` merge),
+    // so this is a SET to compare against, not a single value.
+    return typeof out === "string" ? new Set(out.split(/\r?\n/).map(s => s.trim()).filter(Boolean)) : null;
+  };
+
+  // Which `git remote get-url` reads each remote is judged on — the flags before the remote's name.
+  // The FIRST read must be a fetch read: its first line is the remote's fetch url (with several
+  // `url`s, git fetches from the first; it pushes to them all only while no `pushurl` is set, and
+  // with one it pushes to the `pushurl` alone).
+  //
+  // A CANDIDATE is read on EVERY url of every remote: `--all` lists every `url` and `--push --all`
+  // every push url. One plain read answers with the first fetch url only, which is where a fork kept
+  // as ONE remote can name this repository while the fork itself sits in the push url (`set-url
+  // --push`, or a `pushInsteadOf` rewrite) or in a second url (`set-url --add`); that single read
+  // confirmed both shapes as clones. git expands `insteadOf` in both reads and `pushInsteadOf` in the
+  // push one, so each url is compared as git spells it after rewriting — and every one counts, even
+  // a url git would never contact (a second `url` while a `pushurl` pins pushes elsewhere: see
+  // `secondUrlPushPinned` in the tests), which fails closed.
+  //
+  // The MAIN root is read on its FETCH url alone — plain `get-url`. Its other urls and its push urls
+  // are never where it fetches from — at most where it pushes TO; counting them as its identity would
+  // let a checkout of its push target or of a mirror match it, confirming what this fingerprint never
+  // accepted before — the one direction a change here must not move anything.
+  const CANDIDATE_URL_READS = [["--all"], ["--push", "--all"]];
+  const MAIN_URL_READS = [[]];
+
+  /**
+   * The network urls of `cwd`'s configured remotes, normalized, in two sets (a local-path url
+   * names no network project and cannot veto or match anything — see `isLocalPathRemote`):
+   * `everyUrl`, every url any of the `urlReads` returned for any remote — what the VETO is judged
+   * on; and `fetchUrls`, each remote's fetch url alone — the first line of the first read — which is
+   * all a MATCH may rest on. The two differ on purpose. A match found only in a push url or a later
+   * url is where the checkout sends work, not what it was cloned from: counting it as proof would
+   * confirm a repository with unrelated history whose only link to this one is where it pushes,
+   * which the root-commit check used to keep out. `inconclusive: true` means the remote listing OR
+   * any one of those reads, for any remote, could not be read — NOT "no remote"; the caller must
+   * treat that as unconfirmable, never as an absent remote (#5c — a failed `get-url` used to read
+   * as `null`, which the old gate treated exactly like "no remote configured" and confirmed the
+   * candidate anyway). A push read that fails while the fetch read succeeded is just as
+   * inconclusive: the url it could not read is where a fork would hide. An answer beyond the
+   * name or URL-entry allowance is inconclusive too, before any matching prefix is used.
+   */
+  const networkRemotesOf = (cwd, urlReads) => {
+    let names;
+    try {
+      names = boundedGitLines(call(["remote"], cwd), MAX_REMOTES_PER_FINGERPRINT);
+    } catch (error) {
+      return { everyUrl: new Set(), fetchUrls: new Set(), inconclusive: true,
+        ambiguousUrls: error.code === "git_url_framing" };
+    }
+    if (names === null) return { everyUrl: new Set(), fetchUrls: new Set(), inconclusive: true, tooManyRemotes: true };
+    const network = rawUrl => (isLocalPathRemote(rawUrl, { platform }) ? null : normalizeRemoteUrl(rawUrl, { platform }));
+    const everyUrl = new Set();
+    const fetchUrls = new Set();
+    let totalUrls = 0;
+    for (const name of names) {
+      let remoteUrls = 0;
+      for (let read = 0; read < urlReads.length; read++) {
+        let urls;
+        try {
+          urls = boundedGitLines(call(["remote", "get-url", ...urlReads[read], name], cwd),
+            Math.min(MAX_URLS_PER_REMOTE - remoteUrls, MAX_URLS_PER_FINGERPRINT - totalUrls));
+        } catch (error) {
+          return { everyUrl: new Set(), fetchUrls: new Set(), inconclusive: true,
+            ambiguousUrls: error.code === "git_url_framing" };
+        }
+        if (urls === null) return { everyUrl: new Set(), fetchUrls: new Set(), inconclusive: true, tooManyUrls: true };
+        if (urls.some(url => ambiguousWindowsDrive(url, platform)))
+          return { everyUrl: new Set(), fetchUrls: new Set(), inconclusive: true, ambiguousDrive: true };
+        remoteUrls += urls.length;
+        totalUrls += urls.length;
+        const fetchUrl = read === 0 && urls.length > 0 ? network(urls[0]) : null;
+        if (fetchUrl) fetchUrls.add(fetchUrl);
+        for (const rawUrl of urls) {
+          const normalized = network(rawUrl);
+          if (normalized) everyUrl.add(normalized);
+        }
+      }
+    }
+    return { everyUrl, fetchUrls, inconclusive: false };
+  };
+
+  // Every reference fingerprint must be complete before comparing candidates. Losing a main URL
+  // can veto a genuine clone, while retaining only root history can admit an unrelated remote.
+  const mainRootCommits = new Set();
+  const mainNetworkRemotes = new Set();
+  for (const main of mainRoots) {
+    outputLimited = false;
+    const commits = rootCommitsOf(main);
+    if (outputLimited) { limits.limitedMainRoots++; return unavailableReference(); }
+    if (commits === null) return unavailableReference();
+    const remotes = networkRemotesOf(main, MAIN_URL_READS);
+    if (outputLimited || remotes.tooManyRemotes || remotes.tooManyUrls) {
+      limits.limitedMainRoots++;
+      return unavailableReference();
+    }
+    if (remotes.inconclusive || remotes.ambiguousDrive || remotes.ambiguousUrls) return unavailableReference();
+    for (const c of commits ?? []) mainRootCommits.add(c);
+    for (const r of remotes.fetchUrls) mainNetworkRemotes.add(r);
+  }
+
+  const confirmed = new Map();
+  const probe = cwd => {
+    // Gates "is this even a repo git can see", and names the repository whose remotes and history
+    // are checked below. It is NOT what gets folded in — the cwd is (see Returns above).
+    const toplevel = safeGit(["rev-parse", "--show-toplevel"], cwd);
+    if (!toplevel) return;
+    const resolvedTop = path.resolve(toplevel);
+
+    const remotes = networkRemotesOf(resolvedTop, CANDIDATE_URL_READS);
+    const { everyUrl, fetchUrls, inconclusive } = remotes;
+    if (remotes.tooManyRemotes) limits.tooManyRemotes++;
+    if (remotes.tooManyUrls) limits.tooManyUrls++;
+    if (inconclusive) return; // #5c: fails closed — not "no remote", just unconfirmable.
+
+    // Rule (A), the VETO, checked FIRST so it binds both paths below: ANY network url — any fetch or
+    // push url of any remote — matching none of main's makes this a different project, whatever
+    // else it matches: a fork, a renamed derivative, a fork that also carries main's own URL as a
+    // second remote, or a fork kept as one remote that fetches from main and pushes to itself.
+    if ([...everyUrl].some(r => !mainNetworkRemotes.has(r))) return;
+
+    // Path (a): a remote's FETCH url matching main is proof on its own, regardless of root commit —
+    // but only a fetch url (see `networkRemotesOf`): a match on a push url or a later url is not.
+    if ([...fetchUrls].some(r => mainNetworkRemotes.has(r))) {
+      confirmed.set(cwd, resolvedTop);
+      return;
+    }
+
+    // Path (b): only a candidate whose fetch urls name no network project — local-path-only, or no
+    // remote at all — gets this far (any other network url it carries matched main, or the veto
+    // would have fired), so nothing here is proof on its own; a shared root commit confirms.
+    const commits = rootCommitsOf(resolvedTop);
+    if (commits && mainRootCommits.size > 0 && [...commits].some(c => mainRootCommits.has(c))) {
+      confirmed.set(cwd, resolvedTop);
+    }
+  };
+
+  let probed = 0;
+  probeRole = "candidate"; // Applies to the recorded cwd and every resolved-top follow-up read.
+  for (const cwd of probeList) {
+    if (outOfBudget()) break;
+    outputLimited = false;
+    probe(cwd);
+    if (outputLimited) limits.outputTooLarge++;
+    // The budget ran out part-way through this probe. The refused call left it unconfirmed — a probe
+    // confirms only after its last call has answered — so it counts as unprobed, like the rest.
+    if (budgetSpent) break;
+    probed++;
+  }
+
+  return { confirmed, probed, capped: probed < distinct.length, budgetSpent, referenceAvailable: true, ...limits };
+}
+
+/**
+ * What the clone probe's bounds left unread this run, in the words both signal 4's caveat and
+ * main()'s NOTE print, so the two cannot drift apart. `probe` is main()'s `cloneProbe` —
+ * withConfirmedCloneRoots' counts plus `candidates`, how many distinct outside cwds there were. ""
+ * when no bound was hit (or no probing ran).
+ */
+export function describeCloneProbeLimits(probe) {
+  if (!probe) return "";
+  const out = [];
+  if (probe.capped) {
+    const unprobed = probe.candidates - probe.probed;
+    const why = probe.budgetSpent ? `its ${PROBE_BUDGET_MS / 1000} s time budget ran out` : `at ${MAX_CLONE_PROBES} candidates`;
+    out.push(
+      `CLONE CONFIRMATION CAPPED THIS RUN (${why}): only ${probe.probed} of ${probe.candidates} distinct outside ` +
+      `cwd(s) were checked (newest first) — capped: ${unprobed} candidate(s) unprobed, the OLDEST, left ` +
+      "counted as outside without being checked."
+    );
+  }
+  if (probe.tooManyRemotes > 0) {
+    out.push(
+      `${probe.tooManyRemotes} checked cwd(s) listed more than ${MAX_REMOTES_PER_FINGERPRINT} remotes and were left ` +
+      "unconfirmed, counted as outside, without their urls being read."
+    );
+  }
+  if (probe.tooManyUrls > 0) {
+    out.push(`${probe.tooManyUrls} checked cwd(s) exceeded ${MAX_URLS_PER_REMOTE} URL entries per remote ` +
+      `(fetch and push reads together) or ${MAX_URLS_PER_FINGERPRINT} per fingerprint; the whole fingerprint was discarded, counted as outside.`);
+  }
+  if (probe.outputTooLarge > 0) {
+    out.push(`${probe.outputTooLarge} checked cwd(s) exceeded the ${GIT_MAX_OUTPUT_BYTES / 1024} KiB Git command-output bound; ` +
+      "the whole fingerprint was discarded, counted as outside.");
+  }
+  if (probe.limitedMainRoots > 0) {
+    out.push(`${probe.limitedMainRoots} main-root fingerprint(s) exceeded a bound ` +
+      `(${MAX_REMOTES_PER_FINGERPRINT} remote names, ${MAX_URLS_PER_REMOTE} URL entries per remote, ` +
+      `${MAX_URLS_PER_FINGERPRINT} per fingerprint, ${GIT_MAX_OUTPUT_BYTES / 1024} KiB command output) and were discarded, including root-commit proof.`);
+  }
+  return out.join(" ");
 }
 
 /** The work status a TaskStatusChanged event landed on, or null when it cannot be read. */
@@ -701,6 +1460,49 @@ export function aliasesOf(key, bridge) {
 }
 
 /**
+ * The usage-log rows `summarize()` actually scores: a usable session + timestamp, and that
+ * timestamp at/after `cutoff` (inclusive; `cutoff === null` means no window — see the cutoff
+ * computation at the top of `summarize`, which this shares no parsing with on purpose: `summarize`
+ * must keep throwing its OWN `summarize: since=… is not a parseable date` for a direct caller that
+ * bypasses the CLI's `parseArgs` validation, and this function takes an ALREADY-PARSED cutoff so it
+ * cannot drift from that wording by duplicating it).
+ *
+ * Exported so `main()` can select clone-confirmation candidates from the EXACT SAME set signal 4
+ * will consult — probing a stale, out-of-window cwd instead of an in-window one wastes the bounded
+ * probe budget (`MAX_CLONE_PROBES`) on evidence that could never move the verdict, and can starve
+ * out a live one past the cap.
+ */
+export function selectRowsInWindow(rows, cutoff) {
+  return (Array.isArray(rows) ? rows : []).filter(r =>
+    typeof r?.session === "string" && r.session.length > 0 &&
+    typeof r?.ts === "string" && Number.isFinite(Date.parse(r.ts)) &&
+    (cutoff === null || Date.parse(r.ts) >= cutoff));
+}
+
+/**
+ * Which distinct cwds `main()` should hand to `withConfirmedCloneRoots`, and in what order: rows
+ * `selectRowsInWindow` says signal 4 will actually consult, filtered to `outcome === "ok"` and
+ * already outside `roots` (a cwd inside `roots` needs no confirming), ordered NEWEST ROW FIRST.
+ *
+ * The ordering matters because `withConfirmedCloneRoots` enforces `MAX_CLONE_PROBES`: selecting
+ * candidates from the whole log in file order — the previous shape of this logic, inline in main()
+ * — spends that bounded budget on however the log happens to be ordered, oldest first if it is
+ * append-only. With 50+ distinct STALE cwds ahead of it, a live in-window clone could land past the
+ * cap and never get probed at all, reading as outside for no reason but where it sorted. Newest
+ * first means a cap always drops the STALEST candidates, never a live one ahead of dead ones.
+ *
+ * Pure and exported on purpose: this selection is fully testable with plain row fixtures, with no
+ * live git repo needed to prove 50+ candidates prioritize correctly — that part of the git-backed
+ * confirmation this function feeds is already `withConfirmedCloneRoots`'s own, separately tested job.
+ */
+export function selectCloneCandidates(rows, cutoff, roots) {
+  const ordered = selectRowsInWindow(rows, cutoff)
+    .filter(r => r.outcome === "ok" && typeof r.cwd === "string" && r.cwd.length > 0 && isOutsideAllRoots(r.cwd, roots))
+    .sort((a, b) => Date.parse(b.ts) - Date.parse(a.ts));
+  return [...new Set(ordered.map(r => r.cwd))];
+}
+
+/**
  * Compute the four §11 signals. Pure — every input is passed in, so the whole adjudication is
  * unit-testable against fixtures with no app, no clock and no filesystem.
  *
@@ -714,6 +1516,22 @@ export function summarize({
   repoRoot,
   repoRoots,
   repoRootSource = null,
+  // Cwds that git has POSITIVELY confirmed (see `withConfirmedCloneRoots`) are separate clones of
+  // one of `repoRoots`, not a different project — computed in main() (git and the log both live
+  // there) and handed in as plain strings so `summarize` stays pure. Folded into signal 4's outside
+  // check only, and each by EXACT STRING, never as a prefix root: these are the proven cwds
+  // themselves, as recorded, not the toplevels they resolved to (see signal 4 for why that matters;
+  // the parameter's name predates the distinction). It is not part of `roots`/`repoRootSource`
+  // provenance, which describes the PRIMARY boundary, not this supplementary allowlist.
+  cloneRoots = [],
+  // The OUTCOME of main()'s `withConfirmedCloneRoots` probing pass this run — how many distinct
+  // outside cwds were actually checked, how many there were in all (`candidates`), whether a bound
+  // left some unprobed (`capped`, with `budgetSpent` when it was the time budget), and how many
+  // were left inconclusive for listing too many remotes. Disclosure only: it changes no signal's
+  // verdict, only the honesty of signal 4's caveat and `sources.cloneProbe*` in the JSON output.
+  // `null` (the default, for a direct caller that passes none) means "no probing was run", which is
+  // simply not disclosed rather than reported as a cap that never happened.
+  cloneProbe = null,
   since = null,
   // `truncated` means HARMFULLY truncated — a full page whose oldest event is still inside the
   // window, so events from inside the window were dropped. `truncatedCovered` is the other kind:
@@ -746,6 +1564,7 @@ export function summarize({
 
   const roots = (Array.isArray(repoRoots) ? repoRoots : repoRoot === undefined || repoRoot === null ? [] : [repoRoot])
     .filter(r => typeof r === "string" && r.length > 0);
+  const confirmedCloneCwds = (Array.isArray(cloneRoots) ? cloneRoots : []).filter(r => typeof r === "string" && r.length > 0);
 
   const allEvents = events.map(normalizeEvent);
 
@@ -778,9 +1597,11 @@ export function summarize({
     // With NO root at all nothing can be outside anything, and the signal scored REVERT: the one
     // outcome this file's header says a missing source must never produce.
     repoRoot: {
-      ok: roots.length > 0 && repoRootSource !== "fallback",
+      ok: roots.length > 0 && repoRootSource !== "fallback" && sources.git !== false && cloneProbe?.referenceAvailable !== false,
       why:
-        roots.length === 0
+        sources.git === false ? sources.gitReason || "supported Git was unavailable for repository identity checks"
+          : cloneProbe?.referenceAvailable === false ? "reference repository Git evidence was unavailable or incomplete"
+          : roots.length === 0
           ? "no repo root was supplied, so there is no boundary to be outside OF — every session reads as inside and the signal would score REVERT while measuring nothing"
           : "the repo root came from a FALLBACK (git could not be run, or this is not a git repository), so it is the parent of this script's own directory rather than the repository git would name. Run from a linked worktree, that root is the WORKTREE and every ordinary session in the main checkout reads as outside it — fabricating this signal's adopt condition out of where the script was launched. Pass --repo-root to measure it"
     }
@@ -825,9 +1646,7 @@ export function summarize({
   // sanitised the rows. A session-less row would key every participant map on `undefined` and add
   // one participant nothing ever recorded — enough on its own to carry signal 1 to its `>= 3`
   // adopt threshold.
-  const windowRows = rows.filter(r =>
-    typeof r?.session === "string" && r.session.length > 0 &&
-    typeof r?.ts === "string" && Number.isFinite(Date.parse(r.ts)) && inWindow(r.ts));
+  const windowRows = selectRowsInWindow(rows, cutoff);
   // Normalized HERE TOO, at this function's own input boundary — not inside `inWindow`.
   //
   // `fetchActivity` already normalizes what IT fetches, and that remains the primary fix. But
@@ -1160,6 +1979,20 @@ export function summarize({
   }, ["activity", "activityComplete"]);
 
   // ── Signal 4: board consulted from outside KanbanFlow-v2/ ─────────────────────────────────
+  // A confirmed clone cwd counts as inside HERE ONLY — `confirmedCloneCwds` is not part of `roots`
+  // itself, so it never affects `availability.repoRoot`/provenance — and only AS ITSELF: a row is
+  // folded in when its cwd IS one of them, string for string, never because it sits somewhere
+  // beneath one. Folding in each confirmed cwd's toplevel as a prefix root, as this once did, scored
+  // a repository NESTED inside a confirmed clone as inside although the clone check had REJECTED it,
+  // and it missed a clone whose recorded cwd is a junction onto it, since git names the junction's
+  // target as the toplevel. Not even a case-insensitive comparison: in a per-directory
+  // case-SENSITIVE NTFS directory, `cs\KF` and `cs\kf` are two different directories, and folding
+  // in by a path comparison scored the rejected one as inside because its sibling was confirmed.
+  // Exact strings lose nothing below the probe cap — candidates are de-duplicated and probed by
+  // exact string, so every spelling signal 4 scores is checked itself. What they cost, and the
+  // caveat says so: a cwd the cap left unchecked stays outside, even when it sits inside, or merely
+  // re-spells, a cwd that was confirmed. And the caveat and the NOTE list these same strings, so the
+  // disclosure and the scoring cannot disagree.
   const outsideSessions = new Map();
   for (const row of windowRows) {
     // Successful calls only, for signal 1's reason: a call that never reached the board is not the
@@ -1167,6 +2000,7 @@ export function summarize({
     // behind this signal's ADOPT.
     if (row.outcome !== "ok") continue;
     if (!isOutsideAllRoots(row.cwd, roots)) continue;
+    if (confirmedCloneCwds.includes(row.cwd)) continue;
     // All distinct cwds, for the same reason signal 1 collects them: this list is the evidence the
     // reader adjudicates on, and one session can call from several directories.
     const entry = outsideSessions.get(row.session) ?? { session: row.session, cwds: [], calls: 0 };
@@ -1174,6 +2008,54 @@ export function summarize({
     if (typeof row.cwd === "string" && row.cwd.length > 0 && !entry.cwds.includes(row.cwd)) entry.cwds.push(row.cwd);
     outsideSessions.set(row.session, entry);
   }
+  // Applies under EITHER a trusted root source — git-resolved or an explicit --repo-root override
+  // — since main() runs the clone check for both and only skips it for a fallback root (which
+  // cannot anchor the comparison, and is already UNMEASURED below regardless of this text). Shared
+  // rather than duplicated per branch so an operator using --repo-root gets the same honesty about
+  // what was and wasn't checked as the git-resolved path does.
+  const cloneProbeCapped = Boolean(cloneProbe?.capped);
+  const cloneProbeLimits = describeCloneProbeLimits(cloneProbe);
+  const cloneCaveat = repoRootSource === "fallback" ? "" :
+    // A `git clone` of this SAME repo (not a `git worktree add`) has no ancestry link git can see,
+    // so without this check it reads as outside and pure review/test traffic from a throwaway
+    // clone (e.g. a review fleet's own sandbox) scores as adopt evidence. The count and the list
+    // are the confirmed CWD STRINGS — exactly the strings the loop above folds in, compared as
+    // strings — never the clones' toplevels, so what this sentence names and what the signal scores
+    // cannot disagree.
+    (confirmedCloneCwds.length > 0
+      ? ` ${confirmedCloneCwds.length} outside cwd(s) were confirmed as separate clones of it (by a ` +
+        "remote's fetch URL matching this repository's own, with no NETWORK fetch or push URL of any " +
+        "remote, under any remote name, naming anything else — or by sharing its initial commit), not a " +
+        "different project, and were folded in as inside, each exactly as recorded (never as a root " +
+        `for the tree beneath it): ${confirmedCloneCwds.map(quotedPathForReport).join(", ")}.`
+      : "") +
+    (cloneProbeLimits ? ` ${cloneProbeLimits}` : "") +
+    // A no-remote clone is NOT in this list: it confirms fine via root commit alone (see
+    // withConfirmedCloneRoots). What's left, honestly, is what root commit and remote together
+    // cannot rule out, PLUS the deliberate fail-closed residual rule (A) accepts on purpose: a
+    // clone this check cannot POSITIVELY confirm still reads as outside, exactly as it would on
+    // master, rather than being guessed into "the same repository". The last sentence states the
+    // veto itself, because it is the one exclusion a reader could mistake for a bug: a fork whose
+    // `upstream`, or whose own fetch url, matches this repository is outside on purpose.
+    " A clone this check cannot confirm — its directory no longer exists, git is unavailable or unsupported " +
+    "(Git 2.39 or newer is required), a call " +
+    "exceeded GIT_TIMEOUT_MS or a remote-name, URL-entry or command-output bound, it was left unprobed by " +
+    "the cap or the time budget above (and that includes a cwd INSIDE a " +
+    "clone that was confirmed, or one that merely spells a confirmed cwd differently: a cwd is folded " +
+    "in only when that exact cwd string was itself checked, never because it sits beneath, or " +
+    "resembles, one that was), its remote listing or a remote's URL could not be read " +
+    "(an inconclusive check is never assumed to mean 'no remote'), or it is a " +
+    "GENUINELY THE SAME REPOSITORY but reached via an alias, an IP literal, or another host-spelling " +
+    "this check cannot resolve to a matching hostname (e.g. an SSH config alias, or GitHub's " +
+    "ssh.github.com:443 endpoint) — still reads as outside, exactly as it would on master, so a " +
+    "single outside session should be checked against its own cwd before being read as adoption " +
+    "evidence. By design, a checkout with ANY network URL that matches none of this repository's — " +
+    "every fetch and push URL of every remote is checked — reads as a different project even when " +
+    "another of its URLs does match: the ordinary fork layout (origin the fork, upstream this " +
+    "repository) stays outside as the fork it is, so does a fork kept as a single remote (fetching " +
+    "from this repository while pushing to the fork, or carrying the fork as a second URL), and so " +
+    "does a genuine clone that also carries some other project's URL.";
+
   const signal4 = gate({
     id: 4,
     name: "Board consulted for work outside KanbanFlow-v2/",
@@ -1185,9 +2067,9 @@ export function summarize({
     caveat:
       `Measured against repo root(s) ${roots.join(", ") || "(none supplied — nothing can be outside)"}.` +
       (repoRootSource === "git"
-        ? " Resolved from git (--show-toplevel plus the parent of --git-common-dir), so a linked worktree maps back to the main checkout and does not read as outside."
+        ? " Resolved from git (--show-toplevel plus the parent of --git-common-dir), so a linked worktree maps back to the main checkout and does not read as outside." + cloneCaveat
         : repoRootSource === "override"
-          ? " Supplied explicitly with --repo-root, and checked to exist."
+          ? " Supplied explicitly with --repo-root, and checked to exist." + cloneCaveat
           : repoRootSource === "fallback"
             ? " GIT WAS UNAVAILABLE, so this fell back to the PARENT of the directory containing this " +
               "script (scripts/../, not scripts/ itself). If the report is running from a worktree that " +
@@ -1248,13 +2130,39 @@ export function summarize({
       activity: activityAvailable,
       activityTruncated: truncated.length > 0,
       activityCapped: capped.length > 0,
-      repoRootTrusted: availability.repoRoot.ok
+      repoRootTrusted: availability.repoRoot.ok,
+      cloneProbeCapped,
+      // The full probe counts and resource-limit counters main() measured this
+      // run, not just the boolean above — exposed so an operator (or a test) can see the actual
+      // counts without parsing them back out of caveat prose, which only mentions them at all when a
+      // bound was hit. `null` when no probing ran (no cloneProbe was passed in).
+      cloneProbe: cloneProbe && {
+        probed: cloneProbe.probed, capped: cloneProbeCapped, candidates: cloneProbe.candidates,
+        budgetSpent: Boolean(cloneProbe.budgetSpent), tooManyRemotes: cloneProbe.tooManyRemotes ?? 0,
+        tooManyUrls: cloneProbe.tooManyUrls ?? 0, outputTooLarge: cloneProbe.outputTooLarge ?? 0,
+        limitedMainRoots: cloneProbe.limitedMainRoots ?? 0
+      }
     },
     repoRoots: roots,
     repoRootSource,
     signals,
     overall
   };
+}
+
+function escapedReportCharacter(character) {
+  return character.split("").map(unit => "\\u" + unit.charCodeAt(0).toString(16).padStart(4, "0")).join("");
+}
+
+// JSON remains reversible; string contents cannot terminate a report fence or move its text.
+function jsonForReport(value, indentation) {
+  const json = JSON.stringify(value, null, indentation);
+  return typeof json === "string"
+    ? json.replace(/[\u007f-\u009f\p{Cf}\p{Zl}\p{Zp}`]/gu, escapedReportCharacter) : json;
+}
+
+function quotedPathForReport(value) {
+  return jsonForReport(value).replace(/[*_\[\]<>|&~#!]/g, escapedReportCharacter);
 }
 
 export function renderReport(summary, { logPath, malformed = 0, generations = null, logFiles = [], discovered = null, unreadable = [] } = {}) {
@@ -1340,7 +2248,7 @@ export function renderReport(summary, { logPath, malformed = 0, generations = nu
     out.push(`### ${s.id}. ${s.name} — ${s.verdict}`);
     out.push(s.caveat);
     out.push("```json");
-    out.push(JSON.stringify(s.detail, null, 1));
+    out.push(jsonForReport(s.detail, 1));
     out.push("```");
   }
   return out.join("\n");
@@ -1537,9 +2445,24 @@ async function main(argv) {
     console.error(`NOTE: the usage log is misconfigured, so signals derived from it CANNOT BE MEASURED.\n      ${logConfigError}\n`);
   }
   const here = path.dirname(fileURLToPath(import.meta.url));
+  const runner = createGitRunner();
+  let gitIncompatibility = null;
+  const reportGit = (args, cwd, { probeRole = "reference" } = {}) => {
+    if (gitIncompatibility) throw gitIncompatibility;
+    try { return runner(args, cwd); }
+    catch (error) {
+      const mainFailure = probeRole === "reference";
+      if (error.code === "git_unsupported" || mainFailure) {
+        gitIncompatibility = error.code === "git_unsupported" ? error : new Error(
+          "Reference repository Git evidence is unavailable or incomplete. Signal 4 cannot be measured.", { cause: error });
+        console.error(`NOTE: ${gitIncompatibility.message}\n`);
+      }
+      throw error;
+    }
+  };
   const { roots: repoRoots, source: repoRootSource } = resolveRepoRoots(repoRootOverride, {
     cwd: here,
-    fallbackRoot: path.resolve(here, "..")
+    fallbackRoot: path.resolve(here, ".."), git: reportGit
   });
 
   const { text, files, generations, discovered, unreadable } = readLogGenerations(logPath);
@@ -1586,12 +2509,66 @@ async function main(argv) {
     console.error(`NOTE: the board's activity trail is unreadable at ${apiBase} (${error.message}) — signals 2 and 3 CANNOT BE MEASURED.\n`);
   }
 
+  // Clone confirmation needs a usable log and a TRUSTED boundary to compare against. An incomplete
+  // or wholly corrupt log leaves signal 4 UNMEASURED; probing its partial rows cannot change that
+  // verdict and would print a misleading folded-in NOTE. A fallback root (this script's own
+  // directory, not a repo git named) or no root also leaves it UNMEASURED (see `availability.repoRoot`),
+  // so skip selection and git calls entirely when either source cannot support the result.
+  let cloneRoots = [];
+  let cloneProbe = null;
+  if (logAvailable && !nothingParsed && repoRootSource !== "fallback" && repoRoots.length > 0) {
+    // The SAME cutoff `summarize` will compute from this same `since` — see `selectCloneCandidates`
+    // for why candidates come from the exact rows signal 4 will actually consult, newest first.
+    const cutoff = since === null || since === undefined ? null : Date.parse(since);
+    const distinctOutsideCwds = selectCloneCandidates(rows, cutoff, repoRoots);
+    if (distinctOutsideCwds.length > 0) {
+      // Fingerprint ONLY repoRoots[0] (--show-toplevel's answer), never the rest of `repoRoots`.
+      // `resolveRepoRoots` can return a SECOND entry — the main checkout a linked worktree belongs
+      // to, via --git-common-dir — which is not necessarily this script's own directory tree; this
+      // report must not run git AGAINST that second path just to fingerprint it. This costs nothing
+      // in practice: linked worktrees of one repo share a single object store and .git/config, so
+      // repoRoots[0]'s remotes and initial commit are the same ones repoRoots[1] would report.
+      // Named `cloneCapped`, not `capped`: this function already has an OUTER `capped` (the
+      // activity-page-capped project list from `fetchActivity`, used a few lines below in the
+      // `summarize()` call) — a `const` this name would shadow only inside this block, harmlessly,
+      // but a reader skimming past the shadow could easily mix the two up.
+      const { confirmed, probed, capped: cloneCapped, budgetSpent, tooManyRemotes, tooManyUrls, outputTooLarge, limitedMainRoots, referenceAvailable } =
+        withConfirmedCloneRoots(distinctOutsideCwds, repoRoots.slice(0, 1), { git: reportGit });
+      if (!referenceAvailable && !gitIncompatibility) {
+        const limits = describeCloneProbeLimits({ tooManyRemotes, tooManyUrls, outputTooLarge, limitedMainRoots });
+        gitIncompatibility = new Error("Reference repository Git evidence is unavailable or incomplete. Signal 4 cannot be measured." + (limits ? ` ${limits}` : ""));
+        console.error(`NOTE: ${gitIncompatibility.message}\n`);
+      }
+      // The confirmed CWDS — the map's keys — never the toplevels they resolved to: a toplevel as a
+      // prefix root also covers a nested repository the check rejected, and misses a cwd reached
+      // through a junction (see withConfirmedCloneRoots's Returns, and the note at signal 4).
+      cloneRoots = gitIncompatibility ? [] : [...new Set(confirmed.keys())];
+      cloneProbe = gitIncompatibility ? null : { probed, capped: cloneCapped, candidates: distinctOutsideCwds.length, budgetSpent, tooManyRemotes,
+        tooManyUrls, outputTooLarge, limitedMainRoots };
+      if (!gitIncompatibility && confirmed.size > 0) {
+        // Lists exactly the cwd strings signal 4 folds in — it folds in by exact string — so this
+        // NOTE and the scoring cannot disagree, as they did when it listed toplevels: a clone reached
+        // through a junction was named here as folded in while signal 4 still scored its cwd outside.
+        console.error(
+          `NOTE: ${confirmed.size} of ${distinctOutsideCwds.length} outside cwd(s) confirmed (by a remote's fetch ` +
+          `URL matching this repository's own, with no NETWORK fetch or push URL of any remote, under any remote ` +
+          `name, naming anything else — or by initial commit) as separate clones of this repository, not a ` +
+          `different project — folded into signal 4 as inside, each exactly as recorded: ${cloneRoots.map(quotedPathForReport).join(", ")}\n`
+        );
+      }
+      // The same words signal 4's caveat carries (see describeCloneProbeLimits).
+      const limits = describeCloneProbeLimits(cloneProbe);
+      if (limits) console.error(`NOTE: ${limits}\n`);
+    }
+  }
+
   const summary = summarize({
-    rows, events, repoRoots, repoRootSource, since, truncated, truncatedCovered, capped,
-    sources: { log: logAvailable && !nothingParsed, activity: activityAvailable }
+    rows, events, repoRoots, repoRootSource, cloneRoots, cloneProbe, since, truncated, truncatedCovered, capped,
+    sources: { log: logAvailable && !nothingParsed, activity: activityAvailable,
+      git: gitIncompatibility === null, gitReason: gitIncompatibility?.message }
   });
   console.log(asJson
-    ? JSON.stringify(summary, null, 2)
+    ? jsonForReport(summary, 2)
     : renderReport(summary, { logPath, malformed, generations, logFiles: files, discovered, unreadable }));
 
   // Exit non-zero when the trial could not be adjudicated. A caller that treats exit 0 as "the
