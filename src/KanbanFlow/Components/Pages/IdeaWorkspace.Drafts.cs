@@ -111,7 +111,13 @@ public partial class IdeaWorkspace
             var detail = await Workspaces.GetComponentAsync(scope.WorkspaceId, id, lifetime.Token);
             if (IsCurrent(scope) && id == draft.SelectedComponentId) selectedDetail = detail;
         }
-        catch (IdeaWorkspaceException ex) { if (IsCurrent(scope)) error = ex.Message; }
+        catch (OperationCanceledException) when (lifetime.IsCancellationRequested) { }
+        catch (IdeaWorkspaceException ex) { if (IsCurrent(scope) && id == draft.SelectedComponentId) error = ex.Message; }
+        catch (Exception ex)
+        {
+            if (IsCurrent(scope) && id == draft.SelectedComponentId)
+                error = $"Component details could not be loaded: {ex.Message}. Your unsaved draft is retained; select the component again to retry.";
+        }
     }
 
     private async Task ContentChanged(WorkspaceUiScope scope, WorkspaceContentDraft value)
