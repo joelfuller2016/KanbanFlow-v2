@@ -40,9 +40,10 @@ export async function openWorkspaceStdio(baseUrl, { usageLog = "off" } = {}) {
     child.stdin.write(JSON.stringify({ jsonrpc: "2.0", id, method, params }) + "\n");
   });
   const close = async () => {
-    const exited = child.exitCode === null ? once(child, "exit") : Promise.resolve();
+    const alive = child.exitCode === null && child.signalCode === null;
+    const exited = alive ? once(child, "exit") : Promise.resolve();
     child.stdin.end();
-    if (child.exitCode === null) child.kill();
+    if (alive) child.kill();
     await exited;
   };
   try {
