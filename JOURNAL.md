@@ -51,6 +51,54 @@ A review of the repository and a test run on 2026-09-26 filed findings as issues
   - S7, for #549.
 
 ## Entries (newest first)
+- 2026-11-01 03:05Z (PR monitor — CodeRabbit incremental review on #511, fix applied):
+  - CodeRabbit posted 1 actionable inline comment on Ideas.razor:606 (incremental review of 399648b→a6e7b49).
+  - Finding: WorkflowException("conflict") fell through to generic catch, showing "Move failed: …" instead of service message. Valid — verified against current code.
+  - Fixed in e01fa76ca on feat/unified-workflow-509: added explicit `catch (WorkflowException ex) when (ex.Code == "conflict")` branch showing ex.Message directly, matching the ValidationException branch pattern. Replied on thread (comment 4434200495).
+  - 3 outside-diff-range comments (ui-e2e.mjs:3283 calm fixture, mcp-server.mjs:903 shutdown timeout, one further) — outside current diff, flagged to owner.
+  - PR #511 known open threads: Finding 1 (subtask hash — owner decision needed), Finding 3 (Windows path casing — owner decision needed). Build gate still DOWN.
+
+- 2026-11-01 02:34Z (PR monitor — Copilot review on #511, three findings addressed):
+  - New Copilot review on #511 (feat/unified-workflow-509, HEAD ed205efd) with 3 findings.
+  - Finding 1 (High): Subtask.Completed excluded from StateHash — valid, but changing the hash format invalidates all previously recorded evidence; versioned hash or startup migration needed. Replied to thread; flagged to owner.
+  - Finding 2 (Medium): `<a>` link nested inside `<details><summary>` — confirmed accessibility issue. Fixed in a6e7b49ca5b0a88b0e3a5a2c5e57f4de2bdf7a9c: link removed from summary, added as first visible item in expanded body. Pushed to feat/unified-workflow-509.
+  - Finding 3 (Medium): repository path dedup case-sensitive on Windows — valid, requires SQLite index collation change + startup migration. Replied to thread; flagged to owner.
+  - PR #521 (review/520-project-memory-ownership): 1 open thread (Copilot: MemoryService key normalization), last reply is mine from prior run; flagged to owner.
+  - Build gate still DOWN (.NET 10 install blocked by proxy). No merges.
+
+- 2026-11-01 02:28Z - Published verified repairs to existing PR branches with guarded fast-forward-only pushes: #511 ed205efdca4b39ce3703ab6d220744c35531ebff, #521 ef34d61f2a1e64f73442515afc93567ae1140b40, #564 0dadff673698e05f0de4ad65fc028015a69e5ddc. Product source matches each independently verified local head; final default-branch integration changed JOURNAL.md only. #511 passed1634 .NET/389 script tests, native+stdio workflow smoke,28 live API checks and3 browser cases; #521 passed1273 .NET/329 script tests plus native HTTP pagination/content and framing; #564 passed1259 .NET/371 script/169 targeted tests. Fresh source review found no actionable defect in these repair deltas. Current captured threads remain resolved (511:91,521:3,564:9); no new approval is inferred. #580 initial repaired gate passed1574 .NET/362 script tests, then fresh review found two edge cases: early-state retirement after explicit preservation and placement-selector focus. Corrections and focused regressions are in progress before final build/browser checks. No PR merges or human usability approval. Process lesson: source restored after mutation must be rebuilt without stale timestamp reuse; validate every observed gate against its recorded tree. A small ignored journal-only publisher now enforces fetch, single-file staging and remote ancestry verification.
+
+- 2026-11-01 03:30Z (Automated PR monitor run — build gate DOWN, no merges):
+  - .NET 10 SDK unavailable: dotnet-install.sh blocked by egress proxy (builds.dotnet.microsoft.com:443 connect_rejected). BUILD GATE IS DOWN for this run; no PR was merged.
+  - Open PRs: #580 (non-draft), #578 (Dependabot, non-draft), #564/#521/#511 (all drafts, skipped Phase 1).
+  - #580 (feat/579-idea-workspaces, HEAD 925f2ef2dd6a746641168b1d0d3a79b856e8b16f): mergeable_state=clean, 78/78 review threads resolved, no CHANGES_REQUESTED reviews, CodeRabbit check-run on HEAD = neutral. Would be a merge candidate but BLOCKED (build gate down). Phase 2: 0 unresolved threads, nothing to fix.
+  - #578 (Dependabot, Microsoft.OpenApi 2.13.0→3.11.0): mergeable_state=clean, 0 review threads, CodeRabbit check-run = skipped. Contains 3.0.0 BREAKING CHANGES. BLOCKED (build gate down); prior monitor runs also failed this gate.
+  - #564, #521, #511: draft PRs, Phase 1 skipped. Phase 2 (comment resolution) deferred due to build gate down and token constraints.
+  - Master build: not verified (no dotnet available).
+  - Next: build gate recovery needed before any merges; when dotnet is accessible, #580 is clean and ready to gate.
+
+- 2026-11-01 02:26Z (PR monitor — #521 and #511 both clean, new unreviewed commits):
+  - PR #521 (review/520-project-memory-ownership): still draft; new head ef34d61f pushed by prior session; CI clean on new head; CodeRabbit paused (last reviewed 599a714, ef34d61 not yet reviewed); no unresolved review threads in notifications.
+  - PR #511 (feat/unified-workflow-509): still draft; new head ed205efd pushed by prior session (advancing beyond d412c73 from this monitor's earlier fix); CI clean on new head; CodeRabbit paused (last reviewed 399648b, ed205efd not yet reviewed); no unresolved review threads in notifications.
+  - Build gate still down (.NET 10 install blocked by proxy). No merges performed; owner standing instruction: merges are the owner's.
+
+- 2026-11-01 02:26Z (PR #580 — owner pushed 925f2ef; all reviews on new HEAD clean):
+  - Owner pushed 925f2ef as new branch HEAD, implementing additional fixes:
+    - HasAuthoredState guard in RestoreDraft (navigation-only cache no longer triggers conflict).
+    - Canvas gesture descendant scan refactored to O(n) with one DOM query and iterative BFS.
+    - Guarded async detail reads, delivery feature choices, canvas gesture lifecycle, and more.
+  - All previously-deferred findings (including Major authored-edit preservation) now fixed and resolved by CodeRabbit.
+  - Codex code review on 925f2ef: has_any_findings:false, has_unresolved_findings:false ('Didn't find any major issues. Bravo.').
+  - Codex security review on 925f2ef: has_any_findings:null (no findings).
+  - All PR #580 review threads resolved. PR is ready for owner merge.
+
+- 2026-11-01 02:26Z (Codex complete PR code review — scope and first verification checkpoint):
+  - Request: complete code reviews of all five PRs previously inventoried, including the manifest-only dependency update. Pinned #580 `a6121dd77f0bc5e83733649f12ec4949a4060c62`, #578 `17780aa01cc28c12dbf322379a33074b7ce3becc`, #564 `cd9f67be709bb01bb03cdd174242d7904eae327d`, #521 `599a71402504f8f07a602eddd8a01c7135e0f91a`, #511 `d412c7321008a88cc95f8b2c56713a2aef9c5843` with real merge bases and immutable local refs.
+  - Prepared exact diffs, source/intents, criteria discovery and scope-helper results, plus faithful detached verification worktrees. Preserved the original dirty checkout, active applications and chosen model/effort/access. Reviews remain report-only; no code fix or remote review/comment/status/issue/merge authority inferred.
+  - Native correctness, adversarial and testing passes are running independently; further contract/schema/UI/reliability/standards/performance/previous-comment passes are queued. Remote-ref scope uses native adversarial coverage; no different provider invoked.
+  - Observed #578 blocker: warnings-as-errors build exits 1 with NU1608 dependency-range violations and CS0200 generated OpenAPI assignments after the 3.11.0 pin. No fresh application DLL exists for a truthful runtime-document check. Other per-head gates and source tracing continue; no final merge verdict yet.
+  - Evidence remains ignored; intended local report is `docs/reviews/2026-10-31-pr-code-review.md`. Publish this journal only. The current primary application tree matches the already-verified master snapshot except journal history; preserve concurrent entries.
+
 - 2026-11-01 02:19Z - Owner requested fixes to PRs #580/#564/#521/#511. Applying native GSD debug in isolated detached worktrees; original dirty checkout preserved. Pinned #580 at a2a474377b2fd2c461fcb212a77e4a6c78c6db57, #564 cd9f67be709bb01bb03cdd174242d7904eae327d, #521 599a71402504f8f07a602eddd8a01c7135e0f91a and #511 d412c7321008a88cc95f8b2c56713a2aef9c5843. Independent workers own older-PR integration; parent owns #580 and all publication. Fresh #580 baseline reproduced the preservation failure; repairs now separate early authored state, retire selected-card handlers, synchronize text bindings, correct warning colors and load feature options independently. Narrow integrated #580 check passed 28 cases; mutation and full/runtime verification remain in progress. #564 integrated base locally with169 focused/371 script/1259 .NET passes; #521 native-context verification found and corrected JSON casing/omitted-terminal-cursor guidance; #511 retained both sides of TestRunnerService and repaired real HTTP callers to carry workflow versions. No readiness or human adoption approval is claimed. Next: complete exact-source gates, fresh review and guarded fast-forward updates to the existing PR branches. Only this journal is published at this checkpoint.
 
 
