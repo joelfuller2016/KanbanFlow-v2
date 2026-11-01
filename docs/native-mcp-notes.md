@@ -155,13 +155,21 @@ the #231 native cutover.
 
 ### 1. Protocol-version negotiation (#3)
 
-- **Wrapper:** advertises a **hardcoded** `protocolVersion` of `2024-11-05` in its `initialize`
-  result and does not negotiate against the client's requested version. On the HTTP hop to the
-  native server it sends a fixed `MCP-Protocol-Version: 2025-06-18` header (`nativeProtocolVersion`).
+- **Wrapper:** negotiates against a 2-entry allowlist (`SUPPORTED_PROTOCOL_VERSIONS` =
+  `2025-06-18`, `2024-11-05` — `mcp-server.mjs:25`, `negotiateProtocolVersion` at `:33-39`): it
+  echoes the client's requested revision when that revision is in the list, else falls back to the
+  newest one it supports. This is narrower than full negotiation — a client asking for a revision
+  outside those two gets the fallback, not a match — but it is not the unconditional hardcode this
+  section previously claimed. On the separate HTTP hop to the native server it sends a fixed
+  `MCP-Protocol-Version: 2025-06-18` header (`nativeProtocolVersion`), deliberately pinned rather
+  than negotiated — see the comment at `mcp-server.mjs:12-19` for why the two hops are versioned
+  independently.
 - **Native:** the `ModelContextProtocol.AspNetCore` SDK performs the standard MCP version
   negotiation during the initialize handshake rather than pinning one revision.
-- **Cutover impact:** clients that today see `2024-11-05` from the wrapper will negotiate a newer
-  revision against the native server — confirm target clients accept the negotiated version.
+- **Cutover impact:** narrower than previously stated — most clients already see a negotiated
+  match from the wrapper today. Only a client requesting a revision outside the 2-entry allowlist
+  would see a different (SDK-negotiated) version after cutover — confirm target clients
+  accept that.
 
 ### 2. Response-shape differences (#5)
 

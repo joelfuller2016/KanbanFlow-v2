@@ -174,6 +174,7 @@ using (var scope = app.Services.CreateScope())
     SchemaPatcher.EnsureMemoryTables(db);
     SchemaPatcher.EnsureMemoryFtsTable(db);
     SchemaPatcher.EnsureExternalWorkItemTables(db);
+    SchemaPatcher.EnsureNestingSchema(db);
     SeedData.Initialize(db);
 }
 

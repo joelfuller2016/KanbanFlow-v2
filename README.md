@@ -851,7 +851,9 @@ dotnet test tests/KanbanFlow.Tests      # 1,079 xUnit tests
 
 ```powershell
 ./scripts/smoke-api.ps1                 # boots its own app on a free loopback port,
-                                        # ~75 HTTP calls including negative paths
+                                        # ~100 HTTP calls including negative paths;
+                                        # pins an offline embedding profile
+                                        # (-UseConfiguredEmbeddings to use yours)
 ```
 
 ```bash

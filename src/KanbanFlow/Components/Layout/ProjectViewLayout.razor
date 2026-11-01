@@ -3,9 +3,16 @@
 @inject IDbContextFactory<AppDbContext> DbFactory
 @inject NavigationManager Nav
 
+<a class="project-skip-link visually-hidden-focusable" href="@BoardSearchHref" data-enhance-nav="false"
+   data-project-skip-target="board-filter-search" data-testid="skip-to-board-search">Skip to board search</a>
+<a class="project-skip-link visually-hidden-focusable" href="@BoardCardsHref" data-enhance-nav="false"
+   data-project-skip-target="kanban-board-heading" data-testid="skip-to-board-cards">Skip to board cards</a>
+
 <NavMenu ProjectName="@projectName" />
 
-@Body
+<main id="project-content" tabindex="-1" aria-label="Project workspace">
+    @Body
+</main>
 
 <div id="blazor-error-ui" data-nosnippet>
     An unhandled error has occurred.
@@ -15,51 +22,55 @@
 
 @code {
     private string? projectName;
+    private string BoardSearchHref => Nav.Uri.Split('#')[0] + "#board-filter-search";
+    private string BoardCardsHref => Nav.Uri.Split('#')[0] + "#kanban-board-heading";
 
-    protected override void OnInitialized()
+    private int loadGeneration;
+    private bool disposed;
+
+    protected override async Task OnInitializedAsync()
     {
         Nav.LocationChanged += OnLocationChanged;
-        LoadProjectName(Nav.Uri);
+        await LoadProjectNameAsync(Nav.Uri);
     }
 
     private void OnLocationChanged(object? sender, Microsoft.AspNetCore.Components.Routing.LocationChangedEventArgs e)
     {
-        LoadProjectName(e.Location);
+        if (!disposed) _ = InvokeAsync(() => LoadProjectNameAsync(e.Location));
     }
 
-    private void LoadProjectName(string uri)
+    private async Task LoadProjectNameAsync(string uri)
     {
-        var relativePath = Nav.ToBaseRelativePath(uri);
-        if (relativePath.StartsWith("project/", StringComparison.OrdinalIgnoreCase))
+        var generation = ++loadGeneration;
+        var relativePath = Nav.ToBaseRelativePath(uri).Split('?', '#')[0];
+        projectName = null;
+        if (!relativePath.StartsWith("project/", StringComparison.OrdinalIgnoreCase)
+            || !int.TryParse(relativePath["project/".Length..], out var id))
         {
-            var idPart = relativePath["project/".Length..];
-            if (int.TryParse(idPart, out var id))
-            {
-                _ = LoadProjectNameAsync(id);
-            }
+            if (!disposed) StateHasChanged();
+            return;
         }
-    }
-
-    private async Task LoadProjectNameAsync(int id)
-    {
         try
         {
-            using var db = await DbFactory.CreateDbContextAsync();
-            var name = await db.Projects
+            await using var db = await DbFactory.CreateDbContextAsync();
+            var name = await db.Projects.AsNoTracking()
                 .Where(p => p.Id == id)
                 .Select(p => p.Name)
                 .FirstOrDefaultAsync();
+            if (disposed || generation != loadGeneration || Nav.Uri != uri) return;
             projectName = name;
             StateHasChanged();
         }
         catch
         {
-            // Silently fail - breadcrumb is non-critical
+            // Breadcrumb is non-critical; the project page owns load errors.
         }
     }
 
     public void Dispose()
     {
+        disposed = true;
+        ++loadGeneration;
         Nav.LocationChanged -= OnLocationChanged;
     }
 }

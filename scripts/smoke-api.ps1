@@ -1,7 +1,10 @@
 param(
     [string]$ProjectPath = "src/KanbanFlow/KanbanFlow.csproj",
     [string]$BaseUrl = "http://127.0.0.1:5124",
-    [int]$StartupTimeoutSeconds = 30
+    [int]$StartupTimeoutSeconds = 30,
+    # Keep this machine's embedding configuration instead of pinning the offline fail-soft profile
+    # (#548). Memory search then waits on whatever provider this machine resolves.
+    [switch]$UseConfiguredEmbeddings
 )
 
 $ErrorActionPreference = "Stop"
@@ -156,14 +159,32 @@ $stdoutPath = Join-Path $runDir "kanbanflow.out.log"
 $stderrPath = Join-Path $runDir "kanbanflow.err.log"
 $dbPath = Join-Path $runDir "kanbanflow.db"
 $previousDbPath = $env:KANBANFLOW_DB_PATH
+# The offline fail-soft embedding profile (#548). Every non-blank memory search embeds its query
+# first, and the default endpoint (localhost:5256, 30 s timeout) spends ~4 s of the 5 s client budget
+# on a refused connect when nothing serves it. Port 9 serves no embeddings, and 250 ms bounds each of
+# the two attempts. ZEROROUTER_URL outranks KANBANFLOW_LLM_URL, so it alone decides the URL.
+$pinnedEmbeddingUrl = "http://127.0.0.1:9/v1"
+$pinnedLlmTimeoutMs = "250"
+$previousZeroRouterUrl = $env:ZEROROUTER_URL
+$previousLlmTimeout = $env:KANBANFLOW_LLM_TIMEOUT_MS
 
 try {
     Write-Host "Building KanbanFlow..."
     dotnet build $resolvedProjectPath --nologo
+    # A failed build leaves the previous DLL in bin/, and `dotnet run --no-build` below would smoke-test it (#558).
+    if ($LASTEXITCODE -ne 0) { throw "dotnet build failed (exit $LASTEXITCODE); refusing to smoke-test a stale build." }
 
     Write-Host "Starting KanbanFlow with a fresh SQLite DB in $runDir..."
     Write-Host "Using API smoke base URL $BaseUrl"
     $env:KANBANFLOW_DB_PATH = $dbPath
+    if (-not $UseConfiguredEmbeddings) {
+        Write-Host "Pinning the offline fail-soft embedding profile: ZEROROUTER_URL=$pinnedEmbeddingUrl KANBANFLOW_LLM_TIMEOUT_MS=$pinnedLlmTimeoutMs"
+        $env:ZEROROUTER_URL = $pinnedEmbeddingUrl
+        $env:KANBANFLOW_LLM_TIMEOUT_MS = $pinnedLlmTimeoutMs
+    }
+    else {
+        Write-Host "Embedding profile not pinned (-UseConfiguredEmbeddings): the app uses this machine's embedding configuration."
+    }
     $appProcess = Start-Process dotnet `
         -ArgumentList @("run", "--no-build", "--no-launch-profile", "--project", $resolvedProjectPath, "--urls", $BaseUrl) `
         -WorkingDirectory $runDir `
@@ -226,6 +247,18 @@ try {
     # file to stat and the three are legitimately null; presence is the contract, value is not.
     foreach ($fact in @("createdAtUtc", "lastWriteUtc", "sizeBytes")) {
         Assert-Truthy ($health.db.PSObject.Properties.Name -contains $fact) "GET /api/admin/health does not report db.$fact."
+    }
+
+    # The memory assertions below prove keyword fallback, not a live provider (#548). embed-ping always
+    # answers 200 and reports the URL the app actually resolved, so it proves this run's embedding pin
+    # reached the app the way db.path above proves the database pin did.
+    if (-not $UseConfiguredEmbeddings) {
+        $embedPing = Invoke-SmokeGet "/api/admin/embed-ping"
+        Write-Host "embed-ping: url=$($embedPing.url) ok=$($embedPing.ok) latencyMs=$($embedPing.latencyMs)"
+        Assert-Truthy ($embedPing.url -eq $pinnedEmbeddingUrl) "GET /api/admin/embed-ping resolved '$($embedPing.url)', not the '$pinnedEmbeddingUrl' this run pinned: the embedding profile was not pinned."
+        Assert-Truthy ($embedPing.ok -eq $false) "GET /api/admin/embed-ping reached an embedding provider at '$($embedPing.url)'; the pinned endpoint must be unreachable."
+        # Catches a lost timeout pin only where a refused loopback connect is slow (Windows); the URL check is platform-independent.
+        Assert-Truthy ($null -ne $embedPing.latencyMs -and $embedPing.latencyMs -lt 1500) "GET /api/admin/embed-ping took '$($embedPing.latencyMs)' ms to fail soft; the pinned $pinnedLlmTimeoutMs ms timeout should bound it well under 1500."
     }
 
     $projectId = $projects[0].id
@@ -550,6 +583,20 @@ finally {
     }
     else {
         $env:KANBANFLOW_DB_PATH = $previousDbPath
+    }
+
+    if ($null -eq $previousZeroRouterUrl) {
+        Remove-Item Env:ZEROROUTER_URL -ErrorAction SilentlyContinue
+    }
+    else {
+        $env:ZEROROUTER_URL = $previousZeroRouterUrl
+    }
+
+    if ($null -eq $previousLlmTimeout) {
+        Remove-Item Env:KANBANFLOW_LLM_TIMEOUT_MS -ErrorAction SilentlyContinue
+    }
+    else {
+        $env:KANBANFLOW_LLM_TIMEOUT_MS = $previousLlmTimeout
     }
 
     if ($appProcess -and -not $appProcess.HasExited) {
