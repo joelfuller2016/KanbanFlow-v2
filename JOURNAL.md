@@ -52,6 +52,16 @@ A review of the repository and a test run on 2026-09-26 filed findings as issues
 
 ## Entries (newest first)
 
+- 2026-11-01 02:26Z (PR #580 — owner pushed 925f2ef; all reviews on new HEAD clean):
+  - Owner pushed 925f2ef as new branch HEAD, implementing additional fixes:
+    - HasAuthoredState guard in RestoreDraft (navigation-only cache no longer triggers conflict).
+    - Canvas gesture descendant scan refactored to O(n) with one DOM query and iterative BFS.
+    - Guarded async detail reads, delivery feature choices, canvas gesture lifecycle, and more.
+  - All previously-deferred findings (including Major authored-edit preservation) now fixed and resolved by CodeRabbit.
+  - Codex code review on 925f2ef: has_any_findings:false, has_unresolved_findings:false ('Didn't find any major issues. Bravo.').
+  - Codex security review on 925f2ef: has_any_findings:null (no findings).
+  - All PR #580 review threads resolved. PR is ready for owner merge.
+
 - 2026-11-01 02:26Z (Codex complete PR code review — scope and first verification checkpoint):
   - Request: complete code reviews of all five PRs previously inventoried, including the manifest-only dependency update. Pinned #580 `a6121dd77f0bc5e83733649f12ec4949a4060c62`, #578 `17780aa01cc28c12dbf322379a33074b7ce3becc`, #564 `cd9f67be709bb01bb03cdd174242d7904eae327d`, #521 `599a71402504f8f07a602eddd8a01c7135e0f91a`, #511 `d412c7321008a88cc95f8b2c56713a2aef9c5843` with real merge bases and immutable local refs.
   - Prepared exact diffs, source/intents, criteria discovery and scope-helper results, plus faithful detached verification worktrees. Preserved the original dirty checkout, active applications and chosen model/effort/access. Reviews remain report-only; no code fix or remote review/comment/status/issue/merge authority inferred.
