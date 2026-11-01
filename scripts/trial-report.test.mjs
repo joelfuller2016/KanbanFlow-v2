@@ -3279,7 +3279,7 @@ test("a deleted logged cwd does not poison valid clone probes or a trusted measu
 });
 
 test("a missing Git binary in an existing cwd remains a compatibility failure", () => {
-  const { a, make, cleanup } = buildCloneFixture();
+  const { a, b, make, cleanup } = buildCloneFixture();
   try {
     assert.equal(real(gitOutput(["rev-parse", "--show-toplevel"], a)), real(a));
     const env = scrubGitEnv(process.env);
@@ -3291,6 +3291,90 @@ test("a missing Git binary in an existing cwd remains a compatibility failure", 
       assert.equal(error.cause?.code, "ENOENT");
       return true;
     });
+    const log = path.join(make(), "usage.jsonl");
+    fs.writeFileSync(log, JSON.stringify(row({ cwd: b })) + "\n");
+    const child = spawnSync(process.execPath, [path.join(HERE, "trial-report.mjs"), "--repo-root", a, "--json"], {
+      cwd: a, encoding: "utf8", windowsHide: true, timeout: 30_000,
+      env: { ...env, KANBANFLOW_USAGE_LOG: log, KANBANFLOW_API_URL: "http://127.0.0.1:1" }
+    });
+    assert.equal(child.status, 1, child.stderr);
+    const summary = JSON.parse(child.stdout);
+    assert.equal(find(summary, 4).verdict, "UNMEASURED");
+    assert.equal(summary.sources.cloneProbe, null);
+    assert.equal((child.stderr.match(/Git 2\.39 or newer is required/g) ?? []).length, 1);
+  } finally { cleanup(); }
+});
+
+function versionFailurePreload(dir, failCwd, failure, trace) {
+  const preload = path.join(dir, "version-failure.cjs");
+  fs.writeFileSync(preload, [
+    'const fs = require("node:fs"), path = require("node:path"), cp = require("node:child_process"), original = cp.execFileSync;',
+    'cp.execFileSync = function (file, args, options) {',
+    `  if (file === "git") fs.appendFileSync(${JSON.stringify(trace)}, JSON.stringify({ args, cwd: options.cwd }) + "\\n");`,
+    `  if (file === "git" && args[0] === "--version" && path.resolve(options.cwd) === ${JSON.stringify(path.resolve(failCwd))})`,
+    `    throw Object.assign(new Error("controlled native version failure"), ${JSON.stringify(failure)});`,
+    '  return original.apply(this, arguments);',
+    '};',
+    'require("node:module").syncBuiltinESMExports();'
+  ].join("\n"));
+  return preload;
+}
+
+test("candidate version failures stay local for recorded and resolved working directories", () => {
+  const { a, b, d, make, cleanup } = buildCloneFixture();
+  const dir = make(), log = path.join(dir, "usage.jsonl"), trace = path.join(dir, "trace.jsonl");
+  const subdir = path.join(b, "recorded-subdir");
+  fs.mkdirSync(subdir);
+  try {
+    for (const failure of [{ code: "ETIMEDOUT", signal: "SIGTERM" }, { code: "EACCES" }, { code: "EPERM" }, { signal: "SIGTERM", status: null }]) {
+      for (const failedCwd of [real(subdir), real(b)]) {
+        const orders = failure.code === "ETIMEDOUT" && failedCwd === real(b) ? [[subdir, d], [d, subdir]] : [[subdir, d]];
+        for (const order of orders) {
+          fs.writeFileSync(trace, "");
+          fs.writeFileSync(log, order.map((cwd, index) => JSON.stringify(row({ cwd, session: cwd,
+            ts: `2026-11-01T00:00:0${2 - index}Z` }))).join("\n") + "\n");
+          const preload = versionFailurePreload(dir, failedCwd, failure, trace);
+          const child = runCliJson(log, a, [], ["--require", preload]);
+          assert.equal(child.status, 1, child.stderr);
+          const summary = JSON.parse(child.stdout);
+          assert.equal(find(summary, 4).verdict, "ADOPT", "one candidate failure cannot make the trusted boundary globally unavailable");
+          assert.equal(summary.sources.cloneProbe.probed, 2);
+          assert.deepEqual(find(summary, 4).detail.flatMap(detail => detail.cwds), [subdir], "the failed candidate stays outside and the healthy one is folded");
+          assert.match(child.stderr, /1 of 2 outside cwd\(s\) confirmed/);
+          assert.doesNotMatch(child.stderr, /Git 2\.39 or newer is required/);
+          const calls = fs.readFileSync(trace, "utf8").trim().split("\n").map(line => JSON.parse(line));
+          assert.ok(calls.some(call => path.resolve(call.cwd) === failedCwd && call.args[0] === "--version"), "the selected failure must actually be reached");
+          assert.ok(calls.some(call => path.resolve(call.cwd) === path.resolve(d) && call.args[0] === "rev-parse"), "healthy commands still delegate to the installed Git");
+        }
+      }
+    }
+  } finally { cleanup(); }
+});
+
+test("reference version failures disable the report with and without an explicit root", () => {
+  const { a, b, make, cleanup } = buildCloneFixture();
+  const dir = make(), log = path.join(dir, "usage.jsonl"), trace = path.join(dir, "trace.jsonl");
+  try {
+    fs.writeFileSync(log, JSON.stringify(row({ cwd: b })) + "\n");
+    for (const failure of [{ code: "ETIMEDOUT", signal: "SIGTERM" }, { code: "EACCES" }, { code: "EPERM" }, { signal: "SIGTERM", status: null }]) {
+      for (const explicit of failure.code === "ETIMEDOUT" ? [true, false] : [true]) {
+        fs.writeFileSync(trace, "");
+        const preload = versionFailurePreload(dir, explicit ? a : HERE, failure, trace);
+        const child = spawnSync(process.execPath, ["--require", preload, path.join(HERE, "trial-report.mjs"),
+          ...(explicit ? ["--repo-root", a] : []), "--json"], {
+          cwd: a, encoding: "utf8", windowsHide: true, timeout: 30_000,
+          env: { ...scrubGitEnv(process.env), KANBANFLOW_USAGE_LOG: log, KANBANFLOW_API_URL: "http://127.0.0.1:1" }
+        });
+        assert.equal(child.status, 1, child.stderr);
+        const summary = JSON.parse(child.stdout);
+        assert.equal(find(summary, 4).verdict, "UNMEASURED");
+        assert.equal(summary.sources.cloneProbe, null);
+        const calls = fs.readFileSync(trace, "utf8").trim().split("\n").map(line => JSON.parse(line));
+        assert.equal(calls.length, 1, "reference unavailability latches before later source or candidate commands");
+        assert.deepEqual(calls[0].args, ["--version"]);
+        assert.doesNotMatch(child.stderr, /folded into signal 4/);
+      }
+    }
   } finally { cleanup(); }
 });
 
