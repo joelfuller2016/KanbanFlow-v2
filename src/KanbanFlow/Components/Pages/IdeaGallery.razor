@@ -1,0 +1,31 @@
+@page "/ideas"
+@rendermode InteractiveServer
+@inject IIdeaWorkspaceService Workspaces
+@inject NavigationManager Navigation
+
+<PageTitle>Idea workspaces - KanbanFlow</PageTitle>
+<section data-testid="workspace-gallery" data-ready="@(interactiveReady ? "true" : "false")">
+    <div class="d-flex flex-wrap align-items-start justify-content-between gap-3 mb-4">
+        <div><h1>Idea workspaces</h1><p class="text-muted mb-0">A home for ideas and projects. Open a card to explore, connect, and develop its plan.</p></div>
+        <div class="d-flex flex-wrap gap-2">
+            <a href="/ideas/board" class="btn btn-outline-secondary" data-testid="workspace-board-link">Status board</a>
+            <button class="btn btn-primary" @onclick="() => showCreate = !showCreate" data-testid="workspace-create-toggle">New idea</button>
+        </div>
+    </div>
+    @if (error is not null) { <div class="alert alert-danger" role="alert" data-testid="workspace-gallery-error">@error <button class="btn btn-link" @onclick="Reload">Try again</button></div> }
+    <div hidden="@(!showCreate)"><WorkspaceCreateForm OnCreate="Create" Busy="busy" /></div>
+    <form class="row g-2 mb-4" @onsubmit="Reload" @onsubmit:preventDefault>
+        <div class="col-12 col-md-6"><label for="workspace-search" class="form-label">Search ideas, projects and developed content</label><input id="workspace-search" type="search" class="form-control" @bind="query" data-testid="workspace-search" /></div>
+        <div class="col-6 col-md-2"><label for="workspace-kind" class="form-label">Kind</label><select id="workspace-kind" class="form-select" @bind="kind" data-testid="workspace-kind"><option value="">All</option><option value="idea">Ideas</option><option value="project">Projects</option><option value="linked">Linked ideas</option></select></div>
+        <div class="col-6 col-md-2"><label for="workspace-status" class="form-label">Status</label><select id="workspace-status" class="form-select" @bind="status" data-testid="workspace-status"><option value="">All</option>@foreach (var value in Enum.GetNames<IdeaStatus>()) { <option value="@value">@value</option> }</select></div>
+        <div class="col-12 col-md-2 d-flex align-items-end"><button type="submit" class="btn btn-outline-primary w-100" disabled="@busy" data-testid="workspace-search-submit">Find workspaces</button></div>
+    </form>
+    @if (page is null && error is null) { <p role="status">Loading workspaces…</p> }
+    else if (page is not null)
+    {
+        <p class="text-muted" role="status" data-testid="workspace-total">@(page.Total) workspaces · @items.Count shown</p>
+        @if (items.Count == 0) { <p>No workspaces match these filters. Create an idea or change the search.</p> }
+        <div class="row g-3">@foreach (var item in items) { <div class="col-12 col-md-6 col-xl-4" @key="item.WorkspaceId"><WorkspaceCard Workspace="item" /></div> }</div>
+        @if (page.NextCursor is not null) { <button class="btn btn-outline-primary mt-4" disabled="@busy" @onclick="More" data-testid="workspace-load-more">Load more</button> }
+    }
+</section>

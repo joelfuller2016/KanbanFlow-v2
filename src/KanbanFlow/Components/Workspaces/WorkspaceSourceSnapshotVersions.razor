@@ -1,0 +1,19 @@
+@if (Snapshots.Count != 0)
+{
+    <section class="border-top pt-3 mt-3" data-testid="workspace-source-history">
+        <h3 class="h6">@Heading</h3>
+        <p class="text-muted small">These versions were observed during successful workspace writes. External edits made after the last capture are available only while their source still exists.</p>
+        @foreach (var snapshot in Snapshots.OrderByDescending(s => s.CapturedAt))
+        {
+            <article @key="snapshot.Id" class="mb-3" data-testid="workspace-source-snapshot-@snapshot.Id">
+                <p class="small text-muted mb-1">Captured by @snapshot.Actor at @snapshot.CapturedAt.ToLocalTime().ToString("g")</p>
+                <WorkspaceSourceDocument Source="snapshot.Source" Label="Captured full source" />
+            </article>
+        }
+    </section>
+}
+
+@code {
+    [Parameter, EditorRequired] public IReadOnlyList<IdeaWorkspaceSourceSnapshot> Snapshots { get; set; } = [];
+    [Parameter] public string Heading { get; set; } = "Captured source versions";
+}

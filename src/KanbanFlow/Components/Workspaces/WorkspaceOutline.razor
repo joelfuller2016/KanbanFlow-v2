@@ -1,0 +1,28 @@
+<section class="workspace-panel" aria-labelledby="workspace-outline-heading" data-testid="workspace-outline">
+    <h2 id="workspace-outline-heading" class="h5">Components</h2>
+    <p class="text-muted small">Every content card is listed, including cards with no canvas placement.</p>
+    <ul class="list-unstyled mb-0">
+        @foreach (var component in OrderedComponents)
+        {
+            <li @key="component.Id" class="mb-2">
+                <button class="btn text-start w-100 @(component.Id == SelectedComponentId ? "btn-primary" : "btn-outline-secondary")"
+                        @onclick="() => OnSelect.InvokeAsync(new(component.Id, Document.Placements.FirstOrDefault(p => p.ComponentId == component.Id)?.Id))"
+                        data-testid="outline-component-@component.Id" aria-pressed="@(component.Id == SelectedComponentId ? "true" : "false")">
+                    <span class="d-block">@component.Title @(DirtyIds.Contains(component.Id) ? "• draft" : "")</span>
+                    <span class="small">@component.Type · @Document.Placements.Count(p => p.ComponentId == component.Id) placements</span>
+                </button>
+            </li>
+        }
+    </ul>
+    @if (Document.Components.Count == 0) { <p>No components yet. Add a card to begin.</p> }
+</section>
+
+@code {
+    [Parameter, EditorRequired] public IdeaWorkspaceDocument Document { get; set; } = default!;
+    [Parameter] public string? SelectedComponentId { get; set; }
+    [Parameter] public IReadOnlySet<string> DirtyIds { get; set; } = new HashSet<string>();
+    [Parameter] public EventCallback<WorkspaceSelection> OnSelect { get; set; }
+    private IEnumerable<IdeaWorkspaceComponent> OrderedComponents => Document.Components
+        .OrderBy(c => Document.Placements.Where(p => p.ComponentId == c.Id).Select(p => p.Order).DefaultIfEmpty(int.MaxValue).Min())
+        .ThenBy(c => c.Title, StringComparer.Ordinal);
+}
