@@ -40,7 +40,7 @@ class CanvasController {
             x: Number(card.dataset.localX), y: Number(card.dataset.localY), width: Number(card.dataset.width), height: Number(card.dataset.height),
             resize: handle.classList.contains('workspace-resize-handle'), workspaceId: this.#root.dataset.workspaceId, revision: Number(this.#root.dataset.revision), dx: 0, dy: 0 };
         handle.setPointerCapture(event.pointerId);
-        handle.addEventListener('lostpointercapture', () => { if (this.#gesture) this.#reset(); }, { signal: this.#abort.signal });
+        handle.addEventListener('lostpointercapture', () => { if (this.#gesture) this.#reset(); }, { once: true, signal: this.#abort.signal });
         event.preventDefault();
         handle.focus?.({ preventScroll: true });
     }
