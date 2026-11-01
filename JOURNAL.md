@@ -52,6 +52,12 @@ A review of the repository and a test run on 2026-09-26 filed findings as issues
 
 ## Entries (newest first)
 
+- 2026-11-01 01:45Z (PR #580 — Codex P2 provenance fix on 5cf4438):
+  - Codex P2 finding: WorkspacePlanPanel.razor:72 — Reapply() did not clear foreign-project provenance from plan items after a workspace relink; ValidateProposedIdentity rejected saves with forged_provenance.
+  - Fix: 62e8cf7 — applied same pattern as ConfirmCopy() (line 93): null provenance when its ProjectId ≠ Context.ProjectId.
+  - 0 unresolved threads (50 total). Awaiting Codex code+security reviews on 5cf4438 and 62e8cf7.
+  - Next: resolve any new automated findings on 62e8cf7; notify owner when PR is clean.
+
 - 2026-11-01 01:30Z (PR #580 — CodeRabbit finding fixed, 0 unresolved threads, 50 total):
   - CodeRabbit Minor docs/idea-workspaces.md:117 fix: 5cf4438 — replaced "The current local checkpoint" with "At the T06 checkpoint," and "Current discovery" with "Discovery at this checkpoint" to scope T06 counts (1,437 .NET / 339 script) distinctly from the final gate (1,565 / 362). Thread PRRT_kwDOSA8y6s6yWGAK resolved.
   - All 50 review threads resolved (0 unresolved). No pending automated reviews outstanding.
