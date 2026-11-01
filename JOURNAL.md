@@ -52,6 +52,15 @@ A review of the repository and a test run on 2026-09-26 filed findings as issues
 
 ## Entries (newest first)
 
+- 2026-11-01 01:51Z (Codex repository review — pinned master and unattended reliability):
+  - Request: review KanbanFlow GitHub repository. Reviewed `master` at `878fe8ddb3fe21410b7acde735bc29cda4639946` in an isolated worktree; preserved the dirty original branch and running user applications. Review-only scope; no application fix, live-board mutation, PR change, issue/comment/status write or merge.
+  - Source-backed findings: CI reuse lacks exact root/origin validation before destructive checkout/clean; overlapping PR checks share a mutable clone; existing #561 can purge real non-project audit events; existing #533 accepts another served database. Read-only Git discovery control confirmed ancestor resolution; destructive/race scenarios were not executed.
+  - Observed verification: PowerShell 7.6.5/.NET SDK 10.0.403; existing verify gate exit 0, build 0 warnings/errors, 1,259 .NET tests passed with none failed/skipped; 329 script tests passed with none failed/skipped. Isolated API smoke passed on its own SQLite database/free port/offline embedding profile; task-created processes, port and smoke directory cleaned up. Formatter drift remained advisory.
+  - Delivery: local `docs/reviews/2026-10-31-repository-review.md` and README index; GSD/Codex reuse candidates and explicit coverage gaps included. Static counts 72 REST registrations, 29 native MCP declarations, 51 wrapper tool declarations and 6 routes differ from README. Master results do not validate PR #580 or supply owner UI acceptance.
+  - Validation/lesson: 16 local report links resolve, raw evidence is ignored, recorded pins agree, cleanup assertions and diff checks pass; two bounded final reviews found no material report correction. Extract GitHub metadata before reading selected discussion bodies to avoid oversized irrelevant payloads. Do not infer visible consoles from missing flags or complete audit ownership from timestamps.
+  - Publication: only this journal entry is staged. Fetched current master and verified the reviewed application/source tree is unchanged except journal history, preserving concurrent entries. No external reviewer/provider invoked. Next: scope the four reliability fixes separately and validate each PR on its actual current head.
+
+
 - 2026-11-01 01:52Z (PR #580 — Codex code and security reviews on b1e61c3 both completed clean; PR ready to merge):
   - Codex code review on b1e61c3: status=completed, has_any_findings=true (prior findings), has_unresolved_findings=false. All previous findings resolved.
   - Codex security review on b1e61c3: status=completed, has_any_findings=null (no findings). Clean.
