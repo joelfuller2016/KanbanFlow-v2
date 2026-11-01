@@ -118,6 +118,11 @@ public class AppDbContext : DbContext
             e.HasIndex(m => new { m.Scope, m.ScopeKey, m.Type });
             // Walk the supersession chain / find replaced versions.
             e.HasIndex(m => m.SupersededById);
+            // Page current project context directly in chronological order without a sort.
+            e.HasIndex(m => new { m.Scope, m.ScopeKey, m.CreatedAt, m.Id })
+                .HasDatabaseName("IX_MemoryNodes_CurrentProjectContext")
+                .IsDescending(false, false, true, true)
+                .HasFilter("ValidTo IS NULL AND SupersededById IS NULL");
         });
 
         modelBuilder.Entity<Observation>(e =>

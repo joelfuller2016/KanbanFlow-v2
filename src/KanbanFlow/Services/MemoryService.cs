@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text.Json;
 using KanbanFlow.Data;
 using KanbanFlow.Models;
@@ -71,9 +72,13 @@ public sealed class MemoryService(IDbContextFactory<AppDbContext> dbFactory) : I
             throw new ValidationException($"Invalid memory type '{dto.Type}'.");
         if (!Enum.IsDefined(dto.Scope))
             throw new ValidationException($"Invalid memory scope '{dto.Scope}'.");
-        if (dto.Scope == MemoryScope.Project
-            && (!int.TryParse(dto.ScopeKey.Trim(), out var projectId) || projectId <= 0))
-            throw new ValidationException("Project-scoped memories require a positive integer project id as ScopeKey.");
+        var scopeKey = dto.ScopeKey.Trim();
+        if (dto.Scope == MemoryScope.Project)
+        {
+            if (!int.TryParse(scopeKey, out var projectId) || projectId <= 0)
+                throw new ValidationException("Project-scoped memories require a positive integer project id as ScopeKey.");
+            scopeKey = projectId.ToString(CultureInfo.InvariantCulture);
+        }
 
         await using var db = await dbFactory.CreateDbContextAsync(ct);
 
@@ -82,7 +87,7 @@ public sealed class MemoryService(IDbContextFactory<AppDbContext> dbFactory) : I
         {
             Type = dto.Type,
             Scope = dto.Scope,
-            ScopeKey = dto.ScopeKey.Trim(),
+            ScopeKey = scopeKey,
             Content = dto.Content.Trim(),
             Tags = Normalize(dto.Tags),
             Source = Normalize(dto.Source),
@@ -113,6 +118,42 @@ public sealed class MemoryService(IDbContextFactory<AppDbContext> dbFactory) : I
         return node;
     }
 
+    /// <summary>Startup repair, enlisted in the schema patcher's transaction and existing memory audit boundary.</summary>
+    internal static void NormalizeProjectScopeKeys(AppDbContext db)
+    {
+        if (db.Database.CurrentTransaction is null)
+            throw new InvalidOperationException("Project memory scope-key normalization requires an existing transaction.");
+
+        // Parse exactly as the write boundary does. SQLite CAST accepts malformed numeric prefixes.
+        // Inspect only distinct keys on repeat startups; load complete nodes only when they need repair.
+        var replacements = new Dictionary<string, string>(StringComparer.Ordinal);
+        var keys = db.MemoryNodes.AsNoTracking().Where(n => n.Scope == MemoryScope.Project)
+            .Select(n => n.ScopeKey).Distinct().ToList();
+        foreach (var key in keys)
+        {
+            if (!int.TryParse(key.Trim(), out var projectId) || projectId <= 0)
+                continue;
+            var canonical = projectId.ToString(CultureInfo.InvariantCulture);
+            if (key != canonical)
+                replacements.Add(key, canonical);
+        }
+        if (replacements.Count == 0)
+            return;
+
+        var oldKeys = replacements.Keys.ToArray();
+        var nodes = db.MemoryNodes.Where(n => n.Scope == MemoryScope.Project && oldKeys.Contains(n.ScopeKey)).ToList();
+        var before = nodes.ToDictionary(n => n.Id, MemoryActivitySnapshot);
+        foreach (var node in nodes)
+            node.ScopeKey = replacements[node.ScopeKey];
+        db.SaveChanges();
+
+        foreach (var node in nodes)
+            AddActivityEvent(db, MemoryProjectId(node), "MemoryNode", node.Id, "schema-patcher",
+                "MemoryScopeKeyNormalized", before[node.Id], MemoryActivitySnapshot(node),
+                $"Memory node {node.Id} project scope key normalized");
+        db.SaveChanges();
+    }
+
     public async Task<MemoryNode?> GetNodeAsync(int id, CancellationToken ct = default)
     {
         await using var db = await dbFactory.CreateDbContextAsync(ct);
@@ -139,7 +180,7 @@ public sealed class MemoryService(IDbContextFactory<AppDbContext> dbFactory) : I
             query = query.Where(m => m.Scope == scope);
         if (!string.IsNullOrWhiteSpace(scopeKey))
         {
-            var key = scopeKey.Trim();
+            var key = NormalizeScopeKey(scope, scopeKey.Trim());
             query = query.Where(m => m.ScopeKey == key);
         }
         if (type is not null)
@@ -431,7 +472,7 @@ public sealed class MemoryService(IDbContextFactory<AppDbContext> dbFactory) : I
             throw new ValidationException($"Invalid memory scope '{scope}'.");
         if (string.IsNullOrWhiteSpace(scopeKey))
             throw new ValidationException("ScopeKey cannot be empty or whitespace.");
-        var key = scopeKey.Trim();
+        var key = NormalizeScopeKey(scope, scopeKey.Trim());
 
         await using var db = await dbFactory.CreateDbContextAsync(ct);
 
@@ -627,6 +668,12 @@ public sealed class MemoryService(IDbContextFactory<AppDbContext> dbFactory) : I
     /// <summary>Trim to null: blank strings become <c>null</c> for clean storage.</summary>
     private static string? Normalize(string? value) =>
         string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+
+    /// <summary>Numeric project aliases share an identity; other scopes and malformed legacy keys remain exact.</summary>
+    internal static string NormalizeScopeKey(MemoryScope? scope, string key) =>
+        scope == MemoryScope.Project && int.TryParse(key, out var projectId) && projectId > 0
+            ? projectId.ToString(CultureInfo.InvariantCulture)
+            : key;
 
     /// <summary>
     /// Audit attribution for a memory event. When the node is project-scoped and its

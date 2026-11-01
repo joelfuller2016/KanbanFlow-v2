@@ -21,7 +21,7 @@ public interface IMemoryService
 {
     /// <summary>
     /// Create a new, currently-valid memory node. Validates content (non-empty) and the
-    /// type/scope enums. Emits a <c>MemoryCreated</c> event.
+    /// type/scope enums, and canonicalizes numeric project scope keys. Emits a <c>MemoryCreated</c> event.
     /// </summary>
     /// <exception cref="ValidationException">Content empty/whitespace, or type/scope undefined.</exception>
     Task<MemoryNode> CreateNodeAsync(MemoryNodeCreate dto, string? actor, CancellationToken ct = default);
@@ -34,7 +34,8 @@ public interface IMemoryService
     Task<MemoryNode?> GetNodeAsync(int id, CancellationToken ct = default);
 
     /// <summary>
-    /// List nodes newest-first with optional filters. <paramref name="scopeKey"/> is an exact match.
+    /// List nodes newest-first with optional filters. <paramref name="scopeKey"/> is an exact match,
+    /// except numeric aliases are canonicalized when <paramref name="scope"/> is <see cref="MemoryScope.Project"/>.
     /// When <paramref name="includeSuperseded"/> is <c>false</c> (default), retired versions are
     /// excluded (any row with <see cref="MemoryNode.ValidTo"/> set OR
     /// <see cref="MemoryNode.SupersededById"/> set).

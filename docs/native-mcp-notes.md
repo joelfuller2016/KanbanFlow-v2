@@ -184,7 +184,10 @@ the #231 native cutover.
   - *Wrapper* returns the REST `/context` payload (deeply nested: metadata + summary counts +
     requirements + nested features → tasks → subtasks → comments).
   - *Native* returns a flatter `ProjectContext` (project docs + all features with `parentFeatureId`
-    + a flat task list).
+    + a flat task list), including current project `memory` in pages of up to 200 complete nodes.
+    While `memoryTruncated` is true, pass `memoryNextCursor` as `memoryCursor` on the next call
+    for the same project. The final page omits the cursor. See [project memory ownership](MEMORY_OWNERSHIP.md)
+    for the native endpoint, provenance and continuation contract.
 - **Cutover impact:** any client parsing `recommendations`/`blockedTasks`, or walking the deep
   context tree, must adapt to the native flat shapes (or the native tools must be reshaped to match).
 
