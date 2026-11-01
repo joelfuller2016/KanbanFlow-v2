@@ -20,6 +20,7 @@ public partial class WorkspaceDeliveryPanel : IDisposable
     [Parameter] public EventCallback OnPublish { get; set; }
     [Parameter] public EventCallback<WorkspaceUiCommand> OnCommand { get; set; }
     private readonly WorkspaceDraftInput<WorkspaceDeliveryDraft> input = new(new());
+    private readonly CancellationTokenSource lifetime = new();
     private IReadOnlyList<IdeaWorkspaceFeatureOption> features = [];
     private (string WorkspaceId, int? ProjectId, long? PlanRevision, bool Missing) featureScope;
     private Task? featureRead;
@@ -62,19 +63,21 @@ public partial class WorkspaceDeliveryPanel : IDisposable
     {
         var scope = CurrentFeatureScope;
         if (scope.ProjectId is not { } projectId || scope.Missing || disposed) return;
+        var cancellationToken = lifetime.Token;
         var sequence = ++featureReadSequence;
         featuresBusy = true;
         featuresError = null;
         try
         {
-            await using var db = await DbFactory.CreateDbContextAsync();
+            await using var db = await DbFactory.CreateDbContextAsync(cancellationToken);
             var loaded = await db.Features.AsNoTracking().Where(feature => feature.ProjectId == projectId)
                 .OrderBy(feature => feature.Name).ThenBy(feature => feature.Id)
-                .Select(feature => new IdeaWorkspaceFeatureOption(feature.Id, feature.Name)).ToListAsync();
+                .Select(feature => new IdeaWorkspaceFeatureOption(feature.Id, feature.Name)).ToListAsync(cancellationToken);
             if (!FeatureReadIsCurrent(scope, sequence)) return;
             features = loaded;
             featuresLoaded = true;
         }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { }
         catch (Exception)
         {
             if (FeatureReadIsCurrent(scope, sequence))
@@ -84,7 +87,12 @@ public partial class WorkspaceDeliveryPanel : IDisposable
     }
     private bool FeatureReadIsCurrent((string WorkspaceId, int? ProjectId, long? PlanRevision, bool Missing) scope, long sequence)
         => !disposed && sequence == featureReadSequence && scope == CurrentFeatureScope;
-    public void Dispose() { disposed = true; featureReadSequence++; }
+    public void Dispose()
+    {
+        if (disposed) return;
+        disposed = true; featureReadSequence++;
+        lifetime.Cancel(); lifetime.Dispose();
+    }
     private Task Change(WorkspaceDeliveryDraft value) => input.ChangeAsync(value, OnDraftChanged);
     private Task TargetChanged(ChangeEventArgs e) => Change(editing with { TargetProjectId = int.TryParse(e.Value?.ToString(), out var id) ? id : null });
     private Task ProjectNameChanged(ChangeEventArgs e) => Change(editing with { ProjectName = e.Value?.ToString() ?? "" });

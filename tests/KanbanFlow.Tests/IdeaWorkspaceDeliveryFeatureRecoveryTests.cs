@@ -1,3 +1,4 @@
+using System.Data.Common;
 using System.Reflection;
 using System.Text.Json;
 using KanbanFlow.Components.Workspaces;
@@ -6,6 +7,7 @@ using KanbanFlow.Models;
 using KanbanFlow.Services.IdeaWorkspaces;
 using Microsoft.AspNetCore.Components;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Diagnostics;
 
 namespace KanbanFlow.Tests;
 
@@ -100,34 +102,55 @@ public sealed class IdeaWorkspaceDeliveryFeatureRecoveryTests
     {
         using var factory = new SqliteTestFactory();
         var (a, _, first, _) = await SeedChoices(factory);
-        var held = new HeldFactory(factory) { FailNext = true };
-        using var panel = Panel(held, Context(a.Id));
-        var original = Editing(panel);
+        foreach (var failure in new Exception[] { new IOException("Feature read failed."), new OperationCanceledException("Unrelated cancellation.") })
+        {
+            var held = new HeldFactory(factory) { FailNext = true, Failure = failure };
+            using var panel = Panel(held, Context(a.Id));
+            var original = Editing(panel);
 
-        await Call(panel, "OnParametersSetAsync");
-        Assert.Empty(Features(panel)); Assert.NotNull(Field<string?>(panel, "featuresError"));
-        await Call(panel, "ReloadFeatures");
+            await Call(panel, "OnParametersSetAsync");
+            Assert.Empty(Features(panel));
+            Assert.Equal("Project feature choices could not be loaded. Reload the choices to retry.", Field<string?>(panel, "featuresError"));
+            await Call(panel, "ReloadFeatures");
 
-        Assert.Equal([first.Id], Features(panel).Select(value => value.Id));
-        Assert.Null(Field<string?>(panel, "featuresError"));
-        Assert.Same(original, Editing(panel)); Assert.Null(panel.Preview);
+            Assert.Equal([first.Id], Features(panel).Select(value => value.Id));
+            Assert.Null(Field<string?>(panel, "featuresError"));
+            Assert.Same(original, Editing(panel)); Assert.Null(panel.Preview);
+        }
     }
 
     [Fact]
-    public async Task DisposingDuringFeatureRead_RejectsLateChoicesAndErrors()
+    public async Task DisposingDuringFeatureRead_CancelsFactoryAndQuery_AndRejectsLateChoicesAndErrors()
     {
         using var factory = new SqliteTestFactory();
         var (a, _, _, _) = await SeedChoices(factory);
-        var held = new HeldFactory(factory) { HoldNext = true };
-        var panel = Panel(held, Context(a.Id));
-        var reading = Call(panel, "OnParametersSetAsync");
-        try
+        foreach (var stage in new[] { "factory", "query", "late failure" })
         {
-            await held.Entered.Task.WaitAsync(Deadline); panel.Dispose();
-            held.Failure = new IOException("Disposed read failed."); held.Release.TrySetResult(); await reading.WaitAsync(Deadline);
-            Assert.Empty(Features(panel)); Assert.Null(Field<string?>(panel, "featuresError"));
+            var query = stage == "query" ? new HeldFeatureQuery() : null;
+            var held = new HeldFactory(factory) { HoldNext = query is null, IgnoreCancellation = stage == "late failure", QueryInterceptor = query };
+            var panel = Panel(held, Context(a.Id));
+            var reading = Call(panel, "OnParametersSetAsync");
+            try
+            {
+                await (query?.Entered.Task ?? held.Entered.Task).WaitAsync(Deadline);
+                var cancellationToken = held.CreationToken;
+                Assert.True(cancellationToken.CanBeCanceled);
+                if (query is not null) Assert.Equal(cancellationToken, query.Token);
+                panel.Dispose(); panel.Dispose();
+                Assert.True(cancellationToken.IsCancellationRequested);
+                if (stage == "late failure")
+                {
+                    held.Failure = new IOException("Disposed read failed."); held.Release.TrySetResult();
+                }
+                await reading.WaitAsync(Deadline);
+                Assert.Empty(Features(panel)); Assert.Null(Field<string?>(panel, "featuresError"));
+            }
+            finally
+            {
+                held.Release.TrySetResult(); query?.Release.TrySetResult();
+                await reading.WaitAsync(Deadline); panel.Dispose();
+            }
         }
-        finally { held.Release.TrySetResult(); await reading.WaitAsync(Deadline); panel.Dispose(); }
     }
 
     [Fact]
@@ -230,19 +253,37 @@ public sealed class IdeaWorkspaceDeliveryFeatureRecoveryTests
     {
         public bool HoldNext { get; set; }
         public bool FailNext { get; set; }
+        public bool IgnoreCancellation { get; set; }
+        public DbCommandInterceptor? QueryInterceptor { get; set; }
+        public CancellationToken CreationToken { get; private set; }
         public Exception? Failure { get; set; }
         public TaskCompletionSource Entered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public TaskCompletionSource Release { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public AppDbContext CreateDbContext() => inner.CreateDbContext();
         public async Task<AppDbContext> CreateDbContextAsync(CancellationToken cancellationToken = default)
         {
-            if (FailNext) { FailNext = false; throw new IOException("First feature read failed."); }
+            CreationToken = cancellationToken;
+            if (FailNext) { FailNext = false; throw Failure ?? new IOException("First feature read failed."); }
             if (HoldNext)
             {
-                HoldNext = false; Entered.TrySetResult(); await Release.Task.WaitAsync(cancellationToken);
+                HoldNext = false; Entered.TrySetResult(); await Release.Task.WaitAsync(IgnoreCancellation ? CancellationToken.None : cancellationToken);
                 if (Failure is not null) throw Failure;
             }
-            return inner.CreateDbContext();
+            return QueryInterceptor is null ? inner.CreateDbContext()
+                : new(new DbContextOptionsBuilder<AppDbContext>(inner.Options).AddInterceptors(QueryInterceptor).Options);
+        }
+    }
+    private sealed class HeldFeatureQuery : DbCommandInterceptor
+    {
+        public CancellationToken Token { get; private set; }
+        public TaskCompletionSource Entered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource Release { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public override async ValueTask<InterceptionResult<DbDataReader>> ReaderExecutingAsync(DbCommand command,
+            CommandEventData eventData, InterceptionResult<DbDataReader> result, CancellationToken cancellationToken = default)
+        {
+            Token = cancellationToken; Entered.TrySetResult();
+            await Release.Task.WaitAsync(cancellationToken);
+            return result;
         }
     }
 }
