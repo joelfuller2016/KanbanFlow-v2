@@ -18,12 +18,14 @@ public partial class WorkspaceCanvas
     private ElementReference canvasElement;
     private WorkspaceCanvasInterop? interop;
     private DotNetObjectReference<WorkspaceCanvas>? dotNet;
+    private bool disposed;
     private readonly Dictionary<string, int> effectiveLayers = [];
     private readonly Dictionary<string, IdeaWorkspaceComponent> componentsById = [];
     private readonly Dictionary<string, IdeaWorkspacePlacement> placementsById = [];
     private readonly Dictionary<string, IdeaWorkspacePlacement> firstPlacementByComponentId = [];
     private readonly Dictionary<string, (double X, double Y)> worldPositions = [];
     private IdeaWorkspacePlacement[] orderedPlacements = [];
+    private bool _canvasError;
     private double OriginX { get; set; }
     private double OriginY { get; set; }
     private double CanvasWidth { get; set; }
@@ -97,10 +99,28 @@ public partial class WorkspaceCanvas
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
-        if (!firstRender) return;
+        if (!firstRender || disposed) return;
+        if (!await InitializeCanvasAsync() && !disposed)
+        {
+            _canvasError = true;
+            await InvokeAsync(() => { if (!disposed) StateHasChanged(); });
+        }
+    }
+
+    private async Task<bool> InitializeCanvasAsync()
+    {
         interop = new(JS);
         dotNet = DotNetObjectReference.Create(this);
-        await interop.InitializeAsync(canvasElement, dotNet);
+        try
+        {
+            await interop.InitializeAsync(canvasElement, dotNet);
+            return true;
+        }
+        catch (Exception ex) when (ex is JSDisconnectedException or JSException or OperationCanceledException)
+        {
+            await ReleaseCanvasResources();
+            return false;
+        }
     }
 
     [JSInvokable]
@@ -115,6 +135,12 @@ public partial class WorkspaceCanvas
     }
 
     public async ValueTask DisposeAsync()
+    {
+        disposed = true;
+        await ReleaseCanvasResources();
+    }
+
+    private async ValueTask ReleaseCanvasResources()
     {
         var ownedInterop = interop;
         var ownedCallback = dotNet;

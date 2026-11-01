@@ -137,6 +137,90 @@ public sealed class WorkspaceCanvasInteropTests
         Assert.Throws<ObjectDisposedException>(() => callback.Value);
     }
 
+    [Theory]
+    [InlineData("import", "disconnected")]
+    [InlineData("import", "javascript")]
+    [InlineData("import", "canceled")]
+    [InlineData("initialize", "disconnected")]
+    [InlineData("initialize", "javascript")]
+    [InlineData("initialize", "canceled")]
+    public async Task CanvasInitializationFailure_ReleasesPartialResourcesAndCallback_WithoutDisposingTheComponent(string stage, string failure)
+    {
+        var runtime = new DelayedImportRuntime();
+        var canvas = new WorkspaceCanvas();
+        SetRuntime(canvas, runtime);
+        var initializing = (Task<bool>)InvokeLifecycle(canvas, "InitializeCanvasAsync")!;
+        await runtime.ImportEntered.Task.WaitAsync(CallbackTimeout);
+        var callback = Field<DotNetObjectReference<WorkspaceCanvas>>(canvas, "dotNet");
+        if (stage == "import") runtime.ImportCompleted.SetException(InitializationFailure(failure));
+        else
+        {
+            runtime.Module.InitializeError = InitializationFailure(failure);
+            runtime.ImportCompleted.SetResult(runtime.Module);
+        }
+
+        Assert.False(await initializing.WaitAsync(CallbackTimeout));
+        Assert.Null(Field<WorkspaceCanvasInterop?>(canvas, "interop"));
+        Assert.Null(Field<DotNetObjectReference<WorkspaceCanvas>?>(canvas, "dotNet"));
+        Assert.Throws<ObjectDisposedException>(() => callback.Value);
+        Assert.False(Field<bool>(canvas, "disposed"));
+        Assert.Equal(stage == "initialize" ? 1 : 0, runtime.Module.InitializeCalls);
+        Assert.Equal(stage == "initialize" ? 1 : 0, runtime.Module.ControllerDisposeCalls);
+        Assert.Equal(stage == "initialize" ? 1 : 0, runtime.Module.DisposeCalls);
+
+        var retryRuntime = new DelayedImportRuntime();
+        SetRuntime(canvas, retryRuntime);
+        var retry = (Task<bool>)InvokeLifecycle(canvas, "InitializeCanvasAsync")!;
+        await retryRuntime.ImportEntered.Task.WaitAsync(CallbackTimeout);
+        retryRuntime.ImportCompleted.SetResult(retryRuntime.Module);
+        Assert.True(await retry.WaitAsync(CallbackTimeout));
+        await canvas.DisposeAsync();
+        Assert.Equal(1, retryRuntime.Module.InitializeCalls);
+        Assert.Equal(1, retryRuntime.Module.ControllerDisposeCalls);
+        Assert.Equal(1, retryRuntime.Module.DisposeCalls);
+    }
+
+    [Theory]
+    [InlineData("disconnected")]
+    [InlineData("javascript")]
+    [InlineData("canceled")]
+    public async Task InitializationFailureAfterComponentDisposal_DoesNotRenderOrRetainCallbacks(string failure)
+    {
+        var runtime = new DelayedImportRuntime();
+        var canvas = new WorkspaceCanvas();
+        SetRuntime(canvas, runtime);
+        // This real lifecycle method has no renderer attached. Any attempted fallback render would fail.
+        var rendering = (Task)InvokeLifecycle(canvas, "OnAfterRenderAsync", true)!;
+        await runtime.ImportEntered.Task.WaitAsync(CallbackTimeout);
+        var callback = Field<DotNetObjectReference<WorkspaceCanvas>>(canvas, "dotNet");
+        await canvas.DisposeAsync();
+        runtime.ImportCompleted.SetException(InitializationFailure(failure));
+
+        await rendering.WaitAsync(CallbackTimeout);
+        Assert.Throws<ObjectDisposedException>(() => callback.Value);
+        Assert.Null(Field<WorkspaceCanvasInterop?>(canvas, "interop"));
+        Assert.Null(Field<DotNetObjectReference<WorkspaceCanvas>?>(canvas, "dotNet"));
+        Assert.False(Field<bool>(canvas, "_canvasError"));
+        await (Task)InvokeLifecycle(canvas, "OnAfterRenderAsync", true)!;
+        Assert.Equal(1, runtime.ImportCalls);
+        Assert.Equal(0, runtime.Module.InitializeCalls);
+    }
+
+    private static Exception InitializationFailure(string failure) => failure switch
+    {
+        "disconnected" => new JSDisconnectedException("Circuit ended during canvas initialization"),
+        "javascript" => new JSException("Canvas module failed to initialize"),
+        "canceled" => new OperationCanceledException("Canvas initialization was canceled"),
+        _ => throw new Xunit.Sdk.XunitException("Unknown initialization fixture")
+    };
+
+    private static T Field<T>(object target, string name)
+        => (T)target.GetType().GetField(name, BindingFlags.NonPublic | BindingFlags.Instance)!.GetValue(target)!;
+    private static object? InvokeLifecycle(object target, string name, params object[] args)
+        => target.GetType().GetMethod(name, BindingFlags.NonPublic | BindingFlags.Instance)!.Invoke(target, args);
+    private static void SetRuntime(WorkspaceCanvas canvas, IJSRuntime runtime)
+        => typeof(WorkspaceCanvas).GetProperty("JS", BindingFlags.NonPublic | BindingFlags.Instance)!.SetValue(canvas, runtime);
+
     private static async Task<WorkspaceCanvasInterop> Initialize(DelayedImportRuntime runtime, DotNetObjectReference<WorkspaceCanvas> callback)
     {
         var interop = new WorkspaceCanvasInterop(runtime);
@@ -173,6 +257,7 @@ public sealed class WorkspaceCanvasInteropTests
     private sealed class CanvasModule : IJSObjectReference
     {
         public Exception? DisposeError { get; set; }
+        public Exception? InitializeError { get; set; }
         public Exception? ControllerDisposeError { get; set; }
         public TaskCompletionSource? ControllerDisposeGate { get; set; }
         public int InitializeCalls { get; private set; }
@@ -191,6 +276,7 @@ public sealed class WorkspaceCanvasInteropTests
                 InitializeCalls++;
                 InitializedElement = Assert.IsType<ElementReference>(args[0]);
                 InitializedCallback = args[1];
+                if (InitializeError is { } failure) return ValueTask.FromException<TValue>(failure);
             }
             else
             {
