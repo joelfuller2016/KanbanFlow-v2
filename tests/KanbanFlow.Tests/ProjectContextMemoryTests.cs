@@ -103,7 +103,7 @@ public sealed class ProjectContextMemoryTests
         Assert.False(properties.TryGetProperty("dbFactory", out _));
         Assert.False(properties.TryGetProperty("cancellationToken", out _));
         Assert.Equal(["projectId"], schema.GetProperty("required").EnumerateArray().Select(p => p.GetString()));
-        Assert.Contains("MemoryNextCursor", tool.ProtocolTool.Description);
+        Assert.Contains("memoryNextCursor", tool.ProtocolTool.Description);
     }
 
     /// <summary>Only current versions in the selected project's namespace belong in context.</summary>

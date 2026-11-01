@@ -1,15 +1,18 @@
 # Project memory ownership
 
 KanbanFlow owns project tasks, decisions, requirements and project knowledge.
-The existing `get_project_context` MCP tool is the entry point for agents. It now
-returns current project memory with the project docs, features and tasks. It
-excludes retired versions, other projects and personal/agent/session namespaces.
+The native `get_project_context` tool at the server's HTTP `/mcp` endpoint is the
+selected entry point for authoritative project memory. It returns current
+project memory with the project docs, features and tasks. It excludes retired
+versions, other projects and personal/agent/session namespaces.
 Each page contains up to 200 complete nodes, ordered by `CreatedAt` descending,
-then `Id` descending. When `MemoryTruncated` is true, call `get_project_context`
-again with the same `projectId` and `memoryCursor` set to the returned
-`MemoryNextCursor`. Append the returned `Memory` entries and repeat until
-`MemoryNextCursor` is null (`MemoryTruncated` is then false). Omit `memoryCursor`
-to restart from the newest page. Treat cursor strings as opaque and project-specific.
+then `Id` descending. Native JSON property names use camelCase. When
+`memoryTruncated` is true, call `get_project_context` again with the same
+`projectId` and `memoryCursor` set to the returned
+`memoryNextCursor`. Append the returned `memory` entries and repeat until
+`memoryTruncated` is false. The final page omits `memoryNextCursor`; clients
+should also accept a null cursor. Omit `memoryCursor` to restart from the
+newest page. Treat cursor strings as opaque and project-specific.
 
 Continuation uses creation time and ID, so deleting the previous boundary node
 or inserting newer nodes does not shift later pages. Each call reads current
@@ -17,6 +20,12 @@ records, not a frozen snapshot: retirement removes a node from subsequent reads,
 and concurrent backdated inserts may appear later. Reload from the first page
 before a new task to pick up newly created versions. Project docs, features and
 tasks are included on every call.
+
+The Node stdio wrapper forwards the REST `/api/projects/{id}/context` shape.
+Its transport and response differ from the native tool; see the
+[native MCP contract notes](native-mcp-notes.md#2-response-shape-differences-5).
+Configure the agent's `kanban` source to use the native HTTP `/mcp` endpoint
+for the memory pages described here.
 
 | Data | Owner | Other components |
 | --- | --- | --- |
@@ -48,8 +57,8 @@ preferences and learned skills remain in their own namespaces.
 Connect the KanbanFlow MCP server as the `kanban` source in ToolGateway's canonical
 tool catalog. Offer `kanban__list_projects`, `kanban__get_project_context` and
 `kanban__get_task` for planning. Call `get_project_context` with the selected
-project ID, use its current memory and preserve `Authority`, `Reference`, `Source`
-and `ValidFrom` with the answer's supporting context. Request write tools only
+project ID, use its current memory and preserve `authority`, `reference`, `source`
+and `validFrom` with the answer's supporting context. Request write tools only
 when the task calls for a project change.
 
 This extends the existing project-context tool and adds a partial index for
@@ -57,3 +66,5 @@ current-memory paging. The EF model creates the index for new databases; the
 idempotent startup patch adds it to existing databases. There is no additional
 memory service or project synchronization loop. Scope/version tests use the
 actual SQLite schema and MCP method; query-plan tests check both page queries.
+An HTTP client test discovers the native tool and follows its cursor while
+checking complete Markdown content and provenance on both pages.

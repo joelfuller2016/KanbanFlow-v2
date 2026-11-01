@@ -83,11 +83,11 @@ public static class KanbanMcpTools
 
     /// <summary>Loads authoritative project context and a chronological page of current project memory.</summary>
     [McpServerTool(Name = "get_project_context")]
-    [Description("Load authoritative KanbanFlow project docs, features, tasks and current project memory before planning. Memory is ordered newest first by creation time, then id, with up to 200 nodes per page. Pass MemoryNextCursor as memoryCursor on the next call for the same project until it is null. Keep the configured server identity with returned references; do not copy project decisions into another memory store.")]
+    [Description("Load authoritative KanbanFlow project docs, features, tasks and current project memory before planning. Memory is ordered newest first by creation time, then id, with up to 200 nodes per page. While memoryTruncated is true, pass memoryNextCursor as memoryCursor on the next call for the same project. The final page has memoryTruncated=false and no memoryNextCursor. Keep the configured server identity with returned references; do not copy project decisions into another memory store.")]
     public static async Task<ProjectContext> GetProjectContext(
         IDbContextFactory<AppDbContext> dbFactory,
         [Description("The project id (from list_projects).")] int projectId,
-        [Description("MemoryNextCursor from the previous response for this project; omit for the newest page.")] string? memoryCursor = null,
+        [Description("memoryNextCursor from the previous response for this project; omit for the newest page.")] string? memoryCursor = null,
         CancellationToken cancellationToken = default)
     {
         await using var db = await dbFactory.CreateDbContextAsync(cancellationToken);
@@ -134,7 +134,7 @@ public static class KanbanMcpTools
                 !int.TryParse(parts[0], style, culture, out var cursorProjectId) || cursorProjectId != projectId ||
                 !long.TryParse(parts[1], style, culture, out var ticks) || ticks > DateTime.MaxValue.Ticks ||
                 !int.TryParse(parts[2], style, culture, out var cursorId) || cursorId <= 0)
-                throw new McpException("Invalid memoryCursor. Use MemoryNextCursor from a previous get_project_context response for this project, or omit it to restart.");
+                throw new McpException("Invalid memoryCursor. Use memoryNextCursor from a previous get_project_context response for this project, or omit it to restart.");
 
             var createdAt = new DateTime(ticks, DateTimeKind.Utc);
             memoryQuery = memoryQuery.Where(m => m.CreatedAt < createdAt ||
