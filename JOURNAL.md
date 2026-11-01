@@ -51,6 +51,17 @@ A review of the repository and a test run on 2026-09-26 filed findings as issues
   - S7, for #549.
 
 ## Entries (newest first)
+- 2026-11-01 03:17Z (PR monitor — replied to CodeRabbit thread on #511):
+  - Confirmed e01fa76 (already pushed) addresses CodeRabbit finding on Ideas.razor:606 (WorkflowException conflict fell through to generic catch).
+  - Replied on thread with confirmation (reply comment 4434209389). Thread PRRT_kwDOSA8y6s6yWzor now has a response; CodeRabbit can resolve it on next review cycle.
+  - 2 remaining open Copilot threads on #511 (subtask hash, Windows path casing) still awaiting owner decision. Build gate still DOWN.
+
+- 2026-11-01 03:05Z (PR monitor — CodeRabbit incremental review on #511, fix applied):
+  - CodeRabbit posted 1 actionable inline comment on Ideas.razor:606 (incremental review of 399648b→a6e7b49).
+  - Finding: WorkflowException("conflict") fell through to generic catch, showing "Move failed: …" instead of service message. Valid — verified against current code.
+  - Fixed in e01fa76ca on feat/unified-workflow-509: added explicit `catch (WorkflowException ex) when (ex.Code == "conflict")` branch showing ex.Message directly, matching the ValidationException branch pattern. Replied on thread (comment 4434200495).
+  - 3 outside-diff-range comments (ui-e2e.mjs:3283 calm fixture, mcp-server.mjs:903 shutdown timeout, one further) — outside current diff, flagged to owner.
+  - PR #511 known open threads: Finding 1 (subtask hash — owner decision needed), Finding 3 (Windows path casing — owner decision needed). Build gate still DOWN.
 - 2026-11-01 03:03Z - Published PR #580 repair head c674da7763f9bfb2909601a395ed9060dd841a51 and verified remote equality. Preserved concurrent73085d282950a456b56b2d5aae404b5be0b8ffde fixes and all complete journal entries; retained incoming storage/feature implementations instead of duplicate task state. Combined warnings-as-errors gate passed1677 .NET tests; full script suite374/374. Real REST/native/stdio write and delivery suites passed (17 write tools,53 native/75 wrapper tools; exact long content, receipts, shared-plan publication); actual inventory97 REST operations. Five browser suites passed on this exact app build: new delayed-typing/selection/appearance/contrast checks, existing-feature recovery through actual UI publication, convergence, polling and storage recovery. Warning contrast7.99:1 light/11.38:1 dark; stale controls ignored and keyboard focus retained. Fresh staged-source review found no blockers. Owned app/browser stopped; original dirty checkout preserved. Final bot readback found additional older-PR defects, now being fixed in parallel: project-memory key canonicalization (#521), clone-probe gating for unavailable logs (#564), workflow evidence/repository-path identity and minor drag-conflict presentation (#511). These are not deferred as owner decisions; no merge or human acceptance is claimed. Verified lesson: refresh moving PRs before publication and merge concurrent implementations once, preserving their regression coverage and removing duplicate state machines.
 
 
