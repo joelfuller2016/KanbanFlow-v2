@@ -577,7 +577,7 @@ export function createGitRunner({ env = process.env, timeoutMs = GIT_TIMEOUT_MS 
     const deadline = performance.now() + Math.min(GIT_TIMEOUT_MS, timeoutMs);
     const remainingTimeout = () => {
       const remaining = Math.floor(deadline - performance.now());
-      if (!(remaining >= 1)) throw new Error("Git command exceeded its five-second deadline.");
+      if (!(remaining >= 1)) throw Object.assign(new Error("Git command exceeded its five-second deadline."), { code: "git_cwd_unavailable" });
       return remaining;
     };
     const isolated = { ...scrubGitEnv(captured), GIT_CONFIG_NOSYSTEM: "1",
@@ -606,6 +606,14 @@ export function createGitRunner({ env = process.env, timeoutMs = GIT_TIMEOUT_MS 
         throw Object.assign(
           new Error(`Git version probe could not start: cwd does not exist or is not a directory (${quotedPathForReport(cwd ?? "current directory")}).`, { cause: versionCause }),
           { code: "git_cwd_missing" });
+      }
+      const outputLimit = versionCause?.code === "ENOBUFS" || versionCause?.code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER";
+      const unavailable = versionCause?.status == null &&
+        (["ETIMEDOUT", "EACCES", "EPERM"].includes(versionCause?.code) ||
+          versionCause?.signal && versionCause.code !== "ENOENT" && versionCause.code !== "ENOTDIR");
+      if (!outputLimit && unavailable) {
+        throw Object.assign(new Error(`Git version probe could not complete for cwd ${quotedPathForReport(cwd ?? "current directory")} ` +
+          `(${quotedPathForReport(versionCause.code ?? versionCause.signal)}).`, { cause: versionCause }), { code: "git_cwd_unavailable" });
       }
       throw Object.assign(new Error(`${GIT_VERSION_REQUIREMENT} Found ${quotedPathForReport(version)}. Clone confirmation was not run.`, { cause: versionCause }),
         { code: "git_unsupported" });
@@ -920,6 +928,7 @@ export function withConfirmedCloneRoots(cwds, roots, { git = gitOutput, now = ()
   const deadline = now() + PROBE_BUDGET_MS;
   let budgetSpent = false;
   let outputLimited = false;
+  let probeRole = "reference";
   const outOfBudget = () => budgetSpent || (budgetSpent = now() > deadline);
   // Every git call here answers a question about a SPECIFIC directory — a candidate cwd, or one of
   // the main roots — never about the process's own cwd, for the same reason `gitOutput`'s callers
@@ -927,7 +936,7 @@ export function withConfirmedCloneRoots(cwds, roots, { git = gitOutput, now = ()
   const call = (args, cwd) => {
     if (outOfBudget()) throw new Error(`clone probe budget of ${PROBE_BUDGET_MS} ms spent`);
     try {
-      const output = git(args, cwd);
+      const output = git(args, cwd, { probeRole });
       if (typeof output === "string" && Buffer.byteLength(output, "utf8") > GIT_MAX_OUTPUT_BYTES) {
         throw Object.assign(new Error("Git command output exceeded its byte bound."), { code: "GIT_OUTPUT_LIMIT" });
       }
@@ -1084,6 +1093,7 @@ export function withConfirmedCloneRoots(cwds, roots, { git = gitOutput, now = ()
   };
 
   let probed = 0;
+  probeRole = "candidate"; // Applies to the recorded cwd and every resolved-top follow-up read.
   for (const cwd of probeList) {
     if (outOfBudget()) break;
     outputLimited = false;
@@ -2338,11 +2348,13 @@ async function main(argv) {
   const here = path.dirname(fileURLToPath(import.meta.url));
   const runner = createGitRunner();
   let gitIncompatibility = null;
-  const reportGit = (args, cwd) => {
+  const reportGit = (args, cwd, { probeRole = "reference" } = {}) => {
     if (gitIncompatibility) throw gitIncompatibility;
     try { return runner(args, cwd); }
     catch (error) {
-      if (error.code === "git_unsupported") {
+      const mainFailure = ["git_cwd_unavailable", "git_cwd_missing"].includes(error.code) &&
+        probeRole === "reference";
+      if (error.code === "git_unsupported" || mainFailure) {
         gitIncompatibility = error;
         console.error(`NOTE: ${error.message}\n`);
       }

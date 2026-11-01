@@ -2095,9 +2095,9 @@ test("Git diagnostics distinguish relative absolute and tilde SSH paths without 
 });
 
 test("real Git namespace evidence retains SSH accounts and repository path semantics", async t => {
-  const fixtureParent = path.resolve(HERE, "../_sandbox/564-ssh-namespace");
+  const fixtureParent = path.resolve(HERE, "../_sandbox");
   fs.mkdirSync(fixtureParent, { recursive: true });
-  const fixture = fs.mkdtempSync(path.join(fixtureParent, "repos-"));
+  const fixture = fs.mkdtempSync(path.join(fixtureParent, "564-ssh-namespace-"));
   const main = path.join(fixture, "main");
   const unrelated = path.join(fixture, "unrelated");
   const sameRemote = path.join(fixture, "same-remote");
@@ -2421,6 +2421,12 @@ function runGitHarness(make, settings, body) {
     'const original = cp.execFileSync;',
     'const stateFile = ' + JSON.stringify(stateFile) + ';',
     'const state = () => JSON.parse(fs.readFileSync(stateFile, "utf8"));',
+    'const originalStat = fs.statSync;',
+    'fs.statSync = function (value, ...args) {',
+    '  const current = state();',
+    '  if (current.missingCwd && value === current.failureCwd) throw Object.assign(new Error("fixture cwd missing"), { code: "ENOENT" });',
+    '  return originalStat.call(this, value, ...args);',
+    '};',
     'const nativeNow = performance.now.bind(performance);',
     'let clock = 0, fakeClock = false;',
     'globalThis.resetGitHarness = () => { clock = 0; fakeClock = Object.hasOwn(state(), "clockStep"); globalThis.gitCalls = []; };',
@@ -2434,6 +2440,8 @@ function runGitHarness(make, settings, body) {
     '    XDG_CONFIG_HOME: current.xdg, GIT_CONFIG_SYSTEM: options.env.GIT_CONFIG_SYSTEM === "/dev/null" ? "/dev/null" : current.system,',
     '    GIT_TEST_ASSUME_DIFFERENT_OWNER: current.foreign ? "1" : "0" } };',
     '  globalThis.gitCalls.push({ args, timeout: options.timeout });',
+    '  if (current.trace) fs.appendFileSync(current.trace, JSON.stringify({ args, cwd: options.cwd }) + "\\n");',
+    '  if (args[0] === "--version" && options.cwd === current.failureCwd && current.versionFailure) throw Object.assign(new Error("fixture version launch failed"), current.versionFailure);',
     '  const phase = args[0] === "--version" ? "version" : args[0] === "config" && args.includes("safe.directory") ? "config" : "identity";',
     '  if (current.outputErrorPhase === phase) throw Object.assign(new Error("fixture output exceeded maxBuffer"), { code: "ENOBUFS" });',
     '  if (args[0] === "--version" && (Object.hasOwn(current, "versionReply") || current.versionByPath || current.versionByCwd)) {',
@@ -2512,6 +2520,61 @@ test("protected path bytes cannot become a different ownership exception through
     assert.equal(path.resolve(result.control), path.resolve(real(fixture.a)), "valid Unicode ownership exceptions still grant the configured trust");
     assert.ok(result.replayed.includes("safe.directory=" + result.linePath), "valid UTF8 and literal LF survive native NUL records unchanged");
   } finally { fixture.cleanup(); }
+});
+
+test("version launch availability is candidate-local but invalidates implicit and explicit main boundaries", () => {
+  const { a, b, d, make, cleanup } = buildCloneFixture();
+  const home = make(), xdg = make(), system = path.join(make(), "empty.gitconfig");
+  const log = path.join(make(), "usage.jsonl"), trace = path.join(make(), "trace.jsonl");
+  fs.writeFileSync(system, "");
+  fs.writeFileSync(log, [row({ ts: "2026-11-01T00:00:02Z", session: "failed", cwd: b }),
+    row({ ts: "2026-11-01T00:00:01Z", session: "valid", cwd: d })].map(value => JSON.stringify(value)).join("\n") + "\n");
+  try {
+    const results = runGitHarness(make, { a, b, d, home, xdg, system, log, trace, here: HERE,
+      report: path.join(HERE, "trial-report.mjs"), foreign: false }, (trial, fs, stateFile, settings, cp) => {
+      const cases = [
+        { label: "timeout", error: { code: "ETIMEDOUT", signal: "SIGTERM" }, local: true },
+        { label: "signal", error: { signal: "SIGTERM" }, local: true },
+        { label: "access", error: { code: "EACCES" }, local: true },
+        { label: "permission", error: { code: "EPERM" }, local: true },
+        { label: "missing-cwd", error: { code: "ENOENT" }, local: true, missingCwd: true },
+        { label: "buffer-signal", error: { code: "ENOBUFS", signal: "SIGTERM" }, local: false },
+        { label: "nonzero-exit", error: { status: 1 }, local: false }
+      ];
+      const results = [];
+      for (const role of ["candidate", "explicit", "implicit"]) for (const failure of cases) {
+        const failureCwd = role === "candidate" ? settings.b : role === "explicit" ? settings.a : settings.here;
+        fs.writeFileSync(stateFile, JSON.stringify({ ...settings, failureCwd, missingCwd: failure.missingCwd, versionFailure: failure.error }));
+        fs.writeFileSync(settings.trace, "");
+        const child = cp.spawnSync(process.execPath, ["--require", stateFile.replace(/state\.json$/, "git-boundary.cjs"), settings.report,
+          ...(role === "implicit" ? [] : ["--repo-root", settings.a]), "--json"], {
+          cwd: settings.a, encoding: "utf8", timeout: 20_000, windowsHide: true,
+          env: { ...trial.scrubGitEnv(process.env), KANBANFLOW_USAGE_LOG: settings.log, KANBANFLOW_API_URL: "http://127.0.0.1:1" }
+        });
+        const summary = JSON.parse(child.stdout);
+        const calls = fs.readFileSync(settings.trace, "utf8").trim().split(/\r?\n/).filter(Boolean).map(line => JSON.parse(line));
+        results.push({ role, failure: failure.label, measured: role === "candidate" && failure.local, status: child.status,
+          verdict: summary.signals.find(signal => signal.id === 4).verdict, probe: summary.sources.cloneProbe,
+          laterValidProbed: calls.some(call => call.cwd === settings.d && call.args[0] === "--version"),
+          versionCalls: calls.filter(call => call.args[0] === "--version").length, stderr: child.stderr });
+      }
+      return results;
+    });
+    for (const result of results) {
+      const context = result.role + ": " + result.failure;
+      assert.equal(result.status, 1, context + result.stderr);
+      assert.equal(result.verdict, result.measured ? "ADOPT" : "UNMEASURED", context);
+      if (result.measured) {
+        assert.equal(result.probe.probed, 2, context);
+        assert.equal(result.laterValidProbed, true, context + ": a later valid clone must still run");
+        assert.match(result.stderr, /1 of 2 outside cwd\(s\) confirmed/, context);
+      } else {
+        assert.equal(result.probe, null, context);
+        assert.doesNotMatch(result.stderr, /folded into signal 4/, context);
+        if (result.role !== "candidate") assert.equal(result.versionCalls, 1, context + ": main-boundary failure is latched globally");
+      }
+    }
+  } finally { cleanup(); }
 });
 
 test("Git versions below the supported baseline, unknown versions and version failures stop before config or identity", () => {
@@ -2860,7 +2923,7 @@ test("protected safe.directory exceptions survive isolated Git probes without re
   }
 });
 
-function runGitDeadlineFixture(stepMs, timeoutMs = 5000, urlRead = false) {
+function runGitDeadlineFixture(stepMs, timeoutMs = 5000, urlRead = false, initialClock = []) {
   const fixture = buildInto(make => {
     const a = make();
     initRealRepo(a, "deadline.txt");
@@ -2876,7 +2939,8 @@ function runGitDeadlineFixture(stepMs, timeoutMs = 5000, urlRead = false) {
       'const original = cp.execFileSync;',
       'let elapsed = 0; globalThis.gitTimeouts = []; globalThis.gitMaxBuffers = []; Date.now = () => 50000 - elapsed;',
       'const steps = JSON.parse(process.env.KBF_TEST_GIT_STEPS_MS);',
-      'Object.defineProperty(performance, "now", { value: () => elapsed });',
+      'const initial = JSON.parse(process.env.KBF_TEST_GIT_INITIAL_CLOCK_MS);',
+      'Object.defineProperty(performance, "now", { value: () => initial.shift() ?? elapsed });',
       'cp.execFileSync = function (file, args, options) {',
       '  if (file !== "git") return original.apply(this, arguments);',
       '  globalThis.gitTimeouts.push(options.timeout);',
@@ -2887,13 +2951,14 @@ function runGitDeadlineFixture(stepMs, timeoutMs = 5000, urlRead = false) {
     ].join("\n"));
     const script = [
       `import { gitOutput } from ${JSON.stringify(new URL("./trial-report.mjs", import.meta.url).href)};`,
-      'let success = false, message = null;',
-      `try { success = Boolean(gitOutput(${JSON.stringify(urlRead ? ["remote", "get-url", "origin"] : ["rev-parse", "--show-toplevel"])}, ${JSON.stringify(fixture.a)}, { timeoutMs: ${JSON.stringify(timeoutMs)} })); } catch (error) { message = error.message; }`,
-      'console.log(JSON.stringify({ success, message, timeouts: globalThis.gitTimeouts, maxBuffers: globalThis.gitMaxBuffers }));'
+      'let success = false, message = null, errorCode = null;',
+      `try { success = Boolean(gitOutput(${JSON.stringify(urlRead ? ["remote", "get-url", "origin"] : ["rev-parse", "--show-toplevel"])}, ${JSON.stringify(fixture.a)}, { timeoutMs: ${JSON.stringify(timeoutMs)} })); } catch (error) { message = error.message; errorCode = error.code; }`,
+      'console.log(JSON.stringify({ success, message, errorCode, timeouts: globalThis.gitTimeouts, maxBuffers: globalThis.gitMaxBuffers }));'
     ].join("\n");
     const child = spawnSync(process.execPath, ["--require", preload, "--input-type=module", "--eval", script], {
       cwd: fixture.a, encoding: "utf8", timeout: 20_000, windowsHide: true,
       env: { ...scrubGitEnv(process.env), GIT_CONFIG_GLOBAL: emptyConfig, GIT_CONFIG_SYSTEM: emptyConfig,
+        KBF_TEST_GIT_INITIAL_CLOCK_MS: JSON.stringify(initialClock),
         KBF_TEST_GIT_STEPS_MS: JSON.stringify(Array.isArray(stepMs) ? stepMs : [stepMs, stepMs, stepMs, stepMs]) }
     });
     assert.equal(child.status, 0, child.stderr);
@@ -2923,8 +2988,17 @@ test("Git URL framing metadata and the URL read share the original bounded deadl
 test("Git identity is not started after config reads exhaust its deadline", () => {
   const result = runGitDeadlineFixture(2500);
   assert.equal(result.success, false);
+  assert.equal(result.errorCode, "git_cwd_unavailable", "spent deadlines use the same reference/candidate availability policy");
   assert.deepEqual(result.timeouts, [5000, 2500], "identity must not start after version and config consume the budget");
   assert.match(result.message, /budget|deadline|timed out/i);
+});
+
+test("a deadline spent before version launch is an unavailable probe without spawning Git", () => {
+  const result = runGitDeadlineFixture(0, 5000, false, [0, 5000.25]);
+  assert.equal(result.success, false);
+  assert.equal(result.errorCode, "git_cwd_unavailable");
+  assert.deepEqual(result.timeouts, [], "no child may start after the initial deadline is spent");
+  assert.match(result.message, /deadline/);
 });
 
 test("Git identity refuses a sub-millisecond remainder and accepts a whole millisecond", () => {

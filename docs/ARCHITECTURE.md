@@ -673,6 +673,10 @@ check finds an older or unrecognizable version, it produces one diagnostic and l
 **UNMEASURED**, including with an explicit repository root. If incompatibility is found later,
 earlier clone confirmations and their folding notes are discarded. A missing or non-directory
 logged working path is instead left unconfirmed outside without disabling Git for later candidates.
+A version probe that times out, is killed or lacks permission stays local to an outside candidate.
+The same failures at a main repository boundary, including an explicit `--repo-root`, leave signal 4
+unmeasured. Missing executables, nonzero version exits and unsupported versions remain global failures.
+Spent per-call deadlines follow the same reference/candidate availability scope, including before launch.
 Remote drive syntax follows the host platform: single-letter SCP forms are network
 remotes on POSIX, and ambiguous Windows drive forms cannot prove a clone fingerprint. Every operation's
 five-second monotonic deadline includes that check, a protected configuration read and the identity
