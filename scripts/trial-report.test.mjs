@@ -1285,6 +1285,8 @@ test("unrecognized remote schemes retain distinct nonempty identities", () => {
     normalizeRemoteUrl("softp://github.com/Org/main.git"), "an unfamiliar transport gets no GitHub path assumptions");
   assert.notEqual(normalizeRemoteUrl("softp::host/org/repo"), normalizeRemoteUrl("ssh://softp/:host/org/repo"),
     "an explicit remote helper must not become an SCP host alias");
+  assert.equal(isLocalPathRemote("x::host/org/repo"), false, "one-letter explicit helpers remain network identities");
+  assert.equal(isLocalPathRemote("C:\\work\\repo"), true, "an actual Windows drive path remains local");
 });
 
 test("confirmed cwd disclosure is printable literal data without changing membership", () => {
@@ -1558,7 +1560,8 @@ test("real Git evidence keeps an unfamiliar transport outside despite shared his
     gitOutput(["remote", "add", "origin", "softp://example.invalid/org/repo.git"], b);
     for (const [custom, known] of [
       ["softp://example.invalid/org/repo.git", "https://example.invalid/org/repo.git"],
-      ["softp::host/org/repo", "ssh://softp/:host/org/repo"]
+      ["softp::host/org/repo", "ssh://softp/:host/org/repo"],
+      ["x::host/org/repo", "ssh://x/:host/org/repo"]
     ]) {
       gitOutput(["remote", "set-url", "origin", known], a);
       gitOutput(["remote", "set-url", "origin", custom], b);

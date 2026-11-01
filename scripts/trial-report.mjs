@@ -648,6 +648,7 @@ export function normalizeRemoteUrl(url) {
 export function isLocalPathRemote(rawUrl) {
   if (typeof rawUrl !== "string" || rawUrl.trim().length === 0) return false;
   const u = rawUrl.trim();
+  if (/^[^:/\\]+::/.test(u)) return false;
   if (/^file:\/\//i.test(u)) return true;
   if (/^[a-z][a-z0-9+.-]*:\/\//i.test(u)) return false;
   const colon = u.indexOf(":");
