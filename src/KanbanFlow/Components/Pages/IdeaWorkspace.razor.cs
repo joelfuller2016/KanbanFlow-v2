@@ -151,14 +151,15 @@ public partial class IdeaWorkspace
                 await Task.Delay(TimeSpan.FromSeconds(12), lifetime.Token);
                 if (context is null || busy || !Ready) continue;
                 var scope = CurrentScope;
+                var polledContext = context;
                 try
                 {
                     var next = await Workspaces.GetAsync(scope.WorkspaceId, lifetime.Token);
-                    if (!IsCurrent(scope)) continue;
-                    if (next.Revision != context.Revision || next.Source != context.Source ||
-                        next.ProjectPlanRevision != context.ProjectPlanRevision || next.ProjectSource != context.ProjectSource ||
-                        next.ProjectMissing != context.ProjectMissing)
-                        await InvokeAsync(() => { if (IsCurrent(scope)) { latestContext = next; StateHasChanged(); } });
+                    if (!IsCurrent(scope) || !ReferenceEquals(context, polledContext)) continue;
+                    if (next.Revision != polledContext.Revision || next.Source != polledContext.Source ||
+                        next.ProjectPlanRevision != polledContext.ProjectPlanRevision || next.ProjectSource != polledContext.ProjectSource ||
+                        next.ProjectMissing != polledContext.ProjectMissing)
+                        await InvokeAsync(() => { if (IsCurrent(scope) && ReferenceEquals(context, polledContext)) { latestContext = next; StateHasChanged(); } });
                 }
                 catch (OperationCanceledException) when (lifetime.IsCancellationRequested) { throw; }
                 catch (Exception ex)
