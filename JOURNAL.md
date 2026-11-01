@@ -52,6 +52,12 @@ A review of the repository and a test run on 2026-09-26 filed findings as issues
 
 ## Entries (newest first)
 
+- 2026-11-01 04:05Z (PR monitor — owner pushed enhanced fixes on #580):
+  - Owner pushed 1d1cc40 ("fix: preserve reviewed delivery targets and gallery traversal"), merged as 2d5911f, then JOURNAL merged at 737a8c7.
+  - 1d1cc40 extends session fixes with: browser tests (workspace-ui-preview-target.browser.mjs, workspace-ui-button-contrast.browser.mjs), unit tests (IdeaWorkspaceReviewedDeliveryTargetTests.cs, IdeaGalleryFilterCursorRecoveryTests.cs), IdeaWorkspace.razor.css contrast fix (Copilot Finding 3), and refined IdeaGallery.razor.cs/IdeaWorkspace.Delivery.cs.
+  - Codex attempted review on 737a8c7 but failed ("We couldn't complete this review") — known transient error, auto-retry expected.
+  - #580 HEAD=737a8c7, awaiting Codex retry + Copilot re-review.
+
 - 2026-11-01 04:02Z - Completed native Codex code review of five existing PRs; report-only, no application fixes or merges.
   - Frozen review cutoff: 2026-11-01 03:10 UTC. PR heads: #511 f4030541698b9427ffa15ee64a16a1b1a4f99bbd; #578 17780aa01cc28c12dbf322379a33074b7ce3becc; #580 c674da7763f9bfb2909601a395ed9060dd841a51; #521 ef34d61f2a1e64f73442515afc93567ae1140b40; #564 0dadff673698e05f0de4ad65fc028015a69e5ddc. Original feat/unified-workflow-509 at b9d9ea0dcf32b17a2ec6a1f1f3b913243cb1e4f6 and unrelated dirty work preserved.
   - Ten retained findings passed one fresh validation batch: two P1 build blockers and eight P2 issues. #511 closing build fails CS0246 at Ideas.razor:648 (missing WorkflowException namespace); #578 fails NU1608/generated-code CS0200 with incompatible OpenAPI 3.11.0. Current #511 .NET/runtime checks are blocked; its earlier 1634-test pass is historical, not a closing-head pass.
