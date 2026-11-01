@@ -570,6 +570,14 @@ export function createGitRunner({ env = process.env, timeoutMs = GIT_TIMEOUT_MS 
           new Error(`Git version probe could not start: cwd does not exist or is not a directory (${quotedPathForReport(cwd ?? "current directory")}).`, { cause: versionCause }),
           { code: "git_cwd_missing" });
       }
+      const outputLimit = versionCause?.code === "ENOBUFS" || versionCause?.code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER";
+      const unavailable = versionCause?.status == null &&
+        (["ETIMEDOUT", "EACCES", "EPERM"].includes(versionCause?.code) ||
+          versionCause?.signal && versionCause.code !== "ENOENT" && versionCause.code !== "ENOTDIR");
+      if (!outputLimit && unavailable) {
+        throw Object.assign(new Error(`Git version probe could not complete for cwd ${quotedPathForReport(cwd ?? "current directory")} ` +
+          `(${quotedPathForReport(versionCause.code ?? versionCause.signal)}).`, { cause: versionCause }), { code: "git_cwd_unavailable" });
+      }
       throw Object.assign(new Error(`${GIT_VERSION_REQUIREMENT} Found ${quotedPathForReport(version)}. Clone confirmation was not run.`, { cause: versionCause }),
         { code: "git_unsupported" });
     }
@@ -2301,11 +2309,18 @@ async function main(argv) {
   const here = path.dirname(fileURLToPath(import.meta.url));
   const runner = createGitRunner();
   let gitIncompatibility = null;
+  const rootKey = cwd => {
+    const resolved = path.resolve(cwd);
+    return process.platform === "win32" ? resolved.toLowerCase() : resolved;
+  };
+  let mainRootKeys = null; // Root-resolution calls are main-boundary calls before roots are known.
   const reportGit = (args, cwd) => {
     if (gitIncompatibility) throw gitIncompatibility;
     try { return runner(args, cwd); }
     catch (error) {
-      if (error.code === "git_unsupported") {
+      const mainFailure = ["git_cwd_unavailable", "git_cwd_missing"].includes(error.code) &&
+        (mainRootKeys === null || mainRootKeys.has(rootKey(cwd)));
+      if (error.code === "git_unsupported" || mainFailure) {
         gitIncompatibility = error;
         console.error(`NOTE: ${error.message}\n`);
       }
@@ -2316,6 +2331,7 @@ async function main(argv) {
     cwd: here,
     fallbackRoot: path.resolve(here, ".."), git: reportGit
   });
+  mainRootKeys = new Set(repoRoots.map(rootKey));
 
   const { text, files, generations, discovered, unreadable } = readLogGenerations(logPath);
   // A PARTIALLY read log is not an available log. A collision spanning a rotation reads as absent
