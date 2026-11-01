@@ -149,38 +149,55 @@ public partial class IdeaWorkspace
             while (!lifetime.IsCancellationRequested)
             {
                 await Task.Delay(TimeSpan.FromSeconds(12), lifetime.Token);
-                if (context is null || busy || !Ready) continue;
+                var observed = context;
+                if (observed is null || busy || !Ready) continue;
                 var scope = CurrentScope;
                 try
                 {
-                    var next = await Workspaces.GetAsync(scope.WorkspaceId, lifetime.Token);
-                    if (!IsCurrent(scope)) continue;
-                    if (next.Revision != context.Revision || next.Source != context.Source ||
-                        next.ProjectPlanRevision != context.ProjectPlanRevision || next.ProjectSource != context.ProjectSource ||
-                        next.ProjectMissing != context.ProjectMissing)
-                        await InvokeAsync(() => { if (IsCurrent(scope)) { latestContext = next; StateHasChanged(); } });
+                    var next = await ReadPolledContext(scope, observed);
+                    if (next is not null)
+                        await InvokeAsync(() => { if (TryApplyPolledContext(scope, observed, next)) StateHasChanged(); });
                 }
                 catch (OperationCanceledException) when (lifetime.IsCancellationRequested) { throw; }
                 catch (Exception ex)
                 {
-                    await InvokeAsync(() => { if (IsCurrent(scope)) { error = $"Checking for external changes failed: {ex.Message}. Use Refresh saved context to retry."; StateHasChanged(); } });
+                    if (!IsCurrent(scope) || !ReferenceEquals(context, observed)) continue;
+                    await InvokeAsync(() => { if (IsCurrent(scope) && ReferenceEquals(context, observed)) { error = $"Checking for external changes failed: {ex.Message}. Use Refresh saved context to retry."; StateHasChanged(); } });
                 }
             }
         }
         catch (OperationCanceledException) when (lifetime.IsCancellationRequested) { }
     }
 
+    private async Task<IdeaWorkspaceContext?> ReadPolledContext(WorkspaceUiScope scope, IdeaWorkspaceContext observed)
+    {
+        if (!IsCurrent(scope) || !ReferenceEquals(context, observed)) return null;
+        var next = await Workspaces.GetAsync(scope.WorkspaceId, lifetime.Token);
+        if (!IsCurrent(scope) || !ReferenceEquals(context, observed)) return null;
+        return next.Revision != observed.Revision || next.Source != observed.Source ||
+            next.ProjectPlanRevision != observed.ProjectPlanRevision || next.ProjectSource != observed.ProjectSource ||
+            next.ProjectMissing != observed.ProjectMissing ? next : null;
+    }
+
+    private bool TryApplyPolledContext(WorkspaceUiScope scope, IdeaWorkspaceContext observed, IdeaWorkspaceContext next)
+    {
+        if (!IsCurrent(scope) || !ReferenceEquals(context, observed)) return false;
+        latestContext = next;
+        return true;
+    }
+
     private async Task Refresh(WorkspaceUiScope scope)
     {
-        if (!IsCurrent(scope) || busy || context is null) return;
+        var observed = context;
+        if (!IsCurrent(scope) || busy || observed is null) return;
         try
         {
             var refreshed = await Workspaces.GetAsync(scope.WorkspaceId, lifetime.Token);
-            if (!IsCurrent(scope)) return;
+            if (!IsCurrent(scope) || !ReferenceEquals(context, observed)) return;
             latestContext = refreshed;
             await AdoptLatest(scope);
         }
-        catch (Exception ex) { if (IsCurrent(scope)) error = ex.Message; }
+        catch (Exception ex) { if (IsCurrent(scope) && ReferenceEquals(context, observed)) error = ex.Message; }
     }
 
     private async Task AdoptLatest(WorkspaceUiScope scope)

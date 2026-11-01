@@ -28,7 +28,7 @@
                          style="@PlacementStyle(placement)" data-placement-id="@placement.Id" data-component-id="@component.Id" data-parent-id="@placement.ParentId"
                          data-local-x="@N(placement.X)" data-local-y="@N(placement.Y)" data-width="@N(placement.Width)" data-height="@N(placement.Height)"
                          data-testid="canvas-placement-@placement.Id">
-                    <button class="workspace-drag-handle" type="button" @onclick="() => OnSelect.InvokeAsync(new(component.Id, placement.Id))" data-testid="canvas-select-@placement.Id" aria-label="@($"Select or move {component.Title}")">
+                    <button class="workspace-drag-handle" type="button" @onclick="() => OnSelect.InvokeAsync(new(component.Id, placement.Id))" data-testid="canvas-select-@placement.Id" aria-pressed="@(SelectedPlacementId == placement.Id ? "true" : "false")" aria-label="@($"Select or move {component.Title}")">
                         <span class="small text-muted">@component.Type</span><strong>@component.Title</strong>
                     </button>
                     <div class="workspace-card-preview"><WorkspaceComponentContent Component="component" /></div>

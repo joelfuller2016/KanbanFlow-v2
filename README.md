@@ -16,7 +16,7 @@
 | **Stack** | .NET 10 · Blazor Server · SQLite (EF Core 10) · Minimal APIs · Node 18+ for the MCP wrapper |
 | **Surfaces** | 8 UI routes · 97 REST operations · 53 native MCP tools · 75 Node-wrapper MCP tools (measured in the disposable app, October 31, 2026) |
 | **Sync** | GitHub → board projection, plus one explicit additive board → GitHub issue-create path. Preview is the default; live create requires `--allow-write --task <id>` and a durable journal. No edit/close/delete path — see [Who owns what](#who-owns-what) |
-| **Tests** | 1,565 xUnit · 56 in-app integration · 56 Playwright e2e · 362 script unit · 2 smoke suites — [all local, no CI](#deliberate-non-features) |
+| **Tests** | 1,587 xUnit · 56 in-app integration · 56 Playwright e2e · 362 script unit · 2 smoke suites — [all local, no CI](#deliberate-non-features) |
 | **Runs at** | `http://127.0.0.1:5123` — localhost only, no auth, no Docker, no cloud |
 | **Log book** | [`docs/BACKLOG.md`](docs/BACKLOG.md) — the authoritative record of what happened |
 | **Deep detail** | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) |
@@ -722,7 +722,7 @@ the command beside it — not copied from the previous README, and not copied fr
 | Node-wrapper MCP tools | 75 | Actual `tools/list` over stdio; [workspace verification and transport notes](docs/idea-workspaces.md) |
 | Blazor routes | 8 | `rg '^@page' src/KanbanFlow/Components` includes the gallery, preserved `/ideas/board` and `/ideas/workspace/{Kind}/{SourceId:int}` |
 | Razor components | 49 | `rg --files src/KanbanFlow/Components -g '*.razor'` |
-| xUnit tests | 1,565 | `scripts/verify.ps1`, November 1, 2026 UTC: 1,565 passed, 0 failed/skipped |
+| xUnit tests | 1,587 | `scripts/verify.ps1`, November 1, 2026 UTC: 1,587 passed, 0 failed/skipped |
 | In-app integration tests | 56 | `grep -c 'results.Add(await RunTest' src/KanbanFlow/Services/TestRunnerService.cs` (28 API + 22 service + 6 UI) |
 | Playwright e2e scenarios | 56 | `npm run test:ui`, October 31, 2026: 56 passed, including gallery and preserved board checks in Settings |
 | Script unit tests (`scripts/*.mjs`) | 362 | `npm run test:scripts`, November 1, 2026 UTC: 362 passed, 0 failed/skipped |
@@ -846,7 +846,7 @@ All local. There is no CI — [on purpose](#deliberate-non-features).
 ```
 
 ```bash
-dotnet test tests/KanbanFlow.Tests/KanbanFlow.Tests.csproj # 1,565 xUnit tests
+dotnet test tests/KanbanFlow.Tests/KanbanFlow.Tests.csproj # 1,587 xUnit tests
 ```
 
 ```powershell
