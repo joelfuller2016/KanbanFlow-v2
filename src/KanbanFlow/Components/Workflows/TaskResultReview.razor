@@ -1,5 +1,6 @@
 <details class="border rounded p-3 mb-2 bg-white">
-    <summary><a href="@Task.Url">#@Task.TaskId @Task.Name</a> · @Task.Status · @Task.Evidence.Count reports</summary>
+    <summary>#@Task.TaskId @Task.Name · @Task.Status · @Task.Evidence.Count reports</summary>
+    <div class="mt-2 mb-1"><a href="@Task.Url">↗ Open #@Task.TaskId @Task.Name</a></div>
     <form @onsubmit="Report" @onsubmit:preventDefault class="mt-3">
         <label for="result-summary-@Task.Id" class="form-label">Result summary</label><textarea id="result-summary-@Task.Id" class="form-control mb-2" @bind="summary" maxlength="20000" required></textarea>
         <label for="result-checks-@Task.Id" class="form-label">Observed checks and outcomes</label><textarea id="result-checks-@Task.Id" class="form-control mb-2" @bind="checks" maxlength="20000" required></textarea>
