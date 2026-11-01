@@ -51,6 +51,82 @@ A review of the repository and a test run on 2026-09-26 filed findings as issues
   - S7, for #549.
 
 ## Entries (newest first)
+
+- 2026-11-01 02:55Z (PR monitor — owner pushed c674da7, new code commit on #580):
+  - Owner pushed c674da7763f9bfb2909601a395ed9060dd841a51 to feat/579-idea-workspaces: "fix: preserve workspace input and selected-control identity". 544+/51- across WorkspaceDeliveryPanel, WorkspaceDiscussion, WorkspaceConnections, WorkspaceLayoutEditor, WorkspaceContentEditor, WorkspacePlanItemEditor, WorkspacePlanPanel, WorkspaceSourceDocuments, WorkspaceCard, WorkspaceCheckpointPanel, IdeaWorkspace. New: workspace-ui-feature-recovery.browser.mjs, workspace-ui-races.browser.mjs, WorkspaceLayoutEditorPlacementTests.cs (177 lines); extended IdeaWorkspaceRestoreAndRelinkTests.cs (+91).
+  - PR HEAD is now c674da7. Codex code+security reviews failed with service error ("We couldn't complete this review") — not actual findings. Awaiting Copilot review on new HEAD.
+
+- 2026-11-01 02:52Z - Corrected shell escape characters in this review's immediately preceding checkpoint entry. Its initial insertion used an expandable PowerShell here-string around SHA markup, creating two escape characters and a NUL. Replaced only that new entry with literal text, retained every older entry, and verified the journal is plain UTF-8 text with zero NULs. Future generated prose uses literal strings. No application files changed.
+
+
+
+- 2026-11-01 02:51Z - Full five-PR code-review checkpoint after concurrent head changes.
+  - Refreshed immutable heads: PR #580 73085d282950a456b56b2d5aae404b5be0b8ffde, #521 ef34d61f2a1e64f73442515afc93567ae1140b40, #511 ed205efdca4b39ce3703ab6d220744c35531ebff, #564 0dadff673698e05f0de4ad65fc028015a69e5ddc; #578 unchanged at 17780aa01cc28c12dbf322379a33074b7ce3becc. Original dirty feature checkout preserved.
+  - Delegated fresh-source verification observed zero-warning/error builds and full .NET passes: #580 1660, #521 1273, #511 1634, #564 1259. The exact earlier #580 pre-restoration retry regression now passes; its earlier red result is historical, and this review did not implement that concurrent fix. Current script/formatter/browser completion remains pending.
+  - #578 remains a build blocker: installed ASP.NET OpenAPI 10.0.14 excludes OpenApi 3.x; warnings-as-errors build reports NU1608 and generated-code CS0200. No application repair, merge, deployment or remote review comment performed.
+  - Fresh schema review found no confirmed introduced migration defect. PR #511 plan mapped across U-01-U-18 and nine final checks; actual human usability/adoption and expressly future work remain separate. Complete prior-comment evidence fetched; remaining selected source reviews and independent finding validation still running.
+  - Verified review lesson: recalculate merge bases after concurrent master merges and validate motivating quotes against immutable Git objects. Filled empty staged intent summaries; excluded a stale-source parent candidate and an unreachable UI interleaving. Journal-only publication reuses the earlier passing master gate because every non-journal file is byte-identical to verified 878fe8ddb3fe21410b7acde735bc29cda4639946.
+
+- 2026-11-01 02:45Z (PR monitor — 3 more Copilot performance findings on #580 replied+resolved):
+  - Copilot posted 3 more medium findings on 73085d2 (second re-review of same HEAD).
+  - Finding 1 (r4434164875, WorkspaceOutline.razor:9–28): O(C×P) outline rendering — component sort and placement count each scan the full placement list per component. Valid; imperceptible at typical scale. Replied+resolved PRRT_kwDOSA8y6s6yWt_V; deferred (dict lookup in OnParametersSet).
+  - Finding 2 (r4434164902, WorkspacePlanItemEditor.razor:11–13): O(N²) prerequisite checkboxes — each item editor renders N-1 checkboxes; quadratic for 500+ items. Valid; practical plans are fine. Replied+resolved PRRT_kwDOSA8y6s6yWt_n; deferred (lazy expansion / paged picker).
+  - Finding 3 (r4434164909, WorkspacePlanVersion.razor:9 + WorkspaceDeliveryPanel.razor:61): O(N²) dependency label lookup via repeated FirstOrDefault. Valid; correct fix is a Dictionary<id,title> built once per render. Replied+resolved PRRT_kwDOSA8y6s6yWt_s; deferred.
+  - All 83 threads on #580 now resolved. These are optimization deferrals, not correctness issues.
+
+- 2026-11-01 02:40Z (PR monitor — Codex both clean on #580 HEAD 73085d2; PR fully reviewed):
+  - Codex code review on 73085d282950a456b56b2d5aae404b5be0b8ffde: has_any_findings=false, status=completed. ✅
+  - Codex security review on 73085d282950a456b56b2d5aae404b5be0b8ffde: has_any_findings=null, status=completed. ✅
+  - PR #580 is fully reviewed: all 80 threads resolved, Codex and Copilot both clean on 73085d2, owner delivery record posted. PR is ready for owner merge (T08).
+
+- 2026-11-01 02:40Z (PR monitor — Copilot review on #580 HEAD 73085d2, two findings replied+resolved):
+  - Owner posted closing delivery record on PR #580 (comment 6552403415): all 78 threads resolved, 1,660 .NET / 374 script / 41 browser / 2 integration checks, Codex on 925f2ef clean. PR stays open; merge and owner walkthrough (T08) remain open.
+  - Owner pushed 73085d282950a456b56b2d5aae404b5be0b8ffde (JOURNAL.md only) to feat/579-idea-workspaces; Copilot review triggered on new HEAD.
+  - Copilot Finding 1 (Medium, r4434146742): pointer-up coordinates — `#finish` uses last `#move` dx/dy; `pointerup` could carry different coordinates. Valid edge case; desktop OS coalesces events so gap is sub-pixel and below the ≥2 px commit threshold; `lostpointercapture → #reset()` guards forced releases. Replied and resolved thread PRRT_kwDOSA8y6s6yWrMF; deferred to next iteration.
+  - Copilot Finding 2 (Medium, r4434146754): unkeyed Blazor `<option>` elements in `WorkspaceDeliveryPanel`, `WorkspaceDiscussion`, `WorkspaceConnections`, `WorkspaceLayoutEditor`. Valid best practice; Blazor Server's synchronous circuit rendering prevents mid-render interactions so the described race cannot occur in practice, but `@key` is still the correct approach. Replied and resolved thread PRRT_kwDOSA8y6s6yWrMM; deferred to next iteration.
+  - All threads on #580 now resolved including new Copilot findings. Codex reviews on 73085d2 still running as of 02:36Z.
+
+- 2026-11-01 02:34Z (PR monitor — Copilot review on #511, three findings addressed):
+  - New Copilot review on #511 (feat/unified-workflow-509, HEAD ed205efd) with 3 findings.
+  - Finding 1 (High): Subtask.Completed excluded from StateHash — valid, but changing the hash format invalidates all previously recorded evidence; versioned hash or startup migration needed. Replied to thread; flagged to owner.
+  - Finding 2 (Medium): `<a>` link nested inside `<details><summary>` — confirmed accessibility issue. Fixed in a6e7b49ca5b0a88b0e3a5a2c5e57f4de2bdf7a9c: link removed from summary, added as first visible item in expanded body. Pushed to feat/unified-workflow-509.
+  - Finding 3 (Medium): repository path dedup case-sensitive on Windows — valid, requires SQLite index collation change + startup migration. Replied to thread; flagged to owner.
+  - PR #521 (review/520-project-memory-ownership): 1 open thread (Copilot: MemoryService key normalization), last reply is mine from prior run; flagged to owner.
+  - Build gate still DOWN (.NET 10 install blocked by proxy). No merges.
+
+- 2026-11-01 02:28Z - Published verified repairs to existing PR branches with guarded fast-forward-only pushes: #511 ed205efdca4b39ce3703ab6d220744c35531ebff, #521 ef34d61f2a1e64f73442515afc93567ae1140b40, #564 0dadff673698e05f0de4ad65fc028015a69e5ddc. Product source matches each independently verified local head; final default-branch integration changed JOURNAL.md only. #511 passed1634 .NET/389 script tests, native+stdio workflow smoke,28 live API checks and3 browser cases; #521 passed1273 .NET/329 script tests plus native HTTP pagination/content and framing; #564 passed1259 .NET/371 script/169 targeted tests. Fresh source review found no actionable defect in these repair deltas. Current captured threads remain resolved (511:91,521:3,564:9); no new approval is inferred. #580 initial repaired gate passed1574 .NET/362 script tests, then fresh review found two edge cases: early-state retirement after explicit preservation and placement-selector focus. Corrections and focused regressions are in progress before final build/browser checks. No PR merges or human usability approval. Process lesson: source restored after mutation must be rebuilt without stale timestamp reuse; validate every observed gate against its recorded tree. A small ignored journal-only publisher now enforces fetch, single-file staging and remote ancestry verification.
+
+- 2026-11-01 03:30Z (Automated PR monitor run — build gate DOWN, no merges):
+  - .NET 10 SDK unavailable: dotnet-install.sh blocked by egress proxy (builds.dotnet.microsoft.com:443 connect_rejected). BUILD GATE IS DOWN for this run; no PR was merged.
+  - Open PRs: #580 (non-draft), #578 (Dependabot, non-draft), #564/#521/#511 (all drafts, skipped Phase 1).
+  - #580 (feat/579-idea-workspaces, HEAD 925f2ef2dd6a746641168b1d0d3a79b856e8b16f): mergeable_state=clean, 78/78 review threads resolved, no CHANGES_REQUESTED reviews, CodeRabbit check-run on HEAD = neutral. Would be a merge candidate but BLOCKED (build gate down). Phase 2: 0 unresolved threads, nothing to fix.
+  - #578 (Dependabot, Microsoft.OpenApi 2.13.0→3.11.0): mergeable_state=clean, 0 review threads, CodeRabbit check-run = skipped. Contains 3.0.0 BREAKING CHANGES. BLOCKED (build gate down); prior monitor runs also failed this gate.
+  - #564, #521, #511: draft PRs, Phase 1 skipped. Phase 2 (comment resolution) deferred due to build gate down and token constraints.
+  - Master build: not verified (no dotnet available).
+  - Next: build gate recovery needed before any merges; when dotnet is accessible, #580 is clean and ready to gate.
+
+- 2026-11-01 02:26Z (PR monitor — #521 and #511 both clean, new unreviewed commits):
+  - PR #521 (review/520-project-memory-ownership): still draft; new head ef34d61f pushed by prior session; CI clean on new head; CodeRabbit paused (last reviewed 599a714, ef34d61 not yet reviewed); no unresolved review threads in notifications.
+  - PR #511 (feat/unified-workflow-509): still draft; new head ed205efd pushed by prior session (advancing beyond d412c73 from this monitor's earlier fix); CI clean on new head; CodeRabbit paused (last reviewed 399648b, ed205efd not yet reviewed); no unresolved review threads in notifications.
+  - Build gate still down (.NET 10 install blocked by proxy). No merges performed; owner standing instruction: merges are the owner's.
+
+- 2026-11-01 02:26Z (PR #580 — owner pushed 925f2ef; all reviews on new HEAD clean):
+  - Owner pushed 925f2ef as new branch HEAD, implementing additional fixes:
+    - HasAuthoredState guard in RestoreDraft (navigation-only cache no longer triggers conflict).
+    - Canvas gesture descendant scan refactored to O(n) with one DOM query and iterative BFS.
+    - Guarded async detail reads, delivery feature choices, canvas gesture lifecycle, and more.
+  - All previously-deferred findings (including Major authored-edit preservation) now fixed and resolved by CodeRabbit.
+  - Codex code review on 925f2ef: has_any_findings:false, has_unresolved_findings:false ('Didn't find any major issues. Bravo.').
+  - Codex security review on 925f2ef: has_any_findings:null (no findings).
+  - All PR #580 review threads resolved. PR is ready for owner merge.
+
+- 2026-11-01 02:26Z (Codex complete PR code review — scope and first verification checkpoint):
+  - Request: complete code reviews of all five PRs previously inventoried, including the manifest-only dependency update. Pinned #580 `a6121dd77f0bc5e83733649f12ec4949a4060c62`, #578 `17780aa01cc28c12dbf322379a33074b7ce3becc`, #564 `cd9f67be709bb01bb03cdd174242d7904eae327d`, #521 `599a71402504f8f07a602eddd8a01c7135e0f91a`, #511 `d412c7321008a88cc95f8b2c56713a2aef9c5843` with real merge bases and immutable local refs.
+  - Prepared exact diffs, source/intents, criteria discovery and scope-helper results, plus faithful detached verification worktrees. Preserved the original dirty checkout, active applications and chosen model/effort/access. Reviews remain report-only; no code fix or remote review/comment/status/issue/merge authority inferred.
+  - Native correctness, adversarial and testing passes are running independently; further contract/schema/UI/reliability/standards/performance/previous-comment passes are queued. Remote-ref scope uses native adversarial coverage; no different provider invoked.
+  - Observed #578 blocker: warnings-as-errors build exits 1 with NU1608 dependency-range violations and CS0200 generated OpenAPI assignments after the 3.11.0 pin. No fresh application DLL exists for a truthful runtime-document check. Other per-head gates and source tracing continue; no final merge verdict yet.
+  - Evidence remains ignored; intended local report is `docs/reviews/2026-10-31-pr-code-review.md`. Publish this journal only. The current primary application tree matches the already-verified master snapshot except journal history; preserve concurrent entries.
+
 - 2026-11-01 02:19Z - Owner requested fixes to PRs #580/#564/#521/#511. Applying native GSD debug in isolated detached worktrees; original dirty checkout preserved. Pinned #580 at a2a474377b2fd2c461fcb212a77e4a6c78c6db57, #564 cd9f67be709bb01bb03cdd174242d7904eae327d, #521 599a71402504f8f07a602eddd8a01c7135e0f91a and #511 d412c7321008a88cc95f8b2c56713a2aef9c5843. Independent workers own older-PR integration; parent owns #580 and all publication. Fresh #580 baseline reproduced the preservation failure; repairs now separate early authored state, retire selected-card handlers, synchronize text bindings, correct warning colors and load feature options independently. Narrow integrated #580 check passed 28 cases; mutation and full/runtime verification remain in progress. #564 integrated base locally with169 focused/371 script/1259 .NET passes; #521 native-context verification found and corrected JSON casing/omitted-terminal-cursor guidance; #511 retained both sides of TestRunnerService and repaired real HTTP callers to carry workflow versions. No readiness or human adoption approval is claimed. Next: complete exact-source gates, fresh review and guarded fast-forward updates to the existing PR branches. Only this journal is published at this checkpoint.
 
 

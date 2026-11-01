@@ -2111,13 +2111,14 @@ async function main(argv) {
     console.error(`NOTE: the board's activity trail is unreadable at ${apiBase} (${error.message}) — signals 2 and 3 CANNOT BE MEASURED.\n`);
   }
 
-  // Clone confirmation needs a TRUSTED boundary to compare against: against a fallback root (this
-  // script's own directory, not a repo git named) or no root at all, "confirming" a clone measures
-  // nothing — signal 4 is already UNMEASURED in both cases (see `availability.repoRoot`), so the
-  // git calls are skipped entirely rather than run for a result nothing will use.
+  // Clone confirmation needs a usable log and a TRUSTED boundary to compare against. An incomplete
+  // or wholly corrupt log leaves signal 4 UNMEASURED; probing its partial rows cannot change that
+  // verdict and would print a misleading folded-in NOTE. A fallback root (this script's own
+  // directory, not a repo git named) or no root also leaves it UNMEASURED (see `availability.repoRoot`),
+  // so skip selection and git calls entirely when either source cannot support the result.
   let cloneRoots = [];
   let cloneProbe = null;
-  if (repoRootSource !== "fallback" && repoRoots.length > 0) {
+  if (logAvailable && !nothingParsed && repoRootSource !== "fallback" && repoRoots.length > 0) {
     // The SAME cutoff `summarize` will compute from this same `since` — see `selectCloneCandidates`
     // for why candidates come from the exact rows signal 4 will actually consult, newest first.
     const cutoff = since === null || since === undefined ? null : Date.parse(since);

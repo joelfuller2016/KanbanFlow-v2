@@ -1764,10 +1764,10 @@ test("selectCloneCandidates deduplicates by cwd — one entry per distinct cwd, 
 // (127.0.0.1:1) on purpose, matching the existing dead-port tests elsewhere in this file: signals
 // 2/3 are UNMEASURED, so overall is INCOMPLETE and the CLI exits 1 — that is correct, not a failure
 // of any test here. Signal 4 needs only the log, not the activity trail, so it is still scored.
-const runCliJson = (log, repoRoot, args = []) => {
+const runCliJson = (log, repoRoot, args = [], nodeArgs = []) => {
   const env = { ...process.env, KANBANFLOW_USAGE_LOG: log, KANBANFLOW_API_URL: "http://127.0.0.1:1" };
   for (const key of Object.keys(env)) if (key.startsWith("GIT_")) delete env[key];
-  return spawnSync(process.execPath, [path.join(HERE, "trial-report.mjs"), "--repo-root", repoRoot, ...args, "--json"], {
+  return spawnSync(process.execPath, [...nodeArgs, path.join(HERE, "trial-report.mjs"), "--repo-root", repoRoot, ...args, "--json"], {
     encoding: "utf8",
     env
   });
@@ -1814,6 +1814,70 @@ test("CLI integration: --repo-root a separates a clone (b) from a different proj
     // probed, so the count is 2, not 3.
     assert.deepEqual(summary.sources.cloneProbe, { probed: 2, capped: false, candidates: 2, budgetSpent: false, tooManyRemotes: 0 });
     assert.equal(summary.sources.cloneProbeCapped, false);
+  } finally {
+    cleanup();
+  }
+});
+
+test("CLI integration: unavailable or corrupt usage logs skip clone probes and folded-in notes", () => {
+  const { a, b, make, cleanup } = buildCloneFixture();
+  const dir = make();
+  const log = path.join(dir, "mcp-usage.jsonl");
+  const trace = path.join(dir, "git-calls.jsonl");
+  const preload = path.join(dir, "trace-git.cjs");
+  try {
+    // Observe the real CLI's Git boundary without replacing its answers. --repo-root resolves
+    // without Git, so every recorded call belongs to clone confirmation.
+    fs.writeFileSync(preload, [
+      'const fs = require("node:fs");',
+      'const cp = require("node:child_process");',
+      'const original = cp.execFileSync;',
+      'cp.execFileSync = function (file, args, options) {',
+      '  if (file === "git") fs.appendFileSync(' + JSON.stringify(trace) + ', JSON.stringify({ args, cwd: options?.cwd }) + "\\n");',
+      '  return original.apply(this, arguments);',
+      '};',
+      'require("node:module").syncBuiltinESMExports();'
+    ].join("\n"));
+    const run = (usageLog = log) => {
+      fs.writeFileSync(trace, "");
+      const result = runCliJson(usageLog, a, [], ["--require", preload]);
+      assert.equal(result.status, 1, result.stdout + result.stderr);
+      const calls = fs.readFileSync(trace, "utf8").split(/\r?\n/).filter(Boolean).map(line => JSON.parse(line));
+      return { result, calls, summary: JSON.parse(result.stdout) };
+    };
+    const assertUnavailable = (warning, usageLog = log) => {
+      const { result, calls, summary } = run(usageLog);
+      assert.equal(summary.sources.log, false);
+      assert.equal(find(summary, 4).verdict, "UNMEASURED");
+      assert.match(result.stderr, warning);
+      assert.deepEqual(calls, [], "an unavailable usage log must not cause even a Git fingerprint or clone probe");
+      assert.equal(summary.sources.cloneProbe, null, "clone confirmation did not run");
+      assert.doesNotMatch(result.stderr, /folded into signal 4 as inside/);
+      return summary;
+    };
+
+    // A usable log may contain a torn line. Keep scoring its good rows and prove the observer
+    // sees actual probes before using an empty trace as evidence that probing was skipped.
+    fs.writeFileSync(log, JSON.stringify(row({ session: "review-sandbox", cwd: b })) + "\n{torn\n");
+    const control = run();
+    assert.equal(control.summary.sources.log, true);
+    assert.equal(find(control.summary, 4).verdict, "REVERT");
+    assert.equal(control.summary.sources.cloneProbe.probed, 1);
+    assert.ok(control.calls.some(call => call.cwd === b && call.args[0] === "rev-parse"));
+    assert.match(control.result.stderr, /folded into signal 4 as inside/);
+
+    // A directory is discovered as an archive but cannot be read as a generation. The good
+    // live row remains visible as partial evidence; it cannot justify clone confirmation.
+    fs.mkdirSync(log + ".1");
+    const partial = assertUnavailable(/1 of 2 usage-log generation\(s\) could be read; 1 UNREADABLE/);
+    assert.deepEqual(find(partial, 4).detail.map(detail => detail.session), ["review-sandbox"]);
+    fs.rmdirSync(log + ".1");
+
+    fs.writeFileSync(log, "{torn\n{also-torn\n");
+    assertUnavailable(/every one of the 2 line\(s\).*unparseable/);
+    fs.unlinkSync(log);
+    assertUnavailable(/no usage log .* yet/);
+    assertUnavailable(/usage logging is disabled/, "off");
   } finally {
     cleanup();
   }
