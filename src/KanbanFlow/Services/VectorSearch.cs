@@ -41,7 +41,7 @@ public sealed class VectorSearch(IDbContextFactory<AppDbContext> dbFactory) : IV
         if (string.IsNullOrWhiteSpace(scopeKey))
             throw new ValidationException("scopeKey cannot be null or whitespace.");
 
-        var key = scopeKey.Trim();
+        var key = MemoryService.NormalizeScopeKey(scope, scopeKey.Trim());
 
         await using var db = await dbFactory.CreateDbContextAsync(ct);
 
