@@ -708,8 +708,9 @@ the same comment stream and history.
 ## Surfaces, verified
 
 [Issue #277](https://github.com/joelfuller2016/KanbanFlow-v2/issues/277) exists because this
-README under-reported its own surface. Each number below was re-derived for this revision by
-the command beside it — not copied from the previous README, and not copied from the issue.
+README under-reported its own surface. REST and MCP counts below were measured against the
+November 1 combined workflow/workspace application. UI inventories were checked in source;
+test receipts retain their execution dates and do not imply a new full browser run.
 
 | Surface | Count | Command that produced it |
 |---|---:|---|
@@ -856,7 +857,7 @@ All local. There is no CI — [on purpose](#deliberate-non-features).
 ```
 
 ```bash
-dotnet test tests/KanbanFlow.Tests/KanbanFlow.Tests.csproj # 1,721 xUnit tests
+dotnet test tests/KanbanFlow.Tests/KanbanFlow.Tests.csproj # 2,135 xUnit tests at the November 1 checkpoint
 ```
 
 ```powershell

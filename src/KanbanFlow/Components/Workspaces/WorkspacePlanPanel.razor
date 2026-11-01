@@ -8,18 +8,20 @@
     }
     @foreach (var plan in Context.Document.PlanRevisions.OrderByDescending(p => p.Version))
     {
-        var renderedPlanRevision = Context.ProjectPlanRevision;
+        var renderedWorkspaceRevision = Context.Revision;
+        var renderedProjectPlanRevision = Context.ProjectPlanRevision;
+        var renderedProposalBaseline = plan.ExpectedProjectPlanRevision;
         <details class="border rounded p-3 mb-2" @key="plan.Id" data-testid="plan-version-@plan.Id">
             <summary>@plan.Title · v@(plan.Version) · @plan.Status</summary>
             <WorkspacePlanVersion Plan="plan" KanbanUrl="@Context.KanbanUrl" OnInspectTask="OnInspectTask" />
             <button class="btn btn-sm btn-outline-secondary mt-2" disabled="@Busy" @onclick="() => CopyPlan(plan)" data-testid="plan-copy-@plan.Id">Use as a new draft</button>
             @if (plan.Status == "Draft")
             {
-                <button class="btn btn-outline-success mt-2" disabled="@(Busy || (Context.ProjectId is not null && plan.ExpectedProjectPlanRevision != Context.ProjectPlanRevision))" @onclick="() => Accept(plan.Id, plan.ExpectedProjectPlanRevision)" data-testid="plan-accept-@plan.Id">Accept this plan</button>
+                <button class="btn btn-outline-success mt-2" disabled="@(Busy || (Context.ProjectId is not null && plan.ExpectedProjectPlanRevision != Context.ProjectPlanRevision))" @onclick="() => Accept(plan.Id, renderedProposalBaseline, renderedWorkspaceRevision)" data-testid="plan-accept-@plan.Id">Accept this plan</button>
                 @if (Context.ProjectId is not null && plan.ExpectedProjectPlanRevision != Context.ProjectPlanRevision)
                 {
-                    <p class="text-warning-emphasis small mt-2">This proposal used project-plan revision @(plan.ExpectedProjectPlanRevision?.ToString() ?? "none"). The loaded shared plan is revision @renderedPlanRevision. Review the current accepted plan above before rebasing acceptance.</p>
-                    <button class="btn btn-outline-secondary" disabled="@Busy" @onclick="() => Accept(plan.Id, renderedPlanRevision)" data-testid="plan-rebase-accept-@plan.Id">Accept after reviewing shared revision @renderedPlanRevision</button>
+                    <p class="text-warning-emphasis small mt-2">This proposal used project-plan revision @(plan.ExpectedProjectPlanRevision?.ToString() ?? "none"). The loaded shared plan is revision @Context.ProjectPlanRevision. Review the current accepted plan above before rebasing acceptance.</p>
+                    <button class="btn btn-outline-secondary" disabled="@Busy" @onclick="() => Accept(plan.Id, renderedProjectPlanRevision, renderedWorkspaceRevision)" data-testid="plan-rebase-accept-@plan.Id">Accept after reviewing shared revision @Context.ProjectPlanRevision</button>
                 }
             }
         </details>
@@ -86,7 +88,7 @@
     }
     private Task RemoveItem(string id) => Change(editing with { Items = [.. editing.Items.Where(i => i.Id != id).Select(i => i with { DependsOn = [.. i.DependsOn.Where(d => d != id)] })] });
     private Task Propose() => OnCommand.InvokeAsync(WorkspaceUiCommand.Create("propose_plan", new { title = editing.Title, items = editing.Items.Select(i => new { id = i.Id, title = i.Title, description = i.Description, acceptanceCriteria = i.OriginalAcceptanceCriteria ?? WorkspaceUiText.Lines(i.AcceptanceCriteria), dependsOn = i.DependsOn, provenance = i.Provenance }), expectedProjectPlanRevision = editing.BaseProjectPlanRevision }, editing.BaseRevision ?? Context.Revision, "plan"));
-    private Task Accept(string id, long? baseline) => OnCommand.InvokeAsync(WorkspaceUiCommand.Create("accept_plan", new { planRevisionId = id, expectedProjectPlanRevision = baseline }, Context.Revision));
+    private Task Accept(string id, long? baseline, long workspaceRevision) => OnCommand.InvokeAsync(WorkspaceUiCommand.Create("accept_plan", new { planRevisionId = id, expectedProjectPlanRevision = baseline }, workspaceRevision));
     private Task CopyPlan(IdeaWorkspacePlanRevision plan)
     {
         pendingCopy = plan;
