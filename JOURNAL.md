@@ -51,6 +51,20 @@ A review of the repository and a test run on 2026-09-26 filed findings as issues
   - S7, for #549.
 
 ## Entries (newest first)
+
+- 2026-11-01 04:29Z Codex: PR #521 was squash merged after verified repairs as f1be4156dd716551adc45878e6049699fd679b74, from exact head bd351826594d1387039d7e581ce0ed95c88cd36b. Its canonical gate passed 1,294 .NET tests with zero build warnings/errors; all 329 script cases and 20 focused project-memory key/upgrade cases passed. Current review threads were resolved; final journal-only integration preserved tested source. The merge used the expected PR head and normal repository controls.
+  - PR #578 repair is published at 73cfb6a99f7455a4393bd1e6b447be7d8be4948e: canonical exit 0, 1,260 .NET and 329 script cases; before NU1608, after real HTTP OpenAPI test 1/1; independent review and its focused rerun passed. The new combined gate is running after integrating merged project-memory support.
+  - PR #564 initially passed 1,259 .NET, 373 script and 171 focused trial cases, including a guard-removal mutation that failed on six actual Git calls. Fresh configured review found three additional portability/correctness issues: remote path case, a host-path fixture and preservation of explicit Git safe-directory trust. These are being repaired before merge. CodeRabbit has rate limited review and retains an older change request; no control is being bypassed.
+  - PR #511 focused provider-fault/idempotency/schema regressions now pass 26 cases; its current standalone gate passes 1,663 .NET and 389 script cases plus actual native/stdio checks. Final integration is pending. PR #580 workspace fixes and four fresh review items are in progress. Cross-feature review additionally found route, original-capture, project-association and versioned browser-fixture interactions to address in the final combined feature branch before merging it.
+  - Verified process lesson: compare every final head with its tested source excluding only JOURNAL.md before carrying a gate forward; use expected-head merges and repeat checks when actual application files combine. Optional bot rate limits and source review are not recorded as test passes.
+
+
+- 2026-11-01 04:29Z (PR monitor — Codex both clean on #580 HEAD 5b7c7a9):
+  - Codex Code Review: has_any_findings: false ✅ (completed 04:26Z).
+  - Codex Security Review: has_any_findings: null/completed ✅ (completed 04:29Z).
+  - All 4 CodeRabbit threads on 5b7c7a9 replied, resolved, and acknowledged by CodeRabbit.
+  - #580 HEAD=5b7c7a9 fully clean — awaiting owner walkthrough and merge.
+
 - 2026-11-01 05:00Z (PR monitor — scheduled run):
   - .NET 10 SDK: UNAVAILABLE. `curl` to dot.net install script returned HTTP 403 (network
     proxy blocks it); apt has no `dotnet-sdk-10.0` package. BUILD GATE IS DOWN — no merges.
