@@ -69,7 +69,8 @@
         return input.ChangeAsync(draft with { BaseRevision = draft.BaseRevision ?? Context.Revision, BaseProjectPlanRevision = editing.BaseRevision.HasValue ? draft.BaseProjectPlanRevision : Context.ProjectPlanRevision }, OnDraftChanged);
     }
     private Task TitleChanged(ChangeEventArgs e) => Change(editing with { Title = e.Value?.ToString() ?? "" });
-    private Task Reapply() => Change(editing with { BaseRevision = Context.Revision, BaseProjectPlanRevision = Context.ProjectPlanRevision });
+    private Task Reapply() => Change(editing with { BaseRevision = Context.Revision, BaseProjectPlanRevision = Context.ProjectPlanRevision,
+        Items = [.. editing.Items.Select(i => i with { Provenance = i.Provenance?.ProjectId == Context.ProjectId ? i.Provenance : null })] });
     private Task AddItem() => Change(editing with { Items = [.. editing.Items, new()], BaseRevision = editing.BaseRevision ?? Context.Revision });
     private Task ItemChanged(WorkspacePlanItemDraft item) => Change(editing with { Items = [.. editing.Items.Select(i => i.Id == item.Id ? item : i)], BaseRevision = editing.BaseRevision ?? Context.Revision });
     private Task RemoveItem(string id) => Change(editing with { Items = [.. editing.Items.Where(i => i.Id != id).Select(i => i with { DependsOn = [.. i.DependsOn.Where(d => d != id)] })] });
