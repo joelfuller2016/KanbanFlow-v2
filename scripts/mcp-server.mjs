@@ -123,7 +123,7 @@ const tools = [
       type: "object",
       properties: {
         projectId: { type: "integer", description: "Project id to inspect." },
-        limit: { type: "integer", minimum: 1, maximum: 50, description: "Optional maximum number of recommendations (1–50). Matches the REST clamp (#151) and the native tool." }
+        limit: { type: "integer", description: "Optional maximum number of recommendations (clamped to 1-50). Matches the REST clamp (#151) and the native tool." }
       },
       required: ["projectId"]
     }
@@ -311,7 +311,8 @@ const tools = [
           description: "Optional initial priority. Defaults to Low."
         },
         assignee: { type: "string", description: "Optional free-text assignee label." },
-        sortOrder: { type: "number", description: "Optional finite task rank within the column; may be fractional." }
+        sortOrder: { type: "number", description: "Optional finite task rank within the column; may be fractional." },
+        actor: { type: "string", description: "Optional actor label recorded in the audit trail (default 'mcp-agent')." }
       },
       required: ["featureId", "name"]
     }
@@ -347,14 +348,15 @@ const tools = [
     inputSchema: {
       type: "object",
       properties: {
-        taskId: { type: "integer", minimum: 1, description: "Task id to delete." }
+        taskId: { type: "integer", minimum: 1, description: "Task id to delete." },
+        actor: { type: "string", description: "Optional actor label recorded in the audit trail (default 'mcp-agent')." }
       },
       required: ["taskId"]
     }
   },
   {
     name: "reassign_task",
-    description: "Reassign a task to a different feature (typically in the same project). NOTE: project-boundary enforcement is a known gap (#83); the API today permits cross-project moves.",
+    description: "Reassign a task to a different feature (typically in the same project). Project-boundary enforcement (#83) rejects a cross-project move with a 422.",
     inputSchema: {
       type: "object",
       properties: {
@@ -618,7 +620,7 @@ const tools = [
         },
         tag: { type: "string", description: "Optional case-insensitive tag substring filter." },
         q: { type: "string", description: "Optional case-insensitive search across title + body." },
-        limit: { type: "integer", minimum: 1, maximum: 500, description: "Optional max results." },
+        limit: { type: "integer", description: "Optional max results (clamped to 1-500)." },
         offset: { type: "integer", minimum: 0, description: "Optional offset for paging." }
       }
     }
@@ -821,7 +823,7 @@ const tools = [
   },
   {
     name: "read_graph",
-    description: "Read the entire knowledge-graph memory: every current entity and the relations between them (capped at the first 1000 entities).",
+    description: "Read the entire knowledge-graph memory: every current entity and the relations between them (capped at the first 900 entities).",
     inputSchema: {
       type: "object",
       properties: {
@@ -861,7 +863,68 @@ process.stdin.on("data", chunk => {
   readMessages();
 });
 
-process.stdin.on("end", () => process.exit(0));
+// A client that writes its requests and then closes stdin is shutting down normally, not
+// crashing — closing stdin must not be treated as license to drop a response that is still
+// waiting on its REST round-trip (inFlightRequestIds, #168 above). Each REST hop is individually
+// bounded by restTimeoutMs (an AbortController fires at that mark — see restJson/
+// nativeMcpToolCall); most tools make one hop, so the deadline below (that same bound plus a
+// small margin) is generous, but a compound tool that awaits two hops sequentially (get_task)
+// can legitimately still be running when it fires — measured: two 3s hops, each individually well
+// under a 4s per-request timeout, together still reach the deadline branch below (4s timeout + 1s
+// margin measured from "end", vs. ~6s for both hops in sequence). If it fires with request(s)
+// still tracked, they are named on stderr (see the branch below) rather than left silent as
+// before — this is a backstop against a
+// genuine hang, not a promise that every tool settles inside it. The exit code stays 0 even then:
+// an MCP supervisor (Claude Code among others) may treat a non-zero exit as a server failure, and
+// this shutdown is still orderly from the transport's own point of view — the stderr line is the
+// signal, not the exit code (see the issue's Open questions for the case against changing that).
+//
+// PRECONDITION this does NOT cover: the client must keep READING stdout, not merely keep it open.
+// process.stdout.write() is a blocking, synchronous syscall on Windows (Node's own documented
+// behavior for pipes on this platform); a peer that holds its read end open but never drains it
+// makes that write block once a response exceeds the OS pipe buffer, freezing this entire
+// single-threaded process — including the drainInterval below and its own deadline, since neither
+// can run until the blocked write returns. Measured: a 2.6MB response with no reader is still
+// blocked at 5s; the identical response with a reader completes in ~140ms. Not redesigned here:
+// every real MCP client reads its own stdout continuously by construction (that's how it receives
+// ANY response, not just this one), so a peer that stops reading without closing is already
+// violating the transport's own contract, independent of this fix.
+process.stdin.on("end", () => {
+  // On POSIX, a pipe write can still be QUEUED (not yet flushed to the OS) when write() returns,
+  // so checking inFlightRequestIds alone could exit before the last frame is actually sent.
+  // writableLength is 0 immediately after a synchronous Windows write (measured) and also reads 0
+  // once stdout is EPIPE-broken (measured), so this adds real POSIX safety without changing
+  // Windows behavior or risking a wedge against a dead pipe.
+  const drained = () => inFlightRequestIds.size === 0 && process.stdout.writableLength === 0;
+  if (drained()) {
+    process.exit(0);
+    return;
+  }
+  const deadline = Date.now() + restTimeoutMs + 1000;
+  const drainInterval = setInterval(() => {
+    if (drained()) {
+      clearInterval(drainInterval);
+      process.exit(0);
+      return;
+    }
+    if (Date.now() > deadline) {
+      clearInterval(drainInterval);
+      // Request(s) genuinely still in flight at the deadline: their REST call may already have
+      // completed (or still will) server-side, so answering them here with an error would
+      // actively mislead a client that retries a "failed" write which in fact succeeded — the
+      // same silence-over-a-false-answer reasoning as leaving them unanswered today. Named on
+      // stderr instead so it is at least observable; exit code stays 0 on purpose (see above).
+      if (inFlightRequestIds.size > 0) {
+        try {
+          process.stderr.write(`[kanbanflow-mcp] exiting with request(s) still in flight after ${restTimeoutMs + 1000}ms: ${JSON.stringify([...inFlightRequestIds])}\n`);
+        } catch {
+          // stderr is unavailable too (see its own "error" listener below) — nothing else to do.
+        }
+      }
+      process.exit(0);
+    }
+  }, 25);
+});
 process.stdin.resume();
 
 // Crash-safety (#168): a rejected promise with no catch handler, or a throw in a callback
@@ -890,6 +953,45 @@ function reportFatal(kind, reason) {
 
 process.on("unhandledRejection", reason => reportFatal("unhandledRejection", reason));
 process.on("uncaughtException", error => reportFatal("uncaughtException", error));
+
+// A client that stops reading stdout (closes/destroys its read side, or simply exits without
+// draining it) makes every subsequent process.stdout.write() fail with EPIPE. That failure
+// surfaces asynchronously as an "error" event, on its own event-loop tick — never as a
+// synchronous throw from write() itself (verified: 60 writes after the peer closed, 0 synchronous
+// throws). A Node stream with zero "error" listeners throws that error back into the event loop,
+// which — with no listener here — would reach uncaughtException on a LATER tick than the one that
+// started the write, cascading into reportFatal: reportFatal answers EVERY currently in-flight id
+// when it runs (see its own comment above), not just the one that faulted, so an EPIPE on one
+// response would force-claim a DIFFERENT, still-genuinely-pending request and exit before its own
+// real REST completion (measured live — see the PR's test evidence for the before/after trace).
+//
+// This does NOT recover the lost response — EPIPE is permanent, so this client was never going to
+// see it, listener or not. What swallowing it here actually buys: no stack trace per failed write
+// (there can be many, not one — measured 56 of 60 in one run), and the drain above is left to run
+// to its own real completion instead of being cut short by a fault that has nothing to do with it.
+let stdoutErrorLogged = false;
+process.stdout.on("error", error => {
+  if (stdoutErrorLogged) return;
+  stdoutErrorLogged = true;
+  try {
+    process.stderr.write(`[kanbanflow-mcp] stdout error (client stopped reading): ${error.code || error.message}\n`);
+  } catch {
+    // Best-effort only: a synchronous throw here would be caught, but if the client has ALSO
+    // stopped reading stderr, this write fails the same way stdout's did — asynchronously, past
+    // this catch. process.stderr's own "error" listener below is what actually stops THAT from
+    // reaching uncaughtException and re-triggering the exact cascade this listener exists to avoid
+    // (measured: both pipes dead with no stderr listener, exit at 78-98ms via the force-claim
+    // above; with it, 400ms+, i.e. the real REST completion).
+  }
+});
+
+// Same failure shape as the stdout listener above, for the stderr writes IN this file (this one's
+// own catch block just above, and reportFatal's, #168): if the client has also stopped reading
+// stderr, those writes fail asynchronously too, and with no listener here THAT reaches
+// uncaughtException and cascades into reportFatal exactly as an unguarded stdout EPIPE would.
+// There is nothing else to do with a broken stderr but drop it — it is already the last-resort
+// logging channel (see reportFatal's own comment above).
+process.stderr.on("error", () => {});
 
 class McpError extends Error {
   constructor(code, message, data = undefined) {
@@ -1096,7 +1198,9 @@ async function callTool(toolName, args) {
       return restJson(`/api/projects/${requiredInt(args, "projectId")}/context`);
     case "get_next_tasks": {
       const projectId = requiredInt(args, "projectId");
-      const limit = optionalInt(args, "limit", { min: 1, max: 50 });
+      // Clamped, not rejected: matches TaskRanking.cs's Math.Clamp(limit, 1, 50), which both REST
+      // and the native tool run through (F5 parity fix).
+      const limit = optionalClampedInt(args, "limit", { min: 1, max: 50 });
       const query = limit === undefined ? "" : `?limit=${encodeURIComponent(limit)}`;
       return restJson(`/api/projects/${projectId}/next-tasks${query}`);
     }
@@ -1209,7 +1313,9 @@ async function callTool(toolName, args) {
           status: optionalString(args, "status"),
           priority: optionalString(args, "priority"),
           assignee: optionalNonEmptyString(args, "assignee"),
-          sortOrder: optionalFiniteNumber(args, "sortOrder")
+          sortOrder: optionalFiniteNumber(args, "sortOrder"),
+          // Actor is optional and defaults to "mcp-agent", mirroring the native tool (F2 parity fix).
+          actor: optionalString(args, "actor")?.trim() || "mcp-agent"
         }
       });
     case "update_task":
@@ -1228,8 +1334,13 @@ async function callTool(toolName, args) {
           sortOrder: optionalFiniteNumber(args, "sortOrder")
         }
       });
-    case "delete_task":
-      return restJson(`/api/tasks/${requiredInt(args, "taskId", { min: 1 })}`, { method: "DELETE" });
+    case "delete_task": {
+      // Actor is optional and defaults to "mcp-agent", mirroring the native tool (F3 parity fix).
+      // Forwarded as a query parameter, not a body: DELETE request bodies are commonly dropped by
+      // HTTP clients and intermediate proxies (see the same choice on the REST route itself).
+      const actor = optionalString(args, "actor")?.trim() || "mcp-agent";
+      return restJson(`/api/tasks/${requiredInt(args, "taskId", { min: 1 })}?actor=${encodeURIComponent(actor)}`, { method: "DELETE" });
+    }
     case "reassign_task":
       return restJson(`/api/tasks/${requiredInt(args, "taskId", { min: 1 })}/feature`, {
         method: "PATCH",
@@ -1366,7 +1477,8 @@ async function callTool(toolName, args) {
           plan: optionalNonEmptyString(args, "plan"),
           tags: optionalNonEmptyString(args, "tags"),
           priority: optionalString(args, "priority"),
-          actor: optionalNonEmptyString(args, "actor")
+          // Actor is optional and defaults to "mcp-agent", mirroring the native tool (F4 parity fix).
+          actor: optionalString(args, "actor")?.trim() || "mcp-agent"
         }
       });
     case "list_ideas": {
@@ -1379,7 +1491,8 @@ async function callTool(toolName, args) {
       if (tag !== undefined) params.set("tag", tag);
       const q = optionalNonEmptyString(args, "q");
       if (q !== undefined) params.set("q", q);
-      const limit = optionalInt(args, "limit", { min: 1, max: 500 });
+      // Clamped, not rejected: matches IdeaService.cs's Math.Clamp(limit, 1, 500) (F5 parity fix).
+      const limit = optionalClampedInt(args, "limit", { min: 1, max: 500 });
       if (limit !== undefined) params.set("limit", String(limit));
       const offset = optionalInt(args, "offset", { min: 0 });
       if (offset !== undefined) params.set("offset", String(offset));
@@ -1409,13 +1522,15 @@ async function callTool(toolName, args) {
           status: optionalString(args, "status"),
           tags: optionalString(args, "tags"),
           priority: optionalString(args, "priority"),
-          actor: optionalNonEmptyString(args, "actor")
+          // Actor is optional and defaults to "mcp-agent", mirroring the native tool (F4 parity fix).
+          actor: optionalString(args, "actor")?.trim() || "mcp-agent"
         }
       });
     case "promote_idea":
       return restJson(`/api/ideas/${requiredInt(args, "ideaId", { min: 1 })}/promote`, {
         method: "POST",
-        body: { actor: optionalNonEmptyString(args, "actor") }
+        // Actor is optional and defaults to "mcp-agent", mirroring the native tool (F4 parity fix).
+        body: { actor: optionalString(args, "actor")?.trim() || "mcp-agent" }
       });
 
     // ── Knowledge-graph memory tools (#224) — forwarded to the native MCP server ──
@@ -1665,6 +1780,31 @@ function optionalInt(args, name, { min = undefined, max = undefined } = {}) {
   if (args[name] === undefined || args[name] === null) return undefined;
   const value = coerceInt(args[name], name);
   assertIntRange(value, name, min, max);
+  return value;
+}
+
+// Like optionalInt, but an out-of-range value is CLAMPED rather than rejected (-32602 is reserved
+// for a value that isn't an integer at all; coerceInt above still enforces that). This mirrors the
+// Math.Clamp the REST/native side already applies downstream (TaskRanking.cs, IdeaService.cs) —
+// the wrapper was rejecting what those callees would have silently clamped anyway (F5 parity fix).
+//
+// coerceInt's own strictness only guarantees a SAFE integer (up to 2^53) — wider than the Int32
+// both downstream paths actually bind. Without the check below, a value like 3000000000 would
+// clamp "successfully" to `max` here, while native's `int` parameter fails to bind it and REST's
+// `int?` query binding answers 400 — three different outcomes for the same nonsensical input, the
+// exact drift this fix exists to close. Reject it the same way coerceInt rejects a non-integer,
+// BEFORE it ever reaches the min/max clamp.
+const INT32_MIN = -2147483648;
+const INT32_MAX = 2147483647;
+
+function optionalClampedInt(args, name, { min = undefined, max = undefined } = {}) {
+  if (args[name] === undefined || args[name] === null) return undefined;
+  const value = coerceInt(args[name], name);
+  if (value < INT32_MIN || value > INT32_MAX) {
+    throw new McpError(-32602, `${name} must fit in a 32-bit integer.`);
+  }
+  if (min !== undefined && value < min) return min;
+  if (max !== undefined && value > max) return max;
   return value;
 }
 

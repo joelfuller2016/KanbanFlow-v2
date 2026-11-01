@@ -21,6 +21,15 @@ namespace KanbanFlow.Tests;
 /// </summary>
 public sealed class SqliteFileTestFactory : IDbContextFactory<AppDbContext>, IDisposable
 {
+    /// <summary>
+    /// SQLite's busy timeout for every factory that doesn't override <c>commandTimeoutSeconds</c>.
+    /// Any test that races two writers against one factory and bounds the race with its own watchdog
+    /// must derive that watchdog from this constant instead of an independent number, so the two can
+    /// never drift out of the order that makes a genuine stall diagnosable as SQLITE_BUSY rather than
+    /// an ambiguous watchdog cancellation.
+    /// </summary>
+    public const int DefaultBusyTimeoutSeconds = 30;
+
     private readonly string _path;
     private readonly DbContextOptions<AppDbContext> _options;
 
@@ -29,7 +38,7 @@ public sealed class SqliteFileTestFactory : IDbContextFactory<AppDbContext>, IDi
     /// Maps to SQLite's busy timeout. Must exceed however long a test deliberately holds the write
     /// lock, otherwise the blocked writer fails with SQLITE_BUSY instead of serializing behind it.
     /// </param>
-    public SqliteFileTestFactory(IInterceptor? interceptor = null, int commandTimeoutSeconds = 30)
+    public SqliteFileTestFactory(IInterceptor? interceptor = null, int commandTimeoutSeconds = DefaultBusyTimeoutSeconds)
         : this(
             interceptor is null ? Array.Empty<IInterceptor>() : new[] { interceptor },
             commandTimeoutSeconds)
@@ -44,7 +53,7 @@ public sealed class SqliteFileTestFactory : IDbContextFactory<AppDbContext>, IDi
     /// </param>
     public SqliteFileTestFactory(
         IReadOnlyCollection<IInterceptor> interceptors,
-        int commandTimeoutSeconds = 30)
+        int commandTimeoutSeconds = DefaultBusyTimeoutSeconds)
     {
         ArgumentNullException.ThrowIfNull(interceptors);
 

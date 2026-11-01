@@ -21,6 +21,40 @@ updates:
           - "minor"
           - "patch"
 
-  # NOTE: client-side libs (Bootstrap, SortableJS) are vendored under
-  # wwwroot/lib and are NOT covered by Dependabot. They are managed via
-  # libman.json — run `libman update` to bump them. See issue #136.
+  - package-ecosystem: "nuget"
+    directory: "/tests/KanbanFlow.Tests"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "chore(deps)"
+    labels:
+      - "dependencies"
+    groups:
+      nuget-tests-minor-patch:
+        update-types:
+          - "minor"
+          - "patch"
+
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 3
+    commit-message:
+      prefix: "chore(deps)"
+    labels:
+      - "dependencies"
+    groups:
+      npm-minor-patch:
+        update-types:
+          - "minor"
+          - "patch"
+
+  # NOTE: three manifests are covered above — app (nuget, /src/KanbanFlow), test
+  # project (nuget, /tests/KanbanFlow.Tests) and scripts/e2e tooling (npm, /).
+  # Client-side libs (Bootstrap, SortableJS) are the one exception: they are
+  # vendored under wwwroot/lib and are NOT covered by Dependabot. They are
+  # managed via libman.json — run `libman update` to bump them. See issue #136.

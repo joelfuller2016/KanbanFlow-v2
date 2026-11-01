@@ -1129,7 +1129,10 @@ public static class ApiEndpoints
 
     // ── Task Endpoints ─────────────────────────────────────────────────
 
-    private static void MapTaskEndpoints(this WebApplication app)
+    // internal (not private): TaskDeleteActorEndpointTests hosts this route group alone, over a
+    // real Kestrel listener, without pulling in the LLM/embedding/memory stubs MapApiEndpoints'
+    // other route groups would otherwise require (see that test's summary).
+    internal static void MapTaskEndpoints(this WebApplication app)
     {
         // GET /api/features/{featureId}/tasks — list tasks for feature
         app.MapGet("/api/features/{featureId:int}/tasks", async (int featureId, AppDbContext db) =>
@@ -1713,12 +1716,23 @@ public static class ApiEndpoints
         // DELETE /api/tasks/{id} — delete.
         // Routes through ITaskService.DeleteAsync so the TaskDeleted audit event and the
         // FK-safe child cleanup (leaf-first subtasks + acceptance criteria) are produced
-        // uniformly with UI-driven deletes (#88). No actor param exists on this route.
-        app.MapDelete("/api/tasks/{id:int}", async (int id, Services.ITaskService taskSvc, CancellationToken ct) =>
+        // uniformly with UI-driven deletes (#88).
+        // `actor` is an optional QUERY parameter (`?actor=`), not a request body: a DELETE has no
+        // defined body semantics (RFC 9110 §9.3.5), and clients/proxies commonly drop one, so a
+        // query parameter is the only reliably-transmitted way to attribute this action — the same
+        // choice already made for `GET /api/projects/{id}/next-tasks?actor=&limit=` (see
+        // docs/ARCHITECTURE.md's route map). Forwarded RAW — the same thin pass-through as the
+        // create/update/status/reassign task routes (e.g. PATCH .../status forwards `dto.Actor` raw,
+        // unnormalized); claim and release instead trim the actor and 422 a blank one.
+        // Whitespace-only/omitted uses the shared audit boundary's request attribution (header or
+        // "api" fallback), keeping normalization in the service layer rather than this route — a
+        // caller that wants "mcp-agent" (the wrapper's `delete_task`, or a native tool) supplies it
+        // itself.
+        app.MapDelete("/api/tasks/{id:int}", async (int id, string? actor, Services.ITaskService taskSvc, CancellationToken ct) =>
         {
             try
             {
-                await taskSvc.DeleteAsync(id, actor: null, ct);
+                await taskSvc.DeleteAsync(id, actor, ct);
                 return Results.NoContent();
             }
             catch (Services.TaskNotFoundException)
@@ -1728,6 +1742,10 @@ public static class ApiEndpoints
             catch (Services.ExternalWorkItemConflictException ex)
             {
                 return MapExternalWorkItemConflict(ex);
+            }
+            catch (Services.ValidationException ex)
+            {
+                return Results.UnprocessableEntity(new { message = ex.Message });
             }
         });
 

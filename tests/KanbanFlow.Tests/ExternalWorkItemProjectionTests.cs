@@ -23,7 +23,13 @@ public sealed class ExternalWorkItemProjectionTests
         var feature = await SeedFeature(factory);
         var service = new ExternalWorkItemService(factory);
         var request = Request(feature);
-        using var watchdog = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+        // Must exceed SqliteFileTestFactory's busy timeout so a stall inside SQLite's own busy-wait
+        // surfaces as a SqliteException (SQLITE_BUSY); a stall in
+        // PauseFirstTaskSave.SavingChangesAsync's own wait (bounded only by this same token) still
+        // ends in a cancellation, just with 2x the busy timeout's headroom before it fires (see
+        // TaskDependencyConcurrencyTests.RaceAsync).
+        using var watchdog = new CancellationTokenSource(
+            TimeSpan.FromSeconds(SqliteFileTestFactory.DefaultBusyTimeoutSeconds * 2));
         pause.Enabled = true;
         transactions.Enabled = true;
         var first = Task.Run(() => service.ProjectInboundGitHubIssueAsync(request, "importer", watchdog.Token));
