@@ -163,13 +163,25 @@ public sealed class WorkspacePublicationPreviewRenderedTests
                     await db.SaveChangesAsync();
                 }
                 var key = $"project:{project.Id}";
-                await scenario.Change(key, "propose_plan", new { title = "Review exact publication", expectedProjectPlanRevision = 0,
-                    items = new[] { "A", "B" }.Select(label => new { id = "item-" + label, title = "Task " + label,
+                await scenario.Change(key, "propose_plan", new
+                {
+                    title = "Review exact publication",
+                    expectedProjectPlanRevision = 0,
+                    items = new[] { "A", "B" }.Select(label => new
+                    {
+                        id = "item-" + label,
+                        title = "Task " + label,
                         description = $"\r\n  ## Complete {label} Ω 文\r\n" + new string('文', 2048) + $"\r\nFINAL {label}  \r\n",
-                        acceptanceCriteria = new[] { $"  Complete criterion {label} Ω  " }, dependsOn = Array.Empty<string>() }).ToArray() });
+                        acceptanceCriteria = new[] { $"  Complete criterion {label} Ω  " },
+                        dependsOn = Array.Empty<string>()
+                    }).ToArray()
+                });
                 scenario.Context = await scenario.Service.GetAsync(key);
-                await scenario.Change(key, "accept_plan", new { planRevisionId = scenario.Context.Document.PlanRevisions.Last().Id,
-                    expectedProjectPlanRevision = scenario.Context.ProjectPlanRevision });
+                await scenario.Change(key, "accept_plan", new
+                {
+                    planRevisionId = scenario.Context.Document.PlanRevisions.Last().Id,
+                    expectedProjectPlanRevision = scenario.Context.ProjectPlanRevision
+                });
                 scenario.Context = await scenario.Service.GetAsync(key);
                 Set(scenario.Page, "context", scenario.Context); Set(scenario.Page, "workspaceId", key);
                 Set(scenario.Page, "generation", 7); Set(scenario.Page, "restoredGeneration", 7);
@@ -190,8 +202,13 @@ public sealed class WorkspacePublicationPreviewRenderedTests
         {
             var item = Context.AcceptedPlan!.Items.Single(item => item.Title == (replacement == "content" ? "Task B" : "Task A"));
             var feature = replacement == "target" ? secondFeature : firstFeature;
-            var draft = new WorkspaceDeliveryDraft { AssociationKnown = true, AssociationProjectId = Context.ProjectId,
-                FeatureId = feature.Id, SelectedItemIds = [item.Id] };
+            var draft = new WorkspaceDeliveryDraft
+            {
+                AssociationKnown = true,
+                AssociationProjectId = Context.ProjectId,
+                FeatureId = feature.Id,
+                SelectedItemIds = [item.Id]
+            };
             await Call(Page, "DeliveryChanged", Scope, draft);
             await Call(Page, "PreviewDelivery", Scope, new IdeaWorkspacePublicationPreviewRequest(Context.Revision,
                 Context.ProjectPlanRevision!.Value, [item.Id], feature.Id));
@@ -263,8 +280,10 @@ public sealed class WorkspacePublicationPreviewRenderedTests
             componentId ??= AssignRootComponentId(panel);
             await RenderRootComponentAsync(componentId.Value, ParameterView.FromDictionary(new Dictionary<string, object?>
             {
-                [nameof(WorkspaceDeliveryPanel.Context)] = context, [nameof(WorkspaceDeliveryPanel.Draft)] = draft,
-                [nameof(WorkspaceDeliveryPanel.Preview)] = preview, [nameof(WorkspaceDeliveryPanel.PreviewBusy)] = previewBusy,
+                [nameof(WorkspaceDeliveryPanel.Context)] = context,
+                [nameof(WorkspaceDeliveryPanel.Draft)] = draft,
+                [nameof(WorkspaceDeliveryPanel.Preview)] = preview,
+                [nameof(WorkspaceDeliveryPanel.PreviewBusy)] = previewBusy,
                 [nameof(WorkspaceDeliveryPanel.OnPublish)] = publish
             }));
         });
