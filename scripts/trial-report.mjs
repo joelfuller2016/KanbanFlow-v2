@@ -594,6 +594,8 @@ const DEFAULT_PORTS = { ssh: 22, https: 443, http: 80, git: 9418 };
 export function normalizeRemoteUrl(url) {
   if (typeof url !== "string" || url.trim().length === 0) return null;
   const u = url.trim().replace(/\/+$/, "");
+  // Explicit remote-helper syntax is not the SCP host named before the double colon.
+  if (/^[^:/\\]+::/.test(u)) return url.trim();
   const key = (host, repository) => {
     const authority = host.toLowerCase();
     // GitHub repository names ignore case. Arbitrary Git servers can expose Main and main

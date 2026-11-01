@@ -1283,6 +1283,8 @@ test("unrecognized remote schemes retain distinct nonempty identities", () => {
   assert.equal(normalizeRemoteUrl("SoFtP://example.invalid/Org/Main.git"), custom);
   assert.notEqual(normalizeRemoteUrl("softp://github.com/Org/Main.git"),
     normalizeRemoteUrl("softp://github.com/Org/main.git"), "an unfamiliar transport gets no GitHub path assumptions");
+  assert.notEqual(normalizeRemoteUrl("softp::host/org/repo"), normalizeRemoteUrl("ssh://softp/:host/org/repo"),
+    "an explicit remote helper must not become an SCP host alias");
 });
 
 test("confirmed cwd disclosure is printable literal data without changing membership", () => {
@@ -1554,9 +1556,17 @@ test("real Git evidence keeps an unfamiliar transport outside despite shared his
   const { a, b, d, cleanup } = buildCloneFixture();
   try {
     gitOutput(["remote", "add", "origin", "softp://example.invalid/org/repo.git"], b);
-    const { confirmed } = withConfirmedCloneRoots([b, d], [a]);
-    assert.equal(confirmed.has(b), false, "unknown transport must contradict the known HTTPS identity");
-    assert.equal(confirmed.has(d), true, "the matching known transport still confirms an unrelated root");
+    for (const [custom, known] of [
+      ["softp://example.invalid/org/repo.git", "https://example.invalid/org/repo.git"],
+      ["softp::host/org/repo", "ssh://softp/:host/org/repo"]
+    ]) {
+      gitOutput(["remote", "set-url", "origin", known], a);
+      gitOutput(["remote", "set-url", "origin", custom], b);
+      gitOutput(["remote", "set-url", "origin", known], d);
+      const { confirmed } = withConfirmedCloneRoots([b, d], [a]);
+      assert.equal(confirmed.has(b), false, "unknown transport must contradict the known Git identity");
+      assert.equal(confirmed.has(d), true, "the matching known transport still confirms an unrelated root");
+    }
   } finally {
     cleanup();
   }
