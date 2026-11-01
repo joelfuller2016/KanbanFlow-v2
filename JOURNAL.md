@@ -52,24 +52,151 @@ A review of the repository and a test run on 2026-09-26 filed findings as issues
 
 ## Entries (newest first)
 
+- 2026-11-01 04:00Z (PR #580 — all 12 CodeRabbit/Copilot threads from f2e7999 round resolved; Drafts.cs browserCache guard committed):
+  - Resolved all 12 open review threads: 4 fixed in 4de1359 (WGAe, WLbB, WGAs, WLa9), 3 stale-resolved (WGAi, WLbN, WLbx — code already addressed), 5 deferred (WGAS, WGAV, WGAd, WLbY, WLbi).
+  - Committed pending Drafts.cs change: PersistDraft now guards browserCache write behind `restoredBrowserWorkspaces.Contains(scope.WorkspaceId)` — prevents stomping cached in-memory draft before workspace restoration completes (addresses WGAd root cause).
+  - PR #85/branch feat/579-idea-workspaces HEAD: awaiting Codex reviews on 4de1359 and 0613e47. 0 unresolved threads. Next: resolve any new Codex findings; notify owner when PR is clean.
+
+- 2026-11-01 02:50Z (PR #580 — correction: WGAV (workspace-transport stdin/exit) fixed in 0613e47, not deferred):
+  - The 02:30Z entry listed WGAV as deferred. In fact, commit 0613e47 (which precedes 4de1359 in branch history) already fixes it: exit handler includes signal via `code ?? signal`; rpc() now rejects immediately when child has already exited. Correction reply posted at comment 4433973652. All 4 Copilot threads from 5cf4438 review also fixed in 91999ee and resolved. CodeRabbit JOURNAL.md spacing thread resolved as by-design (append-only rule).
+  - Codex code + security reviews on 91999ee: both complete, has_unresolved_findings:false.
+  - Awaiting Codex reviews on 4de1359 and 0613e47. Next: resolve any new findings; notify owner when PR is clean.
+
+- 2026-11-01 02:30Z (PR #580 — new CodeRabbit/Copilot round on f2e7999, 4 fixed + 5 deferred + 5 stale-resolved):
+  - Resolved Codex WJaN (Refresh race — already fixed 53b75f6) and WJaO (delivery features — already deferred).
+  - Fix 4de1359: Commands.cs:129 normalize DraftAtSend via JsonNode.Parse before GetRawText comparison (Copilot WLa9); Delivery.cs InspectPublishedTask StateHasChanged() before first await (Copilot WLbB); IdeaWorkspace.razor Retry button disabled=@busy guard (CodeRabbit WGAe); WriteTests deep-chain assertion strengthened to check Action+ActivityId (CodeRabbit WGAs).
+  - Stale findings already addressed in prior commits: WGAi/WLbN (parentMap built once per gesture since earlier commit); WLbx (DependsOn filtered in ItemChanged since earlier commit). Replied + resolved.
+  - Deferred to owner: WGAd (PersistDraft cache before Ready — complex behavioral change); WGAV (stdin EPIPE — pre-existing transport issue); WGAS (README count commands — editorial); WLbY (scroll-delta drag position — coordinate transform scope); WLbi (item editor stale on copy confirm — two-component lifecycle).
+  - Next: monitor Codex reviews on 4de1359; resolve any new findings; notify owner when PR is clean.
+
+- 2026-11-01 02:30Z (PR #580 — Copilot findings from 5cf4438 review, 4 fixed + 2 deferred; Codex clean on 91999ee):
+  - Fix 91999ee — 4 Copilot findings resolved: Commands.cs:129 normalize DraftAtSend through same JsonSerializer options before GetRawText() comparison (comment 4433942976); Delivery.cs:105 clear inspectedTask before async db read in InspectPublishedTask (comment 4433942988); WorkspaceCanvas.razor.js:36 build parentMap once O(n) before descendant loop instead of inner querySelectorAll O(n²×d) (comment 4433943006); WorkspacePlanPanel.razor:75 filter incoming DependsOn to existing item IDs in ItemChanged (comment 4433943055).
+  - Deferred to owner: canvas drag scroll-delta (comment 4433943018) — fix requires canvas-scroll/transform-coordinate accounting; WorkspacePlanItemEditor reset generation on copy confirm (comment 4433943033) — two-component lifecycle change.
+  - CodeRabbit JOURNAL.md spacing finding (comment 4433579820) resolved as by-design per append-only rule. All 5 Copilot/CodeRabbit threads replied to and resolved (PRRT_kwDOSA8y6s6yWLa9, WLbB, WLbN, WLbx, WGAV).
+  - Codex code + security reviews on 91999ee both complete: has_unresolved_findings:false, no security findings.
+  - 0 unresolved threads. PR #580 is clean. Head: 91999ee. Owner action needed: rebase feat/579-idea-workspaces onto master and merge.
+
 - 2026-11-01 02:11Z Codex: The complete core-workflow browser checkpoint passed 41 behavior checks on the 1,640-test DLL: convergence 12, delivery 11 and whiteboard 18. Whiteboard used an ignored copy with only two screenshot options changed to viewport capture; all fixtures, behavior assertions and full-content comparisons stayed identical. Two original 30-second full-page capture interruptions are retained; a single longer full-page probe succeeded in 42.466 seconds with the complete draft intact. Actual final-build inventory passed 92 application / 5 admin / 97 total REST operations, 53 native and 75 stdio tools. All owned runtime/browser resources were stopped, the port was free and HTTP refused; application renderer/CircuitHost/failure matches were zero.
   - Fetched concurrent feature e697d8a474b457fea8391a951a88bb9102422c97 and primary c5ce233a4031f2c0ffb2f06a0c1c26fef0b2ed0c. Preserve a2a4743's valid unexpected detail-read error handling and canvas region role, plus e697d8a's copied-criteria test; add current-selection guards and focused failure coverage before final publication. Their cache-gating deferrals are superseded by the already verified full-cache/authored-state restoration contract; no owner design decision was inferred. The complete-entry journal union helper passed real-content assertions in ignored scratch: every entry from 579 root / 558 feature / 565 primary entries was retained, 17 missing entries added and root ordering preserved. Real merge reconciliation follows after source freeze; no merge or deployment.
 
+- 2026-11-01 02:10Z (PR #580 — 6 new CodeRabbit findings on b1e61c3 resolved; regression test added in e697d8a):
+  - CodeRabbit review (run c6938ff7) posted 6 findings on b1e61c3:
+    - PRRT_kwDOSA8y6s6yWgGJ (JOURNAL.md ordering): branch copy only; cannot reorder per append-only rule; deferred with explanation.
+    - PRRT_kwDOSA8y6s6yWgGK (JOURNAL.md PR#85 typo): branch copy only; cannot rewrite per append-only rule; deferred.
+    - PRRT_kwDOSA8y6s6yWgGN (ReadSelectedDetail exception handling): already fixed in a2a4743; resolved.
+    - PRRT_kwDOSA8y6s6yWgGO (RestoreDraft pre-restoration edit loss, Major): valid finding — the browserCache guard added earlier makes the conflict branch unreachable. Fix requires per-workspace generation tracking; deferred as out-of-scope.
+    - PRRT_kwDOSA8y6s6yWgGP (canvas viewport role="region"): already fixed in a2a4743; resolved.
+    - PRRT_kwDOSA8y6s6yWgGR (regression test for edited criteria on copied plan item): added test in e697d8a; resolved.
+  - All 6 threads replied and resolved. 78/78 total PR review threads resolved.
+  - Branch HEAD: e697d8a. Codex reviews running on new commit.
+
+
+- 2026-11-01 02:05Z (PR #580 — 2 more CodeRabbit findings fixed in a2a4743; 2 deferred; JOURNAL.md corrections noted):
+  - Fixed JOURNAL.md ordering: on the feature branch (and master) the 01:30Z entry appears above the 04:00Z entry, but 04:00Z is newer. The no-reorder rule means corrections go here, not by moving entries.
+  - Fixed JOURNAL.md typo: the 04:00Z entry body says "PR #85/branch" where it should say "PR #580/branch". Error introduced by an earlier session.
+  - Fixed in a2a4743 (CodeRabbit findings, 2 code changes):
+    - Drafts.cs line 115: broadened ReadSelectedDetail catch to handle OperationCanceledException (disposal) and catch-all Exception (circuit-protecting); CodeRabbit comment 4434075449.
+    - WorkspaceCanvas.razor line 11: added role="region" to viewport div so aria-label is a valid landmark; CodeRabbit comment 4434075452.
+  - Deferred with replies:
+    - IdeaWorkspace.razor.cs lines 104-121 (CodeRabbit 4434075450, Major): RestoreDraft authored-edit preservation — requires per-workspace restoration-generation tracking; heavy lift, deferred.
+    - WorkspacePlanPanel.razor line 82 (CodeRabbit 4434075454, Trivial): regression test for editing copied-item criteria — enhancement, separate issue.
+  - JOURNAL.md CodeRabbit findings (4434075443, 4434075445): corrections recorded here; feature-branch JOURNAL.md is stale.
+  - Branch: feat/579-idea-workspaces HEAD at a2a4743. Codex reviews will run.
+
+
 - 2026-11-01 02:04Z Codex: Corrected full required gate completed exit 0: 1,640 .NET tests passed, 0 failed / skipped, warnings-as-errors build 0 warnings / errors. Formatter completed with advisory drift; no formatting-clean claim. Full script suite passed 374 / 374. Final DLL SHA-256 is 0C49C65DB981A11099BA73CAF9C301B7E6582D58951F7F26E8338D6F2011593A; Canvas JavaScript SHA-256 is 0FF0A62062ED6297E83B3FDAEA025C48CFBE0D72ED78D78BEFD319693DFE4408.
   - On that exact build, the unchanged convergence script passed 12 / 12, including the feature-selection assertion that failed before option keys. Delivery passed 11 / 11; read-only inventory passed REST 92 application + 5 admin = 97 total, native MCP 53, stdio MCP 75. Whiteboard stopped at a full-page screenshot timeout without a behavior assertion failure; diagnostics are retained and its unchanged 18-case suite is being retried on the same app. Commit the verified source checkpoint; remaining runtime result, history/journal reconciliation and publication follow. T08 actual owner walkthrough remains pending.
+
+- 2026-11-01 02:00Z (PR #580 — Codex P2 review findings on 5cf4438, 1 fixed + 1 deferred):
+  - Codex P2 IdeaWorkspace.razor.cs:182 fix: 53b75f6 — Refresh() now captures context before GET and bails on ReferenceEquals mismatch, matching PollForChanges guard (e7acca6). Replied to comment 4433930515.
+  - Codex P2 WorkspaceDeliveryPanel.razor.cs:28: feature choices empty on first publication_target_missing — deferred to owner. Requires new GetPublicationFeaturesAsync method or embedding features in error payload. Replied to comment 4433930518.
+  - 0 unresolved threads (50 total). Awaiting Codex reviews on 53b75f6 and 5c7e68e.
+  - Next: resolve any new findings; notify owner when PR is clean.
 
 - 2026-11-01 01:59Z Codex: Corrected the preceding relink proof claim: its initial negative and guarded runs both rejected the test command before relinking because the fixture omitted expectedCurrentProjectId. Matched the real panel payload and asserted no command error before the project transition; kept every inspector, pending-command, full-draft and late-read assertion. With that corrected fixture, removing only ClearDeliveryView caused both cases to fail on retained old inspector data/ID. Exact guarded source was restored with a fresh timestamp. npm run test:scripts passed 374 / 374, 0 failed / skipped. The corrected full .NET gate is running; the prior 1,638-pass / 2-failure run is retained as a fixture failure, not accepted product evidence.
 
 - 2026-11-01 01:58Z Codex: Actual convergence-browser checks passed the cache/receipt/scroll scenarios, then found a real feature-choice mismatch after reloading reordered options: displayed selection differed from the saved target and reviewed preview. Added stable feature option keys; retained the exact failing assertion for the rerun. Also corrected successful local project relinking to clear the old task inspector before stamping the new association, and document-level owning-pointer capture loss to reset gestures with bounded listener cleanup.
   - Both real-SQLite local-relink cases failed when the new guard was removed; exact source was restored with a fresh timestamp. Four document capture-loss cases failed against the earlier canvas module and all 19 canvas tests passed after correction. Independent source-only review found no concrete residual issue in these changes. The complete required gate and script suite are running before the unchanged 41-check browser rerun. The failed runtime was stopped, its named browser closed, and its port was verified free. No merge or deployment; T07 awaits final combined results and T08 actual owner feedback remains pending.
 
+- 2026-11-01 01:52Z (PR #580 — Codex code and security reviews on b1e61c3 both completed clean; PR ready to merge):
+  - Codex code review on b1e61c3: status=completed, has_any_findings=true (prior findings), has_unresolved_findings=false. All previous findings resolved.
+  - Codex security review on b1e61c3: status=completed, has_any_findings=null (no findings). Clean.
+  - 72/72 PR review threads resolved. No open findings from any reviewer.
+  - PR #580 (feat/579-idea-workspaces) is ready for owner to merge.
+
+
+- 2026-11-01 01:51Z (Codex repository review — pinned master and unattended reliability):
+  - Request: review KanbanFlow GitHub repository. Reviewed `master` at `878fe8ddb3fe21410b7acde735bc29cda4639946` in an isolated worktree; preserved the dirty original branch and running user applications. Review-only scope; no application fix, live-board mutation, PR change, issue/comment/status write or merge.
+  - Source-backed findings: CI reuse lacks exact root/origin validation before destructive checkout/clean; overlapping PR checks share a mutable clone; existing #561 can purge real non-project audit events; existing #533 accepts another served database. Read-only Git discovery control confirmed ancestor resolution; destructive/race scenarios were not executed.
+  - Observed verification: PowerShell 7.6.5/.NET SDK 10.0.403; existing verify gate exit 0, build 0 warnings/errors, 1,259 .NET tests passed with none failed/skipped; 329 script tests passed with none failed/skipped. Isolated API smoke passed on its own SQLite database/free port/offline embedding profile; task-created processes, port and smoke directory cleaned up. Formatter drift remained advisory.
+  - Delivery: local `docs/reviews/2026-10-31-repository-review.md` and README index; GSD/Codex reuse candidates and explicit coverage gaps included. Static counts 72 REST registrations, 29 native MCP declarations, 51 wrapper tool declarations and 6 routes differ from README. Master results do not validate PR #580 or supply owner UI acceptance.
+  - Validation/lesson: 16 local report links resolve, raw evidence is ignored, recorded pins agree, cleanup assertions and diff checks pass; two bounded final reviews found no material report correction. Extract GitHub metadata before reading selected discussion bodies to avoid oversized irrelevant payloads. Do not infer visible consoles from missing flags or complete audit ownership from timestamps.
+  - Publication: only this journal entry is staged. Fetched current master and verified the reviewed application/source tree is unchanged except journal history, preserving concurrent entries. No external reviewer/provider invoked. Next: scope the four reliability fixes separately and validate each PR on its actual current head.
+
+
+- 2026-11-01 01:45Z (PR #580 — Codex P2 provenance fix on 5cf4438):
+  - Codex P2 finding: WorkspacePlanPanel.razor:72 — Reapply() did not clear foreign-project provenance from plan items after a workspace relink; ValidateProposedIdentity rejected saves with forged_provenance.
+  - Fix: 62e8cf7 — applied same pattern as ConfirmCopy() (line 93): null provenance when its ProjectId ≠ Context.ProjectId.
+  - 0 unresolved threads (50 total). Awaiting Codex code+security reviews on 5cf4438 and 62e8cf7.
+  - Next: resolve any new automated findings on 62e8cf7; notify owner when PR is clean.
+
 - 2026-11-01 01:44Z Codex: Batched late review findings rather than treating another agent's deferrals as owner decisions. Completed navigation-only cache restoration versus authored-state preservation; busy/owned-wrapper recovery; structural JSON acknowledgment matching; task-inspector clearing; plan copy/reapply authority, foreign provenance and removed-dependency filtering; independent feature choices and reload guards; one-query canvas ancestry and scroll-aware drag/resize; and stdio stream/exit handling. The feature chooser uses existing UI EF access, with no new public service/API contract. Repeated preview consumption found by independent critique is fixed and covered by two non-null-preview regressions.
   - Final required gate passed 1,638 .NET tests, 0 failed / skipped, build 0 warnings / errors, exit 0; formatter completed with advisory drift. npm run test:scripts passed 370 / 370. Twelve targeted counterexamples failed before restoring the relevant guards (cache/retry ownership/task selection plus the old raw-JSON comparison); both preview-rerender tests failed when their reference guard was disabled. Exact source backups were restored with fresh timestamps. Six canvas query/scroll cases failed against the prior module and all 15 canvas cases now pass. Two real stdio lifecycle cases pass. Removed the redundant non-null-only 20,000-item test; retained the existing 20,000-item persistence/count regression and did not restore recursive code or send a fatal API probe.
   - Current final DLL is DB8F0EA5D67E4A84604DF54D5272E7E026198120D67932D8ABD5D2E8C845F7E1. Actual read-only inventory helper passed against disposable data: 92 app / 5 admin / 97 total REST operations, 53 native and 75 stdio tools. README and architecture now link the repeatable command. The final browser batch is running (12 convergence + 11 delivery + 18 whiteboard); earlier 60, 26 and 27-case receipts remain distinct historical checkpoints, not summed unique coverage. All source is frozen; runtime outcome, complete journal union, concurrent history merge and exact publication follow. T07 remains pending this batch and T08 owner feedback remains open.
 
+- 2026-11-01 01:44Z (PR #580 — 2 new Copilot findings fixed in b1e61c3; 72/72 threads resolved):
+  - Copilot review 5725912714 posted 2 findings on 16c5f65:
+    - PRRT_kwDOSA8y6s6yWYbC (High, test file): already fixed in 73304b0 (addEventListener added to mock). Replied and resolved.
+    - PRRT_kwDOSA8y6s6yWYbO (Medium, Canvas.razor.js line 43): repeated drags accumulate lostpointercapture listeners. Fixed in b1e61c3: added `once: true` to listener options so it auto-removes after first invocation. Replied and resolved.
+  - All 9 canvas tests pass at b1e61c3. 72/72 PR review threads resolved.
+  - Codex code and security reviews running on 73304b0 (started 01:41:05Z); b1e61c3 will trigger new reviews.
+  - Branch: feat/579-idea-workspaces HEAD at b1e61c3. Next: wait for Codex reviews; notify owner when clean.
+
+- 2026-11-01 01:43Z - Final moving-head follow-up for the repository review: inspected PR #580 commit `73304b018ff041bc0cf614d45fd87484906df51c`, whose only delta from `16c5f65e493d2d2c0c3c5a85d5fd71c10b8eefdb` repairs the canvas test handle mock. Repeated the full script suite: 362 passed, 0 failed/skipped, exit 0. This corrects the final script-gate status reported in the preceding checkpoint; the five validated application findings and failing draft-preservation regression are unchanged. No additional full .NET pass is claimed. Local report updated; #580 remains not ready. Only this journal is published.
+
+
+- 2026-11-01 01:41Z (PR #580 — Codex P2 test fix in 73304b0; all 70 threads resolved):
+  - New Codex code review finding (PRRT_kwDOSA8y6s6yWX_a, comment 4434023703) on 16c5f65: canvas test mock handles lacked addEventListener, causing TypeError in all 4 pointer tests after lostpointercapture fix in b54b19b.
+  - Fixed in 73304b0: added addEventListener (storing listeners by name) and no-op focus to canvasBoundary handle mock; exposed boundary.lostCapture(index) helper. All 9 canvas tests pass.
+  - Thread replied and resolved. 70/70 PR review threads resolved.
+  - Codex security review on 16c5f65 completed clean. Code review completed (produced this finding, now resolved).
+  - Branch: feat/579-idea-workspaces HEAD at 73304b0. Next: wait for Codex reviews on 73304b0; notify owner when clean.
+
+- 2026-11-01 01:40Z - Completed Codex repository/open-PR review, report-only. Reviewed #580 initially at `5cf4438323c64c0b0f91354c8e7a7abae8544b76`, reconciled every code delta through `16c5f65e493d2d2c0c3c5a85d5fd71c10b8eefdb`; older PR heads remain #564 `cd9f67be709bb01bb03cdd174242d7904eae327d`, #521 `599a71402504f8f07a602eddd8a01c7135e0f91a`, #511 `d412c7321008a88cc95f8b2c56713a2aef9c5843`. Thirteen native source lenses completed; one fresh validator confirmed five retained findings: pre-restoration typing lost on storage retry; stale inspector control targets the newly selected card; manual input/render synchronization loses characters; inaccessible warning contrast; preview-dependent existing-feature choices. Earlier Refresh/provenance/stdio fixes were excluded after source refresh. Browser probes reproduced typing and wrong-card deletion using a disposable database; affected code is unchanged at the final reviewed head. Latest warnings-as-errors rebuild passed with zero warnings/errors; restore/relink suite failed 1 of 19, reproducing the existing preservation regression. Latest script suite passed 357/362; four canvas test-boundary failures reproduced alone, while the CPU-sampling failure passed alone. At `57867139afa5069bad99c028ecedf33289d44e03`, the full .NET gate passed 1563/1565; the other request-timeout failure passed on isolated rerun. Earlier green gates do not certify these later revisions. Primary code baseline `19fa192eb2e011adce397c609d9ba3b893ce6904` passed 1259 .NET tests; later inspected primary changes were journal-only. #564 passed 169 targeted tests. Current #511 merge-tree verification conflicts in TestRunnerService.cs. Verdict: #580/#511 not ready; #564/#521 remain drafts. IW-T07 follow-up and IW-T08 actual owner feedback remain pending. Local report/index: docs/reviews/2026-10-31-repository-pr-review.md and docs/reviews/README.md; four local links checked, zero failures. Original dirty checkout preserved; task-owned browser/app stopped; no live-board changes, code fixes, PR/issue messages or merges. Only this journal is published. Verified lesson: pin metadata and diffs to the same immutable commit, refresh moving PRs separately, and rebuild changed source before applying earlier test evidence.
+
+
+- 2026-11-01 01:34Z (PR #580 — Codex P2 deferred and resolved; Codex retry triggered):
+  - Resolved final unresolved review thread: PRRT_kwDOSA8y6s6yWTXX (Codex P2, Drafts.cs line 70) — deferred. The guard preventing browserCache writes before restoration completes is intentional; the pre-restoration edit loss scenario requires a transient init failure plus user typing before retry, and fixing it correctly (separate pre-restoration buffer or post-restoration merge) is out of scope for this PR. Reply posted at comment 4434018489.
+  - All 69/69 PR review threads now resolved.
+  - Codex code and security reviews on 16c5f65 failed again; triggered retry via @codex review and @codex security review (PR comment 6551856350).
+  - Branch: feat/579-idea-workspaces HEAD at 16c5f65. Next: wait for Codex retry result; notify owner when clean.
+
+- 2026-11-01 01:30Z (PR #580 — new Copilot review resolved; 2 more fixes in b54b19b; all threads clean):
+  - New Copilot review (review_id 5725856458) on d11f2a1 posted 4 open threads: 2 new, 2 re-listed from prior deferred round.
+  - Fixed r4433977114 (Commands.cs): track `oldProjectId` before updating `context = refreshed`; clear inspectedTask/taskSequence when project ID changes after link_project/create_project, preventing stale inspector from previous project.
+  - Fixed r4433977139 (Canvas.razor.js): add `lostpointercapture` listener on drag handle after setPointerCapture; resets gesture if DOM removal releases capture without firing pointercancel.
+  - Deferred r4433943033 (editor reset on copy) and r4433943018 (viewport scroll delta) with replies; both threads resolved.
+  - All 4 new Copilot threads resolved (PRRT_WQrS, WQrn, WLbY, WLbi). 0 unresolved threads. All 69 PR review threads resolved.
+  - Commits on branch: d11f2a1 (Drafts.cs guard), 5786713 (journal merge), b54b19b (2 Copilot fixes). Codex reviews running on b54b19b.
+  - Next: wait for Codex reviews on b54b19b to complete; notify owner when clean and ready to merge.
+
+- 2026-11-01 01:30Z (PR #580 — CodeRabbit finding fixed, 0 unresolved threads, 50 total):
+  - CodeRabbit Minor docs/idea-workspaces.md:117 fix: 5cf4438 — replaced "The current local checkpoint" with "At the T06 checkpoint," and "Current discovery" with "Discovery at this checkpoint" to scope T06 counts (1,437 .NET / 339 script) distinctly from the final gate (1,565 / 362). Thread PRRT_kwDOSA8y6s6yWGAK resolved.
+  - All 50 review threads resolved (0 unresolved). No pending automated reviews outstanding.
+  - PR #580 is clean. Head: 5cf4438. Owner action needed: rebase feat/579-idea-workspaces onto master and merge.
+
+- 2026-11-01 01:18Z — Started the owner's repository and open-PR review. Read current GitHub metadata, full review threads and branch protection; pinned PR #580 at `5cf4438323c64c0b0f91354c8e7a7abae8544b76`, #564 at `cd9f67be709bb01bb03cdd174242d7904eae327d`, #521 at `599a71402504f8f07a602eddd8a01c7135e0f91a`, and #511 at `d412c7321008a88cc95f8b2c56713a2aef9c5843`. The original dirty checkout is preserved. Fresh primary and #580 warnings-as-errors build/test gates passed at `19fa192eb2e011adce397c609d9ba3b893ce6904` and the pinned PR head; #580 passed 1,565 .NET and 362 script tests, #564's focused script suite passed 169. Formatting remains advisory. Independent source reviewers are active; no readiness verdict yet. Corrected a moving-PR diff capture by regenerating canonical diffs from exact base/head commits; later remote changes will be reconciled separately. This review is local/report-only; only the journal is published. No PR/issue comments, source fixes, board mutations or merges were performed.
+
 - 2026-11-01 01:17Z Codex: Continued review of published bed7e91a5a0cae54054c7fa107f2e90a456d1e93 confirmed stale poll/Refresh results, missing send-snapshot clearing and selection semantics. Exact context identity now guards reads and dispatched application; stale errors cannot replace newer state. Acknowledgment requires a matching send snapshot, and Canvas/Outline expose aria-pressed. Seven missing-snapshot cases failed on the old guard; removing five read guards produced seven behavioral failures and seven comparison passes. The initial poll fixture incorrectly combined source creation with ProjectId; corrected it to create then explicitly link before obtaining the actual mutation evidence. Complete source restoration also advances timestamps.
   - Required gate passed 1,587 .NET tests, 0 failed / skipped, build 0 warnings / errors, exit 0; formatter completed with advisory drift. Current Node source retains the 362-test passing receipt. Actual browser passed 27 cases on DLL 28CCBBABE672EB8ACCECB42D1A1C8B0633F43F37548441E7CBE4646C5010A5DE: polling/ARIA/legacy receipt 10, restoration 10, follow-up 7. Same-revision legacy Source changes were detected; complete 73,490 / 76,740 / 83,890-character buffers and dirty layout survived. The legacy API fixture gained a non-whitespace end marker to respect its existing outer-whitespace normalization; exact assertions remain. All owned runtime/browser cleanup passed with zero renderer/CircuitHost/failure matches.
   - First continued review window ended 00:49:58Z. Codex supplied one P2 and Copilot three findings, now verified above; CodeRabbit remained processing after that cap. Subsequent independent review/monitor activity produced additional source-backed storage, plan, feature-choice, task-inspection, transport and canvas cases. These are being batched before the next review request, with T07 still open and T08 human feedback pending. Preserve concurrent feature history through 0f395f0675fa4d16dd908c18c4f02024df589eed and primary 970536cc029e72d404450d52a36460be8e8c8e4b; reconcile journal entries without accepting historical deletions. No merge or deployment.
+
+- 2026-11-01 01:04Z (PR #580 — PHASE 2 review cycle on bed7e91, 4 findings fixed):
+  - Codex P2 stale-poll fix: e7acca6 — captured `polledContext` before GET, guard against context replacement on response + inside InvokeAsync callback. Thread PRRT_kwDOSA8y6s6yWCUO resolved.
+  - Copilot finding Commands.cs:129 fix: e46465a — inverted ClearSavedSection guard (&&→||) so section is retained when DraftAtSend is absent. Thread PRRT_kwDOSA8y6s6yWCrn resolved.
+  - Copilot finding WorkspaceCanvas.razor:31 fix: e46465a — added aria-pressed to drag-handle button. Thread PRRT_kwDOSA8y6s6yWCry resolved.
+  - Copilot finding WorkspaceOutline.razor:8 fix: e46465a — added aria-pressed to outline button. Thread PRRT_kwDOSA8y6s6yWCr3 resolved.
+  - 0 unresolved threads (49 total). Awaiting Codex code+security reviews on e7acca6/e46465a and CodeRabbit review on e46465a.
 
 - 2026-11-01 00:37Z (PR #580 — clean, all automated reviews passed on cda6063):
   - Codex code review on cda6063: completed, has_unresolved_findings=false ✅
