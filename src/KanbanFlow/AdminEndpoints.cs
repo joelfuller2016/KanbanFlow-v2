@@ -331,13 +331,16 @@ public static class AdminEndpoints
         // a trivial (per-call unique) string through IEmbeddingService and reports the outcome +
         // resulting vector length. A unique string is used deliberately so the probe always exercises
         // the live provider — a cached constant would report a stale ok:true even after ZeroRouter
-        // went down. ALWAYS returns 200: when ZeroRouter is down/misconfigured it reports
-        // { ok: false, error } (fail-soft), so the probe itself proves the no-crash contract. url +
-        // model are surfaced for diagnostics (open-access: nothing is secret; the key is not echoed here).
+        // went down. For the same reason it goes through ProbeAsync, which skips the failure cooldown
+        // (#549): inside that window the probe still makes a real provider call and reports its real
+        // latency, and a success ends the cooldown at once. ALWAYS returns 200: when ZeroRouter is
+        // down/misconfigured it reports { ok: false, error } (fail-soft), so the probe itself proves
+        // the no-crash contract. url + model are surfaced for diagnostics (open-access: nothing is
+        // secret; the key is not echoed here).
         app.MapGet("/api/admin/embed-ping", async (IEmbeddingService embeddings, EmbeddingOptions options, CancellationToken ct) =>
         {
             var stopwatch = Stopwatch.StartNew();
-            var result = await embeddings.EmbedAsync($"embed-ping {Guid.NewGuid():N}", ct);
+            var result = await embeddings.ProbeAsync($"embed-ping {Guid.NewGuid():N}", ct);
             stopwatch.Stop();
 
             return Results.Ok(new
@@ -355,8 +358,10 @@ public static class AdminEndpoints
         // default it embeds only nodes still missing a vector (EmbeddingBlob == null); force=true
         // re-embeds every current node (e.g. after an embed-model change). Each node's content is
         // embedded via IEmbeddingService and persisted through MemoryService.SetEmbeddingAsync (one
-        // MemoryEmbedded audit event per node, #88). Fail-soft like embed-ping: when ZeroRouter is
-        // down each embed returns ok:false and is counted as failed — the batch never crashes. A node
+        // MemoryEmbedded audit event per node, #88). Fail-soft: when ZeroRouter is down each embed
+        // returns ok:false and is counted as failed — the batch never crashes. Unlike embed-ping it
+        // does NOT bypass the failure cooldown (#549): inside the window each node fails soft at once,
+        // with no provider call, and the tally counts it as failed without saying why. A node
         // superseded/deleted mid-run is counted as skipped. No auth by charter (open-access). Returns
         // a per-run tally { embedded, skipped, failed, ftsReindexed, model }. After re-embedding it
         // also rebuilds the FTS5 keyword index (#223) from the current nodes — the reconciler that

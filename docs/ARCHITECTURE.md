@@ -674,14 +674,19 @@ curl http://127.0.0.1:5123/api/admin/llm-ping
 
 ### Embeddings (`IEmbeddingService`, #219)
 
-Identical text is embedded once (content-hash cache); batches are deduped and chunked. Reuses
-the URL / key / timeout above and adds:
+Identical text is embedded once (content-hash cache); batches are deduped and chunked. After a
+provider-level failure (unreachable, timed out, or a 5xx), embedding calls that miss the cache fail
+soft without calling the provider until a failure cooldown ends, so a down ZeroRouter costs one slow
+call per window instead of one per memory search (#549). Cache hits are checked first and still
+succeed. `embed-ping` always calls the provider, and a success ends the cooldown at once. Reuses the
+URL / key / timeout above and adds:
 
 | Variable | Default | Purpose |
 |---|---|---|
 | `KANBANFLOW_EMBED_MODEL` | `text-embedding-3-small` | Embedding model id |
 | `KANBANFLOW_EMBED_DIMENSIONS` | *(provider-native)* | Requested output dimensionality; only sent when set |
 | `KANBANFLOW_EMBED_BATCH_SIZE` | `256` | Max texts per provider call |
+| `KANBANFLOW_EMBED_COOLDOWN_MS` | `30000` | Failure cooldown after the provider is unreachable, times out or returns a 5xx; `0` disables it |
 
 ```bash
 curl http://127.0.0.1:5123/api/admin/embed-ping
