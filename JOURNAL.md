@@ -52,6 +52,13 @@ A review of the repository and a test run on 2026-09-26 filed findings as issues
 
 ## Entries (newest first)
 
+- 2026-11-01 00:17Z (PR #580 — fully clean, merge-ready):
+  - Codex code review on a1bdb32: completed, has_unresolved_findings=false.
+  - Codex security review on a1bdb32: completed, has_any_findings=null (no findings).
+  - Confirmed 0 unresolved review threads (30 total, all resolved/outdated).
+  - PR #580 is now clean: 0 unresolved threads, all automated reviews passed. Awaiting owner merge.
+  - 3 P2 findings remain open on owner's plate (delivery field clobber, checkpoint list normalization, $new service-level identity collision) — deferred by design, threads resolved.
+
 - 2026-11-01 00:30Z (PR #580 — Copilot findings from fead50b: 2 fixed, 3 deferred to owner):
   - Copilot review on fead50b posted 5 new findings. Handled in commit a1bdb32 on feat/579-idea-workspaces.
   - Finding 2 (PRRT_kwDOSA8y6s6yVxfl — WorkspaceCanvas.razor.js multi-touch drag race): REAL BUG. Added `|| this.#gesture` guard to `#start` so a second `pointerdown` while a gesture is active is rejected. Replied + resolved.
