@@ -558,6 +558,15 @@ export function createGitRunner({ env = process.env, timeoutMs = GIT_TIMEOUT_MS 
     const numbers = parsed?.slice(1, 4).map(Number);
     // Protected configuration follows ordinary includes from Git 2.39 onward.
     if (!numbers?.every(Number.isSafeInteger) || !(numbers[0] > 2 || numbers[0] === 2 && numbers[1] >= 39)) {
+      // ENOENT means the cwd directory was missing before git launched — a per-candidate launch
+      // failure, not a signal that Git itself is absent or unsupported. Using git_unsupported here
+      // made main() cache this as gitIncompatibility, disabling all subsequent git calls and
+      // turning signal 4 UNMEASURED for every remaining candidate.
+      if (versionCause?.code === "ENOENT") {
+        throw Object.assign(
+          new Error(`Git version probe could not start: cwd does not exist (${quotedPathForReport(cwd)}).`, { cause: versionCause }),
+          { code: "git_cwd_missing" });
+      }
       throw Object.assign(new Error(`${GIT_VERSION_REQUIREMENT} Found ${quotedPathForReport(version)}. Clone confirmation was not run.`, { cause: versionCause }),
         { code: "git_unsupported" });
     }
@@ -728,7 +737,12 @@ export function isLocalPathRemote(rawUrl) {
   if (colon === -1) return true;
   const beforeColon = u.slice(0, colon);
   if (beforeColon.includes("/") || beforeColon.includes("\\")) return true;
-  if (/^[a-z]$/i.test(beforeColon)) return true;
+  // A Windows drive letter (C:, D:, …) is local on Windows; on POSIX, Git parses C:path as SCP
+  // shorthand (host "C"), which is a network remote. A backslash immediately after the colon
+  // cannot appear in a POSIX SCP path, so that shape is an unambiguous Windows drive path on any
+  // platform. C:/path, however, is valid SCP on POSIX (absolute path on host "C"), so it is only
+  // treated as local on Windows.
+  if (/^[a-z]$/i.test(beforeColon)) return process.platform === "win32" || u[colon + 1] === "\\";
   return false;
 }
 

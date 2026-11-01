@@ -23,7 +23,7 @@ import {
   pathFlavor, asUtcIso, normalizeEvent, normalizeTaskId, readLogGenerations, resolveRepoRoots,
   fetchActivity, ActivityHttpError, dedupeRows, buildIdentityBridge, aliasesOf, normalizeActor,
   WRITE_TOOLS, MUTATING_TOOLS, normalizeRemoteUrl, withConfirmedCloneRoots, gitOutput, isLocalPathRemote,
-  scrubGitEnv,
+  scrubGitEnv, createGitRunner,
   selectRowsInWindow, selectCloneCandidates
 } from "./trial-report.mjs";
 
@@ -750,8 +750,14 @@ test("a root-commit match is still trusted when the candidate's remote is a LOCA
 });
 
 test("isLocalPathRemote tells a local path apart from a network remote, per git's own rule", () => {
-  assert.equal(isLocalPathRemote("C:\\Users\\joel.fuller\\repo"), true, "a dot LATER in a local path is not a host");
-  assert.equal(isLocalPathRemote("C:/Users/repo"), true, "forward-slash Windows path");
+  assert.equal(isLocalPathRemote("C:\\Users\\joel.fuller\\repo"), true, "backslash after colon is an unambiguous Windows path on any platform");
+  // C:/path: on Windows this is a drive path; on POSIX Git parses it as SCP (host "C", absolute
+  // path /Users/repo), which is a network remote.
+  assert.equal(isLocalPathRemote("C:/Users/repo"), process.platform === "win32", "forward-slash Windows drive path is local only on Windows");
+  if (process.platform !== "win32") {
+    assert.equal(isLocalPathRemote("C:repo"), false, "on POSIX, single-letter SCP host is a network remote, not a drive letter");
+    assert.equal(isLocalPathRemote("D:/path/repo"), false, "on POSIX, D:/path is SCP (host D, absolute path), not a drive path");
+  }
   assert.equal(isLocalPathRemote("/home/joel/repo"), true, "absolute POSIX path");
   assert.equal(isLocalPathRemote("\\\\server\\share\\repo"), true, "UNC path");
   assert.equal(isLocalPathRemote("./relative/repo"), true);
@@ -2294,6 +2300,21 @@ test("one captured report runner checks the selected Git again when cwd changes"
     assert.equal(path.resolve(results[2].value), path.resolve(a));
     assert.equal(results[2].calls[0].args[0], "--version");
   } finally { cleanup(); }
+});
+
+test("createGitRunner throws git_cwd_missing, not git_unsupported, when the cwd does not exist", () => {
+  const missingDir = path.join(os.tmpdir(), "kanbanflow-test-missing-" + Math.random().toString(36).slice(2));
+  // Verify the directory truly does not exist before running the probe.
+  assert.ok(!fs.existsSync(missingDir), "precondition: directory must not exist");
+  const git = createGitRunner();
+  let thrown;
+  try { git(["rev-parse", "--show-toplevel"], missingDir); }
+  catch (e) { thrown = e; }
+  assert.ok(thrown, "must throw when cwd does not exist");
+  // git_cwd_missing keeps the per-candidate failure scoped; git_unsupported would cache
+  // gitIncompatibility globally and suppress all further clone-probe git calls.
+  assert.equal(thrown.code, "git_cwd_missing", "code must be git_cwd_missing, not git_unsupported");
+  assert.match(thrown.message, /does not exist/i);
 });
 
 test("protected capture matches native ownership resets and excludes repository-context trust", () => {
