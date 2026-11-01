@@ -205,7 +205,7 @@ public partial class IdeaWorkspace
 
     private async Task RetryDraftStorage(WorkspaceUiScope scope)
     {
-        if (!IsCurrent(scope)) return;
+        if (!IsCurrent(scope) || busy) return;
         if (clientId.Length == 0)
         {
             var oldBrowser = browser;
@@ -219,12 +219,12 @@ public partial class IdeaWorkspace
 
     private async Task RecoverStoredDraft(WorkspaceUiScope scope)
     {
-        if (!IsCurrent(scope) || busy || browser is null) return;
+        if (!IsCurrent(scope) || busy || browser is not { } owned) return;
         busy = true;
         try
         {
             draft.Validate();
-            var preserved = await browser.PreserveAndClearDraftAsync(scope.WorkspaceId);
+            var preserved = await owned.PreserveAndClearDraftAsync(scope.WorkspaceId);
             if (!IsCurrent(scope)) return;
             draftRecoveries[scope.WorkspaceId] = preserved;
             browserCache[scope.WorkspaceId] = draft;
@@ -233,9 +233,8 @@ public partial class IdeaWorkspace
             clientId = sessionId = "";
             storageError = error = null;
             restoredGeneration = -1;
-            var oldBrowser = browser;
-            browser = null;
-            await oldBrowser.DisposeAsync();
+            if (ReferenceEquals(browser, owned)) browser = null;
+            await owned.DisposeAsync();
             notice = "The original stored draft was preserved. Your current unsaved edits are retained while browser storage is restored; the preserved text remains available below.";
         }
         catch (Exception ex)
