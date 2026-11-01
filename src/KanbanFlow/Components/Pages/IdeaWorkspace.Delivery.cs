@@ -89,10 +89,24 @@ public partial class IdeaWorkspace
         finally { if (IsCurrent(scope) && sequence == previewSequence) previewBusy = false; }
     }
 
-    private async Task PublishReviewed(WorkspaceUiScope scope)
+    private async Task PublishReviewed(WorkspaceUiScope scope, IdeaWorkspacePublicationPreview reviewedPreview)
     {
-        if (!IsCurrent(scope) || publicationPreview is null || publicationRequest is not { } request || context is null) return;
-        if (publicationPreview.WorkspaceId != scope.WorkspaceId || request.ExpectedRevision != context.Revision ||
+        if (!IsCurrent(scope) || context is null) return;
+        if (previewBusy)
+        {
+            deliveryError = "A publication preview is loading. Review the completed preview before publishing.";
+            return;
+        }
+        // Equal revision tokens do not identify a preview: its selected items or feature can differ.
+        // Only the request paired with the exact preview captured by this rendered button may be sent.
+        if (!ReferenceEquals(reviewedPreview, publicationPreview) || publicationRequest is not { } request)
+        {
+            deliveryError = "The publication preview changed. Review the current preview before publishing.";
+            return;
+        }
+        if (reviewedPreview.WorkspaceId != scope.WorkspaceId || reviewedPreview.ProjectId != context.ProjectId ||
+            reviewedPreview.Revision != request.ExpectedRevision || reviewedPreview.ProjectPlanRevision != request.ExpectedProjectPlanRevision ||
+            request.ExpectedRevision != context.Revision ||
             request.ExpectedProjectPlanRevision != context.ProjectPlanRevision)
         {
             deliveryError = "The reviewed context has advanced. Preview the selected tasks again before publishing.";
