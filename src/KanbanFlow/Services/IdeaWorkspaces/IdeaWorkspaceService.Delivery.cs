@@ -112,10 +112,25 @@ public sealed partial class IdeaWorkspaceService
         if (foreignFeature || foreignTask)
             throw Conflict("project_link_workflow_conflict", $"Project {projectId} cannot be linked while the request workflow has a feature or published tasks outside that project. Reconcile the existing workflow project and published work before relinking.");
         if (workflow.ProjectId == projectId) return;
+        var before = WorkflowProjectSnapshot(workflow);
         workflow.ProjectId = projectId;
         workflow.Version++;
         workflow.UpdatedAt = writes.Now;
+        writes.Db.ActivityEvents.Add(new ActivityEvent
+        {
+            ProjectId = projectId, EntityType = "WorkRequest", EntityId = ideaId,
+            EntityKey = workflow.Id.ToString("D"), Actor = writes.Command.Actor,
+            EventType = "WorkRequestProjectLinked", BeforeJson = before,
+            AfterJson = WorkflowProjectSnapshot(workflow), CreatedAt = writes.Now,
+            Message = $"Request project synchronized by workspace {writes.Command.Action} for idea:{ideaId}"
+        });
     }
+
+    private static string WorkflowProjectSnapshot(WorkRequest request) => Serialize(new
+    {
+        request.Id, request.IdeaId, request.ProjectId, request.FeatureId, request.Title,
+        request.Version, request.Archived, request.CreatedAt, request.UpdatedAt
+    });
 
     private static async Task ValidateAssociationTaskReferencesAsync(
         WorkspaceWrites writes, WorkspaceWrite source, int projectId, CancellationToken ct)
