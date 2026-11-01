@@ -570,12 +570,9 @@ export function gitOutput(args, cwd, { env = process.env, timeoutMs = GIT_TIMEOU
   return createGitRunner({ env, timeoutMs })(args, cwd);
 }
 
-function resolveGitExecutable(env, remainingTimeout) {
+function findGitExecutable(search) {
   const windows = process.platform === "win32";
-  const key = windows ? Object.keys(env).sort().find(name => name.toUpperCase() === "PATH") : "PATH";
-  const search = typeof env[key] === "string" ? env[key] : "";
   for (let start = 0; start <= search.length;) {
-    remainingTimeout();
     const quote = windows && (search[start] === '"' || search[start] === "'") ? search[start] : null;
     const closing = quote ? search.indexOf(quote, start + 1) : start;
     let end = closing === -1 ? -1 : search.indexOf(path.delimiter, closing);
@@ -591,11 +588,61 @@ function resolveGitExecutable(env, remainingTimeout) {
         usable = fs.statSync(candidate).isFile();
         if (usable && !windows) fs.accessSync(candidate, fs.constants.X_OK);
       } catch { usable = false; }
-      remainingTimeout();
       if (usable) return candidate;
     }
   }
-  throw Object.assign(new Error("No absolute Git executable was found on the captured PATH."), { code: "ENOENT" });
+  return null;
+}
+
+// Filesystem calls can block on a network path. Keep them in a process whose lifetime the
+// report controls, rather than checking the clock only after a synchronous call returns.
+const GIT_FILESYSTEM_HELPER = `
+const fs = require("node:fs"), path = require("node:path");
+const value = JSON.parse(fs.readFileSync(0, "utf8"));
+let result;
+if (process.argv[1] === "lookup") result = (${findGitExecutable.toString()})(value);
+else {
+  try { result = fs.statSync(value).isDirectory() ? "directory" : "missing"; }
+  catch (error) { result = ["ENOENT", "ENOTDIR"].includes(error.code) ? "missing" : "inconclusive"; }
+}
+process.stdout.write(JSON.stringify(result));
+`;
+
+function gitFilesystemProbe(kind, value, env, remainingTimeout) {
+  const input = JSON.stringify(value);
+  if (Buffer.byteLength(input, "utf8") > GIT_MAX_OUTPUT_BYTES)
+    throw new Error("Git filesystem probe input exceeded its byte bound.");
+  const helperEnv = scrubGitEnv(env);
+  for (const key of Object.keys(helperEnv)) {
+    const name = process.platform === "win32" ? key.toUpperCase() : key;
+    if (name === "NODE_OPTIONS" || name === "NODE_PATH") delete helperEnv[key];
+  }
+  try {
+    return JSON.parse(nativeGitText(execFileSync(process.execPath,
+      ["--input-type=commonjs", "--eval", GIT_FILESYSTEM_HELPER, kind], {
+        cwd: path.dirname(process.execPath), env: helperEnv, input, encoding: null,
+        stdio: ["pipe", "pipe", "ignore"], timeout: remainingTimeout(), killSignal: "SIGKILL",
+        maxBuffer: GIT_MAX_OUTPUT_BYTES, windowsHide: true
+      })));
+  } catch (cause) {
+    if (cause.code === "ETIMEDOUT") throw Object.assign(
+      new Error("Git filesystem probe exceeded its deadline.", { cause }), { code: "git_cwd_unavailable" });
+    throw cause;
+  }
+}
+
+function resolveGitExecutable(env, remainingTimeout) {
+  const windows = process.platform === "win32";
+  const key = windows ? Object.keys(env).sort().find(name => name.toUpperCase() === "PATH") : "PATH";
+  const search = typeof env[key] === "string" ? env[key] : "";
+  const executable = gitFilesystemProbe("lookup", search, env, remainingTimeout);
+  if (executable === null)
+    throw Object.assign(new Error("No absolute Git executable was found on the captured PATH."), { code: "ENOENT" });
+  if (typeof executable !== "string" || !path.isAbsolute(executable) ||
+      windows && !/^(?:[a-z]:[\\/]|[\\/]{2}[^\\/]+[\\/][^\\/]+)/i.test(executable) ||
+      !(windows ? /^git\.(?:com|exe)$/i : /^git$/).test(path.basename(executable)))
+    throw new Error("Git executable lookup returned an invalid absolute pathname.");
+  return executable;
 }
 
 /** Capture the report environment and pin Git once; version and protected trust remain fresh. */
@@ -637,8 +684,12 @@ export function createGitRunner({ env = process.env, timeoutMs = GIT_TIMEOUT_MS 
       // candidate-local; a missing Git executable must retain the unsupported-source diagnostic.
       let cwdUnavailable = false;
       if (versionCause?.code === "ENOENT" || versionCause?.code === "ENOTDIR") {
-        try { cwdUnavailable = !fs.statSync(cwd ?? process.cwd()).isDirectory(); }
-        catch (error) { cwdUnavailable = error.code === "ENOENT" || error.code === "ENOTDIR"; }
+        let state;
+        try { state = gitFilesystemProbe("cwd", cwd ?? process.cwd(), captured, remainingTimeout); }
+        catch (cause) { throw Object.assign(new Error("Git cwd availability could not be determined.", { cause }), { code: "git_cwd_unavailable" }); }
+        if (state !== "missing" && state !== "directory") throw Object.assign(
+          new Error("Git cwd availability is inconclusive."), { code: "git_cwd_unavailable" });
+        cwdUnavailable = state === "missing";
       }
       if (cwdUnavailable) {
         throw Object.assign(

@@ -2461,9 +2461,19 @@ function runGitHarness(make, settings, body) {
     'const stateFile = ' + JSON.stringify(stateFile) + ';',
     'const state = () => JSON.parse(fs.readFileSync(stateFile, "utf8"));',
     'const originalStat = fs.statSync;',
+    'let lookupBlocked = false, cwdBlocked = false;',
     'fs.statSync = function (value, ...args) {',
     '  const current = state();',
+    '  if (current.lookupDelayMs && !lookupBlocked && /^git(?:\\.(?:exe|com))?$/i.test(require("node:path").basename(String(value)))) {',
+    '    lookupBlocked = true; fs.appendFileSync(current.lookupTrace, JSON.stringify({ pid: process.pid }) + "\\n");',
+    '    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, current.lookupDelayMs);',
+    '  }',
+    '  if (current.cwdDelayMs && !cwdBlocked && value === current.failureCwd) {',
+    '    cwdBlocked = true; fs.appendFileSync(current.lookupTrace, JSON.stringify({ pid: process.pid }) + "\\n");',
+    '    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, current.cwdDelayMs);',
+    '  }',
     '  if (current.missingCwd && value === current.failureCwd) throw Object.assign(new Error("fixture cwd missing"), { code: "ENOENT" });',
+    '  if (current.cwdInconclusive && value === current.failureCwd) throw Object.assign(new Error("fixture cwd inaccessible"), { code: "EACCES" });',
     '  return originalStat.call(this, value, ...args);',
     '};',
     'const nativeNow = performance.now.bind(performance);',
@@ -2473,14 +2483,22 @@ function runGitHarness(make, settings, body) {
     'Object.defineProperty(performance, "now", { value: () => fakeClock ? clock : nativeNow() });',
     'cp.execFileSync = function (file, args, options) {',
     GIT_PRELOAD_MATCHER,
-    '  if (!isGitExecutable(file)) return original.apply(this, arguments);',
     '  const current = state();',
+    '  if (file === process.execPath && ["lookup", "cwd"].includes(args.at(-1))) {',
+    '    globalThis.lookupCalls ??= []; globalThis.lookupCalls.push({ file, kind: args.at(-1), cwd: options.cwd, timeout: options.timeout,',
+    '      maxBuffer: options.maxBuffer, killSignal: options.killSignal, windowsHide: options.windowsHide, input: options.input,',
+    '      nodeKeys: Object.keys(options.env).filter(key => /^(NODE_OPTIONS|NODE_PATH)$/i.test(key)) });',
+    '    try { return original.call(this, file, ["--require", __filename, ...args], options); }',
+    '    finally { if (fakeClock) clock += current.lookupClockStep ?? 0; }',
+    '  }',
+    '  if (!isGitExecutable(file)) return original.apply(this, arguments);',
     '  const reply = text => options.encoding === null ? Buffer.from(text) : text;',
     '  options = { ...options, env: { ...options.env, HOME: current.home, USERPROFILE: current.home,',
     '    XDG_CONFIG_HOME: current.xdg, GIT_CONFIG_SYSTEM: options.env.GIT_CONFIG_SYSTEM === "/dev/null" ? "/dev/null" : current.system,',
     '    ...(current.respectExplicitSystem && options.env.GIT_CONFIG_SYSTEM !== undefined ? { GIT_CONFIG_SYSTEM: options.env.GIT_CONFIG_SYSTEM } : {}),',
     '    GIT_TEST_ASSUME_DIFFERENT_OWNER: current.foreign ? "1" : "0" } };',
     '  globalThis.gitCalls.push({ file, args, timeout: options.timeout });',
+    '  if (current.lookupDiagnostics) { globalThis.gitNodeEnvs ??= []; globalThis.gitNodeEnvs.push({ NODE_OPTIONS: options.env.NODE_OPTIONS, NODE_PATH: options.env.NODE_PATH }); }',
     '  let offset = 0; while (args[offset] === "-c") offset += 2; const command = args.slice(offset);',
     '  if (current.referenceFault && options.cwd === current.referenceFaultCwd) {',
     '    const fail = properties => { throw Object.assign(new Error("private-reference-command"), properties); };',
@@ -2824,6 +2842,134 @@ test("a report runner pins one absolute executable across version, trust, metada
     assert.equal(new Set(result.calls.map(call => call.file)).size, 1);
     assert.equal(result.calls.filter(call => call.args[0] === "--version").length, 2, "capabilities stay fresh after pinning");
     assert.ok(result.calls.some(call => call.args.includes("--get-regexp")), "the NUL metadata guard must use the pin too");
+  } finally { cleanup(); }
+});
+
+test("blocked executable lookup is terminated before Git and its failure is cached", () => {
+  const { a, make, cleanup } = buildCloneFixture();
+  const home = make(), xdg = make(), system = path.join(make(), "empty.gitconfig"), lookupTrace = path.join(make(), "lookup-pids.jsonl");
+  fs.writeFileSync(system, ""); fs.writeFileSync(lookupTrace, "");
+  try {
+    const result = runGitHarness(make, { a, home, xdg, system, foreign: false, lookupDiagnostics: true, lookupDelayMs: 4000, lookupTrace },
+      (trial, fs, stateFile, settings) => {
+        const git = trial.createGitRunner({ timeoutMs: 750 });
+        const began = performance.now(); let first, second;
+        try { git(["rev-parse", "--show-toplevel"], settings.a); } catch (error) { first = error; }
+        const elapsed = performance.now() - began, callsAfterFirst = globalThis.gitCalls.length;
+        try { git(["rev-parse", "--show-toplevel"], settings.a); } catch (error) { second = error; }
+        const blockedPids = fs.readFileSync(settings.lookupTrace, "utf8").split("\n").filter(Boolean).map(line => JSON.parse(line).pid);
+        const alive = blockedPids.map(pid => { try { process.kill(pid, 0); return true; } catch (error) { if (error.code === "ESRCH") return false; throw error; } });
+        const failedCalls = globalThis.lookupCalls ?? [];
+        fs.writeFileSync(stateFile, JSON.stringify({ ...settings, lookupDelayMs: 0 }));
+        globalThis.resetGitHarness(); globalThis.lookupCalls = [];
+        const fast = trial.createGitRunner()(["rev-parse", "--show-toplevel"], settings.a);
+        return { elapsed, code: first?.code, cause: first?.cause?.code, sameError: first === second, callsAfterFirst,
+          failedCalls, blockedPids, alive, fast, fastLookups: globalThis.lookupCalls.length, fastGitCalls: globalThis.gitCalls.length };
+      });
+    assert.ok(result.elapsed < 3000, "a blocking filesystem lookup cannot hold the report for its four-second sleep: " + result.elapsed);
+    assert.equal(result.code, "git_cwd_unavailable");
+    assert.equal(result.cause, "ETIMEDOUT");
+    assert.equal(result.sameError, true, "the runner retains its failed pin rather than launching another lookup");
+    assert.equal(result.callsAfterFirst, 0, "Git cannot launch after unavailable discovery");
+    assert.equal(result.failedCalls.length, 1);
+    assert.equal(result.blockedPids.length, 1, "the fixture must actually block in its owned native lookup process");
+    assert.deepEqual(result.alive, [false], "the timed-out owned child must already have exited");
+    assert.equal(result.failedCalls[0].file, process.execPath);
+    assert.equal(real(result.failedCalls[0].cwd), real(path.dirname(process.execPath)));
+    assert.ok(Number.isInteger(result.failedCalls[0].timeout) && result.failedCalls[0].timeout > 0 && result.failedCalls[0].timeout <= 750);
+    assert.equal(result.failedCalls[0].maxBuffer, 256 * 1024);
+    assert.equal(result.failedCalls[0].killSignal, "SIGKILL");
+    assert.equal(result.failedCalls[0].windowsHide, true);
+    assert.equal(real(result.fast), real(a), "an independent fast native lookup still resolves Git");
+    assert.equal(result.fastLookups, 1);
+    assert.equal(result.fastGitCalls, 3);
+  } finally { cleanup(); }
+});
+
+test("a blocked or indeterminate cwd discriminator cannot prove missing Git or a missing directory", () => {
+  const { a, make, cleanup } = buildCloneFixture();
+  const home = make(), xdg = make(), system = path.join(make(), "empty.gitconfig"), lookupTrace = path.join(make(), "cwd-pids.jsonl");
+  fs.writeFileSync(system, ""); fs.writeFileSync(lookupTrace, "");
+  try {
+    const result = runGitHarness(make, { a, home, xdg, system, foreign: false, lookupDiagnostics: true, cwdDelayMs: 4000,
+      failureCwd: a, versionFailure: { code: "ENOENT" }, lookupTrace }, (trial, fs, stateFile, settings) => {
+      const git = trial.createGitRunner({ timeoutMs: 1000 });
+      const began = performance.now(); let error;
+      try { git(["rev-parse", "--show-toplevel"], settings.a); } catch (value) { error = value; }
+      const elapsed = performance.now() - began, calls = globalThis.gitCalls.map(call => call.args);
+      const helpers = globalThis.lookupCalls.map(call => call.kind);
+      const blockedPids = fs.readFileSync(settings.lookupTrace, "utf8").split("\n").filter(Boolean).map(line => JSON.parse(line).pid);
+      const alive = blockedPids.map(pid => { try { process.kill(pid, 0); return true; } catch (error) { if (error.code === "ESRCH") return false; throw error; } });
+      fs.writeFileSync(stateFile, JSON.stringify({ ...settings, cwdDelayMs: 0, cwdInconclusive: true }));
+      let inconclusive; try { git(["rev-parse", "--show-toplevel"], settings.a); } catch (value) { inconclusive = value.code; }
+      fs.writeFileSync(stateFile, JSON.stringify({ ...settings, cwdDelayMs: 0, versionFailure: null }));
+      const helpersBeforeRecovery = globalThis.lookupCalls.length;
+      const recovered = git(["rev-parse", "--show-toplevel"], settings.a);
+      return { elapsed, code: error?.code, calls, helpers, blockedPids, alive, inconclusive, recovered,
+        recoveryLookups: globalThis.lookupCalls.length - helpersBeforeRecovery };
+    });
+    assert.ok(result.elapsed < 3000, "cwd classification cannot hold the report for its four-second filesystem stall: " + result.elapsed);
+    assert.equal(result.code, "git_cwd_unavailable");
+    assert.deepEqual(result.calls, [["--version"]], "no protected configuration or identity read can follow the failed version");
+    assert.deepEqual(result.helpers, ["lookup", "cwd"]);
+    assert.equal(result.blockedPids.length, 1);
+    assert.deepEqual(result.alive, [false]);
+    assert.equal(result.inconclusive, "git_cwd_unavailable", "lack of directory proof cannot become a missing-executable diagnosis");
+    assert.equal(real(result.recovered), real(a));
+    assert.equal(result.recoveryLookups, 0, "candidate availability failures do not discard the existing executable pin");
+  } finally { cleanup(); }
+});
+
+test("private filesystem helpers receive only the selected PATH and do not rerun Node preloads", () => {
+  const { a, make, cleanup } = buildCloneFixture();
+  const home = make(), xdg = make(), system = path.join(make(), "empty.gitconfig");
+  const marker = path.join(make(), "preloaded.txt"), preload = path.join(make(), "must-not-preload.cjs");
+  fs.writeFileSync(system, "");
+  fs.writeFileSync(preload, 'require("node:fs").appendFileSync(' + JSON.stringify(marker) + ', "executed\\n");');
+  try {
+    const result = runGitHarness(make, { a, home, xdg, system, foreign: false, lookupDiagnostics: true, marker, preload },
+      (trial, fs, stateFile, settings) => {
+        const env = { ...process.env, NODE_OPTIONS: "--require " + JSON.stringify(settings.preload.replaceAll("\\", "/")), NODE_PATH: settings.home };
+        if (process.platform === "win32") { env.node_options = env.NODE_OPTIONS; env.NoDe_PaTh = env.NODE_PATH; }
+        const key = process.platform === "win32" ? Object.keys(env).sort().find(name => name.toUpperCase() === "PATH") : "PATH";
+        const git = trial.createGitRunner({ env });
+        const value = git(["rev-parse", "--show-toplevel"], settings.a);
+        git(["rev-parse", "--show-toplevel"], settings.a);
+        const calls = globalThis.lookupCalls;
+        const envPreserved = globalThis.gitNodeEnvs.every(value => value.NODE_OPTIONS === env.NODE_OPTIONS && value.NODE_PATH === env.NODE_PATH);
+        const missing = trial.createGitRunner({ env: { ...env, PATH: undefined, Path: env[key] } });
+        let emptyError; try { missing(["rev-parse", "--show-toplevel"], settings.a); } catch (error) { emptyError = { code: error.code, cause: error.cause?.code }; }
+        return { value, firstCalls: calls.length - 1, onlyPath: calls[0].input === JSON.stringify(env[key]), nodeKeys: calls[0].nodeKeys,
+          preloadRan: fs.existsSync(settings.marker), envPreserved, emptyError, emptyInput: calls.at(-1).input };
+      });
+    assert.equal(real(result.value), real(a));
+    assert.equal(result.firstCalls, 1, "success is pinned across repeated identity operations");
+    assert.equal(result.onlyPath, true, "the private helper input is one selected PATH string, not the full environment");
+    assert.deepEqual(result.nodeKeys, [], "private helpers must not inherit Node preload variables");
+    assert.equal(result.preloadRan, false);
+    assert.equal(result.envPreserved, true, "Node options remain unchanged for the parent and Git environments");
+    assert.deepEqual(result.emptyError, { code: "git_unsupported", cause: "ENOENT" });
+    assert.equal(result.emptyInput, JSON.stringify(""), "selection precedes JSON serialization of an undefined first PATH key");
+  } finally { cleanup(); }
+});
+
+test("filesystem discovery consumes the same original deadline as subsequent Git phases", () => {
+  const { a, make, cleanup } = buildCloneFixture();
+  const home = make(), xdg = make(), system = path.join(make(), "empty.gitconfig"); fs.writeFileSync(system, "");
+  try {
+    const results = runGitHarness(make, { a, home, xdg, system, foreign: false, lookupDiagnostics: true, clockStep: 1000.25 },
+      (trial, fs, stateFile, settings) => [1000.25, 5000.25].map(lookupClockStep => {
+        fs.writeFileSync(stateFile, JSON.stringify({ ...settings, lookupClockStep }));
+        globalThis.resetGitHarness(); globalThis.lookupCalls = [];
+        let value, error; try { value = trial.gitOutput(["rev-parse", "--show-toplevel"], settings.a); } catch (cause) { error = cause.code; }
+        return { value, error, lookupTimeouts: globalThis.lookupCalls.map(call => call.timeout), gitTimeouts: globalThis.gitCalls.map(call => call.timeout) };
+      }));
+    assert.equal(real(results[0].value), real(a));
+    assert.deepEqual(results[0].lookupTimeouts, [5000]);
+    assert.deepEqual(results[0].gitTimeouts, [3999, 2999, 1999], "lookup time cannot grant version/config/identity a fresh budget");
+    assert.equal(results[1].error, "git_cwd_unavailable");
+    assert.deepEqual(results[1].lookupTimeouts, [5000]);
+    assert.deepEqual(results[1].gitTimeouts, [], "Git cannot start when discovery spent the deadline");
   } finally { cleanup(); }
 });
 

@@ -669,8 +669,13 @@ npm run trial:report -- --json
 Repository identity probes require **Git 2.39 or newer**, which follows ordinary includes when
 reading protected configuration. Each report runner lazily pins one absolute native executable from
 its captured `PATH`, ignoring empty, relative and Windows drive-dependent fields while preserving
-quoted absolute fields. Version checks still run before every Git identity operation. If a
-check finds an older or unrecognizable version, it produces one diagnostic and leaves signal 4
+quoted absolute fields. Version checks still run before every Git identity operation. A private
+Node helper performs PATH lookup and exceptional missing-directory checks within the same remaining
+deadline, with forced termination and bounded input/output.
+The helper uses the running Node executable and its installation directory; logged directories cannot
+select its executable or cwd. Only the selected PATH or the one directory being classified is sent
+on stdin. Node preload variables are excluded from this helper alone; parent and Git settings remain intact.
+If a check finds an older or unrecognizable version, it produces one diagnostic and leaves signal 4
 **UNMEASURED**, including with an explicit repository root. If incompatibility is found later,
 earlier clone confirmations and their folding notes are discarded. A missing or non-directory
 logged working path is instead left unconfirmed outside without disabling Git for later candidates.
