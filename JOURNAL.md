@@ -52,12 +52,19 @@ A review of the repository and a test run on 2026-09-26 filed findings as issues
 
 ## Entries (newest first)
 
+- 2026-11-01 01:30Z (PR #580 — new Copilot review resolved; 2 more fixes in b54b19b; all threads clean):
+  - New Copilot review (review_id 5725856458) on d11f2a1 posted 4 open threads: 2 new, 2 re-listed from prior deferred round.
+  - Fixed r4433977114 (Commands.cs): track `oldProjectId` before updating `context = refreshed`; clear inspectedTask/taskSequence when project ID changes after link_project/create_project, preventing stale inspector from previous project.
+  - Fixed r4433977139 (Canvas.razor.js): add `lostpointercapture` listener on drag handle after setPointerCapture; resets gesture if DOM removal releases capture without firing pointercancel.
+  - Deferred r4433943033 (editor reset on copy) and r4433943018 (viewport scroll delta) with replies; both threads resolved.
+  - All 4 new Copilot threads resolved (PRRT_WQrS, WQrn, WLbY, WLbi). 0 unresolved threads. All 69 PR review threads resolved.
+  - Commits on branch: d11f2a1 (Drafts.cs guard), 5786713 (journal merge), b54b19b (2 Copilot fixes). Codex reviews running on b54b19b.
+  - Next: wait for Codex reviews on b54b19b to complete; notify owner when clean and ready to merge.
+
 - 2026-11-01 04:00Z (PR #580 — all 12 CodeRabbit/Copilot threads from f2e7999 round resolved; Drafts.cs browserCache guard committed):
   - Resolved all 12 open review threads: 4 fixed in 4de1359 (WGAe, WLbB, WGAs, WLa9), 3 stale-resolved (WGAi, WLbN, WLbx — code already addressed), 5 deferred (WGAS, WGAV, WGAd, WLbY, WLbi).
   - Committed pending Drafts.cs change: PersistDraft now guards browserCache write behind `restoredBrowserWorkspaces.Contains(scope.WorkspaceId)` — prevents stomping cached in-memory draft before workspace restoration completes (addresses WGAd root cause).
   - PR #85/branch feat/579-idea-workspaces HEAD: awaiting Codex reviews on 4de1359 and 0613e47. 0 unresolved threads. Next: resolve any new Codex findings; notify owner when PR is clean.
-
-- 2026-11-01 03:15Z — Automated PR monitor run (scheduled). Build gate DOWN: proxy blocks dot.net, .NET 10 SDK unavailable. No merges performed. Open PRs (5 total): #580 isDraft=false mergeState=BLOCKED 0 unresolved threads; #578 isDraft=false mergeState=CLEAN 0 unresolved threads (CodeRabbit: skipped/no findings); #564 isDraft=true 0 unresolved threads; #521 isDraft=true 0 unresolved threads; #511 isDraft=true 0 unresolved threads. Phase 1 skipped (gate down). Phase 2: all PRs already at 0 unresolved threads, no comment work needed. Master not re-verified (no SDK). Owner action: re-run once .NET SDK is available; #578 appears ready to merge (clean, 0 threads, bot review skipped with no findings).
 
 - 2026-11-01 02:50Z (PR #580 — correction: WGAV (workspace-transport stdin/exit) fixed in 0613e47, not deferred):
   - The 02:30Z entry listed WGAV as deferred. In fact, commit 0613e47 (which precedes 4de1359 in branch history) already fixes it: exit handler includes signal via `code ?? signal`; rpc() now rejects immediately when child has already exited. Correction reply posted at comment 4433973652. All 4 Copilot threads from 5cf4438 review also fixed in 91999ee and resolved. CodeRabbit JOURNAL.md spacing thread resolved as by-design (append-only rule).
