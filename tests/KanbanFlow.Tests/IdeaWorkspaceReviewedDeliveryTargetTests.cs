@@ -42,7 +42,8 @@ public sealed class IdeaWorkspaceReviewedDeliveryTargetTests
         var scope = new WorkspaceUiScope(key, 7);
         var request = new IdeaWorkspacePublicationPreviewRequest(context.Revision, context.ProjectPlanRevision!.Value, [unpublished.Id]);
         await Call(page, "PreviewDelivery", scope, request);
-        Assert.Equal(first.Id, Field<IdeaWorkspacePublicationPreview>(page, "publicationPreview").FeatureId);
+        var reviewedPreview = Field<IdeaWorkspacePublicationPreview>(page, "publicationPreview");
+        Assert.Equal(first.Id, reviewedPreview.FeatureId);
         Assert.Null(request.FeatureId);
         Assert.Null(request.FeatureName);
         var firstTask = context.Document.Publications.Single(item => item.FeatureId == first.Id).TaskId;
@@ -69,7 +70,7 @@ public sealed class IdeaWorkspaceReviewedDeliveryTargetTests
             receiptsBefore = await db.Set<KanbanFlow.Models.IdeaWorkspaces.IdeaWorkspaceReceipt>().CountAsync();
         }
 
-        await Call(page, "PublishReviewed", scope);
+        await Call(page, "PublishReviewed", scope, reviewedPreview);
 
         await using var verify = factory.CreateDbContext();
         if (removeReviewedFeature)
@@ -121,7 +122,7 @@ public sealed class IdeaWorkspaceReviewedDeliveryTargetTests
         selected.Clear(); // The reviewed selection must not follow a caller's later mutable list.
         calls.LoseNextResponse = true;
 
-        await Call(page, "PublishReviewed", scope);
+        await Call(page, "PublishReviewed", scope, preview);
 
         var pending = Field<WorkspaceBrowserDraft>(page, "draft").Pending!;
         Assert.NotNull(pending);
