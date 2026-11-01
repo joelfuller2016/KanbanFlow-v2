@@ -770,7 +770,7 @@ test("a root-commit match is still trusted when the candidate's remote is a LOCA
       "remote": "origin",
       "rev-parse --show-toplevel": localCloneCwd,
       "rev-list --max-parents=0 HEAD": "aaa111", // shared history
-      "remote get-url origin": "C:\\Users\\repo\\dev\\KanbanFlow-v2" // a LOCAL PATH, not a network remote
+      "remote get-url origin": mainRoot // a host-native LOCAL PATH, not a network remote
     }
   });
   const { confirmed } = withConfirmedCloneRoots([localCloneCwd], [mainRoot], { git });
@@ -1016,7 +1016,7 @@ test("a match on a PUSH url or a later url is not proof — unrelated history th
   // it is where they push — the root-commit check is what used to keep them out, and still must.
   const mainRoot = path.resolve("C:\\real\\KanbanFlow-v2");
   const MAIN = "https://github.com/joel/kanbanflow-v2.git";
-  const LOCAL = "C:\\some\\local\\path";
+  const LOCAL = path.resolve("local-source");
   const pushesHere = path.resolve("C:\\scratch\\unrelated-pushes-here");
   const secondUrlHere = path.resolve("C:\\scratch\\unrelated-second-url-here");
   const localCloneThatPushesHere = path.resolve("C:\\scratch\\local-clone-pushes-here");
@@ -1153,6 +1153,17 @@ function buildInto(build) {
   }
 }
 
+// Construct owned local repositories separately from the report's five-second read budget.
+function setupGit(args, cwd) {
+  const child = spawnSync("git", args, {
+    cwd, encoding: "utf8", timeout: 30_000, maxBuffer: 256 * 1024, windowsHide: true,
+    env: { ...scrubGitEnv(process.env), GIT_CONFIG_NOSYSTEM: "1",
+      GIT_CONFIG_SYSTEM: "/dev/null", GIT_CONFIG_GLOBAL: "/dev/null" }
+  });
+  if (child.error) throw child.error;
+  assert.equal(child.status, 0, child.stderr);
+}
+
 // Twenty-four real repositories covering every remote-classification shape rule (A) addresses, built
 // fresh in os.tmpdir() every run, never read from a machine-specific fixture directory: this is the
 // same key an earlier version of this test read from one, self-contained now instead — this test
@@ -1160,16 +1171,6 @@ function buildInto(build) {
 // future session.
 function buildRuleAFixture() {
   return buildInto(make => {
-    // Construct owned local repositories separately from the report's five-second read budget.
-    const setupGit = (args, cwd) => {
-      const child = spawnSync("git", args, {
-        cwd, encoding: "utf8", timeout: 30_000, maxBuffer: 256 * 1024, windowsHide: true,
-        env: { ...scrubGitEnv(process.env), GIT_CONFIG_NOSYSTEM: "1",
-          GIT_CONFIG_SYSTEM: "/dev/null", GIT_CONFIG_GLOBAL: "/dev/null" }
-      });
-      if (child.error) throw child.error;
-      assert.equal(child.status, 0, child.stderr);
-    };
     const clone = (source, dir, options = []) => setupGit(["clone", "-q", ...options, source, dir], a);
     const cloneWithRemote = (remoteUrl, srcOrigin = "origin") => {
       const dir = make();
@@ -1901,16 +1902,16 @@ function buildCloneFixture() {
   return buildInto(make => {
     const a = make(); const b = make(); const c = make(); const d = make();
     initRealRepo(a, "a.txt");
-    gitOutput(["remote", "add", "origin", "https://example.invalid/org/repo.git"], a);
+    setupGit(["remote", "add", "origin", "https://example.invalid/org/repo.git"], a);
 
-    gitOutput(["clone", "-q", a, b], a);
-    gitOutput(["remote", "remove", "origin"], b);
+    setupGit(["clone", "-q", a, b], a);
+    setupGit(["remote", "remove", "origin"], b);
 
     initRealRepo(c, "c.txt");
-    gitOutput(["remote", "add", "origin", "https://example.invalid/other/thing.git"], c);
+    setupGit(["remote", "add", "origin", "https://example.invalid/other/thing.git"], c);
 
     initRealRepo(d, "d.txt");
-    gitOutput(["remote", "add", "origin", "https://example.invalid/org/repo.git"], d);
+    setupGit(["remote", "add", "origin", "https://example.invalid/org/repo.git"], d);
 
     return { a, b, c, d };
   });
@@ -2198,18 +2199,17 @@ test("real Git namespace evidence retains SSH accounts and repository path seman
 // spawn the real CLI with `...process.env` spread into the child, so a global mutation here would
 // leak into every later test in the same process for the rest of this run, however this file is
 // eventually run, and fail them for a reason nobody would trace back to this section.) Fixture
-// setup itself goes through `gitOutput` too, so it is protected by the SAME scrub being proven,
-// not by a second, separately-written one that could drift from the real one.
+// setup uses the same scrubGitEnv with isolated configuration and a separate bounded setup
+// budget; actual report reads and assertions still exercise gitOutput's five-second deadline.
 
-function initRealRepo(dir, filename, git = gitOutput) {
+function initRealRepo(dir, filename, git = setupGit) {
   fs.writeFileSync(path.join(dir, filename), filename);
   git(["init", "-q"], dir);
   git(["add", filename], dir);
   // -c commit.gpgsign=false / core.hooksPath= / --no-verify: a contributor's global git config can
   // have commit signing or a hooksPath configured (this repo's own CLAUDE.md documents exactly
   // that risk for git hooks). Any of those can prompt, shell out, or simply run slowly on an
-  // unrelated temp repo — inside GIT_TIMEOUT_MS (5s), that reads as "git is unavailable" and turns
-  // an unrelated local config difference into a flaky test.
+  // unrelated temp repo and turn a local config difference into a flaky test.
   git(
     [
       "-c", "user.email=trial-report-test@example.com", "-c", "user.name=trial-report-test",
@@ -3521,7 +3521,7 @@ const runCliJson = (log, repoRoot, args = [], nodeArgs = []) => {
 function remoteLimitFixture() {
   const fixture = buildCloneFixture();
   const { a, b, d } = fixture;
-  for (const repo of [a, d]) gitOutput(["remote", "remove", "origin"], repo);
+  for (const repo of [a, d]) setupGit(["remote", "remove", "origin"], repo);
   const configs = new Map([a, b, d].map(repo => [repo, fs.readFileSync(path.join(repo, ".git", "config"), "utf8")]));
   // Git config supports these escapes; CR remains a literal payload character, not JSON's \\r.
   const quoteConfig = value => '"' + value.replaceAll("\\", "\\\\").replaceAll('"', '\\"')
@@ -3856,13 +3856,17 @@ test("a missing Git binary in an existing cwd remains a compatibility failure", 
   } finally { cleanup(); }
 });
 
-function versionFailurePreload(dir, failCwd, failure, trace) {
+function versionFailurePreload(dir, failCwd, failure, trace, protectedConfig = null) {
   const preload = path.join(dir, "version-failure.cjs");
   fs.writeFileSync(preload, [
     'const fs = require("node:fs"), path = require("node:path"), cp = require("node:child_process"), original = cp.execFileSync;',
     'cp.execFileSync = function (file, args, options) {',
     GIT_PRELOAD_MATCHER,
     `  if (isGitExecutable(file)) fs.appendFileSync(${JSON.stringify(trace)}, JSON.stringify({ args, cwd: options.cwd }) + "\\n");`,
+    ...(protectedConfig ? [
+      `  if (isGitExecutable(file) && args[0] === "config" && args.includes("safe.directory"))`,
+      `    options = { ...options, env: { ...options.env, GIT_CONFIG_GLOBAL: ${JSON.stringify(protectedConfig)} } };`
+    ] : []),
     `  if (isGitExecutable(file) && args[0] === "--version" && path.resolve(options.cwd) === ${JSON.stringify(path.resolve(failCwd))})`,
     `    throw Object.assign(new Error("controlled native version failure"), ${JSON.stringify(failure)});`,
     '  return original.apply(this, arguments);',
@@ -3876,6 +3880,8 @@ test("candidate version failures stay local for recorded and resolved working di
   const { a, b, d, make, cleanup } = buildCloneFixture();
   const dir = make(), log = path.join(dir, "usage.jsonl"), trace = path.join(dir, "trace.jsonl");
   const subdir = path.join(b, "recorded-subdir");
+  const protectedConfig = path.join(dir, "protected.gitconfig");
+  fs.writeFileSync(protectedConfig, "[safe]\n" + [a, b, d].map(value => "\tdirectory = " + JSON.stringify(value.replaceAll("\\", "/")) + "\n").join(""));
   fs.mkdirSync(subdir);
   try {
     for (const failure of [{ code: "ETIMEDOUT", signal: "SIGTERM" }, { code: "ETIMEDOUT", status: 0, signal: null },
@@ -3886,7 +3892,7 @@ test("candidate version failures stay local for recorded and resolved working di
           fs.writeFileSync(trace, "");
           fs.writeFileSync(log, order.map((cwd, index) => JSON.stringify(row({ cwd, session: cwd,
             ts: `2026-11-01T00:00:0${2 - index}Z` }))).join("\n") + "\n");
-          const preload = versionFailurePreload(dir, failedCwd, failure, trace);
+          const preload = versionFailurePreload(dir, failedCwd, failure, trace, protectedConfig);
           const child = runCliJson(log, a, [], ["--require", preload]);
           assert.equal(child.status, 1, child.stderr);
           const summary = JSON.parse(child.stdout);
@@ -3899,7 +3905,14 @@ test("candidate version failures stay local for recorded and resolved working di
           assert.ok(calls.some(call => path.resolve(call.cwd) === failedCwd && call.args[0] === "--version"), "the selected failure must actually be reached");
           assert.ok(calls.filter(call => path.resolve(call.cwd) === failedCwd).every(call => call.args[0] === "--version"),
             "a failed version read cannot authorize config or identity commands at that cwd");
-          assert.ok(calls.some(call => path.resolve(call.cwd) === path.resolve(d) && call.args[0] === "rev-parse"), "healthy commands still delegate to the installed Git");
+          assert.ok(calls.some(call => path.resolve(call.cwd) === path.resolve(d) && call.args[0] === "-c"),
+            "the real protected config must prefix healthy identity commands in this control");
+          assert.ok(calls.some(call => {
+            if (path.resolve(call.cwd) !== path.resolve(d)) return false;
+            let command = 0;
+            while (call.args[command] === "-c" && command + 1 < call.args.length) command += 2;
+            return call.args[command] === "rev-parse" && call.args[command + 1] === "--show-toplevel";
+          }), "healthy commands still delegate exact rev-parse --show-toplevel to the installed Git");
         }
       }
     }
