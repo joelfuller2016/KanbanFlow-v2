@@ -62,7 +62,7 @@
                         @if (item.ExistingTask is { } task) { <p class="small">Current task #@task.Id: @task.Name · @task.Status · @task.Priority. This task will be preserved.</p> }
                     </article>
                 }
-                <button class="btn btn-success" disabled="@(Busy || preview.Revision != Context.Revision || preview.ProjectPlanRevision != Context.ProjectPlanRevision)" @onclick="Publish" data-testid="delivery-publish">Publish reviewed tasks to Kanban</button>
+                <button class="btn btn-success" disabled="@(Busy || preview.Revision != Context.Revision || preview.ProjectPlanRevision != Context.ProjectPlanRevision)" @onclick="() => Publish(preview)" data-testid="delivery-publish">Publish reviewed tasks to Kanban</button>
                 @if (preview.Revision != Context.Revision || preview.ProjectPlanRevision != Context.ProjectPlanRevision) { <p class="text-warning-emphasis mt-2">The saved context advanced. Preview again before publishing.</p> }
             </section>
         }

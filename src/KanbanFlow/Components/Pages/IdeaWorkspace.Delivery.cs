@@ -89,10 +89,16 @@ public partial class IdeaWorkspace
         finally { if (IsCurrent(scope) && sequence == previewSequence) previewBusy = false; }
     }
 
-    private async Task PublishReviewed(WorkspaceUiScope scope)
+    private async Task PublishReviewed(WorkspaceUiScope scope, IdeaWorkspacePublicationPreview reviewedPreview)
     {
-        if (!IsCurrent(scope) || publicationPreview is null || publicationRequest is not { } request || context is null) return;
-        if (publicationPreview.WorkspaceId != scope.WorkspaceId || request.ExpectedRevision != context.Revision ||
+        if (!IsCurrent(scope) || context is null) return;
+        if (!ReferenceEquals(reviewedPreview, publicationPreview))
+        {
+            deliveryError = "The publication preview changed. Review the current selection and destination before publishing.";
+            return;
+        }
+        if (publicationRequest is not { } request) return;
+        if (reviewedPreview.WorkspaceId != scope.WorkspaceId || request.ExpectedRevision != context.Revision ||
             request.ExpectedProjectPlanRevision != context.ProjectPlanRevision)
         {
             deliveryError = "The reviewed context has advanced. Preview the selected tasks again before publishing.";

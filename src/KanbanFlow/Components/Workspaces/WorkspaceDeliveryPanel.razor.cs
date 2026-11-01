@@ -17,7 +17,7 @@ public partial class WorkspaceDeliveryPanel : IDisposable
     [Parameter] public string? Error { get; set; }
     [Parameter] public EventCallback<WorkspaceDeliveryDraft> OnDraftChanged { get; set; }
     [Parameter] public EventCallback<IdeaWorkspacePublicationPreviewRequest> OnPreview { get; set; }
-    [Parameter] public EventCallback OnPublish { get; set; }
+    [Parameter] public EventCallback<IdeaWorkspacePublicationPreview> OnPublish { get; set; }
     [Parameter] public EventCallback<WorkspaceUiCommand> OnCommand { get; set; }
     private readonly WorkspaceDraftInput<WorkspaceDeliveryDraft> input = new(new());
     private readonly CancellationTokenSource lifetime = new();
@@ -119,5 +119,5 @@ public partial class WorkspaceDeliveryPanel : IDisposable
     private Task CreateProject() => OnCommand.InvokeAsync(WorkspaceUiCommand.Create("create_project", new { name = string.IsNullOrWhiteSpace(editing.ProjectName) ? null : editing.ProjectName }, Context.Revision));
     private Task PreviewSelection() => OnPreview.InvokeAsync(new(Context.Revision, Context.ProjectPlanRevision!.Value,
         editing.SelectedItemIds?.ToArray(), editing.FeatureId, string.IsNullOrWhiteSpace(editing.FeatureName) ? null : editing.FeatureName));
-    private Task Publish() => OnPublish.InvokeAsync();
+    private Task Publish(IdeaWorkspacePublicationPreview preview) => OnPublish.InvokeAsync(preview);
 }
