@@ -784,7 +784,7 @@ test("remote path classification follows both native Windows and POSIX Git parse
   // https://github.com/git/git/blob/v2.55.0/url.c#L128-L134
   for (const [url, windowsLocal, posixLocal] of [
     ["C:repo", true, false], ["C:/repo", true, false], ["C:\\repo", true, false],
-    ["C:repo:other", false, false], ["C:re?po", false, false], ["C:CON", false, false],
+    ["C:repo:other", false, false], ["C:re?po", false, false], ["C:CON", false, false], ["C:CON .txt", false, false], ["C:AUX .ext", false, false], ["C:LPT1 .ext", false, false],
     ["before\\slash:repo", false, false], ["before/slash:repo", true, true],
     ["user@C:repo", false, false], ["x::host/repo", false, false],
     ["/local/repo", true, true], ["file:///local/repo", true, true]
@@ -798,7 +798,7 @@ test("remote path classification follows both native Windows and POSIX Git parse
 
 test("native Git diagnostics verify the host platform's drive and backslash classification without connecting", () => {
   for (const [url, validDrive] of [["C:repo", true], ["C:/repo", true], ["C:\\repo", true],
-      ["C:repo:other", false], ["C:re?po", false], ["C:CON", false], ["before\\slash:repo", false]]) {
+      ["C:repo:other", false], ["C:re?po", false], ["C:CON", false], ["C:CON .txt", false], ["C:AUX .ext", false], ["C:LPT1 .ext", false], ["before\\slash:repo", false]]) {
       // Git's CONNECT_DIAG_URL returns before opening the file/SSH transport.
       const diagnostic = gitOutput(["fetch-pack", "--diag-url", url], HERE);
       const local = process.platform === "win32" && validDrive;
@@ -812,7 +812,7 @@ test("real configured single-letter remotes veto shared history under the POSIX 
   try {
     gitOutput(["remote", "add", "origin", "C:fork"], b);
     for (const [url, windowsConfirmed] of [["C:fork", true], ["C:/fork", true], ["C:\\fork", true], ["before\\slash:fork", false],
-      ["C:fork:other", false], ["C:re?po", false], ["C:CON", false]]) {
+      ["C:fork:other", false], ["C:re?po", false], ["C:CON", false], ["C:CON .txt", false], ["C:AUX .ext", false], ["C:LPT1 .ext", false]]) {
       gitOutput(["remote", "set-url", "origin", url], b);
       assert.equal(gitOutput(["remote", "get-url", "origin"], b), url, "real Git stores the exact namespace being judged");
       assert.equal(withConfirmedCloneRoots([b], [a], { platform: "win32" }).confirmed.has(b), windowsConfirmed, "Windows contract: " + url);
@@ -826,7 +826,7 @@ test("ambiguous Windows drive forms cannot prove a matching remote or shared-roo
   const { a, b, c, cleanup } = buildCloneFixture();
   try {
     gitOutput(["remote", "add", "origin", "C:CON"], b);
-    for (const url of ["C:CON", "C:repo:other", "1:repo", "ä:repo"]) {
+    for (const url of ["C:CON", "C:CON .txt", "C:AUX .ext", "C:LPT1 .ext", "C:repo:other", "1:repo", "ä:repo"]) {
       for (const cwd of [a, b, c]) gitOutput(["remote", "set-url", "origin", url], cwd);
       assert.equal(withConfirmedCloneRoots([b, c], [a], { platform: "win32" }).confirmed.size, 0,
         "ambiguous Windows paths cannot contribute URL or root-commit proof: " + url);
@@ -1326,6 +1326,15 @@ test("normalizeRemoteUrl folds case, a trailing .git, and https/ssh/scp syntax t
   assert.equal(normalizeRemoteUrl(undefined), null);
 });
 
+test("normalizeRemoteUrl preserves complete payloads after record framing is removed", () => {
+  const value = "https://example.invalid/org/repo.git";
+  const plain = normalizeRemoteUrl(value);
+  for (const payload of [value + " ", " " + value, value + "\n", value + "\r\n"]) {
+    assert.notEqual(normalizeRemoteUrl(payload), plain, "all supplied characters belong to the URL payload");
+  }
+  // Native get-url assertions below verify that the runner removes only Git's terminal LF.
+});
+
 test("normalizeRemoteUrl preserves case-sensitive repository paths while normalizing network hosts", () => {
   const forms = [
     "git://EXAMPLE.invalid/Org/Main.git",
@@ -1593,6 +1602,7 @@ test("a remote with more than 64 urls is inconclusive, including a contradicting
   for (const [label, fetch, push, accepted] of [
     ["64 aggregate boundary", Array(32).fill(MAIN).join("\n"), Array(32).fill(MAIN).join("\n"), true],
     ["empty records cannot disappear from the aggregate bound", "\n" + Array(32).fill(MAIN).join("\r\n\n") + "\n", Array(32).fill(MAIN).join("\n"), false],
+    ["LF-only empty records also consume the allowance", "\n" + Array(32).fill(MAIN).join("\n\n") + "\n", Array(32).fill(MAIN).join("\n"), false],
     ["65 matching aggregate entries", Array(32).fill(MAIN).join("\n"), Array(33).fill(MAIN).join("\n"), false],
     ["65 matching fetch URLs", limit + "\n" + MAIN, MAIN, false],
     ["65th fetch URL contradicts", limit + "\nhttps://github.com/fork/project.git", MAIN, false],
@@ -1939,7 +1949,7 @@ test("real Git multiline URL framing cannot forge candidate or reference clone e
     assert.equal(ordinary.confirmed.has(d), false, "one multiline URL is not two matching remote records");
     gitOutput(["config", "remote.origin.url", url], d);
     for (const [key, value] of [["remote.origin.pushurl", url + "\n" + url],
-      ["url." + url + ".pushInsteadOf", "unused:\r"]]) {
+      ["url." + url + ".pushInsteadOf", "unused:\r\n"]]) {
       gitOutput(["config", key, value], d);
       assert.equal(withConfirmedCloneRoots([d], [a]).confirmed.has(d), false, key + " must not bypass native framing validation");
       gitOutput(["config", "--unset", key], d);
@@ -1949,7 +1959,7 @@ test("real Git multiline URL framing cannot forge candidate or reference clone e
 
     gitOutput(["config", "remote.origin.url", url], d);
     gitOutput(["remote", "remove", "origin"], b);
-    for (const ambiguous of [url + "\n" + url, url + "\n", url + "\r"]) {
+    for (const ambiguous of [url + "\n" + url, url + "\n", url + "\r\n"]) {
       gitOutput(["config", "remote.origin.url", ambiguous], a);
       assert.equal(withConfirmedCloneRoots([b, d], [a]).confirmed.size, 0,
         "an ambiguously framed reference contributes neither URL nor root-history proof");
@@ -3007,17 +3017,86 @@ function remoteLimitFixture() {
   const { a, b, d } = fixture;
   for (const repo of [a, d]) gitOutput(["remote", "remove", "origin"], repo);
   const configs = new Map([a, b, d].map(repo => [repo, fs.readFileSync(path.join(repo, ".git", "config"), "utf8")]));
+  // Git config supports these escapes; CR remains a literal payload character, not JSON's \\r.
+  const quoteConfig = value => '"' + value.replaceAll("\\", "\\\\").replaceAll('"', '\\"')
+    .replaceAll("\n", "\\n").replaceAll("\t", "\\t").replaceAll("\b", "\\b") + '"';
   const configure = (repo, remotes) => {
     let text = configs.get(repo);
     for (const { name = "origin", urls, push = [] } of remotes) {
       text += `\n[remote "${name}"]\n`;
-      for (const url of urls) text += `\turl = ${JSON.stringify(url)}\n`;
-      for (const url of push) text += `\tpushurl = ${JSON.stringify(url)}\n`;
+      for (const url of urls) text += `\turl = ${quoteConfig(url)}\n`;
+      for (const url of push) text += `\tpushurl = ${quoteConfig(url)}\n`;
     }
     fs.writeFileSync(path.join(repo, ".git", "config"), text);
   };
   return { ...fixture, configure, mainUrl: "https://example.invalid/org/repo.git" };
 }
+
+test("remote normalization retains meaningful surrounding whitespace in every namespace", () => {
+  for (const base of ["https://example.invalid/org/repo.git", "git@example.invalid:org/repo.git",
+    "ssh://alice@example.invalid/org/repo.git", "external::payload", "ftp://example.invalid/repo"]) {
+    for (const padded of [" " + base, base + " ", "\t" + base, base + "\t"]) {
+      assert.notEqual(normalizeRemoteUrl(padded), normalizeRemoteUrl(base), JSON.stringify(padded));
+    }
+  }
+  assert.equal(normalizeRemoteUrl(" \t "), " \t ");
+  assert.equal(isLocalPathRemote(" \t "), true, "a whitespace filename is still a local path");
+  assert.equal(isLocalPathRemote(" file:///repo"), false, "leading space is part of Git's remote payload");
+  assert.equal(isLocalPathRemote(" C:repo"), false, "leading space prevents a Windows DOS-drive prefix");
+  assert.equal(normalizeRemoteUrl("HTTPS://github.com/Org/Repo.git"), normalizeRemoteUrl("git@github.com:org/repo"));
+});
+
+test("native Git whitespace fetch and push payloads veto a matching repo without losing raw evidence", () => {
+  const { a, b, d, configure, mainUrl, cleanup } = remoteLimitFixture();
+  const env = { ...scrubGitEnv(process.env), GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_SYSTEM: "/dev/null", GIT_CONFIG_NOSYSTEM: "1" };
+  const ssh = "git@example.invalid:org/repo.git";
+  try {
+    for (const [base, padded] of [[mainUrl, mainUrl + " "], [mainUrl, " " + mainUrl], [mainUrl, mainUrl + "\r"], [mainUrl, mainUrl + "\\r"],
+      [ssh, ssh + " "], [ssh, "git@example.invalid: org/repo.git"]]) {
+      configure(a, [{ urls: [base] }]);
+      for (const role of ["fetch", "push"]) {
+        configure(b, [{ urls: [role === "fetch" ? padded : base], push: [role === "push" ? padded : base] }]);
+        const args = ["remote", "get-url", ...(role === "push" ? ["--push"] : []), "origin"];
+        const native = spawnSync("git", args, { cwd: b, env, encoding: "utf8", timeout: 5_000, windowsHide: true });
+        assert.equal(native.status, 0, native.stderr);
+        assert.equal(native.stdout, padded + "\n", "native Git prints the complete payload followed by one record LF");
+        assert.equal(withConfirmedCloneRoots([b], [a]).confirmed.has(b), false, role + ": whitespace is still a foreign-network veto with shared history");
+        assert.equal(gitOutput(args, b), padded, "the runner removes only Git's final record LF");
+      }
+      configure(a, [{ urls: [padded] }]); configure(d, [{ urls: [padded] }]);
+      assert.equal(withConfirmedCloneRoots([d], [a]).confirmed.has(d), true, "identical complete payloads retain remote-only proof");
+    }
+  } finally { cleanup(); }
+});
+
+test("native Git whitespace remote names retain their selector and cannot hide a fork", () => {
+  const { a, b, configure, mainUrl, cleanup } = remoteLimitFixture();
+  try {
+    configure(a, [{ urls: [mainUrl] }]);
+    for (const name of [" origin ", "origin\r"]) {
+      configure(b, [{ name: "origin", urls: [mainUrl] }, { name, urls: ["https://example.invalid/fork/repo.git"] }]);
+      assert.equal(withConfirmedCloneRoots([b], [a]).confirmed.has(b), false, "the exact selector must read the fork, not origin again");
+      assert.ok(gitOutput(["remote"], b).split("\n").includes(name));
+      configure(b, [{ name, urls: [mainUrl] }]);
+      assert.equal(withConfirmedCloneRoots([b], [a]).confirmed.has(b), true, "a valid whitespace selector still supports complete matching evidence");
+      configure(b, [{ name, urls: [""] }]);
+      assert.equal(withConfirmedCloneRoots([b], [a]).confirmed.has(b), false, "an empty URL remains inconclusive even under a CR-bearing selector");
+    }
+  } finally { cleanup(); }
+});
+
+test("whitespace-only native URL entries still consume the 64-entry remote allowance", () => {
+  const { a, b, configure, mainUrl, cleanup } = remoteLimitFixture();
+  try {
+    configure(a, [{ urls: [mainUrl] }]);
+    configure(b, [{ urls: [mainUrl], push: Array(63).fill(" \t ") }]);
+    assert.equal(withConfirmedCloneRoots([b], [a]).confirmed.has(b), true, "64 complete entries remain within the allowance");
+    configure(b, [{ urls: [mainUrl], push: Array(64).fill(" \t ") }]);
+    const over = withConfirmedCloneRoots([b], [a]);
+    assert.equal(over.confirmed.has(b), false);
+    assert.equal(over.tooManyUrls, 1, "the 65th whitespace payload cannot disappear before counting");
+  } finally { cleanup(); }
+});
 
 test("real Git remote URL limits preserve 64 entries but discard an overflowing candidate and its matching prefix", () => {
   const { a, d, make, configure, mainUrl, cleanup } = remoteLimitFixture();

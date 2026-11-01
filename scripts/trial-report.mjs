@@ -549,9 +549,10 @@ function checkRemoteUrlFraming(cwd, safeDirectories, env, remainingTimeout) {
     if (end === -1) invalid();
     const record = output.slice(start, end);
     const separator = record.indexOf("\n");
-    if (separator <= 0 || record.indexOf("\n", separator + 1) !== -1 || record.includes("\r")) invalid();
+    if (separator <= 0 || record.indexOf("\n", separator + 1) !== -1) invalid();
     const key = record.slice(0, separator), value = record.slice(separator + 1);
-    if (/^remote\..*\.(?:url|pushurl)$/.test(key) && value.length === 0) invalid();
+    const remoteUrlKey = key.startsWith("remote.") && (key.endsWith(".url") || key.endsWith(".pushurl"));
+    if (remoteUrlKey && value.length === 0) invalid();
     start = end + 1;
   }
 }
@@ -784,7 +785,7 @@ export function isLocalPathRemote(rawUrl, { platform = process.platform } = {}) 
     // forms are refused by fingerprinting below, never promoted into network identity proof.
     if (/[\x00-\x1f<>:"|?*]/.test(tail)) return false;
     return tail.split(/[\\/]/).every(part => part === "." || part === ".." ||
-      (!/[ .]$/.test(part) && !/^(?:con|prn|aux|nul|com[0-9¹²³]|lpt[0-9¹²³]|conin\$|conout\$)(?:\..*)?$/i.test(part)));
+      (!/[ .]$/.test(part) && !/^(?:con|prn|aux|nul|com[0-9¹²³]|lpt[0-9¹²³]|conin\$|conout\$) *(?:\..*)?$/i.test(part)));
   }
   return false;
 }

@@ -677,7 +677,7 @@ Remote drive syntax follows the host platform: single-letter SCP forms are netwo
 remotes on POSIX, and ambiguous Windows drive forms cannot prove a clone fingerprint. Every operation's
 five-second monotonic deadline includes that check, a protected configuration read and the identity
 command. Remote URL reads also inspect bounded NUL-framed URL and rewrite configuration within
-that same deadline: embedded line breaks and empty URL values make the fingerprint inconclusive,
+that same deadline: embedded LF and empty URL values make the fingerprint inconclusive,
 including its reference root history. URL payload whitespace is preserved; only Git's final output
 record terminator is removed. Ordinary repository-local rewrites still come from Git's `get-url`.
 Native Git text is decoded as strict UTF-8 while preserving a valid BOM; malformed bytes cannot
@@ -693,6 +693,7 @@ repository path; generic SSH comparison preserves the login and effective
 command path (including `.git` and relative, absolute or tilde forms); GitHub's documented `git`
 account clone URLs retain their hosted HTTPS aliases. Paths printed in reports are reversible
 quoted literals, and report JSON escapes control characters that could alter its presentation.
+Comparisons retain meaningful spaces in remote names and URL payloads.
 
 The report takes each signal from whichever source can actually answer it — the log for who called
 what from where, the board's `ActivityEvent` rows for what changed — and it says what it could not
