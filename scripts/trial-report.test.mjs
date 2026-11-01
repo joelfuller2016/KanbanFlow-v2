@@ -700,7 +700,7 @@ test("a git clone of THIS repo is confirmed by its root commit and folded in as 
   assert.equal(s4.detail.length, 1, "the confirmed clone must not count as outside evidence");
   assert.equal(s4.detail[0].session, "genuinely-external");
   assert.match(s4.caveat, /confirmed/i);
-  assert.match(s4.caveat, new RegExp(cloneCwd.replace(/\\/g, "\\\\")), "the caveat names which cwd was reclassified");
+  assert.ok(quotedValues(s4.caveat).includes(cloneCwd), "the caveat names which cwd was reclassified");
 });
 
 test("a shared root commit does NOT confirm a fork or renamed derivative pushed to a different network remote", () => {
@@ -1274,6 +1274,33 @@ test("normalizeRemoteUrl preserves case-sensitive repository paths while normali
     normalizeRemoteUrl("https://github.com:8443/Org/main.git"), "a non-default port denotes a different service");
 });
 
+test("unrecognized remote schemes retain distinct nonempty identities", () => {
+  const known = normalizeRemoteUrl("https://example.invalid/Org/Main.git");
+  const custom = normalizeRemoteUrl("softp://example.invalid/Org/Main.git");
+  assert.ok(custom, "an unknown network URL must still veto shared-root fallback");
+  assert.notEqual(custom, known);
+  assert.notEqual(custom, normalizeRemoteUrl("other://example.invalid/Org/Main.git"));
+  assert.equal(normalizeRemoteUrl("SoFtP://example.invalid/Org/Main.git"), custom);
+  assert.notEqual(normalizeRemoteUrl("softp://github.com/Org/Main.git"),
+    normalizeRemoteUrl("softp://github.com/Org/main.git"), "an unfamiliar transport gets no GitHub path assumptions");
+});
+
+test("confirmed cwd disclosure is printable literal data without changing membership", () => {
+  const cwd = "/tmp/clone[`plan`](fake)\n## INJECTED VERDICT: ADOPT\n| forged |\r\t\u001b[2J\u0085\u2028\u2029\u202e\u{e0001}";
+  const rows = [row({ cwd })];
+  const cloneRoots = [cwd];
+  const summary = summarize({ rows, repoRoots: ["/tmp/main"], repoRootSource: "git", cloneRoots });
+  const signal = find(summary, 4);
+  assert.equal(signal.detail.length, 0, "the exact recorded cwd remains confirmed and inside");
+  assert.equal(rows[0].cwd, cwd);
+  assert.equal(cloneRoots[0], cwd);
+  assert.doesNotMatch(signal.caveat, /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u);
+  const literal = quotedLiterals(signal.caveat).find(value => JSON.parse(value) === cwd);
+  assert.ok(literal, "literal disclosure must decode to the original path");
+  assert.doesNotMatch(literal, /[`*_\[\]<>|&~#!]/u);
+  assert.doesNotMatch(renderReport(summary), /^## INJECTED VERDICT/m);
+});
+
 test("clone confirmation FAILS CLOSED: a cwd git cannot examine stays counted as outside", () => {
   // No fixture at all for `goneCwd` — every call the fake receives for it throws, standing in for
   // "the directory no longer exists", "git is not installed", or any other inconclusive failure.
@@ -1457,7 +1484,7 @@ test("an explicit --repo-root override gets the SAME clone-confirmation disclosu
   }), 4);
   assert.equal(s4.detail.length, 0, "the confirmed clone must not count as outside under override sourcing either");
   assert.match(s4.caveat, /confirmed as separate clones/i);
-  assert.match(s4.caveat, new RegExp(cwd.replace(/\\/g, "\\\\")));
+  assert.ok(quotedValues(s4.caveat).includes(cwd));
 });
 
 // A shared fixture of four distinct REAL repositories, each confirmable (or not) by a DIFFERENT
@@ -1518,6 +1545,18 @@ test("real Git clone evidence does not collapse differently cased network reposi
 
     assert.equal(confirmed.has(b), false, "a different network path contradicts even shared root history");
     assert.equal(confirmed.has(d), true, "host casing alone does not hide a matching remote");
+  } finally {
+    cleanup();
+  }
+});
+
+test("real Git evidence keeps an unfamiliar transport outside despite shared history", () => {
+  const { a, b, d, cleanup } = buildCloneFixture();
+  try {
+    gitOutput(["remote", "add", "origin", "softp://example.invalid/org/repo.git"], b);
+    const { confirmed } = withConfirmedCloneRoots([b, d], [a]);
+    assert.equal(confirmed.has(b), false, "unknown transport must contradict the known HTTPS identity");
+    assert.equal(confirmed.has(d), true, "the matching known transport still confirms an unrelated root");
   } finally {
     cleanup();
   }
@@ -1986,6 +2025,49 @@ const runCliJson = (log, repoRoot, args = [], nodeArgs = []) => {
   });
 };
 const escapeRe = text => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+function quotedValues(text) {
+  return quotedLiterals(text).map(value => JSON.parse(value));
+}
+function quotedLiterals(text) {
+  return [...text.matchAll(/"(?:[^"\\]|\\.)*"/g)].map(match => match[0]);
+}
+
+test("real CLI quotes a recorded clone path with Markdown syntax and a line break on both surfaces", () => {
+  const { a, make, cleanup } = buildCloneFixture();
+  const lineBreak = process.platform === "win32" ? "\u2028" : "\n";
+  const clone = path.join(make(), "clone [```plan```](fake)" + lineBreak + "## INJECTED VERDICT ADOPT");
+  try {
+    gitOutput(["clone", "-q", a, clone], a);
+    const log = path.join(make(), "mcp-usage.jsonl");
+    fs.writeFileSync(log, JSON.stringify(row({ cwd: clone })) + "\n");
+    const json = runCliJson(log, a);
+    assert.equal(json.status, 1, json.stdout + json.stderr);
+    const signal = find(JSON.parse(json.stdout), 4);
+    assert.equal(signal.detail.length, 0, "the real clone must still fold in by its recorded cwd");
+    assert.doesNotMatch(signal.caveat, /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u);
+    const caveatLiteral = quotedLiterals(signal.caveat).find(value => JSON.parse(value) === clone);
+    assert.ok(caveatLiteral);
+    assert.doesNotMatch(caveatLiteral, /[`*_\[\]<>|&~#!]/u);
+    const note = json.stderr.split(/\r?\n/).find(line => line.includes("folded into signal 4 as inside"));
+    assert.ok(note, "the actual CLI must disclose its confirmed clone");
+    assert.doesNotMatch(note, /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u);
+    const noteLiteral = quotedLiterals(note).find(value => JSON.parse(value) === clone);
+    assert.ok(noteLiteral);
+    assert.doesNotMatch(noteLiteral, /[`*_\[\]<>|&~#!]/u);
+    assert.doesNotMatch(json.stderr, /^## INJECTED VERDICT/m);
+
+    const env = { ...scrubGitEnv(process.env), KANBANFLOW_USAGE_LOG: log, KANBANFLOW_API_URL: "http://127.0.0.1:1" };
+    const markdown = spawnSync(process.execPath, [path.join(HERE, "trial-report.mjs"), "--repo-root", a], {
+      env, encoding: "utf8", windowsHide: true, timeout: 20_000
+    });
+    assert.equal(markdown.status, 1, markdown.stdout + markdown.stderr);
+    assert.doesNotMatch(markdown.stdout, /^## INJECTED VERDICT/m);
+    assert.ok(quotedValues(markdown.stdout).includes(clone));
+    assert.doesNotMatch(markdown.stderr, /^## INJECTED VERDICT/m);
+  } finally {
+    cleanup();
+  }
+});
 
 test("CLI integration: --repo-root a separates a clone (b) from a different project (c), --since excludes a stale clone (e)", () => {
   // main()'s own wiring has NO other test: removing it entirely still left every prior test green,
@@ -2016,11 +2098,10 @@ test("CLI integration: --repo-root a separates a clone (b) from a different proj
     const s4 = summary.signals.find(s => s.id === 4);
     assert.equal(s4.detail.length, 1, "only the genuinely different, IN-WINDOW project (c) counts as outside");
     assert.equal(s4.detail[0].session, "genuinely-external");
-    assert.match(result.stderr, new RegExp(b.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")), "stderr must name b as a confirmed clone");
+    assert.ok(quotedValues(result.stderr).includes(b), "stderr must name b as a confirmed clone");
 
-    const eEscaped = new RegExp(e.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
-    assert.doesNotMatch(result.stderr, eEscaped, "e is out of window — it must never be probed, let alone named as confirmed");
-    assert.doesNotMatch(s4.caveat, eEscaped, "the caveat's folded-in list must not name a candidate --since excluded from probing");
+    assert.ok(!quotedValues(result.stderr).includes(e), "e is out of window — it must never be probed, let alone named as confirmed");
+    assert.ok(!quotedValues(s4.caveat).includes(e), "the caveat's folded-in list must not name a candidate --since excluded from probing");
 
     // Probe counts (probed/capped/candidates), threaded through cloneProbe into the JSON output —
     // only b and c were ever candidates; e was excluded (by --since, finding #2) before either was
@@ -2170,9 +2251,9 @@ test("a repository NESTED inside a confirmed clone, and rejected on its own, sta
     assert.equal(s4.verdict, "ADOPT", "the rejected repository is still outside use — the verdict must not flip to REVERT");
     // The disclosure agrees with the scoring: X is named as folded in, vendor-other is named nowhere.
     assert.match(s4.caveat, /folded in as inside/);
-    assert.match(s4.caveat, new RegExp(escapeRe(X)));
-    assert.doesNotMatch(s4.caveat, new RegExp(escapeRe(nested)), "a rejected cwd must not be listed as folded in");
-    assert.doesNotMatch(result.stderr, new RegExp(escapeRe(nested)), "nor named in the NOTE as confirmed");
+    assert.ok(quotedValues(s4.caveat).includes(X));
+    assert.ok(!quotedValues(s4.caveat).includes(nested), "a rejected cwd must not be listed as folded in");
+    assert.ok(!quotedValues(result.stderr).includes(nested), "nor named in the NOTE as confirmed");
   } finally {
     fs.rmSync(base, { recursive: true, force: true });
   }
@@ -2211,8 +2292,8 @@ test("a clone reached through a JUNCTION is scored inside, and the disclosure na
     // The disclosure must describe the scoring, not just the confirmation: it names J, the cwd that
     // was actually folded in.
     assert.match(s4.caveat, /folded in as inside/);
-    assert.match(s4.caveat, new RegExp(escapeRe(J)), "the caveat must name the cwd it folded in");
-    assert.match(result.stderr, new RegExp(escapeRe(J)), "and so must the NOTE");
+    assert.ok(quotedValues(s4.caveat).includes(J), "the caveat must name the cwd it folded in");
+    assert.ok(quotedValues(result.stderr).includes(J), "and so must the NOTE");
   } finally {
     // The junction goes FIRST, as a statement of its own: if removing it throws, the recursive delete
     // below never runs, so a recursive walk is never the thing that meets a junction.
@@ -2253,8 +2334,8 @@ test("a confirmed cwd folds in by its EXACT string — a sibling that differs on
     "only the exact confirmed string folds in; the sibling that differs only in case was rejected and stays outside");
   assert.equal(s4.verdict, "ADOPT");
   // The disclosure names exactly the strings that were folded in: KF, and not kf.
-  assert.match(s4.caveat, new RegExp(escapeRe(confirmedCwd)));
-  assert.doesNotMatch(s4.caveat, new RegExp(escapeRe(siblingCwd)));
+  assert.ok(quotedValues(s4.caveat).includes(confirmedCwd));
+  assert.ok(!quotedValues(s4.caveat).includes(siblingCwd));
 });
 
 // --- 6. Reading a Done transition ---------------------------------------------------------

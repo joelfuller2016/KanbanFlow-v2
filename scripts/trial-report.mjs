@@ -571,8 +571,8 @@ export function resolveRepoRoots(override, { cwd = process.cwd(), git = gitOutpu
 
 // The port each scheme uses when a URL names none. Only that port folds away: `https://h:443/o/r`
 // is `https://h/o/r` spelled out, while `https://h:8443/o/r` is another service on the same host,
-// and matching it would fold a different checkout in as this repository. A scheme not listed here
-// keeps any port it names, so two of its URLs match only when their ports agree.
+// and matching it would fold a different checkout in as this repository. Unlisted transports
+// retain their complete scheme-qualified identity; a remote helper need not share Git URL rules.
 const DEFAULT_PORTS = { ssh: 22, https: 443, http: 80, git: 9418 };
 
 /**
@@ -603,7 +603,9 @@ export function normalizeRemoteUrl(url) {
   };
   const scheme = u.match(/^([a-z][a-z0-9+.-]*):\/\//i);
   if (scheme) {
-    const defaultPort = DEFAULT_PORTS[scheme[1].toLowerCase()];
+    const protocol = scheme[1].toLowerCase();
+    if (!Object.hasOwn(DEFAULT_PORTS, protocol)) return protocol + url.trim().slice(scheme[1].length);
+    const defaultPort = DEFAULT_PORTS[protocol];
     const location = u.slice(scheme[0].length).replace(/^[^/@]+@/, "");
     const separator = location.indexOf("/");
     const authority = (separator === -1 ? location : location.slice(0, separator))
@@ -1709,7 +1711,7 @@ export function summarize({
         "remote's fetch URL matching this repository's own, with no NETWORK fetch or push URL of any " +
         "remote, under any remote name, naming anything else — or by sharing its initial commit), not a " +
         "different project, and were folded in as inside, each exactly as recorded (never as a root " +
-        `for the tree beneath it): ${confirmedCloneCwds.join(", ")}.`
+        `for the tree beneath it): ${confirmedCloneCwds.map(quotedPathForReport).join(", ")}.`
       : "") +
     (cloneProbeLimits ? ` ${cloneProbeLimits}` : "") +
     // A no-remote clone is NOT in this list: it confirms fine via root commit alone (see
@@ -1829,6 +1831,21 @@ export function summarize({
   };
 }
 
+function escapedReportCharacter(character) {
+  return character.split("").map(unit => "\\u" + unit.charCodeAt(0).toString(16).padStart(4, "0")).join("");
+}
+
+// JSON remains reversible; string contents cannot terminate a report fence or move its text.
+function jsonForReport(value, indentation) {
+  const json = JSON.stringify(value, null, indentation);
+  return typeof json === "string"
+    ? json.replace(/[\u007f-\u009f\p{Cf}\p{Zl}\p{Zp}`]/gu, escapedReportCharacter) : json;
+}
+
+function quotedPathForReport(value) {
+  return jsonForReport(value).replace(/[*_\[\]<>|&~#!]/g, escapedReportCharacter);
+}
+
 export function renderReport(summary, { logPath, malformed = 0, generations = null, logFiles = [], discovered = null, unreadable = [] } = {}) {
   const out = [];
   out.push("# KanbanFlow adoption trial — #477 §11");
@@ -1912,7 +1929,7 @@ export function renderReport(summary, { logPath, malformed = 0, generations = nu
     out.push(`### ${s.id}. ${s.name} — ${s.verdict}`);
     out.push(s.caveat);
     out.push("```json");
-    out.push(JSON.stringify(s.detail, null, 1));
+    out.push(jsonForReport(s.detail, 1));
     out.push("```");
   }
   return out.join("\n");
@@ -2196,7 +2213,7 @@ async function main(argv) {
           `NOTE: ${confirmed.size} of ${distinctOutsideCwds.length} outside cwd(s) confirmed (by a remote's fetch ` +
           `URL matching this repository's own, with no NETWORK fetch or push URL of any remote, under any remote ` +
           `name, naming anything else — or by initial commit) as separate clones of this repository, not a ` +
-          `different project — folded into signal 4 as inside, each exactly as recorded: ${cloneRoots.join(", ")}\n`
+          `different project — folded into signal 4 as inside, each exactly as recorded: ${cloneRoots.map(quotedPathForReport).join(", ")}\n`
         );
       }
       // The same words signal 4's caveat carries (see describeCloneProbeLimits).
@@ -2210,7 +2227,7 @@ async function main(argv) {
     sources: { log: logAvailable && !nothingParsed, activity: activityAvailable }
   });
   console.log(asJson
-    ? JSON.stringify(summary, null, 2)
+    ? jsonForReport(summary, 2)
     : renderReport(summary, { logPath, malformed, generations, logFiles: files, discovered, unreadable }));
 
   // Exit non-zero when the trial could not be adjudicated. A caller that treats exit 0 as "the
