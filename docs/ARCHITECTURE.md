@@ -666,12 +666,15 @@ npm run trial:report -- --since 2026-08-30
 npm run trial:report -- --json
 ```
 
-Repository identity probes require **Git 2.38 or newer**. The report checks the binary once before
+Repository identity probes require **Git 2.39 or newer**, which follows ordinary includes when
+reading protected configuration. The report checks the binary once before
 its first Git identity operation; if that check finds an older or unrecognizable version, it produces one diagnostic and
 leaves signal 4 **UNMEASURED**, including with an explicit repository root. The first operation's
-five-second monotonic deadline includes that check, protected configuration reads and the identity
-command; later operations get the same bound and reread protected configuration. The report does
-not install Git or change global settings. Generic SSH comparison preserves the login and effective
+five-second monotonic deadline includes that check, a protected configuration read and the identity
+command; later operations get the same bound and reread protected configuration without repository
+context, so `gitdir`/`onbranch` conditional includes cannot grant ownership trust. The report does
+not install Git or change global settings. Other servers retain their transport, account and exact
+repository path; generic SSH comparison preserves the login and effective
 command path (including `.git` and relative, absolute or tilde forms); GitHub's documented `git`
 account clone URLs retain their hosted HTTPS aliases. Paths printed in reports are reversible
 quoted literals, and report JSON escapes control characters that could alter its presentation.

@@ -772,19 +772,19 @@ test("isLocalPathRemote tells a local path apart from a network remote, per git'
   assert.equal(isLocalPathRemote(""), false);
 });
 
-test("normalizeRemoteUrl folds supported SSH aliases while preserving account and path namespaces", () => {
-  const https = normalizeRemoteUrl("https://github.com/org/repo.git");
-  assert.equal(normalizeRemoteUrl("git@github.com:org/repo.git"), https);
-  assert.equal(normalizeRemoteUrl("ssh://git@github.com:22/org/repo.git"), https);
-  assert.equal(normalizeRemoteUrl("example.invalid:/org/repo.git"), normalizeRemoteUrl("ssh://example.invalid/org/repo.git"));
-  assert.notEqual(normalizeRemoteUrl("example.invalid:org/repo.git"), normalizeRemoteUrl("ssh://git@example.invalid/org/repo.git"));
+test("normalizeRemoteUrl keeps unknown SCP, absolute SSH and HTTPS namespaces distinct", () => {
+  // Git's SSH account and home-relative SCP path can select another repository. Only a known
+  // hosting service's documented aliases justify dropping those distinctions.
+  const https = normalizeRemoteUrl("https://example.invalid/org/repo.git");
+  assert.notEqual(normalizeRemoteUrl("example.invalid:org/repo.git"), https);
+  assert.notEqual(normalizeRemoteUrl("ssh://git@example.invalid:22/org/repo.git"), https);
   // A scheme must never be misparsed as a bare scp host — the naive fix for the line above.
   assert.notEqual(normalizeRemoteUrl("https://example.invalid/org/repo.git"), "https/" + "/example.invalid/org/repo");
   // ssh.github.com:443 (GitHub's over-443 SSH endpoint) is a DIFFERENT host from github.com, so it
   // must NOT normalize the same as a plain github.com remote — see the caveat's gap list.
   assert.notEqual(normalizeRemoteUrl("ssh://git@ssh.github.com:443/x/y.git"), normalizeRemoteUrl("https://github.com/x/y.git"));
   assert.notEqual(normalizeRemoteUrl("git@host::path"), normalizeRemoteUrl("ssh://git@host/:path"),
-    "SCP's relative :path differs from the URI's absolute /:path");
+    "userinfo is SCP syntax with a home-relative :path, not an absolute SSH path");
 });
 
 test("a NON-default port is another service, not a spelling — only the scheme's default port folds away", () => {
@@ -1090,9 +1090,6 @@ function buildRuleAFixture() {
     // Its only remote is a's own URL, spelled exactly as a spells it: the veto that now binds the
     // remote-match path too has nothing to fire on here, and must leave this one confirmed.
     const sameRepoHttps = cloneWithRemote("https://example.invalid/org/repo.git");
-    // Generic SSH path/account mappings cannot be inferred from the HTTP virtual path.
-    const unconfirmedScpNamespace = cloneWithRemote("example.invalid:org/repo.git");
-    const unconfirmedSshNamespace = cloneWithRemote("ssh://git@example.invalid:22/org/repo.git");
     // A genuine clone that fetches from a's local path and PUSHES to a's own URL. Its fetch url names no
     // network project, so it takes the root-commit path — decided on its fetch urls, never on every
     // url — and a's history confirms it: the push url is neither proof nor an obstacle.
@@ -1100,6 +1097,10 @@ function buildRuleAFixture() {
     gitOutput(["remote", "set-url", "--push", "origin", "https://example.invalid/org/repo.git"], localClonePushesToA);
 
     // --- OUTSIDE: shares a's root commit, but a network remote vetoes it (rule A) ------------------
+    // Neither an unknown SSH account's home-relative SCP path nor its absolute SSH path proves
+    // identity with the HTTPS repository, even when their path text and history happen to match.
+    const unprovenScpNamespace = cloneWithRemote("example.invalid:org/repo.git");
+    const unprovenSshNamespace = cloneWithRemote("ssh://git@example.invalid:22/org/repo.git");
     const forkHttps = cloneWithRemote("https://example.invalid/alice/repo.git");
     const forkIPv4 = cloneWithRemote("git@192.168.1.10:alice/repo.git"); // needs N1
     const forkSingleLabel = cloneWithRemote("gitserver:alice/repo.git"); // needs N1
@@ -1166,7 +1167,7 @@ function buildRuleAFixture() {
     gitOutput(["remote", "set-url", "--push", "origin", "https://example.invalid/org/repo.git"], unrelatedPushesToA);
 
     return {
-      a, localClone, fileUrlClone, sameRepoHttps, unconfirmedScpNamespace, unconfirmedSshNamespace, localClonePushesToA,
+      a, localClone, fileUrlClone, sameRepoHttps, unprovenScpNamespace, unprovenSshNamespace, localClonePushesToA,
       forkHttps, forkIPv4, forkSingleLabel, forkSshAlias, aliasSpelledSameRepo, derivNoOrigin, forkWithUpstream,
       triangular, secondUrl, reverseTriangular, pushInsteadOfFork, insteadOfFork, secondUrlPushPinned,
       mainSecondUrlOnly, unrelated, unrelatedNoRemote, unrelatedPushesToA
@@ -1181,10 +1182,10 @@ test("rule (A), rebuilt fresh in os.tmpdir(): the exact confirm/outside partitio
       "localClone", "fileUrlClone", "sameRepoHttps", "localClonePushesToA"
     ];
     const outsideKeys = [
-      "forkHttps", "forkIPv4", "forkSingleLabel", "forkSshAlias", "aliasSpelledSameRepo",
+      "unprovenScpNamespace", "unprovenSshNamespace", "forkHttps", "forkIPv4", "forkSingleLabel", "forkSshAlias", "aliasSpelledSameRepo",
       "derivNoOrigin", "forkWithUpstream", "triangular", "secondUrl", "reverseTriangular",
       "pushInsteadOfFork", "insteadOfFork", "secondUrlPushPinned", "mainSecondUrlOnly", "unrelated",
-      "unrelatedNoRemote", "unrelatedPushesToA", "unconfirmedScpNamespace", "unconfirmedSshNamespace"
+      "unrelatedNoRemote", "unrelatedPushesToA"
     ];
     const candidates = [...confirmedKeys, ...outsideKeys].map(k => fx[k]);
     const { confirmed } = withConfirmedCloneRoots(candidates, [fx.a]);
@@ -1272,6 +1273,8 @@ test("normalizeRemoteUrl preserves case-sensitive repository paths while normali
     assert.equal(normalizeRemoteUrl(form), normalizeRemoteUrl(form.replace("EXAMPLE", "example")), "host casing does not change identity");
     assert.notEqual(normalizeRemoteUrl(form), normalizeRemoteUrl(form.replace("Main", "main")),
       "a case-sensitive server can host both paths as different repositories");
+    assert.notEqual(normalizeRemoteUrl(form), normalizeRemoteUrl(form.replace(".git", "")),
+      "an unknown server can expose both suffixes as different repositories");
   }
   assert.notEqual(normalizeRemoteUrl("https://github.com:8443/Org/Main.git"),
     normalizeRemoteUrl("https://github.com:8443/Org/main.git"), "a non-default port denotes a different service");
@@ -1312,6 +1315,38 @@ test("generic SSH account and path namespaces stay distinct", () => {
     assert.notEqual(normalizeRemoteUrl(left), normalizeRemoteUrl(right), `${left} and ${right} can name different repositories`);
   }
 });
+
+test("normalizeRemoteUrl preserves unknown SSH accounts, path roots and named homes", () => {
+  for (const [left, right] of [
+    ["alice@host.example:repo.git", "bob@host.example:repo.git"],
+    ["ssh://alice@host.example/repo.git", "ssh://bob@host.example/repo.git"],
+    ["host.example:repo.git", "alice@host.example:repo.git"],
+    ["alice@host.example:repo.git", "ssh://alice@host.example/repo.git"],
+    ["alice@host.example:repo.git", "alice@host.example:/repo.git"],
+    ["alice@host.example:~alice/repo.git", "alice@host.example:~bob/repo.git"],
+    ["ssh://alice@host.example/~alice/repo.git", "ssh://alice@host.example/~bob/repo.git"],
+    ["ssh://alice@github.com:2222/Org/Main.git", "ssh://bob@github.com:2222/Org/Main.git"]
+  ]) {
+    assert.notEqual(normalizeRemoteUrl(left), normalizeRemoteUrl(right), `${left} and ${right} name distinct namespaces`);
+  }
+});
+
+test("normalizeRemoteUrl preserves unknown repository suffixes and transport identities", () => {
+  for (const [left, right] of [
+    ["https://host.example/Org/Main.git", "https://host.example/Org/Main"],
+    ["alice@host.example:Org/Main.git", "alice@host.example:Org/Main"],
+    ["ssh://alice@host.example/Org/Main.git", "https://host.example/Org/Main.git"],
+    ["git://host.example/Org/Main.git", "https://host.example/Org/Main.git"],
+    ["ssh://git@github.com:2222/Org/Main.git", "ssh://git@github.com:2222/Org/Main"]
+  ]) assert.notEqual(normalizeRemoteUrl(left), normalizeRemoteUrl(right), `${left} and ${right} must not fold`);
+});
+
+for (const url of ["alice@github.com:Org/Main.git", "ssh://alice@github.com:22/Org/Main.git"]) {
+  test(`normalizeRemoteUrl keeps a non-git GitHub SSH account distinct: ${url}`, () => {
+    assert.notEqual(normalizeRemoteUrl(url), normalizeRemoteUrl("https://github.com/Org/Main.git"),
+      "GitHub's documented SSH alias uses the git account");
+  });
+}
 
 test("unrecognized remote schemes retain distinct nonempty identities", () => {
   const known = normalizeRemoteUrl("https://example.invalid/Org/Main.git");
@@ -1671,6 +1706,54 @@ test("Git diagnostics distinguish relative absolute and tilde SSH paths without 
   }
 });
 
+test("real Git namespace evidence retains SSH accounts and repository path semantics", async t => {
+  const fixtureParent = path.resolve(HERE, "../_sandbox/564-ssh-namespace");
+  fs.mkdirSync(fixtureParent, { recursive: true });
+  const fixture = fs.mkdtempSync(path.join(fixtureParent, "repos-"));
+  const main = path.join(fixture, "main");
+  const unrelated = path.join(fixture, "unrelated");
+  const sameRemote = path.join(fixture, "same-remote");
+  const sharedHistory = path.join(fixture, "shared-history");
+  try {
+    for (const [directory, content] of [[main, "main.txt"], [unrelated, "unrelated.txt"], [sameRemote, "same.txt"]]) {
+      fs.mkdirSync(directory);
+      initRealRepo(directory, content);
+      gitOutput(["remote", "add", "origin", "alice@host.example:repo.git"], directory);
+    }
+    gitOutput(["clone", "-q", main, sharedHistory], main);
+    const root = directory => gitOutput(["rev-list", "--max-parents=0", "HEAD"], directory).trim();
+    assert.notEqual(root(main), root(unrelated), "the rejected control has unrelated history");
+    assert.notEqual(root(main), root(sameRemote), "the confirmed control relies on its URL alone");
+    assert.equal(root(main), root(sharedHistory), "the veto control really shares history");
+
+    for (const [label, mainUrl, otherUrl, controlUrl = mainUrl] of [
+      ["SCP account", "alice@host.example:repo.git", "bob@host.example:repo.git"],
+      ["absolute SSH account", "ssh://alice@host.example/repo.git", "ssh://bob@host.example/repo.git"],
+      ["home-relative SCP versus absolute SSH", "alice@host.example:repo.git", "ssh://alice@host.example/repo.git"],
+      ["home-relative versus absolute SCP", "alice@host.example:repo.git", "alice@host.example:/repo.git"],
+      ["explicit named home", "alice@host.example:~alice/repo.git", "alice@host.example:~bob/repo.git"],
+      ["significant .git suffix", "https://host.example/Org/Main.git", "https://host.example/Org/Main"],
+      ["path case", "ssh://alice@host.example/Org/Main.git", "ssh://alice@host.example/Org/main.git"],
+      ["unknown cross-transport alias", "ssh://alice@host.example/Org/Main.git", "https://host.example/Org/Main.git"],
+      ["nondefault GitHub SSH account", "ssh://alice@github.com:2222/Org/Main.git", "ssh://bob@github.com:2222/Org/Main.git"],
+      ["documented GitHub aliases", "https://github.com/Org/Main.git", "git@github.com:Other/Main.git", "ssh://git@GITHUB.COM:22/org/main/"]
+    ]) await t.test(label, () => {
+      for (const [directory, url] of [[main, mainUrl], [unrelated, otherUrl], [sharedHistory, otherUrl], [sameRemote, controlUrl]]) {
+        gitOutput(["remote", "set-url", "origin", url], directory);
+        assert.equal(gitOutput(["remote", "get-url", "origin"], directory).trim(), url, "Git retains the actual configured namespace");
+      }
+      const { confirmed } = withConfirmedCloneRoots([unrelated, sharedHistory, sameRemote], [main]);
+      assert.equal(confirmed.has(unrelated), false, "a different namespace cannot confirm an unrelated root");
+      assert.equal(confirmed.has(sharedHistory), false, "a different namespace also vetoes shared history");
+      assert.equal(real(confirmed.get(sameRemote)), real(sameRemote), "the same repository URL still confirms an unrelated root");
+      assert.equal(confirmed.size, 1);
+    });
+  } finally {
+    assert.equal(path.dirname(fixture), fixtureParent, "cleanup stays within the owning ignored fixture directory");
+    fs.rmSync(fixture, { recursive: true, force: true });
+  }
+});
+
 // --- 5c. Real git: a leaked GIT_DIR must not contaminate ANY answer ------------------------
 //
 // A pre-commit hook (or any git-invoking tool) commonly exports GIT_DIR/GIT_WORK_TREE/etc for its
@@ -1938,6 +2021,162 @@ test("the scrub is by prefix: GIT_* names on no list are dropped before git read
   }
 });
 
+function runGitHarness(make, settings, body) {
+  const dir = make();
+  const stateFile = path.join(dir, "state.json");
+  const preload = path.join(dir, "git-boundary.cjs");
+  const worker = path.join(dir, "worker.mjs");
+  fs.writeFileSync(stateFile, JSON.stringify(settings));
+  fs.writeFileSync(preload, [
+    'const fs = require("node:fs");',
+    'const cp = require("node:child_process");',
+    'const original = cp.execFileSync;',
+    'const stateFile = ' + JSON.stringify(stateFile) + ';',
+    'const state = () => JSON.parse(fs.readFileSync(stateFile, "utf8"));',
+    'const nativeNow = performance.now.bind(performance);',
+    'let clock = 0, fakeClock = false;',
+    'globalThis.resetGitHarness = () => { clock = 0; fakeClock = Object.hasOwn(state(), "clockStep"); globalThis.gitCalls = []; };',
+    'globalThis.resetGitHarness();',
+    'Object.defineProperty(performance, "now", { value: () => fakeClock ? clock : nativeNow() });',
+    'cp.execFileSync = function (file, args, options) {',
+    '  if (file !== "git") return original.apply(this, arguments);',
+    '  const current = state();',
+    '  options = { ...options, env: { ...options.env, HOME: current.home, USERPROFILE: current.home,',
+    '    XDG_CONFIG_HOME: current.xdg, GIT_CONFIG_SYSTEM: options.env.GIT_CONFIG_SYSTEM === "/dev/null" ? "/dev/null" : current.system,',
+    '    GIT_TEST_ASSUME_DIFFERENT_OWNER: current.foreign ? "1" : "0" } };',
+    '  globalThis.gitCalls.push({ args, timeout: options.timeout });',
+    '  if (current.badFraming && args[0] === "config") {',
+    '    if (current.badFraming === "odd") return "global\\0*\\0global\\0";',
+    '    if (current.badFraming === "local" || current.badFraming === "command") return current.badFraming + "\\0*\\0";',
+    '    return "*";',
+    '  }',
+    '  try { return original.call(this, file, args, options); }',
+    '  finally { if (fakeClock) clock += current.clockStep; }',
+    '};',
+    'require("node:module").syncBuiltinESMExports();'
+  ].join("\n"));
+  fs.writeFileSync(worker, [
+    'import fs from "node:fs";',
+    'import * as cp from "node:child_process";',
+    'import * as trial from ' + JSON.stringify(new URL("./trial-report.mjs", import.meta.url).href) + ';',
+    'const stateFile = ' + JSON.stringify(stateFile) + ';',
+    'const settings = ' + JSON.stringify(settings) + ';',
+    'console.log(JSON.stringify((' + body.toString() + ')(trial, fs, stateFile, settings, cp)));'
+  ].join("\n"));
+  const result = spawnSync(process.execPath, ["--require", preload, worker], {
+    encoding: "utf8", timeout: 60_000, windowsHide: true, env: scrubGitEnv(process.env)
+  });
+  assert.equal(result.status, 0, result.stderr + result.stdout);
+  return JSON.parse(result.stdout);
+}
+
+test("protected capture matches native ownership resets and excludes repository-context trust", () => {
+  const { a, c, make, cleanup } = buildCloneFixture();
+  const home = make(), xdg = make();
+  fs.mkdirSync(path.join(xdg, "git"));
+  const system = path.join(make(), "system.gitconfig");
+  const global = path.join(home, ".gitconfig");
+  const xdgConfig = path.join(xdg, "git", "config");
+  const included = path.join(make(), "included.gitconfig");
+  const conditional = path.join(make(), "conditional.gitconfig");
+  const set = (file, key, value) => gitOutput(["config", "--file", file, "--add", key, value], a);
+  try {
+    for (const file of [system, global, xdgConfig, included, conditional]) fs.writeFileSync(file, "");
+    set(system, "safe.directory", "/synthetic/system");
+    set(system, "safe.directory", c);
+    set(system, "safe.directory", a);
+    set(xdgConfig, "safe.directory", "");
+    set(global, "safe.directory", a);
+    set(global, "include.path", included);
+    set(global, "include.path", included);
+    set(global, "includeIf.gitdir:**.path", conditional);
+    set(global, "includeIf.onbranch:**.path", conditional);
+    set(included, "safe.directory", "/synthetic/included");
+    set(conditional, "safe.directory", "*");
+    set(global, "url.https://example.invalid/org/repo.git.insteadOf", "https://example.invalid/other/thing.git");
+    gitOutput(["config", "--local", "safe.directory", "*"], a);
+    gitOutput(["config", "--local", "safe.directory", "*"], c);
+    const results = runGitHarness(make, { home, xdg, system, global, xdgConfig, conditional, foreign: true, a, c },
+      (trial, fs, stateFile, settings, cp) => {
+        const attempt = action => {
+          try { return { ok: true, value: action() }; }
+          catch (error) { return { ok: false, status: error.status ?? null, message: error.message }; }
+        };
+        const raw = cwd => attempt(() => cp.execFileSync("git", ["rev-parse", "--show-toplevel"], {
+          cwd, env: trial.scrubGitEnv(process.env), encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 5_000, windowsHide: true
+        }).trim());
+        const ordinaryDeclared = raw(settings.a);
+        const ordinaryReset = raw(settings.c);
+        const declared = trial.gitOutput(["rev-parse", "--show-toplevel"], settings.a);
+        const resetAndLocal = attempt(() => trial.gitOutput(["rev-parse", "--show-toplevel"], settings.c));
+        const values = cwd => {
+          const fields = trial.gitOutput(["config", "--show-scope", "--null", "--get-all", "safe.directory"], cwd).split("\0");
+          const command = [];
+          for (let i = 0; i + 1 < fields.length; i += 2) if (fields[i] === "command") command.push(fields[i + 1]);
+          return command;
+        };
+        const aValues = values(settings.a);
+        fs.appendFileSync(settings.global, "\n[safe]\n\tdirectory = " + JSON.stringify(settings.c) + "\n");
+        const refreshed = trial.gitOutput(["rev-parse", "--show-toplevel"], settings.c);
+        const cValues = values(settings.c);
+        const remote = trial.gitOutput(["remote", "get-url", "origin"], settings.c);
+        const confirmed = trial.withConfirmedCloneRoots([settings.c], [settings.a]).confirmed.has(settings.c);
+        fs.writeFileSync(settings.system, "");
+        fs.writeFileSync(settings.xdgConfig, "");
+        const conditionalOnly = [];
+        for (const condition of ["gitdir:**", "onbranch:**"]) {
+          fs.writeFileSync(settings.global, '[includeIf "' + condition + '"]\n\tpath = ' + JSON.stringify(settings.conditional) + "\n");
+          conditionalOnly.push({
+            condition, native: raw(settings.a),
+            isolated: attempt(() => trial.gitOutput(["rev-parse", "--show-toplevel"], settings.a))
+          });
+        }
+        const inheritedTrust = attempt(() => trial.gitOutput(["rev-parse", "--show-toplevel"], settings.a, {
+          env: { ...process.env, GIT_CONFIG_COUNT: "1", GIT_CONFIG_KEY_0: "safe.directory", GIT_CONFIG_VALUE_0: "*" }
+        }));
+        fs.writeFileSync(stateFile, JSON.stringify({ ...settings, foreign: false }));
+        for (const file of [settings.system, settings.global, settings.xdgConfig]) fs.unlinkSync(file);
+        const optionalMissing = attempt(() => trial.gitOutput(["rev-parse", "--show-toplevel"], settings.a));
+        fs.writeFileSync(settings.global, "[broken\n");
+        const malformed = attempt(() => trial.gitOutput(["rev-parse", "--show-toplevel"], settings.a));
+        const framing = [];
+        for (const kind of ["raw", "odd", "local", "command"]) {
+          fs.writeFileSync(stateFile, JSON.stringify({ ...settings, foreign: true, badFraming: kind }));
+          framing.push({ kind, result: attempt(() => trial.gitOutput(["rev-parse", "--show-toplevel"], settings.a)) });
+        }
+        return { ordinaryDeclared, ordinaryReset, declared, resetAndLocal, aValues, refreshed, cValues, remote,
+          confirmed, conditionalOnly, inheritedTrust, optionalMissing, malformed, framing };
+      });
+    assert.equal(results.ordinaryDeclared.ok, true, "native Git trusts the explicit protected declaration");
+    assert.equal(results.ordinaryReset.ok, false, "native Git applies the XDG reset before the HOME file");
+    assert.equal(results.ordinaryReset.status, 128);
+    assert.equal(real(results.declared), real(a));
+    assert.equal(results.resetAndLocal.ok, false, "isolation cannot restore reset system trust or accept local '*'");
+    assert.equal(results.resetAndLocal.status, 128);
+    assert.deepEqual(results.aValues, ["/synthetic/system", c, a, "", a, "/synthetic/included", "/synthetic/included"]);
+    assert.equal(real(results.refreshed), real(c), "current declarations are read without stale caching");
+    assert.deepEqual(results.cValues, ["/synthetic/system", c, a, "", a, "/synthetic/included", "/synthetic/included", c]);
+    assert.equal(results.remote, "https://example.invalid/other/thing.git");
+    assert.equal(results.confirmed, false, "protected ownership trust does not restore global URL rewrites");
+    for (const result of results.conditionalOnly) {
+      assert.equal(result.native.ok, false, result.condition + ": native ownership ignores repository-context includes");
+      assert.equal(result.isolated.ok, false, result.condition + ": capture must not promote a conditional wildcard");
+      assert.equal(result.isolated.status, 128);
+    }
+    assert.equal(results.inheritedTrust.ok, false, "inherited command-scope injection remains scrubbed");
+    assert.equal(results.optionalMissing.ok, true, "missing optional config files do not break an owned repository");
+    assert.equal(results.malformed.ok, false, "a failed protected read cannot be treated as an absent key");
+    for (const value of results.framing) {
+      assert.equal(value.result.ok, false, value.kind + ": malformed or unprotected values cannot create trust");
+      if (value.kind === "raw" || value.kind === "odd") assert.match(value.result.message, /framing/);
+      else assert.equal(value.result.status, 128);
+    }
+  } finally {
+    cleanup();
+  }
+});
+
+
 test("protected safe.directory exceptions survive isolated Git probes without restoring global URL rewrites", () => {
   const { a, b, c, d, make, cleanup } = buildCloneFixture();
   const mainUrl = "https://example.invalid/org/repo.git";
@@ -2019,7 +2258,7 @@ test("protected safe.directory exceptions survive isolated Git probes without re
   }
 });
 
-function runGitDeadlineFixture(stepMs) {
+function runGitDeadlineFixture(stepMs, timeoutMs = 5000) {
   const fixture = buildInto(make => {
     const a = make();
     initRealRepo(a, "deadline.txt");
@@ -2045,7 +2284,7 @@ function runGitDeadlineFixture(stepMs) {
     const script = [
       `import { gitOutput } from ${JSON.stringify(new URL("./trial-report.mjs", import.meta.url).href)};`,
       'let success = false, message = null;',
-      `try { success = Boolean(gitOutput(["rev-parse", "--show-toplevel"], ${JSON.stringify(fixture.a)})); } catch (error) { message = error.message; }`,
+      `try { success = Boolean(gitOutput(["rev-parse", "--show-toplevel"], ${JSON.stringify(fixture.a)}, { timeoutMs: ${JSON.stringify(timeoutMs)} })); } catch (error) { message = error.message; }`,
       'console.log(JSON.stringify({ success, message, timeouts: globalThis.gitTimeouts }));'
     ].join("\n");
     const child = spawnSync(process.execPath, ["--require", preload, "--input-type=module", "--eval", script], {
@@ -2063,23 +2302,38 @@ function runGitDeadlineFixture(stepMs) {
 test("Git config reads and identity share one five-second deadline", () => {
   const result = runGitDeadlineFixture(1000.25);
   assert.equal(result.success, true, result.message);
-  assert.deepEqual(result.timeouts, [5000, 3999, 2999, 1999], "version, config and identity share the same budget; timeouts round down");
+  assert.deepEqual(result.timeouts, [5000, 3999, 2999], "version, protected capture and identity share the same budget; timeouts round down");
 });
 
 test("Git identity is not started after config reads exhaust its deadline", () => {
-  const result = runGitDeadlineFixture(1667);
+  const result = runGitDeadlineFixture(2500);
   assert.equal(result.success, false);
-  assert.deepEqual(result.timeouts, [5000, 3333, 1666], "identity must not start after version and config consume the budget");
+  assert.deepEqual(result.timeouts, [5000, 2500], "identity must not start after version and config consume the budget");
   assert.match(result.message, /budget|deadline|timed out/i);
 });
 
 test("Git identity refuses a sub-millisecond remainder and accepts a whole millisecond", () => {
-  const fractional = runGitDeadlineFixture([1666, 1666, 1667.5]);
+  const fractional = runGitDeadlineFixture([2499, 2500.5]);
   assert.equal(fractional.success, false);
-  assert.deepEqual(fractional.timeouts, [5000, 3334, 1668], "half a millisecond cannot start another child");
+  assert.deepEqual(fractional.timeouts, [5000, 2501], "half a millisecond cannot start another child");
   assert.match(fractional.message, /deadline/i);
-  const boundary = runGitDeadlineFixture([1666, 1666, 1667]);
-  assert.deepEqual(boundary.timeouts, [5000, 3334, 1668, 1], "one whole millisecond may start the final child");
+  const boundary = runGitDeadlineFixture([2499, 2500]);
+  assert.deepEqual(boundary.timeouts, [5000, 2501, 1], "one whole millisecond may start the final child");
+});
+
+test("Git refuses an identity subprocess when less than one millisecond remains", () => {
+  const result = runGitDeadlineFixture([2500, 2499.25]);
+  assert.equal(result.success, false);
+  assert.deepEqual(result.timeouts, [5000, 2500]);
+});
+
+test("Git honors a shorter caller cap without extending its default maximum", () => {
+  const short = runGitDeadlineFixture(1000.25, 3000);
+  assert.equal(short.success, true, short.message);
+  assert.deepEqual(short.timeouts, [3000, 1999, 999]);
+  const long = runGitDeadlineFixture(1000.25, 10000);
+  assert.equal(long.success, true, long.message);
+  assert.deepEqual(long.timeouts, [5000, 3999, 2999]);
 });
 
 // --- 5d. Which candidates main() probes, and in what order (bounded-probe-budget priority) --
@@ -2168,7 +2422,7 @@ test("CLI checks Git compatibility once and leaves old or unknown versions unmea
       '};',
       'require("node:module").syncBuiltinESMExports();'
     ].join("\n"));
-    for (const [version, supported] of [["git version 2.37.9", false], ["unknown Git", false], ["git version 2.38.0", true]]) {
+    for (const [version, supported] of [["git version 2.37.9", false], ["git version 2.38.4", false], ["unknown Git", false], ["git version 2.39.0", true]]) {
       fs.writeFileSync(trace, "");
       const child = spawnSync(process.execPath, ["--require", preload, path.join(HERE, "trial-report.mjs"), "--repo-root", a, "--json"], {
         cwd: a, encoding: "utf8", windowsHide: true, timeout: 30_000,
@@ -2186,7 +2440,7 @@ test("CLI checks Git compatibility once and leaves old or unknown versions unmea
         assert.deepEqual(calls, [["--version"]], "unsupported Git must never read config or identity");
         assert.equal(find(summary, 4).verdict, "UNMEASURED");
         assert.equal(summary.sources.cloneProbe, null);
-        assert.equal((child.stderr.match(/Git 2\.38 or newer is required/g) ?? []).length, 1, "show one actionable compatibility diagnostic");
+        assert.equal((child.stderr.match(/Git 2\.39 or newer is required/g) ?? []).length, 1, "show one actionable compatibility diagnostic");
       }
     }
   } finally {
@@ -2234,12 +2488,11 @@ test("a report runner freezes its environment while rereading protected configur
     assert.equal(result.first, a.replaceAll("\\", "/"));
     assert.equal(result.second, b.replaceAll("\\", "/"), "the second command sees the changed protected file");
     assert.equal(result.calls.filter(call => call.args[0] === "--version").length, 1);
-    assert.equal(result.calls.filter(call => call.args.includes("--global")).length, 2);
-    assert.equal(result.calls.filter(call => call.args.includes("--system")).length, 2);
+    assert.equal(result.calls.filter(call => call.args[0] === "config" && call.args.includes("--show-scope")).length, 2);
     const identities = result.calls.filter(call => call.args.includes("-c"));
     assert.equal(identities.length, 2);
     assert.ok(identities.every(call => call.system === "/dev/null" && call.global === "/dev/null"),
-      "identity reads also isolate Git 2.38's early protected system configuration");
+      "identity reads also isolate protected system configuration");
   } finally {
     cleanup();
   }
@@ -3601,7 +3854,7 @@ test("the git call is bounded too — the same unbounded-blocking shape", () => 
   // Observe the real child-process boundary, rather than its position/spelling in source text.
   const result = runGitDeadlineFixture(0);
   assert.equal(result.success, true, result.message);
-  assert.equal(result.timeouts.length, 4, "version, both protected config reads and identity must be observed");
+  assert.equal(result.timeouts.length, 3, "version, protected capture and identity must be observed");
   assert.ok(result.timeouts.every(timeout => Number.isInteger(timeout) && timeout > 0 && timeout <= 5000),
     "every Git subprocess must have a finite positive timeout within the five-second bound");
 });
