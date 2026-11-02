@@ -7,6 +7,8 @@ state and results. The [implementation plan](../../plans/2026-11-01-pr-review-an
 owns scope and requirements R1–R7; root [JOURNAL.md](../../../JOURNAL.md) owns work history.
 The initial source baseline was `789c6b4743f42663365cc04d1bb1e5429788a9d4`. This stable file
 defines the reusable contract; the [run records](#runs) identify exactly what source was executed.
+Current review, delivery, merge and later verification status belongs to that app request,
+the journal and PR; these dated run records retain their own executed scope and source.
 
 ## Behavior and data flow
 
@@ -40,17 +42,20 @@ existing public field limits, atomic rejection and a coherent graph/edit-token s
 independent writer. The browser harness recognizes real creation audit activity rather than
 suppressing it to satisfy an obsolete fixture assumption.
 
-The updated [T4 decision](../../plans/2026-11-01-pr-review-and-regression-expansion.md#t4-correct-source-proven-browser-fixture-assumptions)
-requires Settings to expose actual component readiness on its existing diagnostic-button container
-with `data-interactive`, and to disable its four diagnostic buttons during prerender. The shared
-browser scenario must wait for that signal, dispatch exactly one Run all click, and retain the
+The implemented [T4 decision](../../plans/2026-11-01-pr-review-and-regression-expansion.md#t4-correct-source-proven-browser-fixture-assumptions)
+exposes actual Settings component readiness on its existing diagnostic-button container with
+`data-interactive`, and disables its four diagnostic buttons during prerender. The shared
+browser scenario waits for that signal, dispatches exactly one Run all click, and retains the
 bounded completion wait plus complete-row, failed-row, green-summary and nonempty-result assertions.
-A committed regression must force the pending-click/failed-first boundary through that same
-scenario, and actual disabled controls must be checked while Blazor negotiation is held. An open
+A committed regression forces the pending-click/failed-first boundary through that same
+scenario; the real application case checks disabled controls while actual Blazor negotiation is held. An open
 WebSocket or Blazor-global presence does not prove component readiness. This is a minor functional
-readiness guard that preserves the visual layout. Verification of the new source remains pending;
-the [same-source 485 counterexample](runs/2026-11-01-485d1c40f760.md#settings-pending-click-counterexample)
-supersedes the earlier steady-state controls as proof of this boundary.
+readiness guard that preserves the visual layout. The
+[November 2 UTC application/readiness run at `5972ba958b3c`](runs/2026-11-02-5972ba958b3c.md)
+records 57 passing browser scenarios, including the real negotiation assertions and the separate
+failed-first browser guard. The
+[same-source 485 counterexample](runs/2026-11-01-485d1c40f760.md#settings-pending-click-counterexample)
+and earlier steady-state controls remain distinct historical evidence.
 
 ## Requirement-to-test matrix
 
@@ -64,7 +69,7 @@ supersedes the earlier steady-state controls as proof of this boundary.
 | Invalid or unmatched envelopes cannot become receipts | `wrapper rejects native responses without a matching terminal ID (...)` | Sixteen partitions in both JSON/SSE; no successful result, explicit recovery, exactly one HTTP call per client call and unchanged business key |
 | Correlated errors remain complete | `wrapper preserves correlated native errors in JSON (...)` and `wrapper preserves correlated native errors after unrelated SSE traffic (...)` | Exact code/message/nested data, code zero/empty message, and absence of optional data |
 | New empty project has truthful recency | `A new empty project shows creation recency without work placeholders` | No progress/next-task/claim placeholder; displayed time equals actual API creation activity |
-| Settings waits for component readiness and runs diagnostics exactly once | Shared `Settings 'Run all' reports an all-passed result` scenario plus `Settings Run all preserves a failed first suite across delayed rendering` | Four diagnostic buttons disabled during prerender; wait for component `data-interactive`; one dispatched click and one accepted run; a failed first result must remain a failure even if another run could pass; retain bounded completion, complete-row, failed-row, green-summary and nonempty-result assertions. New-source verification pending |
+| Settings waits for component readiness and runs diagnostics exactly once | Shared `Settings 'Run all' reports an all-passed result` scenario plus `Settings Run all preserves a failed first suite across delayed rendering` | Real negotiation held: four diagnostic buttons disabled and `data-interactive=false`; after release: four enabled and `true`. Shared scenario dispatches one click; separate controlled guard proves one accepted run and preserved failed first result. Bounded completion, complete-row, failed-row, green-summary and nonempty-result assertions retained. Verified in the dated application/readiness run at `5972ba958b3c` |
 
 Sources: [workflow result tests](../../../tests/KanbanFlow.Tests/Services/WorkspaceService.ResultsTests.cs),
 [query tests](../../../tests/KanbanFlow.Tests/Services/WorkspaceService.QueryTests.cs),
@@ -129,3 +134,4 @@ human-usability/adoption gate remains pending. A successful run is not merge or 
 - [2026-11-01: unmodified UI baseline and dirty-source focused controls, base `789c6b4743f4`](runs/2026-11-01-789c6b4743f4.md).
 - [2026-11-01: broad failures at `a97b3c20b6e7` and explicitly dirty Settings harness controls](runs/2026-11-01-a97b3c20b6e7.md).
 - [2026-11-01: recorded clean `485d1c40f760` gates and the later blocking Settings counterexample](runs/2026-11-01-485d1c40f760.md).
+- [2026-11-02 UTC: application/readiness, canonical, Release and live transport QA at `5972ba958b3c`](runs/2026-11-02-5972ba958b3c.md).
