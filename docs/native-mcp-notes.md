@@ -4,7 +4,7 @@ Historical September 6, 2026 transport discovery returned **33 native tools** an
 
 ## Wrapper response correlation
 
-The November 1 [regression contract](test-cases/2026-11-01-regression-expansion.md) fixes production JSON/SSE response selection in the stdio wrapper. It accepts only an exact-ID terminal JSON-RPC response, skips unrelated notifications/server requests and preserves valid error codes/messages/data, including code zero. Invalid or unmatched replies produce an error without an implicit retry; the caller retains its business retry key. The contract records real-wrapper red/green tests, workflow snapshot/content checks and reproduction commands.
+The [PR-584 regression contract](test-cases/584-workflow-transport-regressions/README.md) defines production JSON/SSE response selection in the stdio wrapper. It accepts only an exact-ID terminal JSON-RPC response, skips unrelated notifications/server requests and preserves valid error codes/messages/data, including code zero. Invalid or unmatched replies produce an error without an implicit retry; the caller retains its business retry key. The stable contract owns workflow snapshot/content checks and reproduction commands; its [run records](test-cases/584-workflow-transport-regressions/README.md#runs) separate focused red/green evidence from the [clean-source gates at `485d1c40f760`](test-cases/584-workflow-transport-regressions/runs/2026-11-01-485d1c40f760.md).
 
 ## Historical prototype
 

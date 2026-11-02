@@ -84,17 +84,17 @@
                     contract that closes issue #88.
                 </p>
 
-                <div class="d-flex flex-wrap gap-2 mb-3" data-testid="settings-test-buttons">
-                    <button class="btn btn-outline-primary" @onclick="@(() => RunSuite("api"))" disabled="@isRunning">
+                <div class="d-flex flex-wrap gap-2 mb-3" data-testid="settings-test-buttons" data-interactive="@(isInteractive ? "true" : "false")">
+                    <button class="btn btn-outline-primary" @onclick="@(() => RunSuite("api"))" disabled="@(!isInteractive || isRunning)">
                         Run API tests
                     </button>
-                    <button class="btn btn-outline-primary" @onclick="@(() => RunSuite("ui"))" disabled="@isRunning">
+                    <button class="btn btn-outline-primary" @onclick="@(() => RunSuite("ui"))" disabled="@(!isInteractive || isRunning)">
                         Run UI tests
                     </button>
-                    <button class="btn btn-outline-primary" @onclick="@(() => RunSuite("service"))" disabled="@isRunning">
+                    <button class="btn btn-outline-primary" @onclick="@(() => RunSuite("service"))" disabled="@(!isInteractive || isRunning)">
                         Run Service tests
                     </button>
-                    <button class="btn btn-primary ms-auto" @onclick="@(() => RunSuite("all"))" disabled="@isRunning">
+                    <button class="btn btn-primary ms-auto" @onclick="@(() => RunSuite("all"))" disabled="@(!isInteractive || isRunning)">
                         @(isRunning ? "Running…" : "Run all")
                     </button>
                 </div>
@@ -169,6 +169,7 @@
 
 @code {
     private TestSuiteResult? latestSuite;
+    private bool isInteractive;
     private bool isRunning;
     private string currentSuite = "";
 
@@ -181,6 +182,17 @@
         var asm = typeof(Settings).Assembly;
         AppVersion = asm.GetName().Version?.ToString() ?? "—";
         HostEnv = Environment.GetEnvironmentVariable("ASPNETCORE_ENVIRONMENT") ?? "Production";
+    }
+
+    protected override void OnAfterRender(bool firstRender)
+    {
+        if (!firstRender)
+            return;
+
+        // Static prerendering cannot accept these clicks. Enable controls only
+        // after this component's interactive render has attached its handlers.
+        isInteractive = true;
+        StateHasChanged();
     }
 
     private async Task RunSuite(string suite)

@@ -170,6 +170,166 @@ async function clickUntil(opener, expected, attempts = 6) {
   await expected.waitFor({ state: "visible", timeout: 5000 });
 }
 
+async function verifySettingsReadinessDuringNegotiation(page, baseUrl) {
+  let releaseNegotiation;
+  let sawNegotiation;
+  let timeout;
+  const gate = new Promise(resolve => { releaseNegotiation = resolve; });
+  const seen = new Promise(resolve => { sawNegotiation = resolve; });
+  const continuations = [];
+  const pattern = "**/_blazor/negotiate*";
+  const holdNegotiation = route => {
+    sawNegotiation(true);
+    const continuation = gate.then(() => route.continue());
+    continuations.push(continuation);
+    return continuation;
+  };
+  await page.route(pattern, holdNegotiation);
+  try {
+    await page.goto(`${baseUrl}/settings`, { waitUntil: "domcontentloaded" });
+    const observed = await Promise.race([
+      seen,
+      new Promise(resolve => { timeout = setTimeout(() => resolve(false), 15_000); }),
+    ]);
+    assert(observed, "Settings must negotiate its actual Blazor circuit during this check");
+    const controls = page.locator('[data-testid="settings-test-buttons"]');
+    await controls.waitFor({ state: "visible" });
+    assert(await controls.getAttribute("data-interactive") === "false", "held negotiation must leave Settings noninteractive");
+    const buttons = controls.getByRole("button");
+    assert(await buttons.count() === 4, "Settings must expose all four diagnostic buttons");
+    for (let i = 0; i < 4; i++) {
+      assert(await buttons.nth(i).isDisabled(), `diagnostic button ${i + 1} must be disabled before interactivity`);
+    }
+    releaseNegotiation();
+    await page.waitForFunction(() => {
+      const controls = document.querySelector('[data-testid="settings-test-buttons"]');
+      const buttons = controls?.querySelectorAll("button");
+      return controls?.dataset.interactive === "true" && buttons.length === 4
+        && [...buttons].every(button => button.matches(":enabled"));
+    });
+  } finally {
+    clearTimeout(timeout);
+    releaseNegotiation();
+    await page.unroute(pattern, holdNegotiation);
+    await Promise.allSettled(continuations);
+  }
+}
+
+async function runSettingsAllAndAssert(page, baseUrl) {
+  await page.goto(`${baseUrl}/settings`);
+  await page.locator('[data-testid="settings-test-buttons"][data-interactive="true"]')
+    .waitFor({ state: "visible" });
+  // Starting diagnostics is not idempotent. Once interactive, send one click;
+  // a retry could wait for the first suite to finish and then erase its result.
+  await page.getByRole("button", { name: "Run all", exact: true }).click();
+  const resultsTable = page.locator('[data-testid="settings-test-results"]');
+  await resultsTable.waitFor({ state: "visible", timeout: 30_000 });
+  await page.locator(".badge.text-bg-success").first().waitFor({ state: "visible" });
+  const totalRows = await resultsTable.locator("tbody tr").count();
+  const failedRows = await resultsTable.locator("tbody tr.table-danger").count();
+  const passedRows = totalRows - failedRows;
+  assert(failedRows === 0, `expected 0 failed rows in the UI, found ${failedRows}`);
+  assert(passedRows > 0, `expected at least one passed row in the UI, found ${passedRows} of ${totalRows}`);
+}
+
+async function verifySettingsRunAllDoesNotRestart(browser, scenario = runSettingsAllAndAssert) {
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  page.setDefaultTimeout(5000);
+  const fixtureBase = "http://127.0.0.1:5202";
+  let clickCalls = 0;
+  let pendingRetryForced = false;
+  try {
+    // A real browser action must survive the missed-render boundary: first run
+    // fails, but a queued second click would clear it and render a green retry.
+    await page.route("**/*", async route => {
+      if (route.request().url() !== `${fixtureBase}/settings`) return route.abort();
+      await route.fulfill({ contentType: "text/html; charset=utf-8", body: `<!doctype html>
+        <html><head><meta charset="utf-8"></head><body>
+        <div data-testid="settings-test-buttons" data-interactive="false"><button disabled>Run all</button></div>
+        <script>
+          const controls = document.querySelector('[data-testid="settings-test-buttons"]');
+          const button = controls.querySelector('button');
+          const state = window.settingsFixture = { busy: false, accepted: 0, nativeClicks: 0, completed: [] };
+          let finishTimer;
+          function renderRunning() { button.disabled = true; button.textContent = 'Running…'; }
+          function finish(run) {
+            if (state.completed.some(item => item.run === run)) return;
+            clearTimeout(finishTimer);
+            state.busy = false;
+            button.disabled = false;
+            button.textContent = 'Run all';
+            const failed = run === 1;
+            state.completed.push({ run, failed });
+            document.querySelector('[data-testid="settings-test-results"]')?.remove();
+            document.querySelector('.badge')?.remove();
+            document.body.insertAdjacentHTML('beforeend', '<span class="badge ' + (failed ? 'text-bg-danger' : 'text-bg-success') + '">summary</span><div data-testid="settings-test-results"><table><tbody><tr' + (failed ? ' class="table-danger"' : '') + '><td>run ' + run + '</td></tr></tbody></table></div>');
+          }
+          state.renderRunning = renderRunning;
+          state.finishFirst = () => finish(1);
+          button.addEventListener('click', () => {
+            state.nativeClicks++;
+            if (state.busy) return;
+            state.busy = true;
+            state.accepted++;
+            document.querySelector('[data-testid="settings-test-results"]')?.remove();
+            document.querySelector('.badge')?.remove();
+            if (state.accepted === 1) {
+              // The server accepted the click; its Running render is delayed.
+              finishTimer = setTimeout(() => { renderRunning(); finish(1); }, 4500);
+            } else {
+              renderRunning();
+              finishTimer = setTimeout(() => finish(2), 30);
+            }
+          });
+          setTimeout(() => { controls.dataset.interactive = 'true'; button.disabled = false; }, 50);
+        </script></body></html>` });
+    });
+
+    const getByRole = page.getByRole.bind(page);
+    page.getByRole = (role, options) => {
+      const locator = getByRole(role, options);
+      if (role !== "button" || options?.name !== "Run all") return locator;
+      const nativeClick = locator.click.bind(locator);
+      locator.click = async (...args) => {
+        clickCalls++;
+        if (clickCalls !== 2) return nativeClick(...args);
+        // Deliver the delayed render after the retry's precheck, then prove its
+        // actual Playwright action is waiting before completing the first run.
+        await page.evaluate(() => window.settingsFixture.renderRunning());
+        let settled = false;
+        const pending = nativeClick(...args);
+        pending.then(() => { settled = true; }, () => { settled = true; });
+        await page.waitForTimeout(150);
+        assert(!settled, "the retry must be pending on the disabled Running button");
+        pendingRetryForced = true;
+        await page.evaluate(() => window.settingsFixture.finishFirst());
+        return pending;
+      };
+      return locator;
+    };
+
+    let failure;
+    try { await scenario(page, fixtureBase); } catch (error) { failure = error; }
+    const state = await page.evaluate(() => ({
+      accepted: window.settingsFixture.accepted,
+      nativeClicks: window.settingsFixture.nativeClicks,
+      completed: window.settingsFixture.completed,
+      failedRows: document.querySelectorAll('tbody tr.table-danger').length,
+      resultText: document.querySelector('[data-testid="settings-test-results"]')?.textContent,
+    }));
+    assert(state.accepted === 1, `Settings scenario started ${state.accepted} suites; a retry erased the failed first result`);
+    assert(clickCalls === 1 && state.nativeClicks === 1, "Settings must issue exactly one native Run all click");
+    assert(state.completed.length === 1 && state.completed[0].failed, "the failed first suite must remain the only completed run");
+    assert(state.failedRows === 1 && state.resultText === "run 1", "the failed first result must remain visible");
+    assert(failure && (failure.message.includes("text-bg-success") || failure.message.includes("expected 0 failed rows")),
+      "the shared Settings scenario must reject the failed first suite");
+    return { ...state, clickCalls, pendingRetryForced, failure: failure.message };
+  } finally {
+    await context.close();
+  }
+}
+
 // SortableJS responds to real mouse movement (not HTML5 DnD), so we press on the
 // card and move toward the destination column in small steps before releasing.
 async function dragCardTo(page, cardSelector, targetColumnSelector) {
@@ -562,6 +722,10 @@ async function main() {
         `"locator.click: Timeout 15000ms exceeded". Check the expected element BEFORE re-clicking.`);
       assert(isOpen,
         "clickUntil returned with the menu CLOSED — the caller is about to click into nothing.");
+    });
+
+    await test("Settings Run all preserves a failed first suite across delayed rendering", async () => {
+      await verifySettingsRunAllDoesNotRestart(browser);
     });
 
     // ── Decision & Memory Map (#496): real REST writes -> real Blazor projection ──
@@ -4021,26 +4185,8 @@ async function main() {
 
     // ── Scenario E: Settings -> Run all shows an all-passed result table ──
     await test("Settings 'Run all' reports an all-passed result", async () => {
-      await page.goto(`${baseUrl}/settings`);
-      const resultsTable = page.locator('[data-testid="settings-test-results"]');
-      // A prerendered click can be ignored. Once accepted, do not restart a suite
-      // while its server checks are running; completion has its own wait budget.
-      await clickUntil(
-        () => page.getByRole("button", { name: "Run all", exact: true }).click(),
-        page.getByRole("button", { name: "Running…", exact: true }).or(resultsTable).first());
-      await resultsTable.waitFor({ state: "visible", timeout: 30_000 });
-      // green summary badge present, and no failing rows
-      await page.locator(".badge.text-bg-success").first().waitFor({ state: "visible" });
-      // Count rows inside the results table (not the header summary badge). Passed rows carry
-      // no marker class; only failed rows get `table-danger`, so passed = total - failed.
-      const totalRows = await resultsTable.locator("tbody tr").count();
-      // Scope failed rows to the SAME tbody as totalRows so passedRows can never go negative if a
-      // non-body element ever carries table-danger (#168 review).
-      const failedRows = await resultsTable.locator("tbody tr.table-danger").count();
-      const passedRows = totalRows - failedRows;
-      assert(failedRows === 0, `expected 0 failed rows in the UI, found ${failedRows}`);
-      // Guard against a vacuous pass: a table that rendered zero rows also has zero failures.
-      assert(passedRows > 0, `expected at least one passed row in the UI, found ${passedRows} of ${totalRows}`);
+      await verifySettingsReadinessDuringNegotiation(page, baseUrl);
+      await runSettingsAllAndAssert(page, baseUrl);
     });
 
     // ── Cleanup of API-created data (best effort) ──

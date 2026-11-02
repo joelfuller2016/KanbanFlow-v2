@@ -871,8 +871,10 @@ dotnet test tests/KanbanFlow.Tests/KanbanFlow.Tests.csproj # all xUnit tests; da
 node ./scripts/smoke-mcp.mjs 1          # MCP tool surface — needs the app running on :5123
 npm run test:mcp                        # stdio framing A/B + the MCP smoke suite
 npm run test:scripts                    # node:test units, including local Git/HTTP child
-                                        # fixtures. No configured live app or external
-                                        # service is required.
+                                        # fixtures. No configured live app is required.
+                                        # An optional live GitHub issue/label read runs when
+                                        # authenticated gh is available; otherwise it is skipped
+                                        # with a reason.
 npm run test:ui                         # Playwright e2e — builds, boots an isolated instance
                                         # (fixed port 5198 + throwaway DB), drives chromium, tears down
 ```
@@ -909,7 +911,7 @@ them.
 
 | Doc | What it holds |
 |---|---|
-| [Workflow and transport regression contract](docs/test-cases/2026-11-01-regression-expansion.md) | Exact report/field/snapshot tests, real-wrapper JSON/SSE correlation, red/green controls, browser creation-recency checks and rerun steps |
+| [PR-584 workflow and transport regression contract](docs/test-cases/584-workflow-transport-regressions/README.md) | Reusable report/field/snapshot and wrapper JSON/SSE checks, Settings readiness and single-click requirements, and rerun steps; [commit-pinned results and review counterexample](docs/test-cases/584-workflow-transport-regressions/runs/2026-11-01-485d1c40f760.md) retain failures, controls and pending verification |
 | [Requests, plans and results](docs/request-workflow.md) | Use the existing app and boards for original requests, briefs, real task cards, MCP updates, reviewed reports and conclusions |
 | [Central project board implementation specification](docs/plans/central-project-board-implementation.md) | Detailed issue checklist, four diagrams, existing-versus-new behavior, acceptance checks and explicit later Codex work |
 | [Central project board proposal](docs/plans/central-project-board.md) | Product direction, the same-board constraint and the proposed Codex execution path |

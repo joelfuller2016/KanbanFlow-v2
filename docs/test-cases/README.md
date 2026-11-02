@@ -8,6 +8,7 @@ that case's `runs/` directory records what was actually executed at one immutabl
 
 | ID | Feature | Stable case | Latest recorded run | Status |
 |---|---|---|---|---|
+| PR-584 | Workflow reports, snapshots and wrapper response correlation | [Case](584-workflow-transport-regressions/README.md) | [2026-11-01 · `485d1c40f760`](584-workflow-transport-regressions/runs/2026-11-01-485d1c40f760.md) | Historical passes: 2,199 .NET, 617 scripts, 56 browser scenarios and live workflow checks; subsequent same-source proof confirmed a Settings false green. Readiness repair and new-source gates pending; merge, post-merge verification and human adoption remain separate gates |
 | TC-482 (partial) | Board keyboard bypass | [Case](482-keyboard-bypass/README.md) | [2026-09-14 · `f39c404e992a`](482-keyboard-bypass/runs/2026-09-14-f39c404e992a.md) | Full gates passed with documented offline profile/timing caveats; roving outline and human acceptance remain |
 | TC-507 | Atomic inbound GitHub projection | [Case](507-atomic-github-projection/README.md) | [2026-09-09 · `f6b83bb52240`](507-atomic-github-projection/runs/2026-09-09-f6b83bb52240.md) | Integrated API/MCP and UI passed; human feedback remains |
 | TC-481 | Card legibility and accurate GitHub links | [Case](481-card-legibility/README.md) | [2026-09-09 · `cd8e4ce699e6`](481-card-legibility/runs/2026-09-09-cd8e4ce699e6.md) | Integrated source and three engines passed; human density/usability review pending |
@@ -19,8 +20,12 @@ that case's `runs/` directory records what was actually executed at one immutabl
 ## Conventions
 
 - Use `docs/test-cases/<issue>-<slug>/README.md` for the stable specification.
+  When an existing PR has no separate issue, use its number and label the case `PR-<number>`;
+  link the actual PR and owning request/plan rather than inventing an issue.
 - Put measured results in `runs/YYYY-MM-DD-<12-character-commit>.md`. Never silently carry a
   result forward to another commit.
+  Historical precommit attempts must explicitly identify their base HEAD, dirty source and
+  available hashes; they are not clean-base or later-commit passes.
 - Link every case to its issue, implementation PR, executable tests, and source files.
 - Separate automated assertions, manual/source-review checks, observed dogfood evidence, and known
   gaps. “Implemented” is not a synonym for “automatically tested.”
