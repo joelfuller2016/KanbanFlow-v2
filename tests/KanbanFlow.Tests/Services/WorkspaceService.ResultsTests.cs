@@ -154,6 +154,186 @@ public sealed partial class WorkspaceServiceTests
         Assert.All(after.Task.AcceptanceCriteria, c => Assert.False(c.Completed));
     }
 
+    [Fact]
+    public async Task RecordEvidence_MirrorsCompleteAuthoredReportIntoMessageAndTaskComment()
+    {
+        using var f = new WorkflowSqliteTestFactory();
+        var request = await f.PublishedAsync(Draft());
+        var item = request.WorkItems.Single();
+        var input = new EvidenceDraft("  ## Result Ω 👋\r\n\r\n    authored summary  \n",
+            "- first check\r\n\r\n    indented check café  \t\n", " docs/结果.md\r\ncommit: café-123  ");
+        var expected = $"Reported result for task #{item.TaskItemId}\n\n{input.Summary}\n\nChecks: {input.Checks}\n\nReference: {input.CodeReference}";
+
+        var receipt = await f.Service.RecordEvidenceAsync(request.Id, request.Version, item.Id, input,
+            "complete-report-author", "complete-report");
+
+        var after = await f.LoadAsync(request.Id);
+        var report = Assert.Single(after.Messages, m => m.Kind == "assistant-report");
+        Assert.Equal(expected, report.Text);
+        Assert.Equal(request.Id, report.RequestId);
+        Assert.Equal("complete-report-author", report.Author);
+        Assert.Equal("reported-result", report.Source);
+        var task = Assert.Single(after.WorkItems);
+        var comment = Assert.Single(task.Task.Comments, c => c.Type == CommentType.Verification);
+        Assert.Equal(expected, comment.Text);
+        Assert.Equal(item.TaskItemId, comment.TaskItemId);
+        Assert.Equal("complete-report-author", comment.Author);
+        Assert.Equal(WorkStatus.Review, task.Task.Status);
+        Assert.Null(task.Task.CompletedAt);
+        Assert.All(task.Task.AcceptanceCriteria, criterion => Assert.False(criterion.Completed));
+        var evidence = Assert.Single(task.Evidence);
+        Assert.Equal(item.Id, evidence.WorkItemId);
+        Assert.Equal(input.Summary, evidence.Summary);
+        Assert.Equal(input.Checks, evidence.Checks);
+        Assert.Equal(input.CodeReference, evidence.CodeReference);
+        Assert.Equal("complete-report-author", evidence.Author);
+        Assert.Null(evidence.AcceptedAt);
+        Assert.Null(evidence.AcceptedBy);
+        Assert.Equal(request.Version + 1, after.Version);
+        Assert.Equal(after.Version, receipt.Version);
+        await using var db = f.CreateDbContext();
+        Assert.Equal(1, await db.WorkflowReceipts.CountAsync(r => r.Key == "complete-report" && r.Operation == "evidence.report"));
+    }
+
+    [Theory]
+    [InlineData("summary", 20000, -1)]
+    [InlineData("summary", 20000, 0)]
+    [InlineData("summary", 20000, 1)]
+    [InlineData("checks", 20000, -1)]
+    [InlineData("checks", 20000, 0)]
+    [InlineData("checks", 20000, 1)]
+    [InlineData("reference", 2000, -1)]
+    [InlineData("reference", 2000, 0)]
+    [InlineData("reference", 2000, 1)]
+    public async Task RecordEvidence_FieldLengthBoundary_PreservesOrRejectsAtomically(string field, int limit, int offset)
+    {
+        using var f = new WorkflowSqliteTestFactory();
+        var request = await f.PublishedAsync(Draft());
+        var item = request.WorkItems.Single();
+        var input = new EvidenceDraft("Summary Ω", "Checks Ω", "source/结果.md");
+        var text = ResultBoundaryText(limit + offset);
+        input = field switch
+        {
+            "summary" => input with { Summary = text },
+            "checks" => input with { Checks = text },
+            _ => input with { CodeReference = text }
+        };
+        var before = await CaptureResultWriteCountsAsync(f);
+        const string key = "report-field-boundary";
+
+        if (offset > 0)
+        {
+            await RejectAsync("invalid", () => f.Service.RecordEvidenceAsync(request.Id, request.Version, item.Id, input, Actor, key));
+            var unchanged = await f.LoadAsync(request.Id);
+            Assert.Equal(request.Version, unchanged.Version);
+            Assert.Equal(request.UpdatedAt, unchanged.UpdatedAt);
+            Assert.Equal(item.Task.Status, unchanged.WorkItems.Single().Task.Status);
+            Assert.Empty(unchanged.WorkItems.Single().Evidence);
+            Assert.Equal(before, await CaptureResultWriteCountsAsync(f));
+            await using var rejectedDb = f.CreateDbContext();
+            Assert.False(await rejectedDb.WorkflowReceipts.AnyAsync(r => r.Key == key));
+            return;
+        }
+
+        var receipt = await f.Service.RecordEvidenceAsync(request.Id, request.Version, item.Id, input, Actor, key);
+        var after = await f.LoadAsync(request.Id);
+        var evidence = Assert.Single(after.WorkItems.Single().Evidence);
+        Assert.Equal(input.Summary, evidence.Summary);
+        Assert.Equal(input.Checks, evidence.Checks);
+        Assert.Equal(input.CodeReference, evidence.CodeReference);
+        Assert.Equal(WorkStatus.Review, after.WorkItems.Single().Task.Status);
+        var expectedReport = $"Reported result for task #{item.TaskItemId}\n\n{input.Summary}\n\nChecks: {input.Checks}\n\nReference: {input.CodeReference}";
+        Assert.Equal(expectedReport, Assert.Single(after.Messages, message => message.Kind == "assistant-report").Text);
+        Assert.Equal(expectedReport, Assert.Single(after.WorkItems.Single().Task.Comments,
+            comment => comment.Type == CommentType.Verification).Text);
+        Assert.Null(evidence.AcceptedAt);
+        Assert.Null(evidence.AcceptedBy);
+        Assert.Equal(request.Version + 1, after.Version);
+        Assert.Equal(after.Version, receipt.Version);
+        var counts = await CaptureResultWriteCountsAsync(f);
+        Assert.Equal(before.Evidence + 1, counts.Evidence);
+        Assert.Equal(before.Messages + 1, counts.Messages);
+        Assert.Equal(before.Results, counts.Results);
+        Assert.Equal(before.Receipts + 1, counts.Receipts);
+        Assert.True(counts.Audit > before.Audit, "A successful report must commit its audit event.");
+        Assert.Single(after.WorkItems.Single().Task.Comments, c => c.Type == CommentType.Verification);
+    }
+
+    [Theory]
+    [InlineData("conclusion", 50000, -1)]
+    [InlineData("conclusion", 50000, 0)]
+    [InlineData("conclusion", 50000, 1)]
+    [InlineData("limitations", 10000, -1)]
+    [InlineData("limitations", 10000, 0)]
+    [InlineData("limitations", 10000, 1)]
+    public async Task Conclude_FieldLengthBoundary_PreservesOrRejectsAtomically(string field, int limit, int offset)
+    {
+        using var f = new WorkflowSqliteTestFactory();
+        var request = await f.PublishedAsync(Draft());
+        var itemId = request.WorkItems.Single().Id;
+        request = await f.ReportAsync(request, itemId);
+        request = await f.AcceptAsync(request, itemId);
+        var accepted = request.WorkItems.Single().Evidence.Single();
+        var text = ResultBoundaryText(limit + offset);
+        var conclusion = field == "conclusion" ? text : "Verified conclusion Ω";
+        var limitations = field == "limitations" ? text : "Local verification only Ω";
+        var before = await CaptureResultWriteCountsAsync(f);
+        const string key = "conclusion-field-boundary";
+
+        if (offset > 0)
+        {
+            await RejectAsync("invalid", () => f.Service.ConcludeAsync(request.Id, request.Version, conclusion, limitations, Actor, key));
+            var unchanged = await f.LoadAsync(request.Id);
+            Assert.Equal(request.Version, unchanged.Version);
+            Assert.Equal(request.UpdatedAt, unchanged.UpdatedAt);
+            Assert.Empty(unchanged.Results);
+            Assert.Equal(WorkStatus.Done, unchanged.WorkItems.Single().Task.Status);
+            Assert.All(unchanged.WorkItems.Single().Task.AcceptanceCriteria, criterion => Assert.True(criterion.Completed));
+            Assert.Equal(accepted.AcceptedAt, unchanged.WorkItems.Single().Evidence.Single().AcceptedAt);
+            Assert.Equal(accepted.AcceptedBy, unchanged.WorkItems.Single().Evidence.Single().AcceptedBy);
+            Assert.Equal(before, await CaptureResultWriteCountsAsync(f));
+            await using var rejectedDb = f.CreateDbContext();
+            Assert.False(await rejectedDb.WorkflowReceipts.AnyAsync(r => r.Key == key));
+            return;
+        }
+
+        var receipt = await f.Service.ConcludeAsync(request.Id, request.Version, conclusion, limitations, "boundary-reviewer", key);
+        var after = await f.LoadAsync(request.Id);
+        var result = Assert.Single(after.Results);
+        Assert.Equal(conclusion, result.Conclusion);
+        Assert.Equal(limitations, result.Limitations);
+        Assert.Equal("boundary-reviewer", result.Author);
+        Assert.Equal(request.Version + 1, after.Version);
+        Assert.Equal(after.Version, result.RequestVersion);
+        Assert.Equal(result.RequestVersion, receipt.Version);
+        Assert.Equal(WorkStatus.Done, after.WorkItems.Single().Task.Status);
+        var counts = await CaptureResultWriteCountsAsync(f);
+        Assert.Equal(before.Results + 1, counts.Results);
+        Assert.Equal(before.Evidence, counts.Evidence);
+        Assert.Equal(before.Messages, counts.Messages);
+        Assert.Equal(before.Comments, counts.Comments);
+        Assert.Equal(before.Receipts + 1, counts.Receipts);
+        Assert.True(counts.Audit > before.Audit, "A successful conclusion must commit its audit event.");
+    }
+
+    private static string ResultBoundaryText(int length)
+    {
+        const string prefix = "  ## Ω 👋\r\n\r\n    authored café ";
+        const string suffix = "\r\n\t  ";
+        // The public .NET contract counts UTF-16 characters, not encoded UTF-8 bytes.
+        return prefix + new string('é', length - prefix.Length - suffix.Length) + suffix;
+    }
+
+    private static async Task<ResultWriteCounts> CaptureResultWriteCountsAsync(WorkflowSqliteTestFactory factory)
+    {
+        await using var db = factory.CreateDbContext();
+        return new(await db.RequestMessages.CountAsync(), await db.TaskComments.CountAsync(),
+            await db.TaskEvidence.CountAsync(), await db.RequestResults.CountAsync(),
+            await db.ActivityEvents.CountAsync(), await db.WorkflowReceipts.CountAsync());
+    }
+
+    private sealed record ResultWriteCounts(int Messages, int Comments, int Evidence, int Results, int Audit, int Receipts);
+
     [Theory]
     [InlineData("summary")]
     [InlineData("checks")]

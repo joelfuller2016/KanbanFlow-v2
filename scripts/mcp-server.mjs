@@ -1057,7 +1057,7 @@ function handleRawMessage(rawMessage) {
   handleMessage(message)
     .catch(error => {
       if (hasRequestId(message)) {
-        writeError(message.id, error.code || -32000, error.message, error.data);
+        writeError(message.id, error.code ?? -32000, error.message, error.data);
       }
     })
     .finally(() => {
@@ -1704,11 +1704,11 @@ async function nativeMcpToolCall(toolName, args) {
     ? extractSseJsonRpcMessage(text, requestId)
     : parseJsonOrText(text);
 
-  if (!isPlainObject(message)) {
-    throw new McpError(-32000, `Native MCP returned an unparseable response for ${toolName}.`, { body: text });
+  if (!isNativeMcpResponse(message, requestId)) {
+    throw new McpError(-32000, `Native MCP returned no matching terminal response for ${toolName}.`, { body: text });
   }
-  if (message.error) {
-    throw new McpError(message.error.code ?? -32000, message.error.message, message.error.data);
+  if (Object.hasOwn(message, "error")) {
+    throw new McpError(message.error.code, message.error.message, message.error.data);
   }
 
   const result = message.result ?? {};
@@ -1726,10 +1726,20 @@ async function nativeMcpToolCall(toolName, args) {
   return inner === undefined ? null : parseJsonOrText(inner);
 }
 
-// Pull the JSON-RPC message with the matching id out of an SSE body ("data: {...}" lines,
-// events separated by blank lines). Falls back to the last parsed message when ids are absent.
+// Native SSE may contain notifications or server requests before the tool response. A request
+// in the opposite direction can reuse our id; only a matching terminal response may complete it.
+function isNativeMcpResponse(message, requestId) {
+  if (!isPlainObject(message) || message.jsonrpc !== "2.0" || message.id !== requestId
+      || Object.hasOwn(message, "method")) return false;
+  const hasResult = Object.hasOwn(message, "result");
+  const hasError = Object.hasOwn(message, "error");
+  if (hasResult === hasError) return false;
+  return hasResult || (isPlainObject(message.error) && Number.isInteger(message.error.code)
+    && typeof message.error.message === "string");
+}
+
+// SSE data lines are joined per event; unrelated/malformed frames never become a fallback.
 function extractSseJsonRpcMessage(body, requestId) {
-  let lastParsed = null;
   for (const rawEvent of body.split(/\r?\n\r?\n/)) {
     const dataLines = rawEvent
       .split(/\r?\n/)
@@ -1739,15 +1749,14 @@ function extractSseJsonRpcMessage(body, requestId) {
 
     try {
       const parsed = JSON.parse(dataLines.join("\n"));
-      lastParsed = parsed;
-      if (isPlainObject(parsed) && parsed.id === requestId) {
+      if (isNativeMcpResponse(parsed, requestId)) {
         return parsed;
       }
     } catch {
       // Not JSON (keep scanning) — e.g. a comment/heartbeat frame.
     }
   }
-  return lastParsed;
+  return null;
 }
 
 // Nullable-text updates have three states: omitted/null preserves, empty/whitespace clears,

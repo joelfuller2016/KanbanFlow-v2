@@ -2,6 +2,7 @@ using System.Data.Common;
 using KanbanFlow.Models;
 using KanbanFlow.Models.Workflows;
 using KanbanFlow.Services.Workflows;
+using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 using Xunit.Abstractions;
@@ -229,6 +230,97 @@ public sealed class WorkspaceQueryTests(ITestOutputHelper output)
         Assert.True(contextReads <= 30, $"Context issued {contextReads} reads for {count} tasks; expected a bounded batch (at most 30).");
         Assert.True(saveReads <= 30, $"Save issued {saveReads} reads for {count} tasks; expected a bounded batch (at most 30).");
         Assert.True(publishReads <= 40, $"Publish issued {publishReads} reads for {count} tasks; expected a bounded batch (at most 40).");
+    }
+
+    [Fact]
+    public async Task ContextAsync_ConcurrentTaskEdit_DoesNotPairOldFieldsWithNewEditToken()
+    {
+        var interleaver = new SnapshotWriterInterleaver();
+        using var factory = new WorkflowSqliteTestFactory(interleaver);
+        var request = await factory.PublishedAsync(Draft("Snapshot consistency"));
+        var item = request.WorkItems.Single();
+        // WAL lets an independent writer commit while an ordinary read cursor is open.
+        // The service's explicit operation-wide transaction must protect the later token read.
+        await using (var setup = new SqliteConnection(factory.ConnectionString))
+        {
+            await setup.OpenAsync();
+            using var pragma = setup.CreateCommand();
+            pragma.CommandText = "PRAGMA journal_mode = WAL";
+            Assert.Equal("wal", await pragma.ExecuteScalarAsync());
+        }
+        var before = Assert.Single((await factory.Service.ContextAsync(request.Id))!.Tasks);
+        const string updatedDescription = "A concurrent authored edit Ω\r\n\r\n    retain indentation  ";
+        interleaver.Arm(factory.ConnectionString, item.TaskItemId, updatedDescription);
+
+        var during = Assert.Single((await factory.Service.ContextAsync(request.Id))!.Tasks);
+
+        Assert.Equal(1, interleaver.AttemptsWhileReading);
+        Assert.Equal(item.TaskItemId, during.TaskId);
+        Assert.Equal(before.Description, during.Description);
+        Assert.Equal(before.EditToken, during.EditToken);
+        // An immediate SQLite transaction can reject the bounded first write attempt.
+        // Retry after the read returns, so the final assertion proves a real committed edit.
+        Assert.Equal(1, await interleaver.CompleteWriteAsync());
+        var after = Assert.Single((await factory.Service.ContextAsync(request.Id))!.Tasks);
+        Assert.Equal(item.TaskItemId, after.TaskId);
+        Assert.Equal(updatedDescription, after.Description);
+        Assert.NotEqual(before.EditToken, after.EditToken);
+        Assert.Equal(request.Version, (await factory.LoadAsync(request.Id)).Version);
+    }
+
+    private sealed class SnapshotWriterInterleaver : DbCommandInterceptor
+    {
+        private bool armed;
+        private string connectionString = "";
+        private int taskId;
+        private string description = "";
+        private int committedRows;
+        public int AttemptsWhileReading { get; private set; }
+
+        public void Arm(string sourceConnectionString, int editedTaskId, string editedDescription)
+        {
+            connectionString = new SqliteConnectionStringBuilder(sourceConnectionString) { DefaultTimeout = 1 }.ToString();
+            taskId = editedTaskId;
+            description = editedDescription;
+            armed = true;
+        }
+
+        public override async ValueTask<InterceptionResult<DbDataReader>> ReaderExecutingAsync(DbCommand command,
+            CommandEventData eventData, InterceptionResult<DbDataReader> result, CancellationToken cancellationToken = default)
+        {
+            // This checkpoint runs only after Graph has materialized, immediately before
+            // TaskSnapshot reads the reachable graph for edit tokens. No scheduler delay is used.
+            if (armed && command.CommandText.Contains("WITH RECURSIVE reachable", StringComparison.Ordinal))
+            {
+                armed = false;
+                AttemptsWhileReading++;
+                try { committedRows = await WriteAsync(cancellationToken); }
+                catch (SqliteException error) when (error.SqliteErrorCode is 5 or 6)
+                {
+                    // Busy/locked is the observable writer reservation, not a test failure.
+                    // CommandTimeout=1 bounds this real database attempt; zero would wait forever.
+                }
+            }
+            return result;
+        }
+
+        public async Task<int> CompleteWriteAsync()
+        {
+            if (committedRows == 0) committedRows = await WriteAsync(CancellationToken.None);
+            return committedRows;
+        }
+
+        private async Task<int> WriteAsync(CancellationToken cancellationToken)
+        {
+            await using var connection = new SqliteConnection(connectionString);
+            await connection.OpenAsync(cancellationToken);
+            using var command = connection.CreateCommand();
+            command.CommandTimeout = 1;
+            command.CommandText = "UPDATE Tasks SET Description = $description WHERE Id = $taskId";
+            command.Parameters.AddWithValue("$description", description);
+            command.Parameters.AddWithValue("$taskId", taskId);
+            return await command.ExecuteNonQueryAsync(cancellationToken);
+        }
     }
 
     private sealed class QueryCounter : DbCommandInterceptor
