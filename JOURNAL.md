@@ -51,6 +51,11 @@ A review of the repository and a test run on 2026-09-26 filed findings as issues
   - S7, for #549.
 
 ## Entries (newest first)
+- 2026-11-04 24:00Z — **Automated PR monitor run (scheduled).** Gate DOWN: .NET 10 SDK unavailable — `builds.dotnet.microsoft.com` blocked by proxy (HTTP 403), same as all prior runs today.
+  - Phase 1 (merge-ready check): Same 4 open Dependabot PRs — #585, #586, #587, #588. All non-draft, 0 unresolved review threads. No merges attempted; build/test gate required.
+  - Phase 2 (comment resolution): 0 unresolved review threads across all 4 PRs. No bot comment work needed.
+  - Master build+test: skipped — gate down. No change from prior runs.
+  - Owner should review #588 (OpenApi major, ASP.NET 10 incompatible) and #586 (HtmlSanitizer major, breaking API renames) before merging. #585/#587 (Markdig minor) are lower risk. .NET gate remains blocked until proxy allows dot.net downloads.
 - 2026-11-04 18:00Z — **Automated PR monitor run (scheduled).** Gate DOWN: .NET 10 SDK unavailable — `dot.net` install still blocked by proxy HTTP 403.
   - Phase 1 (merge-ready check): Same 4 open Dependabot PRs — #585, #586, #587, #588. All non-draft, mergeable=CLEAN, no CHANGES_REQUESTED, 0 unresolved review threads. No merges attempted; build/test gate required.
   - Phase 2 (comment resolution): 0 unresolved review threads across all 4 PRs. No bot comment work needed.
