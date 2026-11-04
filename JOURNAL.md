@@ -51,6 +51,11 @@ A review of the repository and a test run on 2026-09-26 filed findings as issues
   - S7, for #549.
 
 ## Entries (newest first)
+- 2026-11-04 06:00Z — **Automated PR monitor run (scheduled).** Gate DOWN: .NET 10 SDK unavailable — `dot.net` install still blocked by proxy HTTP 403.
+  - Phase 1 (merge-ready check): Same 4 open Dependabot PRs — #585, #586, #587, #588. No change in state; all non-draft, no CHANGES_REQUESTED. No merges attempted; build/test gate required.
+  - Phase 2 (comment resolution): 0 unresolved review threads across all 4 PRs (confirmed via MCP get_review_comments). No new bot comments to triage.
+  - Master build+test: skipped — gate down. Master HEAD is `7de6f24` (docs: automated PR monitor run 2026-11-04 — gate down).
+  - Next: owner should review #588 (OpenApi major, ASP.NET 10 incompatible) and #586 (HtmlSanitizer major, breaking API renames) before merging. #585/#587 (Markdig minor) are lower risk.
 - 2026-11-04 00:00Z — **Automated PR monitor run (scheduled).** Gate DOWN: .NET 10 SDK unavailable — `dot.net` install blocked by proxy HTTP 403, same as prior runs.
   - Phase 1 (merge-ready check): 4 open Dependabot PRs found — #585, #586, #587, #588 — all non-draft, `mergeable_state=CLEAN`, no CHANGES_REQUESTED, 0 unresolved review threads. No merges attempted; build/test gate required before any merge.
     - **#588** (Microsoft.OpenApi 2.13.0 → 3.11.0): **major version bump — release notes explicitly warn "ASP.net users should remain on version 2.X for ASP.net 10; this new major version will be implemented in a future version of ASP.net."** Flag for owner review before merging.
