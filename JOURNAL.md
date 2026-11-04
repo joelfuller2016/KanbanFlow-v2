@@ -51,6 +51,10 @@ A review of the repository and a test run on 2026-09-26 filed findings as issues
   - S7, for #549.
 
 ## Entries (newest first)
+- 2026-11-04 13:11Z (re-run) — **Automated PR monitor run (scheduled).** Gate DOWN: .NET 10 SDK unavailable — `dot.net` install blocked by proxy HTTP 403 (confirmed: redirect resolves but content download returns 403).
+  - Phase 1 (merge-ready check): Same 4 open Dependabot PRs — #585, #586, #587, #588. All non-draft, `mergeable_state: unknown` on all 4 (GitHub recalculating). No merges attempted; build/test gate required.
+  - Base SHA on all PRs: `aedc94da`. Master HEAD: `5271fb5`.
+  - No change from prior runs. #588 (OpenApi v2→v3 major) and #586 (HtmlSanitizer v9→v10 major) require owner review; #585/#587 (Markdig 1.5.0→1.5.1 patch) are low risk.
 - 2026-11-05 01:00Z (re-run) — **Automated PR monitor run (scheduled).** Gate DOWN: .NET 10 SDK unavailable — `dot.net` install blocked by proxy HTTP 403, same as all prior runs.
   - Phase 1 (merge-ready check): Same 4 open Dependabot PRs — #585, #586, #587, #588. All non-draft, `mergeable`/`mergeStateStatus` both null (GitHub recalculating). CodeRabbit: `completed/skipped` on all 4. No merges attempted; build/test gate required.
   - Phase 2 (comment resolution): 0 unresolved review threads across all 4 PRs. No bot comment work needed.
