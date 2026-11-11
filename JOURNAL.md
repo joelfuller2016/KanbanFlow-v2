@@ -51,6 +51,10 @@ A review of the repository and a test run on 2026-09-26 filed findings as issues
   - S7, for #549.
 
 ## Entries (newest first)
+- 2026-11-11 17:00Z (re-run) — **Automated PR monitor run (scheduled).** Gate DOWN: .NET 10 SDK unavailable — install script blocked by proxy (HTTP 403), same as all prior runs. Master HEAD: `ad51642`.
+  - Phase 1 (merge-ready check): Same 5 open Dependabot PRs — #588 (Microsoft.OpenApi 2→3 major), #589 (nuget minor), #590 (HtmlSanitizer 9→11 major), #591 (playwright minor), #592 (nuget-tests minor). All non-draft; `mergeable=null` (GitHub still recalculating). No merges attempted — build/test gate required.
+  - Phase 2 (comment resolution): 0 unresolved review threads across all 5 PRs. No bot comment work needed.
+  - Master build+test: skipped — gate down. No change from prior runs.
 - 2026-11-11 16:00Z (re-run) — **Automated dependency-merge run (scheduled).** Gate DOWN: .NET 10 SDK unavailable — install script blocked by proxy (HTTP 403), same as all prior runs. Master HEAD: `ed89659` (advanced from `5de3759`).
   - 5 open Dependabot PRs: #588 (Microsoft.OpenApi 2→3 major), #589 (nuget minor), #590 (HtmlSanitizer 9→11 major), #591 (playwright minor), #592 (nuget-tests minor). All non-draft; `mergeable=null` (GitHub still recalculating). All fall into category (c) UNKNOWN — skipped this run.
   - Build gate unavailable: proxy (HTTP 403) blocks `dot.net/v1/dotnet-install.sh`; no alternative .NET path found. No merges attempted.
