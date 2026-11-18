@@ -51,6 +51,10 @@ A review of the repository and a test run on 2026-09-26 filed findings as issues
   - S7, for #549.
 
 ## Entries (newest first)
+- 2026-11-18 01:00Z (re-run) — **Automated PR monitor run (scheduled).** Gate DOWN: .NET 10 SDK unavailable — proxy blocks dot.net with 403, same as all prior runs. Master HEAD: `c3611ddb`.
+  - Phase 1 (merge-ready check): Same 8 open Dependabot PRs — #588 (OpenApi 2→3), #591 (playwright minor), #593 (nuget-minor-patch 4 pkgs), #594 (HtmlSanitizer 9→11), #595 (AI 10→11), #596 (AI.OpenAI 10→11), #597 (nuget-tests-minor-patch 6 pkgs), #598 (TimeProvider.Testing 10→11). Build/test gate down — no merges attempted.
+  - Phase 2 (comment resolution): 0 unresolved review threads across all 8 PRs. No bot comment work needed.
+  - Master build+test: skipped — gate down. No change from prior runs.
 - 2026-11-18 00:00Z (re-run) — **Automated PR monitor run (scheduled).** Gate DOWN: .NET 10 SDK unavailable — proxy blocks dot.net with 403, same as all prior runs. Master HEAD: `d15fd1f`.
   - Phase 1 (merge-ready check): 8 open Dependabot PRs. All `mergeable=null` (GitHub recalculating); build/test gate down — no merges attempted. PR landscape changed since last run: #589, #590, #592 appear closed/replaced; 6 new PRs: #593 (nuget-minor-patch group, 4 pkgs), #594 (HtmlSanitizer 9→11), #595 (AI 10→11), #596 (AI.OpenAI 10→11), #597 (nuget-tests-minor-patch, 6 pkgs), #598 (TimeProvider.Testing 10→11). Remaining: #588 (OpenApi 2→3), #591 (playwright minor).
   - Phase 2 (comment resolution): 0 unresolved review threads across all 8 PRs. No bot comment work needed.
