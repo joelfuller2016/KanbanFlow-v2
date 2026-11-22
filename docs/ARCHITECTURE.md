@@ -19,7 +19,7 @@ disagrees with the code, the code wins — re-derive it with the commands below.
 - [Runtime shape](#runtime-shape)
 - [Entity model](#entity-model)
 - [The write path & audit boundary](#the-write-path--audit-boundary)
-- [REST surface (102 operations)](#rest-surface-102-operations)
+- [REST surface](#rest-surface)
 - [MCP surface (60 native / 79 wrapper)](#mcp-surface-60-native--79-wrapper)
 - [Who owns what](#who-owns-what)
 - [Running it locally](#running-it-locally)
@@ -41,7 +41,7 @@ flowchart TD
     H["Human"] -->|"kanban, outline, ideas, workspaces, memory"| UI["Blazor Server<br/>Components/ (60 .razor, 8 routes)"]
     A["AI agent"] -->|"JSON-RPC over stdio"| NODE["Node MCP wrapper<br/>scripts/mcp-server.mjs (79 tools)"]
     A -->|"JSON-RPC over HTTP"| NATIVE["Native in-process MCP<br/>POST /mcp (60 tools)"]
-    A -->|"HTTP / JSON"| REST["REST minimal API<br/>Legacy, workflow and workspace endpoint groups<br/>(102 operations)"]
+    A -->|"HTTP / JSON"| REST["REST minimal API<br/>Legacy, workflow and workspace endpoint groups<br/>(103 operations)"]
     NODE -->|"HTTP"| REST
 
     UI --> EF
@@ -147,12 +147,14 @@ grep -rln 'ITaskService\|IIdeaService' src/KanbanFlow/Components/
 
 ---
 
-## REST surface (102 operations)
+<a id="rest-surface-102-operations"></a>
+
+## REST surface
 
 The five additive workflow routes are documented with complete typed payloads in [the request workflow reference](request-workflow.md#mcp-and-rest-reference) and [workflows.http](../src/KanbanFlow/Requests/workflows.http). The original routes below remain available.
 
 The route groups below describe the earlier base checkpoint. The current workspace-inclusive
-surface is measured from the combined running app: 97 application and five admin operations, 102 total (November 1, 2026).
+surface measured on November 22, 2026 has 98 application operations and five admin operations, for a total of 103.
 Use an explicit disposable instance to reproduce the OpenAPI and both MCP counts:
 
 ```powershell
@@ -169,7 +171,7 @@ actual native and stdio `tools/list`, without calling a data-writing tool.
 | Idea and project workspaces | `/api/workspaces` and `/api/workspace-capabilities`: catalog, full context/detail, changes, creation, canvas commands, plans and publication. See the [public surface](idea-workspaces.md#public-surface) and [write contracts](idea-workspaces.md#creation-and-write-surfaces). |
 
 The route tables below retain the earlier base inventory. They are not an exhaustive list
-of the 102 current operations; use OpenAPI and the feature references above for that list.
+of the 103 current operations. Use OpenAPI and the feature references above for that list.
 The earlier single-file static counts were:
 
 ```bash
@@ -210,6 +212,7 @@ The machine-readable source of truth is the OpenAPI document at `/openapi/v1.jso
 | `/api/tasks/{id}/subtasks` | `GET` · `POST` |
 | `/api/tasks/{id}/acceptance-criteria` | `GET` · `POST` |
 | `/api/tasks/{id}/comments` | `GET` · `POST` |
+| `/api/tasks/{id}/comment-imports/github` | `POST` imports a complete GitHub comment once per task and source ID. See [GitHub sync](GITHUB-SYNC.md#complete-content-and-legacy-recovery). |
 | `/api/tasks/{id}/dependencies` | `GET` · `POST` |
 
 ### Leaf entities
@@ -797,7 +800,7 @@ verification are in the [request workflow](request-workflow.md) and
 
 | # | Requirement | Status |
 |---|---|---|
-| R-2.1 | Full REST CRUD for every entity. | ⚠️ 102 operations, but not *full* CRUD everywhere: `TaskComment` has create/list/delete and **no update route**, and `ActivityEvent` is read-only by design (append-only, R-7.3) |
+| R-2.1 | Full REST CRUD for every entity. | ⚠️ 103 operations. `TaskComment` supports create, list, and delete. `ActivityEvent` is read-only by design (append-only, R-7.3). |
 | R-2.2 | Every REST capability has at least one MCP tool. | ❌ native 60, wrapper 79 — neither covers requirements (#231) |
 | R-2.3 | UI mutations go through the same service layer as REST. | ✅ #88 closed; components call `ITaskService`/`IIdeaService` |
 | R-2.4 | All entity mutations produce an `ActivityEvent`. | ❌ tasks + ideas only (#149) |

@@ -1,6 +1,7 @@
 using System.Text.Json;
 using KanbanFlow.Models;
 using KanbanFlow.Models.Workflows;
+using KanbanFlow.Services;
 using KanbanFlow.Services.Workflows;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
@@ -360,7 +361,143 @@ public sealed partial class WorkspaceServiceTests
     }
 
     [Fact]
-    public async Task Replan_ReplacesDependencyEdgesAndKeepsTaskIdentity()
+    public async Task Replan_TitleChangePreservesBoardDependencyAndKeepsTaskBlocked()
+    {
+        using var f = new WorkflowSqliteTestFactory();
+        var draft = Draft("Original title");
+        var request = await f.PublishedAsync(draft);
+        var item = Assert.Single(request.WorkItems);
+        var blocker = await new TaskService(f).CreateAsync(new TaskCreate(item.Task.FeatureId, "Outside-plan prerequisite", Status: WorkStatus.Todo), "human");
+        var created = await new TaskDependencyService(f).CreateAsync(new TaskDependencyCreate(item.TaskItemId, blocker.Id, TaskDependencyType.Blocks));
+
+        await f.Service.SavePlanAsync(request.Id, request.Version, [draft with { Title = "Revised title" }], Actor, "title-only-plan", expectedTaskStates: await f.ReadTaskTokensAsync(request.Id));
+        request = await f.LoadAsync(request.Id);
+        await f.Service.PublishPlanAsync(request.Id, request.Version, request.Plans.MaxBy(p => p.Number)!.Id, Actor, "publish-title-only-plan");
+        request = await f.LoadAsync(request.Id);
+
+        var updated = Assert.Single(request.WorkItems);
+        Assert.Equal("Revised title", updated.Task.Name);
+        var rejection = await RejectAsync("invalid", () => f.Service.SetTaskStateAsync(request.Id, request.Version, item.Id, WorkStatus.InProgress, Actor, "start-blocked-task"));
+        Assert.Contains("dependencies", rejection.Message);
+        var edge = Assert.Single(updated.Task.Dependencies);
+        Assert.Equal(created.Dependency.Id, edge.Id);
+        Assert.Equal(blocker.Id, edge.DependsOnTaskItemId);
+        Assert.Equal(TaskDependencyType.Blocks, edge.Type);
+    }
+
+    [Fact]
+    public async Task Replan_TitleChangeDoesNotRestorePlanDependencyRemovedOnBoard()
+    {
+        using var f = new WorkflowSqliteTestFactory();
+        var prerequisite = Draft("Prerequisite");
+        var draft = Draft("Original title", prerequisite.Id);
+        var request = await f.PublishedAsync(prerequisite, draft);
+        var item = request.WorkItems.Single(w => w.DraftId == draft.Id);
+        var edgeId = Assert.Single(item.Task.Dependencies).Id;
+        await using (var db = f.CreateDbContext())
+        {
+            db.TaskDependencies.Remove((await db.TaskDependencies.FindAsync(edgeId))!);
+            await db.SaveChangesWithAuditAsync("human");
+        }
+
+        await f.Service.SavePlanAsync(request.Id, request.Version, [prerequisite, draft with { Title = "Revised title" }], Actor, "title-only-plan", expectedTaskStates: await f.ReadTaskTokensAsync(request.Id));
+        request = await f.LoadAsync(request.Id);
+        await f.Service.PublishPlanAsync(request.Id, request.Version, request.Plans.MaxBy(p => p.Number)!.Id, Actor, "publish-title-only-plan");
+
+        var updated = (await f.LoadAsync(request.Id)).WorkItems.Single(w => w.DraftId == draft.Id);
+        Assert.Equal("Revised title", updated.Task.Name);
+        Assert.Empty(updated.Task.Dependencies);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Replan_RestoresDeclaredDependencyWhenPrerequisiteTaskIsRecreated(bool editDependentTitle)
+    {
+        using var f = new WorkflowSqliteTestFactory();
+        var prerequisite = Draft("Prerequisite");
+        var dependent = Draft("Dependent", prerequisite.Id);
+        var request = await f.PublishedAsync(prerequisite, dependent);
+        var oldPrerequisiteId = request.WorkItems.Single(w => w.DraftId == prerequisite.Id).TaskItemId;
+        var originalDependent = request.WorkItems.Single(w => w.DraftId == dependent.Id);
+        await new TaskService(f).DeleteAsync(oldPrerequisiteId, "human");
+        request = await f.LoadAsync(request.Id);
+        Assert.Empty(Assert.Single(request.WorkItems).Task.Dependencies);
+        request = await f.ReportAsync(request, originalDependent.Id);
+        request = await f.AcceptAsync(request, originalDependent.Id);
+        var approved = Assert.Single(request.WorkItems);
+
+        var revised = editDependentTitle ? dependent with { Title = "Revised dependent" } : dependent;
+        await f.Service.SavePlanAsync(request.Id, request.Version, [revised, prerequisite], Actor, "restore-prerequisite", expectedTaskStates: await f.ReadTaskTokensAsync(request.Id));
+        request = await f.LoadAsync(request.Id);
+        await f.Service.PublishPlanAsync(request.Id, request.Version, request.Plans.MaxBy(p => p.Number)!.Id, Actor, "publish-restored-prerequisite");
+        request = await f.LoadAsync(request.Id);
+
+        var recreated = request.WorkItems.Single(w => w.DraftId == prerequisite.Id);
+        var updated = request.WorkItems.Single(w => w.DraftId == dependent.Id);
+        Assert.NotEqual(oldPrerequisiteId, recreated.TaskItemId);
+        Assert.Equal(originalDependent.TaskItemId, updated.TaskItemId);
+        Assert.Equal(revised.Title, updated.Task.Name);
+        Assert.Equal(recreated.TaskItemId, Assert.Single(updated.Task.Dependencies).DependsOnTaskItemId);
+        Assert.Equal(WorkStatus.Todo, updated.Task.Status);
+        Assert.All(updated.Task.AcceptanceCriteria, c => Assert.False(c.Completed));
+        Assert.Equal(approved.SpecificationVersion + 1, updated.SpecificationVersion);
+        if (!editDependentTitle)
+            Assert.Equal(approved.Task.AcceptanceCriteria.Select(c => c.Id).Order(), updated.Task.AcceptanceCriteria.Select(c => c.Id).Order());
+        Assert.Equal(approved.Evidence.Single().Id, Assert.Single(updated.Evidence).Id);
+
+        var rejection = await RejectAsync("invalid", () => f.Service.SetTaskStateAsync(request.Id, request.Version, updated.Id, WorkStatus.InProgress, Actor, "start-blocked-task"));
+        Assert.Contains("dependencies", rejection.Message);
+        await using var db = f.CreateDbContext();
+        var audit = Assert.Single(await db.ActivityEvents.Where(a => a.EventType == "TaskDependencyCreated" && a.RelatedTaskId == recreated.TaskItemId).ToListAsync());
+        Assert.Equal(updated.TaskItemId, audit.TaskId);
+        Assert.Equal(Actor, audit.Actor);
+    }
+
+    [Fact]
+    public async Task Replan_CannotRestorePrerequisiteWhileDependentTaskIsInProgress()
+    {
+        using var f = new WorkflowSqliteTestFactory();
+        var prerequisite = Draft("Prerequisite");
+        var dependent = Draft("Dependent", prerequisite.Id);
+        var request = await f.PublishedAsync(prerequisite, dependent);
+        await new TaskService(f).DeleteAsync(request.WorkItems.Single(w => w.DraftId == prerequisite.Id).TaskItemId, "human");
+        request = await f.LoadAsync(request.Id);
+        var item = Assert.Single(request.WorkItems);
+        await f.Service.SetTaskStateAsync(request.Id, request.Version, item.Id, WorkStatus.InProgress, Actor, "start-dependent");
+        request = await f.LoadAsync(request.Id);
+        await f.Service.SavePlanAsync(request.Id, request.Version, [prerequisite, dependent], Actor, "restore-prerequisite", expectedTaskStates: await f.ReadTaskTokensAsync(request.Id));
+        request = await f.LoadAsync(request.Id);
+
+        var rejection = await RejectAsync("invalid", () => f.Service.PublishPlanAsync(request.Id, request.Version, request.Plans.MaxBy(p => p.Number)!.Id, Actor, "publish-restored-prerequisite"));
+        Assert.Contains("In progress", rejection.Message);
+        var after = await f.LoadAsync(request.Id);
+        Assert.Null(after.Plans.MaxBy(p => p.Number)!.PublishedAt);
+        Assert.Equal(WorkStatus.InProgress, Assert.Single(after.WorkItems).Task.Status);
+    }
+
+    [Fact]
+    public async Task Replan_RestoringPrerequisiteRequiresCurrentBaselineForUnchangedDependent()
+    {
+        using var f = new WorkflowSqliteTestFactory();
+        var prerequisite = Draft("Prerequisite");
+        var dependent = Draft("Dependent", prerequisite.Id);
+        var request = await f.PublishedAsync(prerequisite, dependent);
+        await f.Service.SavePlanAsync(request.Id, request.Version, [prerequisite, dependent], Actor, "replan-before-delete", expectedTaskStates: await f.ReadTaskTokensAsync(request.Id));
+        request = await f.LoadAsync(request.Id);
+        await new TaskService(f).DeleteAsync(request.WorkItems.Single(w => w.DraftId == prerequisite.Id).TaskItemId, "human");
+        request = await f.LoadAsync(request.Id);
+
+        await RejectAsync("conflict", () => f.Service.PublishPlanAsync(request.Id, request.Version, request.Plans.MaxBy(p => p.Number)!.Id, Actor, "publish-after-delete"));
+        var after = await f.LoadAsync(request.Id);
+        Assert.Null(after.Plans.MaxBy(p => p.Number)!.PublishedAt);
+        Assert.Equal(dependent.Id, Assert.Single(after.WorkItems).DraftId);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Replan_ReplacesDependencyEdgesAndKeepsTaskIdentity(bool replacementAlreadyOnBoard)
     {
         using var f = new WorkflowSqliteTestFactory();
         var a = Draft("A");
@@ -370,16 +507,28 @@ public sealed partial class WorkspaceServiceTests
         var oldB = request.WorkItems.Single(w => w.DraftId == b.Id);
         var aTaskId = request.WorkItems.Single(w => w.DraftId == a.Id).TaskItemId;
         var cTaskId = request.WorkItems.Single(w => w.DraftId == c.Id).TaskItemId;
-        await f.Service.SavePlanAsync(request.Id, request.Version, [a, b with { Dependencies = [c.Id] }, c], Actor, "different-edge", expectedTaskStates: await f.ReadTaskTokensAsync(request.Id));
+        TaskDependency? existingEdge = null;
+        if (replacementAlreadyOnBoard)
+            existingEdge = (await new TaskDependencyService(f).CreateAsync(new TaskDependencyCreate(oldB.TaskItemId, cTaskId, TaskDependencyType.Blocks))).Dependency;
+
+        await f.Service.SavePlanAsync(request.Id, request.Version, [a with { Dependencies = [b.Id] }, b with { Dependencies = [c.Id] }, c], Actor, "different-edge", expectedTaskStates: await f.ReadTaskTokensAsync(request.Id));
         request = await f.LoadAsync(request.Id);
         await f.Service.PublishPlanAsync(request.Id, request.Version, request.Plans.MaxBy(p => p.Number)!.Id, Actor, "publish-different-edge");
-        var afterB = (await f.LoadAsync(request.Id)).WorkItems.Single(w => w.DraftId == b.Id);
+        var after = await f.LoadAsync(request.Id);
+        var afterB = after.WorkItems.Single(w => w.DraftId == b.Id);
         Assert.Equal(oldB.Id, afterB.Id);
         Assert.Equal(oldB.TaskItemId, afterB.TaskItemId);
         Assert.Equal(2, afterB.SpecificationVersion);
-        Assert.Equal(cTaskId, Assert.Single(afterB.Task.Dependencies).DependsOnTaskItemId);
+        var replacement = Assert.Single(afterB.Task.Dependencies);
+        Assert.Equal(cTaskId, replacement.DependsOnTaskItemId);
+        if (existingEdge is not null)
+        {
+            Assert.Equal(existingEdge.Id, replacement.Id);
+            Assert.Equal(TaskDependencyType.Blocks, replacement.Type);
+        }
+        Assert.Equal(oldB.TaskItemId, Assert.Single(after.WorkItems.Single(w => w.DraftId == a.Id).Task.Dependencies).DependsOnTaskItemId);
         await using var db = f.CreateDbContext();
-        Assert.Equal(1, await db.TaskDependencies.CountAsync());
+        Assert.Equal(2, await db.TaskDependencies.CountAsync());
         Assert.False(await db.TaskDependencies.AnyAsync(d => d.DependsOnTaskItemId == aTaskId));
         Assert.Equal(3, await db.Tasks.CountAsync());
     }
