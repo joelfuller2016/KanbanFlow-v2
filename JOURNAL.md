@@ -51,6 +51,11 @@ A review of the repository and a test run on 2026-09-26 filed findings as issues
   - S7, for #549.
 
 ## Entries (newest first)
+- 2026-11-22 09:00Z — **Automated PR monitor run (scheduled).** GATE UP — .NET 10.0.404 installed fresh via nix (new container). Master HEAD: `3f9d486` (unchanged since 08:00Z run).
+  - **Phase 1 (merges):** 1 PR open, still blocked:
+    - **Blocked #588** (OpenApi 2→3): NU1608 — `Microsoft.AspNetCore.OpenApi 10.0.15` requires `Microsoft.OpenApi >= 2.13.0 && < 3.0.0`; 3.11.1 not compatible. Build FAILED on branch checkout. No change since 08:00Z.
+  - **Phase 2 (comments):** 0 unresolved review threads on #588. No bot comment work needed.
+  - **Master build+test:** `dotnet build KanbanFlow.slnx -warnaserror` → succeeded 0W/0E. `dotnet test` → 2197 passed, 2 failed (same known Linux platform failures). Master GREEN.
 - 2026-11-22 08:00Z — **Automated PR monitor run (scheduled).** GATE UP — .NET 10.0.404 via nix (same as 07:00Z). Master HEAD: `ebe82ce` (unchanged since 07:00Z run).
   - **Phase 1 (merges):** 1 PR open, still blocked:
     - **Blocked #588** (OpenApi 2→3): NU1608 — `Microsoft.AspNetCore.OpenApi 10.0.15` requires `Microsoft.OpenApi >= 2.13.0 && < 3.0.0`; 3.11.1 not compatible. Build FAILED on branch checkout. No change since 07:00Z.
