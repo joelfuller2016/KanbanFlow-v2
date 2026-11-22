@@ -51,6 +51,13 @@ A review of the repository and a test run on 2026-09-26 filed findings as issues
   - S7, for #549.
 
 ## Entries (newest first)
+- 2026-11-22 07:00Z — **Automated PR monitor run (scheduled).** GATE UP for the first time — installed .NET 10.0.404 via `nix profile install nixpkgs#dotnet-sdk_10` (proxy blocks dot.net direct download, nix cache works). Master HEAD after merges: `3d52726`.
+  - **Phase 1 (merges):** 6 PRs merged, 1 blocked, 1 no-op:
+    - **Merged:** #597 (nuget-tests-minor-patch 6 pkgs), #595 (AI 10→11), #591 (playwright npm minor), #598 (TimeProvider.Testing 10→11, after resolving conflict with #597), #596 (AI.OpenAI 10→11, after resolving conflict with #595), #594 (HtmlSanitizer 9→11, after resolving conflict with #597). All build clean; tests 2197/2199 — 2 failures are known Linux filesystem `PLATFORM PRECONDITION` guards (not regressions; documented in test code, pre-existing on master).
+    - **Blocked #588** (OpenApi 2→3): `NU1608` — `Microsoft.AspNetCore.OpenApi 10.0.15` requires `Microsoft.OpenApi >= 2.12.2 && < 3.0.0`; 3.x not yet compatible. Comment posted.
+    - **No-op #593** (nuget-minor-patch 4 pkgs): all 4 target packages already at target versions in master via #597+#594; GitHub reports not mergeable. Comment posted.
+  - **Phase 2 (comments):** 0 unresolved review threads. No bot comment work needed.
+  - **Master build+test (final):** `dotnet build KanbanFlow.slnx -warnaserror` → succeeded 0W/0E. `dotnet test` → 2197 passed, 2 failed (same 2 known Linux platform failures). Master GREEN.
 - 2026-11-22 06:00Z (re-run) — **Automated PR monitor run (scheduled).** Gate DOWN: .NET 10 SDK unavailable — proxy blocks dot.net with 403, same as all prior runs. Master HEAD: `0a2fd25` (NEW — changed from `0ccc98e`).
   - Phase 1 (merge-ready check): Same 8 open Dependabot PRs — #588 (OpenApi 2→3), #591 (playwright minor), #593 (nuget-minor-patch 4 pkgs), #594 (HtmlSanitizer 9→11), #595 (AI 10→11), #596 (AI.OpenAI 10→11), #597 (nuget-tests-minor-patch 6 pkgs), #598 (TimeProvider.Testing 10→11). Build/test gate down — no merges attempted.
   - Phase 2 (comment resolution): No new unresolved review threads; no bot comment work needed.
