@@ -51,6 +51,11 @@ A review of the repository and a test run on 2026-09-26 filed findings as issues
   - S7, for #549.
 
 ## Entries (newest first)
+- 2026-11-22 14:00Z — **Automated PR monitor run (scheduled).** GATE UP — .NET 10.0.404 via nix (new container). Master HEAD: `3a534db` (changed since 13:00Z run — journal push).
+  - **Phase 1 (merges):** 1 PR open:
+    - **Skipped #588** (OpenApi 2→3): `mergeable_state: unknown` at query time — skipped per rule. Same recurring NU1608 incompatibility (Microsoft.AspNetCore.OpenApi 10.0.15 requires Microsoft.OpenApi >= 2.13.0 && < 3.0.0; 3.11.1 not compatible); failure comment already posted in prior runs.
+  - **Phase 2 (comments):** 0 unresolved review threads on #588. No bot comment work needed.
+  - **Master build+test:** `dotnet build KanbanFlow.slnx -warnaserror` → succeeded 0W/0E. `dotnet test` → 2197 passed, 2 failed (same known Linux platform failures). Master GREEN.
 - 2026-11-22 13:00Z — **Automated PR monitor run (scheduled).** GATE UP — .NET 10.0.404 via nix (new container). Master HEAD: `c4485b9` (changed since 12:00Z run — journal push).
   - **Phase 1 (merges):** 1 PR open:
     - **Skipped #588** (OpenApi 2→3): `mergeable_state: unknown` at query time — skipped per rule. Same recurring NU1608 incompatibility (Microsoft.AspNetCore.OpenApi 10.0.15 requires Microsoft.OpenApi >= 2.13.0 && < 3.0.0; 3.11.1 not compatible); failure comment already posted in prior runs.
