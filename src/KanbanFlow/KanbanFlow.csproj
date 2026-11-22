@@ -30,7 +30,7 @@
          supplies IChatClient; Microsoft.Extensions.AI.OpenAI is the OpenAI-compatible
          connector we point at ZeroRouter (:5256). Both are stable (non-preview) 10.x,
          pinned to the .NET 10 line like the EF Core packages above. -->
-    <PackageReference Include="Microsoft.Extensions.AI" Version="10.11.0" />
+    <PackageReference Include="Microsoft.Extensions.AI" Version="11.0.0" />
     <PackageReference Include="Microsoft.Extensions.AI.OpenAI" Version="10.11.0" />
     <!-- Stay on the patched 2.x line: Microsoft.AspNetCore.OpenApi 10.0.14 requires
          Microsoft.OpenApi >= 2.12.2 and < 3.0.0. A 3.x pin breaks the warnings-as-errors
