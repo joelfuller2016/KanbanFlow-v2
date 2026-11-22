@@ -51,6 +51,11 @@ A review of the repository and a test run on 2026-09-26 filed findings as issues
   - S7, for #549.
 
 ## Entries (newest first)
+- 2026-11-22 08:00Z — **Automated PR monitor run (scheduled).** GATE UP — .NET 10.0.404 via nix (same as 07:00Z). Master HEAD: `ebe82ce` (unchanged since 07:00Z run).
+  - **Phase 1 (merges):** 1 PR open, still blocked:
+    - **Blocked #588** (OpenApi 2→3): NU1608 — `Microsoft.AspNetCore.OpenApi 10.0.15` requires `Microsoft.OpenApi >= 2.13.0 && < 3.0.0`; 3.11.1 not compatible. Build FAILED on branch checkout. No change since 07:00Z.
+  - **Phase 2 (comments):** 0 unresolved review threads on #588. No bot comment work needed.
+  - **Master build+test:** `dotnet build KanbanFlow.slnx -warnaserror` → succeeded 0W/0E. `dotnet test` → 2197 passed, 2 failed (same known Linux platform failures). Master GREEN.
 - 2026-11-22 07:00Z — **Automated PR monitor run (scheduled).** GATE UP for the first time — installed .NET 10.0.404 via `nix profile install nixpkgs#dotnet-sdk_10` (proxy blocks dot.net direct download, nix cache works). Master HEAD after merges: `3d52726`.
   - **Phase 1 (merges):** 6 PRs merged, 1 blocked, 1 no-op:
     - **Merged:** #597 (nuget-tests-minor-patch 6 pkgs), #595 (AI 10→11), #591 (playwright npm minor), #598 (TimeProvider.Testing 10→11, after resolving conflict with #597), #596 (AI.OpenAI 10→11, after resolving conflict with #595), #594 (HtmlSanitizer 9→11, after resolving conflict with #597). All build clean; tests 2197/2199 — 2 failures are known Linux filesystem `PLATFORM PRECONDITION` guards (not regressions; documented in test code, pre-existing on master).
