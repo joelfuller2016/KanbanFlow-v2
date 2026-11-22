@@ -118,7 +118,8 @@ public sealed partial class WorkspaceService
                 changed.Add((item, previousDependencies.Except(draft.Dependencies).ToArray(),
                     draft.Dependencies.Where(dependency => !previousDependencies.Contains(dependency) || !mappedDraftIds.Contains(dependency)).ToArray()));
             }
-            await InvalidateDependentsAsync(db, request, changed.Select(change => change.Item.TaskItemId).Where(taskId => taskId != 0).ToHashSet(), actor, ct);
+            await InvalidateDependentsAsync(db, request, changed.Select(change => change.Item.TaskItemId).Where(taskId => taskId != 0).ToHashSet(),
+                actor, ct, rejectActiveDependents: true);
             // IDs become available here; the surrounding transaction still owns every write and receipt.
             await db.SaveChangesWithAuditAsync(actor, ct);
             if (changed.Any(change => change.RemovedDependencies.Length > 0 || change.AddedDependencies.Length > 0))

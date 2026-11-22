@@ -61,6 +61,34 @@ test("PR discussion, reviews and inline comments each preserve the last REST pag
   assert.deepEqual(pr.inlineComments.at(-1), inline);
 });
 
+test("hydrating reviews preserves a footer-ending legacy copy and repairs a genuinely clipped review", async () => {
+  const prUrl = "https://github.com/octo/board/pull/91";
+  const full = `    source with Markdown  \r\n\r\n${COMMENT_FOOTER}`;
+  const [pr] = await fetchOpenPrs("octo/board", true, async args => {
+    if (args[0] === "pr") return [{ number: 91, url: prUrl, comments: [], reviews: previewComments }];
+    if (args.some(arg => arg.includes("/reviews?"))) {
+      return [[1, 2, 3].map(n => ({ ...lastComment, node_id: `PRR_${n}`, state: "APPROVED", body: full,
+        html_url: `${prUrl}#pullrequestreview-${n}`, submitted_at: lastComment.created_at }))];
+    }
+    return [[]];
+  });
+  const header = "_[PR #7 review · **APPROVED**](https://github.com/octo/old-name/pull/7)_";
+  const stored = [
+    { text: `<!-- gh:PRR_1 -->\r\n${header}\r\n\r\n${full}` },
+    { text: `<!-- gh:PRR_2 -->\n${header}\n\npartial\n\n${COMMENT_FOOTER}` },
+    { text: `<!-- gh:PRR_3 -->\nAn authored heading\n\n${full}` },
+  ];
+  const writes = [];
+  await syncComments(issue("body"), pr, 7, { dryRun: false }, async (method, path, body) => {
+    if (method === "GET") return stored;
+    writes.push(body);
+    return { created: true };
+  });
+  assert.deepEqual(writes.map(w => w.githubCommentId), ["PRR_2", "PRR_3"]);
+  assert.ok(writes[0].text.endsWith(`_[PR #91 review · **APPROVED**](${prUrl}#pullrequestreview-2)_\n\n${full}`));
+  assert.equal(pr.reviews[0].url, `${prUrl}#pullrequestreview-1`);
+});
+
 test("a failed saturated discussion read cannot pass as a complete preview", async () => {
   const mod = await import("./portfolio-sync.mjs?failed-discussion");
   await assert.rejects(mod.fetchOpenIssues("octo/board", true, async args => {
@@ -1706,12 +1734,51 @@ test("default closed sweep verifies a transferred node even when the old reposit
     assert.equal(result.requests.some(r => r.path.includes("externalNodeId=I_43")), false);
     const writes = result.requests.filter(r => r.method !== "GET");
     if (projectId === 1) {
-      assert.deepEqual(writes.map(r => [r.path, r.body.status]), [["/api/tasks/1/status", "Done"]]);
+      assert.deepEqual(writes.map(r => r.path), ["/api/tasks/1/external-work-item-links/github", "/api/tasks/1/status"]);
+      assert.deepEqual(writes[0].body, {
+        taskId: 1, provider: "GitHub", repositoryExternalId: REPO_ID, repositoryOwner: "octo", repositoryName: "board",
+        externalNodeId: "I_42", externalNumber: 42, url: "https://github.com/octo/board/issues/42", actor: "tester",
+      });
+      assert.equal(writes[1].body.status, "Done");
       assert.deepEqual(result.drift, []);
     } else {
       assert.deepEqual(writes, []);
       assert.ok(result.drift.some(line => line.includes("project 2")));
     }
+  }
+});
+
+test("default sweep refreshes an already Done transferred card; previews and reruns write nothing", async () => {
+  const remote = { id: "I_42", number: 42, url: "https://github.com/octo/board/issues/42" };
+  const closedIssues = await fetchClosedIssues("octo/board", false, false, async args => {
+    const fields = args.at(-1).split(",");
+    return [Object.fromEntries(Object.entries(remote).filter(([field]) => fields.includes(field)))];
+  });
+  const old = { ...link(1, 7, "I_42"), repositoryExternalId: "R_old" };
+  const done = { ...task(1, "A board title", "", [old]), status: "Done" };
+  const options = { closedIssues, globalNodeOwners: new Map([["I_42", { projectId: 1, link: old }]]) };
+  const dry = await runSyncTasks("preview-closed-transfer", [done], [], { ...options, dryRun: true });
+  assert.deepEqual(dry.requests.filter(r => r.method !== "GET"), []);
+  const live = await runSyncTasks("done-closed-transfer", [done], [], options);
+  const writes = live.requests.filter(r => r.method !== "GET");
+  assert.deepEqual(writes.map(r => r.path), ["/api/tasks/1/external-work-item-links/github"]);
+  assert.equal(writes[0].body.url, remote.url);
+  const rerun = await runSyncTasks("repeat-closed-transfer", [{ ...done, externalLinks: [{ ...old, ...writes[0].body }] }], [], { closedIssues });
+  assert.deepEqual(rerun.requests, []);
+});
+
+test("default transfer refresh requires an active matching owner and canonical destination URL", async () => {
+  const old = { ...link(1, 7, "I_42"), repositoryExternalId: "R_old" };
+  for (const [name, owner, url] of [
+    ["quarantined", { ...old, state: "Quarantined" }, closedIssue(42).url],
+    ["wrong node", { ...old, externalNodeId: "I_wrong" }, closedIssue(42).url],
+    ["wrong URL", old, "https://github.com/other/board/issues/42"],
+  ]) {
+    const result = await runSyncTasks(`invalid-default-transfer-${name}`, [task(1, "Card", "", [old])], [], {
+      closedIssues: [{ ...closedIssue(42), url }], globalNodeOwners: new Map([["I_42", { projectId: 1, link: owner }]]),
+    });
+    assert.deepEqual(result.requests.filter(r => r.method !== "GET"), []);
+    assert.equal(result.drift.length, 1);
   }
 });
 
@@ -1741,6 +1808,10 @@ test("status reports conflicting closed identities as drift and counts only veri
     assert.ok(result.drift.some(line => /#42.*other\/repo/.test(line)));
     assert.ok(result.drift.some(line => /#45.*R_old/.test(line)));
     assert.deepEqual(result.pending, ["3 task(s) whose issue is closed but which are not Done"]);
+    tasks[4] = { ...tasks[4], status: "Done", externalLinks: [link(5, 45, "I_45")] };
+    const refreshed = await statusRepo("octo/board", { actor: "tester" }, [{ id: 1, name: "board" }], read);
+    assert.equal(refreshed.drift.some(line => line.includes("#45") || line.includes("R_old")), false);
+    assert.deepEqual(refreshed.pending, ["2 task(s) whose issue is closed but which are not Done"]);
   } finally {
     globalThis.fetch = realFetch;
   }

@@ -188,7 +188,7 @@ GitHub portfolio synchronization remains a Node script operation. The native `wo
 | Issue | `TaskItem` | Active `ExternalWorkItemLink` keyed by immutable repository node id + issue node id; legacy **`#<n> `** prefix only when no structured state exists | GitHub → board; explicit additive create board → GitHub |
 | Issue labels (`P0`…`P3`, `priority:high`, `critical`, …) | `TaskItem.Priority` | — reconciled every run | GitHub → board (GitHub always wins) |
 | Issue state + linked open PR | `TaskItem.Status` | — | GitHub → board, **advance-only** (see below) |
-| Issue body | `TaskItem.Description` | `<!-- kanbanflow-sync -->` block + up to ~29,491 serialized bytes; a truncated description is refreshed only while it retains the exact sync header and truncation footer | GitHub → board |
+| Issue body | `TaskItem.Description` | Provenance block and complete source body, including original Markdown whitespace | GitHub → board |
 | Issue comment | `TaskComment` (`Comment`) | GitHub node id stamped as `<!-- gh:ID -->` | GitHub → board |
 | PR conversation comment | `TaskComment` (`Comment`) | same `<!-- gh:ID -->` marker | GitHub → board |
 | PR review, `APPROVED` | `TaskComment` (**`Verification`**) | same `<!-- gh:ID -->` marker | GitHub → board |
@@ -245,7 +245,7 @@ that project instead of allowing a duplicate. Because a live `backfill-links` **
 title-only `#<n> ` task that an ordinary sync would have promoted, run `sync` first and reach for
 `backfill-links` afterwards, for the residue.
 
-Full semantics, including truncation warnings, comment sizing, and every drift case:
+Discussion paging, legacy content recovery, and drift handling are documented in
 [`docs/GITHUB-SYNC.md`](docs/GITHUB-SYNC.md) and
 [`.claude/skills/kanban-portfolio/reference/mapping.md`](.claude/skills/kanban-portfolio/reference/mapping.md).
 
@@ -261,7 +261,7 @@ The single most useful table here. Before you edit a field, know which side wins
 | Task **priority** | **GitHub** | Reconciled every run (`syncTasks()`) from `P0`…`P3` / `priority:high` / bare severity labels. Setting it on the board is undone on the next sync |
 | Task **status** | **Shared** | Verified GitHub closures move cards to `Done` once board completion checks pass. A blocked closure or an open issue linked to a `Done` card is reported as drift |
 | Task **feature** (milestone) | **GitHub** | An issue's milestone change moves the task via `PATCH /api/tasks/{id}/feature` (`syncTasks()`) |
-| Task **description** | **GitHub — refreshed when truncated** | Written from the issue body on create, capped at ~29,491 serialized bytes. Truncated descriptions are re-synced only while the exact sync header and truncation footer are intact; human edits that remove either marker are preserved forever |
+| Task **description** | **GitHub on import, board after import** | Creation stores the full issue body. Recovery restores recognizable incomplete legacy imports and retains differing board text. |
 | **Comments** | **GitHub, append-only** | Issue comments, PR conversation, PR reviews, and inline `file:line` comments are appended, deduped by node id. Board-authored comments are never pushed |
 | **`ActivityEvent`** | **Derived** | Written by the service layer as a side effect of task writes. Never read from or sent to GitHub |
 | `TaskDependency` (DAG) | **Board** | No GitHub representation. Authored by you and by agents |
@@ -296,8 +296,8 @@ that assumes otherwise will be wrong.
 
 | Omission | Detail |
 |---|---|
-| **Description refresh is conditional** | On create the description is written from the issue body. On subsequent runs `descriptionRefreshFor()` refreshes it only when it carries both the sync header **and** the truncation footer. A human edit that removes either marker is preserved forever. The cap is `BODY_EXCERPT_LIMIT` (~29,491 serialized bytes by default), derived from SignalR's default 32 KB `MaximumReceiveMessageSize` minus framing headroom; a larger description could not be edited in `EditableMarkdown` at all |
-| **Default sync uses closed-issue identity** | Without `--include-closed`, sync reads closed issue numbers and node IDs to check existing cards for closure. Use `--include-closed` to import closed issue bodies and issue comments |
+| **Description refresh is conditional** | Sync restores the full source when it recognizes an old oversized-header placeholder or a legacy import with its truncation footer. If the board text differs from GitHub, the restored description retains both versions. [Full-content recovery](docs/GITHUB-SYNC.md#complete-content-and-legacy-recovery) |
+| **Default sync uses closed-issue identity** | Without `--include-closed`, sync reads the issue number, node ID and URL. It closes eligible existing cards and refreshes verified links after a transfer within the same board project. Use `--include-closed` to import closed issue bodies and issue comments. |
 | **Assignees are not synchronised** | GitHub assignees are read once, only to infer `InProgress` on create (`deriveStatus()`). `TaskItem.Assignee` is never populated from GitHub |
 | **Labels collapse to one priority** | The first matching severity label becomes `TaskItem.Priority`. Every other label survives only as text inside the description block — there is no label entity, and no filtering by label on the board |
 | **Comment edits, deletions, and reactions are never reconciled** | Dedupe is by GitHub node id; an id already seen is skipped forever. An edited GitHub comment keeps its original mirrored text, and a deleted one stays on the board |

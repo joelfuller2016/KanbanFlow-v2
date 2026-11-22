@@ -170,8 +170,9 @@ This table describes the code, not the aspiration. Read the status row carefully
 | Issue open, task is `Done` | Left alone, and **reported as drift**. |
 | Issue open, no linked PR | Left alone. |
 
-The default sync reads the number and node ID of each closed issue. It checks the issue
-identity and any saved legacy provenance before changing an existing card. When the board
+The default sync reads the number, node ID and URL of each closed issue. It checks the issue
+identity and any saved legacy provenance before changing an existing card. A verified transfer
+within the same board project refreshes the task link, including when the card is already Done. When the board
 rejects a verified closure for unchecked criteria, the card keeps its current status. Complete
 the criteria through the board and rerun sync to retry it.
 
@@ -474,7 +475,8 @@ Comment recovery stays additive: a genuinely incomplete legacy comment permits o
 copy with the same GitHub node identity. The old comment remains. SQLite serializes the
 complete-copy check, insert, and audit, so overlapping imports of the same task and comment
 return the same stored copy. An already complete legacy comment that literally quotes the old
-footer is compared with its source. Upgrade the board server before running the updated
+footer is compared with its source. For a legacy PR review, the comparison preserves
+the exact review body even if GitHub now supplies a different attribution link. Upgrade the board server before running the updated
 sync script. An older server returns 404 for the import route, and the script reports the failure.
 
 When a requested discussion is missing from an issue or PR list response, or its preview

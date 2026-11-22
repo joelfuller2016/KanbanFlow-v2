@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using KanbanFlow.Data;
 using KanbanFlow.Models;
 using Microsoft.EntityFrameworkCore;
@@ -1366,6 +1367,9 @@ public sealed class TaskService(
 
     private const string CompleteGitHubCommentMarker = "<!-- kanbanflow-comment:complete -->";
     private const string LegacyCommentTruncationFooter = "…(truncated — read it on GitHub)";
+    private static readonly Regex GitHubReviewHeader = new(
+        @"\A_\[PR #(?<number>[1-9][0-9]*) review · \*\*[A-Z_]+\*\*\]\(https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/pull/\k<number>(?:#pullrequestreview-[1-9][0-9]*)?\)_\r?\n\r?\n",
+        RegexOptions.CultureInvariant);
 
     public async Task<(TaskComment Comment, bool Created)> ImportGitHubCommentAsync(
         int taskId, string githubCommentId, string text, string? author, CommentType type, string? actor, CancellationToken ct = default)
@@ -1418,10 +1422,23 @@ public sealed class TaskService(
 
         var body = text.AsSpan(sourceMarkerLength);
         // Legacy comments have no completeness marker. A literal truncation footer in the
-        // original source still counts as complete if the entire saved body matches that source.
+        // original source still counts as complete when the saved source matches exactly.
         return LeadingCommentLineLength(body, CompleteGitHubCommentMarker) >= 0 ||
             !body.TrimEnd().EndsWith(LegacyCommentTruncationFooter, StringComparison.Ordinal) ||
-            body.SequenceEqual(incomingBody);
+            body.SequenceEqual(incomingBody) ||
+            GitHubReviewBodiesMatch(body, incomingBody);
+    }
+
+    private static bool GitHubReviewBodiesMatch(ReadOnlySpan<char> saved, ReadOnlySpan<char> incoming)
+    {
+        // Review links and verdicts in the generated headers can change independently of the body.
+        var savedHeader = GitHubReviewHeader.EnumerateMatches(saved);
+        if (!savedHeader.MoveNext())
+            return false;
+
+        var incomingHeader = GitHubReviewHeader.EnumerateMatches(incoming);
+        return incomingHeader.MoveNext() &&
+            saved[savedHeader.Current.Length..].SequenceEqual(incoming[incomingHeader.Current.Length..]);
     }
 
     internal static async Task<TaskComment> AddCommentInContextAsync(AppDbContext db, int taskId, string text, string? author, CommentType type, string? actor, CancellationToken ct)

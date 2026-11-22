@@ -476,6 +476,55 @@ public sealed partial class WorkspaceServiceTests
         Assert.Equal(WorkStatus.InProgress, Assert.Single(after.WorkItems).Task.Status);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Replan_CannotInvalidateActiveTransitiveDependent(bool restorePrerequisite)
+    {
+        using var f = new WorkflowSqliteTestFactory();
+        var prerequisite = Draft("Prerequisite");
+        var direct = Draft("Direct dependent", prerequisite.Id);
+        var intermediate = Draft("Intermediate dependent", direct.Id);
+        var active = Draft("Active dependent", intermediate.Id);
+        var request = await f.PublishedAsync(prerequisite, direct, intermediate, active);
+        var originalPrerequisite = request.WorkItems.Single(w => w.DraftId == prerequisite.Id);
+        if (restorePrerequisite)
+        {
+            await new TaskService(f).DeleteAsync(originalPrerequisite.TaskItemId, "human");
+            request = await f.LoadAsync(request.Id);
+        }
+
+        var prerequisiteDraftIds = restorePrerequisite ? new[] { direct.Id, intermediate.Id } : [prerequisite.Id, direct.Id, intermediate.Id];
+        foreach (var draftId in prerequisiteDraftIds)
+        {
+            var item = request.WorkItems.Single(w => w.DraftId == draftId);
+            request = await f.ReportAsync(request, item.Id);
+            request = await f.AcceptAsync(request, item.Id);
+        }
+        var activeItem = request.WorkItems.Single(w => w.DraftId == active.Id);
+        await f.Service.SetTaskStateAsync(request.Id, request.Version, activeItem.Id, WorkStatus.InProgress, Actor, "start-transitive-dependent");
+        request = await f.LoadAsync(request.Id);
+        var revised = restorePrerequisite ? prerequisite : prerequisite with { Title = "Revised prerequisite" };
+        await f.Service.SavePlanAsync(request.Id, request.Version, [revised, direct, intermediate, active], Actor, "replan-with-active-dependent",
+            expectedTaskStates: await f.ReadTaskTokensAsync(request.Id));
+        request = await f.LoadAsync(request.Id);
+        var planId = request.Plans.MaxBy(p => p.Number)!.Id;
+        var before = request.WorkItems.ToDictionary(w => w.TaskItemId, w => (w.Task.Name, w.Task.Status, w.SpecificationVersion));
+        await using var db = f.CreateDbContext();
+        var initialAuditCount = await db.ActivityEvents.CountAsync();
+
+        var rejection = await RejectAsync("invalid", () => f.Service.PublishPlanAsync(request.Id, request.Version, planId, Actor, "publish-active-dependent"));
+        Assert.Contains("In progress", rejection.Message);
+        Assert.Contains($"#{activeItem.TaskItemId}", rejection.Message);
+        var after = await f.LoadAsync(request.Id);
+        Assert.Equal(request.Version, after.Version);
+        Assert.Null(after.Plans.Single(p => p.Id == planId).PublishedAt);
+        Assert.Equal(before.Keys.Order(), after.WorkItems.Select(w => w.TaskItemId).Order());
+        Assert.All(after.WorkItems, item => Assert.Equal(before[item.TaskItemId], (item.Task.Name, item.Task.Status, item.SpecificationVersion)));
+        Assert.False(await db.WorkflowReceipts.AnyAsync(r => r.Key == "publish-active-dependent"));
+        Assert.Equal(initialAuditCount, await db.ActivityEvents.CountAsync());
+    }
+
     [Fact]
     public async Task Replan_RestoringPrerequisiteRequiresCurrentBaselineForUnchangedDependent()
     {

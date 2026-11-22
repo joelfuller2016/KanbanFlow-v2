@@ -22,6 +22,9 @@ public sealed class GitHubCommentEndpointTests
     private const string TruncationFooter = "\u2026(truncated \u2014 read it on GitHub)";
     private const string SourceBody = "_[issue comment](https://github.com/example/repo/issues/7#issuecomment-123)_\n\n  Source Markdown.  \n\n";
     private const string FullText = SourceHeader + "\n" + CompleteMarker + "\n" + SourceBody;
+    private const string LegacyReviewHeader = "_[PR #7 review \u00b7 **APPROVED**](https://github.com/example/repo/pull/7)_";
+    private const string CurrentReviewHeader = "_[PR #19 review \u00b7 **DISMISSED**](https://github.com/new-owner/renamed.repo/pull/19#pullrequestreview-1201)_";
+    private const string ReviewBody = "  Full source Markdown.  \r\n\r\n" + TruncationFooter;
 
     [Fact]
     public async Task ConcurrentImportsOnOneTaskSaveOneCommentAndReturnItAgainAfterRestart()
@@ -111,6 +114,41 @@ public sealed class GitHubCommentEndpointTests
         await using var check = factory.CreateDbContext();
         var saved = await check.TaskComments.OrderBy(c => c.Id).Select(c => c.Text).ToListAsync();
         Assert.Equal(shouldCreate ? new[] { oldText, FullText } : [oldText], saved);
+        Assert.Equal(shouldCreate ? 1 : 0, await check.ActivityEvents.CountAsync(a => a.EventType == "TaskCommentAdded"));
+    }
+
+    [Theory]
+    [InlineData(LegacyReviewHeader + "\n\n" + ReviewBody + "  \r\n", CurrentReviewHeader, false)]
+    [InlineData(LegacyReviewHeader + "\n\nClipped source.\r\n\r\n" + TruncationFooter, CurrentReviewHeader, true)]
+    [InlineData(LegacyReviewHeader + "\n\n" + ReviewBody + " \r\n", CurrentReviewHeader, true)]
+    [InlineData(LegacyReviewHeader + "\n" + ReviewBody + "  \r\n", CurrentReviewHeader, true)]
+    [InlineData("_[PR #8 review \u00b7 **APPROVED**](https://github.com/example/repo/pull/7)_\n\n" + ReviewBody + "  \r\n", CurrentReviewHeader, true)]
+    [InlineData(LegacyReviewHeader + "\n\n" + ReviewBody + "  \r\n", "A different generated label", true)]
+    public async Task ImportMatchesFooterEndingReviewBodiesWithVerifiedHeaders(
+        string historyBody, string incomingHeader, bool shouldCreate)
+    {
+        using var factory = new SqliteFileTestFactory();
+        var taskId = await SeedTaskAsync(factory);
+        var oldText = SourceHeader + "\n" + historyBody;
+        await using (var db = factory.CreateDbContext())
+        {
+            db.TaskComments.Add(new TaskComment { TaskItemId = taskId, Text = oldText });
+            await db.SaveChangesAsync();
+        }
+
+        var newText = SourceHeader + "\r\n" + CompleteMarker + "\r\n" + incomingHeader + "\r\n\r\n" + ReviewBody + "  \r\n";
+        await using var app = await StartAsync(factory);
+        using var client = CreateClient(app);
+        using var response = await ImportAsync(client, taskId, text: newText);
+
+        Assert.Equal(shouldCreate ? HttpStatusCode.Created : HttpStatusCode.OK, response.StatusCode);
+        var result = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal(shouldCreate, result.GetProperty("created").GetBoolean());
+        Assert.Equal(shouldCreate ? newText : oldText, result.GetProperty("text").GetString());
+
+        await using var check = factory.CreateDbContext();
+        var saved = await check.TaskComments.OrderBy(c => c.Id).Select(c => c.Text).ToListAsync();
+        Assert.Equal(shouldCreate ? new[] { oldText, newText } : [oldText], saved);
         Assert.Equal(shouldCreate ? 1 : 0, await check.ActivityEvents.CountAsync(a => a.EventType == "TaskCommentAdded"));
     }
 

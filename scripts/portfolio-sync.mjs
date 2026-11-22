@@ -498,7 +498,7 @@ function warnIfTruncated(repo, kind, list) {
 }
 
 async function fetchIssues(repo, state, full, withComments, read) {
-  let fields = full ? ISSUE_FIELDS : "id,number";
+  let fields = full ? ISSUE_FIELDS : "id,number,url";
   if (full && withComments) fields += ",comments";
   const list = await read([
     "issue", "list", "-R", repo, "--state", state, "--limit", String(GH_PAGE_LIMIT), "--json", fields,
@@ -655,13 +655,28 @@ function commentTextFor(c) {
   return `<!-- gh:${c.ghId} -->\n${COMPLETE_COMMENT_MARKER}\n${c.header}\n\n${c.body ?? ""}`;
 }
 
+// Older whole-review imports used the PR URL. REST hydration supplies a review anchor,
+// and transfers can change the PR path. Compare the authored body after an exact generated
+// header on both sides, retaining every character after the blank separator.
+const REVIEW_HEADER = /^_\[PR #([1-9]\d*) review · \*\*[A-Z_]+\*\*\]\(https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/pull\/\1(?:#pullrequestreview-[1-9]\d*)?\)_\r?\n\r?\n/;
+
+function legacyCommentMatches(text, incoming) {
+  if (!incoming) return false;
+  const old = text.replace(GH_ID_MARKER, "");
+  const current = `${incoming.header}\n\n${incoming.body ?? ""}`;
+  if (old === current) return true;
+  const oldHeader = REVIEW_HEADER.exec(old);
+  return oldHeader !== null && REVIEW_HEADER.test(current)
+    && old.slice(oldHeader[0].length) === incoming.body;
+}
+
 function completeCommentIds(comments, incoming = []) {
-  const completeLegacyText = new Map(incoming.map((c) => [c.ghId, `<!-- gh:${c.ghId} -->\n${c.header}\n\n${c.body ?? ""}`]));
+  const byId = new Map(incoming.map((c) => [c.ghId, c]));
   return new Set(comments.filter((c) => {
     const text = String(c.text || "");
     return /^<!-- gh:[^>]+ -->\r?\n<!-- kanbanflow-comment:complete -->\r?\n/.test(text)
-      || text === completeLegacyText.get(ghIdOf(text))
-      || !text.trimEnd().endsWith(COMMENT_TRUNCATION_FOOTER);
+      || !text.trimEnd().endsWith(COMMENT_TRUNCATION_FOOTER)
+      || legacyCommentMatches(text, byId.get(ghIdOf(text)));
   }).map((c) => ghIdOf(c.text)).filter(Boolean));
 }
 
@@ -2086,6 +2101,29 @@ async function syncTasks(repo, repoIdentity, projectId, issues, closedByNumber, 
       stats.drift.push(`${repo}#${issue.number}: task ${task.id}: ${promotion.reason}; sync skipped every mutation pending human repair`);
       continue;
     }
+    const currentLink = matched.kind === "transfer" ? matched.link
+      : matched.kind === "durable" ? activeGithubLink(task, repoIdentity.externalId, projectLinks) : null;
+    const transferred = currentLink && currentLink.repositoryExternalId !== repoIdentity.externalId;
+    if (statusOnly && transferred) {
+      const destination = parseGitHubIssueUrl(issue.url);
+      if (!isActiveLink(currentLink) || currentLink.externalNodeId !== issue.id || !currentLink.repositoryExternalId
+        || !destination || destination.number !== issue.number || destination.owner.toLowerCase() !== repoIdentity.owner.toLowerCase()
+        || destination.repo.toLowerCase() !== repoIdentity.name.toLowerCase()) {
+        stats.drift.push(`${repo}#${issue.number}: task ${task.id}: could not verify the active transferred link and destination URL; skipped every mutation`);
+        continue;
+      }
+    }
+    if ((!statusOnly || transferred) && linkMetadataNeedsRefresh(currentLink, repoIdentity, issue)) {
+      const verb = transferred ? "refresh transferred issue repository metadata" : "refresh durable link metadata";
+      plan(dryRun, verb, `task ${task.id} → ${repo}#${issue.number}`);
+      if (!dryRun) {
+        const refreshed = await externalApi.registerLink(task.id, verifiedLinkRequest(task.id, repoIdentity, issue, actor));
+        const indexInLinks = projectLinks.findIndex(candidate => candidate.id === refreshed.id);
+        if (indexInLinks >= 0) projectLinks[indexInLinks] = refreshed;
+        else projectLinks.push(refreshed);
+        stats.linksRegistered++;
+      }
+    }
     if (statusOnly) {
       if (!task) continue;
       if (task.status === "Done") { stats.tasksUnchanged++; continue; }
@@ -2129,33 +2167,6 @@ async function syncTasks(repo, repoIdentity, projectId, issues, closedByNumber, 
       }
       if (args.comments) await syncComments(issue, linkedPr, projection.task.id, args);
       continue;
-    }
-
-    if (matched.kind === "durable" || matched.kind === "transfer") {
-      const currentLink = matched.kind === "transfer"
-        ? matched.link
-        : activeGithubLink(task, repoIdentity.externalId, projectLinks);
-      const metadataDrift = currentLink && (
-        currentLink.repositoryExternalId !== repoIdentity.externalId
-        || currentLink.repositoryOwner !== repoIdentity.owner
-        || currentLink.repositoryName !== repoIdentity.name
-        || currentLink.externalNodeId !== issue.id
-        || currentLink.externalNumber !== issue.number
-        || currentLink.url !== issue.url
-      );
-      if (metadataDrift) {
-        const verb = currentLink.repositoryExternalId === repoIdentity.externalId
-          ? "refresh durable link metadata"
-          : "refresh transferred issue repository metadata";
-        plan(dryRun, verb, `task ${task.id} → ${repo}#${issue.number}`);
-        if (!dryRun) {
-          const refreshed = await externalApi.registerLink(task.id, verifiedLinkRequest(task.id, repoIdentity, issue, actor));
-          const indexInLinks = projectLinks.findIndex((candidate) => candidate.id === refreshed.id);
-          if (indexInLinks >= 0) projectLinks[indexInLinks] = refreshed;
-          else projectLinks.push(refreshed);
-          stats.linksRegistered++;
-        }
-      }
     }
 
     // A `legacy` match is a task the pre-#336 sync created, recognised by the mutable "#<n> "

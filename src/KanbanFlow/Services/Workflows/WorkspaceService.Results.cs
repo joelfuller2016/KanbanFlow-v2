@@ -91,7 +91,8 @@ public sealed partial class WorkspaceService
                 Conclusion = Required(conclusion, "Conclusion", 50000), Limitations = Bounded(limitations, "Limitations", 10000), Author = actor, CreatedAt = Now });
         }, ct);
 
-    private async Task InvalidateDependentsAsync(AppDbContext db, WorkRequest request, HashSet<int> changed, string actor, CancellationToken ct)
+    private async Task InvalidateDependentsAsync(AppDbContext db, WorkRequest request, HashSet<int> changed, string actor, CancellationToken ct,
+        bool rejectActiveDependents = false)
     {
         var pending = new Queue<int>(changed);
         while (pending.TryDequeue(out var dependency))
@@ -99,6 +100,8 @@ public sealed partial class WorkspaceService
             foreach (var item in request.WorkItems.Where(w => w.Task.Dependencies.Any(d => d.DependsOnTaskItemId == dependency)))
             {
                 if (!changed.Add(item.TaskItemId)) continue;
+                if (rejectActiveDependents && item.Task.Status == WorkStatus.InProgress)
+                    throw Invalid($"Move dependent task #{item.TaskItemId} out of In progress before publishing this plan.");
                 item.SpecificationVersion++;
                 await TaskService.ChangeStatusInContextAsync(db, item.TaskItemId, WorkStatus.Todo, actor, ct);
                 foreach (var criterion in item.Task.AcceptanceCriteria) { criterion.Completed = false; criterion.UpdatedAt = Now; }
