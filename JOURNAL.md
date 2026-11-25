@@ -51,6 +51,15 @@ A review of the repository and a test run on 2026-09-26 filed findings as issues
   - S7, for #549.
 
 ## Entries (newest first)
+- 2026-11-25 01:33Z — **Automated PR monitor run (scheduled).** GATE UP — .NET 10.0.404 via nix (new container). Master HEAD after merges: `1758257`.
+  - **Phase 1 (merges):** 5 PRs open; 3 merged, 1 blocked-by-build, 1 skipped (mergeable_state unknown at time of check):
+    - **Merged #605** (nuget-minor-patch 3 pkgs): build 0W/0E, 2197/2199 (2 known Linux platform failures). SHA `ca21719`.
+    - **Merged #606** (playwright npm 1.65.0→1.65.1): build 0W/0E, 2197/2199. SHA `240c4f2`.
+    - **Merged #607** (nuget-tests-minor-patch 4 pkgs): build 0W/0E, 2197/2199. SHA `1758257`.
+    - **Blocked #608** (Microsoft.OpenApi 2→3): NU1608 — `Microsoft.AspNetCore.OpenApi 10.0.15` requires `Microsoft.OpenApi >= 2.13.0 && < 3.0.0`; 3.11.1 not compatible. Build FAILED. Failure comment posted (#issuecomment-7149642298). Same root cause as prior #588.
+    - **Skipped #604** (fix/review-sync-and-plan-correctness): `mergeable_state: unknown` at time of Phase 1 check (changed to `blocked` in earlier query). Not a Dependabot PR — deferred to Phase 2.
+  - **Phase 2 (comments):** #608 — 0 unresolved threads. #604 — 1 unresolved thread (CodeRabbit Major on WorkspaceService.Results.cs:100, traversal bounded to request.WorkItems misses board-only chains). Confirmed real, non-trivial fix; replied with analysis (comment r4688979043), thread left open.
+  - **Master build+test:** `dotnet build KanbanFlow.slnx -warnaserror` → succeeded 0W/0E. `dotnet test` → 2197 passed, 2 failed (same known Linux platform failures). Master GREEN.
 - 2026-11-22 14:00Z — **Automated PR monitor run (scheduled).** GATE UP — .NET 10.0.404 via nix (new container). Master HEAD: `3a534db` (changed since 13:00Z run — journal push).
   - **Phase 1 (merges):** 1 PR open:
     - **Skipped #588** (OpenApi 2→3): `mergeable_state: unknown` at query time — skipped per rule. Same recurring NU1608 incompatibility (Microsoft.AspNetCore.OpenApi 10.0.15 requires Microsoft.OpenApi >= 2.13.0 && < 3.0.0; 3.11.1 not compatible); failure comment already posted in prior runs.
