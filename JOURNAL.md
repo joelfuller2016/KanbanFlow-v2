@@ -51,6 +51,12 @@ A review of the repository and a test run on 2026-09-26 filed findings as issues
   - S7, for #549.
 
 ## Entries (newest first)
+- 2026-11-25 02:49Z — **Automated PR monitor run (scheduled).** GATE UP — .NET 10.0.404 via nix. Master HEAD: `497f160`.
+  - **Phase 1 (merges):** 2 PRs open:
+    - **Blocked #608** (Microsoft.OpenApi 2→3): mergeableState=CLEAN, 0 unresolved threads. Build gate FAILED — same NU1608 (`Microsoft.AspNetCore.OpenApi 10.0.15` requires `Microsoft.OpenApi >= 2.13.0 && < 3.0.0`; 3.11.1 incompatible). Failure comment already posted today (01:31:23Z); no new comment posted.
+    - **Skipped #604** (fix/review-sync-and-plan-correctness): mergeableState=BLOCKED → not a Phase 1 candidate.
+  - **Phase 2 (comments):** #608 — 0 unresolved threads. #604 — 0 unresolved threads (4 threads all resolved). No comment work needed.
+  - **Master build+test:** `dotnet build KanbanFlow.slnx -warnaserror` → succeeded 0W/0E. `dotnet test` → 2197 passed, 2 failed (same known Linux platform failures). Master GREEN.
 - 2026-11-25 01:33Z — **Automated PR monitor run (scheduled).** GATE UP — .NET 10.0.404 via nix (new container). Master HEAD after merges: `1758257`.
   - **Phase 1 (merges):** 5 PRs open; 3 merged, 1 blocked-by-build, 1 skipped (mergeable_state unknown at time of check):
     - **Merged #605** (nuget-minor-patch 3 pkgs): build 0W/0E, 2197/2199 (2 known Linux platform failures). SHA `ca21719`.
