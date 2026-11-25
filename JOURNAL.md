@@ -51,6 +51,12 @@ A review of the repository and a test run on 2026-09-26 filed findings as issues
   - S7, for #549.
 
 ## Entries (newest first)
+- 2026-11-25 04:50Z — **Automated PR monitor run (scheduled).** GATE UP — .NET 10.0.404 via nix-shell. Master HEAD: `41757c4`.
+  - **Phase 1 (merges):** 2 PRs open; both `mergeable_state=unknown` at query time → skipped per rule (GitHub recomputing after journal push).
+    - **Skipped #608** (Microsoft.OpenApi 2→3): `mergeable_state=unknown` → skipped. Same recurring NU1608 build failure; failure comment already posted (01:31:23Z today).
+    - **Skipped #604** (fix/review-sync-and-plan-correctness): `mergeable_state=unknown` → skipped (expected BLOCKED).
+  - **Phase 2 (comments):** #608 — 0 unresolved threads. #604 — 1 unresolved thread (CodeRabbit "Traverse board-only prerequisites", WorkspaceService.Results.cs:100); analysis already posted as r4688979043 in prior run (non-trivial, confirmed real, left open). No new comment work.
+  - **Master build+test:** `dotnet build KanbanFlow.slnx -warnaserror` → succeeded 0W/0E. `dotnet test` → 2197 passed, 2 failed (same known Linux platform failures). Master GREEN.
 - 2026-11-25 03:48Z — **Automated PR monitor run (scheduled).** GATE UP — .NET 10.0.404 via nix-shell. Master HEAD: `4f9f03b`.
   - **Phase 1 (merges):** 2 PRs open:
     - **Blocked #608** (Microsoft.OpenApi 2→3): mergeableState=CLEAN, 0 unresolved threads. Build gate FAILED — same NU1608 (`Microsoft.AspNetCore.OpenApi 10.0.15` requires `Microsoft.OpenApi >= 2.13.0 && < 3.0.0`; 3.11.1 incompatible). Failure comment already posted today (01:31:23Z); no new comment posted.
