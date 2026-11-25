@@ -51,6 +51,12 @@ A review of the repository and a test run on 2026-09-26 filed findings as issues
   - S7, for #549.
 
 ## Entries (newest first)
+- 2026-11-25 14:50Z — **Automated PR monitor run (scheduled).** GATE UP — .NET 10.0.404 via nix-shell. Master HEAD: `aa8b084`.
+  - **Phase 1 (merges):** 2 PRs open; both `mergeable_state=unknown` at query time → skipped per rule.
+    - **Skipped #608** (Microsoft.OpenApi 2→3): `mergeable_state=unknown` → skipped. Recurring NU1608 build failure; failure comment already posted (01:31:23Z today).
+    - **Skipped #604** (fix/review-sync-and-plan-correctness): `mergeable_state=unknown` → skipped (expected BLOCKED).
+  - **Phase 2 (comments):** #608 — 0 unresolved threads. #604 — 1 unresolved thread (CodeRabbit, WorkspaceService.Results.cs:100; analysis already posted as r4688979043 in prior run, non-trivial, left open). No new action.
+  - **Master build+test:** `dotnet build KanbanFlow.slnx -warnaserror` → succeeded 0W/0E. `dotnet test` → 2197 passed, 2 failed (same known Linux platform failures). Master GREEN.
 - 2026-11-25 13:50Z — **Automated dependency-merge run (scheduled).** GATE UP — .NET 10.0.404 via nix-shell. Master HEAD: `47a1f01`.
   - **Dependabot PRs:** 1 open — #608 (Microsoft.OpenApi 2→3, `mergeable_state=unknown`) → skipped per rule. #604 not a Dependabot PR; out of scope.
   - **Master build+test:** `dotnet build KanbanFlow.slnx -warnaserror` → succeeded 0W/0E. `dotnet test` → 2197 passed, 2 failed (same known Linux platform failures). Master GREEN.
