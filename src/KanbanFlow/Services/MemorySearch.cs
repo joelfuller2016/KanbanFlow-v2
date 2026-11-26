@@ -104,6 +104,9 @@ public sealed partial class MemorySearch(
             {
                 keywordRank.TryGetValue(c.Id, out var kr);
                 vectorRank.TryGetValue(c.Id, out var vr);
+                if (opts.RequireQuerySignal && kr == 0 && vr == 0)
+                    continue;
+
                 var rr = recencyRank[c.Id];
                 var ur = usefulnessRank[c.Id];
 

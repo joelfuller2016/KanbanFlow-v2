@@ -31,6 +31,8 @@ public interface IMemorySearch
     /// returns candidates ranked by recency + usefulness only (no keyword/vector signal, never a
     /// throw). When no node exists in scope the result is empty. A malformed query never throws — it
     /// is sanitized for FTS5 and the keyword signal degrades to empty.</para>
+    /// <para>When <see cref="RetrievalOptions.RequireQuerySignal"/> is enabled, only candidates
+    /// with a keyword or vector rank are eligible for the result limit and access tracking.</para>
     ///
     /// <para>The returned <see cref="MemoryHit"/> scores reflect the state <em>before</em> the
     /// access-stat bump that this call applies to the hits.</para>
@@ -112,4 +114,10 @@ public sealed class RetrievalOptions
     /// Full superseded-aware vector ranking is a tracked follow-up (#258).
     /// </remarks>
     public bool IncludeSuperseded { get; init; }
+
+    /// <summary>
+    /// Require a keyword or vector rank before a node can be returned. Blank queries and
+    /// queries with neither signal return no hits in this mode. Defaults to broad hybrid recall.
+    /// </summary>
+    public bool RequireQuerySignal { get; init; }
 }

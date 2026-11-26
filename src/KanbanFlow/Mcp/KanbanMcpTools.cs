@@ -1208,23 +1208,23 @@ public static class KanbanMcpTools
         IReadOnlyList<MemoryHit> hits;
         try
         {
-            hits = await memorySearch.SearchAsync(MemoryScope.Agent, key, query, k, opts: null, cancellationToken);
+            hits = await memorySearch.SearchAsync(MemoryScope.Agent, key, query, k,
+                new RetrievalOptions { RequireQuerySignal = true }, cancellationToken);
         }
         catch (ValidationException ex)
         {
             throw new McpException(ex.Message);
         }
 
-        // The hybrid retrieval ranks EVERY candidate (recency/usefulness are query-independent), but
-        // the official contract returns MATCHING entities. Keep only hits carrying a query-driven
-        // signal — a keyword (BM25) or vector (cosine) rank — in their ranked order, best first.
-        // Resolution is id-targeted (uncapped ListAsync + per-id reads), so a match is never
-        // silently dropped by the read_graph cap (Copilot review, PR #259); the ContainsKey guard
-        // only drops a hit whose node was retired between the search and this read.
+        // The search has already limited the results to query matches. Resolve them through the
+        // uncapped list in rank order, skipping nodes retired between the two reads.
+        if (hits.Count == 0)
+            return new KnowledgeGraph([], []);
+
         var byId = (await memoryService.ListAsync(MemoryScope.Agent, key, type: null, includeSuperseded: false, cancellationToken))
             .ToDictionary(n => n.Id);
         var matched = hits
-            .Where(h => (h.KeywordRank is not null || h.VectorRank is not null) && byId.ContainsKey(h.Id))
+            .Where(h => byId.ContainsKey(h.Id))
             .Select(h => byId[h.Id])
             .ToList();
 

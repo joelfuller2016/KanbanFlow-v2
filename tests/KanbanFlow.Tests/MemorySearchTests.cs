@@ -306,6 +306,27 @@ public sealed class MemorySearchTests
         Assert.Equal(2, hits.Count);
         Assert.All(hits, h => Assert.Null(h.KeywordRank)); // blank ⇒ no keyword signal
         Assert.All(hits, h => Assert.Null(h.VectorRank));  // blank ⇒ no embed / vector signal
+        Assert.Empty(await search.SearchAsync(MemoryScope.Project, "1", "   ", 10,
+            new RetrievalOptions { RequireQuerySignal = true }));
+    }
+
+    [Fact]
+    public async Task Search_RequireQuerySignal_IncludesVectorOnlyMatches()
+    {
+        using var f = new SqliteTestFactory();
+        var svc = new MemoryService(f);
+        var id = await CreateNode(svc, "1", "oranges");
+        float[] vector = [1, 0, 0];
+        await svc.SetEmbeddingAsync(id, vector, null);
+
+        var search = NewSearch(f, EmbeddingReturning(vector));
+        var hits = await search.SearchAsync(MemoryScope.Project, "1", "citrus", 1,
+            new RetrievalOptions { RequireQuerySignal = true });
+
+        var hit = Assert.Single(hits);
+        Assert.Equal(id, hit.Id);
+        Assert.Null(hit.KeywordRank);
+        Assert.Equal(1, hit.VectorRank);
     }
 
     [Fact]

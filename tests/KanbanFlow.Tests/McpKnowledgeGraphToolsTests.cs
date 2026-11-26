@@ -443,6 +443,55 @@ public sealed class McpKnowledgeGraphToolsTests
     }
 
     [Fact]
+    public async Task SearchNodes_FiltersBeforeTopKAndOnlyTracksTheReturnedMatch()
+    {
+        using var f = new SqliteTestFactory();
+        var svc = NewService(f);
+        var candidates = Enumerable.Range(1, 63)
+            .Select(i => new MemoryEntityInput($"Filler {i:D2}", "fixture"))
+            .Prepend(new MemoryEntityInput("Exact record", "fixture", ["the exactneedle fact"]))
+            .ToArray();
+        await KanbanMcpTools.CreateEntities(svc, candidates);
+        await KanbanMcpTools.CreateRelations(svc, [new("Exact record", "Filler 63", "unselected")]);
+
+        await using (var db = await f.CreateDbContextAsync())
+        {
+            var nodes = await db.MemoryNodes.OrderBy(node => node.Id).ToListAsync();
+            var start = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+            for (var i = 0; i < nodes.Count; i++)
+            {
+                nodes[i].CreatedAt = start.AddHours(i);
+                nodes[i].LastAccessedAt = null;
+                nodes[i].AccessCount = i;
+            }
+            await db.SaveChangesAsync();
+        }
+
+        var search = NewSearch(f);
+        var generic = Assert.Single(await search.SearchAsync(MemoryScope.Agent, Kg, "exactneedle", 1, opts: null));
+        Assert.Equal("Filler 63", generic.Content);
+        Assert.Null(generic.KeywordRank);
+        await using (var db = await f.CreateDbContextAsync())
+        {
+            var top = await db.MemoryNodes.FindAsync(generic.Id);
+            top!.AccessCount = 63;
+            top.LastAccessedAt = null;
+            await db.SaveChangesAsync();
+        }
+
+        var result = await KanbanMcpTools.SearchNodes(search, svc, "exactneedle", k: 1);
+
+        var exact = Assert.Single(result.Entities);
+        Assert.Equal("Exact record", exact.Name);
+        Assert.Equal(["the exactneedle fact"], exact.Observations);
+        Assert.Empty(result.Relations);
+        Assert.Equal(1, (await NodeByName(f, "Exact record")).AccessCount);
+        var filler = await NodeByName(f, "Filler 63");
+        Assert.Equal(63, filler.AccessCount);
+        Assert.Null(filler.LastAccessedAt);
+    }
+
+    [Fact]
     public async Task SearchNodes_RanksBestMatchFirst()
     {
         using var f = new SqliteTestFactory();
