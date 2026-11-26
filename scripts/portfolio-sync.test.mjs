@@ -451,11 +451,21 @@ test("comment import requires an explicit boolean result before counting a succe
   assert.equal(mod.stats.commentsUnchanged, 0);
 });
 
+function portfolioCliWithPreload(preload, ...args) {
+  const cli = fileURLToPath(new URL("./portfolio-sync.mjs", import.meta.url));
+  // Node 18 versions before 18.18 do not have the --import flag. The file
+  // argument still lands in argv[1], where the CLI checks for direct execution.
+  const program = `
+    ${preload}
+    await import((await import("node:url")).pathToFileURL(process.argv[1]).href);
+  `;
+  return ["--input-type=module", "--eval", program, "--", cli, ...args];
+}
+
 test("restore-content CLI refuses an omitted repo before reading an environment portfolio", async () => {
   const rejectFetch = "globalThis.fetch = async () => { throw new Error('UNEXPECTED_API_REQUEST'); };";
-  const cli = fileURLToPath(new URL("./portfolio-sync.mjs", import.meta.url));
   await assert.rejects(promisify(execFile)(process.execPath,
-    ["--import", `data:text/javascript,${encodeURIComponent(rejectFetch)}`, cli, "restore-content"], {
+    portfolioCliWithPreload(rejectFetch, "restore-content"), {
       env: { ...process.env, KANBANFLOW_API_URL: "http://127.0.0.1:1", KANBANFLOW_PORTFOLIO_REPOS: "owner/should-not-be-read" },
       timeout: 10_000,
       windowsHide: true,
@@ -775,6 +785,107 @@ test("dedicated wrapper surfaces a child-process pre-spawn error", async () => {
     ),
     /ENOENT/,
   );
+});
+
+function installPushLabelTestTransport(labelCount) {
+  childProcess.execFile = () => assert.fail("Only the promisified GitHub read should be called");
+  childProcess.execFile[promisify.custom] = async (command, args) => {
+    assert.equal(command, "gh");
+    let data;
+    if (args[0] === "label" && args[1] === "list") {
+      console.log("fixture label limit:", args[args.indexOf("--limit") + 1]);
+      if (labelCount === null) throw new Error("Fixture label service unavailable");
+      data = Array.from({ length: labelCount }, (_, index) => ({ name: index === 0 ? "P1" : `label-${index}` }));
+    } else if (args[0] === "api" && args[1] === "repos/octo/board") {
+      data = { node_id: "R_board", owner: { login: "octo" }, name: "board", full_name: "octo/board" };
+    } else if (args[0] === "api" && args[1] === "repos/octo/board/milestones?state=all&per_page=100") {
+      console.log("fixture milestone read");
+      data = [];
+    } else {
+      throw new Error(`Unexpected GitHub request: ${args.join(" ")}`);
+    }
+    return { stdout: JSON.stringify(data), stderr: "" };
+  };
+  childProcess.spawn = (...args) => {
+    console.error("UNEXPECTED GITHUB WRITE");
+    throw new Error(`Unexpected subprocess: ${args[0]}`);
+  };
+  syncBuiltinESMExports();
+
+  const json = value => new Response(JSON.stringify(value));
+  globalThis.fetch = async (url, options) => {
+    if (options.method !== "GET") {
+      console.error("UNEXPECTED BOARD WRITE:", options.method, url);
+      throw new Error("Fixture must stay read-only");
+    }
+    switch (new URL(url).pathname) {
+      case "/api/projects":
+        return json([{ id: 2, name: "board", description: "<!-- github-node: R_board -->" }]);
+      case "/api/projects/2/tasks":
+        return json([{ id: 7, name: "A high-priority task", description: "Full body.", priority: "High", status: "Todo", updatedAt: "2026-10-01T00:00:00Z" }]);
+      case "/api/projects/2/external-work-item-links":
+        return json([]);
+      default:
+        throw new Error(`Unexpected board request: ${url}`);
+    }
+  };
+}
+
+async function runPushLabelCli(labelCount, ...options) {
+  const preload = `
+    import assert from "node:assert/strict";
+    import childProcess from "node:child_process";
+    import { syncBuiltinESMExports } from "node:module";
+    import { promisify } from "node:util";
+    (${installPushLabelTestTransport})(${JSON.stringify(labelCount)});
+  `;
+  const args = portfolioCliWithPreload(preload, "push-issue", "octo/board", "--task", "7", ...options);
+  try {
+    const output = await promisify(execFile)(process.execPath, args, {
+      env: { ...process.env, KANBANFLOW_API_URL: "http://127.0.0.1:1", KANBANFLOW_GH_PAGE_LIMIT: "3" },
+      timeout: 10_000,
+      windowsHide: true,
+    });
+    return { ...output, code: 0 };
+  } catch (error) {
+    if (typeof error.code !== "number") throw error;
+    return error;
+  }
+}
+
+for (const live of [false, true]) {
+  test(`push-issue ${live ? "live create" : "preview"} stops at the label limit before planning or writing`, async () => {
+    const result = await runPushLabelCli(3, ...(live ? ["--allow-write", "octo/other"] : []));
+    assert.equal(result.code, 1, result.stdout + result.stderr);
+    assert.match(result.stdout, /fixture label limit: 3/);
+    assert.match(result.stderr, /octo\/board: labels hit the 3-item fetch bound/);
+    assert.match(result.stdout, /── INCOMPLETE \(1\)/);
+    assert.match(result.stdout, /issues previewed: 0/);
+    assert.match(result.stdout, /issues created:\s+0/);
+    assert.match(result.stdout, /links finalized:\s+0/);
+    assert.doesNotMatch(result.stdout, /fixture milestone read/);
+    assert.doesNotMatch(result.stdout, /(?:would create|creating) issue on/);
+    assert.doesNotMatch(result.stdout, /octo\/other  \(push-issue/);
+    assert.doesNotMatch(result.stderr, /UNEXPECTED (?:GITHUB|BOARD) WRITE/);
+  });
+}
+
+test("push-issue preview stays successful with a complete label list", async () => {
+  const result = await runPushLabelCli(2);
+  assert.equal(result.code, 0, result.stdout + result.stderr);
+  assert.match(result.stdout, /fixture label limit: 3/);
+  assert.match(result.stdout, /fixture milestone read/);
+  assert.match(result.stdout, /labels:\s+P1/);
+  assert.match(result.stdout, /issues previewed: 1/);
+  assert.doesNotMatch(result.stdout + result.stderr, /INCOMPLETE|UNEXPECTED (?:GITHUB|BOARD) WRITE/);
+});
+
+test("push-issue live exits without writes when the label request fails", async () => {
+  const result = await runPushLabelCli(null, "--allow-write", "octo/other");
+  assert.equal(result.code, 1, result.stdout + result.stderr);
+  assert.match(result.stderr, /Fixture label service unavailable/);
+  assert.doesNotMatch(result.stdout, /octo\/other  \(push-issue/);
+  assert.doesNotMatch(result.stderr, /UNEXPECTED (?:GITHUB|BOARD) WRITE/);
 });
 
 test("CLI makes preview the default and rejects every broad or implicit write", () => {

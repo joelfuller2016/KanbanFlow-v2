@@ -489,12 +489,11 @@ async function completeDiscussion(item, field, endpoint, read) {
 // not just printed — `status` turns it into exit 2 ("I could not see everything"), because a
 // drift count computed over a partial read is worse than no drift count at all.
 function warnIfTruncated(repo, kind, list) {
-  if (list.length >= GH_PAGE_LIMIT) {
-    const note = `${repo}: ${kind} hit the ${GH_PAGE_LIMIT}-item fetch bound — this read is INCOMPLETE, so every count and every "no drift" verdict derived from it is unreliable. Raise KANBANFLOW_GH_PAGE_LIMIT.`;
-    console.error(`  ! ${note}`);
-    stats.incomplete.push(note);
-  }
-  return list;
+  if (list.length < GH_PAGE_LIMIT) return false;
+  const note = `${repo}: ${kind} hit the ${GH_PAGE_LIMIT}-item fetch bound — this read is INCOMPLETE, so every count and every "no drift" verdict derived from it is unreliable. Raise KANBANFLOW_GH_PAGE_LIMIT.`;
+  console.error(`  ! ${note}`);
+  stats.incomplete.push(note);
+  return true;
 }
 
 async function fetchIssues(repo, state, full, withComments, read) {
@@ -571,7 +570,13 @@ async function fetchMilestones(repo, read = gh) {
 // would create an unlabelled issue that the very next sync reads back as Medium (a silent
 // round-trip downgrade). Reported in the preview so the loss is visible before anyone acts.
 async function fetchLabels(repo) {
-  return gh(["label", "list", "-R", repo, "--limit", "200", "--json", "name"]);
+  try {
+    const labels = await gh(["label", "list", "-R", repo, "--limit", String(GH_PAGE_LIMIT), "--json", "name"]);
+    return warnIfTruncated(repo, "labels", labels) ? null : labels;
+  } catch (error) {
+    stats.incomplete.push(`${repo}: could not read the full label list: ${error.message}`);
+    throw error;
+  }
 }
 
 // --- GitHub comments -> TaskComments -----------------------------------------------------
@@ -2553,7 +2558,9 @@ async function pushIssues(repo, args) {
   }
   if (candidates.length === 0) { console.log(`  no unsynced tasks — nothing to preview.`); return; }
 
-  const [milestones, labels] = await Promise.all([fetchMilestones(repo), fetchLabels(repo)]);
+  const labels = await fetchLabels(repo);
+  if (labels === null) return;
+  const milestones = await fetchMilestones(repo);
   const milestoneTitles = new Set(milestones.map((m) => m.title));
   const labelNames = labels.map((l) => l.name);
 
@@ -3140,6 +3147,13 @@ the task, deduped by GitHub node id. Bot reviews are mirrored whole and can be v
 Full contract, mapping table and onboarding runbook: docs/GITHUB-SYNC.md
 env: KANBANFLOW_API_URL (default http://127.0.0.1:5123), KANBANFLOW_PORTFOLIO_REPOS`;
 
+function reportIncomplete() {
+  if (!stats.incomplete.length) return;
+  console.log(`\n── INCOMPLETE (${stats.incomplete.length}) — the mirror is missing data ──`);
+  for (const note of stats.incomplete) console.log(`  ! ${note}`);
+  process.exitCode = 1;
+}
+
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   if (args.help) { console.log(HELP); return; }
@@ -3203,6 +3217,7 @@ ${HELP}`);
       console.error(`  ERROR on ${repo}: ${err.message}`);
       process.exitCode = 1;
     }
+    if (args.command === "push-issue" && stats.incomplete.length) break;
   }
 
   console.log(`\n── summary ──`);
@@ -3210,6 +3225,7 @@ ${HELP}`);
     console.log(`issues previewed: ${stats.issuesPreviewed}`);
     console.log(`issues created:   ${stats.issuesCreated}`);
     console.log(`links finalized:  ${stats.linksFinalized}`);
+    reportIncomplete();
     return;
   }
   if (args.command === "backfill-links") {
@@ -3247,11 +3263,7 @@ ${HELP}`);
   }
   // A mirror built from a read that stopped early is not a mirror. Same rule as the
   // comment-fetch failures above: say so, and fail.
-  if (stats.incomplete.length) {
-    console.log(`\n── INCOMPLETE (${stats.incomplete.length}) — the mirror is missing data ──`);
-    for (const n of stats.incomplete) console.log(`  ! ${n}`);
-    process.exitCode = 1;
-  }
+  reportIncomplete();
 }
 
 function resolvedEntry(p) {
