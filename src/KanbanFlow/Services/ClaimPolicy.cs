@@ -174,6 +174,19 @@ public static class ClaimPolicy
         return now - claimedAt.Value > ttl;
     }
 
+    /// <summary>Describe the prior claim timestamp in a renewal or takeover audit message.</summary>
+    internal static string DescribeClaimAge(DateTime now, DateTime? claimedAt, TimeSpan ttl)
+    {
+        if (claimedAt is null)
+            return $"claim had no timestamp; TTL {ttl.TotalHours:0.##}h";
+
+        var age = now - claimedAt.Value;
+        if (age < TimeSpan.Zero)
+            return $"claim timestamp was {-age.TotalHours:0.##}h in the future, possibly due to clock skew. TTL {ttl.TotalHours:0.##}h";
+
+        return $"claim was {age.TotalHours:0.##}h old; TTL {ttl.TotalHours:0.##}h";
+    }
+
     /// <summary>
     /// The instant before which a claim is considered stale — the cutoff for a
     /// <c>WHERE ClaimedAt &lt; @cutoff</c> predicate in a conditional update.
