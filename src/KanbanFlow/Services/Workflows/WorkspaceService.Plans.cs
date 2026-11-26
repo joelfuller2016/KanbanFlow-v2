@@ -66,6 +66,7 @@ public sealed partial class WorkspaceService
                     || savedHash != taskSnapshot.PublicationHash(item.TaskItemId)))
                     throw new WorkflowException("conflict", $"Task #{item.TaskItemId} changed on the board after this plan was saved. Review its current fields and save a revised plan before publishing.");
             }
+            await RequireNoActivePlanDependentsAsync(db, request, affectedTaskIds, ct);
             Feature? feature = request.FeatureId is int featureId ? await db.Features.FindAsync([featureId], ct) : null;
             feature ??= new Feature { Name = request.Title, ProjectId = request.ProjectId.Value, CreatedAt = Now, UpdatedAt = Now };
             if (feature.Id == 0) db.Features.Add(feature);
@@ -119,7 +120,7 @@ public sealed partial class WorkspaceService
                     draft.Dependencies.Where(dependency => !previousDependencies.Contains(dependency) || !mappedDraftIds.Contains(dependency)).ToArray()));
             }
             await InvalidateDependentsAsync(db, request, changed.Select(change => change.Item.TaskItemId).Where(taskId => taskId != 0).ToHashSet(),
-                actor, ct, rejectActiveDependents: true);
+                actor, ct);
             // IDs become available here; the surrounding transaction still owns every write and receipt.
             await db.SaveChangesWithAuditAsync(actor, ct);
             if (changed.Any(change => change.RemovedDependencies.Length > 0 || change.AddedDependencies.Length > 0))

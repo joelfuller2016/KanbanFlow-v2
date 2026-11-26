@@ -526,6 +526,46 @@ public sealed partial class WorkspaceServiceTests
     }
 
     [Fact]
+    public async Task Replan_CannotInvalidateActiveDependentThroughBoardOnlyTask()
+    {
+        using var f = new WorkflowSqliteTestFactory();
+        var prerequisite = Draft("Request prerequisite");
+        var dependent = Draft("Active request task");
+        var request = await f.PublishedAsync(prerequisite, dependent);
+        var prerequisiteItem = request.WorkItems.Single(w => w.DraftId == prerequisite.Id);
+        var activeItem = request.WorkItems.Single(w => w.DraftId == dependent.Id);
+        request = await f.ReportAsync(request, prerequisiteItem.Id);
+        request = await f.AcceptAsync(request, prerequisiteItem.Id);
+
+        var bridge = await new TaskService(f).CreateAsync(
+            new TaskCreate(prerequisiteItem.Task.FeatureId, "Completed board-only intermediary", Status: WorkStatus.Done), "human");
+        var dependencies = new TaskDependencyService(f);
+        await dependencies.CreateAsync(new TaskDependencyCreate(bridge.Id, prerequisiteItem.TaskItemId, TaskDependencyType.Blocks));
+        await dependencies.CreateAsync(new TaskDependencyCreate(activeItem.TaskItemId, bridge.Id, TaskDependencyType.Blocks));
+        await f.Service.SetTaskStateAsync(request.Id, request.Version, activeItem.Id, WorkStatus.InProgress, Actor, "start-bridged-dependent");
+        request = await f.LoadAsync(request.Id);
+        await f.Service.SavePlanAsync(request.Id, request.Version, [prerequisite with { Title = "Revised prerequisite" }, dependent], Actor,
+            "replan-bridged-dependent", expectedTaskStates: await f.ReadTaskTokensAsync(request.Id));
+        request = await f.LoadAsync(request.Id);
+        var planId = request.Plans.MaxBy(p => p.Number)!.Id;
+        var before = request.WorkItems.ToDictionary(w => w.TaskItemId, w => (w.Task.Name, w.Task.Status, w.SpecificationVersion));
+        await using var db = f.CreateDbContext();
+        var auditCount = await db.ActivityEvents.CountAsync();
+
+        var rejection = await RejectAsync("invalid", () => f.Service.PublishPlanAsync(request.Id, request.Version, planId, Actor, "publish-bridged-dependent"));
+
+        Assert.Contains($"#{activeItem.TaskItemId}", rejection.Message);
+        Assert.Contains("In progress", rejection.Message);
+        var after = await f.LoadAsync(request.Id);
+        Assert.Equal(request.Version, after.Version);
+        Assert.Null(after.Plans.Single(p => p.Id == planId).PublishedAt);
+        Assert.All(after.WorkItems, item => Assert.Equal(before[item.TaskItemId], (item.Task.Name, item.Task.Status, item.SpecificationVersion)));
+        Assert.Equal(WorkStatus.Done, (await db.Tasks.FindAsync(bridge.Id))!.Status);
+        Assert.False(await db.WorkflowReceipts.AnyAsync(r => r.Key == "publish-bridged-dependent"));
+        Assert.Equal(auditCount, await db.ActivityEvents.CountAsync());
+    }
+
+    [Fact]
     public async Task Replan_RestoringPrerequisiteRequiresCurrentBaselineForUnchangedDependent()
     {
         using var f = new WorkflowSqliteTestFactory();

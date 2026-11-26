@@ -91,8 +91,31 @@ public sealed partial class WorkspaceService
                 Conclusion = Required(conclusion, "Conclusion", 50000), Limitations = Bounded(limitations, "Limitations", 10000), Author = actor, CreatedAt = Now });
         }, ct);
 
-    private async Task InvalidateDependentsAsync(AppDbContext db, WorkRequest request, HashSet<int> changed, string actor, CancellationToken ct,
-        bool rejectActiveDependents = false)
+    private static async Task RequireNoActivePlanDependentsAsync(AppDbContext db, WorkRequest request, IReadOnlySet<int> changed, CancellationToken ct)
+    {
+        var activeTaskIds = request.WorkItems.Where(w => w.Task.Status == WorkStatus.InProgress)
+            .Select(w => w.TaskItemId).ToHashSet();
+        if (changed.Count == 0 || activeTaskIds.Count == 0) return;
+
+        // Board-only tasks may bridge dependency paths. Publication still invalidates only request work items.
+        var edges = await db.TaskDependencies.Where(d => d.ProjectId == request.ProjectId)
+            .Select(d => new { d.DependsOnTaskItemId, d.TaskItemId }).ToListAsync(ct);
+        var dependents = edges.ToLookup(edge => edge.DependsOnTaskItemId, edge => edge.TaskItemId);
+        var visited = changed.ToHashSet();
+        var pending = new Queue<int>(changed);
+        while (pending.TryDequeue(out var dependency))
+        {
+            foreach (var dependent in dependents[dependency])
+            {
+                if (!visited.Add(dependent)) continue;
+                if (activeTaskIds.Contains(dependent))
+                    throw Invalid($"Move dependent task #{dependent} out of In progress before publishing this plan.");
+                pending.Enqueue(dependent);
+            }
+        }
+    }
+
+    private async Task InvalidateDependentsAsync(AppDbContext db, WorkRequest request, HashSet<int> changed, string actor, CancellationToken ct)
     {
         var pending = new Queue<int>(changed);
         while (pending.TryDequeue(out var dependency))
@@ -100,8 +123,6 @@ public sealed partial class WorkspaceService
             foreach (var item in request.WorkItems.Where(w => w.Task.Dependencies.Any(d => d.DependsOnTaskItemId == dependency)))
             {
                 if (!changed.Add(item.TaskItemId)) continue;
-                if (rejectActiveDependents && item.Task.Status == WorkStatus.InProgress)
-                    throw Invalid($"Move dependent task #{item.TaskItemId} out of In progress before publishing this plan.");
                 item.SpecificationVersion++;
                 await TaskService.ChangeStatusInContextAsync(db, item.TaskItemId, WorkStatus.Todo, actor, ct);
                 foreach (var criterion in item.Task.AcceptanceCriteria) { criterion.Completed = false; criterion.UpdatedAt = Now; }
