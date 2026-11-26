@@ -20,6 +20,11 @@ updates:
         update-types:
           - "minor"
           - "patch"
+    ignore:
+      # This repo has no CI. NuGet major upgrades are opt-in through tracked
+      # issues and a local verify.ps1 run. Security updates remain eligible.
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
 
   - package-ecosystem: "nuget"
     directory: "/tests/KanbanFlow.Tests"
@@ -36,6 +41,9 @@ updates:
         update-types:
           - "minor"
           - "patch"
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
 
   - package-ecosystem: "npm"
     directory: "/"
