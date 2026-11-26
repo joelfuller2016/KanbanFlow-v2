@@ -5,8 +5,8 @@ import { fileURLToPath } from "node:url";
 import path from "node:path";
 import { verifyNullableTextUpdates } from "./mcp-clear-checks.mjs";
 
-const projectId = Number.parseInt(process.argv[2] || "1", 10);
-if (!Number.isInteger(projectId)) {
+const requestedProjectId = process.argv[2] ? Number.parseInt(process.argv[2], 10) : undefined;
+if (requestedProjectId !== undefined && !Number.isInteger(requestedProjectId)) {
   console.error("Usage: node scripts/smoke-mcp.mjs [projectId]");
   process.exit(1);
 }
@@ -31,6 +31,7 @@ const pending = new Map();
 const unexpectedMessages = [];
 const unexpectedWaiters = [];
 const runMarker = `mcp-smoke-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+let projectId;
 let tempFeatureId;
 let tempIdeaId;
 let promotedProjectId;
@@ -146,17 +147,16 @@ try {
     }
   }
 
-  await verifyNullableTextUpdates({ callTool, restJson, apiBaseUrl, timeoutMs: restTimeoutMs, marker: runMarker });
-
   const projects = await callTool("list_projects", {});
-  if (!Array.isArray(projects) || !projects.some(project => project.id === projectId)) {
-    throw new Error(`list_projects did not include project ${projectId}.`);
-  }
+  projectId = chooseProjectId(requestedProjectId, projects);
+  console.log(`Running MCP smoke tests for project ${projectId}.`);
 
   const project = await callTool("get_project", { projectId });
   if (project?.id !== projectId) {
     throw new Error(`get_project returned unexpected project: ${JSON.stringify(project)}`);
   }
+
+  await verifyNullableTextUpdates({ callTool, restJson, apiBaseUrl, timeoutMs: restTimeoutMs, marker: runMarker });
 
   const projectTasks = await callTool("list_project_tasks", { projectId });
   if (!Array.isArray(projectTasks)) {
@@ -509,6 +509,22 @@ try {
   } finally {
     server.kill();
   }
+}
+
+function chooseProjectId(requestedId, projects) {
+  if (!Array.isArray(projects)) {
+    throw new Error("list_projects did not return an array.");
+  }
+  if (projects.length === 0) {
+    throw new Error("The board has no projects; run npm run gh:onboard.");
+  }
+  if (requestedId !== undefined) {
+    if (!projects.some(project => project.id === requestedId)) {
+      throw new Error(`list_projects did not include project ${requestedId}.`);
+    }
+    return requestedId;
+  }
+  return projects.reduce((lowest, project) => Math.min(lowest, project.id), projects[0].id);
 }
 
 function request(method, params) {
