@@ -14,7 +14,7 @@
 | | |
 |---|---|
 | **Stack** | .NET 10 · Blazor Server · SQLite (EF Core 10) · Minimal APIs · Node 18+ for the MCP wrapper |
-| **Surfaces** | 8 UI routes · 103 REST operations · 60 native MCP tools · 79 Node-wrapper MCP tools (REST and MCP measured in a disposable app, November 22, 2026) |
+| **Surfaces** | 8 UI routes · 106 REST operations · 60 native MCP tools · 79 Node-wrapper MCP tools (REST and MCP measured in a disposable app, November 26, 2026) |
 | **Sync** | GitHub → board projection, plus one explicit additive board → GitHub issue-create path. Preview is the default; live create requires `--allow-write --task <id>` and a durable journal. No edit/close/delete path — see [Who owns what](#who-owns-what) |
 | **Tests** | Post-merge follow-up: 2,182 xUnit · 444 script unit · current targeted browser and HTTP/native/stdio checks; earlier 16-suite/restart receipts remain source-pinned — [all local, no CI](#deliberate-non-features) |
 | **Runs at** | `http://127.0.0.1:5123` — localhost only, no auth, no Docker, no cloud |
@@ -63,7 +63,7 @@ graph and gives that graph three surfaces:
    pastes into chat as a link. Filtering never reorders anything: a drag under an active filter
    anchors on the next *visible* card's identity and the server resolves that against the full
    persisted column. For you.
-2. **A REST API** — 103 operations over the same graph, including workspace composition and plan publication. For scripts.
+2. **A REST API** — 106 operations over the same graph, including workspace composition and plan publication. For scripts.
 3. **An MCP server** — the same capabilities as first-class agent tools, plus a direction
    engine that answers *"what next, and why"* with a human-readable reason. For agents.
 
@@ -138,7 +138,7 @@ flowchart LR
     subgraph OUT["surfaces over the same graph"]
         direction TB
         UI["Blazor UI<br/>/ · /project/{id} · /ideas · /memory"]
-        REST["REST · 103 operations"]
+        REST["REST · 106 operations"]
         MCP["MCP · 60 native / 79 wrapper"]
     end
 
@@ -703,14 +703,14 @@ the same comment stream and history.
 
 [Issue #277](https://github.com/joelfuller2016/KanbanFlow-v2/issues/277) exists because this
 README under-reported its own surface. REST and MCP counts below were measured against the
-November 22 combined workflow/workspace application. UI inventories were checked in source;
+November 26 application with the leaf entity GET routes. UI inventories were checked in source;
 test receipts retain their execution dates and do not imply a new full browser run.
 
 | Surface | Count | Command that produced it |
 |---|---:|---|
-| REST operations (app) | 98 | [Run the inventory below](#reproduce-surface-counts): `rest.application` |
+| REST operations (app) | 101 | [Run the inventory below](#reproduce-surface-counts): `rest.application` |
 | REST operations (admin) | 5 | [Run the inventory below](#reproduce-surface-counts): `rest.admin` |
-| **REST operations total** | **103** | [Run the inventory below](#reproduce-surface-counts): `rest.total` |
+| **REST operations total** | **106** | [Run the inventory below](#reproduce-surface-counts): `rest.total` |
 | Native MCP tools (`POST /mcp`) | 60 | [Actual native `tools/list`](#reproduce-surface-counts): `nativeMcpTools` |
 | Node-wrapper MCP tools | 79 | [Actual stdio `tools/list`](#reproduce-surface-counts): `stdioMcpTools` |
 | Blazor routes | 8 | `rg '^@page' src/KanbanFlow/Components` includes the gallery, preserved `/ideas/board` and `/ideas/workspace/{Kind}/{SourceId:int}` |
@@ -736,9 +736,9 @@ operations, separating `/api/admin/` from other `/api/` routes. See the
 Historical inventory corrections from the original README revision: **53 → 60** endpoints (both memory
 endpoints and `GET /api/tasks/{id}/context` were missing from the route list entirely);
 **41 → 50** wrapper tools; native tool count stated for the first time (**24**); in-app suite
-**40 → 56**; and `GET /api/subtasks/{id}`, `GET /api/acceptance-criteria/{id}`,
-`GET /api/requirements/{id}` were listed as existing — **they do not exist**. The route map in
-[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md#rest-surface) now marks them.
+**40 → 56**. The original README also listed three leaf entity GET routes before they existed.
+Subtasks, acceptance criteria and requirements now support GET by ID at the `Location` returned
+by their respective create endpoints. See the [REST route map](docs/ARCHITECTURE.md#leaf-entities).
 
 Also corrected: `#82`, `#83`, `#85`, `#88`, and `#89` were all cited as open/broken. All five
 are **closed**, and the code enforces what they asked for.

@@ -2286,19 +2286,9 @@ public static class ApiEndpoints
                 .Where(s => s.TaskItemId == taskId)
                 .AsNoTracking()
                 .OrderBy(s => s.SortOrder)
-                .Select(s => new
-                {
-                    s.Id,
-                    s.TaskItemId,
-                    s.ParentSubtaskId,
-                    s.Text,
-                    s.Completed,
-                    s.SortOrder,
-                    s.CreatedAt
-                })
                 .ToListAsync();
 
-            return Results.Ok(subtasks);
+            return Results.Ok(subtasks.Select(MapSubtask));
         });
 
         // POST /api/tasks/{taskId}/subtasks — create (optionally nested under parentSubtaskId)
@@ -2347,6 +2337,16 @@ public static class ApiEndpoints
                 subtask.SortOrder,
                 subtask.CreatedAt
             });
+        });
+
+        // GET /api/subtasks/{id} — get by ID
+        app.MapGet("/api/subtasks/{id:int}", async (int id, AppDbContext db, CancellationToken ct) =>
+        {
+            var subtask = await db.Subtasks.AsNoTracking().FirstOrDefaultAsync(s => s.Id == id, ct);
+            if (subtask is null)
+                return Results.NotFound(new { message = $"Subtask {id} not found." });
+
+            return Results.Ok(MapSubtask(subtask));
         });
 
         // PUT /api/subtasks/{id} — update
@@ -2437,19 +2437,9 @@ public static class ApiEndpoints
                 // after any delete, and every surface accepts an explicit duplicate rank. Two
                 // surfaces returning different orders for the same task is the drift this fixes.
                 .OrderBy(c => c.SortOrder).ThenBy(c => c.Id)
-                .Select(c => new
-                {
-                    c.Id,
-                    c.TaskItemId,
-                    c.Text,
-                    c.Completed,
-                    c.SortOrder,
-                    c.CreatedAt,
-                    c.UpdatedAt
-                })
                 .ToListAsync();
 
-            return Results.Ok(criteria);
+            return Results.Ok(criteria.Select(MapAcceptanceCriterion));
         });
 
         // POST /api/tasks/{taskId}/acceptance-criteria — create
@@ -2487,6 +2477,16 @@ public static class ApiEndpoints
                 criterion.CreatedAt,
                 criterion.UpdatedAt
             });
+        });
+
+        // GET /api/acceptance-criteria/{id} — get by ID
+        app.MapGet("/api/acceptance-criteria/{id:int}", async (int id, AppDbContext db, CancellationToken ct) =>
+        {
+            var criterion = await db.AcceptanceCriteria.AsNoTracking().FirstOrDefaultAsync(c => c.Id == id, ct);
+            if (criterion is null)
+                return Results.NotFound(new { message = $"Acceptance criterion {id} not found." });
+
+            return Results.Ok(MapAcceptanceCriterion(criterion));
         });
 
         // PUT /api/acceptance-criteria/{id} — update
@@ -2552,22 +2552,7 @@ public static class ApiEndpoints
                 .OrderBy(r => r.SortOrder)
                 .ToListAsync();
 
-            return Results.Ok(requirements.Select(r => new
-            {
-                r.Id,
-                r.ProjectId,
-                r.Text,
-                r.Description,
-                Priority = r.Priority.ToString(),
-                Status = r.Status.ToString(),
-                r.FeatureId,
-                FeatureName = r.Feature?.Name,
-                r.TaskItemId,
-                TaskItemName = r.TaskItem?.Name,
-                r.SortOrder,
-                r.CreatedAt,
-                r.UpdatedAt
-            }));
+            return Results.Ok(requirements.Select(MapRequirement));
         });
 
         // POST /api/projects/{projectId}/requirements — create
@@ -2630,6 +2615,20 @@ public static class ApiEndpoints
                 requirement.CreatedAt,
                 requirement.UpdatedAt
             });
+        });
+
+        // GET /api/requirements/{id} — get by ID
+        app.MapGet("/api/requirements/{id:int}", async (int id, AppDbContext db, CancellationToken ct) =>
+        {
+            var requirement = await db.Requirements
+                .Include(r => r.Feature)
+                .Include(r => r.TaskItem)
+                .AsNoTracking()
+                .FirstOrDefaultAsync(r => r.Id == id, ct);
+            if (requirement is null)
+                return Results.NotFound(new { message = $"Requirement {id} not found." });
+
+            return Results.Ok(MapRequirement(requirement));
         });
 
         // PUT /api/requirements/{id} — update
@@ -3365,6 +3364,45 @@ public static class ApiEndpoints
         BlockingTaskId = d.DependsOnTaskItemId,
         Type = d.Type.ToString(),
         d.CreatedAt
+    };
+
+    private static object MapSubtask(Subtask subtask) => new
+    {
+        subtask.Id,
+        subtask.TaskItemId,
+        subtask.ParentSubtaskId,
+        subtask.Text,
+        subtask.Completed,
+        subtask.SortOrder,
+        subtask.CreatedAt
+    };
+
+    private static object MapAcceptanceCriterion(AcceptanceCriterion criterion) => new
+    {
+        criterion.Id,
+        criterion.TaskItemId,
+        criterion.Text,
+        criterion.Completed,
+        criterion.SortOrder,
+        criterion.CreatedAt,
+        criterion.UpdatedAt
+    };
+
+    private static object MapRequirement(Requirement requirement) => new
+    {
+        requirement.Id,
+        requirement.ProjectId,
+        requirement.Text,
+        requirement.Description,
+        Priority = requirement.Priority.ToString(),
+        Status = requirement.Status.ToString(),
+        requirement.FeatureId,
+        FeatureName = requirement.Feature?.Name,
+        requirement.TaskItemId,
+        TaskItemName = requirement.TaskItem?.Name,
+        requirement.SortOrder,
+        requirement.CreatedAt,
+        requirement.UpdatedAt
     };
 
     private static (int? BlockedTaskId, int? BlockingTaskId, string MissingTaskMessage) ResolveDependencyTaskIds(int routeTaskId, TaskDependencyDto dto, TaskDependencyType type)
