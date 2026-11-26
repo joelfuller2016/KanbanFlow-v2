@@ -398,6 +398,15 @@ These aren't oversights. They're explicit non-goals for v2:
 /api/ideas/{id}/activity                    GET (idea audit log)
 ```
 
+Dependency writes report SQLite busy or locked timeouts as `503 Service Unavailable`
+with `Retry-After: 1` and a JSON `message`. Clients can retry after the indicated
+delay. A duplicate create returns `409 Conflict` because the dependency already exists.
+
+| Dependency write | Status codes |
+|---|---|
+| `POST /api/tasks/{id}/dependencies` | `201` created, `404` task missing, `409` duplicate, `422` invalid dependency, `503` store busy |
+| `DELETE /api/task-dependencies/{id}` | `204` deleted, `404` dependency missing, `503` store busy |
+
 ### 6.2 MCP tools
 
 **Implemented (11):** `list_projects`, `get_project`, `list_project_tasks`, `get_task`, `get_project_board`, `get_project_context`, `get_next_tasks`, `claim_task`, `release_task`, `update_task_status`, `add_task_comment`.

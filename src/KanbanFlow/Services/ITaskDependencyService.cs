@@ -3,8 +3,8 @@ using KanbanFlow.Models;
 namespace KanbanFlow.Services;
 
 /// <summary>
-/// Owns task-dependency creation so the graph validation and insert share one
-/// database transaction across REST requests, UI circuits, and other callers.
+/// Owns task-dependency writes. Creation validates the graph and inserts the edge
+/// in a single transaction.
 /// </summary>
 public interface ITaskDependencyService
 {
@@ -15,6 +15,9 @@ public interface ITaskDependencyService
     Task<TaskDependencyCreateResult> CreateAsync(
         TaskDependencyCreate request,
         CancellationToken ct = default);
+
+    /// <summary>Deletes an edge and returns whether it existed.</summary>
+    Task<bool> DeleteAsync(int id, CancellationToken ct = default);
 }
 
 /// <summary>

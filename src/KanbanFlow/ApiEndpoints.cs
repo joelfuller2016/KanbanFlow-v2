@@ -2216,6 +2216,7 @@ public static class ApiEndpoints
             int taskId,
             TaskDependencyDto dto,
             Services.ITaskDependencyService dependencyService,
+            HttpContext httpContext,
             CancellationToken ct) =>
         {
             if (!EnumParse.TryParseDefined<TaskDependencyType>(dto.Type ?? nameof(TaskDependencyType.DependsOn), out var type))
@@ -2256,19 +2257,34 @@ public static class ApiEndpoints
             {
                 return Results.UnprocessableEntity(new { message = ex.Message });
             }
+            catch (Services.StoreBusyException ex)
+            {
+                return StoreBusy(httpContext, ex);
+            }
         });
 
         // DELETE /api/task-dependencies/{id} — delete a dependency
-        app.MapDelete("/api/task-dependencies/{id:int}", async (int id, AppDbContext db, CancellationToken ct) =>
+        app.MapDelete("/api/task-dependencies/{id:int}", async (
+            int id, Services.ITaskDependencyService dependencyService, HttpContext httpContext, CancellationToken ct) =>
         {
-            var dependency = await db.TaskDependencies.FindAsync([id], ct);
-            if (dependency is null)
-                return Results.NotFound(new { message = $"Task dependency {id} not found." });
+            try
+            {
+                if (!await dependencyService.DeleteAsync(id, ct))
+                    return Results.NotFound(new { message = $"Task dependency {id} not found." });
 
-            db.TaskDependencies.Remove(dependency);
-            await db.SaveChangesWithAuditAsync(ct: ct);
-            return Results.NoContent();
+                return Results.NoContent();
+            }
+            catch (Services.StoreBusyException ex)
+            {
+                return StoreBusy(httpContext, ex);
+            }
         });
+
+        static IResult StoreBusy(HttpContext httpContext, Services.StoreBusyException error)
+        {
+            httpContext.Response.Headers.RetryAfter = "1";
+            return Results.Json(new { message = error.Message }, statusCode: StatusCodes.Status503ServiceUnavailable);
+        }
     }
 
     // ── Subtask Endpoints ──────────────────────────────────────────────
