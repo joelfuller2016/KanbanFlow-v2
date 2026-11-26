@@ -350,10 +350,11 @@ else
     private bool HasActiveFilter =>
         !string.IsNullOrWhiteSpace(searchFilter)
         || !string.IsNullOrWhiteSpace(tagFilter)
-        || !string.IsNullOrEmpty(statusFilterRaw);
+        || StatusFilter is not null;
 
+    // The select emits ordinals. An empty or unrecognized value means All statuses.
     private IdeaStatus? StatusFilter =>
-        string.IsNullOrEmpty(statusFilterRaw) ? null : (IdeaStatus)int.Parse(statusFilterRaw);
+        EnumParse.TryParseDefined<IdeaStatus>(statusFilterRaw, out var status) ? status : null;
 
     // ── Board configuration ──
 

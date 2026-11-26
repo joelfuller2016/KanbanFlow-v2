@@ -16,8 +16,9 @@ namespace KanbanFlow;
 /// This lives here rather than inside <see cref="ApiEndpoints"/> because it is not an API concern.
 /// It was private to that class until #305, which is why
 /// <c>ProjectView.ParsePriority</c> — a Razor component, unable to reach it — grew its own
-/// unguarded copy and became the last unguarded string parse in <c>src/</c>. A rule enforced in
-/// one class is a rule the rest of the codebase cannot follow.
+/// unguarded copy. The Ideas status filter and idea modal priority selector used
+/// <c>int.Parse</c> followed by an enum cast, which the <c>Enum.TryParse</c> search missed (#472).
+/// To find that form, use <c>git grep -nE '\((IdeaStatus|TaskPriority|WorkStatus)\)int\.Parse' -- src/</c>.
 /// </para>
 /// <para>
 /// NOT yet the only copy, and this doc will not pretend otherwise. Many call sites still

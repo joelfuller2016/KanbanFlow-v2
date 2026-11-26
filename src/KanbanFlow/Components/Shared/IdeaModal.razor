@@ -249,8 +249,9 @@
         StateHasChanged();
     }
 
+    // The select emits ordinals. An empty or unrecognized value means None.
     private TaskPriority? SelectedPriority =>
-        string.IsNullOrEmpty(priorityRaw) ? null : (TaskPriority)int.Parse(priorityRaw);
+        EnumParse.TryParseDefined<TaskPriority>(priorityRaw, out var priority) ? priority : null;
 
     // The status to SEND on save, or null for "leave unchanged".
     //
