@@ -875,16 +875,20 @@ function unclosedFence(text) {
   return open;
 }
 
+function openPrRecordFor(linkedPrs) {
+  const links = linkedPrs.map(pr => `${pr.url}${pr.isDraft ? " (draft)" : ""}`).join(", ");
+  return `**Open PR${linkedPrs.length > 1 ? "s" : ""}:** ${links || "none"}`;
+}
+
 function descriptionFor(issue, linkedPrs) {
   const body = String(issue.body ?? "");
   const labels = (issue.labels || []).map((l) => l.name).join(", ") || "none";
   const milestone = issue.milestone?.title || "none";
-  const pullRequests = linkedPrs.map(pr => `${pr.url}${pr.isDraft ? " (draft)" : ""}`).join(", ");
   const lines = [
     "<!-- kanbanflow-sync -->",
     `**Issue:** ${issue.url}`,
     `**State:** ${issue.state || "OPEN"} · **Milestone:** ${milestone} · **Labels:** ${labels}`,
-    `**Open PR${linkedPrs.length > 1 ? "s" : ""}:** ${pullRequests || "none"}`,
+    openPrRecordFor(linkedPrs),
     `**Synced:** ${new Date().toISOString()}`,
     "**Content:** complete",
     `**Source SHA-256:** ${createHash("sha256").update(body, "utf8").digest("hex")}`,
@@ -906,9 +910,35 @@ function needsContentRestoration(description) {
     && parts.body.trimEnd().endsWith(TRUNCATION_FOOTER));
 }
 
+function isGeneratedOpenPrRecord(line) {
+  if (line === "**Open PR:** none") return true;
+  const record = /^\*\*Open (PRs?):\*\* (.+)$/.exec(line);
+  if (!record) return false;
+  const links = record[2].split(", ");
+  return (record[1] === "PR" ? links.length === 1 : links.length > 1)
+    && links.every(link => /^https:\/\/github\.com\/[a-z0-9_.-]+\/[a-z0-9_.-]+\/pull\/[1-9]\d*(?: \(draft\))?$/i.test(link));
+}
+
+function completePrRecordRefresh(description, issueUrl, linkedPrs) {
+  const parts = syncDescriptionParts(description);
+  if (!parts) return null;
+  const prior = parseGitHubIssueUrl(parts.issueUrl);
+  const current = parseGitHubIssueUrl(issueUrl);
+  if (!prior || !current || prior.number !== current.number
+      || prior.owner.toLowerCase() !== current.owner.toLowerCase()
+      || prior.repo.toLowerCase() !== current.repo.toLowerCase()) return null;
+  if ([...parts.header.matchAll(/^\*\*Issue:\*\*[^\r\n]*/gm)].length !== 1) return null;
+  const records = [...parts.header.matchAll(/^\*\*Open PRs?:\*\*[^\r\n]*/gm)];
+  if (records.length !== 1 || !isGeneratedOpenPrRecord(records[0][0])) return null;
+  const next = openPrRecordFor(linkedPrs);
+  const [record] = records;
+  if (next === record[0] || !isGeneratedOpenPrRecord(next)) return null;
+  return description.slice(0, record.index) + next + description.slice(record.index + record[0].length);
+}
+
 // Restore only recognizable incomplete imports. A changed source or local edit is kept in a
 // labeled section as well as the existing audit snapshot; no assumption of GitHub ownership
-// is used to discard differing board text. Complete imports remain untouched (#495).
+// is used to discard differing board text. Complete imports require a separate metadata-only refresh.
 function descriptionRefreshFor(storedDescription, regeneratedDescription) {
   if (!needsContentRestoration(storedDescription)) return null;
   const next = syncDescriptionParts(regeneratedDescription);
@@ -2030,6 +2060,31 @@ async function updateMirroredTask(repo, number, taskId, method, path, changes) {
   }
 }
 
+async function refreshPrMetadata(repo, issue, task, linkedPrs, { dryRun, actor }) {
+  const description = completePrRecordRefresh(task.description, issue.url, linkedPrs);
+  if (description === null) return false;
+  plan(dryRun, "refresh linked PR metadata", `${repo}#${issue.number} on task ${task.id}`);
+  if (!dryRun) {
+    try {
+      await api("PATCH", `/api/tasks/${task.id}/description`, {
+        expectedSha256: createHash("sha256").update(task.description, "utf8").digest("hex"),
+        description, actor,
+      });
+    } catch (error) {
+      const status = error.cause?.status;
+      if (status !== 404 && status !== 405 && status !== 409) throw error;
+      const reason = status === 409 ? "the description changed during sync. Run sync again."
+        : "the board could not accept a conditional description update. Check the task and board version.";
+      const note = `${repo}#${issue.number}: task ${task.id} PR metadata was preserved because ${reason}`;
+      console.error(`  ! ${note}`);
+      stats.incomplete.push(note);
+      return false;
+    }
+  }
+  stats.descriptionsRefreshed++;
+  return true;
+}
+
 async function syncTasks(repo, repoIdentity, projectId, issues, closedByNumber, prsByIssue, featureIds, args, existing, projectLinks, operationTasks, blockedIssues = new Set()) {
   const { actor, dryRun } = args;
   const index = buildTaskIdentityIndex(existing, repoIdentity, projectLinks, operationTasks);
@@ -2209,6 +2264,8 @@ async function syncTasks(repo, repoIdentity, projectId, issues, closedByNumber, 
     if (task.priority !== desiredPriority) patch.priority = desiredPriority;
     const refreshedDescription = descriptionRefreshFor(task.description, descriptionFor(issue, linkedPrs));
     if (refreshedDescription !== null) patch.description = refreshedDescription;
+    const metadataRefreshed = args.completePrList && !needsContentRestoration(task.description)
+      && await refreshPrMetadata(repo, issue, task, linkedPrs, args);
 
     const closed = issue.state && issue.state.toUpperCase() === "CLOSED";
     if (closed && task.status !== "Done") {
@@ -2219,7 +2276,11 @@ async function syncTasks(repo, repoIdentity, projectId, issues, closedByNumber, 
       stats.drift.push(driftDoneButOpen(repo, issue));
     }
 
-    if (Object.keys(patch).length === 0) { stats.tasksUnchanged++; continue; }
+    if (Object.keys(patch).length === 0) {
+      if (!metadataRefreshed) stats.tasksUnchanged++;
+      else if (!dryRun) stats.tasksUpdated++;
+      continue;
+    }
 
     plan(dryRun, "update task", `${desiredName}  ${JSON.stringify(patch)}`);
     if (dryRun) {
@@ -2289,7 +2350,8 @@ async function syncRepo(repo, args, { header = true, repoIdentity: suppliedRepoI
     : await reconcilePushMarkers(repo, repoIdentity, issues, existingTasks, args);
   projectLinks.push(...reconciliation.finalizedLinks);
   await syncTasks(
-    repo, repoIdentity, projectId, issues, closedByNumber, prsByIssue, featureIds, args,
+    repo, repoIdentity, projectId, issues, closedByNumber, prsByIssue, featureIds,
+    { ...args, completePrList: prs.length < GH_PAGE_LIMIT },
     existingTasks, projectLinks, reconciliation.operationTasks, reconciliation.blockedIssues,
   );
 }

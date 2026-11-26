@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
+import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import {
@@ -166,6 +167,8 @@ test("sync mirrors both PR discussions to each linked issue and reports only the
   const tasks = [];
   const links = [];
   const savedComments = new Map();
+  const descriptionWrites = [];
+  let nextDescriptionStatus = 204;
   const log = [];
   const realFetch = globalThis.fetch;
   const realLog = console.log;
@@ -179,6 +182,14 @@ test("sync mirrors both PR discussions to each linked issue and reports only the
     if (path === "/api/projects/1/tasks" && init.method === "GET") return Response.json(tasks);
     if (path === "/api/projects/1/external-work-item-links" && init.method === "GET") return Response.json(links);
     if (path === "/api/external-work-item-links/github/by-node" && init.method === "GET") return new Response("", { status: 404 });
+    if (path === "/api/tasks/42/description" && init.method === "PATCH") {
+      descriptionWrites.push(payload);
+      if (nextDescriptionStatus === 409) tasks[0].description += "\r\nConcurrent board edit  ";
+      if (nextDescriptionStatus !== 204) return new Response(null, { status: nextDescriptionStatus });
+      assert.equal(payload.expectedSha256, createHash("sha256").update(tasks[0].description, "utf8").digest("hex"));
+      tasks[0].description = payload.description;
+      return new Response(null, { status: 204 });
+    }
     if (path === "/api/features/10/external-work-item-projections/github" && init.method === "POST") {
       const task = { id: payload.externalNumber, featureId: 10, name: payload.name, description: payload.description,
         status: payload.status, priority: payload.priority };
@@ -222,6 +233,48 @@ test("sync mirrors both PR discussions to each linked issue and reports only the
     await mod.syncRepo("octo/board", args, opts);
     assert.equal(mod.stats.commentsCreated, 9);
     assert.equal(mod.stats.commentsUnchanged, 18);
+
+    const previousRecord = "**Open PR:** none";
+    const currentRecord = tasks[0].description.match(/^\*\*Open PRs:\*\* [^\r\n]+/m)[0];
+    const previous = tasks[0].description.replace(currentRecord, previousRecord)
+      .replace(/\r?\n/g, "\r\n") + "\r\nLocal board notes  \r\n";
+    tasks[0].description = previous;
+    nextDescriptionStatus = 405;
+    await mod.syncRepo("octo/board", { ...args, comments: false }, opts);
+    assert.equal(tasks[0].description, previous);
+    assert.equal(descriptionWrites.length, 1);
+
+    nextDescriptionStatus = 409;
+    await mod.syncRepo("octo/board", { ...args, comments: false }, opts);
+    const concurrent = previous + "\r\nConcurrent board edit  ";
+    assert.equal(tasks[0].description, concurrent);
+    assert.equal(descriptionWrites.length, 2);
+
+    nextDescriptionStatus = 204;
+    await mod.syncRepo("octo/board", { ...args, comments: false }, opts);
+    assert.equal(tasks[0].description, concurrent.replace(previousRecord, currentRecord));
+    await mod.syncRepo("octo/board", { ...args, comments: false }, opts);
+    assert.equal(descriptionWrites.length, 3);
+
+    const ambiguous = previous.replace(previousRecord, `${previousRecord}\r\n${currentRecord}`);
+    tasks[0].description = ambiguous;
+    await mod.syncRepo("octo/board", { ...args, comments: false }, opts);
+    assert.equal(tasks[0].description, ambiguous);
+    assert.equal(descriptionWrites.length, 3);
+
+    const originalLimit = process.env.KANBANFLOW_GH_PAGE_LIMIT;
+    process.env.KANBANFLOW_GH_PAGE_LIMIT = String(prs.length);
+    try {
+      const bounded = await import("./portfolio-sync.mjs?bounded-pr-metadata");
+      tasks[0].description = previous;
+      await bounded.syncRepo("octo/board", { ...args, comments: false }, opts);
+      assert.equal(tasks[0].description, previous);
+      assert.equal(descriptionWrites.length, 3);
+      assert.ok(bounded.stats.incomplete.some(note => note.includes("open PRs hit the")));
+    } finally {
+      if (originalLimit === undefined) delete process.env.KANBANFLOW_GH_PAGE_LIMIT;
+      else process.env.KANBANFLOW_GH_PAGE_LIMIT = originalLimit;
+    }
   } finally {
     globalThis.fetch = realFetch;
     console.log = realLog;

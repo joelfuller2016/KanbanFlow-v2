@@ -1653,6 +1653,25 @@ public static class ApiEndpoints
             }
         });
 
+        app.MapPatch("/api/tasks/{id:int}/description", async (int id, TaskDescriptionUpdateDto dto,
+            Services.ITaskService taskSvc, CancellationToken ct) =>
+        {
+            try
+            {
+                return await taskSvc.UpdateDescriptionIfCurrentAsync(id, dto.ExpectedSha256, dto.Description, dto.Actor, ct)
+                    ? Results.NoContent()
+                    : Results.Conflict(new { message = "The task description changed. Read the current description before retrying." });
+            }
+            catch (Services.TaskNotFoundException)
+            {
+                return Results.NotFound(new { message = $"Task {id} not found." });
+            }
+            catch (Services.ValidationException ex)
+            {
+                return Results.UnprocessableEntity(new { message = ex.Message });
+            }
+        });
+
         // POST /api/tasks/{id}/claim — lightweight task claim for AI agents.
         // Routes through ITaskService.ClaimAsync so the TaskClaimed audit event is
         // emitted uniformly with UI-driven claims (#88). Conflict body shape is
@@ -3467,6 +3486,8 @@ public record TaskDto(
     string? Assignee,
     double? SortOrder,
     string? Actor = null);
+
+public record TaskDescriptionUpdateDto(string? ExpectedSha256, string? Description, string? Actor = null);
 
 /// <summary>Complete task content and verified immutable identity for atomic inbound projection.</summary>
 public sealed record ProjectInboundGitHubIssueDto(

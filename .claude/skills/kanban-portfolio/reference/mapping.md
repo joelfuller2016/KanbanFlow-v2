@@ -150,7 +150,10 @@ Acceptable: the convention in these repos is `Closes #N` in the body, enforced b
 
 The block lists the linked open PRs in PR-number order. Zero or one linked PR uses the legacy
 `**Open PR:**` record. New imports and recognized legacy content repairs use the current list and
-retain the complete source body. Complete stored descriptions keep their original provenance.
+retain the complete source body. For complete stored descriptions, sync refreshes only a recognized
+open-PR record in a matching issue header after a complete open-PR read. The board requires the
+stored description to match its original SHA-256 before accepting the audited update. Sync reports
+a concurrent edit or unsupported board version and leaves the existing description intact.
 
 ## Closed issues — fetched even when not mirrored
 
