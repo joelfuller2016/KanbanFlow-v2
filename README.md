@@ -188,7 +188,7 @@ GitHub portfolio synchronization remains a Node script operation. The native `wo
 | Issue | `TaskItem` | Active `ExternalWorkItemLink` keyed by immutable repository node id + issue node id; legacy **`#<n> `** prefix only when no structured state exists | GitHub → board; explicit additive create board → GitHub |
 | Issue labels (`P0`…`P3`, `priority:high`, `critical`, …) | `TaskItem.Priority` | — reconciled every run | GitHub → board (GitHub always wins) |
 | Issue state + linked open PR | `TaskItem.Status` | — | GitHub → board, **advance-only** (see below) |
-| Issue body | `TaskItem.Description` | Provenance block and complete source body, including original Markdown whitespace | GitHub → board |
+| Issue body | `TaskItem.Description` | Complete source body with original Markdown whitespace, a `<!-- kanbanflow-sync -->` provenance block, and a SHA-256 of the source | GitHub → board |
 | Issue comment | `TaskComment` (`Comment`) | GitHub node id stamped as `<!-- gh:ID -->` | GitHub → board |
 | PR conversation comment | `TaskComment` (`Comment`) | same `<!-- gh:ID -->` marker | GitHub → board |
 | PR review, `APPROVED` | `TaskComment` (**`Verification`**) | same `<!-- gh:ID -->` marker | GitHub → board |
@@ -245,7 +245,7 @@ that project instead of allowing a duplicate. Because a live `backfill-links` **
 title-only `#<n> ` task that an ordinary sync would have promoted, run `sync` first and reach for
 `backfill-links` afterwards, for the residue.
 
-Discussion paging, legacy content recovery, and drift handling are documented in
+Discussion paging, fetch limits, legacy content recovery, and drift handling are documented in
 [`docs/GITHUB-SYNC.md`](docs/GITHUB-SYNC.md) and
 [`.claude/skills/kanban-portfolio/reference/mapping.md`](.claude/skills/kanban-portfolio/reference/mapping.md).
 
@@ -261,7 +261,7 @@ The single most useful table here. Before you edit a field, know which side wins
 | Task **priority** | **GitHub** | Reconciled every run (`syncTasks()`) from `P0`…`P3` / `priority:high` / bare severity labels. Setting it on the board is undone on the next sync |
 | Task **status** | **Shared** | Verified GitHub closures move cards to `Done` once board completion checks pass. A blocked closure or an open issue linked to a `Done` card is reported as drift |
 | Task **feature** (milestone) | **GitHub** | An issue's milestone change moves the task via `PATCH /api/tasks/{id}/feature` (`syncTasks()`) |
-| Task **description** | **GitHub on import, board after import** | Creation stores the full issue body. Recovery restores recognizable incomplete legacy imports and retains differing board text. |
+| Task **description** | **GitHub on import, board after import** | Creation stores the complete issue body. Recovery restores recognizable incomplete legacy imports and retains any differing prior board text in the same description |
 | **Comments** | **GitHub, append-only** | Issue comments, PR conversation, PR reviews, and inline `file:line` comments are appended, deduped by node id. Board-authored comments are never pushed |
 | **`ActivityEvent`** | **Derived** | Written by the service layer as a side effect of task writes. Never read from or sent to GitHub |
 | `TaskDependency` (DAG) | **Board** | No GitHub representation. Authored by you and by agents |
@@ -296,11 +296,11 @@ that assumes otherwise will be wrong.
 
 | Omission | Detail |
 |---|---|
-| **Description refresh is conditional** | Sync restores the full source when it recognizes an old oversized-header placeholder or a legacy import with its truncation footer. If the board text differs from GitHub, the restored description retains both versions. [Full-content recovery](docs/GITHUB-SYNC.md#complete-content-and-legacy-recovery) |
-| **Default sync uses closed-issue identity** | Without `--include-closed`, sync reads the issue number, node ID and URL. It closes eligible existing cards and refreshes verified links after a transfer within the same board project. Use `--include-closed` to import closed issue bodies and issue comments. |
+| **Description refresh is conditional** | Complete descriptions stay in place. Sync restores recognized legacy excerpts and oversized-header placeholders while retaining any differing board text. Use `restore-content` to repair existing descriptions across open and closed issues. [Full-content recovery](docs/GITHUB-SYNC.md#complete-content-and-legacy-recovery) |
+| **Default sync uses closed-issue identity** | Without `--include-closed`, sync reads the issue number, node ID and URL. It closes eligible existing cards and refreshes verified links after a transfer within the same board project. Use `--include-closed` to import closed issue bodies and comments |
 | **Assignees are not synchronised** | GitHub assignees are read once, only to infer `InProgress` on create (`deriveStatus()`). `TaskItem.Assignee` is never populated from GitHub |
 | **Labels collapse to one priority** | The first matching severity label becomes `TaskItem.Priority`. Every other label survives only as text inside the description block — there is no label entity, and no filtering by label on the board |
-| **Comment edits, deletions, and reactions are never reconciled** | Dedupe is by GitHub node id; an id already seen is skipped forever. An edited GitHub comment keeps its original mirrored text, and a deleted one stays on the board |
+| **Comment edits, deletions, and reactions are never reconciled** | Dedupe uses the GitHub node id once a complete copy exists. A recognizable legacy excerpt can receive one full copy alongside its original history |
 | **PR comments on a PR that closes no issue are dropped** | With no `Closes #n` there is no task to attach them to. They are counted and reported, never silently discarded |
 | **Large discussions require extra reads** | Sync fetches inline review comments through the paginated GitHub API. It also fetches all pages of issue comments, PR conversation comments, or PR reviews when a list result reaches 100 entries. A discussion read failure gives sync a nonzero exit code |
 | **Fetches are capped per list** | `GH_PAGE_LIMIT` defaults to `2000` (`KANBANFLOW_GH_PAGE_LIMIT` overrides it). Hitting the cap is a hard failure, not a warning — a count derived from a partial read is worse than no count |
@@ -573,6 +573,9 @@ node scripts/portfolio-sync.mjs --include-closed
 
 # Skip comment mirroring — much faster on repos with heavy bot review threads.
 node scripts/portfolio-sync.mjs --no-comments
+
+# Preview repair of legacy descriptions for one repository.
+node scripts/portfolio-sync.mjs restore-content owner/repo --dry-run
 
 # Label the audit trail so you can tell this run apart later.
 node scripts/portfolio-sync.mjs --actor nightly-sync

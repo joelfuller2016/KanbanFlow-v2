@@ -10,6 +10,7 @@ public partial class ProjectView
     private int outlineHistoryIndex = -1;
     private int outlineRevealRequest;
     private bool outlineFocusSelection;
+    private bool outlineScrollSelection;
     private bool outlineSortablesRefreshPending;
 
     private OutlineItem? CurrentOutlineItem => outlineHistoryIndex >= 0 &&
@@ -50,10 +51,10 @@ public partial class ProjectView
         if (index < 0) return;
         outlineHistoryIndex = index;
         // Keep keyboard focus on the header button so repeated navigation stays easy.
-        RevealOutlineItem(outlineHistory[index]);
+        RevealOutlineItem(outlineHistory[index], scroll: true);
     }
 
-    private void RevealOutlineItem(OutlineItem item, bool focus = false)
+    private void RevealOutlineItem(OutlineItem item, bool focus = false, bool scroll = false)
     {
         if (!OutlineItemExists(item)) return;
         var task = item.Kind switch
@@ -75,6 +76,7 @@ public partial class ProjectView
             featureId = feature.ParentFeatureId;
         }
         outlineFocusSelection = focus;
+        outlineScrollSelection = scroll;
         outlineRevealRequest++;
     }
 
@@ -84,6 +86,10 @@ public partial class ProjectView
         await OnDetailClose();
         pendingDetailFocusReturnTaskId = null;
         outlineOpen = true;
+        if (panelLayout.Outline.Collapsed)
+        {
+            await UpdatePanelLayout(panelLayout with { Outline = panelLayout.Outline with { Collapsed = false } });
+        }
         if (CurrentOutlineItem is { } item) RevealOutlineItem(item, focus: true);
     }
 

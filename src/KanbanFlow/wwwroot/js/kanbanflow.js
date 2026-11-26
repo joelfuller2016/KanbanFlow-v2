@@ -179,11 +179,25 @@ window.KanbanFlow = {
         this._navSortables = [];
     },
 
-    focusTaskCard: function (taskId) {
+    focusTaskCard: function (taskId, fromOutline) {
+        if (fromOutline) {
+            var outlineTitle = document.querySelector('[data-testid="outline-task-' + taskId + '-title"]');
+            if (outlineTitle && outlineTitle.getClientRects().length && getComputedStyle(outlineTitle).visibility === 'visible') {
+                outlineTitle.focus();
+                return;
+            }
+
+            var outlineToggle = document.querySelector('[data-testid="toggle-project-outline-button"]');
+            if (outlineToggle && outlineToggle.getClientRects().length) {
+                outlineToggle.focus();
+                return;
+            }
+        }
+
         var selector = '[data-testid="board-card-' + taskId + '-title"]';
         var taskButton = document.querySelector(selector);
         if (taskButton) {
-            taskButton.focus({ preventScroll: true });
+            taskButton.focus();
             return;
         }
 
@@ -257,9 +271,11 @@ window.KanbanFlow = {
             dialog._kfOpener = document.activeElement;
         }
 
-        var preferred = options.focusContainer ? dialog : dialog.querySelector('[data-dialog-autofocus]');
-        var focusables = this._dialogFocusables(dialog);
-        (preferred || focusables[0] || dialog).focus({ preventScroll: true });
+        if (!options.preserveFocus) {
+            var preferred = options.focusContainer ? dialog : dialog.querySelector('[data-dialog-autofocus]');
+            var focusables = this._dialogFocusables(dialog);
+            (preferred || focusables[0] || dialog).focus({ preventScroll: true });
+        }
 
         if (dialog._kfKeydown) {
             (dialog._kfKeydownTarget || dialog).removeEventListener('keydown', dialog._kfKeydown);
@@ -280,7 +296,7 @@ window.KanbanFlow = {
                 }
                 return;
             }
-            if (event.key !== 'Tab') {
+            if (event.key !== 'Tab' || options.trapFocus === false) {
                 return;
             }
             // Trap Tab within the dialog (wrap at the first/last focusable).

@@ -111,8 +111,8 @@ it is plainly visible in raw text — over the REST API, in a `curl`, and to an 
 comment over MCP. **Don't edit a mirrored comment's text**; you'll strip the id and the next sync
 will re-add it as a duplicate.
 
-`--no-comments` skips the whole thing. `--max-comment-chars N` caps each body — worth setting if
-bot reviews (CodeRabbit bodies run past 100k chars) start costing agents real context.
+`--no-comments` skips comment mirroring for that run. Mirrored comments retain the full source,
+including large bot reviews. Remove the obsolete `--max-comment-chars` option from old invocations.
 
 Two things about this are load-bearing, not cosmetic:
 

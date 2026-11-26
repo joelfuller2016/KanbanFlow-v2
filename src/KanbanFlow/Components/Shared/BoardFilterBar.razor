@@ -33,11 +33,11 @@
    The host must resolve its filtered list on CHANGE, never in a render-path computed property —
    such a property re-runs on every render, i.e. once per keystroke. *@
 
-<section class="board-filter-bar border-bottom bg-white px-3 py-2"
+<section class="board-filter-bar px-2 py-2"
          data-testid="board-filter-bar"
          aria-label="Filter board tasks">
-    <div class="row g-2 align-items-center">
-        <div class="col-12 col-md-4">
+    <div class="board-filter-fields">
+        <div class="board-filter-search-field">
             <label class="visually-hidden" for="board-filter-search">Search tasks by name or description</label>
             <input id="board-filter-search"
                    @key="@($"search-{TextResetToken}")"
@@ -49,7 +49,7 @@
                    @oninput="OnSearchInput" />
         </div>
 
-        <div class="col-6 col-md-2">
+        <div class="board-filter-person-field">
             <label class="visually-hidden" for="board-filter-assignee">Filter by assignee</label>
             <input id="board-filter-assignee"
                    @key="@($"assignee-{TextResetToken}")"
@@ -61,7 +61,7 @@
                    @oninput="OnAssigneeInput" />
         </div>
 
-        <div class="col-6 col-md-2">
+        <div class="board-filter-person-field">
             @* "Filter by claimed by" is what the field is called, and it is gibberish read aloud —
                this label IS the control's accessible name, so it has to be a sentence, not a column
                name. The visible placeholder keeps the domain term ("Claimed by..."). *@
@@ -81,7 +81,7 @@
            on. Bootstrap's btn-check renders them as a segmented control while keeping the checkbox
            semantics (and therefore the keyboard and screen-reader behaviour) intact — the LABEL is
            the hit target, which is what a user (and an e2e test) clicks. *@
-        <div class="col-12 col-md-4 d-flex flex-wrap align-items-center gap-2">
+        <div class="d-flex flex-wrap align-items-center gap-2">
             @* A flex row of `btn-check` pairs, NOT a `.btn-group`. Four chips do not fit beside the
                hide-done switch at 390px, and a btn-group that wraps draws its rounded end-caps in
                the middle of the row. Bootstrap's `.btn-check:checked + .btn` rule is an ADJACENT
@@ -121,35 +121,34 @@
                 <label class="form-check-label small" for="board-filter-hide-done">Hide done</label>
             </div>
         </div>
-    </div>
+        <div class="board-filter-results d-flex flex-wrap align-items-center gap-2">
+            @* Announced politely, not assertively: narrowing a board is not an emergency, and with
+               `oninput` binding this text changes on every keystroke. *@
+            <span class="text-muted small" aria-live="polite" aria-atomic="true" data-testid="board-filter-summary">
+                @if (Filter.IsActive)
+                {
+                    @($"Showing {MatchCount} of {TotalCount} task{(TotalCount == 1 ? "" : "s")}")
+                }
+                else
+                {
+                    @($"{TotalCount} task{(TotalCount == 1 ? "" : "s")}")
+                }
+            </span>
 
-    <div class="d-flex flex-wrap align-items-center gap-2 mt-2">
-        @* Announced politely, not assertively: narrowing a board is not an emergency, and with
-           `oninput` binding this text changes on every keystroke. *@
-        <span class="text-muted small" aria-live="polite" aria-atomic="true" data-testid="board-filter-summary">
-            @if (Filter.IsActive)
-            {
-                @($"Showing {MatchCount} of {TotalCount} task{(TotalCount == 1 ? "" : "s")}")
-            }
-            else
-            {
-                @($"{TotalCount} task{(TotalCount == 1 ? "" : "s")}")
-            }
-        </span>
-
-        @* Always rendered, never `@if`-ed: an `@if` would make the bar's second row change height
-           the moment the first filter is applied, shoving the whole board down under the user's
-           cursor. Disabled rather than hidden, and the disabling IS a focus change — a disabled
-           element is dropped from the tab order and a focused one blurs to <body> — but that only
-           happens on Clear, where focus leaving a button that now does nothing is the correct
-           outcome. (Copilot, PR #362.) *@
-        <button type="button"
-                class="btn btn-sm btn-outline-secondary ms-auto"
-                data-testid="board-filter-clear"
-                disabled="@(!Filter.IsActive)"
-                @onclick="() => OnClear.InvokeAsync()">
-            Clear filters
-        </button>
+            @* Always rendered, never `@if`-ed: an `@if` would make the bar's second row change height
+               the moment the first filter is applied, shoving the whole board down under the user's
+               cursor. Disabled rather than hidden, and the disabling IS a focus change — a disabled
+               element is dropped from the tab order and a focused one blurs to <body> — but that only
+               happens on Clear, where focus leaving a button that now does nothing is the correct
+               outcome. (Copilot, PR #362.) *@
+            <button type="button"
+                    class="btn btn-sm btn-outline-secondary"
+                    data-testid="board-filter-clear"
+                    disabled="@(!Filter.IsActive)"
+                    @onclick="() => OnClear.InvokeAsync()">
+                Clear filters
+            </button>
+        </div>
     </div>
 </section>
 

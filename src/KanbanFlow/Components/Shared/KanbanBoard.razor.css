@@ -1,0 +1,8 @@
+.kanban-board-scroll {
+    min-height: 0;
+}
+
+.kanban-board-scroll:focus-visible {
+    outline: 2px solid var(--bs-primary);
+    outline-offset: -2px;
+}

@@ -134,7 +134,7 @@ This is body-only. It does **not** read GitHub's native "linked issues" field (t
 `closingIssuesReferences` GraphQL edge), so a PR linked purely through the UI sidebar is missed.
 Acceptable: the convention in these repos is `Closes #N` in the body, enforced by the PR gate.
 
-### Description — a sync block plus an excerpt
+### Description provenance and full issue body
 
 ```markdown
 <!-- kanbanflow-sync -->
@@ -142,32 +142,28 @@ Acceptable: the convention in these repos is `Closes #N` in the body, enforced b
 **State:** OPEN · **Milestone:** M6: AI Memory & Ops Hub · **Labels:** ai-agent, enhancement
 **Open PR:** none
 **Synced:** 2026-07-12T14:02:11.000Z
+**Content:** complete
+**Source SHA-256:** <SHA-256 of the exact UTF-8 issue body>
 <!-- /kanbanflow-sync -->
 
-<first ~29,491 serialized UTF-8 bytes of the issue body>
+<complete issue body>
 ```
 
-The block is machine-readable and human-visible. The body is truncated at `MAX_DESCRIPTION_BYTES`
-(29,491 serialized UTF-8 bytes by default) — 400 tasks × full issue bodies is a lot of payload,
-and the canonical text is one click away. A truncated description refreshes on the next sync run
-only when it still retains both the exact sync header and the truncation footer.
+The provenance block records the source URL and body hash. Imports preserve Markdown whitespace,
+Unicode, and the full body. Ordinary sync repairs recognizable legacy excerpts for the issues it
+processes and preserves differing board text. To repair existing descriptions across open and
+closed issues, use `restore-content owner/repo --dry-run`. Follow the
+[recovery procedure](../../../../docs/GITHUB-SYNC.md#complete-content-and-legacy-recovery).
 
-## Closed issues — fetched even when not mirrored
+## Closed issues
 
-Closed issue **numbers are always fetched**, regardless of `--include-closed`. This is not an
-optimisation detail; it is load-bearing.
+By default, sync fetches closed issue numbers, immutable GitHub node IDs, and URLs to reconcile
+existing linked tasks. With `--include-closed`, sync also fetches complete issue fields and
+mirrors closed issues as tasks.
 
-Without it, a close is *invisible*. When an issue you already synced gets closed, it simply
-drops out of the open set — so a sync that only ever looked at open issues would never see
-the close, would never advance the task to `Done`, and would instead report the task as drift
-("no matching issue") **forever**. Every completed issue would accumulate as permanent noise.
-
-So:
-
-| `--include-closed` | Closed issues fetched | Closed issues become tasks | Existing task converges to `Done` |
-|---|---|---|---|
-| off (default) | numbers only (cheap) | no | **yes** |
-| on | full fields | yes | yes |
+Sync verifies the closed issue's identity against the task's link before requesting `Done`.
+Ambiguous or transferred issues are reported for review. Board completion checks can refuse
+the transition and leave the task's current status in place.
 
 ## Feature reassignment
 
@@ -235,11 +231,9 @@ case — one had 48 comments). Those are **counted and reported, never silently 
 
 ### Size
 
-Bot review bodies are the only real size risk — a single CodeRabbit review measured **110,574
-chars**. Bodies are mirrored whole by default (the board is meant to be the complete record) and
-each is capped to its own scroll box in the UI so one comment can't swallow the timeline. If
-agents start paying for it in context, `--max-comment-chars N` truncates with a pointer back to
-GitHub.
+Large reviews retain the full source. The UI puts long comments in a scrollable region. Use
+`--no-comments` to skip comment mirroring for a run. Remove the rejected `--max-comment-chars`
+option from old invocations.
 
 ## Drift
 

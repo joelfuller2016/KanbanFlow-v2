@@ -1,0 +1,62 @@
+@inject IJSRuntime JS
+@implements IAsyncDisposable
+
+<div @ref="element" class="project-panel-resize-handle d-none d-lg-block"
+     role="separator" tabindex="0" aria-orientation="vertical"
+     aria-label="@($"Resize {PanelLabel}")" aria-controls="@TargetId"
+     title="@($"Resize {PanelLabel}. Use Left and Right arrows, Home, or End.")"
+     data-dock="@Dock" data-testid="@($"{PanelId}-resize-handle")"></div>
+
+@code {
+    [Parameter, EditorRequired] public string PanelId { get; set; } = "";
+    [Parameter, EditorRequired] public string PanelLabel { get; set; } = "";
+    [Parameter, EditorRequired] public string TargetId { get; set; } = "";
+    [Parameter, EditorRequired] public string Dock { get; set; } = "";
+    [Parameter] public EventCallback<int> OnResize { get; set; }
+
+    private ElementReference element;
+    private DotNetObjectReference<ProjectPanelResizeHandle>? self;
+    private IJSObjectReference? controller;
+    private bool disposed;
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender || disposed) return;
+        try
+        {
+            await using var module = await JS.InvokeAsync<IJSObjectReference>("import", ProjectPanelLayout.ModulePath);
+            if (disposed) return;
+            self = DotNetObjectReference.Create(this);
+            var attached = await module.InvokeAsync<IJSObjectReference>("attachResizeHandle", element, self);
+            if (disposed) await DisposeControllerAsync(attached);
+            else controller = attached;
+        }
+        catch (JSDisconnectedException) { }
+        catch (JSException) { }
+        catch (ObjectDisposedException) { }
+    }
+
+    [JSInvokable]
+    public Task CommitWidthAsync(int width) => OnResize.InvokeAsync(width);
+
+    public async ValueTask DisposeAsync()
+    {
+        disposed = true;
+        if (controller is not null)
+        {
+            try { await DisposeControllerAsync(controller); }
+            catch (JSDisconnectedException) { }
+            catch (JSException) { }
+            catch (ObjectDisposedException) { }
+        }
+        self?.Dispose();
+    }
+
+    private static async ValueTask DisposeControllerAsync(IJSObjectReference controller)
+    {
+        await using (controller)
+        {
+            await controller.InvokeVoidAsync("dispose");
+        }
+    }
+}

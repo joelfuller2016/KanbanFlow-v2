@@ -135,6 +135,12 @@ test("descriptionFor preserves empty and whitespace-only source bodies without n
   }
 });
 
+test("descriptionFor refuses missing or malformed source bodies instead of marking them complete", () => {
+  for (const body of [undefined, 14, { truncated: true }]) {
+    assert.throws(() => descriptionFor(issue(body), null), /GitHub issue #488 has no valid source body/);
+  }
+});
+
 test("large provenance is retained with the complete body instead of a replacement stub", () => {
   const source = issue("DO NOT LOSE THIS BODY\n");
   source.labels = [{ name: "label".repeat(9000) }];
@@ -532,6 +538,16 @@ test("restore-content preflights a missing second source before writing the vali
   assert.deepEqual(io.calls.filter(c => c.method !== "GET"), []);
   assert.deepEqual(io.getTasks(), before);
   assert.equal(io.sourceReads(), 1);
+});
+
+test("restore-content preflights an omitted issue body before writing another candidate", async () => {
+  const io = batchFixture();
+  delete io.sources[1].body;
+  const before = io.getTasks();
+  await assert.rejects(restoreContent("owner/repository", { dryRun: false, actor: "batch-repair" }, io),
+    /GitHub issue #489 has no valid source body/);
+  assert.deepEqual(io.calls.filter(c => c.method !== "GET"), []);
+  assert.deepEqual(io.getTasks(), before);
 });
 
 test("restore-content retries a partially successful batch without rewriting the first task or losing a correction", async () => {
@@ -1546,7 +1562,7 @@ test("a pre-dispatch hook abort records nothing and says what it left behind", a
 const SYNC_BLOCK = (owner, repo, number) =>
   `<!-- kanbanflow-sync -->\n**Issue:** https://github.com/${owner}/${repo}/issues/${number}\n<!-- /kanbanflow-sync -->`;
 
-const GH_ISSUE = { id: "I_kwDOnode42", number: 42, title: "Foo", state: "OPEN", url: "https://github.com/octo/board/issues/42" };
+const GH_ISSUE = { id: "I_kwDOnode42", number: 42, title: "Foo", state: "OPEN", url: "https://github.com/octo/board/issues/42", body: null };
 
 test("promotion is refused when the task's authoritative sync block names another repo", async () => {
   const { legacyPromotionDisposition } = await import("./portfolio-sync.mjs?promote-precondition");

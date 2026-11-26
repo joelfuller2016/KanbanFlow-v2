@@ -14,6 +14,11 @@
     gap: .375rem;
 }
 
+.outline-navigation button[aria-disabled="true"] {
+    opacity: var(--bs-btn-disabled-opacity);
+    pointer-events: none;
+}
+
 .project-outline-items {
     flex: 1;
     min-height: 0;
@@ -22,8 +27,141 @@
     padding: 2px;
 }
 
+.outline-item {
+    margin-block-end: .625rem;
+    margin-inline-start: calc(var(--outline-level, 0) * .6rem);
+    min-inline-size: 0;
+    border-radius: .5rem;
+    cursor: pointer;
+}
+
+.outline-item.outline-feature-card {
+    background: var(--bs-tertiary-bg);
+}
+
 .outline-item.is-selected {
     background-color: var(--bs-primary-bg-subtle, #cfe2ff);
     outline: 2px solid var(--bs-primary, #0d6efd);
     outline-offset: -2px;
+}
+
+.outline-card-body {
+    padding: .75rem;
+}
+
+.outline-card-heading {
+    display: flex;
+    align-items: flex-start;
+    gap: .45rem;
+}
+
+.outline-card-title {
+    --bs-btn-hover-color: var(--bs-btn-color);
+    --bs-btn-active-color: var(--bs-btn-color);
+    flex: 1;
+    min-inline-size: 0;
+    font-size: 1rem;
+    font-weight: 600;
+    line-height: 1.35;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+}
+
+.outline-card-title-done {
+    --bs-btn-color: var(--bs-secondary-color);
+    text-decoration: line-through;
+}
+
+.outline-task-title-text {
+    display: block;
+}
+
+.outline-feature-title {
+    display: flex;
+    align-items: flex-start;
+    gap: .4rem;
+}
+
+.outline-feature-icon {
+    flex: none;
+    margin-block-start: .2rem;
+    color: var(--bs-secondary-color);
+}
+
+.outline-card-check {
+    flex: none;
+    margin-block-start: .2rem;
+    cursor: pointer;
+}
+
+.outline-card-check:not(:checked) {
+    border-color: var(--bs-secondary-color);
+}
+
+.outline-card-toggle {
+    display: grid;
+    place-items: center;
+    flex: none;
+    inline-size: 24px;
+    block-size: 24px;
+    padding: 0;
+}
+
+.outline-card-footer {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: .25rem .6rem;
+    margin-block-start: .35rem;
+}
+
+.outline-card-meta {
+    display: flex;
+    flex: 1 1 8rem;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: .2rem .5rem;
+    min-inline-size: 0;
+    color: var(--bs-secondary-color);
+    font-size: .75rem;
+    overflow-wrap: anywhere;
+}
+
+.outline-card-status {
+    padding: .15rem .3rem;
+    color: var(--bs-emphasis-color);
+    background: var(--bs-secondary-bg);
+    border-radius: .25rem;
+}
+
+.outline-card-actions {
+    display: flex;
+    gap: .15rem;
+}
+
+.outline-action-btn {
+    min-block-size: 24px;
+}
+
+.outline-card-title:focus-visible,
+.outline-card-toggle:focus-visible {
+    outline: 2px solid var(--bs-primary);
+    outline-offset: 1px;
+}
+
+@media (min-width: 992px) {
+    .project-outline-header {
+        position: sticky;
+        inset-block-start: 0;
+        z-index: 1;
+        background: inherit;
+        padding-block: .25rem;
+    }
+
+    .project-outline,
+    .project-outline-items {
+        overflow: visible;
+        overscroll-behavior: auto;
+    }
 }
