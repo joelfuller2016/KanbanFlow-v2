@@ -93,7 +93,7 @@ public static class TaskRanking
                 // ClaimedByOther is the primary sort key, so the penalty is maximal and permanent.
                 var claimIsStale = ClaimPolicy.IsStale(task.ClaimedBy, task.ClaimedAt, effectiveNow, effectiveTtl);
                 var claimedByOther = !string.IsNullOrWhiteSpace(task.ClaimedBy)
-                    && !string.Equals(task.ClaimedBy, normalizedActor, StringComparison.OrdinalIgnoreCase)
+                    && !ClaimPolicy.IsSameActor(task.ClaimedBy, normalizedActor)
                     && !claimIsStale;
                 return (Task: task, HasOpenBlocker: hasOpenBlocker, ClaimedByOther: claimedByOther, ClaimIsStale: claimIsStale);
             })

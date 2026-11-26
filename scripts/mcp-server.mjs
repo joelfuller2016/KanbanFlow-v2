@@ -1787,8 +1787,8 @@ function optionalCommentType(args) {
 
 function auditHeaderActor(actor) {
   const value = typeof actor === "string" ? actor.trim() : "";
-  // Fetch headers are ByteStrings and reject controls. Keep the full authored actor in JSON.
-  return value && !/[\x00-\x1f\x7f-\x9f\u0100-\uffff]/.test(value) ? value : "mcp-agent";
+  // Kestrel expects printable ASCII in this header. Keep the full authored actor in JSON.
+  return value && /^[\x20-\x7e]+$/.test(value) ? value : "mcp-agent";
 }
 
 async function restJson(path, options = {}) {

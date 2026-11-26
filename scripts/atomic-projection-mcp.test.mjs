@@ -69,7 +69,10 @@ const args = {
   externalNumber: 42, url: "https://github.com/octo/board/issues/42", description,
 };
 
-for (const [actor, header] of [['Agent \u03a9', 'mcp-agent'], ['agent\r\nlabel', 'mcp-agent'], ['   ', 'mcp-agent'], ['  operator  ', 'operator']]) {
+for (const [actor, header] of [
+  ['\u00c9LODIE', 'mcp-agent'], ['Agent \u03a9', 'mcp-agent'], ['agent\r\nlabel', 'mcp-agent'],
+  ['   ', 'mcp-agent'], ['  operator  ', 'operator'],
+]) {
   test(`stdio REST actor header is safe while JSON retains ${JSON.stringify(actor)}`, async () => {
     await withTransport(200, { id: 7 }, async (rpc, requests) => {
       const result = await rpc('tools/call', { name: 'project_github_issue', arguments: { ...args, actor } });

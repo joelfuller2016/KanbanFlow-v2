@@ -1094,7 +1094,7 @@ public sealed class TaskService(
 
         // Claimed by someone else and still FRESH → conflict (API → 409). Same actor is idempotent.
         if (!string.IsNullOrWhiteSpace(task.ClaimedBy)
-            && !string.Equals(task.ClaimedBy, trimmedActor, StringComparison.OrdinalIgnoreCase)
+            && !ClaimPolicy.IsSameActor(task.ClaimedBy, trimmedActor)
             && !existingClaimIsStale)
         {
             throw new TaskClaimConflictException(taskId, task.ClaimedBy, task.ClaimedAt);
@@ -1110,7 +1110,7 @@ public sealed class TaskService(
         // inside the TTL is by definition not stale, so it takes the no-op branch and ClaimedAt
         // never moves. That reading satisfies AC2 while defeating AC4. This implements AC2's own
         // parenthetical instead: the fresh renewal leaves UpdatedAt unchanged. U-13 now records its saved lease timestamp in the audit.
-        if (string.Equals(task.ClaimedBy, trimmedActor, StringComparison.OrdinalIgnoreCase))
+        if (ClaimPolicy.IsSameActor(task.ClaimedBy, trimmedActor))
         {
             var renewedFromStale = existingClaimIsStale;
             var beforeRenew = TaskActivitySnapshot(task);
@@ -1147,7 +1147,7 @@ public sealed class TaskService(
                     .FirstOrDefaultAsync(ct)
                     ?? throw new TaskNotFoundException(taskId);
                 if (!string.IsNullOrWhiteSpace(current.ClaimedBy)
-                    && !string.Equals(current.ClaimedBy, trimmedActor, StringComparison.OrdinalIgnoreCase))
+                    && !ClaimPolicy.IsSameActor(current.ClaimedBy, trimmedActor))
                     throw new TaskClaimConflictException(taskId, current.ClaimedBy, current.ClaimedAt);
                 task.ClaimedBy = current.ClaimedBy;
                 task.ClaimedAt = current.ClaimedAt;
@@ -1235,7 +1235,7 @@ public sealed class TaskService(
                 .Select(t => new { t.ClaimedBy, t.ClaimedAt, t.UpdatedAt })
                 .FirstOrDefaultAsync(ct)
                 ?? throw new TaskNotFoundException(taskId);
-            if (string.Equals(current.ClaimedBy, trimmedActor, StringComparison.OrdinalIgnoreCase))
+            if (ClaimPolicy.IsSameActor(current.ClaimedBy, trimmedActor))
             {
                 // Reconcile the stale loaded entity with the concurrent winner's values.
                 task.ClaimedBy = current.ClaimedBy;
@@ -1286,40 +1286,34 @@ public sealed class TaskService(
         var trimmedActor = actor.Trim();
 
         await using var db = await dbFactory.CreateDbContextAsync(ct);
-        // #195: AsNoTracking — release is persisted via the conditional ExecuteUpdateAsync below;
-        // not tracking the loaded entity stops SaveChanges from emitting a redundant Tasks UPDATE.
-        var task = await db.Tasks
-            .Include(t => t.Feature)
-            .AsNoTracking()
-            .FirstOrDefaultAsync(t => t.Id == taskId, ct);
-        if (task is null)
-            throw new TaskNotFoundException(taskId);
+        // The conditional update persists the release. The loaded task supplies the response
+        // and audit snapshot, with no tracked entity update to duplicate the write.
+        var candidates = db.Tasks.Include(t => t.Feature).AsNoTracking();
+        var task = await candidates.FirstOrDefaultAsync(t => t.Id == taskId, ct)
+            ?? throw new TaskNotFoundException(taskId);
         if (task.Feature is null)
             throw new InvalidOperationException($"Task {taskId} has no feature; cannot resolve project for audit.");
 
-        // Only the claiming actor may release; anyone else → conflict (API → 409).
-        if (!string.IsNullOrWhiteSpace(task.ClaimedBy)
-            && !string.Equals(task.ClaimedBy, trimmedActor, StringComparison.OrdinalIgnoreCase))
-        {
-            throw new TaskClaimConflictException(taskId, task.ClaimedBy, task.ClaimedAt);
-        }
-
-        // Idempotent: already unclaimed → nothing to do, no audit churn.
-        if (string.IsNullOrWhiteSpace(task.ClaimedBy))
+        var authorizedHolder = task.ClaimedBy;
+        if (authorizedHolder is null && task.ClaimedAt is null)
             return task;
+        if (string.IsNullOrWhiteSpace(authorizedHolder))
+            throw new TaskClaimStateChangedException(taskId, authorizedHolder, task.ClaimedAt);
+        if (!ClaimPolicy.IsSameActor(authorizedHolder, trimmedActor))
+            throw new TaskClaimConflictException(taskId, authorizedHolder, task.ClaimedAt);
 
+        var authorizedClaimedAt = task.ClaimedAt;
         var before = TaskActivitySnapshot(task);
         var now = DateTime.UtcNow;
 
-        // Atomic release + audit (#156): wrap the conditional UPDATE and the TaskReleased event
-        // in one transaction so a release can never persist without its audit event.
+        // The claim clear and TaskReleased event commit together (#156).
         await using var tx = await db.Database.BeginTransactionAsync(ct);
 
-        // Race-safe release (R4): conditional UPDATE that only fires while THIS actor still
-        // holds the claim. If the state changed underneath us, rows == 0 → reconcile below.
+        // Match the exact authorized lease snapshot. SQLite does not participate in actor
+        // case folding, and a renewal or re-claim may change the lease with the same holder.
         var released = await db.Tasks
-            .Where(t => t.Id == taskId && t.ClaimedBy != null
-                        && t.ClaimedBy.ToLower() == trimmedActor.ToLower())
+            .Where(t => t.Id == taskId && t.ClaimedBy == authorizedHolder
+                        && t.ClaimedAt == authorizedClaimedAt)
             .ExecuteUpdateAsync(s => s
                 .SetProperty(t => t.ClaimedBy, (string?)null)
                 .SetProperty(t => t.ClaimedAt, (DateTime?)null)
@@ -1327,24 +1321,13 @@ public sealed class TaskService(
 
         if (released == 0)
         {
-            // State changed between check and write. Re-read: still claimed by another actor
-            // ⇒ 409 conflict; otherwise it is already released ⇒ idempotent success.
-            var current = await db.Tasks.AsNoTracking()
-                .Where(t => t.Id == taskId)
-                .Select(t => new { t.ClaimedBy, t.ClaimedAt, t.UpdatedAt })
-                .FirstOrDefaultAsync(ct)
+            var current = await candidates.FirstOrDefaultAsync(t => t.Id == taskId, ct)
                 ?? throw new TaskNotFoundException(taskId);
-            if (!string.IsNullOrWhiteSpace(current.ClaimedBy)
-                && !string.Equals(current.ClaimedBy, trimmedActor, StringComparison.OrdinalIgnoreCase))
-                throw new TaskClaimConflictException(taskId, current.ClaimedBy!, current.ClaimedAt);
-            // Reconcile the stale loaded entity with the already-released DB state.
-            task.ClaimedBy = current.ClaimedBy;
-            task.ClaimedAt = current.ClaimedAt;
-            task.UpdatedAt = current.UpdatedAt;
-            return task;
+            if (current.ClaimedBy is not null || current.ClaimedAt is not null)
+                throw new TaskClaimStateChangedException(taskId, current.ClaimedBy, current.ClaimedAt);
+            return current;
         }
 
-        // Mirror onto the loaded entity for an accurate audit snapshot + return value.
         task.ClaimedBy = null;
         task.ClaimedAt = null;
         task.UpdatedAt = now;

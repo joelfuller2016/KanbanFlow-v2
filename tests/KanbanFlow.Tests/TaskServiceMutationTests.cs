@@ -1,7 +1,14 @@
+using System.Data.Common;
+using System.Net;
+using System.Net.Http.Json;
+using System.Text.Json;
 using KanbanFlow.Data;
+using KanbanFlow.Mcp;
 using KanbanFlow.Models;
 using KanbanFlow.Services;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Diagnostics;
+using ModelContextProtocol;
 
 namespace KanbanFlow.Tests;
 
@@ -385,32 +392,179 @@ public sealed class TaskServiceMutationTests
     }
 
     // ── ReleaseAsync ───────────────────────────────────────────────────────────
-    [Fact]
-    public async Task Release_ByClaimingActor_ClearsClaimAndWritesActivityEvent()
+    [Theory]
+    [InlineData("ALICE", "aLiCe")]
+    [InlineData("ÉLODIE", "  élodie  ")]
+    [InlineData("ΣΤΕΛΙΟΣ", "στελιος")]
+    public async Task Release_ByCaseEquivalentClaimingActor_ClearsClaimAndWritesActivityEvent(string holder, string actor)
     {
         using var f = new SqliteTestFactory();
-        var (_, taskId) = SeedFeatureWithTask(f, claimedBy: "alice");
+        var (_, taskId) = SeedFeatureWithTask(f, claimedBy: holder);
         var svc = new TaskService(f);
 
-        var result = await svc.ReleaseAsync(taskId, "alice");
+        var result = await svc.ReleaseAsync(taskId, actor);
 
         Assert.Null(result.ClaimedBy);
         Assert.Null(result.ClaimedAt);
 
         using var db = f.CreateDbContext();
+        var persisted = await db.Tasks.SingleAsync(t => t.Id == taskId);
+        Assert.Null(persisted.ClaimedBy);
+        Assert.Null(persisted.ClaimedAt);
         var ev = await db.ActivityEvents.SingleAsync(e => e.EntityId == taskId);
         Assert.Equal("TaskReleased", ev.EventType);
-        Assert.Equal("alice", ev.Actor);
+        Assert.Equal(actor.Trim(), ev.Actor);
+    }
+
+    [Theory]
+    [InlineData("alice", "bob")]
+    [InlineData("ÉLODIE", "elodie")]
+    [InlineData("ÉLODIE", "E\u0301LODIE")]
+    public async Task Release_ByDifferentActor_ThrowsClaimConflict(string holder, string actor)
+    {
+        using var f = new SqliteTestFactory();
+        var (_, taskId) = SeedFeatureWithTask(f, claimedBy: holder);
+        var svc = new TaskService(f);
+
+        await Assert.ThrowsAsync<TaskClaimConflictException>(() => svc.ReleaseAsync(taskId, actor));
     }
 
     [Fact]
-    public async Task Release_ByDifferentActor_ThrowsClaimConflict()
+    public async Task Release_WhenUpdateIsIgnoredAndClaimRemains_RejectsWithoutAudit()
     {
         using var f = new SqliteTestFactory();
         var (_, taskId) = SeedFeatureWithTask(f, claimedBy: "alice");
-        var svc = new TaskService(f);
+        await using var db = f.CreateDbContext();
+        await IgnoreReleaseUpdateAsync(db);
 
-        await Assert.ThrowsAsync<TaskClaimConflictException>(() => svc.ReleaseAsync(taskId, "bob"));
+        var error = await Assert.ThrowsAsync<TaskClaimStateChangedException>(
+            () => new TaskService(f).ReleaseAsync(taskId, "alice"));
+
+        Assert.Contains("retry", error.Message, StringComparison.OrdinalIgnoreCase);
+        var persisted = await db.Tasks.SingleAsync(t => t.Id == taskId);
+        Assert.Equal("alice", persisted.ClaimedBy);
+        Assert.NotNull(persisted.ClaimedAt);
+        Assert.Empty(await db.ActivityEvents.ToListAsync());
+    }
+
+    [Fact]
+    public async Task Release_WhenClaimRemains_RestReturnsRetryableConflict()
+    {
+        using var f = new SqliteTestFactory();
+        var claimedAt = DateTime.UtcNow.AddMinutes(-5);
+        var (_, taskId) = SeedFeatureWithTask(f, claimedBy: "alice", claimedAt: claimedAt);
+        await using var db = f.CreateDbContext();
+        await IgnoreReleaseUpdateAsync(db);
+        await using var host = await TaskDeleteActorEndpointTests.TaskHost.StartAsync(f);
+
+        using var response = await host.Client.PostAsJsonAsync($"/api/tasks/{taskId}/release", new { actor = "alice" });
+
+        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal("alice", body.GetProperty("claimedBy").GetString());
+        Assert.Equal(claimedAt, body.GetProperty("claimedAt").GetDateTime());
+        Assert.Contains("retry", body.GetProperty("message").GetString(), StringComparison.OrdinalIgnoreCase);
+        Assert.Empty(await db.ActivityEvents.ToListAsync());
+    }
+
+    [Fact]
+    public async Task Release_WhenClaimRemains_NativeMcpReturnsRetryableError()
+    {
+        using var f = new SqliteTestFactory();
+        var (_, taskId) = SeedFeatureWithTask(f, claimedBy: "alice");
+        await using var db = f.CreateDbContext();
+        await IgnoreReleaseUpdateAsync(db);
+
+        var error = await Assert.ThrowsAsync<McpException>(
+            () => KanbanMcpTools.ReleaseTask(new TaskService(f), taskId, "alice"));
+
+        Assert.Contains("retry", error.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal("alice", (await db.Tasks.SingleAsync(t => t.Id == taskId)).ClaimedBy);
+        Assert.Empty(await db.ActivityEvents.ToListAsync());
+    }
+
+    private static Task IgnoreReleaseUpdateAsync(AppDbContext db) => db.Database.ExecuteSqlRawAsync("""
+        CREATE TRIGGER ignore_release BEFORE UPDATE OF ClaimedBy ON Tasks
+        WHEN NEW.ClaimedBy IS NULL
+        BEGIN
+            SELECT RAISE(IGNORE);
+        END;
+        """);
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Release_WhenAnotherReleaseWins_RespectsTheResultingClaim(bool reclaim)
+    {
+        using var f = new SqliteTestFactory();
+        var originalStamp = DateTime.UtcNow.AddMinutes(-5);
+        var (_, taskId) = SeedFeatureWithTask(f, claimedBy: "alice", claimedAt: originalStamp);
+        var concurrent = new TaskService(f);
+        var service = new TaskService(new ReleaseInterleavingFactory(f, async ct =>
+        {
+            await concurrent.ReleaseAsync(taskId, "alice", ct);
+            if (reclaim)
+                await concurrent.ClaimAsync(taskId, "alice", ct);
+        }));
+
+        if (reclaim)
+        {
+            var failure = await Assert.ThrowsAsync<TaskClaimStateChangedException>(() => service.ReleaseAsync(taskId, "alice"));
+            Assert.Equal("alice", failure.ClaimedBy);
+            Assert.True(failure.ClaimedAt > originalStamp);
+        }
+        else
+        {
+            var alreadyReleased = await service.ReleaseAsync(taskId, "alice");
+            Assert.Null(alreadyReleased.ClaimedBy);
+            Assert.Null(alreadyReleased.ClaimedAt);
+        }
+
+        using var db = f.CreateDbContext();
+        var persisted = await db.Tasks.SingleAsync(t => t.Id == taskId);
+        Assert.Equal(reclaim ? "alice" : null, persisted.ClaimedBy);
+        Assert.Equal(reclaim, persisted.ClaimedAt.HasValue);
+        Assert.Single(await db.ActivityEvents.Where(e => e.EventType == "TaskReleased").ToListAsync());
+    }
+
+    private sealed class ReleaseInterleavingFactory(SqliteTestFactory inner, Func<CancellationToken, Task> beforeTransaction)
+        : IDbContextFactory<AppDbContext>
+    {
+        private readonly DbContextOptions<AppDbContext> options = new DbContextOptionsBuilder<AppDbContext>(inner.Options)
+            .AddInterceptors(new ReleaseInterleaving(beforeTransaction))
+            .Options;
+
+        public AppDbContext CreateDbContext() => new(options);
+    }
+
+    private sealed class ReleaseInterleaving(Func<CancellationToken, Task> beforeTransaction) : DbTransactionInterceptor
+    {
+        public override async ValueTask<InterceptionResult<DbTransaction>> TransactionStartingAsync(
+            DbConnection connection, TransactionStartingEventData eventData, InterceptionResult<DbTransaction> result,
+            CancellationToken cancellationToken = default)
+        {
+            // Commit the competing operations after authorization and before the outer write acquires its lock.
+            await beforeTransaction(cancellationToken);
+            return result;
+        }
+    }
+
+    [Fact]
+    public async Task Release_NativeMcpRetry_ReportsUnclaimedWithoutClaimingAnotherAudit()
+    {
+        using var f = new SqliteTestFactory();
+        var (_, taskId) = SeedFeatureWithTask(f, claimedBy: "alice");
+        var service = new TaskService(f);
+
+        var released = await KanbanMcpTools.ReleaseTask(service, taskId, "alice");
+        var retried = await KanbanMcpTools.ReleaseTask(service, taskId, "alice");
+
+        Assert.Null(released.ClaimedBy);
+        Assert.Equal("Task is unclaimed.", released.Message);
+        Assert.Null(retried.ClaimedBy);
+        Assert.Equal("Task is unclaimed.", retried.Message);
+        using var db = f.CreateDbContext();
+        Assert.Single(await db.ActivityEvents.Where(e => e.EventType == "TaskReleased").ToListAsync());
     }
 
     [Fact]
@@ -425,6 +579,51 @@ public sealed class TaskServiceMutationTests
         Assert.Null(result.ClaimedBy);
         using var db = f.CreateDbContext();
         Assert.Equal(0, await db.ActivityEvents.CountAsync(e => e.EventType == "TaskReleased"));
+    }
+
+    [Theory]
+    [InlineData(" ", false)]
+    [InlineData(" ", true)]
+    [InlineData(null, true)]
+    public async Task Release_LegacyIncompleteClaim_RequiresClaimBeforeRetry(string? holder, bool hasTimestamp)
+    {
+        using var f = new SqliteTestFactory();
+        var (_, taskId) = SeedFeatureWithTask(f);
+        await using var db = f.CreateDbContext();
+        var raw = await db.Tasks.SingleAsync(t => t.Id == taskId);
+        raw.ClaimedBy = holder;
+        raw.ClaimedAt = hasTimestamp ? DateTime.UtcNow.AddHours(-1) : null;
+        await db.SaveChangesAsync();
+
+        var error = await Assert.ThrowsAsync<TaskClaimStateChangedException>(
+            () => new TaskService(f).ReleaseAsync(taskId, "alice"));
+
+        Assert.Contains("Claim the task", error.Message);
+        var persisted = await db.Tasks.AsNoTracking().SingleAsync(t => t.Id == taskId);
+        Assert.Equal(holder, persisted.ClaimedBy);
+        Assert.Equal(raw.ClaimedAt, persisted.ClaimedAt);
+        Assert.Empty(await db.ActivityEvents.ToListAsync());
+    }
+
+    [Fact]
+    public async Task Release_LegacyHolderWithoutTimestamp_StillClearsClaim()
+    {
+        using var f = new SqliteTestFactory();
+        var (_, taskId) = SeedFeatureWithTask(f, claimedBy: "ÉLODIE");
+        await using var db = f.CreateDbContext();
+        var raw = await db.Tasks.SingleAsync(t => t.Id == taskId);
+        raw.ClaimedAt = null;
+        await db.SaveChangesAsync();
+
+        var released = await new TaskService(f).ReleaseAsync(taskId, "élodie");
+
+        Assert.Null(released.ClaimedBy);
+        Assert.Null(released.ClaimedAt);
+        var persisted = await db.Tasks.AsNoTracking().SingleAsync(t => t.Id == taskId);
+        Assert.Null(persisted.ClaimedBy);
+        Assert.Null(persisted.ClaimedAt);
+        var activity = await db.ActivityEvents.SingleAsync();
+        Assert.Equal("TaskReleased", activity.EventType);
     }
 
     [Fact]

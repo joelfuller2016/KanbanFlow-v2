@@ -185,7 +185,7 @@ public interface ITaskService
     /// <summary>
     /// Release a task previously claimed by <paramref name="actor"/>. Clears
     /// <see cref="TaskItem.ClaimedBy"/>/<see cref="TaskItem.ClaimedAt"/> and emits a
-    /// <c>TaskReleased</c> activity event.
+    /// <c>TaskReleased</c> activity event. An already unclaimed task is returned without a write.
     /// </summary>
     /// <param name="taskId">Target task id.</param>
     /// <param name="actor">Releasing actor; required (non-blank).</param>
@@ -194,6 +194,7 @@ public interface ITaskService
     /// <exception cref="ValidationException">Actor is blank (API maps to 422).</exception>
     /// <exception cref="TaskNotFoundException">The task does not exist.</exception>
     /// <exception cref="TaskClaimConflictException">The task is claimed by a different actor (API maps to 409).</exception>
+    /// <exception cref="TaskClaimStateChangedException">The authorized release did not apply or claim data is incomplete (API maps to 409).</exception>
     Task<TaskItem> ReleaseAsync(int taskId, string actor, CancellationToken ct = default);
 
     /// <summary>

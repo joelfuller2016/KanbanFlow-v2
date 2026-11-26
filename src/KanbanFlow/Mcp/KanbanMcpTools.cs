@@ -475,7 +475,7 @@ public static class KanbanMcpTools
     }
 
     [McpServerTool(Name = "release_task")]
-    [Description("Release a task you previously claimed through the audit-aware service layer (writes a TaskReleased activity event; no HTTP hop). Clears the claim so other actors can pick it up.")]
+    [Description("Release a task you previously claimed so other actors can pick it up. An actual release records a TaskReleased activity event. An already unclaimed task needs no change.")]
     public static async Task<TaskClaimResult> ReleaseTask(
         ITaskService taskService,
         [Description("The task id to release.")] int taskId,
@@ -488,7 +488,7 @@ public static class KanbanMcpTools
                 taskId, string.IsNullOrWhiteSpace(actor) ? DefaultActor : actor.Trim(), cancellationToken);
             return new TaskClaimResult(
                 released.Id, released.Name, released.ClaimedBy, released.ClaimedAt,
-                "Task released; audit event recorded.");
+                "Task is unclaimed.");
         }
         catch (TaskNotFoundException)
         {
@@ -498,6 +498,10 @@ public static class KanbanMcpTools
         {
             throw new McpException(
                 $"Task {taskId} is claimed by {ex.ClaimedBy}, not by the releasing actor. Only {ex.ClaimedBy} can release it.");
+        }
+        catch (TaskClaimStateChangedException ex)
+        {
+            throw new McpException(ex.Message);
         }
         catch (ValidationException ex)
         {
