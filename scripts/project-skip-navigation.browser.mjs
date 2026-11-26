@@ -95,6 +95,9 @@ export async function projectSkipNavigation(page, api) {
       await page.keyboard.press(key);
       const panel = page.getByTestId('task-detail-panel');
       await panel.waitFor();
+      // Blazor first displays the dock, then its initializer transfers focus.
+      await page.waitForFunction(() =>
+        document.getElementById('task-details')?.contains(document.activeElement));
       const modalUrl = page.url();
       await page.getByTestId('skip-to-board-search').dispatchEvent('click');
       await page.waitForFunction(() => document.activeElement?.id === 'board-filter-search');

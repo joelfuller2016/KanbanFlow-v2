@@ -833,8 +833,14 @@ function unclosedFence(text) {
   return open;
 }
 
+function issueBodyForDescription(issue) {
+  if (issue.body === null) return "";
+  if (typeof issue.body !== "string") throw new Error(`GitHub issue #${issue.number} has no valid source body; complete content is unavailable.`);
+  return issue.body;
+}
+
 function descriptionFor(issue, linkedPr) {
-  const body = String(issue.body ?? "");
+  const body = issueBodyForDescription(issue);
   const labels = (issue.labels || []).map((l) => l.name).join(", ") || "none";
   const milestone = issue.milestone?.title || "none";
   const lines = [
@@ -2181,6 +2187,7 @@ async function syncRepo(repo, args, { header = true, repoIdentity: suppliedRepoI
   // With --include-closed, closed issues are mirrored as tasks too. Without it they are still
   // fetched (numbers only) so an already-synced task can converge to Done when its issue closes.
   const issues = args.includeClosed ? [...openIssues, ...closed] : openIssues;
+  for (const issue of issues) issueBodyForDescription(issue);
 
   const prByIssue = mapIssueToOpenPr(prs);
 

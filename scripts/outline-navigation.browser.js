@@ -90,9 +90,10 @@ async page => {
       'outline-' + kind + '-' + id);
   }
   async function openOutline(kind, id, expectedName) {
-    const label = kind === 'feature' ? 'Edit feature ' : kind === 'subtask' ? 'Open subtask details for ' : 'Open task details for ';
+    const label = kind === 'feature' ? 'Edit feature ' : 'Open subtask details for ';
     const name = kind === 'subtask' ? 'Outline nested subtask' : expectedName;
-    await row(kind, id).getByRole('button', { name: label + name, exact: true }).click();
+    if (kind === 'task') await row(kind, id).getByTestId('outline-task-' + id + '-edit-button').click();
+    else await row(kind, id).getByRole('button', { name: label + name, exact: true }).click();
     await editor.waitFor();
     assert(await page.locator('#edit-item-name').inputValue() === expectedName, 'Outline opened the wrong existing editor.');
     await page.getByTestId('edit-item-close-button').click();
@@ -111,17 +112,20 @@ async page => {
   await board();
   assert(await back.isDisabled() && await forward.isDisabled(), 'New history should be empty.');
   assert(await outline.locator('.is-selected').count() === 0, 'New visit selected an arbitrary item.');
-  const frozen = await header.boundingBox();
   await page.getByTestId('outline-feature-' + root.id + '-toggle').click();
   await row('task', taskB.id).waitFor({ state: 'detached' });
   await showCard(taskB);
   const beforeScroll = await positions();
   await page.getByTestId('task-detail-full-page-button').click();
   await showOutline('task', taskB.id);
-  assert(JSON.stringify(await positions()) === JSON.stringify(beforeScroll),
-    'Revealing the outline moved the board/page: ' + JSON.stringify({ beforeScroll, after: await positions() }));
-  assert(Math.abs((await header.boundingBox()).y - frozen.y) < 1, 'Outline header scrolled with its items.');
-  assert(await items.evaluate(e => e.scrollTop > 200), 'Long outline did not scroll to the selected task.');
+  const afterScroll = await positions();
+  assert(afterScroll.x === beforeScroll.x && afterScroll.y > beforeScroll.y,
+    'Revealing an off-screen outline card must scroll the document vertically.');
+  assert(await items.evaluate(e => e.scrollTop === 0), 'Desktop outline must scroll with the document.');
+  assert(await row('task', taskB.id).evaluate(el => {
+    const rect = el.getBoundingClientRect();
+    return rect.top >= 0 && rect.top < window.innerHeight;
+  }), 'The selected outline task must be visible in the viewport.');
   assert(await back.isDisabled() && await forward.isDisabled(), 'Show in outline recorded a duplicate visit.');
   await page.screenshot({ path: 'outline-desktop.png', fullPage: true, animations: 'disabled' });
 

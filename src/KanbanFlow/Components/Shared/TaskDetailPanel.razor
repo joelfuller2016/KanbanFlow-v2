@@ -12,26 +12,43 @@
 
     <div class="offcanvas-header task-detail-header border-bottom">
         <div class="task-detail-heading">
-        @if (Task is not null)
-        {
-            @if (isEditingName)
+            @if (Task is not null)
             {
-                <input id="task-detail-title" type="text" class="form-control form-control-lg fw-bold border-0 p-0"
-                       aria-label="Task name"
-                       @bind="editingName" @bind:event="oninput"
-                       @onblur="SaveNameAsync"
-                       @onkeydown="HandleNameKeyDown"
-                       style="font-size: 1.15rem;" />
+                <div class="task-detail-identity">
+                    <span>Task #@Task.Id</span>
+                    <GitHubIssueBadge Links="Task.ExternalLinks"
+                                      Description="@Task.Description"
+                                      CssClass="badge rounded-pill text-bg-light border text-decoration-none d-inline-flex"
+                                      TestId="task-detail-github-link" />
+                </div>
+                @if (isEditingName)
+                {
+                    <input id="task-detail-title" type="text" class="form-control task-detail-title task-detail-title-editor"
+                           aria-label="Task name"
+                           @bind="editingName" @bind:event="oninput"
+                           @onblur="SaveNameAsync"
+                           @onkeydown="HandleNameKeyDown" />
+                }
+                else
+                {
+                    <h5 id="task-detail-title" class="offcanvas-title task-detail-title text-break mb-0" role="button"
+                        tabindex="0" aria-label="Edit task name @Task.Name"
+                        @onclick="StartEditingName" @onkeydown="HandleNameActivationKeyDown" title="Click to edit">
+                        @Task.Name
+                    </h5>
+                }
+                <div class="task-detail-summary">
+                    <span class="@GetStatusBadgeClass(Task.Status)">@GetStatusDisplayName(Task.Status)</span>
+                    <span class="task-detail-assignee">@(!string.IsNullOrWhiteSpace(Task.Assignee) ? Task.Assignee : "Unassigned")</span>
+                    <button type="button" class="btn btn-link btn-sm p-0 text-decoration-none task-detail-outline-link"
+                            @onclick="ScrollToOutline" data-testid="task-detail-show-in-outline-button">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="currentColor" class="me-1" aria-hidden="true" viewBox="0 0 16 16">
+                            <path fill-rule="evenodd" d="M15 2a1 1 0 0 0-1-1H2a1 1 0 0 0-1 1v12a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1zM0 2a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H2a2 2 0 0 1-2-2zm4.5 5.5a.5.5 0 0 0 0 1h7a.5.5 0 0 0 0-1zm0-2a.5.5 0 0 0 0 1h7a.5.5 0 0 0 0-1zm0 4a.5.5 0 0 0 0 1h4a.5.5 0 0 0 0-1z"/>
+                        </svg>
+                        Show in outline
+                    </button>
+                </div>
             }
-            else
-            {
-                <h5 id="task-detail-title" class="offcanvas-title fw-bold text-break mb-0" role="button"
-                    tabindex="0" aria-label="Edit task name @Task.Name"
-                    @onclick="StartEditingName" @onkeydown="HandleNameActivationKeyDown" title="Click to edit">
-                    @Task.Name
-                </h5>
-            }
-        }
         </div>
         <div class="task-detail-controls" role="group" aria-label="Card display">
             <button type="button" class="btn btn-sm btn-outline-secondary"
@@ -70,455 +87,464 @@
             <button type="button" class="btn-close" title="Close" @onclick="ClosePanel"
                     aria-label="Close task detail panel" data-testid="task-detail-close-button"></button>
         </div>
+        @if (Task is not null)
+        {
+            <nav class="task-detail-section-nav" aria-label="Task sections">
+                <button type="button" class="btn btn-link btn-sm" @onclick="() => FocusSectionAsync(descriptionSection)">Description</button>
+                <button type="button" class="btn btn-link btn-sm" @onclick="() => FocusSectionAsync(discussionSection)">Discussion</button>
+                <button type="button" class="btn btn-link btn-sm" @onclick="() => FocusSectionAsync(fieldsSection)">Fields</button>
+            </nav>
+        }
         <span class="task-detail-collapsed-label" aria-hidden="true">Task details</span>
     </div>
 
     @if (Task is not null)
     {
-        <div id="task-detail-content" class="offcanvas-body">
-            <TaskRequestContext TaskId="Task.Id" />
+        <div id="task-detail-content" class="offcanvas-body task-detail-content">
+            <div class="task-detail-grid">
+                <div class="task-detail-primary">
+                    @* Description (#357). This was a bare <textarea>: the field had no READ state at all,
+                       so a mirrored task showed `<!-- kanbanflow-sync -->` and `**Issue:**` as literal
+                       text and its issue URL was dead. EditableMarkdown adds the missing state and is the
+                       SAME component EditItemModal uses — do not fork it (#306).
 
-            @* Show in outline *@
-            <div class="mb-3">
-                <button class="btn btn-link btn-sm p-0 text-decoration-none"
-                        @onclick="ScrollToOutline" data-testid="task-detail-show-in-outline-button">
-                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="currentColor" class="me-1" viewBox="0 0 16 16">
-                        <path fill-rule="evenodd" d="M15 2a1 1 0 0 0-1-1H2a1 1 0 0 0-1 1v12a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1zM0 2a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H2a2 2 0 0 1-2-2zm4.5 5.5a.5.5 0 0 0 0 1h7a.5.5 0 0 0 0-1zm0-2a.5.5 0 0 0 0 1h7a.5.5 0 0 0 0-1zm0 4a.5.5 0 0 0 0 1h4a.5.5 0 0 0 0-1z"/>
-                    </svg>
-                    Show in outline
-                </button>
-            </div>
+                       The write path below is untouched: OnCommit fires on blur and calls
+                       SaveDescriptionAsync exactly as @onblur did, so the ITaskService routing, the
+                       unchanged-guard and the audit trail all behave as before. *@
+                    <section class="task-detail-section task-detail-description" aria-label="Description"
+                             tabindex="-1" @ref="descriptionSection">
+                        <EditableMarkdown ElementId="task-detail-description"
+                                          TestId="task-detail-description"
+                                          Label="Description"
+                                          Rows="4"
+                                          ResetToken="descriptionResetToken"
+                                          @bind-Value="editingDescription"
+                                          OnCommit="SaveDescriptionAsync" />
+                    </section>
 
-            <GitHubIssueBadge Links="Task.ExternalLinks"
-                              Description="@Task.Description"
-                              CssClass="badge rounded-pill text-bg-light border text-decoration-none d-inline-flex mb-3"
-                              TestId="task-detail-github-link" />
+                    @* ── History: the task's COMPLETE trail (#328) ────────────────────────────────────
+                       This section rendered `comments` ONLY. Every field-level change — status, priority,
+                       assignment, rename, feature move, claim/release — was written to ActivityEvent by
+                       TaskService and then never shown to the human. ActivityTimeline merges both records
+                       into one rail and de-duplicates the comment/event PAIRS the service writes for a
+                       single action (see ActivityTimelineBuilder's remarks).
 
-            @* Feature reassignment *@
-            <div class="mb-3">
-                <label class="form-label small text-muted mb-1" for="task-detail-feature">Feature</label>
-                <select id="task-detail-feature" class="form-select form-select-sm" value="@Task.FeatureId"
-                        @onchange="OnFeatureChanged">
-                    @if (Features is not null)
-                    {
-                        @foreach (var f in Features.OrderBy(f => f.SortOrder))
-                        {
-                            <option value="@f.Id">@f.Name</option>
-                        }
-                    }
-                </select>
-            </div>
+                       It is the SAME component EditItemModal uses. Do not fork it — two copies is exactly
+                       how this panel ended up rendering two different clocks (#306).
 
-            @* Status *@
-            <div class="mb-3">
-                <label class="form-label small text-muted mb-1" for="task-detail-status">Status</label>
-                <select id="task-detail-status" class="form-select form-select-sm" value="@((int)Task.Status)"
-                        @key="statusSelectToken"
-                        @onchange="OnStatusChanged">
-                    @foreach (var status in Enum.GetValues<WorkStatus>())
-                    {
-                        <option value="@((int)status)">@GetStatusDisplayName(status)</option>
-                    }
-                </select>
-
-                @* Definition-of-Done refusal (#428). The gate lives in ITaskService, so this is the
-                   human-readable face of the exact constraint an agent hits over MCP or REST. *@
-                @if (_dodBlocked is not null)
-                {
-                    @* The announcement and the controls are deliberately SEPARATE elements: an
-                       assertive live region announces its contents, but interactive controls inside
-                       one are announced unpredictably and are not exposed as a grouped, operable
-                       unit. So role="alert" wraps only the text, and the form sits outside it. *@
-                    <div class="alert alert-warning mt-2 mb-0 py-2 px-3"
-                         data-testid="task-detail-dod-block">
-                        <div role="alert">
-                            <div class="fw-semibold small mb-1">
-                                Can&rsquo;t mark Done &mdash; @_dodBlocked.UnmetCount unfinished acceptance
-                                @(_dodBlocked.UnmetCount == 1 ? "criterion" : "criteria")
-                            </div>
-                            <ul class="small mb-2 ps-3">
-                                @foreach (var text in _dodBlocked.Unmet)
-                                {
-                                    <li>@text</li>
-                                }
-                            </ul>
+                       The Latest Handoff banner stays: it is a "read this first" callout, not a duplicate
+                       history, and it is the one entry that must not be behind a filter chip or a fold. *@
+                    <section class="task-detail-section" tabindex="-1" @ref="discussionSection"
+                             data-testid="task-comments-section" aria-labelledby="task-comments-heading">
+                        <div class="d-flex align-items-center mb-2">
+                            <h6 id="task-comments-heading" class="task-detail-section-heading mb-0">Discussion and activity</h6>
+                            @if (!commentsLoading)
+                            {
+                                @* Counts COMMENTS, not history entries — the timeline's own chips carry the
+                                   per-category totals. The label identifies the comment count. *@
+                                <span class="ms-2 badge bg-secondary small" data-testid="task-comments-count"
+                                      title="Comments" aria-label="@($"{comments.Count} comments")">@comments.Count</span>
+                            }
                         </div>
-                        <div class="input-group input-group-sm" role="group"
-                             aria-label="Complete this task despite unmet acceptance criteria">
-                            @* maxlength mirrors the service-side bound, so the UI cannot submit a
-                               reason the gate will reject. The catch in ApplyStatusAsync still
-                               handles it, because REST and MCP share the same gate. *@
-                            <input type="text" class="form-control" placeholder="Reason to complete anyway"
-                                   aria-label="Reason to complete anyway"
-                                   data-testid="task-detail-dod-reason"
-                                   maxlength="@MaxOverrideReasonLength"
-                                   @ref="_dodReasonInput"
-                                   @bind="_dodOverrideReason" @bind:event="oninput" />
-                            <button type="button" class="btn btn-outline-secondary"
-                                    data-testid="task-detail-dod-override"
-                                    disabled="@string.IsNullOrWhiteSpace(_dodOverrideReason)"
-                                    @onclick="OverrideDefinitionOfDone">
-                                Complete anyway
-                            </button>
-                            <button type="button" class="btn btn-outline-secondary"
-                                    data-testid="task-detail-dod-cancel"
-                                    @onclick="CancelDefinitionOfDoneOverride">
-                                Cancel
-                            </button>
-                        </div>
-                        @if (_dodValidationError is not null)
-                        {
-                            <div class="text-danger small mt-1" role="alert"
-                                 data-testid="task-detail-dod-validation">@_dodValidationError</div>
-                        }
-                        <div class="form-text small mt-1">
-                            The reason is recorded as a Verification comment and an audit event.
-                        </div>
-                    </div>
-                }
-            </div>
 
-            @* Dependency blockers *@
-            <section class="mb-3" data-testid="task-detail-blockers-section" aria-labelledby="task-detail-blockers-heading">
-                <div class="d-flex align-items-center mb-1">
-                    <h6 id="task-detail-blockers-heading" class="form-label small text-muted mb-0">Dependency blockers</h6>
-                    @if (Task.Dependencies.Count > 0)
-                    {
-                        <span class="ms-2 badge @(HasIncompleteBlockers ? "text-bg-danger" : "text-bg-secondary") small" data-testid="task-detail-blockers-count">@Task.Dependencies.Count</span>
-                    }
-                </div>
-
-                @if (Task.Dependencies.Count == 0)
-                {
-                    <div class="text-muted small border rounded p-2" data-testid="task-detail-blockers-empty-state">
-                        No dependency blockers for this task.
-                    </div>
-                }
-                else
-                {
-                    <div class="list-group list-group-flush border rounded" data-testid="task-detail-blockers-list">
-                        @foreach (var dependency in OrderedDependencies)
-                        {
-                            var blocker = dependency.DependsOnTaskItem;
-                            var blockerName = blocker?.Name ?? $"Task #{dependency.DependsOnTaskItemId}";
-                            var blockerStatus = blocker?.Status;
-                            var blockerDone = blockerStatus == WorkStatus.Done;
-
-                            <div class="list-group-item py-2 @(blockerDone ? null : "task-blocker-incomplete")" data-testid="task-detail-blocker-@dependency.DependsOnTaskItemId">
-                                <div class="d-flex flex-wrap align-items-center gap-2">
-                                    <span class="fw-medium small me-auto text-break">@blockerName</span>
-                                    <span class="@GetStatusBadgeClass(blockerStatus)" data-testid="task-detail-blocker-@dependency.DependsOnTaskItemId-status">@GetStatusDisplayName(blockerStatus)</span>
-                                </div>
-                            </div>
-                        }
-                    </div>
-                }
-            </section>
-
-            @* Priority *@
-            <div class="mb-3">
-                <label class="form-label small text-muted mb-1" for="task-detail-priority">Priority</label>
-                <select id="task-detail-priority" class="form-select form-select-sm" value="@((int)Task.Priority)"
-                        @onchange="OnPriorityChanged">
-                    @foreach (var priority in Enum.GetValues<TaskPriority>())
-                    {
-                        <option value="@((int)priority)">@priority</option>
-                    }
-                </select>
-            </div>
-
-            @* Assignee *@
-            <div class="mb-3">
-                <label class="form-label small text-muted mb-1" for="task-detail-assignee">Assignee</label>
-                <input id="task-detail-assignee" type="text" class="form-control form-control-sm"
-                       placeholder="Unassigned"
-                       value="@Task.Assignee"
-                       @onchange="OnAssigneeChanged" />
-            </div>
-
-            @* Description (#357). This was a bare <textarea>: the field had no READ state at all,
-               so a mirrored task showed `<!-- kanbanflow-sync -->` and `**Issue:**` as literal
-               text and its issue URL was dead. EditableMarkdown adds the missing state and is the
-               SAME component EditItemModal uses — do not fork it (#306).
-
-               The write path below is untouched: OnCommit fires on blur and calls
-               SaveDescriptionAsync exactly as @onblur did, so the ITaskService routing, the
-               unchanged-guard and the audit trail all behave as before. *@
-            <div class="mb-3">
-                <EditableMarkdown ElementId="task-detail-description"
-                                  TestId="task-detail-description"
-                                  Label="Description"
-                                  Rows="4"
-                                  ResetToken="descriptionResetToken"
-                                  @bind-Value="editingDescription"
-                                  OnCommit="SaveDescriptionAsync" />
-            </div>
-
-            @* Acceptance criteria *@
-            <section class="mb-3 pt-3 border-top" data-testid="task-acceptance-criteria-section" aria-labelledby="task-acceptance-criteria-heading">
-                <div class="d-flex align-items-center mb-2">
-                    <h6 id="task-acceptance-criteria-heading" class="form-label small text-muted mb-0">Acceptance criteria</h6>
-                    @{
-                        var completedCriteriaCount = Task.AcceptanceCriteria.Count(c => c.Completed);
-                        var totalCriteriaCount = Task.AcceptanceCriteria.Count;
-                    }
-                    @if (totalCriteriaCount > 0)
-                    {
-                        <span class="ms-2 badge bg-secondary small" data-testid="task-acceptance-criteria-count">@completedCriteriaCount/@totalCriteriaCount</span>
-                    }
-                </div>
-
-                @if (totalCriteriaCount == 0)
-                {
-                    <div class="text-muted small border rounded p-2 mb-2" data-testid="task-acceptance-criteria-empty-state">
-                        No acceptance criteria yet. Add a checklist item to define done for this task.
-                    </div>
-                }
-                else
-                {
-                    <div class="list-group list-group-flush mb-2" data-testid="task-acceptance-criteria-list">
-                        @foreach (var criterion in Task.AcceptanceCriteria.OrderBy(c => c.SortOrder).ThenBy(c => c.Id))
-                        {
-                            <div class="list-group-item px-0 py-1 border-0 d-flex align-items-start gap-2" data-testid="@($"task-acceptance-criterion-{criterion.Id}")">
-                                <input id="@($"task-acceptance-criterion-toggle-{criterion.Id}")" class="form-check-input mt-1" type="checkbox"
-                                       checked="@criterion.Completed"
-                                       data-testid="@($"task-acceptance-criterion-toggle-{criterion.Id}")"
-                                       @onchange="() => ToggleAcceptanceCriterionAsync(criterion)" />
-                                <label class="small flex-grow-1 text-break @(criterion.Completed ? "text-decoration-line-through text-muted" : null)" for="@($"task-acceptance-criterion-toggle-{criterion.Id}")">@criterion.Text</label>
-                                <button class="btn btn-sm text-danger p-0 ms-1" title="Delete acceptance criterion"
-                                        aria-label="Delete acceptance criterion @criterion.Text"
-                                        data-testid="@($"task-acceptance-criterion-delete-{criterion.Id}")"
-                                        @onclick="() => DeleteAcceptanceCriterionAsync(criterion)">
-                                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="currentColor" viewBox="0 0 16 16" aria-hidden="true">
-                                        <path d="M4.646 4.646a.5.5 0 0 1 .708 0L8 7.293l2.646-2.647a.5.5 0 0 1 .708.708L8.707 8l2.647 2.646a.5.5 0 0 1-.708.708L8 8.707l-2.646 2.647a.5.5 0 0 1-.708-.708L7.293 8 4.646 5.354a.5.5 0 0 1 0-.708"/>
-                                    </svg>
+                        <div class="task-detail-comment-composer">
+                            <label class="form-label small text-muted mb-1" for="task-comment-input">Add comment</label>
+                            <textarea id="task-comment-input" class="form-control form-control-sm" rows="3"
+                                      placeholder="Write a handoff note or update..."
+                                      data-testid="task-comment-input"
+                                      @bind="newCommentText"
+                                      @bind:event="oninput"></textarea>
+                            <div class="d-flex justify-content-between align-items-center gap-2 mt-2">
+                                <select class="form-select form-select-sm w-auto" aria-label="Comment type" data-testid="task-comment-type-select" @bind="newCommentType">
+                                    @foreach (var type in UserCommentTypes)
+                                    {
+                                        <option value="@type">@GetCommentTypeDisplayName(type)</option>
+                                    }
+                                </select>
+                                <button class="btn btn-sm btn-primary" data-testid="task-comment-add-button"
+                                        @onclick="AddCommentAsync"
+                                        disabled="@(addingComment || string.IsNullOrWhiteSpace(newCommentText))">
+                                    @(addingComment ? "Adding..." : "Add Comment")
                                 </button>
                             </div>
+                        </div>
+
+                        @if (commentsLoading)
+                        {
+                            <div class="d-flex align-items-center small text-muted" data-testid="task-comments-loading">
+                                <div class="spinner-border spinner-border-sm me-2" role="status" aria-hidden="true"></div>
+                                Loading comments...
+                            </div>
                         }
-                    </div>
-                }
-
-                <label class="visually-hidden" for="task-acceptance-criterion-input">Acceptance criterion text</label>
-                <div class="input-group input-group-sm">
-                    <input id="task-acceptance-criterion-input" type="text" class="form-control" placeholder="Add acceptance criterion..."
-                           data-testid="task-acceptance-criterion-input"
-                           @bind="newAcceptanceCriterionText" @bind:event="oninput"
-                           @onkeydown="HandleAcceptanceCriterionKeyDown" />
-                    <button class="btn btn-outline-secondary d-flex align-items-center gap-1" @onclick="AddAcceptanceCriterionAsync"
-                            title="Add acceptance criterion to @Task.Name"
-                            aria-label="Add acceptance criterion to @Task.Name" data-testid="task-acceptance-criterion-add-button"
-                            disabled="@string.IsNullOrWhiteSpace(newAcceptanceCriterionText)">
-                        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="currentColor" viewBox="0 0 16 16" aria-hidden="true">
-                            <path fill-rule="evenodd" d="M8 2a.5.5 0 0 1 .5.5v5h5a.5.5 0 0 1 0 1h-5v5a.5.5 0 0 1-1 0v-5h-5a.5.5 0 0 1 0-1h5v-5A.5.5 0 0 1 8 2"/>
-                        </svg>
-                        <span>Add criterion</span>
-                    </button>
-                </div>
-            </section>
-
-            @* Subtasks (recursive) *@
-            <div class="mb-3">
-                <div class="d-flex align-items-center mb-2">
-                    <h6 id="task-detail-subtasks-heading" class="form-label small text-muted mb-0">Subtasks</h6>
-                    @{
-                        var completedCount = Task.Subtasks.Count(s => s.Completed);
-                        var totalCount = Task.Subtasks.Count;
-                        var subtaskProgressPct = totalCount > 0 ? (int)(100.0 * completedCount / totalCount) : 0;
-                    }
-                    @if (totalCount > 0)
-                    {
-                        <span class="ms-2 badge bg-secondary small">@completedCount/@totalCount</span>
-                    }
-                </div>
-
-                @if (totalCount > 0)
-                {
-                    <div class="progress mb-2" style="height: 4px;">
-                        <div class="progress-bar bg-success" role="progressbar"
-                             style="width: @(subtaskProgressPct)%"
-                             aria-label="@($"{Task.Name} subtask completion")"
-                             aria-valuemin="0"
-                             aria-valuemax="100"
-                             aria-valuenow="@subtaskProgressPct"
-                             aria-valuetext="@($"{completedCount} of {totalCount} subtasks complete")">
-                        </div>
-                    </div>
-                }
-
-                <div class="list-group list-group-flush mb-2" aria-labelledby="task-detail-subtasks-heading">
-                    @{ var rootSubtasks = Task.Subtasks.Where(s => s.ParentSubtaskId == null).OrderBy(s => s.SortOrder).ToList(); }
-                    @foreach (var subtask in rootSubtasks)
-                    {
-                        @RenderSubtaskNode(subtask, 0)
-                    }
-                </div>
-
-                @if (subtaskError is not null)
-                {
-                    <div class="alert alert-danger py-2 small d-flex justify-content-between align-items-center"
-                         data-testid="subtask-error" role="alert">
-                        <span>@subtaskError</span>
-                        <button type="button" class="btn-close" style="font-size:.6rem;"
-                                aria-label="Dismiss" @onclick="() => subtaskError = null"></button>
-                    </div>
-                }
-
-                @* Add top-level subtask *@
-                <div class="input-group input-group-sm">
-                    <input type="text" class="form-control" placeholder="Add a subtask..." aria-label="New subtask text"
-                           @bind="newSubtaskText" @bind:event="oninput"
-                           @onkeydown="HandleSubtaskKeyDown" />
-                    <button class="btn btn-outline-secondary d-flex align-items-center gap-1" @onclick="AddSubtaskAsync"
-                            title="Add subtask to @Task.Name"
-                            aria-label="Add subtask to @Task.Name" data-testid="task-detail-add-subtask-button"
-                            disabled="@string.IsNullOrWhiteSpace(newSubtaskText)">
-                        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="currentColor" viewBox="0 0 16 16" aria-hidden="true">
-                            <path fill-rule="evenodd" d="M8 2a.5.5 0 0 1 .5.5v5h5a.5.5 0 0 1 0 1h-5v5a.5.5 0 0 1-1 0v-5h-5a.5.5 0 0 1 0-1h5v-5A.5.5 0 0 1 8 2"/>
-                        </svg>
-                        <span>Add subtask</span>
-                    </button>
-                </div>
-            </div>
-
-            @* ── History: the task's COMPLETE trail (#328) ────────────────────────────────────
-               This section rendered `comments` ONLY. Every field-level change — status, priority,
-               assignment, rename, feature move, claim/release — was written to ActivityEvent by
-               TaskService and then never shown to the human. ActivityTimeline merges both records
-               into one rail and de-duplicates the comment/event PAIRS the service writes for a
-               single action (see ActivityTimelineBuilder's remarks).
-
-               It is the SAME component EditItemModal uses. Do not fork it — two copies is exactly
-               how this panel ended up rendering two different clocks (#306).
-
-               The Latest Handoff banner stays: it is a "read this first" callout, not a duplicate
-               history, and it is the one entry that must not be behind a filter chip or a fold. *@
-            <section class="mb-4 pt-3 border-top" data-testid="task-comments-section" aria-labelledby="task-comments-heading">
-                <div class="d-flex align-items-center mb-2">
-                    <h6 id="task-comments-heading" class="form-label small text-muted mb-0">History</h6>
-                    @if (!commentsLoading)
-                    {
-                        @* Counts COMMENTS, not history entries — the timeline's own chips carry the
-                           per-category totals. Labelled so "12" next to "History" cannot be misread. *@
-                        <span class="ms-2 badge bg-secondary small" data-testid="task-comments-count"
-                              title="Comments" aria-label="@($"{comments.Count} comments")">@comments.Count</span>
-                    }
-                </div>
-
-                @if (commentsLoading)
-                {
-                    <div class="d-flex align-items-center small text-muted" data-testid="task-comments-loading">
-                        <div class="spinner-border spinner-border-sm me-2" role="status" aria-hidden="true"></div>
-                        Loading comments...
-                    </div>
-                }
-                else
-                {
-                    @* A failed COMMENT load no longer hides the audit trail: the timeline still
-                       renders the events, and the alert says which half is missing. *@
-                    @if (commentsError is not null)
-                    {
-                        <div class="alert alert-danger py-2 small" data-testid="task-comments-error">We couldn't load comments right now. Please try reopening the task.</div>
-                    }
-                    else if (comments.Count == 0)
-                    {
-                        <div class="text-muted small border rounded p-2 mb-2" data-testid="task-comments-empty-state">
-                            No comments yet. Add a note for the next human or AI agent.
-                        </div>
-                    }
-
-                    var latestHandoff = GetLatestHandoffComment();
-                    @if (latestHandoff is not null)
-                    {
-                        <div class="alert alert-warning py-2 mb-2" data-testid="latest-handoff-comment">
-                            <div class="d-flex flex-wrap align-items-center gap-2 mb-1">
-                                <span class="badge text-bg-warning" data-testid="latest-handoff-comment-badge">Latest Handoff</span>
-                                <span class="small fw-semibold">@(!string.IsNullOrWhiteSpace(latestHandoff.Author) ? latestHandoff.Author : "Anonymous")</span>
-                                <span class="small text-muted ms-auto" title="@ActivityTimelineBuilder.FormatTooltip(latestHandoff.CreatedAt)">@ActivityTimelineBuilder.FormatLocal(latestHandoff.CreatedAt)</span>
-                            </div>
-                            <div data-testid="latest-handoff-comment-text">
-                                <MarkdownContent Markdown="@latestHandoff.Text"
-                                                 CssClass="small text-break"
-                                                 EmptyText="" />
-                            </div>
-                        </div>
-                    }
-
-                    <div class="mb-2">
-                        <ActivityTimeline TaskId="Task.Id"
-                                          Comments="comments"
-                                          RefreshToken="activityRefreshToken"
-                                          CollapseAfter="10" />
-                    </div>
-                }
-
-                <div class="mt-2">
-                    <label class="form-label small text-muted mb-1" for="task-comment-input">Add comment</label>
-                    <textarea id="task-comment-input" class="form-control form-control-sm" rows="3"
-                              placeholder="Write a handoff note or update..."
-                              data-testid="task-comment-input"
-                              @bind="newCommentText"
-                              @bind:event="oninput"></textarea>
-                    <div class="d-flex justify-content-between align-items-center gap-2 mt-2">
-                        <select class="form-select form-select-sm w-auto" aria-label="Comment type" data-testid="task-comment-type-select" @bind="newCommentType">
-                            @foreach (var type in UserCommentTypes)
+                        else
+                        {
+                            @* A failed COMMENT load no longer hides the audit trail: the timeline still
+                               renders the events, and the alert says which half is missing. *@
+                            @if (commentsError is not null)
                             {
-                                <option value="@type">@GetCommentTypeDisplayName(type)</option>
+                                <div class="alert alert-danger py-2 small" data-testid="task-comments-error">We couldn't load comments right now. Please try reopening the task.</div>
                             }
-                        </select>
-                        <button class="btn btn-sm btn-primary" data-testid="task-comment-add-button"
-                                @onclick="AddCommentAsync"
-                                disabled="@(addingComment || string.IsNullOrWhiteSpace(newCommentText))">
-                            @(addingComment ? "Adding..." : "Add Comment")
-                        </button>
-                    </div>
+                            else if (comments.Count == 0)
+                            {
+                                <div class="text-muted small border rounded p-2 mb-2" data-testid="task-comments-empty-state">
+                                    No comments yet. Add a note for the next human or AI agent.
+                                </div>
+                            }
+
+                            var latestHandoff = GetLatestHandoffComment();
+                            @if (latestHandoff is not null)
+                            {
+                                <div class="alert alert-warning py-2 mb-2" data-testid="latest-handoff-comment">
+                                    <div class="d-flex flex-wrap align-items-center gap-2 mb-1">
+                                        <span class="badge text-bg-warning" data-testid="latest-handoff-comment-badge">Latest Handoff</span>
+                                        <span class="small fw-semibold">@(!string.IsNullOrWhiteSpace(latestHandoff.Author) ? latestHandoff.Author : "Anonymous")</span>
+                                        <span class="small text-muted ms-auto" title="@ActivityTimelineBuilder.FormatTooltip(latestHandoff.CreatedAt)">@ActivityTimelineBuilder.FormatLocal(latestHandoff.CreatedAt)</span>
+                                    </div>
+                                    <div data-testid="latest-handoff-comment-text">
+                                        <MarkdownContent Markdown="@latestHandoff.Text"
+                                                         CssClass="small text-break"
+                                                         EmptyText="" />
+                                    </div>
+                                </div>
+                            }
+
+                            <div class="mb-2">
+                                <ActivityTimeline TaskId="Task.Id"
+                                                  Comments="comments"
+                                                  RefreshToken="activityRefreshToken"
+                                                  CollapseAfter="10" />
+                            </div>
+                        }
+                    </section>
+
+                    @* Acceptance criteria *@
+                    <section class="task-detail-section" data-testid="task-acceptance-criteria-section" aria-labelledby="task-acceptance-criteria-heading">
+                        <div class="d-flex align-items-center mb-2">
+                            <h6 id="task-acceptance-criteria-heading" class="task-detail-section-heading mb-0">Acceptance criteria</h6>
+                            @{
+                                var completedCriteriaCount = Task.AcceptanceCriteria.Count(c => c.Completed);
+                                var totalCriteriaCount = Task.AcceptanceCriteria.Count;
+                            }
+                            @if (totalCriteriaCount > 0)
+                            {
+                                <span class="ms-2 badge bg-secondary small" data-testid="task-acceptance-criteria-count">@completedCriteriaCount/@totalCriteriaCount</span>
+                            }
+                        </div>
+
+                        @if (totalCriteriaCount == 0)
+                        {
+                            <div class="text-muted small border rounded p-2 mb-2" data-testid="task-acceptance-criteria-empty-state">
+                                No acceptance criteria yet. Add a checklist item to define done for this task.
+                            </div>
+                        }
+                        else
+                        {
+                            <div class="list-group list-group-flush mb-2" data-testid="task-acceptance-criteria-list">
+                                @foreach (var criterion in Task.AcceptanceCriteria.OrderBy(c => c.SortOrder).ThenBy(c => c.Id))
+                                {
+                                    <div class="list-group-item px-0 py-1 border-0 d-flex align-items-start gap-2" data-testid="@($"task-acceptance-criterion-{criterion.Id}")">
+                                        <input id="@($"task-acceptance-criterion-toggle-{criterion.Id}")" class="form-check-input mt-1" type="checkbox"
+                                               checked="@criterion.Completed"
+                                               data-testid="@($"task-acceptance-criterion-toggle-{criterion.Id}")"
+                                               @onchange="() => ToggleAcceptanceCriterionAsync(criterion)" />
+                                        <label class="small flex-grow-1 text-break @(criterion.Completed ? "text-decoration-line-through text-muted" : null)" for="@($"task-acceptance-criterion-toggle-{criterion.Id}")">@criterion.Text</label>
+                                        <button class="btn btn-sm text-danger p-0 ms-1" title="Delete acceptance criterion"
+                                                aria-label="Delete acceptance criterion @criterion.Text"
+                                                data-testid="@($"task-acceptance-criterion-delete-{criterion.Id}")"
+                                                @onclick="() => DeleteAcceptanceCriterionAsync(criterion)">
+                                            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="currentColor" viewBox="0 0 16 16" aria-hidden="true">
+                                                <path d="M4.646 4.646a.5.5 0 0 1 .708 0L8 7.293l2.646-2.647a.5.5 0 0 1 .708.708L8.707 8l2.647 2.646a.5.5 0 0 1-.708.708L8 8.707l-2.646 2.647a.5.5 0 0 1-.708-.708L7.293 8 4.646 5.354a.5.5 0 0 1 0-.708"/>
+                                            </svg>
+                                        </button>
+                                    </div>
+                                }
+                            </div>
+                        }
+
+                        <label class="visually-hidden" for="task-acceptance-criterion-input">Acceptance criterion text</label>
+                        <div class="input-group input-group-sm">
+                            <input id="task-acceptance-criterion-input" type="text" class="form-control" placeholder="Add acceptance criterion..."
+                                   data-testid="task-acceptance-criterion-input"
+                                   @bind="newAcceptanceCriterionText" @bind:event="oninput"
+                                   @onkeydown="HandleAcceptanceCriterionKeyDown" />
+                            <button class="btn btn-outline-secondary d-flex align-items-center gap-1" @onclick="AddAcceptanceCriterionAsync"
+                                    title="Add acceptance criterion to @Task.Name"
+                                    aria-label="Add acceptance criterion to @Task.Name" data-testid="task-acceptance-criterion-add-button"
+                                    disabled="@string.IsNullOrWhiteSpace(newAcceptanceCriterionText)">
+                                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="currentColor" viewBox="0 0 16 16" aria-hidden="true">
+                                    <path fill-rule="evenodd" d="M8 2a.5.5 0 0 1 .5.5v5h5a.5.5 0 0 1 0 1h-5v5a.5.5 0 0 1-1 0v-5h-5a.5.5 0 0 1 0-1h5v-5A.5.5 0 0 1 8 2"/>
+                                </svg>
+                                <span>Add criterion</span>
+                            </button>
+                        </div>
+                    </section>
                 </div>
-            </section>
 
-            @* Timestamps — LOCAL on the face, absolute UTC in the tooltip (#306).
-               These three lines used to render raw UTC with no `.ToLocalTime()` and no tooltip,
-               while the comment rows ~35 lines above rendered local: two clocks, one panel, four
-               to five hours apart in US Eastern. The new timeline is uniformly local, so leaving
-               these would have made it three. One convention, applied to every timestamp here.
+                <aside class="task-detail-rail" aria-label="Task fields and related work">
+                    <section class="task-detail-rail-card" aria-labelledby="task-detail-fields-heading"
+                             tabindex="-1" @ref="fieldsSection">
+                        <h6 id="task-detail-fields-heading" class="task-detail-section-heading">Fields</h6>
+                        @* Status *@
+                        <div class="mb-3">
+                            <label class="form-label small text-muted mb-1" for="task-detail-status">Status</label>
+                            <select id="task-detail-status" class="form-select form-select-sm" value="@((int)Task.Status)"
+                                    @key="statusSelectToken"
+                                    @onchange="OnStatusChanged">
+                                @foreach (var status in Enum.GetValues<WorkStatus>())
+                                {
+                                    <option value="@((int)status)">@GetStatusDisplayName(status)</option>
+                                }
+                            </select>
 
-               Formatting goes through the SAME tested helpers the timeline uses, not a hand-rolled
-               `:O` + `.ToLocalTime()`. EF hands these back as Kind=Unspecified (SQLite has no zone
-               type), and `"O"` on Unspecified emits NO trailing `Z` — so a tooltip labelled "UTC:"
-               was showing an instant not actually marked as UTC. That is the #306 ambiguity one
-               layer down, and it is exactly what ActivityTimelineBuilder.AsUtc normalises. *@
-            <div class="mb-4 pt-2 border-top">
-                <small class="text-muted d-block" title="@ActivityTimelineBuilder.FormatTooltip(Task.CreatedAt)">Created: @ActivityTimelineBuilder.FormatLocal(Task.CreatedAt)</small>
-                <small class="text-muted d-block" title="@ActivityTimelineBuilder.FormatTooltip(Task.UpdatedAt)">Updated: @ActivityTimelineBuilder.FormatLocal(Task.UpdatedAt)</small>
-                @if (Task.CompletedAt.HasValue)
-                {
-                    <small class="text-muted d-block" title="@ActivityTimelineBuilder.FormatTooltip(Task.CompletedAt.Value)">Completed: @ActivityTimelineBuilder.FormatLocal(Task.CompletedAt.Value)</small>
-                }
-            </div>
+                            @* Definition-of-Done refusal (#428). The gate lives in ITaskService, so this is the
+                               human-readable face of the exact constraint an agent hits over MCP or REST. *@
+                            @if (_dodBlocked is not null)
+                            {
+                                @* The announcement and the controls are deliberately SEPARATE elements: an
+                                   assertive live region announces its contents, but interactive controls inside
+                                   one are announced unpredictably and are not exposed as a grouped, operable
+                                   unit. So role="alert" wraps only the text, and the form sits outside it. *@
+                                <div class="alert alert-warning mt-2 mb-0 py-2 px-3"
+                                     data-testid="task-detail-dod-block">
+                                    <div role="alert">
+                                        <div class="fw-semibold small mb-1">
+                                            Can&rsquo;t mark Done &mdash; @_dodBlocked.UnmetCount unfinished acceptance
+                                            @(_dodBlocked.UnmetCount == 1 ? "criterion" : "criteria")
+                                        </div>
+                                        <ul class="small mb-2 ps-3">
+                                            @foreach (var text in _dodBlocked.Unmet)
+                                            {
+                                                <li>@text</li>
+                                            }
+                                        </ul>
+                                    </div>
+                                    <div class="task-detail-status-override" role="group"
+                                         aria-label="Complete this task despite unmet acceptance criteria">
+                                        @* maxlength mirrors the service-side bound, so the UI cannot submit a
+                                           reason the gate will reject. The catch in ApplyStatusAsync still
+                                           handles it, because REST and MCP share the same gate. *@
+                                        <input type="text" class="form-control form-control-sm" placeholder="Reason to complete anyway"
+                                               aria-label="Reason to complete anyway"
+                                               data-testid="task-detail-dod-reason"
+                                               maxlength="@MaxOverrideReasonLength"
+                                               @ref="_dodReasonInput"
+                                               @bind="_dodOverrideReason" @bind:event="oninput" />
+                                        <button type="button" class="btn btn-sm btn-outline-secondary"
+                                                data-testid="task-detail-dod-override"
+                                                disabled="@string.IsNullOrWhiteSpace(_dodOverrideReason)"
+                                                @onclick="OverrideDefinitionOfDone">
+                                            Complete anyway
+                                        </button>
+                                        <button type="button" class="btn btn-sm btn-outline-secondary"
+                                                data-testid="task-detail-dod-cancel"
+                                                @onclick="CancelDefinitionOfDoneOverride">
+                                            Cancel
+                                        </button>
+                                    </div>
+                                    @if (_dodValidationError is not null)
+                                    {
+                                        <div class="text-danger small mt-1" role="alert"
+                                             data-testid="task-detail-dod-validation">@_dodValidationError</div>
+                                    }
+                                    <div class="form-text small mt-1">
+                                        The reason is recorded as a Verification comment and an audit event.
+                                    </div>
+                                </div>
+                            }
+                        </div>
 
-            @* Delete task *@
-            <div class="mb-3">
-                @if (confirmingDelete)
-                {
-                    <div class="d-flex align-items-center gap-2">
-                        <span class="small text-danger">Delete this task?</span>
-                        <button class="btn btn-danger btn-sm" @onclick="ConfirmDeleteAsync" data-testid="task-detail-confirm-delete-button">Yes, delete</button>
-                        <button class="btn btn-outline-secondary btn-sm" @onclick="() => confirmingDelete = false" data-testid="task-detail-cancel-delete-button">Cancel</button>
-                    </div>
-                }
-                else
-                {
-                    <button class="btn btn-outline-danger btn-sm" @onclick="BeginDelete" data-testid="task-detail-delete-button">
-                        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="currentColor" class="me-1" viewBox="0 0 16 16">
-                            <path d="M5.5 5.5A.5.5 0 0 1 6 6v6a.5.5 0 0 1-1 0V6a.5.5 0 0 1 .5-.5m2.5 0a.5.5 0 0 1 .5.5v6a.5.5 0 0 1-1 0V6a.5.5 0 0 1 .5-.5m3 .5a.5.5 0 0 0-1 0v6a.5.5 0 0 0 1 0z"/>
-                            <path d="M14.5 3a1 1 0 0 1-1 1H13v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V4h-.5a1 1 0 0 1-1-1V2a1 1 0 0 1 1-1H6a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1h3.5a1 1 0 0 1 1 1zM4.118 4 4 4.059V13a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1V4.059L11.882 4zM2.5 3h11V2h-11z"/>
-                        </svg>
-                        Delete Task
-                    </button>
-                }
-                @if (deleteError is not null)
-                {
-                    <div class="alert alert-warning py-2 px-3 mt-2 mb-0 small" role="alert"
-                         data-testid="task-detail-delete-conflict">@deleteError</div>
-                }
+                        @* Assignee *@
+                        <div class="mb-3">
+                            <label class="form-label small text-muted mb-1" for="task-detail-assignee">Assignee</label>
+                            <input id="task-detail-assignee" type="text" class="form-control form-control-sm"
+                                   placeholder="Unassigned"
+                                   value="@Task.Assignee"
+                                   @onchange="OnAssigneeChanged" />
+                        </div>
+
+                        @* Priority *@
+                        <div class="mb-3">
+                            <label class="form-label small text-muted mb-1" for="task-detail-priority">Priority</label>
+                            <select id="task-detail-priority" class="form-select form-select-sm" value="@((int)Task.Priority)"
+                                    @onchange="OnPriorityChanged">
+                                @foreach (var priority in Enum.GetValues<TaskPriority>())
+                                {
+                                    <option value="@((int)priority)">@priority</option>
+                                }
+                            </select>
+                        </div>
+
+                        @* Feature reassignment *@
+                        <div class="mb-3">
+                            <label class="form-label small text-muted mb-1" for="task-detail-feature">Feature</label>
+                            <select id="task-detail-feature" class="form-select form-select-sm" value="@Task.FeatureId"
+                                    @onchange="OnFeatureChanged">
+                                @if (Features is not null)
+                                {
+                                    @foreach (var f in Features.OrderBy(f => f.SortOrder))
+                                    {
+                                        <option value="@f.Id">@f.Name</option>
+                                    }
+                                }
+                            </select>
+                        </div>
+                    </section>
+
+                    <section class="task-detail-rail-card" aria-labelledby="task-detail-related-heading">
+                        <h6 id="task-detail-related-heading" class="task-detail-section-heading">Related work</h6>
+                        @* Dependency blockers *@
+                        <section class="mb-3" data-testid="task-detail-blockers-section" aria-labelledby="task-detail-blockers-heading">
+                            <div class="d-flex align-items-center mb-1">
+                                <h6 id="task-detail-blockers-heading" class="form-label small text-muted mb-0">Dependency blockers</h6>
+                                @if (Task.Dependencies.Count > 0)
+                                {
+                                    <span class="ms-2 badge @(HasIncompleteBlockers ? "text-bg-danger" : "text-bg-secondary") small" data-testid="task-detail-blockers-count">@Task.Dependencies.Count</span>
+                                }
+                            </div>
+
+                            @if (Task.Dependencies.Count == 0)
+                            {
+                                <div class="text-muted small border rounded p-2" data-testid="task-detail-blockers-empty-state">
+                                    No dependency blockers for this task.
+                                </div>
+                            }
+                            else
+                            {
+                                <div class="list-group list-group-flush border rounded" data-testid="task-detail-blockers-list">
+                                    @foreach (var dependency in OrderedDependencies)
+                                    {
+                                        var blocker = dependency.DependsOnTaskItem;
+                                        var blockerName = blocker?.Name ?? $"Task #{dependency.DependsOnTaskItemId}";
+                                        var blockerStatus = blocker?.Status;
+                                        var blockerDone = blockerStatus == WorkStatus.Done;
+
+                                        <div class="list-group-item py-2 @(blockerDone ? null : "task-blocker-incomplete")" data-testid="task-detail-blocker-@dependency.DependsOnTaskItemId">
+                                            <div class="d-flex flex-wrap align-items-center gap-2">
+                                                <span class="fw-medium small me-auto text-break">@blockerName</span>
+                                                <span class="@GetStatusBadgeClass(blockerStatus)" data-testid="task-detail-blocker-@dependency.DependsOnTaskItemId-status">@GetStatusDisplayName(blockerStatus)</span>
+                                            </div>
+                                        </div>
+                                    }
+                                </div>
+                            }
+                        </section>
+
+                        @* Subtasks (recursive) *@
+                        <div class="mb-3">
+                            <div class="d-flex align-items-center mb-2">
+                                <h6 id="task-detail-subtasks-heading" class="form-label small text-muted mb-0">Subtasks</h6>
+                                @{
+                                    var completedCount = Task.Subtasks.Count(s => s.Completed);
+                                    var totalCount = Task.Subtasks.Count;
+                                    var subtaskProgressPct = totalCount > 0 ? (int)(100.0 * completedCount / totalCount) : 0;
+                                }
+                                @if (totalCount > 0)
+                                {
+                                    <span class="ms-2 badge bg-secondary small">@completedCount/@totalCount</span>
+                                }
+                            </div>
+
+                            @if (totalCount > 0)
+                            {
+                                <div class="progress mb-2" style="height: 4px;">
+                                    <div class="progress-bar bg-success" role="progressbar"
+                                         style="width: @(subtaskProgressPct)%"
+                                         aria-label="@($"{Task.Name} subtask completion")"
+                                         aria-valuemin="0"
+                                         aria-valuemax="100"
+                                         aria-valuenow="@subtaskProgressPct"
+                                         aria-valuetext="@($"{completedCount} of {totalCount} subtasks complete")">
+                                    </div>
+                                </div>
+                            }
+
+                            <div class="list-group list-group-flush mb-2" aria-labelledby="task-detail-subtasks-heading">
+                                @{ var rootSubtasks = Task.Subtasks.Where(s => s.ParentSubtaskId == null).OrderBy(s => s.SortOrder).ToList(); }
+                                @foreach (var subtask in rootSubtasks)
+                                {
+                                    @RenderSubtaskNode(subtask, 0)
+                                }
+                            </div>
+
+                            @if (subtaskError is not null)
+                            {
+                                <div class="alert alert-danger py-2 small d-flex justify-content-between align-items-center"
+                                     data-testid="subtask-error" role="alert">
+                                    <span>@subtaskError</span>
+                                    <button type="button" class="btn-close" style="font-size:.6rem;"
+                                            aria-label="Dismiss" @onclick="() => subtaskError = null"></button>
+                                </div>
+                            }
+
+                            @* Add top-level subtask *@
+                            <div class="input-group input-group-sm">
+                                <input type="text" class="form-control" placeholder="Add a subtask..." aria-label="New subtask text"
+                                       @bind="newSubtaskText" @bind:event="oninput"
+                                       @onkeydown="HandleSubtaskKeyDown" />
+                                <button class="btn btn-outline-secondary d-flex align-items-center gap-1" @onclick="AddSubtaskAsync"
+                                        title="Add subtask to @Task.Name"
+                                        aria-label="Add subtask to @Task.Name" data-testid="task-detail-add-subtask-button"
+                                        disabled="@string.IsNullOrWhiteSpace(newSubtaskText)">
+                                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="currentColor" viewBox="0 0 16 16" aria-hidden="true">
+                                        <path fill-rule="evenodd" d="M8 2a.5.5 0 0 1 .5.5v5h5a.5.5 0 0 1 0 1h-5v5a.5.5 0 0 1-1 0v-5h-5a.5.5 0 0 1 0-1h5v-5A.5.5 0 0 1 8 2"/>
+                                    </svg>
+                                    <span>Add subtask</span>
+                                </button>
+                            </div>
+                        </div>
+                        <TaskRequestContext TaskId="Task.Id" />
+                    </section>
+
+                    <section class="task-detail-rail-card" aria-labelledby="task-detail-record-heading">
+                        <h6 id="task-detail-record-heading" class="task-detail-section-heading">Task record</h6>
+                        @* Timestamps — LOCAL on the face, absolute UTC in the tooltip (#306).
+                           These three lines used to render raw UTC with no `.ToLocalTime()` and no tooltip,
+                           while the comment rows ~35 lines above rendered local: two clocks, one panel, four
+                           to five hours apart in US Eastern. The new timeline is uniformly local, so leaving
+                           these would have made it three. One convention, applied to every timestamp here.
+
+                           Formatting goes through the SAME tested helpers the timeline uses, not a hand-rolled
+                           `:O` + `.ToLocalTime()`. EF hands these back as Kind=Unspecified (SQLite has no zone
+                           type), and `"O"` on Unspecified emits NO trailing `Z` — so a tooltip labelled "UTC:"
+                           was showing an instant not actually marked as UTC. That is the #306 ambiguity one
+                           layer down, and it is exactly what ActivityTimelineBuilder.AsUtc normalises. *@
+                        <div class="mb-3">
+                            <small class="text-muted d-block" title="@ActivityTimelineBuilder.FormatTooltip(Task.CreatedAt)">Created: @ActivityTimelineBuilder.FormatLocal(Task.CreatedAt)</small>
+                            <small class="text-muted d-block" title="@ActivityTimelineBuilder.FormatTooltip(Task.UpdatedAt)">Updated: @ActivityTimelineBuilder.FormatLocal(Task.UpdatedAt)</small>
+                            @if (Task.CompletedAt.HasValue)
+                            {
+                                <small class="text-muted d-block" title="@ActivityTimelineBuilder.FormatTooltip(Task.CompletedAt.Value)">Completed: @ActivityTimelineBuilder.FormatLocal(Task.CompletedAt.Value)</small>
+                            }
+                        </div>
+
+                        @* Delete task *@
+                        <div class="mb-0">
+                            @if (confirmingDelete)
+                            {
+                                <div class="d-flex flex-wrap align-items-center gap-2">
+                                    <span class="small text-danger">Delete this task?</span>
+                                    <button class="btn btn-danger btn-sm" @onclick="ConfirmDeleteAsync" data-testid="task-detail-confirm-delete-button">Yes, delete</button>
+                                    <button class="btn btn-outline-secondary btn-sm" @onclick="() => confirmingDelete = false" data-testid="task-detail-cancel-delete-button">Cancel</button>
+                                </div>
+                            }
+                            else
+                            {
+                                <button class="btn btn-outline-danger btn-sm" @onclick="BeginDelete" data-testid="task-detail-delete-button">
+                                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="currentColor" class="me-1" viewBox="0 0 16 16">
+                                        <path d="M5.5 5.5A.5.5 0 0 1 6 6v6a.5.5 0 0 1-1 0V6a.5.5 0 0 1 .5-.5m2.5 0a.5.5 0 0 1 .5.5v6a.5.5 0 0 1-1 0V6a.5.5 0 0 1 .5-.5m3 .5a.5.5 0 0 0-1 0v6a.5.5 0 0 0 1 0z"/>
+                                        <path d="M14.5 3a1 1 0 0 1-1 1H13v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V4h-.5a1 1 0 0 1-1-1V2a1 1 0 0 1 1-1H6a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1h3.5a1 1 0 0 1 1 1zM4.118 4 4 4.059V13a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1V4.059L11.882 4zM2.5 3h11V2h-11z"/>
+                                    </svg>
+                                    Delete Task
+                                </button>
+                            }
+                            @if (deleteError is not null)
+                            {
+                                <div class="alert alert-warning py-2 px-3 mt-2 mb-0 small" role="alert"
+                                     data-testid="task-detail-delete-conflict">@deleteError</div>
+                            }
+                        </div>
+                    </section>
+                </aside>
             </div>
         </div>
     }
@@ -549,6 +575,9 @@
     [Parameter] public EventCallback<ProjectPanelPreference> OnLayoutChanged { get; set; }
 
     private ElementReference panelRoot;
+    private ElementReference descriptionSection;
+    private ElementReference discussionSection;
+    private ElementReference fieldsSection;
     private bool wasOpen;
     private bool fullPage;
     private DotNetObjectReference<TaskDetailPanel>? _selfRef;
@@ -560,6 +589,14 @@
     private string? WidthStyle => Layout.Width is int width ? $"--project-details-width: {width}px;" : null;
     private string DockLabel => Layout.Dock == "left" ? "Dock task details on right" : "Dock task details on left";
     private string CollapseLabel => Layout.Collapsed ? "Expand task details" : "Collapse task details";
+
+    private async Task FocusSectionAsync(ElementReference section)
+    {
+        try { await section.FocusAsync(); }
+        catch (JSDisconnectedException) { }
+        catch (ObjectDisposedException) { }
+        catch (InvalidOperationException) { }
+    }
 
     private async Task UseHalfPageAsync()
     {

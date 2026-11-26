@@ -2149,55 +2149,25 @@ async function main() {
       }
     });
 
-    await test("Board column: a column taller than the board scrolls itself, not the board (#322)", async () => {
-      // The other unguarded half. `.kanban-column { max-height: 100% }` caps a long column and
-      // `.kanban-column-body { min-height: 0 }` is the release valve that lets
-      // `.board-column-cards`'s `overflow-auto` actually engage. Every other guard seeds <= 2 cards,
-      // so NEITHER was exercised: reverting `max-height` (column grows to 1038px) or the
-      // `min-height` (cards box 993px inside a 651px column) brings back the board's second
-      // vertical scrollbar with every other assertion still green.
+    await test("Project board: tall columns scroll with the page", async () => {
       const tallProj = await api("POST", "/api/projects", { name: `E2E Tall ${stamp}` });
       const tallFeature = await api("POST", `/api/projects/${tallProj.id}/features`, { name: "Tall Feature" });
-      for (let i = 0; i < 14; i++) {
+      for (let i = 0; i < 20; i++) {
         await api("POST", `/api/features/${tallFeature.id}/tasks`,
           { name: `Tall probe ${i} with a deliberately long wrapping title`, status: "Todo", sortOrder: i * 10 });
       }
       await page.goto(`${baseUrl}/project/${tallProj.id}`);
-      await page.locator('[data-testid="board-column-Todo-cards"] .board-card').first().waitFor({ state: "visible" });
-
-      const g = await page.evaluate(() => {
-        const board = document.querySelector('[data-testid="kanban-board"]');
-        const col = document.querySelector('[data-testid="board-column-Todo"]');
-        const cards = document.querySelector('[data-testid="board-column-Todo-cards"]');
-        const before = cards.scrollTop;
-        cards.scrollTop = 99999;
-        const maxScroll = cards.scrollTop;
-        cards.scrollTop = before;
-        return {
-          cardCount: col.querySelectorAll(".board-card").length,
-          columnBottom: col.getBoundingClientRect().bottom,
-          boardBottom: board.getBoundingClientRect().bottom,
-          cardsClientH: cards.clientHeight,
-          cardsScrollH: cards.scrollHeight,
-          maxInternalScroll: maxScroll,
-          boardScrollH: board.scrollHeight,
-          boardClientH: board.clientHeight,
-        };
-      });
-
-      assert(g.cardCount >= 10, `guard needs a genuinely tall column, saw ${g.cardCount} cards`);
-      // the cap: the column may not grow past the board
-      assert(g.columnBottom <= g.boardBottom + 1,
-        `a ${g.cardCount}-card column overflows the board by ${(g.columnBottom - g.boardBottom).toFixed(0)}px — ` +
-        `max-height is not capping it`);
-      // the release valve: the cards box must actually be scrollable, not merely overflowing
-      assert(g.cardsScrollH > g.cardsClientH,
-        `the cards container is ${g.cardsClientH}px for ${g.cardsScrollH}px of cards — it is not bounded, so it cannot scroll`);
-      assert(g.maxInternalScroll > 0,
-        `the cards container reports ${g.maxInternalScroll}px of scroll range — overflow-auto never engaged`);
-      // and the whole point: the board itself must NOT gain a second vertical scrollbar
-      assert(g.boardScrollH <= g.boardClientH + 1,
-        `the board scrolls vertically (${g.boardScrollH}px in ${g.boardClientH}px) — the column overflow escaped to it`);
+      const cards = page.locator('[data-testid="board-column-Todo-cards"]');
+      const last = cards.locator(".board-card").last();
+      await last.waitFor();
+      await page.waitForFunction(() => window.KanbanFlow?._boardSortables?.some(
+        sortable => sortable.el?.isConnected));
+      assert(await cards.locator(".board-card").count() === 20, "Tall column fixture must render all cards.");
+      assert(await page.evaluate(() => document.documentElement.scrollHeight > innerHeight),
+        "Tall columns must increase document height.");
+      await last.evaluate(card => card.scrollIntoView({ block: "center", behavior: "instant" }));
+      await page.waitForFunction(() => window.scrollY > 0);
+      assert(await cards.evaluate(list => list.scrollTop === 0), "A tall column must not introduce a second vertical scroll position.");
     });
 
     // ── Regression guard (#294): a drag must not corrupt the RENDER ───────────────────────────
@@ -3496,7 +3466,7 @@ async function main() {
       const modalTimeline = page.locator('[data-testid="activity-timeline"]');
       const openModal = async () => {
         await clickUntil(
-          () => page.locator(`[data-testid="outline-task-${reopenTask.id}"]`).click(),
+          () => page.locator(`[data-testid="outline-task-${reopenTask.id}-edit-button"]`).click(),
           modalTimeline,
         );
       };
@@ -3762,7 +3732,7 @@ async function main() {
 
       await page.goto(`${baseUrl}/project/${proj.id}`);
       await clickUntil(
-        () => page.locator(`[data-testid="outline-task-${syncedTask.id}"]`).click(),
+        () => page.locator(`[data-testid="outline-task-${syncedTask.id}-edit-button"]`).click(),
         page.locator('[data-testid="edit-item-modal"]'),
       );
       await assertIssueControl(page.locator('[data-testid="edit-item-github-link"]'), "edit modal");
@@ -4099,7 +4069,7 @@ async function main() {
     await test("Edit Task modal renders the description too, from the same shared component (#357)", async () => {
       await page.goto(`${baseUrl}/project/${proj.id}`);
       await clickUntil(
-        () => page.locator(`[data-testid="outline-task-${syncedTask.id}"]`).click(),
+        () => page.locator(`[data-testid="outline-task-${syncedTask.id}-edit-button"]`).click(),
         page.locator('[data-testid="edit-item-modal"] [data-testid="edit-item-description-read"]'),
       );
 
@@ -4158,7 +4128,7 @@ async function main() {
         "Cancel persisted a buffered modal description edit");
 
       await clickUntil(
-        () => page.locator(`[data-testid="outline-task-${syncedTask.id}"]`).click(),
+        () => page.locator(`[data-testid="outline-task-${syncedTask.id}-edit-button"]`).click(),
         page.locator('[data-testid="edit-item-modal"] [data-testid="edit-item-description-read"]'),
       );
       assert(await page.locator('[data-testid="edit-item-description-edit"]').count() === 0,

@@ -8,12 +8,60 @@
 
 .task-detail-header {
     align-items: flex-start;
-    gap: 1rem;
+    flex-wrap: wrap;
+    gap: .75rem 1rem;
 }
 
 .task-detail-heading {
     flex: 1;
     min-width: 0;
+}
+
+.task-detail-identity,
+.task-detail-summary,
+.task-detail-section-nav {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: .25rem .75rem;
+    color: var(--bs-secondary-color);
+    font-size: .8125rem;
+}
+
+.task-detail-identity {
+    margin-bottom: .375rem;
+    font-weight: 600;
+}
+
+.task-detail-title {
+    font-size: clamp(1.2rem, 2vw, 1.6rem);
+    font-weight: 700;
+    line-height: 1.25;
+}
+
+.task-detail-title-editor {
+    padding: .25rem .375rem;
+}
+
+.task-detail-summary {
+    margin-top: .625rem;
+    overflow-wrap: anywhere;
+}
+
+.task-detail-outline-link {
+    font-size: inherit;
+}
+
+.task-detail-section-nav {
+    flex: 1 0 100%;
+    padding-top: .375rem;
+    border-top: 1px solid var(--bs-border-color);
+}
+
+.task-detail-section-nav .btn {
+    padding: .25rem .125rem;
+    font-weight: 600;
+    text-decoration: none;
 }
 
 .task-detail-controls {
@@ -46,12 +94,73 @@
     display: none;
 }
 
-@media (min-width: 992px) {
-    .task-detail-header {
-        flex-wrap: wrap;
-        row-gap: .5rem;
-    }
+.task-detail-content {
+    container-type: inline-size;
+    background: var(--bs-tertiary-bg);
+}
 
+.task-detail-grid {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    align-items: start;
+    gap: 1rem;
+    max-width: 76rem;
+    margin-inline: auto;
+}
+
+.task-detail-primary,
+.task-detail-rail {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 1rem;
+}
+
+.task-detail-section,
+.task-detail-rail-card {
+    min-width: 0;
+    padding: .875rem;
+    border: 1px solid var(--bs-border-color);
+    border-radius: var(--bs-border-radius);
+    background: var(--bs-body-bg);
+    overflow-wrap: anywhere;
+}
+
+.task-detail-section-heading,
+.task-detail-description ::deep .form-label {
+    color: var(--bs-body-color) !important;
+    font-size: .9375rem;
+    font-weight: 600;
+}
+
+/* The work item uses its outer scroll surface for long descriptions and discussion. */
+.task-detail-section ::deep .markdown-editable-read,
+.task-detail-section ::deep .kf-timeline-panel,
+.task-detail-section ::deep .task-comment-body {
+    max-height: none;
+    overscroll-behavior-y: auto;
+}
+
+.task-detail-rail-card > :last-child {
+    margin-bottom: 0 !important;
+}
+
+.task-detail-comment-composer {
+    margin-bottom: 1rem;
+}
+
+.task-detail-status-override {
+    display: flex;
+    flex-wrap: wrap;
+    gap: .375rem;
+}
+
+@container (min-width: 42rem) {
+    .task-detail-grid {
+        grid-template-columns: minmax(0, 1fr) minmax(14rem, 30%);
+    }
+}
+
+@media (min-width: 992px) {
     .task-detail-heading {
         flex-basis: 14.5rem;
     }
@@ -85,6 +194,10 @@
         display: inline-flex;
     }
 
+    .task-detail-panel:not([data-size="full"]) .task-detail-content {
+        overflow: visible;
+    }
+
     .task-detail-backdrop:not([data-size="full"]) {
         display: none;
     }
@@ -111,6 +224,7 @@
     }
 
     .task-detail-panel[data-collapsed="true"]:not([data-size="full"]) .task-detail-heading,
+    .task-detail-panel[data-collapsed="true"]:not([data-size="full"]) .task-detail-section-nav,
     .task-detail-panel[data-collapsed="true"]:not([data-size="full"]) .offcanvas-body,
     .task-detail-panel[data-collapsed="true"]:not([data-size="full"]) .task-detail-controls .btn:not(.task-detail-collapse-control) {
         display: none;

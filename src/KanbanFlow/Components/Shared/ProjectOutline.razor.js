@@ -4,11 +4,16 @@ export async function revealSelection(items, request, focus) {
     if (!items?.isConnected || items.dataset.revealRequest !== String(request)) return;
     const row = items.querySelector('.outline-item.is-selected');
     if (!row) return;
-    const bounds = items.getBoundingClientRect();
+    const view = items.ownerDocument.defaultView;
     const target = row.getBoundingClientRect();
-    // Scroll this container only. scrollIntoView can also move the board and page.
-    items.scrollTo({ top: items.scrollTop + target.top - bounds.top - (items.clientHeight - target.height) / 2,
-        behavior: 'instant' });
+    if (view.matchMedia('(max-width: 991.98px)').matches) {
+        const bounds = items.getBoundingClientRect();
+        items.scrollTo({ top: items.scrollTop + target.top - bounds.top - (items.clientHeight - target.height) / 2,
+            behavior: 'instant' });
+    } else if (focus && (target.top < 0 || target.bottom > view.innerHeight)) {
+        // The desktop outline follows the page. Scroll for an explicit focus request only.
+        row.scrollIntoView({ block: 'start', inline: 'nearest', behavior: 'instant' });
+    }
     if (focus && !items.closest('[inert]')) {
         row.querySelector('button[aria-current="true"]')?.focus({ preventScroll: true });
     }

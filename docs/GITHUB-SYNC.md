@@ -453,8 +453,9 @@ sequenceDiagram
 3. **Preview one explicit repository.** Run
    `node scripts/portfolio-sync.mjs restore-content owner/repo --dry-run --actor Codex`.
    Expect task IDs, old/new character counts and any retained prior text; no writes occur.
-   Ambiguous project links, foreign provenance, missing source or a saturated GitHub page
-   bound fail before writes. A provenance-free legacy stub additionally requires a durable
+   Recovery fails before writes if a project link is ambiguous, provenance points elsewhere,
+   an issue or its body is missing, or a GitHub read hits its page bound.
+   A provenance-free legacy stub additionally requires a durable
    matching project marker and issue-number title. Resolve the stated problem and preview again.
 4. **Apply that scoped recovery.** Remove `--dry-run` from the same command. Each existing
    description is re-read, repaired through the audited task API and checked by exact

@@ -179,11 +179,25 @@ window.KanbanFlow = {
         this._navSortables = [];
     },
 
-    focusTaskCard: function (taskId) {
+    focusTaskCard: function (taskId, fromOutline) {
+        if (fromOutline) {
+            var outlineTitle = document.querySelector('[data-testid="outline-task-' + taskId + '-title"]');
+            if (outlineTitle && outlineTitle.getClientRects().length && getComputedStyle(outlineTitle).visibility === 'visible') {
+                outlineTitle.focus();
+                return;
+            }
+
+            var outlineToggle = document.querySelector('[data-testid="toggle-project-outline-button"]');
+            if (outlineToggle && outlineToggle.getClientRects().length) {
+                outlineToggle.focus();
+                return;
+            }
+        }
+
         var selector = '[data-testid="board-card-' + taskId + '-title"]';
         var taskButton = document.querySelector(selector);
         if (taskButton) {
-            taskButton.focus({ preventScroll: true });
+            taskButton.focus();
             return;
         }
 

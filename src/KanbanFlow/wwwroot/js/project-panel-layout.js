@@ -198,6 +198,7 @@ export function watchTaskDetails(panel, dotNetRef) {
 
         const nextModal = narrow.matches || panel.dataset.size === "full";
         if (nextModal === modal) return;
+        const revealDock = modal === undefined && !nextModal;
         const active = panel.ownerDocument.activeElement;
         const preserveFocus = modal !== undefined && panel.contains(active) && active.getClientRects().length > 0;
         modal = nextModal;
@@ -209,6 +210,9 @@ export function watchTaskDetails(panel, dotNetRef) {
             trapFocus: modal,
             preserveFocus,
         });
+        if (revealDock) {
+            panel.querySelector(".task-detail-header")?.scrollIntoView({ block: "nearest", inline: "nearest" });
+        }
     }
 
     const observer = new view.MutationObserver(update);

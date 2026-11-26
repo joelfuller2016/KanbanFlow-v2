@@ -190,7 +190,7 @@ GitHub portfolio synchronization remains a Node script operation. The native `wo
 | Issue | `TaskItem` | Active `ExternalWorkItemLink` keyed by immutable repository node id + issue node id; legacy **`#<n> `** prefix only when no structured state exists | GitHub → board; explicit additive create board → GitHub |
 | Issue labels (`P0`…`P3`, `priority:high`, `critical`, …) | `TaskItem.Priority` | — reconciled every run | GitHub → board (GitHub always wins) |
 | Issue state + linked open PR | `TaskItem.Status` | — | GitHub → board, **advance-only** (see below) |
-| Issue body | `TaskItem.Description` | `<!-- kanbanflow-sync -->` block + up to ~29,491 serialized bytes; a truncated description is refreshed only while it retains the exact sync header and truncation footer | GitHub → board |
+| Issue body | `TaskItem.Description` | Complete body with a `<!-- kanbanflow-sync -->` provenance block and a SHA-256 of the source | GitHub → board |
 | Issue comment | `TaskComment` (`Comment`) | GitHub node id stamped as `<!-- gh:ID -->` | GitHub → board |
 | PR conversation comment | `TaskComment` (`Comment`) | same `<!-- gh:ID -->` marker | GitHub → board |
 | PR review, `APPROVED` | `TaskComment` (**`Verification`**) | same `<!-- gh:ID -->` marker | GitHub → board |
@@ -248,9 +248,9 @@ that project instead of allowing a duplicate. Because a live `backfill-links` **
 title-only `#<n> ` task that an ordinary sync would have promoted, run `sync` first and reach for
 `backfill-links` afterwards, for the residue.
 
-Full semantics, including truncation warnings, comment sizing, and every drift case:
+The sync guide and mapping reference cover recovery of old excerpts, fetch limits, and drift cases.
 [`docs/GITHUB-SYNC.md`](docs/GITHUB-SYNC.md) and
-[`.claude/skills/kanban-portfolio/reference/mapping.md`](.claude/skills/kanban-portfolio/reference/mapping.md).
+[`.claude/skills/kanban-portfolio/reference/mapping.md`](.claude/skills/kanban-portfolio/reference/mapping.md)
 
 ---
 
@@ -264,7 +264,7 @@ The single most useful table here. Before you edit a field, know which side wins
 | Task **priority** | **GitHub** | Reconciled every run (`syncTasks()`) from `P0`…`P3` / `priority:high` / bare severity labels. Setting it on the board is undone on the next sync |
 | Task **status** | **Shared, GitHub-dominant** | You may move it freely, **except** that a closed issue forces `Done` (`syncTasks()`). Board `Done` + open issue is reported as drift, not corrected |
 | Task **feature** (milestone) | **GitHub** | An issue's milestone change moves the task via `PATCH /api/tasks/{id}/feature` (`syncTasks()`) |
-| Task **description** | **GitHub — refreshed when truncated** | Written from the issue body on create, capped at ~29,491 serialized bytes. Truncated descriptions are re-synced only while the exact sync header and truncation footer are intact; human edits that remove either marker are preserved forever |
+| Task **description** | **GitHub source and board edits** | New imports retain the complete issue body. Recovery fills recognized legacy excerpts and keeps any differing prior board text in the same description |
 | **Comments** | **GitHub, append-only** | Issue comments, PR conversation, PR reviews, and inline `file:line` comments are appended, deduped by node id. Board-authored comments are never pushed |
 | **`ActivityEvent`** | **Derived** | Written by the service layer as a side effect of task writes. Never read from or sent to GitHub |
 | `TaskDependency` (DAG) | **Board** | No GitHub representation. Authored by you and by agents |
@@ -299,11 +299,11 @@ that assumes otherwise will be wrong.
 
 | Omission | Detail |
 |---|---|
-| **Description refresh is conditional** | On create the description is written from the issue body. On subsequent runs `descriptionRefreshFor()` refreshes it only when it carries both the sync header **and** the truncation footer. A human edit that removes either marker is preserved forever. The cap is `BODY_EXCERPT_LIMIT` (~29,491 serialized bytes by default), derived from SignalR's default 32 KB `MaximumReceiveMessageSize` minus framing headroom; a larger description could not be edited in `EditableMarkdown` at all |
-| **Closed issues are fetched as numbers only** | Without `--include-closed` the sync pulls only issue *numbers* for closed issues (`fetchClosedIssues(repo, full)`), enough to converge a task to `Done` — their bodies and comments are not mirrored |
+| **Description refresh is conditional** | Ordinary sync leaves complete descriptions in place. Use [legacy recovery](docs/GITHUB-SYNC.md#complete-content-and-legacy-recovery) for existing cards with a recognized cutoff or omitted-provenance stub |
+| **Closed issues are fetched as numbers only** | Default sync reads closed issue numbers to advance already-linked tasks to `Done`. Use `--include-closed` to mirror closed issue bodies and comments, or `restore-content` to repair existing descriptions across all states |
 | **Assignees are not synchronised** | GitHub assignees are read once, only to infer `InProgress` on create (`deriveStatus()`). `TaskItem.Assignee` is never populated from GitHub |
 | **Labels collapse to one priority** | The first matching severity label becomes `TaskItem.Priority`. Every other label survives only as text inside the description block — there is no label entity, and no filtering by label on the board |
-| **Comment edits, deletions, and reactions are never reconciled** | Dedupe is by GitHub node id; an id already seen is skipped forever. An edited GitHub comment keeps its original mirrored text, and a deleted one stays on the board |
+| **Comment edits, deletions, and reactions are never reconciled** | Dedupe uses the GitHub node id once a complete copy exists. A recognizable legacy excerpt can receive one full copy alongside its original history |
 | **PR comments on a PR that closes no issue are dropped** | With no `Closes #n` there is no task to attach them to. They are counted and reported, never silently discarded |
 | **Inline review comments cost one API call per PR** | Fetched via `gh api repos/{repo}/pulls/{n}/comments`. A failure is reported and sets a non-zero exit code — the board is explicitly flagged incomplete rather than looking whole |
 | **Fetches are capped per list** | `GH_PAGE_LIMIT` defaults to `2000` (`KANBANFLOW_GH_PAGE_LIMIT` overrides it). Hitting the cap is a hard failure, not a warning — a count derived from a partial read is worse than no count |
@@ -577,8 +577,8 @@ node scripts/portfolio-sync.mjs --include-closed
 # Skip comment mirroring — much faster on repos with heavy bot review threads.
 node scripts/portfolio-sync.mjs --no-comments
 
-# Cap each mirrored comment (a single CodeRabbit review has measured 110,574 chars).
-node scripts/portfolio-sync.mjs --max-comment-chars 4000
+# Preview repair of legacy descriptions for one repository.
+node scripts/portfolio-sync.mjs restore-content owner/repo --dry-run
 
 # Label the audit trail so you can tell this run apart later.
 node scripts/portfolio-sync.mjs --actor nightly-sync
@@ -601,7 +601,7 @@ comments mirrored: 404
 comments existing:   0
 
   ! biggest comment: 110,574 chars from coderabbitai on #149.
-    Mirrored whole. Use --max-comment-chars N to cap it (agents reading this task over MCP pay for it).
+    Full content preserved. Clients can page or collapse their views without changing the saved text.
 ```
 
 **A second consecutive run creates nothing** — that is the idempotency contract. Immediately

@@ -29,7 +29,18 @@ try {
 
   const board = page.getByTestId('kanban-board');
   const firstTitle = board.locator('.board-card-title-text').first();
-  assert.equal(await firstTitle.evaluate(element => getComputedStyle(element).webkitLineClamp), '3');
+  const longLane = page.getByTestId('board-column-Backlog-cards');
+  const box = await firstTitle.boundingBox();
+  await page.mouse.move(box.x + 8, box.y + 8);
+  await page.mouse.wheel(0, 750);
+  await page.waitForFunction(() => window.scrollY >= 400, null, { timeout: 3000 });
+  assert.equal(await longLane.evaluate(element => element.scrollTop), 0,
+    'Page scrolling should move the project, including the outline and board');
+  await page.evaluate(() => window.scrollTo(0, 0));
+  await page.mouse.move(1, 1);
+  assert.equal(await firstTitle.evaluate(element => getComputedStyle(element).webkitLineClamp), 'none');
+  assert.ok(await firstTitle.evaluate(element => element.scrollHeight <= element.clientHeight + 1),
+    'The full card title should be visible without hover');
   assert.ok(await board.evaluate(element => element.scrollWidth > element.clientWidth),
     'Columns should retain readable widths and scroll within the board at laptop width');
 
@@ -43,6 +54,7 @@ try {
   const pane = page.locator('[data-project-panel="outline"]');
   const handle = page.getByTestId('outline-resize-handle');
   const originalOutlineWidth = (await pane.boundingBox()).width;
+  assert.ok(originalOutlineWidth >= 360, 'The desktop outline should have space for larger task cards');
   await handle.press('ArrowRight');
   await page.waitForFunction(width => document.querySelector('[data-project-panel="outline"]').getBoundingClientRect().width > width, originalOutlineWidth);
   await pane.getByTestId('dock-project-outline').click();
@@ -54,10 +66,18 @@ try {
   await page.waitForFunction(() => document.querySelector('[data-project-panel="outline"]').dataset.dock === 'left');
   assert.equal((await pane.boundingBox()).width, originalOutlineWidth);
 
+  const outlineTitle = outline.locator('button.outline-task-title').first();
+  const outlineTitleId = await outlineTitle.getAttribute('data-testid');
+  await outlineTitle.click();
+  const details = page.getByTestId('task-detail-panel');
+  await details.waitFor();
+  await details.getByTestId('task-detail-close-button').click();
+  await details.waitFor({ state: 'hidden' });
+  await page.waitForFunction(testId => document.activeElement?.dataset.testid === testId, outlineTitleId);
+
   await page.setViewportSize({ width: 1000, height: 768 });
   const firstCard = board.locator('.board-card-title').first();
   await firstCard.click();
-  const details = page.getByTestId('task-detail-panel');
   await details.waitFor();
   await handle.press('End');
   await details.getByTestId('details-resize-handle').press('End');

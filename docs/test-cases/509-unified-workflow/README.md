@@ -262,3 +262,7 @@ The targeted seeded run is `node scripts/project-board-layout.browser.mjs <local
 Use `scripts/board-column-layout.browser.js` and `scripts/task-detail-display.browser.js`
 on their disposable fixtures for write and readback checks. Actual human usability feedback
 on card scanning, panel movement, and narrow-screen behavior is pending.
+
+The revised preview uses larger cards in the Outline, shows complete titles, and scrolls the document vertically. Open a task from either the Outline or a board lane. Read its Description and Discussion in the task form, try the section shortcuts, then close it and confirm focus returns to the opener. Repeat with a card below the first viewport and at phone width. The narrow drawers and Full page view have their own scroll area.
+
+For a task imported with an old truncation marker, use the audited recovery in the [sync guide](../../GITHUB-SYNC.md#complete-content-and-legacy-recovery). Confirm the restored issue body is readable in Task Details and that any differing board text is preserved by the recovery.

@@ -3,7 +3,8 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 
 const source = new URL("../src/KanbanFlow/wwwroot/js/project-panel-layout.js", import.meta.url);
-const { attachResizeHandle, load, reset, save } = await import("data:text/javascript;base64," + readFileSync(source).toString("base64"));
+const { attachResizeHandle, load, reset, save, watchTaskDetails } =
+  await import("data:text/javascript;base64," + readFileSync(source).toString("base64"));
 
 const storageData = new Map();
 globalThis.localStorage = {
@@ -158,4 +159,43 @@ test("losing pointer capture clears the preview without saving a width", () => {
   assert.equal(resize.style.size, 0);
   assert.deepEqual(resize.commits, []);
   resize.controller.dispose();
+});
+
+test("a fresh desktop dock reveals its header without scrolling on mode changes", () => {
+  const narrow = new EventTarget();
+  narrow.matches = false;
+  const scrolls = [];
+  let shown = false;
+  let update;
+  const view = {
+    matchMedia: () => narrow,
+    KanbanFlow: { initDialog() {}, destroyDialog() {} },
+    MutationObserver: class {
+      constructor(callback) { update = callback; }
+      observe() {}
+      disconnect() {}
+    },
+  };
+  const panel = {
+    ownerDocument: { defaultView: view, activeElement: null },
+    classList: { contains: () => shown },
+    dataset: { size: "half" },
+    contains: () => false,
+    setAttribute() {},
+    removeAttribute() {},
+    querySelector: selector => selector === ".task-detail-header"
+      ? { scrollIntoView: options => scrolls.push(options) }
+      : null,
+  };
+  const controller = watchTaskDetails(panel, {});
+  shown = true;
+  update();
+  assert.deepEqual(scrolls, [{ block: "nearest", inline: "nearest" }]);
+
+  panel.dataset.size = "full";
+  update();
+  panel.dataset.size = "half";
+  update();
+  assert.equal(scrolls.length, 1);
+  controller.dispose();
 });

@@ -59,6 +59,7 @@ else
                             OnOpenAddFeature="OpenAddModalForFeature"
                             OnOpenAddTaskSubtask="OpenAddSubtaskForTask"
                             OnOpenAddSubtaskChild="OpenAddChildSubtaskFromOutline"
+                            OnOpenTaskDetails="OpenTaskDetailsFromOutline"
                             OnOpenEditTask="OpenOutlineTask"
                             OnOpenSubtask="OpenOutlineSubtask"
                             Selection="CurrentOutlineItem"
@@ -82,7 +83,7 @@ else
                 @onclick="CloseOutline"></button>
 
         @* ── Right Panel: AI Action Bar + Kanban Board ── *@
-        <div class="project-main flex-grow-1 d-flex flex-column overflow-hidden">
+        <div class="project-main flex-grow-1 d-flex flex-column">
             <section class="project-board-toolbar" aria-label="Project board tools" data-testid="project-board-toolbar">
                 <BoardFilterBar Filter="filter"
                                 TextResetToken="filterTextResetToken"
@@ -466,6 +467,8 @@ else
     private bool detailPanelOpen;
     private int? detailPanelAddSubtaskParentId;
     private int? pendingDetailFocusReturnTaskId;
+    private bool detailOpenedFromOutline;
+    private bool pendingDetailFocusFromOutline;
     private bool outlineOpen;
     private ElementReference desktopOutlineToggle;
     private KanbanBoard<TaskItem, WorkStatus>? taskBoard;
@@ -557,11 +560,19 @@ else
 
     private void OpenTaskDetail(TaskItem task) => OpenTaskDetail(task, null, forceTaskExpansion: false);
 
+    private void OpenTaskDetailsFromOutline(TaskItem task)
+    {
+        outlineOpen = false;
+        OpenTaskDetail(task);
+        detailOpenedFromOutline = true;
+    }
+
     private void OpenTaskDetail(TaskItem task, int? addSubtaskParentId, bool forceTaskExpansion)
     {
         SelectOutlineItem(addSubtaskParentId is int subtaskId
             ? new(OutlineItemKind.Subtask, subtaskId) : new(OutlineItemKind.Task, task.Id));
         selectedTask = task;
+        detailOpenedFromOutline = false;
         detailPanelAddSubtaskParentId = addSubtaskParentId;
         detailPanelOpen = true;
         panelLayout = panelLayout with { Details = panelLayout.Details with { Collapsed = false } };
@@ -577,6 +588,7 @@ else
     private async Task OnDetailClose()
     {
         pendingDetailFocusReturnTaskId = selectedTask?.Id;
+        pendingDetailFocusFromOutline = detailOpenedFromOutline;
         detailPanelOpen = false;
         selectedTask = null;
         detailPanelAddSubtaskParentId = null;
@@ -777,7 +789,7 @@ else
             pendingDetailFocusReturnTaskId = null;
             try
             {
-                await JS.InvokeVoidAsync("KanbanFlow.focusTaskCard", taskId);
+                await JS.InvokeVoidAsync("KanbanFlow.focusTaskCard", taskId, pendingDetailFocusFromOutline);
             }
             catch (JSDisconnectedException) { }
             catch (ObjectDisposedException) { }

@@ -62,14 +62,14 @@ async (page) => {
   await page.evaluate(() => document.activeElement?.blur());
   await page.waitForFunction(selector => document.querySelector(selector)?.getBoundingClientRect().height < 1, revealSelector);
   const resting = await metrics(page);
-  check(resting.hasHover && resting.clamp === '3', 'Desktop title must start at three lines.');
-  check(Math.abs(resting.title.height - 3 * resting.lineHeight) < 2, 'The title must actually occupy three lines.');
-  check(resting.titleScrollHeight > resting.title.height, 'The fixture must exercise a longer title.');
+  check(resting.hasHover && resting.clamp === 'none', 'Desktop title must be readable at rest.');
+  check(resting.title.height > 3 * resting.lineHeight, 'The fixture must exercise a longer title.');
+  check(resting.titleScrollHeight <= resting.title.height + 1, 'Every desktop title line must be visible.');
   check(resting.reveal.height < 1 && resting.opacity === '0', 'Desktop preview must collapse fully at rest.');
   await page.locator(titleSelector).hover();
   await page.waitForFunction(selector => getComputedStyle(document.querySelector(selector)).opacity === '1', revealSelector);
   const hovered = await metrics(page);
-  check(hovered.title.height > resting.title.height && hovered.clamp !== '3', 'Hover must expose the complete title.');
+  check(Math.abs(hovered.title.height - resting.title.height) < 1, 'Hover must keep the complete title in place.');
   check(hovered.titleScrollHeight <= hovered.title.height + 1, 'Every title line must fit in the visible hover box.');
   check(hovered.reveal.height > 20, 'Hover must expose the description preview.');
   check(hovered.badge.right <= hovered.card.right && hovered.badge.width > 0, 'Long tokens must keep the Blocked badge inside the card.');
@@ -102,7 +102,7 @@ async (page) => {
   // This fixture class tests the global CSS state independently of pointer timing.
   await page.locator(cardSelector).evaluate(card => card.classList.add('kanban-ghost'));
   const desktopDrag = await metrics(page);
-  check(desktopDrag.reveal.height < 1 && desktopDrag.clamp === '3' && desktopDrag.transition === '0s', 'Desktop drag suppression must immediately fix geometry.');
+  check(desktopDrag.reveal.height < 1 && desktopDrag.clamp === 'none' && desktopDrag.transition === '0s', 'Desktop drag must keep the title visible and close the excerpt immediately.');
   await page.locator(cardSelector).evaluate(card => card.classList.remove('kanban-ghost'));
 
   // A real click proves the InteractiveServer callback and complete detail view still work.
@@ -125,11 +125,13 @@ async (page) => {
   await outlineTitle.waitFor({ state: 'visible' });
   const outline = await outlineTitle.evaluate(title => ({
     height: title.getBoundingClientRect().height,
+    scrollHeight: title.scrollHeight,
     lineHeight: parseFloat(getComputedStyle(title).lineHeight),
     fullText: title.textContent,
     tooltip: title.parentElement.title
   }));
-  check(Math.abs(outline.height - 2 * outline.lineHeight) < 2, 'The outline title must also actually clamp to two lines.');
+  check(outline.height > 2 * outline.lineHeight && outline.scrollHeight <= outline.height + 1,
+    'The full outline title must wrap across as many lines as it needs.');
   check(outline.fullText === fullTitle && outline.tooltip === fullTitle, 'The outline must retain the complete task title.');
   await outlineTitle.click();
   // This branch's outline opens the existing edit modal; #511 routes it through task detail.
@@ -160,7 +162,7 @@ async (page) => {
     await touchPage.locator(cardSelector).waitFor({ state: 'visible' });
     touchResting = await metrics(touchPage);
     check(touchResting.hasNoHover, 'The touch case must execute in an actual no-hover media context.');
-    check(touchResting.opacity === '1' && touchResting.reveal.height > 20 && touchResting.clamp !== '3', `Touch readers must see the title, preview and link without hovering: ${JSON.stringify(touchResting)}`);
+    check(touchResting.opacity === '1' && touchResting.reveal.height > 20 && touchResting.clamp === 'none', `Touch readers must see the title, preview and link without hovering: ${JSON.stringify(touchResting)}`);
     check(touchResting.titleScrollHeight <= touchResting.title.height + 1, 'Every title line must fit in the visible touch box.');
     check(touchResting.link.height >= 24, 'Touch link must have at least a 24px target.');
     await touchPage.locator(cardSelector).evaluate(card => card.classList.add('kanban-ghost'));
