@@ -42,8 +42,8 @@
     A CONSEQUENCE WORTH STATING PLAINLY: `status: ok` from /api/admin/health used to prove only
     that the process was up and its DI graph wired -- the endpoint never opened the database. Since
     #498 it opens it, reads from it, and reports `db.path`, so it can now answer `degraded` or
-    `error`. It still cannot know which database you MEANT -- this script pins that -- but the
-    comparison is finally possible: read `db.path` and check it against the file you expect.
+    `error`. This script checks `db.path` against the file it pinned into the task action before
+    reporting that the app is serving the expected database.
 
     REBOOT SURVIVAL NEEDS ADMINISTRATOR, and that is a measurement, not a guess. Registering the
     same trivial task as a non-elevated user on this box: Interactive principal with AtLogOn + Once
@@ -365,11 +365,9 @@ function ConvertTo-ProbeUrl {
 
 function Test-KanbanFlowHealthy {
     <#
-        True when the endpoint answers 200 AND its top-level status says the process is serving a
-        database: `ok`, or `degraded` (it opened and read one, and is reporting something about it
-        -- new, empty, or shadowed). Both mean RUNNING, which is what this readiness probe is for.
-        `error` and anything else are false. §9's reboot criterion is stricter and lives there, not
-        here: top-level `ok` AND `db.path` equal to the database the operator pinned (#498).
+        True when the endpoint answers 200, reports the database pinned into the task action, and
+        its top-level status is `ok` or `degraded`. Compare normalized paths. Missing, invalid, or
+        different paths fail the probe. The reboot criterion additionally requires top-level `ok`.
 
         The proxy handling is load-bearing, not defensive noise. Measured under Windows PowerShell
         5.1: the FIRST web request in a process pays a one-time proxy auto-detection cost -- 1886 ms
@@ -387,6 +385,7 @@ function Test-KanbanFlowHealthy {
     #>
     param(
         [Parameter(Mandatory = $true)][string] $Uri,
+        [Parameter(Mandatory = $true)][ValidateNotNullOrEmpty()][string] $ExpectedDbPath,
         [int] $TimeoutSec = 20
     )
 
@@ -416,15 +415,29 @@ function Test-KanbanFlowHealthy {
         # '"status"\s*:\s*"ok"' match would report the app healthy off the INNER field while the
         # top-level status said degraded or error -- a false positive in exactly the direction this
         # function must never fail.
-        #
-        # This is a readiness probe: "degraded" means the process is up, opened its database and
-        # read from it, and is telling you something about that board (it is new, empty, or
-        # shadowed by another file). That is running, so the caller must not restart it. §9's
-        # reboot criterion is the STRICTER check -- top-level ok, db.path equal to the expected
-        # file -- and belongs at the criterion, not here.
-        $status = $null
-        try { $status = ([string]$body | ConvertFrom-Json).status } catch { return $false }
-        return ($status -eq 'ok' -or $status -eq 'degraded')
+        $health = [string]$body | ConvertFrom-Json
+        if ($health.status -notin @('ok', 'degraded')) { return $false }
+
+        $reportedDbPath = $null
+        try { $reportedDbPath = $health.db.path } catch { }
+        if ($reportedDbPath -isnot [string] -or [string]::IsNullOrWhiteSpace($reportedDbPath)) {
+            Write-Warning "[task] $Uri did not report a database path; expected '$ExpectedDbPath'."
+            return $false
+        }
+
+        $displayDbPath = $reportedDbPath -replace '[\x00-\x1f\x7f]', '?'
+        try {
+            $matchesExpectedDb = [System.IO.Path]::GetFullPath($reportedDbPath) -eq [System.IO.Path]::GetFullPath($ExpectedDbPath)
+        }
+        catch {
+            Write-Warning "[task] $Uri reports an invalid database path '$displayDbPath'. Expected '$ExpectedDbPath'."
+            return $false
+        }
+        if (-not $matchesExpectedDb) {
+            Write-Warning "[task] $Uri reports database '$displayDbPath'. Expected '$ExpectedDbPath'."
+            return $false
+        }
+        return $true
     }
     catch {
         return $false
@@ -832,13 +845,13 @@ try {
     }
 
     if (-not $NoStart) {
-        # Only start when the app is not already answering. Starting unconditionally would be
-        # harmless (IgnoreNew refuses the duplicate) but the refusal reads like an error in the
-        # task history, and a clean history is worth more than one saved condition.
+        # Only start when the app is not already serving the pinned database. Starting unconditionally
+        # would be harmless (IgnoreNew refuses the duplicate) but the refusal reads like an error in
+        # the task history.
         # A -WhatIf preview must stay side-effect free, so the probe itself is SKIPPED under
         # -WhatIf: the short-circuit means Test-KanbanFlowHealthy is never called, and the preview
         # falls through to the ShouldProcess branch below, which only announces the start.
-        if ((-not $WhatIfPreference) -and (Test-KanbanFlowHealthy -Uri $healthUri)) {
+        if ((-not $WhatIfPreference) -and (Test-KanbanFlowHealthy -Uri $healthUri -ExpectedDbPath $resolvedDb)) {
             Write-Host "[task] KanbanFlow is already serving at $healthUri; not starting a second instance"
         }
         elseif ($PSCmdlet.ShouldProcess($TaskName, 'Start scheduled task')) {
@@ -852,7 +865,10 @@ try {
             $deadline = (Get-Date).AddSeconds($StartTimeoutSeconds)
             $healthy = $false
             while ((Get-Date) -lt $deadline) {
-                if (Test-KanbanFlowHealthy -Uri $healthUri -TimeoutSec 10) { $healthy = $true; break }
+                if (Test-KanbanFlowHealthy -Uri $healthUri -ExpectedDbPath $resolvedDb -TimeoutSec 10) {
+                    $healthy = $true
+                    break
+                }
                 Start-Sleep -Seconds 3
             }
 
@@ -861,7 +877,7 @@ try {
                 # because degraded means the app opened its database and read from it and is
                 # reporting something about that board (#498). Saying "ok" here would name a
                 # verdict the probe did not actually require.
-                Write-Host "[task] $healthUri is serving a database (status ok or degraded)"
+                Write-Host "[task] $healthUri is serving the pinned database '$resolvedDb' (status ok or degraded)"
             }
             else {
                 $lastResult = '(unknown)'
@@ -870,7 +886,7 @@ try {
                     $lastResult = ('0x{0:X8}' -f $info.LastTaskResult)
                 }
                 catch { }
-                throw ("Started $TaskName but $healthUri did not report a served database " +
+                throw ("Started $TaskName but $healthUri did not report the pinned database '$resolvedDb' " +
                        "(status ok or degraded) within " +
                        "${StartTimeoutSeconds}s. LastTaskResult=$lastResult (0x800710E0 means Task " +
                        "Scheduler REFUSED the start because an instance is already running, so " +
