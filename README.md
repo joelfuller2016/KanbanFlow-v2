@@ -862,8 +862,8 @@ dotnet test tests/KanbanFlow.Tests/KanbanFlow.Tests.csproj # all xUnit tests; da
 ```
 
 ```bash
-node ./scripts/smoke-mcp.mjs 1          # MCP tool surface — needs the app running on :5123
-npm run test:mcp                        # stdio framing A/B + the MCP smoke suite
+node ./scripts/smoke-mcp.mjs 2          # use an explicit project ID on the disposable app
+npm run test:mcp                        # stdio framing A/B + smoke against the lowest available project ID
 npm run test:scripts                    # node:test units, including local Git/HTTP child
                                         # fixtures. No configured live app is required.
                                         # An optional live GitHub issue/label read runs when
@@ -872,6 +872,9 @@ npm run test:scripts                    # node:test units, including local Git/H
 npm run test:ui                         # Playwright e2e — builds, boots an isolated instance
                                         # (fixed port 5198 + throwaway DB), drives chromium, tears down
 ```
+
+Set `KANBANFLOW_API_URL` to an app running with a disposable copy of the seed database before
+running the MCP smoke suite. The suite creates temporary test records and cleans them up.
 
 > **`test:ui` binds a fixed port (`5198`).** Two concurrent runs — two agents, or you and an
 > agent — share that port but get *separate* throwaway databases, so one run's API calls land on
