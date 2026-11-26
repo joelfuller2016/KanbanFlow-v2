@@ -29,6 +29,10 @@ async page => {
   const half = page.getByRole('button', { name: 'Half page', exact: true });
   const full = page.getByRole('button', { name: 'Full page', exact: true });
   const close = page.getByTestId('task-detail-close-button');
+  const dock = page.getByTestId('task-detail-dock-button');
+  const collapse = page.getByTestId('task-detail-collapse-button');
+  const resize = page.getByTestId('details-resize-handle');
+  const reset = page.getByTestId('reset-project-layout');
   const card = page.getByTestId('board-card-' + taskId + '-title');
   async function board(width = 1280, height = 900) {
     await page.setViewportSize({ width, height });
@@ -37,13 +41,22 @@ async page => {
     await page.getByTestId('request-workspace').locator('summary').first().click();
     await card.waitFor();
   }
-  async function size(mode, ratio) {
-    await page.waitForFunction(({ mode, ratio }) => {
+  async function size(mode, ratio, dock = 'right') {
+    await page.waitForFunction(({ mode, ratio, dock }) => {
       const el = document.querySelector('[data-testid="task-detail-panel"]');
       const rect = el?.getBoundingClientRect();
-      return el?.dataset.size === mode && Math.abs(rect.width - innerWidth * ratio) < 2 &&
-        Math.abs(rect.right - innerWidth) < 2 && Math.abs(rect.height - innerHeight) < 2;
-    }, { mode, ratio });
+      if (el?.dataset.size !== mode || el.dataset.dock !== dock || Math.abs(rect.width - innerWidth * ratio) >= 2) {
+        return false;
+      }
+      if (mode === 'full' || innerWidth < 992) {
+        return el.getAttribute('aria-modal') === 'true' && Math.abs(rect.right - innerWidth) < 2 &&
+          Math.abs(rect.height - innerHeight) < 2;
+      }
+      const board = document.querySelector('.project-main').getBoundingClientRect();
+      const edge = dock === 'left' ? rect.right - board.left : rect.left - board.right;
+      return !el.hasAttribute('aria-modal') && Math.abs(edge) < 2 &&
+        Math.abs(rect.height - board.height) < 2 && Math.abs(rect.top - board.top) < 2;
+    }, { mode, ratio, dock });
     assert(await half.getAttribute('aria-pressed') === String(mode === 'half'), 'Half-page state is incorrect.');
     assert(await full.getAttribute('aria-pressed') === String(mode === 'full'), 'Full-page state is incorrect.');
     assert((await panel.locator('#task-detail-title').innerText()).trim() === before.tasks[0].name,
@@ -53,7 +66,7 @@ async page => {
       const controls = el.querySelector('.task-detail-controls').getBoundingClientRect();
       const header = el.querySelector('.offcanvas-header').getBoundingClientRect();
       return { noOverlap: heading.right <= controls.left, inHeader: controls.top >= header.top &&
-        controls.bottom <= header.bottom && controls.right <= innerWidth, topRight: innerWidth - controls.right < 40 };
+        controls.bottom <= header.bottom && controls.right <= innerWidth, topRight: header.right - controls.right < 40 };
     });
     assert(bounds.noOverlap && bounds.inHeader && bounds.topRight, 'Top-right controls overlap the title or leave the viewport.');
   }
@@ -65,6 +78,7 @@ async page => {
   }
 
   await board();
+  await reset.click();
   await card.focus();
   await page.keyboard.press('Enter');
   await size('half', .5);
@@ -84,13 +98,36 @@ async page => {
   await size('half', .5);
   assert(await comment.inputValue() === draft && await type.inputValue() === 'Handoff',
     'Restoring half page lost the draft.');
+  await dock.click();
+  await size('half', .5, 'left');
+  await page.waitForFunction(() => document.querySelector('[data-testid="details-resize-handle"]')
+    ?.getAttribute('aria-valuenow') === '640');
+  await resize.focus();
+  await page.keyboard.press('ArrowRight');
+  const customRatio = .5 + 16 / 1280;
+  await size('custom', customRatio, 'left');
+
+  await collapse.focus();
+  await page.keyboard.press('Space');
+  await panel.waitFor({ state: 'visible' });
+  await comment.waitFor({ state: 'hidden' });
+  assert(await collapse.getAttribute('aria-expanded') === 'false' &&
+    await collapse.evaluate(el => el === document.activeElement), 'Collapse did not preserve keyboard focus.');
+  await page.keyboard.press('Enter');
+  await size('custom', customRatio, 'left');
+  assert(await comment.inputValue() === draft && await type.inputValue() === 'Handoff',
+    'Docking, resizing, or collapsing lost the draft.');
+  const filter = page.getByTestId('board-filter-search');
+  await filter.focus();
+  await page.keyboard.press('Tab');
+  assert(await panel.evaluate(el => !el.contains(document.activeElement)), 'The docked panel trapped board focus.');
   const afterResize = await read();
   assert(afterResize.version === before.version && afterResize.tasks[0].editToken === before.tasks[0].editToken &&
     afterResize.tasks[0].comments.length === before.tasks[0].comments.length,
     'A display-only action mutated task or workflow data.');
   await full.focus();
   await page.keyboard.press('Enter');
-  await size('full', 1);
+  await size('full', 1, 'left');
   await page.keyboard.press('Tab');
   assert(await panel.evaluate(el => el.contains(document.activeElement)), 'Keyboard focus escaped the open card.');
   await page.getByTestId('task-comment-add-button').click();
@@ -101,12 +138,19 @@ async page => {
   await close.click();
   await closed();
   await card.click();
-  await size('half', .5);
+  await size('custom', customRatio, 'left');
   await full.click();
-  await size('full', 1);
+  await size('full', 1, 'left');
   await page.keyboard.press('Escape');
   await closed();
-  const filter = page.getByTestId('board-filter-search');
+
+  await board();
+  await card.click();
+  await size('custom', customRatio, 'left');
+  await reset.click();
+  await size('half', .5);
+  await close.click();
+  await closed();
   await filter.fill('Verify');
   await page.waitForURL(url => url.searchParams.get('q') === 'Verify');
   await card.waitFor();
@@ -124,6 +168,7 @@ async page => {
   await closed();
   await page.setViewportSize({ width: 1280, height: 900 });
   return { passed: true, taskId, desktopHalfAndFull: true, topRightControls: true,
+    desktopDockAndCollapse: true, keyboardResize: true, layoutSavedAndReset: true, modelessDock: true,
     draftAndTaskPreserved: true, savedFromFullPageVisibleToMcp: true, keyboardAndFocusReturn: true,
     closeAndEscape: true, mobileFits: true, humanUsabilityApproval: 'pending' };
 }

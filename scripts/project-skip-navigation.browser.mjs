@@ -85,22 +85,29 @@ export async function projectSkipNavigation(page, api) {
     await page.keyboard.press('Enter');
     await page.waitForFunction(() => document.activeElement?.id === 'kanban-board-heading');
     assert.equal(await focusedId(), 'kanban-board-heading', 'desktop cards bypass must retain heading focus');
-    let tabs = 2;
-    while (tabs < 5 && await focusedTestId() !== `board-card-${firstTask.id}-title`) {
+    let tabsFromHeading = 0;
+    while (tabsFromHeading < 5 && await focusedTestId() !== `board-card-${firstTask.id}-title`) {
       await page.keyboard.press('Tab');
-      tabs++;
+      tabsFromHeading++;
     }
-    assert.equal(await focusedTestId(), `board-card-${firstTask.id}-title`, 'card title must be reachable within 5 Tabs');
+    assert.equal(await focusedTestId(), `board-card-${firstTask.id}-title`, 'card title must follow the board and lane controls');
     for (const key of ['Enter', 'Space']) {
       await page.keyboard.press(key);
-      await page.locator('[data-testid="task-detail-panel"]').waitFor();
+      const panel = page.getByTestId('task-detail-panel');
+      await panel.waitFor();
       const modalUrl = page.url();
+      await page.getByTestId('skip-to-board-search').dispatchEvent('click');
+      await page.waitForFunction(() => document.activeElement?.id === 'board-filter-search');
+      assert.ok(await panel.isVisible(), 'docked details stay open when focus returns to the board');
+
+      await page.getByTestId('task-detail-full-page-button').click();
+      await page.locator('[data-testid="task-detail-panel"][aria-modal="true"]').waitFor();
       await page.getByTestId('skip-to-board-search').dispatchEvent('click');
       assert.ok(await page.evaluate(() => document.querySelector('[data-testid="task-detail-panel"]')
         .contains(document.activeElement)), 'bypass must not escape an open modal');
       assert.equal(page.url(), modalUrl);
       await page.keyboard.press('Escape');
-      await page.locator('[data-testid="task-detail-panel"]').waitFor({ state: 'hidden' });
+      await panel.waitFor({ state: 'hidden' });
       await page.waitForFunction((testId) => document.activeElement?.getAttribute('data-testid') === testId,
         `board-card-${firstTask.id}-title`);
     }

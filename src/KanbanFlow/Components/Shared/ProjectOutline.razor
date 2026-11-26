@@ -4,7 +4,8 @@
 @inject IJSRuntime JS
 @implements IAsyncDisposable
 
-<div id="project-outline" class="project-outline border-end bg-light p-3" data-testid="project-outline">
+<div id="project-outline" class="project-outline border-end bg-light p-3"
+     data-testid="project-outline" tabindex="-1" @ref="outlineElement">
     <div class="project-outline-header">
         <div class="outline-title-row">
             <button type="button"
@@ -34,7 +35,7 @@
                     @onclick="() => OnCloseOutline.InvokeAsync()"
                     title="Hide outline"
                     aria-label="Hide project outline"
-                    data-testid="close-project-outline-button">
+                    data-testid="close-project-outline-button" data-dialog-autofocus>
                 <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="currentColor" viewBox="0 0 16 16" aria-hidden="true">
                     <path d="M2.146 2.854a.5.5 0 1 1 .708-.708L8 7.293l5.146-5.147a.5.5 0 0 1 .708.708L8.707 8l5.147 5.146a.5.5 0 0 1-.708.708L8 8.707l-5.146 5.147a.5.5 0 0 1-.708-.708L7.293 8z"/>
                 </svg>
@@ -116,6 +117,10 @@
     [Parameter] public EventCallback<Subtask> OnToggleOutlineSubtask { get; set; }
     [Parameter] public EventCallback OnCloseOutline { get; set; }
 
+    private ElementReference outlineElement;
+    private IJSObjectReference? drawerWatcher;
+    private DotNetObjectReference<ProjectOutline>? drawerReference;
+    private bool disposed;
     private ElementReference itemsElement;
     private ProjectOutlineInterop? interop;
     private int appliedRevealRequest;
@@ -123,7 +128,8 @@
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
-        if (appliedRevealRequest == RevealRequest) return;
+        if (firstRender) await AttachDrawerAsync();
+        if (disposed || appliedRevealRequest == RevealRequest) return;
         appliedRevealRequest = RevealRequest;
         interop ??= new ProjectOutlineInterop(JS);
         try { await interop.RevealAsync(itemsElement, RevealRequest, FocusSelection, revealCancellation.Token); }
@@ -132,11 +138,53 @@
         catch (ObjectDisposedException) { }
     }
 
+    private async Task AttachDrawerAsync()
+    {
+        try
+        {
+            await using var module = await JS.InvokeAsync<IJSObjectReference>("import", "./js/project-outline-drawer.js");
+            if (disposed) return;
+            drawerReference = DotNetObjectReference.Create(this);
+            var watcher = await module.InvokeAsync<IJSObjectReference>("watchProjectOutlineDrawer", outlineElement, drawerReference);
+            if (disposed) await DisposeDrawerAsync(watcher);
+            else drawerWatcher = watcher;
+        }
+        catch (JSDisconnectedException) { }
+        catch (JSException) { }
+        catch (ObjectDisposedException) { }
+    }
+
+    [JSInvokable]
+    public Task CloseFromJs() => OnCloseOutline.InvokeAsync();
+
+    private static async ValueTask DisposeDrawerAsync(IJSObjectReference watcher)
+    {
+        try
+        {
+            await using (watcher)
+            {
+                await watcher.InvokeVoidAsync("dispose");
+            }
+        }
+        catch (JSDisconnectedException) { }
+        catch (JSException) { }
+        catch (ObjectDisposedException) { }
+    }
+
     public async ValueTask DisposeAsync()
     {
+        disposed = true;
         revealCancellation.Cancel();
-        try { if (interop is not null) await interop.DisposeAsync(); }
-        finally { revealCancellation.Dispose(); }
+        try
+        {
+            if (drawerWatcher is not null) await DisposeDrawerAsync(drawerWatcher);
+            if (interop is not null) await interop.DisposeAsync();
+        }
+        finally
+        {
+            drawerReference?.Dispose();
+            revealCancellation.Dispose();
+        }
     }
 
     private bool IsSelected(OutlineItemKind kind, int id) => Selection == new OutlineItem(kind, id);

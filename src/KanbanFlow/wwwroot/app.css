@@ -524,14 +524,131 @@ h1:focus {
 }
 
 .project-main {
+    flex: 1 1 0;
     min-width: 0;
 }
 
-.project-outline {
-    width: 320px;
-    min-width: 320px;
-    flex-shrink: 0;
+.project-outline-pane {
+    --project-outline-width: 320px;
+    position: relative;
+    display: flex;
+    flex: 0 1 auto;
+    flex-direction: column;
+    width: var(--project-panel-resize-preview, var(--project-outline-width));
+    min-width: 224px;
+    max-width: min(432px, 32vw);
+    min-height: 0;
+    border-inline-end: 1px solid var(--bs-border-color);
+    background: var(--bs-tertiary-bg);
+    order: -2;
+}
+
+.project-outline-pane[data-dock="right"] {
+    order: 2;
+    border-inline-end: 0;
+    border-inline-start: 1px solid var(--bs-border-color);
+}
+
+.project-outline-pane > .project-outline {
+    flex: 1 1 auto;
+    min-height: 0;
     overflow-y: auto;
+}
+
+.project-outline-pane-actions {
+    justify-content: space-between;
+    gap: .25rem;
+    padding: .5rem .75rem 0;
+}
+
+@media (min-width: 992px) {
+    .project-main {
+        min-width: 20rem;
+    }
+
+    .project-outline-pane[data-collapsed="true"] {
+        display: none;
+    }
+}
+
+.project-board-toolbar {
+    position: relative;
+    flex: 0 0 auto;
+    z-index: 2;
+    background: var(--bs-body-bg);
+    border-bottom: 1px solid var(--bs-border-color);
+}
+
+.project-board-actions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: .375rem;
+    padding: .375rem .75rem;
+}
+
+.project-board-actions .btn {
+    min-height: 32px;
+    align-items: center;
+    gap: .375rem;
+}
+
+.project-board-actions [aria-expanded="true"] {
+    color: var(--bs-emphasis-color);
+    background-color: var(--bs-secondary-bg);
+}
+
+.project-toolbar-requests > summary {
+    list-style: none;
+}
+
+.project-toolbar-requests[open] > summary {
+    background-color: var(--bs-secondary-bg);
+}
+
+.project-toolbar-requests > .request-workspace-content {
+    position: absolute;
+    inset: 100% 0 auto;
+    background: var(--bs-body-bg);
+    border: 1px solid var(--bs-border-color);
+    box-shadow: var(--bs-box-shadow-sm);
+    max-height: 55dvh;
+    overflow: auto;
+}
+
+.project-toolbar-requests-close {
+    display: flex;
+    justify-content: flex-end;
+    margin-bottom: .5rem;
+}
+
+@media (max-height: 600px), (max-width: 575.98px) {
+    .project-toolbar-requests > .request-workspace-content {
+        position: fixed;
+        inset: 3.5rem .5rem .5rem;
+        max-height: none;
+    }
+
+    .project-toolbar-requests-close {
+        position: sticky;
+        top: 0;
+        z-index: 1;
+        padding-block: .25rem;
+        background: var(--bs-body-bg);
+    }
+}
+
+.project-tool-count {
+    color: var(--bs-secondary-color);
+    font-size: .75rem;
+}
+
+.project-tools-content {
+    flex: 0 0 auto;
+    max-height: 45dvh;
+    overflow: auto;
+    padding: .5rem .75rem;
+    border-bottom: 1px solid var(--bs-border-color);
 }
 
 /* Header inside the outline: title row, then a primary "+ Feature/task" button. */
@@ -670,12 +787,35 @@ h1:focus {
     flex-shrink: 0;
 }
 
-/* The chips wrap onto a second line on a phone. Without a floor they wrap into four different
-   widths (Low/High are ~2x narrower than Critical) and read as a ransom note rather than a control;
-   with one they form an even grid. `min-width`, not `width` — "Critical" must still be able to grow
-   past it rather than truncate. */
+.board-filter-fields {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: .375rem;
+}
+
+.board-filter-search-field {
+    flex: 2 1 14rem;
+    min-width: min(100%, 10rem);
+}
+
+.board-filter-person-field {
+    flex: 1 1 7rem;
+    min-width: 6rem;
+}
+
+.board-filter-results {
+    margin-inline-start: auto;
+}
+
 .board-filter-priorities > .btn {
-    min-width: 4.25rem;
+    min-width: 3.25rem;
+}
+
+@media (max-width: 575.98px) {
+    .board-filter-search-field {
+        flex-basis: 100%;
+    }
 }
 
 /* #322 phase 3 -- columns fit their content instead of stretching to the board's full height.
@@ -703,7 +843,7 @@ h1:focus {
 }
 
 @media (max-width: 991.98px) {
-    .project-outline {
+    .project-outline-pane {
         position: absolute;
         inset: 0 auto 0 0;
         z-index: 1040;
@@ -713,10 +853,17 @@ h1:focus {
         box-shadow: 0 .5rem 1rem rgba(0, 0, 0, .15);
         transform: translateX(-100%);
         transition: transform .18s ease-in-out;
+        visibility: hidden;
     }
 
-    .project-shell.outline-open .project-outline {
+    .project-outline-pane[data-dock="right"] {
+        inset: 0 0 0 auto;
+        transform: translateX(100%);
+    }
+
+    .project-shell.outline-open .project-outline-pane {
         transform: translateX(0);
+        visibility: visible;
     }
 
     .project-shell.outline-open .project-outline-backdrop {
@@ -1460,7 +1607,7 @@ h1:focus {
        (0,1,0) and .btn is later, so the button takes --bs-btn-font-size: 1rem. The rule shrank the
        title to 13px — a 19% REDUCTION in a change whose purpose was legibility. The extra title now
        comes from the clamp, not from shrinking the text.
-       line-height: 1.3 rather than .btn's 1.5 stops two lines costing a full 48px on every card.
+       line-height: 1.3 rather than .btn's 1.5 keeps multiline titles compact.
        Set here rather than on the span so the button box and the clamped box agree on line height
        whatever else lands on the button. */
     line-height: 1.3;
@@ -1471,8 +1618,8 @@ h1:focus {
 .board-card-title-text {
     display: -webkit-box;
     -webkit-box-orient: vertical;
-    -webkit-line-clamp: 2;
-    line-clamp: 2;
+    -webkit-line-clamp: 3;
+    line-clamp: 3;
     overflow: hidden;
 }
 
@@ -1566,8 +1713,8 @@ h1:focus {
     }
 
     body:has(.kanban-ghost) .board-card .board-card-title-text {
-        -webkit-line-clamp: 2;
-        line-clamp: 2;
+        -webkit-line-clamp: 3;
+        line-clamp: 3;
         transition: none;
     }
 }

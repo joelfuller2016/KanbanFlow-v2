@@ -3,9 +3,11 @@
 @inject ITaskService TaskSvc
 @implements IAsyncDisposable
 
-<div class="offcanvas offcanvas-end task-detail-panel @(IsOpen ? "show" : "")"
-     tabindex="-1" role="dialog" aria-modal="true" aria-labelledby="task-detail-title"
-     data-testid="task-detail-panel" data-size="@(fullPage ? "full" : "half")" @ref="panelRoot"
+<div id="task-details" class="offcanvas @(Layout.Dock == "left" ? "offcanvas-start" : "offcanvas-end") task-detail-panel @(IsOpen ? "show" : "")"
+     tabindex="-1" role="dialog" aria-labelledby="task-detail-title"
+     data-testid="task-detail-panel" data-project-panel="details" data-dock="@Layout.Dock"
+     data-size="@DisplaySize" data-collapsed="@(Layout.Collapsed ? "true" : "false")"
+     style="@WidthStyle" @ref="panelRoot"
      @onclick:stopPropagation="true">
 
     <div class="offcanvas-header task-detail-header border-bottom">
@@ -33,8 +35,8 @@
         </div>
         <div class="task-detail-controls" role="group" aria-label="Card display">
             <button type="button" class="btn btn-sm btn-outline-secondary"
-                    title="Half page" aria-label="Half page" aria-pressed="@(fullPage ? "false" : "true")"
-                    data-testid="task-detail-half-page-button" @onclick="() => fullPage = false">
+                    title="Half page" aria-label="Half page" aria-pressed="@(DisplaySize == "half" ? "true" : "false")"
+                    data-testid="task-detail-half-page-button" @onclick="UseHalfPageAsync">
                 <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
                     <rect x="1.5" y="2" width="13" height="12" rx="1" stroke="currentColor" />
                     <path d="M8 2h5.5a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H8V2Z" fill="currentColor" />
@@ -47,14 +49,33 @@
                     <path d="M6 2H2v4m8-4h4v4M2 10v4h4m4 0h4v-4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" />
                 </svg>
             </button>
+            <button type="button" class="btn btn-sm btn-outline-secondary task-detail-layout-control"
+                    title="@DockLabel" aria-label="@DockLabel" data-testid="task-detail-dock-button"
+                    @onclick="ToggleDockAsync">
+                <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                    <rect x="1.5" y="2" width="13" height="12" rx="1" stroke="currentColor" />
+                    <path d="@(Layout.Dock == "left" ? "M9.5 7.5h3M11 6l1.5 1.5L11 9" : "M6.5 7.5h-3M5 6 3.5 7.5 5 9")"
+                          stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" />
+                </svg>
+            </button>
+            <button type="button" class="btn btn-sm btn-outline-secondary task-detail-layout-control task-detail-collapse-control"
+                    title="@CollapseLabel" aria-label="@CollapseLabel" aria-controls="task-detail-content"
+                    aria-expanded="@(Layout.Collapsed ? "false" : "true")" data-testid="task-detail-collapse-button"
+                    @onclick="ToggleCollapseAsync">
+                <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                    <path d="@((Layout.Dock == "right") != Layout.Collapsed ? "M6 4l4 4-4 4" : "M10 4 6 8l4 4")"
+                          stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" />
+                </svg>
+            </button>
             <button type="button" class="btn-close" title="Close" @onclick="ClosePanel"
                     aria-label="Close task detail panel" data-testid="task-detail-close-button"></button>
         </div>
+        <span class="task-detail-collapsed-label" aria-hidden="true">Task details</span>
     </div>
 
     @if (Task is not null)
     {
-        <div class="offcanvas-body">
+        <div id="task-detail-content" class="offcanvas-body">
             <TaskRequestContext TaskId="Task.Id" />
 
             @* Show in outline *@
@@ -501,12 +522,18 @@
             </div>
         </div>
     }
+    @if (IsOpen && !fullPage && !Layout.Collapsed)
+    {
+        <ProjectPanelResizeHandle PanelId="details" PanelLabel="Task Details" TargetId="task-details"
+                                  Dock="@Layout.Dock" OnResize="ResizeAsync" />
+    }
 </div>
 
 @* Backdrop *@
 @if (IsOpen)
 {
-    <div class="offcanvas-backdrop fade show" @onclick="ClosePanel"></div>
+    <div class="offcanvas-backdrop fade show task-detail-backdrop"
+         data-size="@DisplaySize" @onclick="ClosePanel"></div>
 }
 
 @code {
@@ -518,12 +545,37 @@
     [Parameter] public EventCallback OnShowInOutline { get; set; }
     [Parameter] public EventCallback OnTaskUpdated { get; set; }
     [Parameter] public EventCallback<int> OnTaskDeleted { get; set; }
+    [Parameter] public ProjectPanelPreference Layout { get; set; } = ProjectPanelLayout.Default.Details;
+    [Parameter] public EventCallback<ProjectPanelPreference> OnLayoutChanged { get; set; }
 
     private ElementReference panelRoot;
     private bool wasOpen;
     private bool fullPage;
     private DotNetObjectReference<TaskDetailPanel>? _selfRef;
-    private bool _dialogInited;
+    private IJSObjectReference? _dialogWatcher;
+    private bool disposed;
+    private int? previousAddSubtaskParentId;
+
+    private string DisplaySize => fullPage ? "full" : Layout.Width is null ? "half" : "custom";
+    private string? WidthStyle => Layout.Width is int width ? $"--project-details-width: {width}px;" : null;
+    private string DockLabel => Layout.Dock == "left" ? "Dock task details on right" : "Dock task details on left";
+    private string CollapseLabel => Layout.Collapsed ? "Expand task details" : "Collapse task details";
+
+    private async Task UseHalfPageAsync()
+    {
+        fullPage = false;
+        if (Layout.Width is not null)
+            await OnLayoutChanged.InvokeAsync(Layout with { Width = null });
+    }
+
+    private Task ToggleDockAsync() =>
+        OnLayoutChanged.InvokeAsync(Layout with { Dock = Layout.Dock == "left" ? "right" : "left" });
+
+    private Task ToggleCollapseAsync() =>
+        OnLayoutChanged.InvokeAsync(Layout with { Collapsed = !Layout.Collapsed });
+
+    private Task ResizeAsync(int width) =>
+        OnLayoutChanged.InvokeAsync(Layout with { Width = width });
 
     // Inline name editing
     private bool isEditingName;
@@ -582,22 +634,25 @@
 
         wasOpen = IsOpen;
 
-        // Reset editing state when task changes
-        isEditingName = false;
-        confirmingDelete = false;
-        newSubtaskText = null;
-        newAcceptanceCriterionText = null;
-        addingChildSubtaskToId = AddSubtaskParentId;
-        newChildSubtaskText = null;
-
         var taskId = IsOpen ? Task?.Id : null;
         var taskChanged = taskId != loadedCommentsTaskId;
 
+        // Layout updates re-render the parent. Keep text and editing state for the same card.
         if (freshOpen || taskChanged)
         {
+            isEditingName = false;
+            confirmingDelete = false;
+            newSubtaskText = null;
+            newAcceptanceCriterionText = null;
             editingDescription = Task?.Description;
-            descriptionResetToken++;   // a new editing session always starts in read mode (#357)
+            descriptionResetToken++;
+        }
 
+        if (freshOpen || taskChanged || previousAddSubtaskParentId != AddSubtaskParentId)
+        {
+            previousAddSubtaskParentId = AddSubtaskParentId;
+            addingChildSubtaskToId = AddSubtaskParentId;
+            newChildSubtaskText = null;
         }
 
         // Deliberately OUTSIDE the block above, and keyed on instance rather than id. The panel is
@@ -645,23 +700,21 @@
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
-        if (IsOpen && !_dialogInited)
+        if (firstRender && !disposed)
         {
-            _dialogInited = true;
-            _selfRef ??= DotNetObjectReference.Create(this);
             try
             {
-                await JS.InvokeVoidAsync("KanbanFlow.initDialog", panelRoot, _selfRef,
-                    new { focusContainer = true, documentKeydown = true });
+                await using var module = await JS.InvokeAsync<IJSObjectReference>("import", ProjectPanelLayout.ModulePath);
+                if (disposed) return;
+                _selfRef = DotNetObjectReference.Create(this);
+                var watcher = await module.InvokeAsync<IJSObjectReference>("watchTaskDetails", panelRoot, _selfRef);
+                if (disposed) await DisposeDialogWatcherAsync(watcher);
+                else _dialogWatcher = watcher;
             }
             catch (JSDisconnectedException) { }
+            catch (JSException) { }
             catch (ObjectDisposedException) { }
             catch (InvalidOperationException) { }
-        }
-        else if (!IsOpen && _dialogInited)
-        {
-            _dialogInited = false;
-            await SafeDestroyDialogAsync();
         }
 
         // Re-keying the <select> after a refusal replaces the focused node, so browser focus
@@ -695,18 +748,24 @@
     [JSInvokable]
     public Task CloseFromJs() => ClosePanel();
 
-    private async Task SafeDestroyDialogAsync()
+    private static async ValueTask DisposeDialogWatcherAsync(IJSObjectReference watcher)
     {
-        try { await JS.InvokeVoidAsync("KanbanFlow.destroyDialog", panelRoot); }
-        catch (JSDisconnectedException) { }
-        catch (ObjectDisposedException) { }
-        catch (InvalidOperationException) { }
+        await using (watcher)
+        {
+            await watcher.InvokeVoidAsync("dispose");
+        }
     }
 
     public async ValueTask DisposeAsync()
     {
-        if (_dialogInited)
-            await SafeDestroyDialogAsync();
+        disposed = true;
+        if (_dialogWatcher is not null)
+        {
+            try { await DisposeDialogWatcherAsync(_dialogWatcher); }
+            catch (JSDisconnectedException) { }
+            catch (JSException) { }
+            catch (ObjectDisposedException) { }
+        }
         _selfRef?.Dispose();
     }
 
@@ -1443,10 +1502,13 @@
         if (Task is null) return;
         // Release the focus trap before the outline receives focus, so dialog cleanup
         // cannot restore the opener after the outline row has been focused.
-        if (_dialogInited)
+        if (_dialogWatcher is not null)
         {
-            _dialogInited = false;
-            await SafeDestroyDialogAsync();
+            try { await _dialogWatcher.InvokeVoidAsync("dismiss"); }
+            catch (JSDisconnectedException) { }
+            catch (JSException) { }
+            catch (ObjectDisposedException) { }
+            catch (InvalidOperationException) { }
         }
         await OnShowInOutline.InvokeAsync();
     }

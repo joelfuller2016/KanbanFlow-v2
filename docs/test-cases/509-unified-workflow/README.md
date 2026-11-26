@@ -217,7 +217,7 @@ details. Record feedback on U-18 and the request's Updates; automated success do
 
 ## Outline visibility review (proposed)
 
-This is the acceptance specification for future U-15/188, U-16/189 and U-17/190, planned by U-14/187. The [canonical plan](../../plans/central-project-board-implementation.md#outline-visibility-and-context--staged-proposal) owns interaction rules, source changes, diagrams and the implementation checklist. The live outline still uses fixed width and the existing controls; the following future checks have **not run**. All human outcomes are pending.
+This is the acceptance specification for U-15/188, U-16/189 and U-17/190, planned by U-14/187. The [canonical plan](../../plans/central-project-board-implementation.md#outline-visibility-and-context--staged-proposal) owns interaction rules, source changes, diagrams and the implementation checklist. The September 7 baseline used a fixed-width outline. The bounded board layout preview below covers part of this specification. All human outcomes are pending.
 
 The [September 7 planning baseline](runs/2026-09-07-65de739994a4.md) records actual source/browser observations, board task publication and the current rebuild/gate separately from these future checks.
 
@@ -243,3 +243,22 @@ Run this human sequence for each delivered increment:
 3. **Exercise decisions for U-17 or an increment affecting that workflow.** Use Updates to request a concrete priority or scope change. Read it through MCP, acknowledge that exact decision and revise the brief/plan. Have the person inspect the unchanged card identity and explain the outcome. A saved message alone cannot stop a running process.
 4. **Record feedback.** Add the participant/date/source, V-row outcomes, observations, requested changes and adoption decision to the owning request's Updates and the next run record. Keep feedback separate from automated assertions. On failure, retain the prior normal build, revise the same stage and repeat only affected checks plus required gates.
 5. **Adopt after verification and human testing.** Follow the existing consistent-backup/restart/data-preservation procedure. Record the actual build and a final real-control check. Leave U-10 and this matrix pending until a person actually performs them; neither this plan nor an agent critique accepts the UI.
+
+### Board layout preview (#612)
+
+Use the seeded preview to read a long task card, filter the board, and open its details.
+Confirm that a linked issue has one clear ID and that the full authored title is available in
+Task Details. In a disposable project, collapse a column, move a card into it, and confirm
+the destination reopens and the move persists.
+
+On desktop, collapse, resize, and dock the Outline and Task Details on either side. Switch
+Details to Full page and back with an unsent comment, then check that the draft survives the
+layout changes. Reload to check the saved dock sides, widths, and Outline visibility. Opening
+a card or a task deep link expands Details. Reset layout restores the defaults. On a phone
+viewport, use the Outline drawer, the modal Task Details, and Requests & plans at a short
+viewport height. Verify keyboard focus, Escape, and return to the control that opened each drawer.
+
+The targeted seeded run is `node scripts/project-board-layout.browser.mjs <local-seeded-project-url>`.
+Use `scripts/board-column-layout.browser.js` and `scripts/task-detail-display.browser.js`
+on their disposable fixtures for write and readback checks. Actual human usability feedback
+on card scanning, panel movement, and narrow-screen behavior is pending.

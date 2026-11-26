@@ -1,0 +1,26 @@
+.kanban-column-layout:not(.kanban-column-collapsed) {
+    --kanban-column-min-width: min(82vw, 16rem);
+    flex: 1 0 var(--kanban-column-min-width);
+    min-width: var(--kanban-column-min-width);
+    max-width: 24rem;
+}
+
+.kanban-column-layout:not(.kanban-column-collapsed) > .d-flex {
+    gap: .375rem;
+}
+
+.kanban-column-toggle {
+    flex: 0 0 auto;
+    min-width: 2rem;
+    min-height: 2rem;
+    margin-inline-start: auto;
+}
+
+.kanban-column-toggle:focus-visible {
+    outline: 2px solid var(--bs-primary);
+    outline-offset: 2px;
+}
+
+.kanban-column-toggle svg {
+    rotate: 90deg;
+}

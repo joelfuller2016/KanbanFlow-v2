@@ -31,14 +31,17 @@
    reads a perfectly innocent 390. /project/{id} never showed it only because `.project-shell` happens
    to be `position: relative` and was quietly catching them (#280). *@
 <section class="kanban-board-shell flex-grow-1 d-flex flex-column overflow-hidden" aria-labelledby="kanban-board-heading">
-    <div class="border-bottom bg-white px-3 py-2">
+    <div class="border-bottom bg-white px-3 py-2 @(EnableColumnLayout ? "flex-shrink-0" : null)">
         <h2 id="kanban-board-heading" class="h6 mb-1" tabindex="-1">@BoardLabel</h2>
         <p id="kanban-board-guidance" class="small text-muted mb-0" data-testid="kanban-board-guidance">@Guidance</p>
     </div>
 
-    <div class="flex-grow-1 d-flex overflow-auto p-2 gap-2"
+    <div class="flex-grow-1 d-flex overflow-auto p-2 gap-2 @(EnableColumnLayout ? "kanban-board-scroll" : null)"
          style="min-width: 0;"
          data-testid="kanban-board"
+         tabindex="@(EnableColumnLayout ? "0" : null)"
+         role="@(EnableColumnLayout ? "group" : null)"
+         aria-label="@(EnableColumnLayout ? "Board columns" : null)"
          aria-describedby="kanban-board-guidance">
         @foreach (var status in resolvedStatuses)
         {
@@ -50,6 +53,7 @@
                           DisplayName="@DisplayNameFor(status)"
                           IsDragEnabled="IsDragEnabledFor(status)"
                           IsTerminal="IsTerminalFor(status)"
+                          EnableColumnLayout="EnableColumnLayout"
                           Collapsed="IsCollapsed(status)"
                           CollapsedChanged="CollapsedChangedFor(status)"
                           InertHint="@InertHint?.Invoke(status)"
@@ -87,6 +91,9 @@
     /// <summary>Whether a column is terminal, and so renders as a collapsible rail. Defaults to <c>false</c>.</summary>
     [Parameter] public Func<TStatus, bool>? IsTerminal { get; set; }
 
+    /// <summary>Gives every column a collapse control and keeps expanded columns readable on a scrolling board.</summary>
+    [Parameter] public bool EnableColumnLayout { get; set; }
+
     /// <summary>One-line hint shown inside a column that does not accept drags.</summary>
     [Parameter] public Func<TStatus, string?>? InertHint { get; set; }
 
@@ -111,7 +118,11 @@
     protected override void OnParametersSet()
     {
         resolvedStatuses = Statuses ?? Enum.GetValues<TStatus>();
+        SeedCollapseState();
+    }
 
+    private void SeedCollapseState()
+    {
         // Seed once per status: terminal columns start collapsed. A status already in the map keeps
         // whatever the user last chose, so a re-render never re-collapses a column they opened.
         foreach (var status in resolvedStatuses)
@@ -123,16 +134,16 @@
         }
     }
 
+    /// <summary>Restores the initial collapse state while keeping the existing drop containers.</summary>
+    public void ResetColumns()
+    {
+        collapsed.Clear();
+        SeedCollapseState();
+        StateHasChanged();
+    }
+
     /// <summary>
-    /// Opens a collapsed column. The board owns the collapse map (collapsing one column re-shares the
-    /// row's width, so no single column can own that decision), which left the hosting page unable to
-    /// react to its own drops: a card dragged into a collapsed terminal rail simply VANISHED into a
-    /// 3rem strip — the rail is a live drop target by design, but a silent one. This is the setter the
-    /// map was missing, so the page can reveal where the card actually landed (design/ui/interactions.md §4).
-    ///
-    /// A no-op unless the column is genuinely collapsed, which makes it safe to call after ANY move:
-    /// a board that declares no terminal columns (the task board — it never passes IsTerminal, so
-    /// nothing is ever collapsed) can never have a collapsed column to open.
+    /// Opens a collapsed column so a hosting page can reveal a card after moving it into that column.
     /// </summary>
     public void Expand(TStatus status)
     {

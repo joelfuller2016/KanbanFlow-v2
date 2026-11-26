@@ -37,32 +37,44 @@ else if (project is null)
 else
 {
     <div class="project-shell d-flex @(outlineOpen ? "outline-open" : null)">
-
-        <ProjectOutline @key="Id" Project="project"
-                        ExpandedFeatures="expandedFeatures"
-                        ExpandedTasks="expandedTasks"
-                        OnGoHome="GoHome"
-                        OnOpenEditProject="OpenEditModalForProject"
-                        OnOpenAddProject="OpenAddModalForProject"
-                        OnOpenEditFeature="OpenEditModalForFeature"
-                        OnOpenAddFeature="OpenAddModalForFeature"
-                        OnOpenAddTaskSubtask="OpenAddSubtaskForTask"
-                        OnOpenAddSubtaskChild="OpenAddChildSubtaskFromOutline"
-                        OnOpenEditTask="OpenOutlineTask"
-                        OnOpenSubtask="OpenOutlineSubtask"
-                        Selection="CurrentOutlineItem"
-                        RevealRequest="outlineRevealRequest"
-                        FocusSelection="outlineFocusSelection"
-                        CanGoBack="@(FindOutlineHistoryIndex(-1) >= 0)"
-                        CanGoForward="@(FindOutlineHistoryIndex(1) >= 0)"
-                        OnBack="() => NavigateOutline(-1)"
-                        OnForward="() => NavigateOutline(1)"
-                        OnToggleFeature="ToggleFeature"
-                        OnToggleTask="ToggleTask"
-                        OnToggleTaskDone="ToggleTaskDone"
-                        OnToggleOutlineSubtask="ToggleOutlineSubtask"
-                        CheckboxResetToken="checkboxResetToken"
-                        OnCloseOutline="CloseOutline" />
+        <aside class="project-outline-pane" aria-label="Project outline pane" data-project-panel="outline"
+               data-dock="@panelLayout.Outline.Dock" data-collapsed="@ToAriaExpanded(panelLayout.Outline.Collapsed)"
+               style="@OutlineWidthStyle">
+            <div class="project-outline-pane-actions d-none d-lg-flex" role="group" aria-label="Outline layout">
+                <button type="button" class="btn btn-sm btn-outline-secondary"
+                        data-testid="dock-project-outline" @onclick="DockOutline">Dock @(panelLayout.Outline.Dock == "left" ? "right" : "left")</button>
+                <button type="button" class="btn btn-sm btn-outline-secondary"
+                        @onclick="CollapseOutlineFromPane">Collapse outline</button>
+            </div>
+            <ProjectPanelResizeHandle PanelId="outline" PanelLabel="Outline" TargetId="project-outline"
+                                      Dock="@panelLayout.Outline.Dock"
+                                      OnResize="ResizeOutline" />
+            <ProjectOutline @key="Id" Project="project"
+                            ExpandedFeatures="expandedFeatures"
+                            ExpandedTasks="expandedTasks"
+                            OnGoHome="GoHome"
+                            OnOpenEditProject="OpenEditModalForProject"
+                            OnOpenAddProject="OpenAddModalForProject"
+                            OnOpenEditFeature="OpenEditModalForFeature"
+                            OnOpenAddFeature="OpenAddModalForFeature"
+                            OnOpenAddTaskSubtask="OpenAddSubtaskForTask"
+                            OnOpenAddSubtaskChild="OpenAddChildSubtaskFromOutline"
+                            OnOpenEditTask="OpenOutlineTask"
+                            OnOpenSubtask="OpenOutlineSubtask"
+                            Selection="CurrentOutlineItem"
+                            RevealRequest="outlineRevealRequest"
+                            FocusSelection="outlineFocusSelection"
+                            CanGoBack="@(FindOutlineHistoryIndex(-1) >= 0)"
+                            CanGoForward="@(FindOutlineHistoryIndex(1) >= 0)"
+                            OnBack="() => NavigateOutline(-1)"
+                            OnForward="() => NavigateOutline(1)"
+                            OnToggleFeature="ToggleFeature"
+                            OnToggleTask="ToggleTask"
+                            OnToggleTaskDone="ToggleTaskDone"
+                            OnToggleOutlineSubtask="ToggleOutlineSubtask"
+                            CheckboxResetToken="checkboxResetToken"
+                            OnCloseOutline="CloseOutline" />
+        </aside>
 
         <button type="button"
                 class="project-outline-backdrop"
@@ -70,46 +82,42 @@ else
                 @onclick="CloseOutline"></button>
 
         @* ── Right Panel: AI Action Bar + Kanban Board ── *@
-        <div class="project-main flex-grow-1 d-flex flex-column overflow-hidden" style="min-width: 0;">
-            <RequestWorkspace ProjectId="Id" RequestId="WorkflowRequestId" OnChanged="LoadProject" />
-            <div class="border-bottom bg-white px-3 py-2">
-                <a class="btn btn-sm btn-outline-secondary mb-2" href="@($"/ideas/workspace/project/{project.Id}?view=plan")" data-testid="project-workspace-link">Open idea workspace and shared plan ↗</a>
-                <div class="d-lg-none mb-3">
-                    <button class="btn btn-sm btn-outline-secondary d-inline-flex align-items-center gap-2"
-                            @onclick="ToggleOutline"
-                            aria-expanded="@outlineOpen"
-                            aria-controls="project-outline"
-                            data-testid="toggle-project-outline-button"
-                            style="min-height: 44px; padding: .5rem .75rem;">
-                        @if (!outlineOpen) {
-                            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16" aria-hidden="true">
-                                <path fill-rule="evenodd" d="M1 3h14v1H1V3zm0 4h14v1H1V7zm0 4h14v1H1v-1z"/>
-                            </svg>
-                            <span>Project outline</span>
-                        } else {
-                            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16" aria-hidden="true">
-                                <path d="M2.146 2.854a.5.5 0 1 1 .708-.708L8 7.293l5.146-5.147a.5.5 0 0 1 .708.708L8.707 8l5.147 5.146a.5.5 0 0 1-.708.708L8 8.707l-5.146 5.147a.5.5 0 0 1-.708-.708L7.293 8z"/>
-                            </svg>
-                            <span>Close outline</span>
-                        }
+        <div class="project-main flex-grow-1 d-flex flex-column overflow-hidden">
+            <section class="project-board-toolbar" aria-label="Project board tools" data-testid="project-board-toolbar">
+                <BoardFilterBar Filter="filter"
+                                TextResetToken="filterTextResetToken"
+                                MatchCount="filteredTasks.Count"
+                                TotalCount="allTasks.Count"
+                                OnSearchChanged="OnSearchChanged"
+                                OnAssigneeChanged="OnAssigneeChanged"
+                                OnClaimedByChanged="OnClaimedByChanged"
+                                OnPriorityToggled="OnPriorityToggled"
+                                OnHideDoneChanged="OnHideDoneChanged"
+                                OnClear="ClearFilters" />
+                <div class="project-board-actions" role="group" aria-label="Project views and panels">
+                    <button type="button" class="btn btn-sm btn-outline-secondary d-none d-lg-inline-flex"
+                            @ref="desktopOutlineToggle"
+                            aria-expanded="@ToAriaExpanded(!panelLayout.Outline.Collapsed)" aria-controls="project-outline"
+                            data-testid="toggle-desktop-project-outline" @onclick="ToggleDesktopOutline">Outline</button>
+                    <button type="button" class="btn btn-sm btn-outline-secondary d-lg-none"
+                            aria-expanded="@ToAriaExpanded(outlineOpen)" aria-controls="project-outline" aria-haspopup="dialog"
+                            data-testid="toggle-project-outline-button" @onclick="ToggleOutline">Outline</button>
+                    <RequestWorkspace ProjectId="Id" RequestId="WorkflowRequestId" OnChanged="LoadProject"
+                                      ToolbarExpanded="requestsExpanded" OnToolbarToggle="ToggleRequests" />
+                    <button type="button" class="btn btn-sm btn-outline-secondary" data-testid="requirements-toggle"
+                            aria-expanded="@ToAriaExpanded(requirementsExpanded)" aria-controls="requirements-content" @onclick="ToggleRequirements">
+                        Requirements <span class="project-tool-count" data-testid="requirements-count">@GetOrderedRequirements().Count</span>
                     </button>
+                    <button type="button" class="btn btn-sm btn-outline-secondary" data-testid="ai-tools-toggle"
+                            aria-expanded="@ToAriaExpanded(aiControlsExpanded)" aria-controls="ai-tools-controls" @onclick="ToggleAiControls">AI tools</button>
+                    <a class="btn btn-sm btn-link" href="@($"/ideas/workspace/project/{project.Id}?view=plan")"
+                       data-testid="project-workspace-link">Workspace &amp; plan</a>
+                    <button type="button" class="btn btn-sm btn-link ms-lg-auto"
+                            data-testid="reset-project-layout" @onclick="ResetPanelLayout">Reset layout</button>
                 </div>
-                <div class="d-flex flex-wrap align-items-center gap-2">
-                    <div class="me-auto">
-                        <div class="text-uppercase text-primary fw-bold small">AI tools</div>
-                        <div class="text-muted small">Optional agent helpers for context and next-work planning.</div>
-                    </div>
-                    <button class="btn btn-sm btn-outline-primary" data-testid="ai-tools-toggle" aria-expanded="@ToAriaExpanded(aiControlsExpanded)" aria-controls="ai-tools-controls" @onclick="ToggleAiControls">
-                        @(aiControlsExpanded ? "Hide AI tools" : "Show AI tools")
-                    </button>
-                </div>
+            </section>
 
-                @* Keep #ai-tools-controls in the DOM at all times so the toggle button's
-                   `aria-controls="ai-tools-controls"` always refers to a real element. Toggle
-                   visibility by swapping `d-flex` ↔ `d-none`. Inline `display:none` would lose
-                   to `.d-flex { display: flex !important }` here — `!important` from a class
-                   beats a plain inline rule, so we have to use Bootstrap's own `d-none`
-                   (which is also `!important`) and rely on the cascade order. *@
+            <section class="project-tools-content @(aiControlsExpanded ? null : "d-none")" aria-label="AI tools">
                 <div id="ai-tools-controls" class="@(aiControlsExpanded ? "d-flex flex-wrap align-items-center gap-2 mt-2 pt-2 border-top" : "d-none")">
                     <span class="text-muted small me-auto">Inspect project context, choose next work, or prepare future AI actions.</span>
                     <button class="btn btn-sm btn-outline-primary" data-testid="ai-project-context-button" @onclick="ShowProjectContextAsync">
@@ -209,26 +217,11 @@ else
                         </div>
                     </div>
                 }
-            </div>
+            </section>
 
-            <section class="requirements-panel border-bottom bg-light px-3 py-2" data-testid="requirements-panel" aria-labelledby="requirements-heading">
-                <div class="d-flex flex-wrap align-items-center gap-2">
-                    <div class="me-auto">
-                        <h2 id="requirements-heading" class="h6 mb-0">Requirements</h2>
-                        <div class="text-muted small">@GetRequirementsSummaryText()</div>
-                    </div>
-                    <span class="badge text-bg-secondary" data-testid="requirements-count">@GetOrderedRequirements().Count</span>
-                    <button class="btn btn-sm btn-outline-secondary" data-testid="requirements-toggle" aria-expanded="@ToAriaExpanded(requirementsExpanded)" aria-controls="requirements-content" @onclick="ToggleRequirements">
-                        @(requirementsExpanded ? "Hide requirements" : "Show requirements")
-                    </button>
-                </div>
-
-                @* Toggle visibility via inline `display:none;` rather than the `hidden`
-                   attribute. The `hidden` attribute resolves to `display: none` from the UA
-                   stylesheet, which loses to any element with a stronger rule (e.g. utility
-                   classes that set `display: flex`). Inline style sits at the same specificity
-                   level as those utility classes and `display:none` reliably wins for the
-                   wrapper. Element stays in the DOM so `aria-controls` stays valid. *@
+            <section class="requirements-panel project-tools-content @(requirementsExpanded ? null : "d-none")" data-testid="requirements-panel" aria-labelledby="requirements-heading">
+                <h2 id="requirements-heading" class="h6 mb-1">Requirements</h2>
+                <div class="text-muted small mb-2">@GetRequirementsSummaryText()</div>
                 <div id="requirements-content" style="@(requirementsExpanded ? null : "display:none;")">
                     @if (GetOrderedRequirements().Count == 0)
                     {
@@ -293,18 +286,6 @@ else
                             aria-label="Dismiss error"></button>
                 </div>
             }
-            @* #112 — the filter bar. It owns NO state: it renders `filter` and reports changes, and
-               this page holds the state, narrows the list, and syncs the URL. *@
-            <BoardFilterBar Filter="filter"
-                            TextResetToken="filterTextResetToken"
-                            MatchCount="filteredTasks.Count"
-                            TotalCount="allTasks.Count"
-                            OnSearchChanged="OnSearchChanged"
-                            OnAssigneeChanged="OnAssigneeChanged"
-                            OnClaimedByChanged="OnClaimedByChanged"
-                            OnPriorityToggled="OnPriorityToggled"
-                            OnHideDoneChanged="OnHideDoneChanged"
-                            OnClear="ClearFilters" />
             @* The board is generic over <TItem, TStatus>. Pass the type arguments EXPLICITLY at
                every call site: with inferred type arguments Razor closes an EventCallback<T>
                handler before T is known and it degrades to object (CS1503). What a task *is* now
@@ -315,6 +296,8 @@ else
                resolution: its third argument is the next RENDERED card's identity, so a drag under an
                active filter still lands where the user aimed it in the PERSISTED column. *@
             <KanbanBoard TItem="TaskItem" TStatus="WorkStatus"
+                         @ref="taskBoard"
+                         EnableColumnLayout="true"
                          Items="filteredTasks"
                          StatusOf="t => t.Status"
                          IdOf="t => t.Id"
@@ -373,18 +356,20 @@ else
                 </ColumnEmptyTemplate>
             </KanbanBoard>
         </div>
+
+        @{ var detailTaskId = selectedTask?.Id; }
+        <TaskDetailPanel @key="detailTaskId" Task="selectedTask"
+                         Features="project.Features?.ToList()"
+                         IsOpen="detailPanelOpen"
+                         Layout="panelLayout.Details"
+                         OnLayoutChanged="SetDetailLayout"
+                         AddSubtaskParentId="detailPanelAddSubtaskParentId"
+                         OnClose="OnDetailClose"
+                         OnShowInOutline="ShowInOutline"
+                         OnTaskUpdated="() => OnTaskUpdated(detailTaskId)"
+                         OnTaskDeleted="OnTaskDeleted" />
     </div>
 }
-
-<KanbanFlow.Components.Shared.TaskDetailPanel
-    Task="selectedTask"
-    Features="project?.Features?.ToList()"
-    IsOpen="detailPanelOpen"
-    AddSubtaskParentId="detailPanelAddSubtaskParentId"
-                     OnClose="OnDetailClose"
-                     OnShowInOutline="ShowInOutline"
-    OnTaskUpdated="OnTaskUpdated"
-    OnTaskDeleted="OnTaskDeleted" />
 
 <KanbanFlow.Components.Shared.EditItemModal
     IsOpen="editModalOpen"
@@ -482,6 +467,85 @@ else
     private int? detailPanelAddSubtaskParentId;
     private int? pendingDetailFocusReturnTaskId;
     private bool outlineOpen;
+    private ElementReference desktopOutlineToggle;
+    private KanbanBoard<TaskItem, WorkStatus>? taskBoard;
+    private ProjectPanelLayout panelLayout = ProjectPanelLayout.Default;
+    private Task<IJSObjectReference>? panelLayoutModule;
+    private int? panelLayoutLoadedProjectId;
+    private int panelLayoutRevision;
+    private string? OutlineWidthStyle => panelLayout.Outline.Width is int width ? $"--project-outline-width: {width}px" : null;
+
+    private async Task ToggleDesktopOutline()
+    {
+        var outline = panelLayout.Outline with { Collapsed = !panelLayout.Outline.Collapsed };
+        await UpdatePanelLayout(panelLayout with { Outline = outline });
+        if (!outline.Collapsed && CurrentOutlineItem is { } item) RevealOutlineItem(item);
+    }
+
+    private async Task CollapseOutlineFromPane()
+    {
+        await UpdatePanelLayout(panelLayout with { Outline = panelLayout.Outline with { Collapsed = true } });
+        await desktopOutlineToggle.FocusAsync();
+    }
+
+    private Task DockOutline() => UpdatePanelLayout(panelLayout with
+    {
+        Outline = panelLayout.Outline with { Dock = panelLayout.Outline.Dock == "left" ? "right" : "left" }
+    });
+
+    private Task ResizeOutline(int width) =>
+        UpdatePanelLayout(panelLayout with { Outline = panelLayout.Outline with { Width = width } });
+
+    private Task SetDetailLayout(ProjectPanelPreference details) =>
+        UpdatePanelLayout(panelLayout with { Details = details });
+
+    private Task ResetPanelLayout()
+    {
+        taskBoard?.ResetColumns();
+        outlineOpen = false;
+        return UpdatePanelLayout(ProjectPanelLayout.Default, reset: true);
+    }
+
+    private Task<IJSObjectReference> GetPanelLayoutModule() =>
+        panelLayoutModule ??= JS.InvokeAsync<IJSObjectReference>("import", ProjectPanelLayout.ModulePath).AsTask();
+
+    private async Task LoadPanelLayout()
+    {
+        if (panelLayoutLoadedProjectId == Id) return;
+        var projectId = Id;
+        var revision = panelLayoutRevision;
+        panelLayoutLoadedProjectId = projectId;
+        try
+        {
+            var module = await GetPanelLayoutModule();
+            var saved = await module.InvokeAsync<ProjectPanelLayout?>("load", projectId);
+            if (projectId != Id || revision != panelLayoutRevision || saved is null) return;
+            // Opening a specific task, including a deep link, should reveal its content.
+            panelLayout = saved with { Details = saved.Details with { Collapsed = false } };
+            StateHasChanged();
+        }
+        catch (JSDisconnectedException) { }
+        catch (JSException) { }
+        catch (InvalidOperationException) { }
+    }
+
+    private async Task UpdatePanelLayout(ProjectPanelLayout updated, bool reset = false)
+    {
+        panelLayout = updated;
+        var revision = ++panelLayoutRevision;
+        var projectId = Id;
+        try
+        {
+            var module = await GetPanelLayoutModule();
+            if (revision != panelLayoutRevision || projectId != Id) return;
+            if (reset) await module.InvokeVoidAsync("reset", projectId);
+            else await module.InvokeVoidAsync("save", projectId,
+                updated with { Details = updated.Details with { Collapsed = false } });
+        }
+        catch (JSDisconnectedException) { }
+        catch (JSException) { }
+        catch (InvalidOperationException) { }
+    }
 
     private void ToggleOutline()
     {
@@ -500,6 +564,7 @@ else
         selectedTask = task;
         detailPanelAddSubtaskParentId = addSubtaskParentId;
         detailPanelOpen = true;
+        panelLayout = panelLayout with { Details = panelLayout.Details with { Collapsed = false } };
 
         if (forceTaskExpansion)
         {
@@ -518,22 +583,19 @@ else
         await LoadProject();
     }
 
-    private async Task OnTaskUpdated()
+    private async Task OnTaskUpdated(int? taskId)
     {
-        var selectedTaskId = selectedTask?.Id;
-        detailPanelAddSubtaskParentId = null;
+        if (selectedTask?.Id == taskId) detailPanelAddSubtaskParentId = null;
         await LoadProject();
-
-        if (selectedTaskId is int taskId)
-        {
-            selectedTask = allTasks.FirstOrDefault(t => t.Id == taskId);
-        }
     }
 
     private async Task OnTaskDeleted(int taskId)
     {
-        detailPanelOpen = false;
-        selectedTask = null;
+        if (selectedTask?.Id == taskId)
+        {
+            detailPanelOpen = false;
+            selectedTask = null;
+        }
         await LoadProject();
     }
     private CancellationTokenSource _cts = new();
@@ -567,6 +629,8 @@ else
 
     // AI action bar state
     private bool aiControlsExpanded;
+    private bool requestsExpanded;
+    private Guid? observedWorkflowRequestId;
     private bool aiPanelOpen;
     private bool aiLoading;
     private string aiPanelTitle = string.Empty;
@@ -614,6 +678,10 @@ else
             expandedTasks.Clear();
             outlineExpansionInitialized = false;
             outlineOpen = false;
+            panelLayout = ProjectPanelLayout.Default;
+            panelLayoutLoadedProjectId = null;
+            panelLayoutRevision++;
+            taskBoard?.ResetColumns();
             detailPanelOpen = editModalOpen = addModalOpen = false;
             selectedTask = null;
             pendingDetailFocusReturnTaskId = detailPanelAddSubtaskParentId = null;
@@ -623,12 +691,24 @@ else
             loadError = null;
             moveError = null;
             CloseAiPanel();
+            aiControlsExpanded = false;
+            requestsExpanded = WorkflowRequestId is not null;
             requirementsExpanded = false;
             deepLinkApplied = false;
             sortablesInitialized = false;
             dotNetRef?.Dispose();
             dotNetRef = null;
             await LoadProject();
+        }
+
+        if (observedWorkflowRequestId != WorkflowRequestId)
+        {
+            observedWorkflowRequestId = WorkflowRequestId;
+            if (WorkflowRequestId is not null)
+            {
+                requestsExpanded = true;
+                aiControlsExpanded = requirementsExpanded = false;
+            }
         }
 
         if (observedDeepLinkTaskId != DeepLinkTaskId)
@@ -677,6 +757,7 @@ else
 
         if (project is not null)
         {
+            await LoadPanelLayout();
             if (outlineSortablesRefreshPending)
             {
                 outlineSortablesRefreshPending = false;
@@ -707,11 +788,19 @@ else
     private void ToggleAiControls()
     {
         aiControlsExpanded = !aiControlsExpanded;
+        if (aiControlsExpanded) requestsExpanded = requirementsExpanded = false;
+    }
+
+    private void ToggleRequests()
+    {
+        requestsExpanded = !requestsExpanded;
+        if (requestsExpanded) aiControlsExpanded = requirementsExpanded = false;
     }
 
     private void ToggleRequirements()
     {
         requirementsExpanded = !requirementsExpanded;
+        if (requirementsExpanded) requestsExpanded = aiControlsExpanded = false;
     }
 
     private static string ToAriaExpanded(bool expanded) => expanded ? "true" : "false";
@@ -1198,6 +1287,7 @@ else
             // JS argument is a task id (0 = append), never an index into the rendered subset.
             await TaskSvc.MoveOnBoardAsync(taskId, status, Id, beforeTaskId, actor: "User", _cts.Token);
             await LoadProject();
+            taskBoard?.Expand(status);
             await ReinitializeSortables();
         }
         catch (OperationCanceledException) { }
@@ -1268,6 +1358,11 @@ else
             {
                 await JS.InvokeVoidAsync("KanbanFlow.destroySortables");
                 await JS.InvokeVoidAsync("KanbanFlow.destroyProjectOutlineAccessibility");
+            }
+            if (panelLayoutModule is { IsCompletedSuccessfully: true } moduleTask)
+            {
+                var module = await moduleTask;
+                await module.DisposeAsync();
             }
         }
         catch (JSDisconnectedException) { }

@@ -2957,10 +2957,8 @@ async function main() {
         `Esc on the PROMOTE confirm must cancel it — the idea is now ${notPromoted.status}`);
     });
 
-    // TaskDetailPanel makes the same aria-modal promise as the confirms above and deliberately
-    // shares their initDialog/destroyDialog wiring. Keep it in this harness: a separate test with
-    // a different definition of focus containment could let the shared behavior silently diverge.
-    await test("Task detail panel traps Tab, Escape closes it, and focus returns to its card (#483)", async () => {
+    // The full-page mode makes the same aria-modal promise as the confirms above.
+    await test("Full-page task details trap Tab, Escape closes, and focus returns to the card (#483)", async () => {
       const trapTask = await api("POST", `/api/features/${feature.id}/tasks`, {
         name: `E2E task detail trap ${stamp}`, status: "Todo",
       });
@@ -2974,6 +2972,8 @@ async function main() {
         () => page.locator(`[data-testid="${openerTestid}"]`).click(),
         page.locator(panel),
       );
+      await page.getByTestId("task-detail-full-page-button").click();
+      await page.locator(`${panel}[aria-modal="true"]`).waitFor();
 
       const opened = await probeDialogFocus(page, panel);
       assert(opened.count >= 2,
@@ -3811,7 +3811,8 @@ async function main() {
 
       // ONE click into edit, with the caret already in the textarea. A second click would be the
       // roadblock the issue forbids.
-      await read.click();
+      // An arbitrary point in the middle can be a real link as the dock width changes.
+      await read.getByText("Issue:", { exact: true }).click();
       const edit = page.locator('[data-testid="task-detail-description-edit"]');
       await edit.waitFor({ state: "visible" });
       const focused = await page.evaluate(() => document.activeElement?.getAttribute("data-testid"));

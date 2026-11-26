@@ -84,6 +84,10 @@ public partial class ProjectView
         await OnDetailClose();
         pendingDetailFocusReturnTaskId = null;
         outlineOpen = true;
+        if (panelLayout.Outline.Collapsed)
+        {
+            await UpdatePanelLayout(panelLayout with { Outline = panelLayout.Outline with { Collapsed = false } });
+        }
         if (CurrentOutlineItem is { } item) RevealOutlineItem(item, focus: true);
     }
 

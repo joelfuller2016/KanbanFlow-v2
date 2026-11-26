@@ -257,9 +257,11 @@ window.KanbanFlow = {
             dialog._kfOpener = document.activeElement;
         }
 
-        var preferred = options.focusContainer ? dialog : dialog.querySelector('[data-dialog-autofocus]');
-        var focusables = this._dialogFocusables(dialog);
-        (preferred || focusables[0] || dialog).focus({ preventScroll: true });
+        if (!options.preserveFocus) {
+            var preferred = options.focusContainer ? dialog : dialog.querySelector('[data-dialog-autofocus]');
+            var focusables = this._dialogFocusables(dialog);
+            (preferred || focusables[0] || dialog).focus({ preventScroll: true });
+        }
 
         if (dialog._kfKeydown) {
             (dialog._kfKeydownTarget || dialog).removeEventListener('keydown', dialog._kfKeydown);
@@ -280,7 +282,7 @@ window.KanbanFlow = {
                 }
                 return;
             }
-            if (event.key !== 'Tab') {
+            if (event.key !== 'Tab' || options.trapFocus === false) {
                 return;
             }
             // Trap Tab within the dialog (wrap at the first/last focusable).

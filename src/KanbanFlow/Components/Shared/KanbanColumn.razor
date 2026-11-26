@@ -40,15 +40,20 @@
             @DisplayName<span class="visually-hidden"> column,</span>
             <span class="badge bg-secondary">@Items.Count<span class="visually-hidden">@(Items.Count == 1 ? " item" : " items")</span></span>
         </h3>
-        @if (IsTerminal)
+        @if (EnableColumnLayout && !Collapsed)
+        {
+            @HeaderActions
+        }
+        @if (CanCollapse)
         {
             <button type="button"
-                    class="btn btn-sm btn-link text-reset text-decoration-none ms-auto p-1 lh-1"
-                    style="min-width: 24px; min-height: 24px;"
+                    class="@CollapseButtonCssClass"
+                    style="@(EnableColumnLayout ? null : "min-width: 24px; min-height: 24px;")"
                     @onclick="ToggleCollapsedAsync"
                     aria-expanded="@(Collapsed ? "false" : "true")"
                     aria-controls="@CardsId"
-                    aria-label="@(Collapsed ? $"Expand {DisplayName} column" : $"Collapse {DisplayName} column")"
+                    aria-label="@CollapseLabel"
+                    title="@(EnableColumnLayout ? CollapseLabel : null)"
                     data-testid="board-column-@(Status)-collapse-toggle">
                 <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="currentColor" viewBox="0 0 16 16" aria-hidden="true">
                     @if (Collapsed)
@@ -62,7 +67,10 @@
                 </svg>
             </button>
         }
-        @HeaderActions
+        @if (!EnableColumnLayout)
+        {
+            @HeaderActions
+        }
     </div>
 
     @* #295 — directly under the heading, NOT at the column's bottom edge. This is the one cue that
@@ -73,7 +81,7 @@
        exactly the user it exists for, never saw it. It reads BEFORE the attempt now, which is the
        whole point of a pre-attempt cue. Still a sibling of the cards container, never a child of it:
        SortableJS makes every child of its container draggable (#290). *@
-    @if (!string.IsNullOrWhiteSpace(InertHint))
+    @if ((!EnableColumnLayout || !Collapsed) && !string.IsNullOrWhiteSpace(InertHint))
     {
         <p class="small text-body-secondary mb-2" data-testid="board-column-@(Status)-inert-hint">@InertHint</p>
     }
@@ -85,7 +93,7 @@
     <div class="kanban-column-body position-relative flex-grow-1">
         @* ── SortableJS container. ONLY cards may be children of this element (#290). ── *@
         <div class="@CardsCssClass"
-             id="@(IsTerminal ? CardsId : null)"
+             id="@(CanCollapse ? CardsId : null)"
              data-status="@Status"
              data-testid="@CardsId">
             @* #294 — CardTemplate's root MUST carry `@key` (on an identity, never the index). This
@@ -153,10 +161,13 @@
     /// <summary>Whether this column takes part in drag-and-drop. See <see cref="CardsCssClass"/>.</summary>
     [Parameter] public bool IsDragEnabled { get; set; } = true;
 
-    /// <summary>Whether this column is terminal, and so collapsible.</summary>
+    /// <summary>Whether this column is terminal and starts collapsed.</summary>
     [Parameter] public bool IsTerminal { get; set; }
 
-    /// <summary>Whether a terminal column is currently collapsed. Owned by the board.</summary>
+    /// <summary>Whether to use the board's wider, collapsible column layout.</summary>
+    [Parameter] public bool EnableColumnLayout { get; set; }
+
+    /// <summary>Whether this column is currently collapsed. Owned by the board.</summary>
     [Parameter] public bool Collapsed { get; set; }
 
     /// <summary>Raised when the collapse toggle is pressed.</summary>
@@ -178,13 +189,20 @@
 
     private string CardsId => $"board-column-{Status}-cards";
 
-    // The base classes are the task board's original column classes, unchanged: `.kanban-column`
-    // carries the flex/width rules in app.css, so dropping it would silently collapse the layout.
+    private bool CanCollapse => IsTerminal || EnableColumnLayout;
+
+    private string CollapseLabel => Collapsed ? $"Expand {DisplayName} column" : $"Collapse {DisplayName} column";
+
+    private string CollapseButtonCssClass => EnableColumnLayout
+        ? "btn btn-sm btn-outline-secondary kanban-column-toggle p-1 lh-1"
+        : "btn btn-sm btn-link text-reset text-decoration-none ms-auto p-1 lh-1";
+
     private string ColumnCssClass
     {
         get
         {
             var css = "kanban-column d-flex flex-column bg-body-secondary rounded p-2";
+            if (EnableColumnLayout) css += " kanban-column-layout";
             if (IsTerminal) css += " kanban-column-terminal";
             if (Collapsed) css += " kanban-column-collapsed";
             if (!IsDragEnabled) css += " kanban-column-inert";

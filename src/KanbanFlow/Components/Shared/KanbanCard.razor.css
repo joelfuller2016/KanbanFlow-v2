@@ -1,0 +1,101 @@
+.board-card {
+    background-color: var(--bs-body-bg);
+    border: 1px solid var(--bs-border-color);
+    border-radius: .5rem;
+    box-shadow: 0 1px 2px rgb(0 0 0 / .06);
+}
+
+.board-card:hover {
+    box-shadow: 0 2px 5px rgb(0 0 0 / .1);
+    transform: none;
+}
+
+.board-card-heading {
+    display: flex;
+    align-items: flex-start;
+    gap: .5rem;
+}
+
+.board-card-done {
+    flex: none;
+    margin-block-start: .2rem;
+    cursor: pointer;
+}
+
+.board-card-done:not(:checked) {
+    border-color: var(--bs-secondary-color);
+}
+
+.board-card-title {
+    --bs-btn-color: var(--bs-body-color);
+    --bs-btn-hover-color: var(--bs-btn-color);
+    --bs-btn-active-color: var(--bs-btn-color);
+    flex: 1;
+    min-inline-size: 0;
+    font-weight: 600;
+}
+
+.board-card-title-done {
+    --bs-btn-color: var(--bs-secondary-color);
+    text-decoration: line-through;
+}
+
+.board-card-title:focus-visible {
+    outline: 2px solid var(--bs-primary);
+    outline-offset: 1px;
+}
+
+.board-card-metadata {
+    margin-block-start: .3rem;
+    margin-inline-start: 1.5rem;
+    color: var(--bs-secondary-color);
+    font-size: .75rem;
+    line-height: 1.4;
+}
+
+.board-card-meta-row {
+    display: flex;
+    align-items: center;
+    gap: .375rem;
+}
+
+.board-card-meta-context {
+    margin-block-start: .25rem;
+}
+
+.board-card-priority,
+.board-card-blocked-badge {
+    flex: none;
+    padding: .1rem .3rem;
+    font-size: inherit;
+    line-height: inherit;
+}
+
+.board-card-priority {
+    color: inherit;
+    background-color: var(--bs-tertiary-bg);
+    font-weight: 600;
+}
+
+.board-card-blocked-badge {
+    color: var(--bs-danger-text-emphasis);
+    background-color: var(--bs-danger-bg-subtle);
+}
+
+.board-card-meta-label {
+    font-size: inherit;
+}
+
+.board-card-assignee {
+    min-inline-size: 0;
+}
+
+.board-card-meta-row ::deep .board-card-gh {
+    flex: none;
+    border-color: transparent;
+    font-size: inherit;
+    line-height: inherit;
+    font-variant-numeric: tabular-nums;
+    text-decoration: underline;
+    text-underline-offset: .15em;
+}

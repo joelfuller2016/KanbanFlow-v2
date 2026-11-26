@@ -1,0 +1,35 @@
+.project-panel-resize-handle {
+    position: absolute;
+    inset-block: 0;
+    z-index: 2;
+    width: .5rem;
+    min-height: 2rem;
+    border: 0;
+    cursor: ew-resize;
+    touch-action: none;
+}
+
+.project-panel-resize-handle[data-dock="left"] {
+    right: 0;
+}
+
+.project-panel-resize-handle[data-dock="right"] {
+    left: 0;
+}
+
+.project-panel-resize-handle::after {
+    position: absolute;
+    inset: 0 calc(50% - 1px);
+    content: "";
+    background: var(--bs-border-color);
+}
+
+.project-panel-resize-handle:hover::after,
+.project-panel-resize-handle:focus-visible::after {
+    background: var(--bs-primary);
+}
+
+.project-panel-resize-handle:focus-visible {
+    outline: 2px solid var(--bs-primary);
+    outline-offset: -2px;
+}

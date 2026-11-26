@@ -3,9 +3,21 @@
 @inject WorkflowOptions Options
 @inject ILogger<RequestWorkspace> Logger
 
-<details class="border-bottom bg-light" open="@(IdeaId is not null || RequestId is not null)" data-testid="request-workspace" data-interactive="@interactiveReady.ToString().ToLowerInvariant()">
-    <summary class="px-3 py-2 fw-semibold">Requests &amp; plans <span class="text-muted fw-normal">· @requests.Count linked requests</span></summary>
-    <div class="p-3" style="max-height: 55vh; overflow:auto">
+<details class="@(ToolbarExpanded.HasValue ? "project-toolbar-requests" : "border-bottom bg-light")"
+         open="@(ToolbarExpanded ?? (IdeaId is not null || RequestId is not null))"
+         data-testid="request-workspace" data-interactive="@interactiveReady.ToString().ToLowerInvariant()">
+    <summary @ref="toolbarSummary" class="@(ToolbarExpanded.HasValue ? "btn btn-sm btn-outline-secondary" : "px-3 py-2 fw-semibold")"
+             @onclick="OnToolbarToggle" @onclick:preventDefault="@ToolbarExpanded.HasValue">
+        Requests &amp; plans <span class="text-muted fw-normal">· @requests.Count linked requests</span>
+    </summary>
+    <div class="p-3 request-workspace-content" style="@(ToolbarExpanded.HasValue ? null : "max-height: 55vh; overflow:auto")">
+        @if (ToolbarExpanded.HasValue)
+        {
+            <div class="project-toolbar-requests-close">
+                <button type="button" class="btn btn-sm btn-outline-secondary"
+                        @onclick="CloseToolbar">Close requests &amp; plans</button>
+            </div>
+        }
         <fieldset disabled="@(!interactiveReady)">
         <div class="d-flex flex-wrap gap-2 align-items-end mb-3">
             @if (IdeaId is null)
@@ -76,6 +88,16 @@
     [Parameter] public int? IdeaId { get; set; }
     [Parameter] public Guid? RequestId { get; set; }
     [Parameter] public EventCallback OnChanged { get; set; }
+    [Parameter] public bool? ToolbarExpanded { get; set; }
+    [Parameter] public EventCallback OnToolbarToggle { get; set; }
+    private ElementReference toolbarSummary;
+
+    private async Task CloseToolbar()
+    {
+        await OnToolbarToggle.InvokeAsync();
+        await toolbarSummary.FocusAsync();
+    }
+
     private List<RequestSummary> requests = [];
     private List<KanbanFlow.Models.Workflows.ProjectSummary> projects = [];
     private WorkflowContext? current;
