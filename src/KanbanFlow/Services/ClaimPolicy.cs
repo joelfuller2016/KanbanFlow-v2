@@ -45,6 +45,11 @@ public sealed record ClaimTtlSetting
 /// </remarks>
 public static class ClaimPolicy
 {
+    /// <summary>Compare a stored claim with a trimmed actor label using ordinal case equivalence.</summary>
+    /// <remarks>Actor labels retain their Unicode normalization form.</remarks>
+    internal static bool IsSameActor(string? claimedBy, string? trimmedActor) =>
+        trimmedActor is not null && string.Equals(claimedBy, trimmedActor, StringComparison.OrdinalIgnoreCase);
+
     /// <summary>Default time-to-live for a claim before another actor may take it over.</summary>
     /// <remarks>
     /// 24 hours: long enough that a slow human or a long agent run is never stolen from, short

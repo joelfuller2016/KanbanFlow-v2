@@ -1712,6 +1712,10 @@ public static class ApiEndpoints
                     ex.ClaimedAt
                 });
             }
+            catch (Services.TaskClaimStateChangedException ex)
+            {
+                return Results.Conflict(new { message = ex.Message, ex.ClaimedBy, ex.ClaimedAt });
+            }
         });
 
         // DELETE /api/tasks/{id} — delete.
