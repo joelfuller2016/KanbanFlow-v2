@@ -285,6 +285,44 @@ public sealed class TestRunnerServiceCancellationTests
         Assert.Equal(host.BaselineEventCount, await db.ActivityEvents.CountAsync());
     }
 
+    [Theory]
+    [InlineData("/api/projects", "Create + delete project")]
+    [InlineData("/api/ideas", "Idea create + get round-trip")]
+    public async Task RunApiTestsAsync_RejectsStaleCreateResponseAndSweepsTheRealFixture(string route, string testName)
+    {
+        await using var host = await ApiHost.StartAsync();
+        const string userName = "User work created during the test run";
+        using var handler = new FaultInjectingHandler(
+            host.BaseAddress,
+            request => request.Method == HttpMethod.Post && request.RequestUri!.AbsolutePath == route,
+            faultOnNthMatch: 1,
+            replaceResponse: async () =>
+            {
+                var response = await host.RealClient.PostAsJsonAsync(route, new { name = userName, title = userName });
+                Assert.Equal(HttpStatusCode.Created, response.StatusCode);
+                return response;
+            });
+        var result = await host.NewRunner(handler).RunApiTestsAsync();
+
+        await using var db = await host.DbFactory.CreateDbContextAsync();
+        var projects = await db.Projects.Select(p => p.Name).ToListAsync();
+        var ideas = await db.Ideas.Select(i => i.Title).ToListAsync();
+        var audit = await db.ActivityEvents.OrderBy(e => e.Id).Select(e => e.EventType).ToListAsync();
+        if (route == "/api/projects")
+        {
+            Assert.Equal([userName], projects);
+            Assert.Empty(ideas);
+            Assert.Equal(["ProjectCreated"], audit);
+        }
+        else
+        {
+            Assert.Empty(projects);
+            Assert.Equal([userName], ideas);
+            Assert.Equal(["IdeaCreated"], audit);
+        }
+        Assert.Contains(result.Tests, test => !test.Passed && test.Name == testName);
+    }
+
     [Fact]
     public async Task RunApiTestsAsync_SweepFindsAndDeletesTheProject_WhenTheLeakingCreateIsInsideARunTestWrapper()
     {
@@ -316,6 +354,40 @@ public sealed class TestRunnerServiceCancellationTests
         Assert.Equal(host.BaselineProjectCount, survivors.Count);
         Assert.DoesNotContain(survivors, name => name.StartsWith("Test-Project-", StringComparison.Ordinal));
         // See the previous test's identical assertion for why this pins the sweep-then-purge order.
+        Assert.Equal(host.BaselineEventCount, await db.ActivityEvents.CountAsync());
+    }
+
+    [Fact]
+    public async Task RunApiTestsAsync_LeavesNoProjectOrIdeaAuditAfterSuccessfulRun()
+    {
+        await using var host = await ApiHost.StartAsync();
+        using var handler = new FaultInjectingHandler(host.BaseAddress, _ => false, faultOnNthMatch: 0);
+        var result = await host.NewRunner(handler).RunApiTestsAsync();
+        Assert.NotEmpty(result.Tests);
+        Assert.All(result.Tests, test => Assert.True(test.Passed, $"{test.Name}: {test.Error}"));
+
+        await using var db = await host.DbFactory.CreateDbContextAsync();
+        Assert.Equal(host.BaselineProjectCount, await db.Projects.CountAsync());
+        Assert.Empty(await db.Ideas.ToListAsync());
+        Assert.Equal(host.BaselineEventCount, await db.ActivityEvents.CountAsync());
+    }
+
+    [Fact]
+    public async Task RunApiTestsAsync_SweepRemovesIdeaAudit_WhenCreateResponseIsLost()
+    {
+        await using var host = await ApiHost.StartAsync();
+        using var cts = new CancellationTokenSource();
+        using var handler = new FaultInjectingHandler(
+            host.BaseAddress,
+            request => request.Method == HttpMethod.Post && request.RequestUri!.AbsolutePath == "/api/ideas",
+            faultOnNthMatch: 1,
+            cancelBeforeThrow: cts);
+        var result = await host.NewRunner(handler).RunApiTestsAsync(cts.Token);
+        Assert.Contains(result.Tests, test => !test.Passed && test.Name == "Idea create + get round-trip");
+
+        await using var db = await host.DbFactory.CreateDbContextAsync();
+        Assert.Empty(await db.Ideas.ToListAsync());
+        Assert.Equal(host.BaselineProjectCount, await db.Projects.CountAsync());
         Assert.Equal(host.BaselineEventCount, await db.ActivityEvents.CountAsync());
     }
 
@@ -870,7 +942,7 @@ public sealed class TestRunnerServiceCancellationTests
     /// </summary>
     private sealed class FaultInjectingHandler(
         Uri ownHost, Func<HttpRequestMessage, bool> match, int faultOnNthMatch, CancellationTokenSource? cancelBeforeThrow = null,
-        HttpMessageHandler? inner = null)
+        HttpMessageHandler? inner = null, Func<Task<HttpResponseMessage>>? replaceResponse = null)
         : DelegatingHandler(inner ?? new SocketsHttpHandler())
     {
         private int _remaining = faultOnNthMatch;
@@ -884,6 +956,8 @@ public sealed class TestRunnerServiceCancellationTests
             if (match(request) && Interlocked.Decrement(ref _remaining) == 0)
             {
                 response.Dispose();
+                if (replaceResponse is not null)
+                    return await replaceResponse();
                 cancelBeforeThrow?.Cancel();
                 // TaskCanceledException because that is what HttpClient throws when HttpClient.Timeout fires.
                 throw new TaskCanceledException(
