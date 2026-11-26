@@ -11,13 +11,13 @@ public sealed class ProjectOutlineCancellationTests
         var runtime = new Runtime();
         await using var interop = new ProjectOutlineInterop(runtime);
         using var cancelled = new CancellationTokenSource();
-        var reveal = interop.RevealAsync(default, 1, false, cancelled.Token).AsTask();
+        var reveal = interop.RevealAsync(default, 1, focus: false, scroll: false, cancelled.Token).AsTask();
         cancelled.Cancel();
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => reveal);
         var module = new Module();
         runtime.Import.SetResult(module);
         using var current = new CancellationTokenSource();
-        await interop.RevealAsync(default, 2, true, current.Token);
+        await interop.RevealAsync(default, 2, focus: true, scroll: false, current.Token);
         Assert.Equal(1, runtime.Imports);
         Assert.Equal(current.Token, module.Token);
     }
@@ -30,7 +30,7 @@ public sealed class ProjectOutlineCancellationTests
         runtime.Import.SetResult(module);
         await using var interop = new ProjectOutlineInterop(runtime);
         using var cancellation = new CancellationTokenSource();
-        var reveal = interop.RevealAsync(default, 1, true, cancellation.Token).AsTask();
+        var reveal = interop.RevealAsync(default, 1, focus: true, scroll: false, cancellation.Token).AsTask();
         cancellation.Cancel();
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => reveal);
         Assert.Equal(cancellation.Token, module.Token);

@@ -43,14 +43,16 @@
         </div>
         <div class="outline-navigation" role="group" aria-label="Outline navigation">
             <button type="button" class="btn btn-sm btn-outline-secondary icon-btn"
-                    disabled="@(!CanGoBack)" @onclick="() => OnBack.InvokeAsync()"
+                    aria-disabled="@(CanGoBack ? "false" : "true")" tabindex="@(CanGoBack ? 0 : -1)"
+                    @onclick="() => CanGoBack ? OnBack.InvokeAsync() : Task.CompletedTask"
                     title="Previous outline item" aria-label="Previous outline item" data-testid="outline-back-button">
                 <svg width="16" height="16" fill="currentColor" viewBox="0 0 16 16" aria-hidden="true">
                     <path fill-rule="evenodd" d="M11.354 1.646a.5.5 0 0 1 0 .708L5.707 8l5.647 5.646a.5.5 0 0 1-.708.708l-6-6a.5.5 0 0 1 0-.708l6-6a.5.5 0 0 1 .708 0" />
                 </svg>
             </button>
             <button type="button" class="btn btn-sm btn-outline-secondary icon-btn"
-                    disabled="@(!CanGoForward)" @onclick="() => OnForward.InvokeAsync()"
+                    aria-disabled="@(CanGoForward ? "false" : "true")" tabindex="@(CanGoForward ? 0 : -1)"
+                    @onclick="() => CanGoForward ? OnForward.InvokeAsync() : Task.CompletedTask"
                     title="Next outline item" aria-label="Next outline item" data-testid="outline-forward-button">
                 <svg width="16" height="16" fill="currentColor" viewBox="0 0 16 16" aria-hidden="true">
                     <path fill-rule="evenodd" d="M4.646 1.646a.5.5 0 0 1 .708 0l6 6a.5.5 0 0 1 0 .708l-6 6a.5.5 0 0 1-.708-.708L10.293 8 4.646 2.354a.5.5 0 0 1 0-.708" />
@@ -101,6 +103,7 @@
     [Parameter] public OutlineItem? Selection { get; set; }
     [Parameter] public int RevealRequest { get; set; }
     [Parameter] public bool FocusSelection { get; set; }
+    [Parameter] public bool ScrollSelection { get; set; }
     [Parameter] public bool CanGoBack { get; set; }
     [Parameter] public bool CanGoForward { get; set; }
     [Parameter] public EventCallback OnBack { get; set; }
@@ -133,7 +136,7 @@
         if (disposed || appliedRevealRequest == RevealRequest) return;
         appliedRevealRequest = RevealRequest;
         interop ??= new ProjectOutlineInterop(JS);
-        try { await interop.RevealAsync(itemsElement, RevealRequest, FocusSelection, revealCancellation.Token); }
+        try { await interop.RevealAsync(itemsElement, RevealRequest, FocusSelection, ScrollSelection, revealCancellation.Token); }
         catch (OperationCanceledException) when (revealCancellation.IsCancellationRequested) { }
         catch (JSDisconnectedException) { }
         catch (ObjectDisposedException) { }

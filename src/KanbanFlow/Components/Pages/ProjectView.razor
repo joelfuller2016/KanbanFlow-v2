@@ -65,6 +65,7 @@ else
                             Selection="CurrentOutlineItem"
                             RevealRequest="outlineRevealRequest"
                             FocusSelection="outlineFocusSelection"
+                            ScrollSelection="outlineScrollSelection"
                             CanGoBack="@(FindOutlineHistoryIndex(-1) >= 0)"
                             CanGoForward="@(FindOutlineHistoryIndex(1) >= 0)"
                             OnBack="() => NavigateOutline(-1)"
@@ -560,19 +561,17 @@ else
 
     private void OpenTaskDetail(TaskItem task) => OpenTaskDetail(task, null, forceTaskExpansion: false);
 
-    private void OpenTaskDetailsFromOutline(TaskItem task)
-    {
-        outlineOpen = false;
-        OpenTaskDetail(task);
-        detailOpenedFromOutline = true;
-    }
+    private void OpenTaskDetailsFromOutline(TaskItem task) =>
+        OpenTaskDetail(task, null, forceTaskExpansion: false, fromOutline: true);
 
-    private void OpenTaskDetail(TaskItem task, int? addSubtaskParentId, bool forceTaskExpansion)
+    private void OpenTaskDetail(TaskItem task, int? addSubtaskParentId, bool forceTaskExpansion, bool fromOutline = false)
     {
+        // Clear the mobile drawer even while the desktop Outline is visible.
+        outlineOpen = false;
         SelectOutlineItem(addSubtaskParentId is int subtaskId
             ? new(OutlineItemKind.Subtask, subtaskId) : new(OutlineItemKind.Task, task.Id));
         selectedTask = task;
-        detailOpenedFromOutline = false;
+        detailOpenedFromOutline = fromOutline;
         detailPanelAddSubtaskParentId = addSubtaskParentId;
         detailPanelOpen = true;
         panelLayout = panelLayout with { Details = panelLayout.Details with { Collapsed = false } };
@@ -1067,14 +1066,15 @@ else
     private void OpenAddModalForProject() => OpenAddModal("feature", null, null);
     private void OpenAddModalForFeature(int featureId) => OpenAddModal("task", featureId, null);
     private void OpenAddModalForColumn(WorkStatus status) => OpenAddModal("task", null, status);
-    private void OpenAddSubtaskForTask(TaskItem task) => OpenTaskDetail(task, null, forceTaskExpansion: true);
+    private void OpenAddSubtaskForTask(TaskItem task) =>
+        OpenTaskDetail(task, null, forceTaskExpansion: true, fromOutline: true);
 
     private void OpenAddChildSubtaskFromOutline(Subtask subtask)
     {
         var parentTask = allTasks.FirstOrDefault(t => t.Id == subtask.TaskItemId);
         if (parentTask is not null)
         {
-            OpenTaskDetail(parentTask, subtask.Id, forceTaskExpansion: true);
+            OpenTaskDetail(parentTask, subtask.Id, forceTaskExpansion: true, fromOutline: true);
         }
     }
 

@@ -12,6 +12,13 @@
     gap: .75rem 1rem;
 }
 
+/* Reserve space for the form when the full title and metadata wrap in a drawer. */
+.task-detail-panel[aria-modal="true"] .task-detail-header {
+    max-block-size: 45dvh;
+    overflow-y: auto;
+    overscroll-behavior-y: contain;
+}
+
 .task-detail-heading {
     flex: 1;
     min-width: 0;
