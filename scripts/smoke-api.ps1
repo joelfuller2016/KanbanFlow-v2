@@ -384,10 +384,20 @@ try {
     $initialCriteria = Invoke-SmokeGet "/api/tasks/$($task.id)/acceptance-criteria"
     Assert-Truthy ($null -ne $initialCriteria) "GET /api/tasks/$($task.id)/acceptance-criteria returned null."
 
-    $createdCriterion = Invoke-SmokeJson "Post" "/api/tasks/$($task.id)/acceptance-criteria" @{ text = "User can complete the workflow" }
+    $criterionPath = "/api/tasks/$($task.id)/acceptance-criteria"
+    Write-Host "POST $criterionPath"
+    $criterionBody = @{ text = "User can complete the workflow" } | ConvertTo-Json
+    $createdCriterionResponse = Invoke-WebRequest -Method Post -Uri "$BaseUrl$criterionPath" -ContentType "application/json" -Body $criterionBody -TimeoutSec 5 -UseBasicParsing
+    Assert-Truthy ($createdCriterionResponse.StatusCode -eq 201) "POST $criterionPath did not return HTTP 201."
+    $createdCriterion = $createdCriterionResponse.Content | ConvertFrom-Json
     Assert-Truthy $createdCriterion.id "POST /api/tasks/$($task.id)/acceptance-criteria did not return an id."
     Assert-Truthy ($createdCriterion.taskItemId -eq $task.id) "Created acceptance criterion was not scoped to the requested task."
     Assert-Truthy (-not $createdCriterion.completed) "Created acceptance criterion should default to incomplete."
+
+    $criterionLocation = $createdCriterionResponse.Headers["Location"] | Select-Object -First 1
+    Assert-Truthy ($criterionLocation -eq "/api/acceptance-criteria/$($createdCriterion.id)") "POST $criterionPath returned an unexpected Location."
+    $criterionAtLocation = Invoke-SmokeGet $criterionLocation
+    Assert-Truthy ($criterionAtLocation.id -eq $createdCriterion.id -and $criterionAtLocation.text -eq $createdCriterion.text) "GET $criterionLocation did not return the created acceptance criterion."
 
     $criteria = Invoke-SmokeGet "/api/tasks/$($task.id)/acceptance-criteria"
     Assert-Truthy (@($criteria | Where-Object { $_.id -eq $createdCriterion.id }).Count -eq 1) "Created acceptance criterion was not returned for its task."
