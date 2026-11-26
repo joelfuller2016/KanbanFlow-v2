@@ -95,9 +95,10 @@ public sealed class WorkspaceQueryTests(ITestOutputHelper output)
     }
 
     [Theory]
-    [InlineData(12)]
-    [InlineData(100)]
-    public async Task RepublishManyChangedTasks_BatchesDependencyCleanup(int count)
+    [InlineData(12, false)]
+    [InlineData(12, true)]
+    [InlineData(100, true)]
+    public async Task RepublishManyChangedTasks_BatchesOnlyActualDependencyEdits(int count, bool editDependencies)
     {
         var counter = new QueryCounter();
         using var factory = new WorkflowSqliteTestFactory(counter);
@@ -106,21 +107,32 @@ public sealed class WorkspaceQueryTests(ITestOutputHelper output)
         var request = await factory.PublishedAsync(drafts);
         var read = (await factory.Service.ContextAsync(request.Id))!;
         var revised = drafts.Select(d => d with { Description = "Reviewed new scope" }).ToArray();
+        if (editDependencies)
+        {
+            for (var i = 0; i < count - 1; i++) revised[i] = revised[i] with { Dependencies = [drafts[i + 1].Id] };
+            revised[^1] = revised[^1] with { Dependencies = [] };
+        }
+
         var saved = await factory.Service.SavePlanAsync(request.Id, request.Version, revised, Actor, "replan-all",
             expectedTaskStates: read.Tasks.ToDictionary(t => t.TaskId, t => t.EditToken));
         request = await factory.LoadAsync(request.Id);
         counter.Reset();
         await factory.Service.PublishPlanAsync(request.Id, saved.Version, request.Plans.MaxBy(p => p.Number)!.Id, Actor, "republish-all");
-        // Other domain mutations have their own reads. This is the direct cleanup query
-        // (not an Include/recursive graph read), which must run once for the whole set.
-        var dependencyReads = counter.Reads.Where(sql => sql.Contains("FROM \"TaskDependencies\" AS")
-            && !sql.Contains("JOIN", StringComparison.OrdinalIgnoreCase)
-            && sql.IndexOf("WHERE", StringComparison.Ordinal) is var where && where >= 0
-            && sql[where..].Contains("\"TaskItemId\"", StringComparison.Ordinal)).ToArray();
-        Assert.Single(dependencyReads);
+        // Direct reads for reconciliation and audit are batched. The request and task
+        // baseline queries load dependencies as part of their own graph reads.
+        var dependencyReads = counter.Reads.Count(sql => sql.Contains("FROM \"TaskDependencies\" AS", StringComparison.Ordinal)
+            && !sql.Contains("JOIN", StringComparison.OrdinalIgnoreCase));
+        if (editDependencies) Assert.InRange(dependencyReads, 1, 2);
+        else Assert.Equal(0, dependencyReads);
+
         var after = await factory.LoadAsync(request.Id);
-        Assert.All(after.WorkItems, t => Assert.Equal("Reviewed new scope", t.Task.Description));
-        Assert.Equal(count - 1, after.WorkItems.Sum(t => t.Task.Dependencies.Count));
+        var byDraft = after.WorkItems.ToDictionary(t => t.DraftId);
+        foreach (var draft in revised)
+        {
+            var item = byDraft[draft.Id];
+            Assert.Equal("Reviewed new scope", item.Task.Description);
+            Assert.Equal(draft.Dependencies.Select(id => byDraft[id].TaskItemId), item.Task.Dependencies.Select(d => d.DependsOnTaskItemId));
+        }
     }
 
     [Fact]

@@ -319,8 +319,8 @@ async function ghIssueCreate(repo, request, options, spawnImpl = spawn) {
   return url;
 }
 
-async function fetchRepositoryIdentity(repo) {
-  const record = await gh(["api", `repos/${repo}`]);
+async function fetchRepositoryIdentity(repo, read = gh) {
+  const record = await read(["api", `repos/${repo}`]);
   if (!record?.node_id || !record?.owner?.login || !record?.name) {
     throw new Error(`${repo}: GitHub repository response omitted node_id/owner/name; refusing an unstable repository link.`);
   }
@@ -451,10 +451,38 @@ async function findIssueByPushMarker(repo, operationId) {
   return { hints, ...diagnostics, complete: true };
 }
 
-// `comments` rides along on the list call we already make, so issue comments cost zero extra
-// requests. Each carries a stable node id (e.g. `IC_kwDO…`) — that id is the dedupe key that
-// makes comment mirroring idempotent.
-const ISSUE_FIELDS = "id,number,title,body,labels,milestone,assignees,state,updatedAt,url,comments";
+const ISSUE_FIELDS = "id,number,title,body,labels,milestone,assignees,state,updatedAt,url";
+const GH_NESTED_LIMIT = 100;
+
+async function readCommentPages(endpoint, read) {
+  const pages = await read(["api", "--paginate", "--slurp", `${endpoint}?per_page=100`]);
+  if (!Array.isArray(pages) || !pages.length || !pages.every(Array.isArray)) {
+    throw new Error(`${endpoint}: expected complete GitHub comment pages`);
+  }
+  return flattenGhPages(pages);
+}
+
+// gh list embeds only one page per nested collection. Saturated or unavailable previews
+// need the full REST collection before this repository can be mirrored.
+async function completeDiscussion(item, field, endpoint, read) {
+  if (Array.isArray(item[field]) && item[field].length < GH_NESTED_LIMIT) return;
+  try {
+    const records = await readCommentPages(endpoint, read);
+    item[field] = records.map(record => {
+      if (!record?.node_id || (typeof record.body !== "string" && record.body !== null)) {
+        throw new Error("GitHub comment omitted its node id or body");
+      }
+      const comment = { id: record.node_id, body: record.body, url: record.html_url, author: record.user };
+      return field === "reviews"
+        ? { ...comment, state: record.state, submittedAt: record.submitted_at }
+        : { ...comment, createdAt: record.created_at };
+    });
+  } catch (error) {
+    const note = `${endpoint}: incomplete GitHub ${field}: ${error.message}`;
+    stats.incomplete.push(note);
+    throw new Error(note, { cause: error });
+  }
+}
 
 // Never truncate silently: a board that quietly drops issues past the limit still *looks*
 // like a full mirror, which is the one thing this tool must not do. Saturation is RECORDED,
@@ -469,31 +497,36 @@ function warnIfTruncated(repo, kind, list) {
   return list;
 }
 
-async function fetchOpenIssues(repo) {
-  const list = await gh([
-    "issue", "list", "-R", repo, "--state", "open",
-    "--limit", String(GH_PAGE_LIMIT), "--json", ISSUE_FIELDS,
+async function fetchIssues(repo, state, full, withComments, read) {
+  let fields = full ? ISSUE_FIELDS : "id,number,url";
+  if (full && withComments) fields += ",comments";
+  const list = await read([
+    "issue", "list", "-R", repo, "--state", state, "--limit", String(GH_PAGE_LIMIT), "--json", fields,
   ]);
-  return warnIfTruncated(repo, "open issues", list);
+  warnIfTruncated(repo, `${state} issues`, list);
+  if (full && withComments) {
+    await Promise.all(list.map(issue => completeDiscussion(issue, "comments", `repos/${repo}/issues/${issue.number}/comments`, read)));
+  }
+  return list;
+}
+
+function fetchOpenIssues(repo, withComments, read = gh) {
+  return fetchIssues(repo, "open", true, withComments, read);
 }
 
 // Closed issues are fetched even when we aren't mirroring them, because a task already on
 // the board whose issue has since been closed must still converge to Done. Without this the
 // close is invisible (the issue simply vanishes from the open set) and the task is instead
-// mis-reported as drift forever. Cheap by default: numbers only.
-async function fetchClosedIssues(repo, full) {
-  const list = await gh([
-    "issue", "list", "-R", repo, "--state", "closed",
-    "--limit", String(GH_PAGE_LIMIT), "--json", full ? ISSUE_FIELDS : "number",
-  ]);
-  return warnIfTruncated(repo, "closed issues", list);
+// mis-reported as drift forever. By default, fetch only the issue identity for this check.
+function fetchClosedIssues(repo, full, withComments, read = gh) {
+  return fetchIssues(repo, "closed", full, withComments, read);
 }
 
-async function fetchOpenPrs(repo, withComments) {
+async function fetchOpenPrs(repo, withComments, read = gh) {
   const fields = withComments
     ? "number,title,body,url,updatedAt,reviewDecision,isDraft,comments,reviews"
     : "number,title,body,url,updatedAt,reviewDecision,isDraft";
-  const list = await gh([
+  const list = await read([
     "pr", "list", "-R", repo, "--state", "open",
     "--limit", String(GH_PAGE_LIMIT), "--json", fields,
   ]);
@@ -509,8 +542,13 @@ async function fetchOpenPrs(repo, withComments) {
   // is the exact failure mode the truncation warning above exists to prevent.
   if (withComments) {
     await Promise.all(list.map(async (pr) => {
+      const pulls = `repos/${repo}/pulls/${pr.number}`;
+      await Promise.all([
+        completeDiscussion(pr, "comments", `repos/${repo}/issues/${pr.number}/comments`, read),
+        completeDiscussion(pr, "reviews", `${pulls}/reviews`, read),
+      ]);
       try {
-        pr.inlineComments = await gh(["api", `repos/${repo}/pulls/${pr.number}/comments`, "--paginate"]);
+        pr.inlineComments = await readCommentPages(`${pulls}/comments`, read);
       } catch (err) {
         pr.inlineComments = [];
         console.warn(`  ! ${repo} PR #${pr.number}: could NOT fetch inline review comments — ${err.message}`);
@@ -524,8 +562,8 @@ async function fetchOpenPrs(repo, withComments) {
 
 // Milestones are the Feature axis. Read-only: a milestone is only ever ATTACHED in a
 // push-issue preview, never created.
-async function fetchMilestones(repo) {
-  return gh(["api", `repos/${repo}/milestones?state=all&per_page=100`, "--paginate"]);
+async function fetchMilestones(repo, read = gh) {
+  return read(["api", `repos/${repo}/milestones?state=all&per_page=100`, "--paginate"]);
 }
 
 // The repo's label vocabulary. A push-issue preview picks the label that priorityFromLabel()
@@ -538,11 +576,8 @@ async function fetchLabels(repo) {
 
 // --- GitHub comments -> TaskComments -----------------------------------------------------
 
-// A GitHub comment's node id is stable and globally unique. Stamping it into the comment body
-// makes the mirror idempotent with no schema change: on re-sync we read back what's already on
-// the task and skip anything whose id we've seen. (TaskComment has no external-id column —
-// this is the same trick as the "#<n> " task-title prefix.)
-const GH_ID_MARKER = /<!--\s*gh:([^\s>]+)\s*-->/;
+// Only the leading import marker identifies a mirrored comment. Authored text can quote it.
+const GH_ID_MARKER = /^<!-- gh:([^\s>]+) -->\r?\n/;
 
 function ghIdOf(commentText) {
   const m = GH_ID_MARKER.exec(String(commentText || ""));
@@ -620,13 +655,28 @@ function commentTextFor(c) {
   return `<!-- gh:${c.ghId} -->\n${COMPLETE_COMMENT_MARKER}\n${c.header}\n\n${c.body ?? ""}`;
 }
 
+// Older whole-review imports used the PR URL. REST hydration supplies a review anchor,
+// and transfers can change the PR path. Compare the authored body after an exact generated
+// header on both sides, retaining every character after the blank separator.
+const REVIEW_HEADER = /^_\[PR #([1-9]\d*) review · \*\*[A-Z_]+\*\*\]\(https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/pull\/\1(?:#pullrequestreview-[1-9]\d*)?\)_\r?\n\r?\n/;
+
+function legacyCommentMatches(text, incoming) {
+  if (!incoming) return false;
+  const old = text.replace(GH_ID_MARKER, "");
+  const current = `${incoming.header}\n\n${incoming.body ?? ""}`;
+  if (old === current) return true;
+  const oldHeader = REVIEW_HEADER.exec(old);
+  return oldHeader !== null && REVIEW_HEADER.test(current)
+    && old.slice(oldHeader[0].length) === incoming.body;
+}
+
 function completeCommentIds(comments, incoming = []) {
-  const completeLegacyText = new Map(incoming.map((c) => [c.ghId, `<!-- gh:${c.ghId} -->\n${c.header}\n\n${c.body ?? ""}`]));
+  const byId = new Map(incoming.map((c) => [c.ghId, c]));
   return new Set(comments.filter((c) => {
     const text = String(c.text || "");
     return /^<!-- gh:[^>]+ -->\r?\n<!-- kanbanflow-comment:complete -->\r?\n/.test(text)
-      || text === completeLegacyText.get(ghIdOf(text))
-      || !text.trimEnd().endsWith(COMMENT_TRUNCATION_FOOTER);
+      || !text.trimEnd().endsWith(COMMENT_TRUNCATION_FOOTER)
+      || legacyCommentMatches(text, byId.get(ghIdOf(text)));
   }).map((c) => ghIdOf(c.text)).filter(Boolean));
 }
 
@@ -901,7 +951,9 @@ async function api(method, path, body) {
   });
   if (!res.ok) {
     const text = await res.text().catch(() => "");
-    throw new Error(`${method} ${path} -> ${res.status} ${res.statusText}${text ? `: ${text}` : ""}`);
+    throw new Error(`${method} ${path} -> ${res.status} ${res.statusText}${text ? `: ${text}` : ""}`, {
+      cause: { status: res.status, responseText: text },
+    });
   }
   if (res.status === 204) return null;
   const text = await res.text();
@@ -1487,10 +1539,17 @@ async function syncComments(issue, linkedPr, taskId, args, request = api) {
     plan(args.dryRun, "add comment", `#${issue.number} ← ${c.author} [${c.type}] ${c.body.length.toLocaleString()} chars`);
     if (args.dryRun) { stats.commentsCreated++; continue; }
     if (taskId == null) {
-      throw new Error(`syncComments: taskId is null outside --dry-run (issue #${issue.number}) — refusing to POST to /api/tasks/null/comments`);
+      throw new Error(`syncComments: taskId is null outside --dry-run (issue #${issue.number})`);
     }
-    await request("POST", `/api/tasks/${taskId}/comments`, { text, author: c.author, type: c.type });
+    const path = `/api/tasks/${taskId}/comment-imports/github`;
+    const result = await request("POST", path, {
+      text, author: c.author, type: c.type, githubCommentId: c.ghId,
+    });
+    if (typeof result?.created !== "boolean") {
+      throw new Error(`POST ${path}: GitHub comment ${c.ghId} import returned no boolean created result`);
+    }
     seen.add(c.ghId);
+    if (!result.created) { stats.commentsUnchanged++; continue; }
     stats.commentsCreated++;
     if (c.body.length > stats.biggestComment.chars) {
       stats.biggestComment = { chars: c.body.length, author: c.author, issue: issue.number };
@@ -1589,6 +1648,7 @@ function addUnique(map, key, task, kind) {
 
 function buildTaskIdentityIndex(tasks, repoIdentity, projectLinks = [], operationTasks = new Map()) {
   const byId = new Map(tasks.map((task) => [task.id, task]));
+  const projectNodeIds = new Set();
   const durableByNode = new Map();
   const durableByNumber = new Map();
   const durableLinkByTaskId = new Map();
@@ -1602,6 +1662,9 @@ function buildTaskIdentityIndex(tasks, repoIdentity, projectLinks = [], operatio
 
   for (const task of tasks) {
     const allGithubLinks = githubLinksOf(task, projectLinks);
+    for (const link of allGithubLinks) {
+      if (link.externalNodeId) projectNodeIds.add(link.externalNodeId);
+    }
     const repoLinks = allGithubLinks
       .filter((candidate) => candidate.repositoryExternalId === repoIdentity.externalId);
     if (allGithubLinks.length > 0 && repoLinks.length === 0) {
@@ -1642,7 +1705,7 @@ function buildTaskIdentityIndex(tasks, repoIdentity, projectLinks = [], operatio
   }
 
   return {
-    byId, durableByNode, durableByNumber, durableLinkByTaskId,
+    byId, projectNodeIds, durableByNode, durableByNumber, durableLinkByTaskId,
     legacyByNumber, quarantineByNumber, foreignLinkByNumber,
     durableTaskIds, quarantinedTaskIds, projectWideQuarantines, foreignLinkedTaskIds,
     operationTasks,
@@ -1716,11 +1779,17 @@ function taskMatchForIssue(index, issue) {
 // inside exactly one block, and {malformed} otherwise. Malformed fails closed: backfill-links
 // owns the malformed-provenance taxonomy and will quarantine it properly.
 function syncBlockIssueUrl(description) {
-  const blocks = [...String(description || "").matchAll(new RegExp(SYNC_BLOCK_RE.source, "gi"))];
-  if (blocks.length === 0) return null;
+  const text = String(description || "");
+  const blocks = [...text.matchAll(new RegExp(SYNC_BLOCK_RE.source, "gi"))];
+  const markers = text.match(/<!--\s*\/?kanbanflow-sync\s*-->/gi) || [];
+  if (markers.length !== blocks.length * 2) return { malformed: "incomplete kanbanflow-sync block" };
+  if (blocks.length === 0) {
+    return malformedProvenanceCandidate(text, null).canonicalCount
+      ? { malformed: "found a canonical **Issue:** URL outside a kanbanflow-sync block" } : null;
+  }
   if (blocks.length !== 1) return { malformed: `found ${blocks.length} kanbanflow-sync blocks` };
-  const issueLines = [...blocks[0][1].matchAll(new RegExp(SYNC_ISSUE_LINE_RE.source, "gmi"))];
-  if (issueLines.length === 0) return null;
+  // Count every labelled field, including a malformed duplicate alongside a valid URL.
+  const issueLines = [...blocks[0][1].matchAll(/^[ \t]*\*\*Issue:\*\*[ \t]*(.*)$/gmi)];
   if (issueLines.length !== 1) return { malformed: `found ${issueLines.length} **Issue:** URLs in the sync block` };
   const parsed = parseGitHubIssueUrl(issueLines[0][1]);
   return parsed ?? { malformed: "the **Issue:** value is not a canonical GitHub issue URL" };
@@ -1951,18 +2020,41 @@ async function reconcilePushMarkers(repo, repoIdentity, issues, tasks, args) {
   return { operationTasks, finalizedLinks, blockedIssues };
 }
 
-async function syncTasks(repo, repoIdentity, projectId, issues, closedNumbers, prByIssue, featureIds, args, existing, projectLinks, operationTasks, blockedIssues = new Set()) {
+// Both task update endpoints return the same structured Definition-of-Done refusal.
+async function updateMirroredTask(repo, number, taskId, method, path, changes) {
+  try {
+    await api(method, path, changes);
+    stats.tasksUpdated++;
+    return true;
+  } catch (error) {
+    if (changes.status !== "Done" || error.cause?.status !== 422) throw error;
+    let gate;
+    try { gate = JSON.parse(error.cause.responseText); } catch { throw error; }
+    if (gate?.taskId !== taskId || typeof gate.message !== "string" || !Array.isArray(gate.unmet) || gate.unmet.length === 0
+      || gate.unmetCount !== gate.unmet.length || !gate.unmet.every(text => typeof text === "string")) throw error;
+    stats.drift.push(`${repo}#${number}: task ${taskId} remains open on the board. Definition of Done requires: ${gate.unmet.join(", ")}`);
+    return false;
+  }
+}
+
+async function syncTasks(repo, repoIdentity, projectId, issues, closedByNumber, prByIssue, featureIds, args, existing, projectLinks, operationTasks, blockedIssues = new Set()) {
   const { actor, dryRun } = args;
   const index = buildTaskIdentityIndex(existing, repoIdentity, projectLinks, operationTasks);
   const byIssueNumber = new Map([...index.legacyByNumber, ...index.durableByNumber]);
+  const processed = new Set(issues.map(issue => issue.number));
+  const closedForStatus = [...closedByNumber.values()].filter(issue => !processed.has(issue.number) && (
+    byIssueNumber.has(issue.number) || index.projectNodeIds.has(issue.id) ||
+    index.foreignLinkByNumber.has(issue.number) || index.quarantineByNumber.has(issue.number)
+  ));
+  const matchedTaskIds = new Set();
 
-  for (const issue of issues) {
+  for (const issue of [...issues, ...closedForStatus]) {
     if (blockedIssues.has(issue.id) || blockedIssues.has(issue.number)) continue;
-    const linkedPr = prByIssue.get(issue.number) || null;
-    const desiredPriority = derivePriority(issue);
-    const desiredStatus = deriveStatus(issue, linkedPr);
-    const featureName = featureNameFor(issue);
-    const featureId = featureIds.get(featureName);
+    const statusOnly = !processed.has(issue.number);
+    if (statusOnly && !promotableIssueNodeId(issue)) {
+      stats.drift.push(`${repo}#${issue.number}: closed issue record has no immutable GitHub node id; skipped status update`);
+      continue;
+    }
     let matched = taskMatchForIssue(index, issue);
     // A repository transfer can change repo node + issue number/URL while the issue node remains
     // immutable. Consult the global node owner before trusting a fallback or creating anything.
@@ -1985,7 +2077,7 @@ async function syncTasks(repo, repoIdentity, projectId, issues, closedNumbers, p
         matched = { task: transfer.task, kind: "transfer", link: transfer.link };
       }
     }
-    let task = matched.task;
+    const task = matched.task;
     if (matched.kind === "identity-mismatch") {
       stats.drift.push(`${repo}#${issue.number}: ${matched.reason}; sync skipped every mutation pending human repair`);
       continue;
@@ -2003,9 +2095,49 @@ async function syncTasks(repo, repoIdentity, projectId, issues, closedNumbers, p
       stats.drift.push(`${repo}#${issue.number}: task(s) ${taskIds} carry a GitHub link for a different repository; sync skipped every mutation`);
       continue;
     }
+    if (task) matchedTaskIds.add(task.id);
+    const promotion = matched.kind === "legacy" ? legacyPromotionDisposition(task, issue, repoIdentity) : null;
+    if (promotion?.kind === "drift") {
+      stats.drift.push(`${repo}#${issue.number}: task ${task.id}: ${promotion.reason}; sync skipped every mutation pending human repair`);
+      continue;
+    }
+    const currentLink = matched.kind === "transfer" ? matched.link
+      : matched.kind === "durable" ? activeGithubLink(task, repoIdentity.externalId, projectLinks) : null;
+    const transferred = currentLink && currentLink.repositoryExternalId !== repoIdentity.externalId;
+    if (statusOnly && transferred) {
+      const destination = parseGitHubIssueUrl(issue.url);
+      if (!isActiveLink(currentLink) || currentLink.externalNodeId !== issue.id || !currentLink.repositoryExternalId
+        || !destination || destination.number !== issue.number || destination.owner.toLowerCase() !== repoIdentity.owner.toLowerCase()
+        || destination.repo.toLowerCase() !== repoIdentity.name.toLowerCase()) {
+        stats.drift.push(`${repo}#${issue.number}: task ${task.id}: could not verify the active transferred link and destination URL; skipped every mutation`);
+        continue;
+      }
+    }
+    if ((!statusOnly || transferred) && linkMetadataNeedsRefresh(currentLink, repoIdentity, issue)) {
+      const verb = transferred ? "refresh transferred issue repository metadata" : "refresh durable link metadata";
+      plan(dryRun, verb, `task ${task.id} → ${repo}#${issue.number}`);
+      if (!dryRun) {
+        const refreshed = await externalApi.registerLink(task.id, verifiedLinkRequest(task.id, repoIdentity, issue, actor));
+        const indexInLinks = projectLinks.findIndex(candidate => candidate.id === refreshed.id);
+        if (indexInLinks >= 0) projectLinks[indexInLinks] = refreshed;
+        else projectLinks.push(refreshed);
+        stats.linksRegistered++;
+      }
+    }
+    if (statusOnly) {
+      if (!task) continue;
+      if (task.status === "Done") { stats.tasksUnchanged++; continue; }
+      plan(dryRun, "close task", `${task.name} -> Done (issue #${issue.number} closed)`);
+      if (!dryRun) await updateMirroredTask(repo, issue.number, task.id, "PATCH", `/api/tasks/${task.id}/status`, { status: "Done", actor });
+      continue;
+    }
+    const linkedPr = prByIssue.get(issue.number) || null;
+    const desiredPriority = derivePriority(issue);
+    const desiredStatus = deriveStatus(issue, linkedPr);
+    const featureName = featureNameFor(issue);
+    const featureId = featureIds.get(featureName);
     const durableIdentity = matched.kind === "durable" || matched.kind === "operation" || matched.kind === "transfer";
     let desiredName = durableIdentity ? String(issue.title || "").trim() : taskNameFor(issue);
-    if (task) byIssueNumber.set(issue.number, task);
 
     if (!task) {
       const plainName = String(issue.title || "").trim();
@@ -2033,36 +2165,8 @@ async function syncTasks(repo, repoIdentity, projectId, issues, closedNumbers, p
         stats.tasksCreated++;
         stats.linksRegistered++;
       }
-      byIssueNumber.set(issue.number, projection.task);
       if (args.comments) await syncComments(issue, linkedPr, projection.task.id, args);
       continue;
-    }
-
-    if (matched.kind === "durable" || matched.kind === "transfer") {
-      const currentLink = matched.kind === "transfer"
-        ? matched.link
-        : activeGithubLink(task, repoIdentity.externalId, projectLinks);
-      const metadataDrift = currentLink && (
-        currentLink.repositoryExternalId !== repoIdentity.externalId
-        || currentLink.repositoryOwner !== repoIdentity.owner
-        || currentLink.repositoryName !== repoIdentity.name
-        || currentLink.externalNodeId !== issue.id
-        || currentLink.externalNumber !== issue.number
-        || currentLink.url !== issue.url
-      );
-      if (metadataDrift) {
-        const verb = currentLink.repositoryExternalId === repoIdentity.externalId
-          ? "refresh durable link metadata"
-          : "refresh transferred issue repository metadata";
-        plan(dryRun, verb, `task ${task.id} → ${repo}#${issue.number}`);
-        if (!dryRun) {
-          const refreshed = await externalApi.registerLink(task.id, verifiedLinkRequest(task.id, repoIdentity, issue, actor));
-          const indexInLinks = projectLinks.findIndex((candidate) => candidate.id === refreshed.id);
-          if (indexInLinks >= 0) projectLinks[indexInLinks] = refreshed;
-          else projectLinks.push(refreshed);
-          stats.linksRegistered++;
-        }
-      }
     }
 
     // A `legacy` match is a task the pre-#336 sync created, recognised by the mutable "#<n> "
@@ -2072,30 +2176,22 @@ async function syncTasks(repo, repoIdentity, projectId, issues, closedNumbers, p
     // a `backfill-links owner/repo` that appears in no runnable instruction.
     //
     // The precondition is what makes it safe; see legacyPromotionDisposition.
-    if (matched.kind === "legacy") {
-      const promotion = legacyPromotionDisposition(task, issue, repoIdentity);
-      if (promotion.kind !== "promote") {
-        stats.drift.push(`${repo}#${issue.number}: task ${task.id}: ${promotion.reason}; sync skipped every mutation pending human repair`);
-        // Refusing the link also refuses this task as the issue's projection. Continuing would
-        // still overwrite its source content, copy foreign comments, move it or close it.
-        continue;
-      } else {
-        plan(dryRun, "promote legacy prefix to durable link", `task ${task.id} → ${repo}#${issue.number} (${promotion.nodeId})`);
-        // GitHub owns the title once identity is durable, so the prefix goes in the same run --
-        // through the ordinary update path below, which is exactly what the next sync would do.
-        desiredName = String(issue.title || "").trim();
-        if (!dryRun) {
-          try {
-            const registered = await externalApi.registerLink(task.id, verifiedLinkRequest(task.id, repoIdentity, issue, actor));
-            projectLinks.push(registered);
-            stats.linksRegistered++;
-          } catch (err) {
-            // A competing claim is arbitrated server-side. The preflight may have raced with
-            // that claim, so a refused registration makes this candidate unverified again.
-            // Leave the whole task untouched and continue the repository's other issues.
-            stats.drift.push(`${repo}#${issue.number}: task ${task.id}: legacy promotion refused (${err.message}); sync skipped every further mutation and preserved the task — run \`backfill-links ${repo}\``);
-            continue;
-          }
+    if (promotion) {
+      plan(dryRun, "promote legacy prefix to durable link", `task ${task.id} → ${repo}#${issue.number} (${promotion.nodeId})`);
+      // GitHub owns the title once identity is durable, so the prefix goes in the same run --
+      // through the ordinary update path below, which is exactly what the next sync would do.
+      desiredName = String(issue.title || "").trim();
+      if (!dryRun) {
+        try {
+          const registered = await externalApi.registerLink(task.id, verifiedLinkRequest(task.id, repoIdentity, issue, actor));
+          projectLinks.push(registered);
+          stats.linksRegistered++;
+        } catch (err) {
+          // A competing claim is arbitrated server-side. The preflight may have raced with
+          // that claim, so a refused registration makes this candidate unverified again.
+          // Leave the whole task untouched and continue the repository's other issues.
+          stats.drift.push(`${repo}#${issue.number}: task ${task.id}: legacy promotion refused (${err.message}); sync skipped every further mutation and preserved the task — run \`backfill-links ${repo}\``);
+          continue;
         }
       }
     }
@@ -2140,28 +2236,12 @@ async function syncTasks(repo, repoIdentity, projectId, issues, closedNumbers, p
     // PUT /api/tasks/{id} rejects any payload without `name` — 422 "Name is required."
     // (ApiEndpoints.cs:1451). So `name` always goes on the wire, even when unchanged;
     // `patch` exists only to detect *whether* anything differs and to log what.
-    await api("PUT", `/api/tasks/${task.id}`, { ...patch, name: desiredName, actor });
-    stats.tasksUpdated++;
-    if (patch.description !== undefined) stats.descriptionsRefreshed++;
+    const updated = await updateMirroredTask(repo, issue.number, task.id, "PUT", `/api/tasks/${task.id}`, { ...patch, name: desiredName, actor });
+    if (updated && patch.description !== undefined) stats.descriptionsRefreshed++;
   }
 
-  // Board tasks whose issue was not in the set we just processed. Two very different cases —
-  // conflating them is what made every closed issue look like drift.
-  const processed = new Set(issues.map((i) => i.number));
   for (const [n, task] of byIssueNumber) {
-    if (processed.has(n)) continue;
-
-    if (closedNumbers.has(n)) {
-      // Closed on GitHub since the last sync. This is the *only* path by which a close
-      // reaches the board when --include-closed is off: the issue is simply absent from the
-      // open set, so without this it would never converge to Done.
-      if (task.status === "Done") { stats.tasksUnchanged++; continue; }
-      plan(dryRun, "close task", `${task.name} -> Done (issue #${n} closed)`);
-      if (dryRun) continue;
-      await api("PATCH", `/api/tasks/${task.id}/status`, { status: "Done", actor });
-      stats.tasksUpdated++;
-      continue;
-    }
+    if (processed.has(n) || closedByNumber.has(n) || matchedTaskIds.has(task.id)) continue;
 
     // Genuinely absent from GitHub — deleted or transferred. Never auto-delete (the audit
     // trail is sacred); surface it and let a human decide.
@@ -2172,15 +2252,15 @@ async function syncTasks(repo, repoIdentity, projectId, issues, closedNumbers, p
 async function syncRepo(repo, args, { header = true, repoIdentity: suppliedRepoIdentity = null } = {}) {
   if (header) console.log(`\n${repo}`);
   const [openIssues, closed, prs, repoIdentity] = await Promise.all([
-    fetchOpenIssues(repo),
-    fetchClosedIssues(repo, args.includeClosed),
+    fetchOpenIssues(repo, args.comments),
+    fetchClosedIssues(repo, args.includeClosed, args.comments),
     fetchOpenPrs(repo, args.comments),
     suppliedRepoIdentity || fetchRepositoryIdentity(repo),
   ]);
-  const closedNumbers = new Set(closed.map((i) => i.number));
   // With --include-closed, closed issues are mirrored as tasks too. Without it they are still
-  // fetched (numbers only) so an already-synced task can converge to Done when its issue closes.
+  // checked by immutable node and number before a status-only update to an existing card.
   const issues = args.includeClosed ? [...openIssues, ...closed] : openIssues;
+  const closedByNumber = new Map(args.includeClosed ? [] : closed.map(i => [i.number, i]));
 
   const prByIssue = mapIssueToOpenPr(prs);
 
@@ -2218,7 +2298,7 @@ async function syncRepo(repo, args, { header = true, repoIdentity: suppliedRepoI
     : await reconcilePushMarkers(repo, repoIdentity, issues, existingTasks, args);
   projectLinks.push(...reconciliation.finalizedLinks);
   await syncTasks(
-    repo, repoIdentity, projectId, issues, closedNumbers, prByIssue, featureIds, args,
+    repo, repoIdentity, projectId, issues, closedByNumber, prByIssue, featureIds, args,
     existingTasks, projectLinks, reconciliation.operationTasks, reconciliation.blockedIssues,
   );
 }
@@ -2783,14 +2863,14 @@ async function lastSyncAt(projectId, actor) {
   }
 }
 
-async function statusRepo(repo, args, projects) {
+async function statusRepo(repo, args, projects, read = gh) {
   const rec = {
     repo, link: "none", projectId: null, projectName: null,
     github: {}, board: { tasks: 0, mirrored: 0, unsynced: 0 },
     pending: [], drift: [], unsynced: [], lastSync: null,
   };
 
-  const repoIdentity = await fetchRepositoryIdentity(repo);
+  const repoIdentity = await fetchRepositoryIdentity(repo, read);
   const link = resolveProjectLink(repo, projects, repoIdentity);
   rec.link = link.linkedBy ?? "none";
   // A forked or ambiguous link is drift, not a warning: sync will not repair it and the
@@ -2799,12 +2879,13 @@ async function statusRepo(repo, args, projects) {
   if (link.project) { rec.projectId = link.project.id; rec.projectName = link.project.name; }
 
   const [openIssues, closedIssues, prs, milestones] = await Promise.all([
-    fetchOpenIssues(repo),
-    fetchClosedIssues(repo, false), // numbers only — enough to tell "closed" from "gone"
-    fetchOpenPrs(repo, false),
-    fetchMilestones(repo),
+    fetchOpenIssues(repo, false, read),
+    fetchClosedIssues(repo, false, false, read),
+    fetchOpenPrs(repo, false, read),
+    fetchMilestones(repo, read),
   ]);
-  const closedNumbers = new Set(closedIssues.map((i) => i.number));
+  const closedByNumber = new Map(closedIssues.map(issue => [issue.number, issue]));
+  const closedByNode = new Map(closedIssues.map(issue => [issue.id, issue]));
   const openByNumber = new Map(openIssues.map((i) => [i.number, i]));
   const prByIssue = mapIssueToOpenPr(prs);
   rec.github = {
@@ -2823,10 +2904,18 @@ async function statusRepo(repo, args, projects) {
   ]);
   const index = buildTaskIdentityIndex(tasks, repoIdentity, projectLinks);
   const byIssueNumber = new Map([...index.legacyByNumber, ...index.durableByNumber]);
+  let closeLag = 0;
   for (const task of tasks) {
     const links = githubLinksOf(task, projectLinks);
     if (index.foreignLinkedTaskIds.has(task.id)) {
-      rec.drift.push(`${repo}: task ${task.id} has a GitHub link for repository node ${links[0]?.repositoryExternalId}; structured identity blocks legacy fallback`);
+      const transferred = links.find(link => isActiveLink(link) && link.externalNodeId && closedByNode.has(link.externalNodeId));
+      if (transferred) {
+        const closed = closedByNode.get(transferred.externalNodeId);
+        rec.drift.push(`${repo}#${closed.number}: task ${task.id} matches the closed issue node, but its link still names repository ${transferred.repositoryExternalId}`);
+        if (task.status !== "Done") closeLag++;
+      } else {
+        rec.drift.push(`${repo}: task ${task.id} has a GitHub link for repository node ${links[0]?.repositoryExternalId}; structured identity blocks legacy fallback`);
+      }
       continue;
     }
     if (links.some((candidate) => !isActiveLink(candidate))) {
@@ -2839,13 +2928,23 @@ async function statusRepo(repo, args, projects) {
   }
   rec.board = { tasks: tasks.length, mirrored: byIssueNumber.size, unsynced: rec.unsynced.length };
 
-  let closeLag = 0, titleLag = 0, priorityLag = 0, featureLag = 0, reviewLag = 0;
+  let titleLag = 0, priorityLag = 0, featureLag = 0, reviewLag = 0;
   for (const [n, task] of byIssueNumber) {
     const issue = openByNumber.get(n);
     if (!issue) {
-      // Absent from the open set: either closed (sync converges it to Done) or genuinely gone.
-      if (closedNumbers.has(n)) { if (task.status !== "Done") closeLag++; }
-      else rec.drift.push(driftOrphanTask(repo, task.name, n));
+      const link = index.durableLinkByTaskId.get(task.id);
+      const closed = (link?.externalNodeId && closedByNode.get(link.externalNodeId)) || closedByNumber.get(n);
+      if (!closed) {
+        rec.drift.push(driftOrphanTask(repo, task.name, n));
+        continue;
+      }
+      const match = taskMatchForIssue(index, closed);
+      let conflict = match.reason;
+      if (!promotableIssueNodeId(closed)) conflict = "closed issue record has no immutable GitHub node id";
+      else if (match.kind === "legacy") conflict = legacyPromotionDisposition(task, closed, repoIdentity).reason;
+      else if (!conflict && match.task?.id !== task.id) conflict = "closed issue matches another board task";
+      if (conflict) rec.drift.push(`${repo}#${closed.number}: task ${task.id}: ${conflict}`);
+      else if (task.status !== "Done") closeLag++;
       continue;
     }
     // Same two conditions syncTasks uses, and the same message text (shared builders above),
@@ -3189,6 +3288,9 @@ export {
   exactMarkerCount,
   exactMarkerMatches,
   exhaustiveMarkerDisposition,
+  fetchOpenIssues,
+  fetchClosedIssues,
+  fetchOpenPrs,
   ghIssueCreate,
   globalNodeLinkDisposition,
   githubLinksOf,
@@ -3222,6 +3324,7 @@ export {
   resolveProjectLink,
   stripLegacyIssuePrefix,
   stats,
+  statusRepo,
   syncBlockIssueUrl,
   syncTasks,
   taskMatchForIssue,

@@ -1,5 +1,6 @@
 using KanbanFlow.Services;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using KanbanFlow.Data;
 using KanbanFlow.Models;
 using KanbanFlow.Models.Workflows;
@@ -2791,46 +2792,23 @@ public static class ApiEndpoints
         });
 
         // POST /api/tasks/{taskId}/comments — add comment.
-        // Routes through ITaskService.AddCommentAsync so the TaskCommentAdded audit event
+        // Routes through ITaskService so the TaskCommentAdded audit event
         // is emitted uniformly with the Blazor comment writers (#88). Comment-type parsing
         // stays at the edge so the {message, allowedTypes} 422 body remains byte-identical;
         // the typed CommentType is then handed to the service (R3).
-        app.MapPost("/api/tasks/{taskId:int}/comments", async (int taskId, TaskCommentDto dto, Services.ITaskService taskSvc, CancellationToken ct) =>
-        {
-            if (string.IsNullOrWhiteSpace(dto.Text))
-                return Results.UnprocessableEntity(new { message = "Text is required." });
+        app.MapPost("/api/tasks/{taskId:int}/comments",
+            (int taskId, TaskCommentDto dto, Services.ITaskService taskSvc, CancellationToken ct) =>
+                PostTaskCommentAsync(taskId, dto.Text, dto.Author, dto.Type, githubCommentId: null, taskSvc, ct));
 
-            if (!TryParseCommentType(dto.Type, out var commentType))
+        // Older servers return 404 for the dedicated import route before a comment can be written.
+        app.MapPost("/api/tasks/{taskId:int}/comment-imports/github",
+            async (int taskId, GitHubCommentImportDto dto, Services.ITaskService taskSvc, CancellationToken ct) =>
             {
-                return Results.UnprocessableEntity(new
-                {
-                    message = $"Invalid comment type '{dto.Type}'. Allowed values: {string.Join(", ", AllowedUserCommentTypes)}.",
-                    allowedTypes = AllowedUserCommentTypes
-                });
-            }
+                if (dto.GitHubCommentId is null)
+                    return Results.UnprocessableEntity(new { message = "githubCommentId is required." });
 
-            try
-            {
-                var comment = await taskSvc.AddCommentAsync(taskId, dto.Text, dto.Author, commentType, actor: dto.Author, ct);
-                return Results.Created($"/api/tasks/{taskId}/comments/{comment.Id}", new
-                {
-                    comment.Id,
-                    comment.TaskItemId,
-                    comment.Text,
-                    comment.Author,
-                    Type = comment.Type.ToString(),
-                    comment.CreatedAt
-                });
-            }
-            catch (Services.TaskNotFoundException)
-            {
-                return Results.NotFound(new { message = $"Task {taskId} not found." });
-            }
-            catch (Services.ValidationException ex)
-            {
-                return Results.UnprocessableEntity(new { message = ex.Message });
-            }
-        });
+                return await PostTaskCommentAsync(taskId, dto.Text, dto.Author, dto.Type, dto.GitHubCommentId, taskSvc, ct);
+            });
 
         // DELETE /api/comments/{id}
         app.MapDelete("/api/comments/{id:int}", async (int id, AppDbContext db, CancellationToken ct) =>
@@ -2844,6 +2822,61 @@ public static class ApiEndpoints
             return Results.NoContent();
         });
     }
+
+    private static async Task<IResult> PostTaskCommentAsync(
+        int taskId, string? text, string? author, string? type, string? githubCommentId,
+        Services.ITaskService taskSvc, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+            return Results.UnprocessableEntity(new { message = "Text is required." });
+
+        if (!TryParseCommentType(type, out var commentType))
+        {
+            return Results.UnprocessableEntity(new
+            {
+                message = $"Invalid comment type '{type}'. Allowed values: {string.Join(", ", AllowedUserCommentTypes)}.",
+                allowedTypes = AllowedUserCommentTypes
+            });
+        }
+
+        try
+        {
+            TaskComment comment;
+            bool? created = null;
+            if (githubCommentId is not null)
+            {
+                (comment, created) = await taskSvc.ImportGitHubCommentAsync(
+                    taskId, githubCommentId, text, author, commentType, actor: author, ct);
+            }
+            else
+            {
+                comment = await taskSvc.AddCommentAsync(taskId, text, author, commentType, actor: author, ct);
+            }
+
+            var response = new TaskCommentResponse(
+                comment.Id, comment.TaskItemId, comment.Text, comment.Author, comment.Type.ToString(), comment.CreatedAt, created);
+            return created == false
+                ? Results.Ok(response)
+                : Results.Created($"/api/tasks/{taskId}/comments/{comment.Id}", response);
+        }
+        catch (Services.TaskNotFoundException)
+        {
+            return Results.NotFound(new { message = $"Task {taskId} not found." });
+        }
+        catch (Services.ValidationException ex)
+        {
+            return Results.UnprocessableEntity(new { message = ex.Message });
+        }
+    }
+
+    private sealed record TaskCommentResponse(
+        int Id,
+        int TaskItemId,
+        string Text,
+        string? Author,
+        string Type,
+        DateTime CreatedAt,
+        [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] bool? Created);
 
     // ── Helper ─────────────────────────────────────────────────────────
 
@@ -3628,6 +3661,12 @@ public record RequirementDto(string? Text, string? Description, string? Priority
 public record RequirementAssignDto(int? FeatureId, int? TaskItemId);
 
 public record TaskCommentDto(string? Text, string? Author, string? Type);
+
+public record GitHubCommentImportDto(
+    string? Text,
+    string? Author,
+    string? Type,
+    [property: JsonPropertyName("githubCommentId")] string? GitHubCommentId);
 
 public record TaskDependencyDto(int? TaskItemId, int? BlockedTaskId, int? DependsOnTaskItemId, int? BlockingTaskItemId, int? BlockingTaskId, string? Type);
 

@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using KanbanFlow.Data;
 using KanbanFlow.Models;
 using Microsoft.EntityFrameworkCore;
@@ -1362,6 +1363,82 @@ public sealed class TaskService(
     {
         await using var db = await dbFactory.CreateDbContextAsync(ct);
         return await AddCommentInContextAsync(db, taskId, text, author, type, actor, ct);
+    }
+
+    private const string CompleteGitHubCommentMarker = "<!-- kanbanflow-comment:complete -->";
+    private const string LegacyCommentTruncationFooter = "…(truncated — read it on GitHub)";
+    private static readonly Regex GitHubReviewHeader = new(
+        @"\A_\[PR #(?<number>[1-9][0-9]*) review · \*\*[A-Z_]+\*\*\]\(https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/pull/\k<number>(?:#pullrequestreview-[1-9][0-9]*)?\)_\r?\n\r?\n",
+        RegexOptions.CultureInvariant);
+
+    public async Task<(TaskComment Comment, bool Created)> ImportGitHubCommentAsync(
+        int taskId, string githubCommentId, string text, string? author, CommentType type, string? actor, CancellationToken ct = default)
+    {
+        if (string.IsNullOrEmpty(githubCommentId) ||
+            githubCommentId.Any(c => char.IsWhiteSpace(c) || char.IsControl(c) || c is '<' or '>'))
+            throw new ValidationException("A valid GitHub comment node ID is required.");
+
+        var sourceMarker = $"<!-- gh:{githubCommentId} -->";
+        var sourceMarkerLength = LeadingCommentLineLength(text, sourceMarker);
+        var completeMarkerLength = sourceMarkerLength < 0
+            ? -1
+            : LeadingCommentLineLength(text.AsSpan(sourceMarkerLength), CompleteGitHubCommentMarker);
+        if (completeMarkerLength < 0)
+            throw new ValidationException("Text must start with the matching GitHub comment marker and a complete-comment marker.");
+
+        await using var db = await dbFactory.CreateDbContextAsync(ct);
+        // SQLite begins an immediate transaction here. Reserve its writer before checking for an
+        // existing copy so concurrent imports through any app instance serialize.
+        await using var transaction = await db.Database.BeginTransactionAsync(ct);
+        var candidates = await db.TaskComments.AsNoTracking()
+            .Where(c => c.TaskItemId == taskId && c.Text.StartsWith(sourceMarker))
+            .OrderBy(c => c.Id)
+            .ToListAsync(ct);
+
+        var bodyOffset = sourceMarkerLength + completeMarkerLength;
+        var existing = candidates.FirstOrDefault(c => IsCompleteGitHubComment(c.Text, sourceMarker, text.AsSpan(bodyOffset)));
+        if (existing is not null)
+        {
+            await transaction.CommitAsync(ct);
+            return (existing, false);
+        }
+
+        var comment = await AddCommentInContextAsync(db, taskId, text, author, type, actor, ct);
+        await transaction.CommitAsync(ct);
+        return (comment, true);
+    }
+
+    private static int LeadingCommentLineLength(ReadOnlySpan<char> text, string marker)
+    {
+        var end = text.IndexOf('\n');
+        return end >= 0 && text[..end].TrimEnd('\r').SequenceEqual(marker) ? end + 1 : -1;
+    }
+
+    private static bool IsCompleteGitHubComment(string text, string sourceMarker, ReadOnlySpan<char> incomingBody)
+    {
+        var sourceMarkerLength = LeadingCommentLineLength(text, sourceMarker);
+        if (sourceMarkerLength < 0)
+            return false;
+
+        var body = text.AsSpan(sourceMarkerLength);
+        // Legacy comments have no completeness marker. A literal truncation footer in the
+        // original source still counts as complete when the saved source matches exactly.
+        return LeadingCommentLineLength(body, CompleteGitHubCommentMarker) >= 0 ||
+            !body.TrimEnd().EndsWith(LegacyCommentTruncationFooter, StringComparison.Ordinal) ||
+            body.SequenceEqual(incomingBody) ||
+            GitHubReviewBodiesMatch(body, incomingBody);
+    }
+
+    private static bool GitHubReviewBodiesMatch(ReadOnlySpan<char> saved, ReadOnlySpan<char> incoming)
+    {
+        // Review links and verdicts in the generated headers can change independently of the body.
+        var savedHeader = GitHubReviewHeader.EnumerateMatches(saved);
+        if (!savedHeader.MoveNext())
+            return false;
+
+        var incomingHeader = GitHubReviewHeader.EnumerateMatches(incoming);
+        return incomingHeader.MoveNext() &&
+            saved[savedHeader.Current.Length..].SequenceEqual(incoming[incomingHeader.Current.Length..]);
     }
 
     internal static async Task<TaskComment> AddCommentInContextAsync(AppDbContext db, int taskId, string text, string? author, CommentType type, string? actor, CancellationToken ct)
