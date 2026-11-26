@@ -41,6 +41,18 @@ public sealed class ClaimStalenessTests
         return await db.Tasks.AsNoTracking().FirstAsync(t => t.Id == id);
     }
 
+    [Theory]
+    [InlineData(null, "claim had no timestamp; TTL 1h")]
+    [InlineData(0d, "claim was 0h old; TTL 1h")]
+    [InlineData(-2d, "claim was 2h old; TTL 1h")]
+    [InlineData(3d, "claim timestamp was 3h in the future, possibly due to clock skew. TTL 1h")]
+    public void DescribeClaimAge_SeparatesMissingCurrentPastAndFutureTimestamps(double? offset, string expected)
+    {
+        var now = new DateTime(2026, 8, 30, 12, 0, 0, DateTimeKind.Utc);
+        DateTime? timestamp = offset is { } hours ? now.AddHours(hours) : null;
+        Assert.Equal(expected, ClaimPolicy.DescribeClaimAge(now, timestamp, Ttl));
+    }
+
     // ── ClaimPolicy: the boundary, asserted on BOTH sides ──────────────────────
 
     /// <summary>The staleness boundary is exact: strictly past the TTL is stale; at or before is fresh.</summary>
@@ -145,6 +157,32 @@ public sealed class ClaimStalenessTests
         Assert.Contains($"{expectedAge}h old", stolen.Message);     // claim age is included, not just the TTL
         Assert.Equal("alice", stolen.Actor);
         Assert.DoesNotContain(events, e => e.EventType == "TaskClaimed");
+    }
+
+    [Theory]
+    [InlineData("bob", "TaskClaimStolen")]
+    [InlineData("alice", "TaskClaimRenewed")]
+    public async Task ClaimAsync_FutureTimestamp_AuditsTheClockSkew(string previousHolder, string eventType)
+    {
+        using var f = new SqliteTestFactory();
+        var now = new DateTime(2026, 8, 30, 12, 0, 0, DateTimeKind.Utc);
+        var seededAt = now.AddHours(3.2);
+        var id = SeedClaimedTask(f, previousHolder, seededAt);
+        var service = new TaskService(f, Ttl, clock: () => now);
+
+        await service.ClaimAsync(id, "alice");
+
+        var task = await Reload(f, id);
+        Assert.Equal("alice", task.ClaimedBy);
+        Assert.Equal(now, task.ClaimedAt);
+        await using var db = await f.CreateDbContextAsync();
+        var activity = Assert.Single(await db.ActivityEvents.Where(e => e.EntityId == id).ToListAsync());
+        Assert.Equal(eventType, activity.EventType);
+        Assert.Contains($"claim timestamp was {(seededAt - now).TotalHours:0.##}h in the future", activity.Message);
+        Assert.Contains("clock skew", activity.Message);
+        Assert.Contains("TTL 1h", activity.Message);
+        Assert.DoesNotContain("h old", activity.Message);
+        Assert.DoesNotContain("no timestamp", activity.Message);
     }
 
     /// <summary>A task claimed with no <c>ClaimedAt</c> (counted as stale) is takeable by another actor, and the steal is audited as <c>TaskClaimStolen</c> with a no-timestamp message.</summary>

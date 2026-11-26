@@ -1170,9 +1170,7 @@ public sealed class TaskService(
                         db, task.Feature.ProjectId, "Task", task.Id, trimmedActor,
                         "TaskClaimRenewed", beforeRenew, TaskActivitySnapshot(task),
                         $"Task '{task.Name}' claim renewed by {trimmedActor} "
-                        + (previousClaimedAt is { } staleSince
-                            ? $"(claim was {(now - staleSince).TotalHours:0.##}h old; TTL {_claimTtl.TotalHours:0.##}h)"
-                            : $"(claim had no timestamp; TTL {_claimTtl.TotalHours:0.##}h)"));
+                        + $"({ClaimPolicy.DescribeClaimAge(now, previousClaimedAt, _claimTtl)})");
                     await db.SaveChangesWithAuditAsync(trimmedActor, ct);
                 }
 
@@ -1262,9 +1260,7 @@ public sealed class TaskService(
                 db, task.Feature.ProjectId, "Task", task.Id, trimmedActor,
                 "TaskClaimStolen", before, TaskActivitySnapshot(task),
                 $"Task '{task.Name}' claim taken over by {trimmedActor} from {previousHolder} "
-                + (previousClaimedAt is { } heldSince
-                    ? $"(claim was {(now - heldSince).TotalHours:0.##}h old; TTL {_claimTtl.TotalHours:0.##}h)"
-                    : $"(claim had no timestamp; TTL {_claimTtl.TotalHours:0.##}h)"));
+                + $"({ClaimPolicy.DescribeClaimAge(now, previousClaimedAt, _claimTtl)})");
         }
         else
         {
