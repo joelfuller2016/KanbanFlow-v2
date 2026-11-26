@@ -2270,7 +2270,7 @@ async function main() {
 
     const ideaTitle = `E2E Idea ${stamp}`;
     const ideaTag = `e2etag${stamp}`;
-    await test("New-idea modal creates a card", async () => {
+    await test("New-idea modal persists the selected priority", async () => {
       await clickUntil(
         () => page.locator('[data-testid="new-idea-button"]').click(),
         page.locator("#idea-title"),
@@ -2278,10 +2278,13 @@ async function main() {
       await page.locator("#idea-title").fill(ideaTitle);
       await page.locator("#idea-body").fill("captured via e2e");
       await page.locator("#idea-tags").fill(ideaTag);
-      await page.locator('[data-testid="idea-priority-select"]').selectOption(String(2)); // High
+      await page.getByTestId("idea-priority-select").selectOption({ label: "High" });
       await page.locator('[data-testid="idea-save-button"]').click();
       // the new card appears in the grid with that title
       await page.getByText(ideaTitle, { exact: true }).waitFor({ state: "visible" });
+      const saved = (await api("GET", `/api/ideas?q=${encodeURIComponent(ideaTitle)}`))
+        .find((idea) => idea.title === ideaTitle);
+      assert(saved?.priority === "High", `expected saved priority High, got ${saved?.priority}`);
     });
 
     // Resolve the created idea's id via the REST surface so we can target its card precisely.
@@ -2290,7 +2293,7 @@ async function main() {
     assert(createdIdea, "created idea not found via API");
 
     const ideaTitleEdited = `${ideaTitle} (edited)`;
-    await test("Editing an idea updates its card title", async () => {
+    await test("Editing an idea persists the selected title, status, and priority", async () => {
       await clickUntil(
         () => page.locator(`[data-testid="idea-card-menu-${createdIdea.id}"]`).click(),
         page.locator(`[data-testid="idea-card-edit-${createdIdea.id}"]`),
@@ -2298,9 +2301,65 @@ async function main() {
       await page.locator(`[data-testid="idea-card-edit-${createdIdea.id}"]`).click();
       await page.locator("#idea-title").waitFor({ state: "visible" });
       await page.locator("#idea-title").fill(ideaTitleEdited);
-      await page.locator('[data-testid="idea-status-select"]').selectOption(String(1)); // Triaging
+      await page.getByTestId("idea-status-select").selectOption({ label: "Triaging" });
+      await page.getByTestId("idea-priority-select").selectOption({ label: "Critical" });
       await page.locator('[data-testid="idea-save-button"]').click();
+      await page.getByTestId("idea-modal").waitFor({ state: "hidden" });
       await page.getByText(ideaTitleEdited, { exact: true }).waitFor({ state: "visible" });
+      const saved = await api("GET", `/api/ideas/${createdIdea.id}`);
+      assert(saved.status === "Triaging", `expected saved status Triaging, got ${saved.status}`);
+      assert(saved.priority === "Critical", `expected saved priority Critical, got ${saved.priority}`);
+    });
+
+    await test("The Ideas status select filters rendered cards and restores them with All statuses", async () => {
+      const other = await api("POST", "/api/ideas", { title: `E2E status filter ${stamp}` });
+      const newCard = page.getByTestId(`idea-card-${other.id}`);
+      const triaging = page.getByTestId(`idea-card-${createdIdea.id}`);
+      const filter = page.getByTestId("idea-status-filter");
+      try {
+        await page.goto(`${baseUrl}/ideas/board`);
+        await triaging.waitFor({ state: "visible" });
+        await newCard.waitFor({ state: "visible" });
+        // The board is prerendered. Repeat the selection until the interactive circuit removes the New card.
+        for (let attempt = 0; attempt < 3 && await newCard.isVisible(); attempt++) {
+          await filter.selectOption({ label: "All statuses" });
+          await filter.selectOption({ label: "Triaging" });
+          await newCard.waitFor({ state: "detached", timeout: 1500 }).catch(() => {});
+        }
+        await newCard.waitFor({ state: "detached" });
+        await triaging.waitFor({ state: "visible" });
+        assert(!await page.getByTestId("idea-load-error").isVisible(), "the status filter rendered an error");
+        await filter.selectOption({ label: "All statuses" });
+        await newCard.waitFor({ state: "visible" });
+        await triaging.waitFor({ state: "visible" });
+      } finally {
+        await api("DELETE", `/api/ideas/${other.id}`);
+      }
+    });
+
+    await test("An idea edited elsewhere renders a save error and preserves the newer card", async () => {
+      const other = await api("POST", "/api/ideas", { title: `E2E stale idea ${stamp}` });
+      const modal = page.getByTestId("idea-modal");
+      try {
+        await page.goto(`${baseUrl}/ideas/board`);
+        const edit = page.getByTestId(`idea-card-edit-${other.id}`);
+        await clickUntil(() => page.getByTestId(`idea-card-menu-${other.id}`).click(), edit);
+        await edit.click();
+        const save = modal.getByTestId("idea-save-button");
+        await save.waitFor({ state: "visible" });
+        await page.waitForFunction(() => !document.querySelector('[data-testid="idea-save-button"]').disabled);
+        await modal.getByTestId("idea-priority-select").selectOption({ label: "High" });
+        const otherTitle = `${other.title} revised`;
+        await api("PATCH", `/api/ideas/${other.id}`, { title: otherTitle, expectedWorkflowVersion: other.workflowVersion });
+        await save.click();
+        const error = modal.getByRole("alert").filter({ hasText: "This idea was modified by another client. Reload before saving again." });
+        await error.waitFor({ state: "visible" });
+        const saved = await api("GET", `/api/ideas/${other.id}`);
+        assert(saved.title === otherTitle && saved.priority == null, "the stale modal overwrote the newer card");
+      } finally {
+        if (await modal.isVisible()) await modal.getByTestId("idea-cancel-button").click();
+        await api("DELETE", `/api/ideas/${other.id}`);
+      }
     });
 
     await test("Tag filter narrows the list to the matching idea", async () => {
