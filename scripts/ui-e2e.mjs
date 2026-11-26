@@ -13,9 +13,8 @@
 // task's status and identity-anchored order. These tests drive a real drag (mouse events) AND
 // the done-checkbox path — both re-group the card into the destination column.
 
-import { chromium } from "playwright";
 import { projectSkipNavigation } from "./project-skip-navigation.browser.mjs";
-import { spawn, execSync } from "node:child_process";
+import { spawn, spawnSync, execSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { mkdtempSync, rmSync } from "node:fs";
 import path from "node:path";
@@ -575,7 +574,25 @@ async function focusFirstInDialog(page, modalSelector) {
 async function startApp() {
   if (process.env.SKIP_BUILD !== "1") {
     log("Building app (worktree)...");
-    execSync(`dotnet build "${csproj}" -c Debug --nologo`, { stdio: "inherit" });
+    const build = spawnSync("dotnet", ["build", csproj, "-c", "Debug", "--nologo"], {
+      encoding: "utf8",
+      maxBuffer: 16 * 1024 * 1024,
+    });
+    const stdout = build.stdout ?? "";
+    const stderr = build.stderr ?? "";
+    const locked = build.status !== 0 &&
+      /\bMSB302[167]\b[^\r\n]*(?:being used by another process|file is locked by:|text file busy)/i.test(stdout + "\n" + stderr);
+    // Keep the final MSBuild errors and lock owner while dropping repeated copy warnings.
+    const diagnostics = output => locked
+      ? output.replace(/^.*\bwarning MSB3026\b[^\r\n]*(?:\r?\n|$)/gim, "")
+      : output;
+    process.stdout.write(diagnostics(stdout));
+    process.stderr.write(diagnostics(stderr));
+    if (build.error) throw new Error("Could not run dotnet build.", { cause: build.error });
+    if (locked) {
+      throw new Error("Build output is locked. Stop the app running from this checkout or run the tests in a separate git worktree.");
+    }
+    if (build.status !== 0) throw new Error(`dotnet build failed (${build.signal ?? `exit ${build.status}`}).`);
   }
   tempDbDir = mkdtempSync(path.join(os.tmpdir(), "kf-uie2e-"));
   const dbPath = path.join(tempDbDir, "ui-e2e.db");
@@ -678,12 +695,19 @@ function stopApp() {
 }
 
 async function main() {
+  const { chromium } = await import("playwright").catch(error => {
+    if (error.code === "ERR_MODULE_NOT_FOUND") {
+      throw new Error("Playwright dependencies are unavailable. Run npm ci first.", { cause: error });
+    }
+    throw error;
+  });
   await startApp();
   const browser = await chromium.launch();
-  const page = await browser.newPage();
-  page.setDefaultTimeout(15000);
+  let completed = false;
 
   try {
+    const page = await browser.newPage();
+    page.setDefaultTimeout(15000);
     const stamp = Date.now();
 
     // ── Regression guard (#312): clickUntil must not re-click an opener it has already opened ──
@@ -4207,20 +4231,33 @@ async function main() {
     for (const i of leftoverIdeas.filter((i) => i.title.includes(String(stamp)))) {
       await api("DELETE", `/api/ideas/${i.id}`).catch(() => {});
     }
+    completed = true;
   } finally {
-    await browser.close();
+    try {
+      await browser.close();
+    } catch (error) {
+      if (completed) throw error;
+      console.error("UI e2e browser cleanup error:", error);
+    }
   }
 }
 
-main()
-  .then(() => {
-    const failed = results.filter((r) => !r.ok);
-    log(`\nUI e2e: ${results.length - failed.length}/${results.length} passed`);
-    stopApp();
-    process.exit(failed.length === 0 ? 0 : 1);
-  })
-  .catch((err) => {
-    log(`\nUI e2e harness error: ${err.stack || err.message}`);
-    stopApp();
-    process.exit(1);
-  });
+let outcome = "passed";
+let exitCode;
+try {
+  await main();
+  exitCode = results.some(result => !result.ok) ? 1 : 0;
+} catch (error) {
+  console.error("UI e2e harness error:", error);
+  const reason = (error?.message ?? String(error)).split(/\r?\n/).find(line => line.trim());
+  outcome = `— HARNESS FAILED: ${reason?.trim() || "Unknown error"}`;
+  exitCode = 1;
+} finally {
+  stopApp();
+}
+const passed = results.filter(result => result.ok).length;
+// Piped streams may still have queued data. Flush both before exiting even if a
+// failed teardown left a child handle open.
+await new Promise(resolve => process.stderr.write("", resolve));
+await new Promise(resolve => process.stdout.write(`\nUI e2e: ${passed}/${results.length} ${outcome}\n`, resolve));
+process.exit(exitCode);
