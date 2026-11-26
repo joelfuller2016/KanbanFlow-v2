@@ -79,7 +79,7 @@ test("hydrating reviews preserves a footer-ending legacy copy and repairs a genu
     { text: `<!-- gh:PRR_3 -->\nAn authored heading\n\n${full}` },
   ];
   const writes = [];
-  await syncComments(issue("body"), pr, 7, { dryRun: false }, async (method, path, body) => {
+  await syncComments(issue("body"), [pr], 7, { dryRun: false }, async (method, path, body) => {
     if (method === "GET") return stored;
     writes.push(body);
     return { created: true };
@@ -120,10 +120,118 @@ test("comment-free source reads omit nested collections and skip comment endpoin
   await fetchOpenPrs("octo/board", false, read);
 });
 
+test("status counts pull requests and issues separately when two open PRs close the same issue", async () => {
+  const repos = await statusRepo("octo/board", {}, [], async args => {
+    if (args[1] === "repos/octo/board") return { node_id: "R_test", owner: { login: "octo" }, name: "board" };
+    if (args[0] === "issue" && args.includes("open")) return [{ number: 42 }];
+    if (args[0] === "pr") return [
+      { number: 102, body: "Fixes #42" },
+      { number: 101, body: "Closes #42; fixes #42" },
+      { number: 103, body: "No closing reference" },
+    ];
+    return [];
+  });
+  assert.equal(repos.github.openPrs, 3);
+  assert.equal(repos.github.linkedPrs, 2);
+  assert.equal(repos.github.issuesWithLinkedPrs, 1);
+});
+
+test("sync mirrors both PR discussions to each linked issue and reports only the unrelated PR as orphaned", async () => {
+  const mod = await import("./portfolio-sync.mjs?many-to-many");
+  const firstIssue = { ...issue("    issue body 漢🙂  \r\n\t", 42), url: "https://github.com/octo/board/issues/42" };
+  const secondIssue = { ...firstIssue, id: "I_43", number: 43, url: "https://github.com/octo/board/issues/43", body: "second issue\n" };
+  const unlinkedIssue = { ...firstIssue, id: "I_44", number: 44, url: "https://github.com/octo/board/issues/44", body: "no pull request\n" };
+  const date = "2026-08-10T00:00:00Z";
+  const body = `    Markdown 漢🙂  \r\n${"Complete source row\n".repeat(5000)}End of discussion  \r\n\t`;
+  const prs = [
+    { number: 102, url: "https://github.com/octo/board/pull/102", body: "Fixes #42", isDraft: true,
+      comments: [{ id: "IC_102", author: { login: "reviewer" }, body, createdAt: date }],
+      reviews: [{ id: "PRR_102", author: { login: "reviewer" }, state: "CHANGES_REQUESTED", body, submittedAt: date }] },
+    { number: 101, url: "https://github.com/octo/board/pull/101", body: "Closes #42; fixes #42; resolves #43",
+      comments: [{ id: "IC_101", author: { login: "octocat" }, body, createdAt: date }],
+      reviews: [{ id: "PRR_101", author: { login: "octocat" }, state: "APPROVED", body, submittedAt: date }] },
+    { number: 103, url: "https://github.com/octo/board/pull/103", body: "No closing reference",
+      comments: [{ id: "IC_103", author: { login: "octocat" }, body, createdAt: date }], reviews: [] },
+  ];
+  const read = async args => {
+    if (args[0] === "issue") return args.includes("open")
+      ? [firstIssue, secondIssue, unlinkedIssue].map(source => ({ ...source, comments: [] })) : [];
+    if (args[0] === "pr") return prs.map(pr => structuredClone(pr));
+    const pr = /\/pulls\/(10[12])\/comments\?/.exec(args.at(-1));
+    if (pr) return [[{ node_id: `PRRC_${pr[1]}`, user: { login: "coder" }, body,
+      path: "src/details.cs", line: 72, created_at: date }]];
+    if (args.at(-1).includes("/pulls/103/comments?")) return [[]];
+    assert.fail(`Unexpected GitHub read: ${args.join(" ")}`);
+  };
+  const tasks = [];
+  const links = [];
+  const savedComments = new Map();
+  const log = [];
+  const realFetch = globalThis.fetch;
+  const realLog = console.log;
+  globalThis.fetch = async (url, init) => {
+    const path = new URL(url).pathname;
+    const payload = init.body ? JSON.parse(init.body) : null;
+    if (path === "/api/projects" && init.method === "GET") return Response.json([
+      { id: 1, name: "board", description: "<!-- github-node: R_fixture -->\n<!-- github: octo/board -->" },
+    ]);
+    if (path === "/api/projects/1/features" && init.method === "GET") return Response.json([{ id: 10, name: "M1" }]);
+    if (path === "/api/projects/1/tasks" && init.method === "GET") return Response.json(tasks);
+    if (path === "/api/projects/1/external-work-item-links" && init.method === "GET") return Response.json(links);
+    if (path === "/api/external-work-item-links/github/by-node" && init.method === "GET") return new Response("", { status: 404 });
+    if (path === "/api/features/10/external-work-item-projections/github" && init.method === "POST") {
+      const task = { id: payload.externalNumber, featureId: 10, name: payload.name, description: payload.description,
+        status: payload.status, priority: payload.priority };
+      const link = { ...payload, id: 500 + task.id, taskId: task.id, provider: "GitHub", state: "Active" };
+      tasks.push(task);
+      links.push(link);
+      return Response.json({ task, link, created: true });
+    }
+    const commentPath = /^\/api\/tasks\/(\d+)\/(comments|comment-imports\/github)$/.exec(path);
+    if (commentPath) {
+      const id = Number(commentPath[1]);
+      const comments = savedComments.get(id) || [];
+      if (init.method === "GET" && commentPath[2] === "comments") return Response.json(comments);
+      if (init.method === "POST" && commentPath[2] === "comment-imports/github") {
+        comments.push(payload);
+        savedComments.set(id, comments);
+        return Response.json({ created: true });
+      }
+    }
+    assert.fail(`Unexpected board request: ${init.method} ${path}`);
+  };
+  console.log = line => log.push(line);
+  try {
+    const opts = { repoIdentity: { externalId: "R_fixture", owner: "octo", name: "board", fullName: "octo/board" }, read };
+    const args = { actor: "tester", comments: true };
+    await mod.syncRepo("octo/board", args, opts);
+    assert.deepEqual(tasks.map(task => task.status), ["Review", "Review", "Backlog"]);
+    assert.deepEqual(tasks.map(task => bodyOf(task.description)), [firstIssue.body, secondIssue.body, unlinkedIssue.body]);
+    assert.deepEqual([...savedComments.values()].map(comments => comments.map(c => c.githubCommentId)), [
+      ["IC_101", "IC_102", "PRR_101", "PRR_102", "PRRC_101", "PRRC_102"],
+      ["IC_101", "PRR_101", "PRRC_101"],
+    ]);
+    assert.match(tasks[0].description, /\*\*Open PRs:\*\* https:\/\/github\.com\/octo\/board\/pull\/101, https:\/\/github\.com\/octo\/board\/pull\/102 \(draft\)/);
+    assert.deepEqual(savedComments.get(42).map(comment => comment.type), ["Comment", "Comment", "Verification", "Blocked", "Comment", "Comment"]);
+    assert.ok([...savedComments.values()].flat().every(comment => comment.text.endsWith(`\n\n${body}`)));
+    assert.ok(log.some(line => /2 issues with linked PRs.*2 linked PRs/.test(line)));
+    assert.ok(log.some(line => /! 1 comment\(s\) on PRs/.test(line)));
+    assert.equal(mod.stats.commentsCreated, 9);
+    prs.reverse();
+    await mod.syncRepo("octo/board", { ...args, dryRun: true }, opts);
+    await mod.syncRepo("octo/board", args, opts);
+    assert.equal(mod.stats.commentsCreated, 9);
+    assert.equal(mod.stats.commentsUnchanged, 18);
+  } finally {
+    globalThis.fetch = realFetch;
+    console.log = realLog;
+  }
+});
+
 test("descriptionFor preserves the entire large Unicode Markdown body including whitespace and tail", () => {
   const body = `  \r\n# Full issue\r\n\r\n\`\`\`json\r\n${'{"path":"C:\\\\work", "text":"漢字🙂"}\r\n'.repeat(4000)}\`\`\`\r\nLAST REQUIRED ACCEPTANCE CHECK  \r\n\t`;
   assert.ok(Buffer.byteLength(JSON.stringify(body), "utf8") > 29491);
-  const saved = descriptionFor(issue(body), { url: "https://github.com/owner/repository/pull/511", isDraft: true });
+  const saved = descriptionFor(issue(body), [{ url: "https://github.com/owner/repository/pull/511", isDraft: true }]);
   assert.equal(bodyOf(saved), body);
   assert.ok(saved.includes("**Open PR:** https://github.com/owner/repository/pull/511 (draft)"));
   assert.equal(needsContentRestoration(saved), false);
@@ -131,14 +239,14 @@ test("descriptionFor preserves the entire large Unicode Markdown body including 
 
 test("descriptionFor preserves empty and whitespace-only source bodies without normalizing them", () => {
   for (const body of ["", " \t\r\n ", "single line  ", "\nleading and trailing\n", null]) {
-    assert.equal(bodyOf(descriptionFor(issue(body), null)), body ?? "");
+    assert.equal(bodyOf(descriptionFor(issue(body), [])), body ?? "");
   }
 });
 
 test("large provenance is retained with the complete body instead of a replacement stub", () => {
   const source = issue("DO NOT LOSE THIS BODY\n");
   source.labels = [{ name: "label".repeat(9000) }];
-  const saved = descriptionFor(source, null);
+  const saved = descriptionFor(source, []);
   assert.ok(saved.includes(source.labels[0].name));
   assert.ok(saved.includes(source.url));
   assert.equal(bodyOf(saved), source.body);
@@ -150,7 +258,7 @@ test("legacy limits cannot shorten a new issue or comment", async () => {
   try {
     const module = await import("./portfolio-sync.mjs?legacy-limit");
     const body = "row 漢🙂\\\"\n".repeat(8000) + "FINAL TEXT  \n";
-    assert.equal(bodyOf(module.descriptionFor(issue(body), null)), body);
+    assert.equal(bodyOf(module.descriptionFor(issue(body), [])), body);
     const comment = module.commentTextFor({ ghId: "IC_full", header: "source", body }, 10);
     assert.ok(comment.endsWith(body));
     assert.equal(comment.split("source\n\n")[1], body);
@@ -163,23 +271,23 @@ test("legacy limits cannot shorten a new issue or comment", async () => {
 
 test("matching legacy prefixes restore complete text once", () => {
   const body = "  original prefix\ncontinued source\nTHE FINAL REQUIREMENT  \n";
-  const complete = descriptionFor(issue(body), null);
+  const complete = descriptionFor(issue(body), []);
   assert.equal(descriptionRefreshFor(legacy(`original prefix\n\n${FOOTER}`), complete), complete);
-  assert.equal(descriptionRefreshFor(complete, descriptionFor(issue("changed remote text"), null)), null);
+  assert.equal(descriptionRefreshFor(complete, descriptionFor(issue("changed remote text"), [])), null);
 });
 
 test("synthetic closing fences do not become duplicated local text during repair", () => {
   for (const fence of ["```", "~~~~"]) {
     const body = `intro\n${fence}js\nconst first = 1;\nconst last = 2;\n${fence}\nfooter\n`;
     const old = legacy(`intro\n${fence}js\nconst first = 1;\n${fence}\n\n${FOOTER}`);
-    const complete = descriptionFor(issue(body), null);
+    const complete = descriptionFor(issue(body), []);
     assert.equal(descriptionRefreshFor(old, complete), complete);
   }
 });
 
 test("differing prior board text and its Markdown whitespace survive full-source recovery", () => {
   const local = "Human decision: keep this behavior.  \n\n\t";
-  const complete = descriptionFor(issue("The complete current GitHub issue.\n"), null);
+  const complete = descriptionFor(issue("The complete current GitHub issue.\n"), []);
   const restored = descriptionRefreshFor(legacy(`${local}\n\n${FOOTER}`), complete);
   assert.ok(restored.startsWith(complete));
   assert.ok(restored.includes(`\n\n${local}\n<!-- /kanbanflow-preserved-board-text -->`));
@@ -190,14 +298,14 @@ test("differing prior board text and its Markdown whitespace survive full-source
 
 test("repair preserves leading Markdown indentation added on the board", () => {
   const local = "    keep as code";
-  const complete = descriptionFor(issue("keep as code\nrest of the current issue"), null);
+  const complete = descriptionFor(issue("keep as code\nrest of the current issue"), []);
   const restored = descriptionRefreshFor(legacy(`${local}\n\n${FOOTER}`), complete);
   assert.ok(restored.startsWith(complete));
   assert.ok(restored.includes(`\n\n${local}\n<!-- /kanbanflow-preserved-board-text -->`));
 });
 
 test("ordinary complete content and marker-like human prose are not overwritten", () => {
-  const complete = descriptionFor(issue("new source"), null);
+  const complete = descriptionFor(issue("new source"), []);
   for (const old of [legacy("Human rewrite with no cutoff"), `notes\n\n${FOOTER}`, "<!-- kanbanflow-sync -->\nmalformed\n" + FOOTER]) {
     assert.equal(descriptionRefreshFor(old, complete), null);
   }
@@ -206,15 +314,15 @@ test("ordinary complete content and marker-like human prose are not overwritten"
 });
 
 test("a complete source may itself quote the old cutoff marker without being treated as incomplete", () => {
-  const complete = descriptionFor(issue(`A bug report can end with the literal text\n${FOOTER}`), null);
+  const complete = descriptionFor(issue(`A bug report can end with the literal text\n${FOOTER}`), []);
   assert.equal(needsContentRestoration(complete), false);
   assert.equal(bodyOf(complete), `A bug report can end with the literal text\n${FOOTER}`);
-  assert.equal(descriptionRefreshFor(complete, descriptionFor(issue("later source"), null)), null);
+  assert.equal(descriptionRefreshFor(complete, descriptionFor(issue("later source"), [])), null);
 });
 
 test("a legacy omitted-provenance stub can be recovered from its task identity", () => {
   const stub = "<!-- kanbanflow-sync -->\n**Issue:** (provenance omitted: header exceeded description budget)\n<!-- /kanbanflow-sync -->";
-  const complete = descriptionFor(issue("full source"), null);
+  const complete = descriptionFor(issue("full source"), []);
   assert.equal(needsContentRestoration(stub), true);
   assert.equal(descriptionRefreshFor(stub, complete), complete);
 });
@@ -254,7 +362,7 @@ function fixture({ taskChanges = {}, sourceMissing = false, conflictingProject =
     throw new Error(`Unexpected request ${method} ${path}`);
   };
   let sourceReads = 0;
-  const readSources = async () => { sourceReads++; return { issues: sourceMissing ? [] : [source], prByIssue: new Map() }; };
+  const readSources = async () => { sourceReads++; return { issues: sourceMissing ? [] : [source], prsByIssue: new Map() }; };
   return { request, readSources, readRepositoryIdentity: async () => ({ externalId: "R_restore", fullName: "owner/repository" }), calls, source, getTask: () => task, sourceReads: () => sourceReads };
 }
 
@@ -375,7 +483,7 @@ test("content restoration refuses ambiguous provenance and newly quarantined lin
 
 test("outbound issue bodies preserve complete Markdown and quoted sync blocks", () => {
   const text = "    authored indentation\r\n<!-- kanbanflow-sync -->\nquoted metadata\n<!-- /kanbanflow-sync -->\nfinal hard break  \r\n\t";
-  for (const description of [text, descriptionFor(issue(text), null)]) {
+  for (const description of [text, descriptionFor(issue(text), [])]) {
     const body = issueBodyFor({ name: "Project" }, { id: 7, status: "Todo", priority: "High", description }, "Feature");
     assert.ok(body.includes(`\n\n${text}\n\n---`));
   }
@@ -403,23 +511,23 @@ test("comment sync appends an incomplete source once and does not duplicate a co
     stored.push({ text: body.text });
     return { id: 99, created: true };
   };
-  await syncComments(incoming, null, 7, { dryRun: true }, request);
+  await syncComments(incoming, [], 7, { dryRun: true }, request);
   assert.equal(writes.length, 0);
-  await syncComments(incoming, null, 7, { dryRun: false }, request);
+  await syncComments(incoming, [], 7, { dryRun: false }, request);
   assert.equal(writes.length, 1);
   assert.equal(writes[0].githubCommentId, "IC_repair");
   assert.ok(writes[0].text.endsWith(fullBody));
   assert.equal(writes[0].author, "octocat");
   assert.equal(stored[0].text, oldText);
   assert.equal(stored[1].text, literalText);
-  await syncComments(incoming, null, 7, { dryRun: false }, request);
+  await syncComments(incoming, [], 7, { dryRun: false }, request);
   assert.equal(writes.length, 1);
 });
 
 test("comment sync counts a concurrent import as existing after a stale GET", async () => {
   const mod = await import("./portfolio-sync.mjs?comment-replay");
   const incoming = { ...issue("body"), comments: [{ id: "IC_shared", body: "Saved by a concurrent run" }] };
-  await mod.syncComments(incoming, null, 7, { dryRun: false }, async (method) =>
+  await mod.syncComments(incoming, [], 7, { dryRun: false }, async (method) =>
     method === "GET" ? [] : { id: 99, created: false });
   assert.equal(mod.stats.commentsCreated, 0);
   assert.equal(mod.stats.commentsUnchanged, 1);
@@ -429,7 +537,7 @@ test("an older board without the atomic import endpoint cannot receive an ordina
   const mod = await import("./portfolio-sync.mjs?missing-import-endpoint");
   const posts = [];
   const incoming = { ...issue("body"), comments: [{ id: "IC_shared", body: "Comment" }] };
-  await assert.rejects(mod.syncComments(incoming, null, 7, { dryRun: false }, async (method, path) => {
+  await assert.rejects(mod.syncComments(incoming, [], 7, { dryRun: false }, async (method, path) => {
     if (method === "GET") return [];
     posts.push(path);
     if (path === "/api/tasks/7/comment-imports/github") throw new Error("404 Not Found");
@@ -444,7 +552,7 @@ test("comment import requires an explicit boolean result before counting a succe
   const mod = await import("./portfolio-sync.mjs?malformed-import-response");
   const incoming = { ...issue("body"), comments: [{ id: "IC_shared", body: "Comment" }] };
   for (const response of [null, { id: 42 }, { id: 42, created: "false" }]) {
-    await assert.rejects(mod.syncComments(incoming, null, 7, { dryRun: false }, async method =>
+    await assert.rejects(mod.syncComments(incoming, [], 7, { dryRun: false }, async method =>
       method === "GET" ? [] : response), /created/);
   }
   assert.equal(mod.stats.commentsCreated, 0);
@@ -504,7 +612,7 @@ function batchFixture({ missingSecondSource = false, changeSecondBeforeWrite = f
   const readSources = async () => {
     sourceReads++;
     // Reverse the source order so selecting an issue by array position corrupts a tested result.
-    return { issues: missingSecondSource ? [sources[0]] : [...sources].reverse(), prByIssue: new Map() };
+    return { issues: missingSecondSource ? [sources[0]] : [...sources].reverse(), prsByIssue: new Map() };
   };
   return { request, readSources, readRepositoryIdentity: async () => ({ externalId: "R_restore", fullName: "owner/repository" }), calls, sources, correction,
     getTasks: () => structuredClone([...tasks.values()]), sourceReads: () => sourceReads };

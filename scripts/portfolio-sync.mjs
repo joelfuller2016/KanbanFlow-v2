@@ -66,6 +66,7 @@ import { promisify } from "node:util";
 // "clean up the unused import" edit that throws ReferenceError the first time `push-issue` runs.
 // Search for call sites before removing either name.
 import { derivePriority, priorityFromLabel } from "./priority-model.mjs";
+import { mapIssueToPrs, summarizePrLinks } from "./pr-link-model.mjs";
 
 const execFileAsync = promisify(execFile);
 
@@ -595,9 +596,9 @@ function commentTypeForReview(state) {
   }
 }
 
-// Flatten every GitHub comment surface attached to an issue (and its linked PR) into one
+// Flatten every GitHub comment surface attached to an issue and its linked PRs into one
 // ordered list of {ghId, author, type, text} ready to POST.
-function collectComments(issue, linkedPr) {
+function collectComments(issue, linkedPrs) {
   const out = [];
 
   for (const c of issue.comments || []) {
@@ -611,7 +612,7 @@ function collectComments(issue, linkedPr) {
     });
   }
 
-  if (linkedPr) {
+  for (const linkedPr of linkedPrs) {
     for (const c of linkedPr.comments || []) {
       out.push({
         ghId: c.id,
@@ -647,8 +648,14 @@ function collectComments(issue, linkedPr) {
     }
   }
 
-  out.sort((a, b) => new Date(a.createdAt || 0) - new Date(b.createdAt || 0));
-  return out;
+  out.sort((a, b) => new Date(a.createdAt || 0) - new Date(b.createdAt || 0)
+    || String(a.ghId).localeCompare(String(b.ghId), "en"));
+  const seen = new Set();
+  return out.filter(({ ghId }) => {
+    if (seen.has(ghId)) return false;
+    seen.add(ghId);
+    return true;
+  });
 }
 
 function commentTextFor(c) {
@@ -680,21 +687,6 @@ function completeCommentIds(comments, incoming = []) {
   }).map((c) => ghIdOf(c.text)).filter(Boolean));
 }
 
-// "Closes #12", "fixes #34", "resolved: #56" — GitHub's own closing-keyword vocabulary.
-const CLOSING_KEYWORDS = /\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\b[:\s]*#(\d+)/gi;
-
-function mapIssueToOpenPr(prs) {
-  const byIssue = new Map();
-  for (const pr of prs) {
-    const body = pr.body || "";
-    for (const m of body.matchAll(CLOSING_KEYWORDS)) {
-      const issueNumber = Number.parseInt(m[1], 10);
-      if (Number.isFinite(issueNumber) && !byIssue.has(issueNumber)) byIssue.set(issueNumber, pr);
-    }
-  }
-  return byIssue;
-}
-
 // --- Mapping ----------------------------------------------------------------------------
 
 // Priority resolution (title prefix -> label -> milestone -> Medium) lives in
@@ -702,9 +694,9 @@ function mapIssueToOpenPr(prs) {
 // backlog log book both read it, so they cannot disagree. See #355 for the rule and #364 for
 // the decision that settled it.
 
-function deriveStatus(issue, linkedPr) {
+function deriveStatus(issue, linkedPrs) {
   if (issue.state && issue.state.toUpperCase() === "CLOSED") return "Done";
-  if (linkedPr) return "Review";
+  if (linkedPrs.length > 0) return "Review";
   if ((issue.assignees || []).length > 0) return "InProgress";
   return "Backlog";
 }
@@ -883,15 +875,16 @@ function unclosedFence(text) {
   return open;
 }
 
-function descriptionFor(issue, linkedPr) {
+function descriptionFor(issue, linkedPrs) {
   const body = String(issue.body ?? "");
   const labels = (issue.labels || []).map((l) => l.name).join(", ") || "none";
   const milestone = issue.milestone?.title || "none";
+  const pullRequests = linkedPrs.map(pr => `${pr.url}${pr.isDraft ? " (draft)" : ""}`).join(", ");
   const lines = [
     "<!-- kanbanflow-sync -->",
     `**Issue:** ${issue.url}`,
     `**State:** ${issue.state || "OPEN"} · **Milestone:** ${milestone} · **Labels:** ${labels}`,
-    linkedPr ? `**Open PR:** ${linkedPr.url}${linkedPr.isDraft ? " (draft)" : ""}` : "**Open PR:** none",
+    `**Open PR${linkedPrs.length > 1 ? "s" : ""}:** ${pullRequests || "none"}`,
     `**Synced:** ${new Date().toISOString()}`,
     "**Content:** complete",
     `**Source SHA-256:** ${createHash("sha256").update(body, "utf8").digest("hex")}`,
@@ -1513,13 +1506,13 @@ async function ensureFeatures(projectId, names, dryRun) {
   return byName;
 }
 
-// Mirror an issue's (and its linked PR's) GitHub comments onto the task, skipping any whose
+// Mirror an issue's and its linked PRs' GitHub comments onto the task, skipping any whose
 // node id is already present. Returns nothing; updates stats.
 // taskId is null ONLY on the dry-run "this task would be created" path — a task that does not
 // exist yet cannot have comments, so an empty dedupe set is correct there. Everywhere else a real
 // id is required, and the guard below enforces that rather than trusting the call sites.
-async function syncComments(issue, linkedPr, taskId, args, request = api) {
-  const incoming = collectComments(issue, linkedPr);
+async function syncComments(issue, linkedPrs, taskId, args, request = api) {
+  const incoming = collectComments(issue, linkedPrs);
   if (incoming.length === 0) return;
 
   // Dedupe against what is already on the task. This read is gated on whether the task EXISTS
@@ -1566,7 +1559,7 @@ async function restorationSources(repo) {
   if (issues.length >= GH_PAGE_LIMIT || prs.length >= GH_PAGE_LIMIT) {
     throw new Error("Content restoration requires a complete source read. Raise KANBANFLOW_GH_PAGE_LIMIT and retry; no descriptions were changed.");
   }
-  return { issues, prByIssue: mapIssueToOpenPr(prs) };
+  return { issues, prsByIssue: mapIssueToPrs(prs) };
 }
 
 // A content-only repair does not run normal sync's title/priority/status/feature reconciliation.
@@ -1581,7 +1574,7 @@ async function restoreContent(repo, args, {
   const candidates = tasks.filter((t) => needsContentRestoration(t.description));
   const result = { candidates: candidates.length, restored: 0, preservedPriorText: 0 };
   if (!candidates.length) return result;
-  const { issues, prByIssue } = await readSources(repo);
+  const { issues, prsByIssue } = await readSources(repo);
   const projectLinks = await request("GET", `/api/projects/${link.project.id}/external-work-item-links`);
   const byNumber = new Map(issues.map((issue) => [issue.number, issue]));
   const validateIdentity = (task, issue, links) => {
@@ -1608,7 +1601,7 @@ async function restoreContent(repo, args, {
     const issue = byNumber.get(number);
     if (!issue) throw new Error(`Task ${task.id}: full GitHub issue ${number ?? "identity"} is unavailable; no content was changed.`);
     validateIdentity(task, issue, projectLinks);
-    const completeDescription = descriptionFor(issue, prByIssue.get(number) || null);
+    const completeDescription = descriptionFor(issue, prsByIssue.get(number) || []);
     const description = descriptionRefreshFor(task.description, completeDescription);
     if (description === null) throw new Error(`Task ${task.id}: source provenance does not match; no content was changed.`);
     return { task, issue, description, preserved: description !== completeDescription };
@@ -2037,7 +2030,7 @@ async function updateMirroredTask(repo, number, taskId, method, path, changes) {
   }
 }
 
-async function syncTasks(repo, repoIdentity, projectId, issues, closedByNumber, prByIssue, featureIds, args, existing, projectLinks, operationTasks, blockedIssues = new Set()) {
+async function syncTasks(repo, repoIdentity, projectId, issues, closedByNumber, prsByIssue, featureIds, args, existing, projectLinks, operationTasks, blockedIssues = new Set()) {
   const { actor, dryRun } = args;
   const index = buildTaskIdentityIndex(existing, repoIdentity, projectLinks, operationTasks);
   const byIssueNumber = new Map([...index.legacyByNumber, ...index.durableByNumber]);
@@ -2131,9 +2124,9 @@ async function syncTasks(repo, repoIdentity, projectId, issues, closedByNumber, 
       if (!dryRun) await updateMirroredTask(repo, issue.number, task.id, "PATCH", `/api/tasks/${task.id}/status`, { status: "Done", actor });
       continue;
     }
-    const linkedPr = prByIssue.get(issue.number) || null;
+    const linkedPrs = prsByIssue.get(issue.number) || [];
     const desiredPriority = derivePriority(issue);
-    const desiredStatus = deriveStatus(issue, linkedPr);
+    const desiredStatus = deriveStatus(issue, linkedPrs);
     const featureName = featureNameFor(issue);
     const featureId = featureIds.get(featureName);
     const durableIdentity = matched.kind === "durable" || matched.kind === "operation" || matched.kind === "transfer";
@@ -2144,7 +2137,7 @@ async function syncTasks(repo, repoIdentity, projectId, issues, closedByNumber, 
       plan(dryRun, "project issue atomically", `${plainName}  [${desiredStatus}/${desiredPriority}]`);
       if (dryRun) {
         plan(true, "create task and durable link together", `${repo}#${issue.number} → "${plainName}"`);
-        if (args.comments) await syncComments(issue, linkedPr, null, args);
+        if (args.comments) await syncComments(issue, linkedPrs, null, args);
         continue;
       }
       if (featureId == null) throw new Error(`No feature id for "${featureName}" (issue #${issue.number})`);
@@ -2152,7 +2145,7 @@ async function syncTasks(repo, repoIdentity, projectId, issues, closedByNumber, 
       try {
         projection = await externalApi.projectIssue(featureId, {
           ...verifiedLinkRequest(null, repoIdentity, issue, actor),
-          name: plainName, description: descriptionFor(issue, linkedPr),
+          name: plainName, description: descriptionFor(issue, linkedPrs),
           status: desiredStatus, priority: desiredPriority, actor,
         });
       } catch (error) {
@@ -2165,7 +2158,7 @@ async function syncTasks(repo, repoIdentity, projectId, issues, closedByNumber, 
         stats.tasksCreated++;
         stats.linksRegistered++;
       }
-      if (args.comments) await syncComments(issue, linkedPr, projection.task.id, args);
+      if (args.comments) await syncComments(issue, linkedPrs, projection.task.id, args);
       continue;
     }
 
@@ -2196,7 +2189,7 @@ async function syncTasks(repo, repoIdentity, projectId, issues, closedByNumber, 
       }
     }
 
-    if (args.comments) await syncComments(issue, linkedPr, task.id, args);
+    if (args.comments) await syncComments(issue, linkedPrs, task.id, args);
 
     // The issue's milestone changed on GitHub -> the task belongs under a different Feature.
     // featureId is not settable through PUT /api/tasks/{id}; reassignment is its own verb.
@@ -2214,13 +2207,13 @@ async function syncTasks(repo, repoIdentity, projectId, issues, closedByNumber, 
     const patch = {};
     if (task.name !== desiredName) patch.name = desiredName;
     if (task.priority !== desiredPriority) patch.priority = desiredPriority;
-    const refreshedDescription = descriptionRefreshFor(task.description, descriptionFor(issue, linkedPr));
+    const refreshedDescription = descriptionRefreshFor(task.description, descriptionFor(issue, linkedPrs));
     if (refreshedDescription !== null) patch.description = refreshedDescription;
 
     const closed = issue.state && issue.state.toUpperCase() === "CLOSED";
     if (closed && task.status !== "Done") {
       patch.status = "Done";
-    } else if (!closed && linkedPr && ADVANCEABLE_TO_REVIEW.has(task.status) && task.status !== "Review") {
+    } else if (!closed && linkedPrs.length > 0 && ADVANCEABLE_TO_REVIEW.has(task.status) && task.status !== "Review") {
       patch.status = "Review";
     } else if (!closed && task.status === "Done") {
       stats.drift.push(driftDoneButOpen(repo, issue));
@@ -2249,25 +2242,23 @@ async function syncTasks(repo, repoIdentity, projectId, issues, closedByNumber, 
   }
 }
 
-async function syncRepo(repo, args, { header = true, repoIdentity: suppliedRepoIdentity = null } = {}) {
+async function syncRepo(repo, args, { header = true, repoIdentity: suppliedRepoIdentity = null, read = gh } = {}) {
   if (header) console.log(`\n${repo}`);
   const [openIssues, closed, prs, repoIdentity] = await Promise.all([
-    fetchOpenIssues(repo, args.comments),
-    fetchClosedIssues(repo, args.includeClosed, args.comments),
-    fetchOpenPrs(repo, args.comments),
-    suppliedRepoIdentity || fetchRepositoryIdentity(repo),
+    fetchOpenIssues(repo, args.comments, read),
+    fetchClosedIssues(repo, args.includeClosed, args.comments, read),
+    fetchOpenPrs(repo, args.comments, read),
+    suppliedRepoIdentity || fetchRepositoryIdentity(repo, read),
   ]);
   // With --include-closed, closed issues are mirrored as tasks too. Without it they are still
   // checked by immutable node and number before a status-only update to an existing card.
   const issues = args.includeClosed ? [...openIssues, ...closed] : openIssues;
   const closedByNumber = new Map(args.includeClosed ? [] : closed.map(i => [i.number, i]));
 
-  const prByIssue = mapIssueToOpenPr(prs);
+  const prsByIssue = mapIssueToPrs(prs);
 
-  // A PR that closes no issue has no task to hang its comments on (Dependabot PRs are the
-  // usual case). Count those separately and SAY so — a comment total that silently includes
-  // comments we can't mirror reads as a complete mirror when it isn't.
-  const linkedPrNumbers = new Set([...prByIssue.values()].map((p) => p.number));
+  // A PR without a linked issue in the selected import has no task to receive its comments.
+  const { issuesWithLinkedPrs, linkedPrNumbers } = summarizePrLinks(prsByIssue, issues);
   const countPr = (p) => (p.comments?.length || 0) + (p.reviews?.length || 0) + (p.inlineComments?.length || 0);
   const orphanedPrComments = args.comments
     ? prs.filter((p) => !linkedPrNumbers.has(p.number)).reduce((n, p) => n + countPr(p), 0)
@@ -2277,11 +2268,11 @@ async function syncRepo(repo, args, { header = true, repoIdentity: suppliedRepoI
       + prs.filter((p) => linkedPrNumbers.has(p.number)).reduce((n, p) => n + countPr(p), 0)
     : 0;
 
-  let line = `  ${openIssues.length} open${args.includeClosed ? ` + ${closed.length} closed` : ""} issues · ${prs.length} open PRs · ${prByIssue.size} issues with a linked PR`;
+  let line = `  ${openIssues.length} open${args.includeClosed ? ` + ${closed.length} closed` : ""} issues · ${prs.length} open PRs · ${issuesWithLinkedPrs} issues with linked PRs · ${linkedPrNumbers.size} linked PRs`;
   if (args.comments) line += ` · ${mirrorable} GitHub comments`;
   console.log(line);
   if (orphanedPrComments > 0) {
-    console.log(`  ! ${orphanedPrComments} comment(s) on PRs that close no issue — no task to attach them to, NOT mirrored.`);
+    console.log(`  ! ${orphanedPrComments} comment(s) on PRs without a linked issue in this sync — no task to attach them to, NOT mirrored.`);
   }
 
   const projectId = await ensureProject(repo, repoIdentity, args.dryRun);
@@ -2298,7 +2289,7 @@ async function syncRepo(repo, args, { header = true, repoIdentity: suppliedRepoI
     : await reconcilePushMarkers(repo, repoIdentity, issues, existingTasks, args);
   projectLinks.push(...reconciliation.finalizedLinks);
   await syncTasks(
-    repo, repoIdentity, projectId, issues, closedByNumber, prByIssue, featureIds, args,
+    repo, repoIdentity, projectId, issues, closedByNumber, prsByIssue, featureIds, args,
     existingTasks, projectLinks, reconciliation.operationTasks, reconciliation.blockedIssues,
   );
 }
@@ -2887,10 +2878,11 @@ async function statusRepo(repo, args, projects, read = gh) {
   const closedByNumber = new Map(closedIssues.map(issue => [issue.number, issue]));
   const closedByNode = new Map(closedIssues.map(issue => [issue.id, issue]));
   const openByNumber = new Map(openIssues.map((i) => [i.number, i]));
-  const prByIssue = mapIssueToOpenPr(prs);
+  const prsByIssue = mapIssueToPrs(prs);
+  const { issuesWithLinkedPrs, linkedPrNumbers } = summarizePrLinks(prsByIssue, [...openIssues, ...closedIssues]);
   rec.github = {
     openIssues: openIssues.length, closedIssues: closedIssues.length,
-    openPrs: prs.length, linkedPrs: prByIssue.size, milestones: milestones.length,
+    openPrs: prs.length, linkedPrs: linkedPrNumbers.size, issuesWithLinkedPrs, milestones: milestones.length,
   };
 
   if (!link.project) {
@@ -2956,7 +2948,7 @@ async function statusRepo(repo, args, projects, read = gh) {
     if (task.name !== expectedName) titleLag++;
     if (task.priority !== derivePriority(issue)) priorityLag++;
     if ((task.featureName || "") !== featureNameFor(issue)) featureLag++;
-    if (prByIssue.get(n) && ADVANCEABLE_TO_REVIEW.has(task.status) && task.status !== "Review") reviewLag++;
+    if (prsByIssue.has(n) && ADVANCEABLE_TO_REVIEW.has(task.status) && task.status !== "Review") reviewLag++;
   }
 
   const openMatches = openIssues.map((issue) => ({ issue, match: taskMatchForIssue(index, issue) }));
@@ -2984,7 +2976,7 @@ function printStatusRepo(rec) {
     ? `UNLINKED — no project on the board`
     : `project #${rec.projectId} "${rec.projectName}"  (${rec.link === "node" ? "immutable repository node" : rec.link === "marker" ? "legacy path marker — run `onboard` to add node identity" : "name match only — run `onboard` to make it durable"})`;
   console.log(`  link       ${linkText}`);
-  console.log(`  github     ${g.openIssues} open · ${g.closedIssues} closed issues · ${g.openPrs} open PRs (${g.linkedPrs} linked) · ${g.milestones} milestones`);
+  console.log(`  github     ${g.openIssues} open · ${g.closedIssues} closed issues · ${g.openPrs} open PRs (${g.linkedPrs} linked across ${g.issuesWithLinkedPrs} issues) · ${g.milestones} milestones`);
   console.log(`  board      ${rec.board.tasks} tasks · ${rec.board.mirrored} mirrored · ${rec.board.unsynced} unsynced`);
   // Normalised to an unambiguous ISO-with-Z rather than echoing the naive value back.
   console.log(`  last sync  ${rec.lastSync ? `${asUtcDate(rec.lastSync.at).toISOString()}  (${agoText(rec.lastSync.at)}, ${rec.lastSync.eventType})` : "never — no activity by this actor"}`);
@@ -3326,6 +3318,7 @@ export {
   stats,
   statusRepo,
   syncBlockIssueUrl,
+  syncRepo,
   syncTasks,
   taskMatchForIssue,
   verifiedFinalizeRequest,

@@ -48,6 +48,17 @@ Newly mirrored and board-originated issues receive structured links. Existing bo
 working because prefix matching remains a fallback — and an ordinary `sync` upgrades that
 fallback by itself.
 
+Every open PR that names an issue with a closing keyword such as `Closes #42` contributes its
+conversation, reviews, and inline comments to that issue's task. If a PR closes several issues,
+each task gets the full discussion. Repeated references do not duplicate a comment. The sync
+reports separate counts for linked issues and linked open PRs, and reports discussion that has
+no linked issue in the selected import.
+
+New tasks and repairs of incomplete legacy descriptions list all linked open PRs in ascending
+PR-number order and identify draft PRs. The task editor opens each listed PR and still accepts
+older single-link provenance. Complete stored descriptions keep their original provenance.
+Their comments can still receive the full discussion from every linked PR on the next sync.
+
 ### Legacy prefix → durable link
 
 An ordinary `sync` promotes a legacy `#<n> ` prefix match to a durable link, with no operator

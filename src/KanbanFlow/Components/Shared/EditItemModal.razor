@@ -69,14 +69,14 @@
                                       Description="@editDescription"
                                       CssClass="btn btn-sm btn-outline-secondary mb-3 me-2"
                                       TestId="edit-item-github-link" />
-                    @if (gitHubPullRequest is not null)
+                    @foreach (var pullRequest in gitHubPullRequests)
                     {
-                        <a class="btn btn-sm btn-outline-primary mb-3"
-                           href="@gitHubPullRequest.Url"
+                        <a class="btn btn-sm btn-outline-primary mb-3 me-2"
+                           href="@pullRequest.Url"
                            target="_blank" rel="noopener noreferrer"
                            data-testid="edit-item-github-pr-link"
-                           aria-label="@($"Open GitHub pull request #{gitHubPullRequest.Number} for {gitHubPullRequest.RepositoryOwner}/{gitHubPullRequest.RepositoryName} in a new tab")">
-                            PR #@gitHubPullRequest.Number <span aria-hidden="true">↗</span>
+                           aria-label="@($"Open GitHub pull request #{pullRequest.Number} for {pullRequest.RepositoryOwner}/{pullRequest.RepositoryName} in a new tab")">
+                            PR #@pullRequest.Number <span aria-hidden="true">↗</span>
                         </a>
                     }
                 }
@@ -294,10 +294,10 @@
     // ValueChanged per keystroke, so resetting on every OnParametersSet would eject the user
     // mid-word.
     private int descriptionResetToken;
-    private GitHubPullRequestReference? gitHubPullRequest;
+    private IReadOnlyList<GitHubPullRequestReference> gitHubPullRequests = [];
 
     private void RefreshGitHubPullRequest() =>
-        gitHubPullRequest = ExternalWorkItemPresentation.FindSyncBlockPullRequest(editDescription);
+        gitHubPullRequests = ExternalWorkItemPresentation.FindSyncBlockPullRequests(editDescription);
 
     private int editParentFeatureId;
     private int editFeatureId;

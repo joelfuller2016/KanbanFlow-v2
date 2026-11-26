@@ -575,11 +575,11 @@ public sealed class MirroredDescriptionTests
             StringComparison.Ordinal);
         var accepted = ModalChipsFor(leading);
         Assert.NotNull(accepted.IssueUrl);
-        Assert.NotNull(accepted.PrUrl);
+        Assert.Single(accepted.PullRequests);
 
         var quoted = ModalChipsFor("Human context before an example header.\n\n" + leading);
         Assert.Null(quoted.IssueUrl);
-        Assert.Null(quoted.PrUrl);
+        Assert.Empty(quoted.PullRequests);
     }
 
     // ── Ownership is not enough: the forgery that lives INSIDE the owned block ───────────────────
@@ -703,7 +703,7 @@ public sealed class MirroredDescriptionTests
     /// so a rename fails loudly rather than degrading into a test of nothing.
     /// </para>
     /// </remarks>
-    private static (string? IssueUrl, string? IssueNumber, string? PrUrl, string? PrNumber) ModalChipsFor(string description)
+    private static (string? IssueUrl, string? IssueNumber, IReadOnlyList<GitHubPullRequestReference> PullRequests) ModalChipsFor(string description)
     {
         const BindingFlags Flags = BindingFlags.NonPublic | BindingFlags.Instance;
         var type = typeof(KanbanFlow.Components.Shared.EditItemModal);
@@ -716,15 +716,14 @@ public sealed class MirroredDescriptionTests
 
         Member(type.GetField("editDescription", Flags), "editDescription").SetValue(instance, description);
         Member(type.GetMethod("RefreshGitHubPullRequest", Flags), "RefreshGitHubPullRequest").Invoke(instance, null);
-        var pr = (GitHubPullRequestReference?)Member(type.GetField("gitHubPullRequest", Flags), "gitHubPullRequest").GetValue(instance);
+        var pullRequests = (IReadOnlyList<GitHubPullRequestReference>)Member(type.GetField("gitHubPullRequests", Flags), "gitHubPullRequests").GetValue(instance)!;
 
         var badgeType = typeof(GitHubIssueBadge);
         var badge = Activator.CreateInstance(badgeType)!;
         Member(badgeType.GetProperty("Description"), "GitHubIssueBadge.Description").SetValue(badge, description);
         Member(badgeType.GetMethod("OnParametersSet", Flags), "GitHubIssueBadge.OnParametersSet").Invoke(badge, null);
         var issue = (GitHubIssueReference?)Member(badgeType.GetField("Issue", Flags), "GitHubIssueBadge.Issue").GetValue(badge);
-        return (issue?.Url, issue?.Number.ToString(CultureInfo.InvariantCulture),
-            pr?.Url, pr?.Number.ToString(CultureInfo.InvariantCulture));
+        return (issue?.Url, issue?.Number.ToString(CultureInfo.InvariantCulture), pullRequests);
     }
 
     /// <summary>The modal renders the genuine chips for a genuine mirror.</summary>
@@ -745,8 +744,20 @@ public sealed class MirroredDescriptionTests
 
         Assert.Equal("https://github.com/joelfuller2016/KanbanFlow-v2/issues/454", chips.IssueUrl);
         Assert.Equal("454", chips.IssueNumber);
-        Assert.Equal("https://github.com/joelfuller2016/KanbanFlow-v2/pull/455", chips.PrUrl);
-        Assert.Equal("455", chips.PrNumber);
+        var pullRequest = Assert.Single(chips.PullRequests);
+        Assert.Equal("https://github.com/joelfuller2016/KanbanFlow-v2/pull/455", pullRequest.Url);
+        Assert.Equal(455, pullRequest.Number);
+    }
+
+    [Fact]
+    public void EditItemModal_ResolvesAllPullRequestsFromTheGeneratedList()
+    {
+        var description = MirroredFixture.Replace(
+            "**Open PR:** none",
+            "**Open PRs:** https://github.com/octo/board/pull/101, https://github.com/octo/board/pull/102 (draft)",
+            StringComparison.Ordinal);
+
+        Assert.Equal([101, 102], ModalChipsFor(description).PullRequests.Select(pr => pr.Number));
     }
 
     /// <summary>
@@ -779,8 +790,7 @@ public sealed class MirroredDescriptionTests
         Assert.Equal("https://github.com/joelfuller2016/KanbanFlow-v2/issues/487", chips.IssueUrl);
         Assert.Equal("487", chips.IssueNumber);
 
-        Assert.Null(chips.PrUrl);
-        Assert.Null(chips.PrNumber);
+        Assert.Empty(chips.PullRequests);
     }
 
     /// <summary>
@@ -842,8 +852,9 @@ public sealed class MirroredDescriptionTests
         Assert.Equal("455", chips.IssueNumber);
         Assert.Equal(chips.IssueUrl, MirroredDescription.IssueUrl(description));
         Assert.Equal("#455", MirroredDescription.IssueLabel(description));
-        Assert.Equal("https://github.com/joelfuller2016/KanbanFlow-v2/pull/22?view=files#diff-9", chips.PrUrl);
-        Assert.Equal("22", chips.PrNumber);
+        var pullRequest = Assert.Single(chips.PullRequests);
+        Assert.Equal("https://github.com/joelfuller2016/KanbanFlow-v2/pull/22?view=files#diff-9", pullRequest.Url);
+        Assert.Equal(22, pullRequest.Number);
     }
 
     [Theory]
@@ -868,7 +879,7 @@ public sealed class MirroredDescriptionTests
         var chips = ModalChipsFor(description);
 
         Assert.Null(chips.IssueUrl);
-        Assert.Null(chips.PrUrl);
+        Assert.Empty(chips.PullRequests);
         Assert.Null(MirroredDescription.IssueUrl(description));
     }
 }

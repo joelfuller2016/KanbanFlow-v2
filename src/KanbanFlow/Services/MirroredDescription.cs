@@ -188,7 +188,9 @@ public static class MirroredDescription
     /// — this method narrows WHERE they may look, and does not take over WHAT they accept.
     /// </para>
     /// </remarks>
-    public static string? SyncRecord(string? description, string key)
+    public static string? SyncRecord(string? description, string key) => SyncRecord(description, key, null);
+
+    private static string? SyncRecord(string? description, string key, string? alternateKey)
     {
         var block = SyncBlock(description);
         if (block is null) return null;
@@ -196,7 +198,8 @@ public static class MirroredDescription
         string? found = null;
         foreach (Match m in SyncRecordRe.Matches(block))
         {
-            if (!string.Equals(m.Groups["k"].Value, key, StringComparison.Ordinal)) continue;
+            var recordKey = m.Groups["k"].Value;
+            if (recordKey != key && recordKey != alternateKey) continue;
             if (found is not null) return null;   // ambiguous → fail closed
             found = m.Groups["line"].Value.Trim();
         }
@@ -210,25 +213,35 @@ public static class MirroredDescription
     /// </summary>
     public static string? IssueUrl(string? description)
     {
-        return UrlFromRecord(description, "Issue");
+        var line = SyncRecord(description, "Issue");
+        return line is null ? null : GitHubUrlFromValue(line["**Issue:**".Length..]);
     }
 
-    /// <summary>The normalized pull request URL from its header record, or null.</summary>
-    public static string? PullRequestUrl(string? description)
+    /// <summary>The normalized pull request URLs from an unambiguous header record.</summary>
+    public static IReadOnlyList<string> PullRequestUrls(string? description)
     {
-        var url = UrlFromRecord(description, "Open PR");
-        return ItemNumberForUrl(url, "pull") is null ? null : url;
+        var line = SyncRecord(description, "Open PR", "Open PRs");
+        if (line is null) return [];
+
+        const string pluralPrefix = "**Open PRs:**";
+        var values = line.StartsWith(pluralPrefix, StringComparison.Ordinal)
+            ? line[pluralPrefix.Length..].Split(", ", StringSplitOptions.None)
+            : [line["**Open PR:**".Length..]];
+        var urls = new List<string>(values.Length);
+        foreach (var value in values)
+        {
+            var url = GitHubUrlFromValue(value);
+            if (url is null || ItemNumberForUrl(url, "pull") is null) return [];
+            urls.Add(url);
+        }
+        return urls.Distinct(StringComparer.Ordinal).ToArray();
     }
 
-    private static string? UrlFromRecord(string? description, string key)
+    private static string? GitHubUrlFromValue(string value)
     {
-        var line = SyncRecord(description, key);
-        if (line is null) return null;
-
         // Read the value at its start. Searching for another **Issue:** marker inside the value
         // would let free text forge a second record even after SyncRecord isolated the first one.
-        var value = line[(key.Length + 5)..].TrimStart(); // **Key:**
-        var candidate = value.Split([' ', '\t', '<'], 2)[0];
+        var candidate = value.TrimStart().Split([' ', '\t', '<'], 2)[0];
         // Preserve the complete query/fragment token: parentheses and final punctuation can be
         // meaningful there. Keep the existing sentence-stop cleanup only for a bare path.
         if (candidate.IndexOfAny(['?', '#']) < 0)
