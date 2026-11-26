@@ -160,24 +160,21 @@ This table describes the code, not the aspiration. Read the status row carefully
 | Task **comments** | GitHub | Complete, additive copies. An old incomplete copy permits one full replacement copy; the prior comment remains in history. Complete copies deduplicate by node id. |
 | Subtasks, acceptance criteria, dependencies, claims | **the board** | Never touched by the sync. |
 
-### Status is not symmetric, and manual pinning does not exist yet
+### Status updates and completion checks
 
 | Situation | What the sync does |
 |---|---|
-| Issue **closed**, task not `Done` | **Forces** the task to `Done` — *even if a human set that status by hand.* |
+| Verified issue **closed**, task outside `Done` | Requests `Done` through the regular board completion gate. Unchecked criteria are reported as drift, and sync continues with the remaining issues. |
 | Issue open, linked open PR, task in `Backlog`/`Todo`/`InProgress` | Advances to `Review`. |
 | Issue open, linked open PR, task already `Review` or `Done` | Left alone. |
 | Issue open, task is `Done` | Left alone, and **reported as drift**. |
 | Issue open, no linked PR | Left alone. |
 
-So the frequently-stated invariant *"the sync never overrides a hand-set status"* is **only
-half true today**. The advance-to-`Review` path honours it. The close path does not: closing an
-issue on GitHub forces the task to `Done` regardless of what anyone set on the board.
-
-This is not currently fixable in the script. `TaskItem` has no manual-pin field (no
-`StatusOverride`, no `StatusManagedBy`), so there is nothing for the sync to check before
-forcing. Adding one is tracked separately. **Until then, treat a hand-set status on a task
-whose issue may close as temporary.**
+The default sync reads the number, node ID and URL of each closed issue. It checks the issue
+identity and any saved legacy provenance before changing an existing card. A verified transfer
+within the same board project refreshes the task link, including when the card is already Done. When the board
+rejects a verified closure for unchecked criteria, the card keeps its current status. Complete
+the criteria through the board and rerun sync to retry it.
 
 ---
 
@@ -191,13 +188,16 @@ Conflating these is how a sync earns a reputation for fighting its owner.
 | **unsynced** | A board task with neither an Active GitHub link nor a legacy `#<n> ` fallback. | No — it is a `push-issue` candidate. Not a problem. |
 | **drift** | A disagreement the sync deliberately **will not** resolve. | **No.** A human decides. |
 
-There are exactly two kinds of drift, and `sync` and `status` report them with identical
-wording (they share the message builders, so the two commands cannot disagree):
+Common drift cases include:
 
 1. **Board says `Done`, issue is still open.** Someone marked the task complete while the issue
    lives on. The sync refuses to guess which one is right.
 2. **Task references an issue that does not exist on GitHub.** Deleted, transferred, or the
    wrong number was typed. The task is **never** auto-deleted — the audit trail is sacred.
+3. **A saved card conflicts with GitHub issue identity.** Review the provenance and use
+   `backfill-links` to diagnose a legacy match before retrying.
+4. **A closed issue's card has unchecked acceptance criteria.** Sync records the refusal
+   and continues processing other cards.
 
 Link problems also count as drift, because the mirror silently forks while looking healthy:
 two projects carrying the same repo marker, or several unlinked projects sharing a name.
@@ -261,7 +261,7 @@ indistinguishable from a human's in the history.
 | `PUT /api/tasks/{id}` | title or priority is behind | **`name` is mandatory** — a priority-only body 422s (`ApiEndpoints.cs:1451`), so `name` always goes on the wire even when unchanged. Do **not** generalise from the projects PUT; the two behave differently |
 | `PATCH /api/tasks/{id}/status` | an issue closed since the last sync | |
 | `PATCH /api/tasks/{id}/feature` | an issue's milestone changed | feature is not settable through the task PUT; reassignment is its own verb |
-| `POST /api/tasks/{id}/comments` | a GitHub comment is not mirrored yet | deduped by node id |
+| `POST /api/tasks/{id}/comment-imports/github` | importing a GitHub comment | send `githubCommentId` and the matching complete source marker. Returns `created: true` with HTTP 201 for a new copy or `created: false` with HTTP 200 for an existing complete copy |
 | `POST /api/tasks/{id}/external-write-operations` | before a live GitHub create | freezes the exact request and server-generated `kanbanflow-push` marker |
 | `POST /api/external-write-operations/{uuid}/dispatch` | immediately before GitHub contact | closes the unsafe pre-call window |
 | `POST /api/external-write-operations/{uuid}/finalize` | after an exact issue result or marker recovery | sends current repository node/owner/name with the issue result; the service pins the immutable node, validates the URL against the current path, then atomically completes the operation and inserts the Active link |
@@ -473,9 +473,16 @@ sequenceDiagram
    refresh of later changes to complete GitHub imports remains a separate concern (#495).
 
 Comment recovery stays additive: a genuinely incomplete legacy comment permits one complete
-copy with the same GitHub node identity; the old comment remains. The next sync detects the
-complete copy and does not duplicate it. An already complete legacy comment that literally
-quotes the old footer is compared with its source and is not duplicated.
+copy with the same GitHub node identity. The old comment remains. SQLite serializes the
+complete-copy check, insert, and audit, so overlapping imports of the same task and comment
+return the same stored copy. An already complete legacy comment that literally quotes the old
+footer is compared with its source. For a legacy PR review, the comparison preserves
+the exact review body even if GitHub now supplies a different attribution link. Upgrade the board server before running the updated
+sync script. An older server returns 404 for the import route, and the script reports the failure.
+
+When a requested discussion is missing from an issue or PR list response, or its preview
+reaches the GitHub CLI's 100-entry bound, sync fetches all pages. Failed discussion reads are reported as incomplete and give the command
+a nonzero exit code.
 
 Transport limits are not content budgets. The editor uses a finite 4 MiB inbound SignalR
 message allowance and an 8 MiB inbound transport buffer. Import/storage code never clips a value to fit it. A failed or oversized

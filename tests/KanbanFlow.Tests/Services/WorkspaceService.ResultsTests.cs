@@ -626,6 +626,33 @@ public sealed partial class WorkspaceServiceTests
     }
 
     [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ReopeningAcceptedPrerequisiteInvalidatesActiveDependent(bool reportNewEvidence)
+    {
+        using var f = new WorkflowSqliteTestFactory();
+        var prerequisite = Draft("Prerequisite");
+        var active = Draft("Active dependent", prerequisite.Id);
+        var request = await f.PublishedAsync(prerequisite, active);
+        var prerequisiteId = request.WorkItems.Single(w => w.DraftId == prerequisite.Id).Id;
+        request = await f.ReportAsync(request, prerequisiteId);
+        request = await f.AcceptAsync(request, prerequisiteId);
+        var activeItem = request.WorkItems.Single(w => w.DraftId == active.Id);
+        await f.Service.SetTaskStateAsync(request.Id, request.Version, activeItem.Id, WorkStatus.InProgress, Actor, "start-dependent");
+        request = await f.LoadAsync(request.Id);
+
+        if (reportNewEvidence)
+            await f.Service.RecordEvidenceAsync(request.Id, request.Version, prerequisiteId, new EvidenceDraft("Revised result", "Rerun checks", "src/A.cs updated"), Actor, "new-report");
+        else
+            await f.Service.SetTaskStateAsync(request.Id, request.Version, prerequisiteId, WorkStatus.Todo, Actor, "reopen");
+
+        var after = await f.LoadAsync(request.Id);
+        var invalidated = after.WorkItems.Single(w => w.Id == activeItem.Id);
+        Assert.Equal(WorkStatus.Todo, invalidated.Task.Status);
+        Assert.Equal(activeItem.SpecificationVersion + 1, invalidated.SpecificationVersion);
+    }
+
+    [Theory]
     [InlineData("version")]
     [InlineData("hash")]
     public async Task AcceptEvidence_RejectsEitherSpecificationVersionOrHashMismatch(string mismatch)

@@ -155,22 +155,15 @@ processes and preserves differing board text. To repair existing descriptions ac
 closed issues, use `restore-content owner/repo --dry-run`. Follow the
 [recovery procedure](../../../../docs/GITHUB-SYNC.md#complete-content-and-legacy-recovery).
 
-## Closed issues — fetched even when not mirrored
+## Closed issues
 
-Closed issue **numbers are always fetched**, regardless of `--include-closed`. This is not an
-optimisation detail; it is load-bearing.
+By default, sync fetches closed issue numbers, immutable GitHub node IDs, and URLs to reconcile
+existing linked tasks. With `--include-closed`, sync also fetches complete issue fields and
+mirrors closed issues as tasks.
 
-Without it, a close is *invisible*. When an issue you already synced gets closed, it simply
-drops out of the open set — so a sync that only ever looked at open issues would never see
-the close, would never advance the task to `Done`, and would instead report the task as drift
-("no matching issue") **forever**. Every completed issue would accumulate as permanent noise.
-
-So:
-
-| `--include-closed` | Closed issues fetched | Closed issues become tasks | Existing task converges to `Done` |
-|---|---|---|---|
-| off (default) | numbers only (cheap) | no | **yes** |
-| on | full fields | yes | yes |
+Sync verifies the closed issue's identity against the task's link before requesting `Done`.
+Ambiguous or transferred issues are reported for review. Board completion checks can refuse
+the transition and leave the task's current status in place.
 
 ## Feature reassignment
 

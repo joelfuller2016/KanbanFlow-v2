@@ -14,7 +14,7 @@
 | | |
 |---|---|
 | **Stack** | .NET 10 · Blazor Server · SQLite (EF Core 10) · Minimal APIs · Node 18+ for the MCP wrapper |
-| **Surfaces** | 8 UI routes · 102 REST operations · 60 native MCP tools · 79 Node-wrapper MCP tools (measured in the disposable combined app, November 1, 2026) |
+| **Surfaces** | 8 UI routes · 103 REST operations · 60 native MCP tools · 79 Node-wrapper MCP tools (REST and MCP measured in a disposable app, November 22, 2026) |
 | **Sync** | GitHub → board projection, plus one explicit additive board → GitHub issue-create path. Preview is the default; live create requires `--allow-write --task <id>` and a durable journal. No edit/close/delete path — see [Who owns what](#who-owns-what) |
 | **Tests** | Post-merge follow-up: 2,182 xUnit · 444 script unit · current targeted browser and HTTP/native/stdio checks; earlier 16-suite/restart receipts remain source-pinned — [all local, no CI](#deliberate-non-features) |
 | **Runs at** | `http://127.0.0.1:5123` — localhost only, no auth, no Docker, no cloud |
@@ -63,7 +63,7 @@ graph and gives that graph three surfaces:
    pastes into chat as a link. Filtering never reorders anything: a drag under an active filter
    anchors on the next *visible* card's identity and the server resolves that against the full
    persisted column. For you.
-2. **A REST API** — 102 operations over the same graph, including workspace composition and plan publication. For scripts.
+2. **A REST API** — 103 operations over the same graph, including workspace composition and plan publication. For scripts.
 3. **An MCP server** — the same capabilities as first-class agent tools, plus a direction
    engine that answers *"what next, and why"* with a human-readable reason. For agents.
 
@@ -80,12 +80,10 @@ Three properties make it safe to point at a real portfolio:
   GitHub. `push-issue` previews by default; `--allow-write --task <id>` exposes exactly one
   additive issue create backed by a persisted operation and durable identity. It cannot edit,
   close, delete, or comment on GitHub.
-- **It advances your board, and overrides it in exactly one case.** Drag a task to
-  `InProgress` and the sync leaves it there — *unless the issue is closed*, in which case the
-  task is forced to `Done` regardless of where you put it
-  (`syncTasks()` in `portfolio-sync.mjs`). The opposite disagreement — board `Done`, issue still
-  open — is reported as **drift** and never touched (`driftDoneButOpen`). That asymmetry is the whole rule; the
-  older "never overrides your status" phrasing was half true and has been corrected here.
+- **It advances cards on verified GitHub changes.** A closed issue can move its card to
+  `Done` once the card passes the board's completion checks. Sync reports blocked closures
+  as drift and continues processing other issues. A `Done` card with an open issue is also
+  reported as drift, with its current status preserved.
 - **It is idempotent and fail-closed.** Active issue links use immutable GitHub repository and
   issue node ids. Legacy `#<n> ` names are a fallback that an ordinary `sync` promotes to a
   durable link — and strips — as soon as the task's `kanbanflow-sync` block agrees or is
@@ -140,7 +138,7 @@ flowchart LR
     subgraph OUT["surfaces over the same graph"]
         direction TB
         UI["Blazor UI<br/>/ · /project/{id} · /ideas · /memory"]
-        REST["REST · 102 operations"]
+        REST["REST · 103 operations"]
         MCP["MCP · 60 native / 79 wrapper"]
     end
 
@@ -153,7 +151,7 @@ flowchart LR
     PLAN -->|"POST /api/projects"| PRJ
     PLAN -->|"POST /api/projects/{id}/features"| FEAT
     PLAN -->|"POST /api/features/{id}/tasks<br/>PUT name+priority · PATCH status · PATCH feature"| TASK
-    PLAN -->|"POST /api/tasks/{id}/comments"| TC
+    PLAN -->|"POST /api/tasks/{id}/comment-imports/github"| TC
     TASK -.->|"task writes only"| AE
 
     TASK --- OWN
@@ -190,7 +188,7 @@ GitHub portfolio synchronization remains a Node script operation. The native `wo
 | Issue | `TaskItem` | Active `ExternalWorkItemLink` keyed by immutable repository node id + issue node id; legacy **`#<n> `** prefix only when no structured state exists | GitHub → board; explicit additive create board → GitHub |
 | Issue labels (`P0`…`P3`, `priority:high`, `critical`, …) | `TaskItem.Priority` | — reconciled every run | GitHub → board (GitHub always wins) |
 | Issue state + linked open PR | `TaskItem.Status` | — | GitHub → board, **advance-only** (see below) |
-| Issue body | `TaskItem.Description` | Complete body with a `<!-- kanbanflow-sync -->` provenance block and a SHA-256 of the source | GitHub → board |
+| Issue body | `TaskItem.Description` | Complete source body with original Markdown whitespace, a `<!-- kanbanflow-sync -->` provenance block, and a SHA-256 of the source | GitHub → board |
 | Issue comment | `TaskComment` (`Comment`) | GitHub node id stamped as `<!-- gh:ID -->` | GitHub → board |
 | PR conversation comment | `TaskComment` (`Comment`) | same `<!-- gh:ID -->` marker | GitHub → board |
 | PR review, `APPROVED` | `TaskComment` (**`Verification`**) | same `<!-- gh:ID -->` marker | GitHub → board |
@@ -199,21 +197,20 @@ GitHub portfolio synchronization remains a Node script operation. The native `wo
 | *(every task mutation the sync makes)* | `ActivityEvent` | — append-only | board-internal |
 | Board-only task | GitHub issue | durable `ExternalWriteOperation` UUID embedded as `<!-- kanbanflow-push:… -->`, then finalized to an Active link | board → GitHub, explicit additive create only |
 
-**Status is deliberately asymmetric — and one row does override you.** On create it is derived
+**Status updates depend on GitHub state and board checks.** On create it is derived
 from GitHub (`closed` → `Done`; open + linked open PR → `Review`; open + assignee →
 `InProgress`; else `Backlog`). On update:
 
 | Condition | Action | Overrides a hand-set status? |
 |---|---|---|
-| issue closed, task ≠ `Done` | → `Done` | **Yes.** Whatever column you put it in, a closed issue forces `Done` (`syncTasks()` in `portfolio-sync.mjs`) |
+| verified issue closed, task ≠ `Done` | → `Done` when completion checks pass | Yes, after the board accepts the transition |
 | issue open, linked open PR, task ∈ {`Backlog`, `Todo`, `InProgress`} | → `Review` | Partly — it advances those three, and will not touch `Review` or `Done` |
 | issue open, task = `Done` | **drift** — reported, not touched | No |
 | task's issue is in neither the open nor the closed set | **drift** — deleted or transferred; never auto-deleted | No |
 | anything else | leave the board alone | No |
 
-> The frequently-repeated line *"the sync advances status but never overrides yours"* is **half
-> true**. Row 1 is a genuine override. If you deliberately park a task in `Todo` while its issue
-> is closed, the next sync will move it to `Done` and keep doing so.
+> A closed issue with unchecked board criteria is reported as drift. Complete its checks
+> through the board and rerun sync to retry the closure.
 
 **Legacy and protocol markers are data, not decoration:**
 
@@ -248,9 +245,9 @@ that project instead of allowing a duplicate. Because a live `backfill-links` **
 title-only `#<n> ` task that an ordinary sync would have promoted, run `sync` first and reach for
 `backfill-links` afterwards, for the residue.
 
-The sync guide and mapping reference cover recovery of old excerpts, fetch limits, and drift cases.
+Discussion paging, fetch limits, legacy content recovery, and drift handling are documented in
 [`docs/GITHUB-SYNC.md`](docs/GITHUB-SYNC.md) and
-[`.claude/skills/kanban-portfolio/reference/mapping.md`](.claude/skills/kanban-portfolio/reference/mapping.md)
+[`.claude/skills/kanban-portfolio/reference/mapping.md`](.claude/skills/kanban-portfolio/reference/mapping.md).
 
 ---
 
@@ -262,9 +259,9 @@ The single most useful table here. Before you edit a field, know which side wins
 |---|---|---|
 | Task **title** | **GitHub content; not identity** | Reconciled every run (`syncTasks()`). Active linked tasks show the plain issue title and identity survives renames. Legacy fallback tasks keep `#<n> ` only until the first sync that promotes them |
 | Task **priority** | **GitHub** | Reconciled every run (`syncTasks()`) from `P0`…`P3` / `priority:high` / bare severity labels. Setting it on the board is undone on the next sync |
-| Task **status** | **Shared, GitHub-dominant** | You may move it freely, **except** that a closed issue forces `Done` (`syncTasks()`). Board `Done` + open issue is reported as drift, not corrected |
+| Task **status** | **Shared** | Verified GitHub closures move cards to `Done` once board completion checks pass. A blocked closure or an open issue linked to a `Done` card is reported as drift |
 | Task **feature** (milestone) | **GitHub** | An issue's milestone change moves the task via `PATCH /api/tasks/{id}/feature` (`syncTasks()`) |
-| Task **description** | **GitHub source and board edits** | New imports retain the complete issue body. Recovery fills recognized legacy excerpts and keeps any differing prior board text in the same description |
+| Task **description** | **GitHub on import, board after import** | Creation stores the complete issue body. Recovery restores recognizable incomplete legacy imports and retains any differing prior board text in the same description |
 | **Comments** | **GitHub, append-only** | Issue comments, PR conversation, PR reviews, and inline `file:line` comments are appended, deduped by node id. Board-authored comments are never pushed |
 | **`ActivityEvent`** | **Derived** | Written by the service layer as a side effect of task writes. Never read from or sent to GitHub |
 | `TaskDependency` (DAG) | **Board** | No GitHub representation. Authored by you and by agents |
@@ -299,13 +296,13 @@ that assumes otherwise will be wrong.
 
 | Omission | Detail |
 |---|---|
-| **Description refresh is conditional** | Ordinary sync leaves complete descriptions in place. Use [legacy recovery](docs/GITHUB-SYNC.md#complete-content-and-legacy-recovery) for existing cards with a recognized cutoff or omitted-provenance stub |
-| **Closed issues are fetched as numbers only** | Default sync reads closed issue numbers to advance already-linked tasks to `Done`. Use `--include-closed` to mirror closed issue bodies and comments, or `restore-content` to repair existing descriptions across all states |
+| **Description refresh is conditional** | Complete descriptions stay in place. Sync restores recognized legacy excerpts and oversized-header placeholders while retaining any differing board text. Use `restore-content` to repair existing descriptions across open and closed issues. [Full-content recovery](docs/GITHUB-SYNC.md#complete-content-and-legacy-recovery) |
+| **Default sync uses closed-issue identity** | Without `--include-closed`, sync reads the issue number, node ID and URL. It closes eligible existing cards and refreshes verified links after a transfer within the same board project. Use `--include-closed` to import closed issue bodies and comments |
 | **Assignees are not synchronised** | GitHub assignees are read once, only to infer `InProgress` on create (`deriveStatus()`). `TaskItem.Assignee` is never populated from GitHub |
 | **Labels collapse to one priority** | The first matching severity label becomes `TaskItem.Priority`. Every other label survives only as text inside the description block — there is no label entity, and no filtering by label on the board |
 | **Comment edits, deletions, and reactions are never reconciled** | Dedupe uses the GitHub node id once a complete copy exists. A recognizable legacy excerpt can receive one full copy alongside its original history |
 | **PR comments on a PR that closes no issue are dropped** | With no `Closes #n` there is no task to attach them to. They are counted and reported, never silently discarded |
-| **Inline review comments cost one API call per PR** | Fetched via `gh api repos/{repo}/pulls/{n}/comments`. A failure is reported and sets a non-zero exit code — the board is explicitly flagged incomplete rather than looking whole |
+| **Large discussions require extra reads** | Sync fetches inline review comments through the paginated GitHub API. It also fetches all pages of issue comments, PR conversation comments, or PR reviews when a list result reaches 100 entries. A discussion read failure gives sync a nonzero exit code |
 | **Fetches are capped per list** | `GH_PAGE_LIMIT` defaults to `2000` (`KANBANFLOW_GH_PAGE_LIMIT` overrides it). Hitting the cap is a hard failure, not a warning — a count derived from a partial read is worse than no count |
 | **No general board → GitHub editing** | The only outbound path creates one issue after `--allow-write --task`. Titles/bodies/status/comments of existing issues are never written back; no issue is closed or deleted |
 | **Board-owned structure never round-trips** | Dependencies, acceptance criteria, subtasks, requirements, claims, ordering, and memory have no GitHub equivalent. See [Who owns what](#who-owns-what) |
@@ -709,14 +706,14 @@ the same comment stream and history.
 
 [Issue #277](https://github.com/joelfuller2016/KanbanFlow-v2/issues/277) exists because this
 README under-reported its own surface. REST and MCP counts below were measured against the
-November 1 combined workflow/workspace application. UI inventories were checked in source;
+November 22 combined workflow/workspace application. UI inventories were checked in source;
 test receipts retain their execution dates and do not imply a new full browser run.
 
 | Surface | Count | Command that produced it |
 |---|---:|---|
-| REST operations (app) | 97 | [Run the inventory below](#reproduce-surface-counts): `rest.application` |
+| REST operations (app) | 98 | [Run the inventory below](#reproduce-surface-counts): `rest.application` |
 | REST operations (admin) | 5 | [Run the inventory below](#reproduce-surface-counts): `rest.admin` |
-| **REST operations total** | **102** | [Run the inventory below](#reproduce-surface-counts): `rest.total` |
+| **REST operations total** | **103** | [Run the inventory below](#reproduce-surface-counts): `rest.total` |
 | Native MCP tools (`POST /mcp`) | 60 | [Actual native `tools/list`](#reproduce-surface-counts): `nativeMcpTools` |
 | Node-wrapper MCP tools | 79 | [Actual stdio `tools/list`](#reproduce-surface-counts): `stdioMcpTools` |
 | Blazor routes | 8 | `rg '^@page' src/KanbanFlow/Components` includes the gallery, preserved `/ideas/board` and `/ideas/workspace/{Kind}/{SourceId:int}` |
@@ -737,14 +734,14 @@ node scripts/workspace-surface-inventory.mjs http://127.0.0.1:5123
 
 The [inventory implementation](scripts/workspace-surface-inventory.mjs) counts OpenAPI HTTP
 operations, separating `/api/admin/` from other `/api/` routes. See the
-[REST document location and route map](docs/ARCHITECTURE.md#rest-surface-102-operations) for API details.
+[REST document location and route map](docs/ARCHITECTURE.md#rest-surface) for API details.
 
 Historical inventory corrections from the original README revision: **53 → 60** endpoints (both memory
 endpoints and `GET /api/tasks/{id}/context` were missing from the route list entirely);
 **41 → 50** wrapper tools; native tool count stated for the first time (**24**); in-app suite
 **40 → 56**; and `GET /api/subtasks/{id}`, `GET /api/acceptance-criteria/{id}`,
 `GET /api/requirements/{id}` were listed as existing — **they do not exist**. The route map in
-[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md#rest-surface-102-operations) now marks them.
+[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md#rest-surface) now marks them.
 
 Also corrected: `#82`, `#83`, `#85`, `#88`, and `#89` were all cited as open/broken. All five
 are **closed**, and the code enforces what they asked for.

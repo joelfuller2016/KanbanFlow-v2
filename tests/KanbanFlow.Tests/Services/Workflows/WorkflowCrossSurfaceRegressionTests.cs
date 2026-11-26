@@ -97,8 +97,10 @@ public sealed class WorkflowCrossSurfaceRegressionTests
         Assert.Equal(1, await db.ActivityEvents.CountAsync(audit => audit.EventType == "plan.save"));
     }
 
-    [Fact]
-    public async Task PublishingRevisedTask_CannotCreateCycleWithDependencyAddedOnUnchangedBoardTask()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task PublishingRevisedTask_CannotCreateCycleWithExistingBoardDependency(bool reviseOtherTask)
     {
         using var f = new WorkflowSqliteTestFactory();
         var a = Draft("A");
@@ -107,9 +109,10 @@ public sealed class WorkflowCrossSurfaceRegressionTests
         var aItem = request.WorkItems.Single(w => w.DraftId == a.Id);
         var bItem = request.WorkItems.Single(w => w.DraftId == b.Id);
         await new TaskDependencyService(f).CreateAsync(new TaskDependencyCreate(aItem.TaskItemId, bItem.TaskItemId, TaskDependencyType.DependsOn));
-        // The draft alone is acyclic (B -> A). A's existing board edge (A -> B)
-        // remains because its draft is unchanged, so publication must check their union.
-        await f.Service.SavePlanAsync(request.Id, request.Version, [a, b with { Dependencies = [a.Id] }], "planner", "revised-plan", expectedTaskStates: await f.ReadTaskTokensAsync(request.Id));
+        // The draft alone is acyclic (B -> A), but A's existing board edge (A -> B)
+        // remains even when A's title changes, so publication must check their union.
+        var nextA = reviseOtherTask ? a with { Title = "Revised A" } : a;
+        await f.Service.SavePlanAsync(request.Id, request.Version, [nextA, b with { Dependencies = [a.Id] }], "planner", "revised-plan", expectedTaskStates: await f.ReadTaskTokensAsync(request.Id));
         request = await f.LoadAsync(request.Id);
         var unpublished = request.Plans.MaxBy(p => p.Number)!;
         var rejection = await RejectAsync("invalid", () => f.Service.PublishPlanAsync(request.Id, request.Version, unpublished.Id, "publisher", "cyclic-publication"));
@@ -121,6 +124,7 @@ public sealed class WorkflowCrossSurfaceRegressionTests
         var afterA = after.WorkItems.Single(w => w.DraftId == a.Id);
         var afterB = after.WorkItems.Single(w => w.DraftId == b.Id);
         Assert.Equal(aItem.TaskItemId, afterA.TaskItemId);
+        Assert.Equal(aItem.Task.Name, afterA.Task.Name);
         Assert.Equal(bItem.TaskItemId, afterB.TaskItemId);
         Assert.Equal(bItem.TaskItemId, Assert.Single(afterA.Task.Dependencies).DependsOnTaskItemId);
         Assert.Empty(afterB.Task.Dependencies);

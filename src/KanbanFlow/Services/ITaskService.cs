@@ -214,6 +214,13 @@ public interface ITaskService
     Task<TaskComment> AddCommentAsync(int taskId, string text, string? author, CommentType type, string? actor, CancellationToken ct = default);
 
     /// <summary>
+    /// Adds a complete GitHub source comment, or returns the complete copy already saved for the
+    /// same task and GitHub node ID. Preserves older comments, including clipped imports.
+    /// </summary>
+    Task<(TaskComment Comment, bool Created)> ImportGitHubCommentAsync(
+        int taskId, string githubCommentId, string text, string? author, CommentType type, string? actor, CancellationToken ct = default);
+
+    /// <summary>
     /// True when <paramref name="type"/> is a comment type a user/agent is allowed to
     /// author directly (Note, Decision, Question, Blocked, Handoff, Verification,
     /// Comment). System-generated types (StatusChange, Created, FeatureChange, …) are

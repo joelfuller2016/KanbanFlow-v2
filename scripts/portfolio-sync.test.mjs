@@ -6,6 +6,7 @@ import { promisify } from "node:util";
 import {
   commentTextFor, completeCommentIds, descriptionFor, descriptionRefreshFor,
   needsContentRestoration, restoreContent, syncComments,
+  fetchOpenIssues, fetchClosedIssues, fetchOpenPrs, statusRepo,
 } from "./portfolio-sync.mjs";
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
@@ -17,6 +18,107 @@ const issue = (body, number = 488) => ({ id: `I_${number}`, number, title: "Keep
   milestone: { title: "M1" }, labels: [{ name: "bug" }] });
 const bodyOf = (description) => description.slice(description.indexOf("<!-- /kanbanflow-sync -->\n\n") + "<!-- /kanbanflow-sync -->\n\n".length);
 const legacy = (body, number = 488) => `<!-- kanbanflow-sync -->\n**Issue:** https://github.com/owner/repository/issues/${number}\n**State:** OPEN · **Milestone:** M1 · **Labels:** bug\n**Open PR:** none\n**Synced:** 2026-08-30T12:00:00.000Z\n<!-- /kanbanflow-sync -->\n\n${body}`;
+
+const previewComments = Array.from({ length: 100 }, (_, n) => ({ id: `IC_${n}`, body: "preview" }));
+const pagedComments = previewComments.map((_, n) => ({
+  id: n + 1000, node_id: `IC_${n}`, user: { login: "octocat" }, body: `complete ${n}  \n`,
+  html_url: `https://github.com/octo/board/issues/42#issuecomment-${n + 1000}`, created_at: "2026-08-01T00:00:00Z",
+}));
+const lastComment = { ...pagedComments[0], id: 1100, node_id: "IC_last", body: "    last page 漢🙂  \r\n\t" };
+
+test("open and full closed issue reads recover saturated comments and preserve their source fields", async () => {
+  for (const list of [fetchOpenIssues, (repo, comments, read) => fetchClosedIssues(repo, true, comments, read)]) {
+    const [item, short] = await list("octo/board", true, async args => {
+      if (args[0] === "issue") return [{ number: 42, comments: previewComments }, { number: 43, comments: [{ id: "IC_only" }] }];
+      assert.ok(args.includes("--paginate") && args.includes("--slurp"));
+      assert.ok(args.some(a => a.split("?")[0] === "repos/octo/board/issues/42/comments"));
+      return [pagedComments, [lastComment]];
+    });
+    assert.equal(item.comments.length, 101);
+    const last = item.comments.at(-1);
+    assert.deepEqual([last.id, last.body, last.author.login, last.url, last.createdAt],
+      ["IC_last", lastComment.body, "octocat", lastComment.html_url, lastComment.created_at]);
+    assert.deepEqual(short.comments, [{ id: "IC_only" }]);
+  }
+});
+
+test("PR discussion, reviews and inline comments each preserve the last REST page", async () => {
+  const review = { ...lastComment, node_id: "PRR_last", state: "CHANGES_REQUESTED", submitted_at: "2026-08-05T00:00:00Z" };
+  const inline = { ...lastComment, node_id: "PRRC_last", path: "src/file.cs", line: 22 };
+  const [pr] = await fetchOpenPrs("octo/board", true, async args => {
+    if (args[0] === "pr") return [{ number: 91, comments: previewComments, reviews: previewComments }];
+    assert.ok(args.includes("--paginate") && args.includes("--slurp"));
+    const endpoint = args.find(a => a.startsWith("repos/")).split("?")[0];
+    if (endpoint === "repos/octo/board/issues/91/comments") return [pagedComments, [lastComment]];
+    if (endpoint === "repos/octo/board/pulls/91/reviews") return [pagedComments, [review]];
+    assert.equal(endpoint, "repos/octo/board/pulls/91/comments");
+    return [pagedComments, [inline]];
+  });
+  assert.equal(pr.comments.at(-1).id, "IC_last");
+  const last = pr.reviews.at(-1);
+  assert.deepEqual([last.id, last.state, last.body, last.author.login, last.submittedAt, last.url],
+    ["PRR_last", "CHANGES_REQUESTED", review.body, "octocat", review.submitted_at, review.html_url]);
+  assert.deepEqual(pr.inlineComments.at(-1), inline);
+});
+
+test("hydrating reviews preserves a footer-ending legacy copy and repairs a genuinely clipped review", async () => {
+  const prUrl = "https://github.com/octo/board/pull/91";
+  const full = `    source with Markdown  \r\n\r\n${COMMENT_FOOTER}`;
+  const [pr] = await fetchOpenPrs("octo/board", true, async args => {
+    if (args[0] === "pr") return [{ number: 91, url: prUrl, comments: [], reviews: previewComments }];
+    if (args.some(arg => arg.includes("/reviews?"))) {
+      return [[1, 2, 3].map(n => ({ ...lastComment, node_id: `PRR_${n}`, state: "APPROVED", body: full,
+        html_url: `${prUrl}#pullrequestreview-${n}`, submitted_at: lastComment.created_at }))];
+    }
+    return [[]];
+  });
+  const header = "_[PR #7 review · **APPROVED**](https://github.com/octo/old-name/pull/7)_";
+  const stored = [
+    { text: `<!-- gh:PRR_1 -->\r\n${header}\r\n\r\n${full}` },
+    { text: `<!-- gh:PRR_2 -->\n${header}\n\npartial\n\n${COMMENT_FOOTER}` },
+    { text: `<!-- gh:PRR_3 -->\nAn authored heading\n\n${full}` },
+  ];
+  const writes = [];
+  await syncComments(issue("body"), pr, 7, { dryRun: false }, async (method, path, body) => {
+    if (method === "GET") return stored;
+    writes.push(body);
+    return { created: true };
+  });
+  assert.deepEqual(writes.map(w => w.githubCommentId), ["PRR_2", "PRR_3"]);
+  assert.ok(writes[0].text.endsWith(`_[PR #91 review · **APPROVED**](${prUrl}#pullrequestreview-2)_\n\n${full}`));
+  assert.equal(pr.reviews[0].url, `${prUrl}#pullrequestreview-1`);
+});
+
+test("a failed saturated discussion read cannot pass as a complete preview", async () => {
+  const mod = await import("./portfolio-sync.mjs?failed-discussion");
+  await assert.rejects(mod.fetchOpenIssues("octo/board", true, async args => {
+    if (args[0] === "issue") return [{ number: 42, comments: previewComments }];
+    throw new Error("pagination rate limited");
+  }), /pagination rate limited/);
+  assert.ok(mod.stats.incomplete.some(note => /repos\/octo\/board\/issues\/42\/comments.*pagination rate limited/.test(note)));
+});
+
+test("missing and non-array discussion previews recover from the complete endpoint", async () => {
+  const items = await fetchOpenIssues("octo/board", true, async args => {
+    if (args[0] === "issue") return [{ number: 42 }, { number: 43, comments: {} }];
+    if (args.some(a => a.includes("issues/42/comments"))) return [[lastComment]];
+    assert.ok(args.some(a => a.includes("issues/43/comments")));
+    return [[]];
+  });
+  assert.equal(items[0].comments?.[0]?.id, "IC_last");
+  assert.deepEqual(items[1].comments, []);
+});
+
+test("comment-free source reads omit nested collections and skip comment endpoints", async () => {
+  const read = async args => {
+    assert.ok(["issue", "pr"].includes(args[0]));
+    assert.doesNotMatch(args.at(-1), /comments|reviews/);
+    return [{ number: 42 }];
+  };
+  await fetchOpenIssues("octo/board", false, read);
+  await fetchClosedIssues("octo/board", true, false, read);
+  await fetchOpenPrs("octo/board", false, read);
+});
 
 test("descriptionFor preserves the entire large Unicode Markdown body including whitespace and tail", () => {
   const body = `  \r\n# Full issue\r\n\r\n\`\`\`json\r\n${'{"path":"C:\\\\work", "text":"漢字🙂"}\r\n'.repeat(4000)}\`\`\`\r\nLAST REQUIRED ACCEPTANCE CHECK  \r\n\t`;
@@ -134,6 +236,7 @@ test("an incomplete comment does not block a full additive repair, which then de
   const literal = { text: commentTextFor({ ghId: "IC_literal", header: "source", body: COMMENT_FOOTER }) };
   assert.equal(completeCommentIds([literal]).has("IC_literal"), true);
   assert.deepEqual([...completeCommentIds([{ text: "ordinary note" }, { text: "<!-- gh:IC_existing -->\nold complete copy" }])], ["IC_existing"]);
+  assert.equal(completeCommentIds([{ text: "A human quoted the marker:\n<!-- gh:IC_quoted -->\n" }]).has("IC_quoted"), false);
 });
 
 function fixture({ taskChanges = {}, sourceMissing = false, conflictingProject = false, mutateBeforeWrite = false, corruptSave = false, projectDescription = "<!-- github: owner/repository -->" } = {}) {
@@ -296,23 +399,62 @@ test("comment sync appends an incomplete source once and does not duplicate a co
   const stored = [{ text: oldText }, { text: literalText }];
   const writes = [];
   const request = async (method, path, body) => {
-    assert.equal(path, "/api/tasks/7/comments");
-    if (method === "GET") return structuredClone(stored);
+    if (method === "GET") {
+      assert.equal(path, "/api/tasks/7/comments");
+      return structuredClone(stored);
+    }
     assert.equal(method, "POST");
+    assert.equal(path, "/api/tasks/7/comment-imports/github");
     writes.push(body);
     stored.push({ text: body.text });
-    return { id: 99 };
+    return { id: 99, created: true };
   };
   await syncComments(incoming, null, 7, { dryRun: true }, request);
   assert.equal(writes.length, 0);
   await syncComments(incoming, null, 7, { dryRun: false }, request);
   assert.equal(writes.length, 1);
+  assert.equal(writes[0].githubCommentId, "IC_repair");
   assert.ok(writes[0].text.endsWith(fullBody));
   assert.equal(writes[0].author, "octocat");
   assert.equal(stored[0].text, oldText);
   assert.equal(stored[1].text, literalText);
   await syncComments(incoming, null, 7, { dryRun: false }, request);
   assert.equal(writes.length, 1);
+});
+
+test("comment sync counts a concurrent import as existing after a stale GET", async () => {
+  const mod = await import("./portfolio-sync.mjs?comment-replay");
+  const incoming = { ...issue("body"), comments: [{ id: "IC_shared", body: "Saved by a concurrent run" }] };
+  await mod.syncComments(incoming, null, 7, { dryRun: false }, async (method) =>
+    method === "GET" ? [] : { id: 99, created: false });
+  assert.equal(mod.stats.commentsCreated, 0);
+  assert.equal(mod.stats.commentsUnchanged, 1);
+});
+
+test("an older board without the atomic import endpoint cannot receive an ordinary comment write", async () => {
+  const mod = await import("./portfolio-sync.mjs?missing-import-endpoint");
+  const posts = [];
+  const incoming = { ...issue("body"), comments: [{ id: "IC_shared", body: "Comment" }] };
+  await assert.rejects(mod.syncComments(incoming, null, 7, { dryRun: false }, async (method, path) => {
+    if (method === "GET") return [];
+    posts.push(path);
+    if (path === "/api/tasks/7/comment-imports/github") throw new Error("404 Not Found");
+    return { id: 80 };
+  }), /404 Not Found/);
+  assert.deepEqual(posts, ["/api/tasks/7/comment-imports/github"]);
+  assert.equal(mod.stats.commentsCreated, 0);
+  assert.equal(mod.stats.commentsUnchanged, 0);
+});
+
+test("comment import requires an explicit boolean result before counting a successful response", async () => {
+  const mod = await import("./portfolio-sync.mjs?malformed-import-response");
+  const incoming = { ...issue("body"), comments: [{ id: "IC_shared", body: "Comment" }] };
+  for (const response of [null, { id: 42 }, { id: 42, created: "false" }]) {
+    await assert.rejects(mod.syncComments(incoming, null, 7, { dryRun: false }, async method =>
+      method === "GET" ? [] : response), /created/);
+  }
+  assert.equal(mod.stats.commentsCreated, 0);
+  assert.equal(mod.stats.commentsUnchanged, 0);
 });
 
 test("restore-content CLI refuses an omitted repo before reading an environment portfolio", async () => {
@@ -1476,6 +1618,9 @@ async function runSyncTasks(tag, tasks, issues, {
   featureIds = new Map(),
   projectionStatus = 201,
   projectionCreated = true,
+  closedIssues = [],
+  taskWriteError,
+  globalNodeOwners = new Map(),
 } = {}) {
   const mod = await import(`./portfolio-sync.mjs?${tag}`);
   const requests = [];
@@ -1488,7 +1633,12 @@ async function runSyncTasks(tag, tasks, issues, {
     const path = String(url).replace(/^https?:\/\/[^/]+/, "");
     const body = init.body ? JSON.parse(init.body) : null;
     requests.push({ method: init.method || "GET", path, body });
+    if (body?.status === "Done" && taskWriteError && /^\/api\/tasks\/1(?:\/status)?$/.test(path)) {
+      return Response.json(taskWriteError, { status: 422 });
+    }
     if (path.startsWith("/api/external-work-item-links/github/by-node")) {
+      const owner = globalNodeOwners.get(new URL(url).searchParams.get("externalNodeId"));
+      if (owner) return Response.json(owner);
       return new Response("", { status: 404, statusText: "Not Found" });
     }
     if ((init.method || "GET") === "GET" && /^\/api\/tasks\/\d+\/comments$/.test(path)) {
@@ -1514,7 +1664,7 @@ async function runSyncTasks(tag, tasks, issues, {
   console.log = () => {};
   try {
     await mod.syncTasks(
-      "octo/board", REPO, 1, issues, new Set(), new Map(), featureIds,
+      "octo/board", REPO, 1, issues, new Map(closedIssues.map(i => [i.number, i])), new Map(), featureIds,
       { actor: "tester", dryRun, comments },
       tasks, [], new Map(),
     );
@@ -1527,7 +1677,187 @@ async function runSyncTasks(tag, tasks, issues, {
     drift: mod.stats.drift.slice(driftBefore),
     linksRegistered: mod.stats.linksRegistered - registeredBefore,
     tasksCreated: mod.stats.tasksCreated - createdBefore,
+    tasksUpdated: mod.stats.tasksUpdated,
   };
+}
+
+const closedIssue = (number) => ({
+  ...GH_ISSUE, state: "CLOSED", id: `I_${number}`, number, url: `https://github.com/octo/board/issues/${number}`,
+});
+
+test("default closed sweep validates provenance and durable node identity before changing a card", async () => {
+  const cases = [
+    task(1, "#1 foreign source", SYNC_BLOCK("other", "repo", 1)),
+    task(2, "#2 wrong issue", SYNC_BLOCK("octo", "board", 102)),
+    task(3, "#3 malformed source", SYNC_BLOCK("octo", "board", "bad")),
+    task(4, "Durable number reused", "", [link(4, 4, "I_different")]),
+    task(5, "#5 plain legacy"),
+    task(6, "#6 same source", SYNC_BLOCK("Octo", "Board", 6)),
+    task(7, "Renamed durable task", "", [link(7, 7, "I_7")]),
+    task(8, "#8 incomplete block", "<!-- kanbanflow-sync -->\n**Issue:** https://github.com/other/repo/issues/8"),
+    task(9, "#9 empty block", "<!-- kanbanflow-sync -->\n<!-- /kanbanflow-sync -->"),
+    task(10, "#10 orphaned issue URL", "**Issue:** https://github.com/other/repo/issues/10"),
+    task(11, "#11 contradictory field", "<!-- kanbanflow-sync -->\n**Issue:** https://github.com/octo/board/issues/11\n**Issue:** invalid source reference\n<!-- /kanbanflow-sync -->"),
+    task(12, "#12 ordinary Markdown", "<!-- kanbanflow-sync-notes -->\n**Issue:** our smoke test is flaky"),
+  ];
+  const result = await runSyncTasks("closed-sweep-identities", cases, [], {
+    closedIssues: cases.map(t => closedIssue(t.id)),
+  });
+  assert.deepEqual(result.requests.filter(r => r.method !== "GET").map(r => r.path),
+    ["/api/tasks/5/status", "/api/tasks/6/status", "/api/tasks/7/status", "/api/tasks/12/status"]);
+  for (const id of [1, 2, 3, 4, 8, 9, 10, 11]) {
+    assert.ok(result.drift.some(line => line.includes(`octo/board#${id}:`)), `missing drift for #${id}`);
+  }
+});
+
+test("default sweep defers to the full open record when GitHub list snapshots overlap", async () => {
+  const open = { ...closedIssue(41), state: "OPEN" };
+  const result = await runSyncTasks("closed-sweep-overlap", [task(1, "#41 work")], [open], {
+    closedIssues: [closedIssue(41)],
+  });
+  assert.equal(result.linksRegistered, 1);
+  assert.equal(result.requests.some(r => r.body?.status === "Done"), false);
+});
+
+test("default closed sweep reports numbered foreign and quarantined cards without mutating them", async () => {
+  const tasks = [
+    task(1, "Foreign card", "", [{ ...link(1, 41, "I_foreign"), repositoryExternalId: "R_foreign" }]),
+    task(2, "Quarantined card", "", [link(2, 42, "I_42", "Quarantined")]),
+  ];
+  const result = await runSyncTasks("numbered-closed-drift", tasks, [], {
+    closedIssues: [closedIssue(41), closedIssue(42), closedIssue(43)],
+  });
+  assert.deepEqual(result.requests.filter(r => r.method !== "GET"), []);
+  assert.equal(result.drift.length, 2);
+  assert.ok(result.drift.some(line => /octo\/board#41:.*different repository/.test(line)));
+  assert.ok(result.drift.some(line => /octo\/board#42:.*quarantined link/.test(line)));
+  assert.equal(result.requests.some(r => r.path.includes("I_43")), false);
+  const unrelated = await runSyncTasks("unnumbered-closed-quarantine", [
+    task(3, "Unnumbered quarantine", "", [link(3, null, null, "Quarantined")]),
+  ], [], { closedIssues: [closedIssue(43)] });
+  assert.deepEqual(unrelated.requests, []);
+});
+
+test("default closed sweep verifies a transferred node even when the old repository number changed", async () => {
+  const previous = { ...link(1, 7, "I_42"), repositoryExternalId: "R_old" };
+  const tasks = [task(1, "Original board card", "", [previous])];
+  for (const projectId of [1, 2]) {
+    const result = await runSyncTasks(`closed-transfer-to-project-${projectId}`, tasks, [], {
+      closedIssues: [closedIssue(42), closedIssue(43)],
+      globalNodeOwners: new Map([["I_42", { projectId, link: previous }]]),
+    });
+    assert.ok(result.requests.some(r => r.path.includes("externalNodeId=I_42")));
+    assert.equal(result.requests.some(r => r.path.includes("externalNodeId=I_43")), false);
+    const writes = result.requests.filter(r => r.method !== "GET");
+    if (projectId === 1) {
+      assert.deepEqual(writes.map(r => r.path), ["/api/tasks/1/external-work-item-links/github", "/api/tasks/1/status"]);
+      assert.deepEqual(writes[0].body, {
+        taskId: 1, provider: "GitHub", repositoryExternalId: REPO_ID, repositoryOwner: "octo", repositoryName: "board",
+        externalNodeId: "I_42", externalNumber: 42, url: "https://github.com/octo/board/issues/42", actor: "tester",
+      });
+      assert.equal(writes[1].body.status, "Done");
+      assert.deepEqual(result.drift, []);
+    } else {
+      assert.deepEqual(writes, []);
+      assert.ok(result.drift.some(line => line.includes("project 2")));
+    }
+  }
+});
+
+test("default sweep refreshes an already Done transferred card; previews and reruns write nothing", async () => {
+  const remote = { id: "I_42", number: 42, url: "https://github.com/octo/board/issues/42" };
+  const closedIssues = await fetchClosedIssues("octo/board", false, false, async args => {
+    const fields = args.at(-1).split(",");
+    return [Object.fromEntries(Object.entries(remote).filter(([field]) => fields.includes(field)))];
+  });
+  const old = { ...link(1, 7, "I_42"), repositoryExternalId: "R_old" };
+  const done = { ...task(1, "A board title", "", [old]), status: "Done" };
+  const options = { closedIssues, globalNodeOwners: new Map([["I_42", { projectId: 1, link: old }]]) };
+  const dry = await runSyncTasks("preview-closed-transfer", [done], [], { ...options, dryRun: true });
+  assert.deepEqual(dry.requests.filter(r => r.method !== "GET"), []);
+  const live = await runSyncTasks("done-closed-transfer", [done], [], options);
+  const writes = live.requests.filter(r => r.method !== "GET");
+  assert.deepEqual(writes.map(r => r.path), ["/api/tasks/1/external-work-item-links/github"]);
+  assert.equal(writes[0].body.url, remote.url);
+  const rerun = await runSyncTasks("repeat-closed-transfer", [{ ...done, externalLinks: [{ ...old, ...writes[0].body }] }], [], { closedIssues });
+  assert.deepEqual(rerun.requests, []);
+});
+
+test("default transfer refresh requires an active matching owner and canonical destination URL", async () => {
+  const old = { ...link(1, 7, "I_42"), repositoryExternalId: "R_old" };
+  for (const [name, owner, url] of [
+    ["quarantined", { ...old, state: "Quarantined" }, closedIssue(42).url],
+    ["wrong node", { ...old, externalNodeId: "I_wrong" }, closedIssue(42).url],
+    ["wrong URL", old, "https://github.com/other/board/issues/42"],
+  ]) {
+    const result = await runSyncTasks(`invalid-default-transfer-${name}`, [task(1, "Card", "", [old])], [], {
+      closedIssues: [{ ...closedIssue(42), url }], globalNodeOwners: new Map([["I_42", { projectId: 1, link: owner }]]),
+    });
+    assert.deepEqual(result.requests.filter(r => r.method !== "GET"), []);
+    assert.equal(result.drift.length, 1);
+  }
+});
+
+test("status reports conflicting closed identities as drift and counts only verified close lag", async () => {
+  const tasks = [
+    { ...task(1, "Done but wrong node", "", [link(1, 41, "I_foreign")]), status: "Done" },
+    task(2, "#42 foreign legacy", SYNC_BLOCK("other", "repo", 42)),
+    task(3, "#43 ordinary legacy"),
+    task(4, "Closed under a new number", "", [link(4, 80, "I_44")]),
+    task(5, "Transferred from another repo", "", [{ ...link(5, 7, "I_45"), repositoryExternalId: "R_old" }]),
+  ];
+  const read = async args => {
+    if (args[0] === "api" && args[1] === "repos/octo/board")
+      return { node_id: REPO_ID, owner: { login: "octo" }, name: "board" };
+    if (args.includes("closed")) return [41, 42, 43, 44, 45].map(closedIssue);
+    return [];
+  };
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async (url, init) => {
+    assert.equal(init.method, "GET");
+    return Response.json(new URL(url).pathname.endsWith("/tasks") ? tasks : []);
+  };
+  try {
+    const result = await statusRepo("octo/board", { actor: "tester" }, [{ id: 1, name: "board" }], read);
+    assert.equal(result.drift.length, 3);
+    assert.ok(result.drift.some(line => /#41.*I_foreign/.test(line)));
+    assert.ok(result.drift.some(line => /#42.*other\/repo/.test(line)));
+    assert.ok(result.drift.some(line => /#45.*R_old/.test(line)));
+    assert.deepEqual(result.pending, ["3 task(s) whose issue is closed but which are not Done"]);
+    tasks[4] = { ...tasks[4], status: "Done", externalLinks: [link(5, 45, "I_45")] };
+    const refreshed = await statusRepo("octo/board", { actor: "tester" }, [{ id: 1, name: "board" }], read);
+    assert.equal(refreshed.drift.some(line => line.includes("#45") || line.includes("R_old")), false);
+    assert.deepEqual(refreshed.pending, ["2 task(s) whose issue is closed but which are not Done"]);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
+for (const full of [false, true]) {
+  test(`Done gate reports the affected task and continues in ${full ? "full" : "default"} closed sync`, async () => {
+    const closed = [closedIssue(41), closedIssue(42)];
+    const result = await runSyncTasks(`done-refusal-${full}`, [task(1, "#41 gated"), task(2, "#42 ready")],
+      full ? closed : [], {
+        closedIssues: full ? [] : closed,
+        taskWriteError: { message: "Task 1 has unmet acceptance criteria", taskId: 1, unmetCount: 1, unmet: ["Run smoke test"] },
+      });
+    const attempted = result.requests.filter(r => r.body?.status === "Done");
+    assert.deepEqual(attempted.map(r => r.path), full ? ["/api/tasks/1", "/api/tasks/2"] : ["/api/tasks/1/status", "/api/tasks/2/status"]);
+    assert.ok(attempted.every(r => !r.body.overrideReason));
+    assert.equal(result.tasksUpdated, 1);
+    assert.equal(result.drift.length, 1);
+    assert.match(result.drift[0], /octo\/board#41.*task 1/i);
+    assert.match(result.drift[0], /Run smoke test/);
+  });
+  test(`an unrelated 422 surfaces in ${full ? "full" : "default"} closed sync`, async () => {
+    const closed = [closedIssue(41)];
+    await assert.rejects(runSyncTasks(`unexpected-422-${full}`, [task(1, "#41 Foo")], full ? closed : [], {
+      closedIssues: full ? [] : closed, taskWriteError: { message: "Unexpected constraint" },
+    }), /422.*Unexpected constraint/);
+    await assert.rejects(runSyncTasks(`malformed-gate-${full}`, [task(1, "#41 Foo")], full ? closed : [], {
+      closedIssues: full ? [] : closed, taskWriteError: { taskId: 1, unmetCount: 1, unmet: ["Missing message"] },
+    }), /422.*Missing message/);
+  });
 }
 
 test("new verified inbound issue makes one atomic request with the plain title", async () => {

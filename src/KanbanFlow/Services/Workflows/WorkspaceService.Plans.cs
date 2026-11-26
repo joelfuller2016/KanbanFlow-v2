@@ -51,31 +51,51 @@ public sealed partial class WorkspaceService
             if (await db.ProjectRepositories.CountAsync(r => repositoryIds.Contains(r.Id) && r.ProjectId == request.ProjectId, ct) != repositoryIds.Length)
                 throw Invalid("A draft repository no longer belongs to this request's project. Update the plan before publishing.");
             var baseline = JsonSerializer.Deserialize<Dictionary<int, string>>(plan.TaskBaselineJson)!;
-            var changedTaskIds = request.WorkItems
-                .Where(item => item.SpecificationHash != Hash(drafts.Single(d => d.Id == item.DraftId)))
-                .Select(item => item.TaskItemId);
-            var taskSnapshot = await TaskSnapshot.LoadAsync(db, changedTaskIds, ct);
+            // A deleted prerequisite can keep its draft identity when publication creates a replacement board task.
+            var mappedDraftIds = request.WorkItems.Select(item => item.DraftId).ToHashSet();
+            var affectedTaskIds = request.WorkItems.Where(item =>
+            {
+                var draft = drafts.Single(d => d.Id == item.DraftId);
+                return item.SpecificationHash != Hash(draft) || draft.Dependencies.Any(dependency => !mappedDraftIds.Contains(dependency));
+            }).Select(item => item.TaskItemId).ToHashSet();
+            var taskSnapshot = await TaskSnapshot.LoadAsync(db, affectedTaskIds, ct);
             foreach (var item in request.WorkItems)
             {
                 if (item.Task.Feature.ProjectId != request.ProjectId) throw Invalid($"Task #{item.TaskItemId} moved to another project. Resolve its request mapping before publishing.");
-                var draft = drafts.Single(d => d.Id == item.DraftId);
-                if (item.SpecificationHash != Hash(draft) && (!baseline.TryGetValue(item.TaskItemId, out var savedHash)
+                if (affectedTaskIds.Contains(item.TaskItemId) && (!baseline.TryGetValue(item.TaskItemId, out var savedHash)
                     || savedHash != taskSnapshot.PublicationHash(item.TaskItemId)))
                     throw new WorkflowException("conflict", $"Task #{item.TaskItemId} changed on the board after this plan was saved. Review its current fields and save a revised plan before publishing.");
             }
+            await RequireNoActivePlanDependentsAsync(db, request, affectedTaskIds, ct);
             Feature? feature = request.FeatureId is int featureId ? await db.Features.FindAsync([featureId], ct) : null;
             feature ??= new Feature { Name = request.Title, ProjectId = request.ProjectId.Value, CreatedAt = Now, UpdatedAt = Now };
             if (feature.Id == 0) db.Features.Add(feature);
             await db.SaveChangesWithAuditAsync(actor, ct);
             request.FeatureId = feature.Id;
-            var changed = new List<PlannedTask>();
+            var changed = new List<(PlannedTask Item, Guid[] RemovedDependencies, Guid[] AddedDependencies)>();
             for (var index = 0; index < drafts.Length; index++)
             {
                 var draft = drafts[index];
                 var hash = Hash(draft);
                 var item = request.WorkItems.SingleOrDefault(w => w.DraftId == draft.Id);
-                if (item is not null && item.SpecificationHash == hash) { item.Task.SortOrder = index; continue; }
-                if (item?.Task.Status == WorkStatus.InProgress) throw Invalid("Move active work out of In progress before adopting a changed specification.");
+                if (item is not null)
+                {
+                    if (!affectedTaskIds.Contains(item.TaskItemId)) { item.Task.SortOrder = index; continue; }
+                    if (item.Task.Status == WorkStatus.InProgress) throw Invalid("Move active work out of In progress before adopting a changed specification or restoring a prerequisite.");
+                    if (item.SpecificationHash == hash)
+                    {
+                        // The draft is unchanged, but the replacement prerequisite invalidates prior work.
+                        item.Task.SortOrder = index;
+                        item.SpecificationVersion++;
+                        await TaskService.ChangeStatusInContextAsync(db, item.TaskItemId, WorkStatus.Todo, actor, ct);
+                        foreach (var criterion in item.Task.AcceptanceCriteria) { criterion.Completed = false; criterion.UpdatedAt = Now; }
+                        changed.Add((item, [], draft.Dependencies.Where(dependency => !mappedDraftIds.Contains(dependency)).ToArray()));
+                        continue;
+                    }
+                }
+
+                // Compare the previously published specification with the revised draft. Board dependencies can change independently.
+                Guid[] previousDependencies = item is null ? [] : JsonSerializer.Deserialize<TaskDraft>(item.SpecificationJson)!.Dependencies;
                 if (item is null)
                 {
                     var task = await TaskService.CreateInContextAsync(db,
@@ -96,31 +116,44 @@ public sealed partial class WorkspaceService
                     new TaskUpdate(draft.Title, draft.Description, WorkStatus.Todo, draft.Priority, draft.Assignee, index), actor, ct);
                 item.Task.AcceptanceCriteria.AddRange(draft.Acceptance.Split('\n', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries)
                     .Select((text, order) => new AcceptanceCriterion { Text = text, SortOrder = order, CreatedAt = Now, UpdatedAt = Now }));
-                changed.Add(item);
+                changed.Add((item, previousDependencies.Except(draft.Dependencies).ToArray(),
+                    draft.Dependencies.Where(dependency => !previousDependencies.Contains(dependency) || !mappedDraftIds.Contains(dependency)).ToArray()));
             }
-            await InvalidateDependentsAsync(db, request, changed.Select(w => w.TaskItemId).Where(taskId => taskId != 0).ToHashSet(), actor, ct);
+            await InvalidateDependentsAsync(db, request, changed.Select(change => change.Item.TaskItemId).Where(taskId => taskId != 0).ToHashSet(),
+                actor, ct);
             // IDs become available here; the surrounding transaction still owns every write and receipt.
             await db.SaveChangesWithAuditAsync(actor, ct);
-            var changedIds = changed.Select(item => item.TaskItemId).ToArray();
-            if (changedIds.Length > 0)
+            if (changed.Any(change => change.RemovedDependencies.Length > 0 || change.AddedDependencies.Length > 0))
             {
-                var oldEdges = await db.TaskDependencies.Where(d => changedIds.Contains(d.TaskItemId)).ToListAsync(ct);
-                db.TaskDependencies.RemoveRange(oldEdges);
-            }
-            await db.SaveChangesWithAuditAsync(actor, ct);
-            var resultingEdges = await db.TaskDependencies.AsNoTracking().Where(d => d.ProjectId == request.ProjectId).ToListAsync(ct);
-            foreach (var item in changed)
-            {
-                var draft = drafts.Single(d => d.Id == item.DraftId);
-                foreach (var dependency in draft.Dependencies)
+                var taskIdsByDraft = request.WorkItems.ToDictionary(item => item.DraftId, item => item.TaskItemId);
+                var resultingEdges = await db.TaskDependencies.Where(d => d.ProjectId == request.ProjectId)
+                    .ToDictionaryAsync(d => (d.TaskItemId, d.DependsOnTaskItemId), ct);
+
+                // Apply all removals before cycle checks. A deleted board task has no mapping or edges to remove.
+                foreach (var (item, removedDependencies, _) in changed)
                 {
-                    var blocker = request.WorkItems.Single(w => w.DraftId == dependency).TaskItemId;
-                    if (TaskDependencyService.WouldCreateCycle(item.TaskItemId, blocker, resultingEdges))
-                        throw Invalid("This plan conflicts with dependencies edited on the board and would create a cycle. Revise the plan.");
-                    var edge = new TaskDependency { ProjectId = request.ProjectId.Value, TaskItemId = item.TaskItemId,
-                        DependsOnTaskItemId = blocker, CreatedAt = Now };
-                    resultingEdges.Add(edge);
-                    db.TaskDependencies.Add(edge);
+                    foreach (var dependency in removedDependencies)
+                    {
+                        if (taskIdsByDraft.TryGetValue(dependency, out var blocker)
+                            && resultingEdges.Remove((item.TaskItemId, blocker), out var edge))
+                            db.TaskDependencies.Remove(edge);
+                    }
+                }
+
+                foreach (var (item, _, addedDependencies) in changed)
+                {
+                    foreach (var dependency in addedDependencies)
+                    {
+                        var blocker = taskIdsByDraft[dependency];
+                        var pair = (item.TaskItemId, blocker);
+                        if (resultingEdges.ContainsKey(pair)) continue;
+                        if (TaskDependencyService.WouldCreateCycle(item.TaskItemId, blocker, resultingEdges.Values))
+                            throw Invalid("This plan conflicts with dependencies edited on the board and would create a cycle. Revise the plan.");
+                        var edge = new TaskDependency { ProjectId = request.ProjectId.Value, TaskItemId = item.TaskItemId,
+                            DependsOnTaskItemId = blocker, CreatedAt = Now };
+                        resultingEdges.Add(pair, edge);
+                        db.TaskDependencies.Add(edge);
+                    }
                 }
             }
             plan.PublishedAt = Now;
