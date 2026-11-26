@@ -451,11 +451,21 @@ test("comment import requires an explicit boolean result before counting a succe
   assert.equal(mod.stats.commentsUnchanged, 0);
 });
 
+function portfolioCliWithPreload(preload, ...args) {
+  const cli = fileURLToPath(new URL("./portfolio-sync.mjs", import.meta.url));
+  // Node 18 versions before 18.18 do not have the --import flag. The file
+  // argument still lands in argv[1], where the CLI checks for direct execution.
+  const program = `
+    ${preload}
+    await import((await import("node:url")).pathToFileURL(process.argv[1]).href);
+  `;
+  return ["--input-type=module", "--eval", program, "--", cli, ...args];
+}
+
 test("restore-content CLI refuses an omitted repo before reading an environment portfolio", async () => {
   const rejectFetch = "globalThis.fetch = async () => { throw new Error('UNEXPECTED_API_REQUEST'); };";
-  const cli = fileURLToPath(new URL("./portfolio-sync.mjs", import.meta.url));
   await assert.rejects(promisify(execFile)(process.execPath,
-    ["--import", `data:text/javascript,${encodeURIComponent(rejectFetch)}`, cli, "restore-content"], {
+    portfolioCliWithPreload(rejectFetch, "restore-content"), {
       env: { ...process.env, KANBANFLOW_API_URL: "http://127.0.0.1:1", KANBANFLOW_PORTFOLIO_REPOS: "owner/should-not-be-read" },
       timeout: 10_000,
       windowsHide: true,
@@ -802,6 +812,7 @@ function installPushLabelTestTransport(labelCount) {
   };
   syncBuiltinESMExports();
 
+  const json = value => new Response(JSON.stringify(value));
   globalThis.fetch = async (url, options) => {
     if (options.method !== "GET") {
       console.error("UNEXPECTED BOARD WRITE:", options.method, url);
@@ -809,11 +820,11 @@ function installPushLabelTestTransport(labelCount) {
     }
     switch (new URL(url).pathname) {
       case "/api/projects":
-        return Response.json([{ id: 2, name: "board", description: "<!-- github-node: R_board -->" }]);
+        return json([{ id: 2, name: "board", description: "<!-- github-node: R_board -->" }]);
       case "/api/projects/2/tasks":
-        return Response.json([{ id: 7, name: "A high-priority task", description: "Full body.", priority: "High", status: "Todo", updatedAt: "2026-10-01T00:00:00Z" }]);
+        return json([{ id: 7, name: "A high-priority task", description: "Full body.", priority: "High", status: "Todo", updatedAt: "2026-10-01T00:00:00Z" }]);
       case "/api/projects/2/external-work-item-links":
-        return Response.json([]);
+        return json([]);
       default:
         throw new Error(`Unexpected board request: ${url}`);
     }
@@ -828,9 +839,7 @@ async function runPushLabelCli(labelCount, ...options) {
     import { promisify } from "node:util";
     (${installPushLabelTestTransport})(${JSON.stringify(labelCount)});
   `;
-  const cli = fileURLToPath(new URL("./portfolio-sync.mjs", import.meta.url));
-  const args = ["--import", `data:text/javascript,${encodeURIComponent(preload)}`, cli,
-    "push-issue", "octo/board", "--task", "7", ...options];
+  const args = portfolioCliWithPreload(preload, "push-issue", "octo/board", "--task", "7", ...options);
   try {
     const output = await promisify(execFile)(process.execPath, args, {
       env: { ...process.env, KANBANFLOW_API_URL: "http://127.0.0.1:1", KANBANFLOW_GH_PAGE_LIMIT: "3" },
