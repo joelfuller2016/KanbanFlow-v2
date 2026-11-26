@@ -1,4 +1,5 @@
 using KanbanFlow.Models;
+using KanbanFlow.Models.Workflows;
 using KanbanFlow.Services;
 using Microsoft.EntityFrameworkCore;
 
@@ -14,6 +15,109 @@ namespace KanbanFlow.Tests;
 /// </summary>
 public sealed class TestAuditCleanupTests
 {
+    [Fact]
+    public async Task PurgePreservesRealIdeaMemoryAndProjectAuditWrittenDuringTheRun()
+    {
+        using var factory = new SqliteTestFactory();
+        var runStart = DateTime.UtcNow;
+        await using var db = await factory.CreateDbContextAsync();
+        Assert.Contains(":memory:", db.Database.GetDbConnection().ConnectionString, StringComparison.Ordinal);
+        var preExistingProjectIds = await db.Projects.Select(p => p.Id).ToListAsync();
+
+        var ideas = new IdeaService(factory);
+        var idea = await ideas.CreateAsync(new IdeaCreate("User idea"), "user");
+        await ideas.UpdateAsync(idea.Id, new IdeaUpdate(Title: "Renamed user idea", ExpectedWorkflowVersion: idea.WorkflowVersion), "user");
+        await ideas.DeleteAsync(idea.Id, "user");
+
+        var memory = new MemoryService(factory);
+        foreach (var (scope, scopeKey) in new[]
+        {
+            (MemoryScope.Feature, "7"),
+            (MemoryScope.Agent, "agent-1"),
+            (MemoryScope.Session, "session-1"),
+            (MemoryScope.Project, "424242")
+        })
+        {
+            await memory.CreateNodeAsync(new MemoryNodeCreate(MemoryType.Decision, scope, scopeKey, "Keep this memory"), "agent-1");
+        }
+
+        var project = new Project { Name = "User project created during the run" };
+        db.Projects.Add(project);
+        await db.SaveChangesAsync();
+        await new TaskService(factory).DeleteProjectAsync(project.Id, "user");
+
+        var before = await db.ActivityEvents.AsNoTracking().OrderBy(e => e.Id).ToListAsync();
+        Assert.Equal(new[]
+        {
+            "IdeaCreated", "IdeaUpdated", "IdeaDeleted", "WorkRequestDeleted", "RequestMessageDeleted",
+            "MemoryCreated", "MemoryCreated", "MemoryCreated", "MemoryCreated", "ProjectDeleted"
+        }, before.Select(e => e.EventType));
+        Assert.All(before, e => Assert.True(e.CreatedAt >= runStart));
+
+        var fixtureProject = new Project { Name = "Runner project" };
+        db.Projects.Add(fixtureProject);
+        await db.SaveChangesAsync();
+        await new TaskService(factory).DeleteProjectAsync(fixtureProject.Id, "test-runner");
+        var fixtureIdea = await ideas.CreateAsync(new IdeaCreate("Runner idea"), "test-runner");
+        await ideas.DeleteAsync(fixtureIdea.Id, "test-runner");
+
+        // A project-scoped memory can independently refer to the now-deleted fixture's ID.
+        var fixtureScope = fixtureProject.Id.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        var memoryForMissingFixture = await memory.CreateNodeAsync(
+            new MemoryNodeCreate(MemoryType.Decision, MemoryScope.Project, fixtureScope, "User memory"), "agent-1");
+        var keepMemoryEventId = await db.ActivityEvents
+            .Where(e => e.EntityType == "MemoryNode" && e.EntityId == memoryForMissingFixture.Id)
+            .Select(e => e.Id).SingleAsync();
+
+        var purged = await TestAuditCleanup.PurgeOrphanedSinceAsync(
+            factory, runStart, preExistingProjectIds, [fixtureProject.Id], [fixtureIdea.Id]);
+
+        Assert.Equal(5, purged); // Project delete plus the idea create/delete and its two cascade events.
+        var after = await db.ActivityEvents.OrderBy(e => e.Id).Select(e => e.Id).ToListAsync();
+        Assert.Equal(before.Select(e => e.Id).Append(keepMemoryEventId), after);
+    }
+
+    [Fact]
+    public async Task PurgePreservesUnrelatedRequestAuditWhenItsFixtureProjectIsDeleted()
+    {
+        using var factory = new SqliteTestFactory();
+        var runStart = DateTime.UtcNow;
+        await using var db = await factory.CreateDbContextAsync();
+        var fixtureProject = new Project { Name = "Runner project" };
+        db.Projects.Add(fixtureProject);
+        await db.SaveChangesAsync();
+
+        var ideas = new IdeaService(factory);
+        var userIdea = await ideas.CreateAsync(new IdeaCreate("User idea"), "user");
+        await ideas.PromoteAsync(userIdea.Id, "user", fixtureProject.Id);
+
+        var deletedIdea = await ideas.CreateAsync(new IdeaCreate("Another user idea"), "user");
+        await ideas.PromoteAsync(deletedIdea.Id, "user", fixtureProject.Id);
+        var requestId = await db.WorkRequests.Where(r => r.IdeaId == deletedIdea.Id).Select(r => r.Id).SingleAsync();
+        db.BriefRevisions.Add(new BriefRevision
+        {
+            RequestId = requestId,
+            Number = 1,
+            Outcome = "User brief",
+            Acceptance = "Keep the audit",
+            Author = "user"
+        });
+        await db.SaveChangesAsync();
+        await ideas.DeleteAsync(deletedIdea.Id, "user");
+        await new TaskService(factory).DeleteProjectAsync(fixtureProject.Id, "test-runner");
+
+        var before = await db.ActivityEvents.AsNoTracking().OrderBy(e => e.Id).ToListAsync();
+        Assert.Contains(before, e => e is { EntityType: "WorkRequest", EventType: "WorkRequestUpdated" }
+            && e.ProjectId == fixtureProject.Id);
+        Assert.Contains(before, e => e is { EntityType: "BriefRevision", EventType: "BriefRevisionDeleted" }
+            && e.ProjectId == fixtureProject.Id);
+        var userAuditIds = before.Where(e => e.EntityType != "Project").Select(e => e.Id);
+        await TestAuditCleanup.PurgeOrphanedSinceAsync(factory, runStart, [], [fixtureProject.Id], []);
+
+        var after = await db.ActivityEvents.OrderBy(e => e.Id).Select(e => e.Id).ToListAsync();
+        Assert.Equal(userAuditIds, after);
+    }
+
     [Fact]
     public async Task PurgeOrphanedSince_DeletesOnlyThisRunsOrphans_PreservesPreExistingMidRunAndLive()
     {
@@ -87,11 +191,12 @@ public sealed class TestAuditCleanupTests
             preExistingDeletedMidRunId = preExistingDeletedMidRun.Id;
         }
 
-        // Projects that existed at run start: the live one (still present) and the one a user
-        // deletes mid-run (id 9003). The runner's own throwaway (9001) is deliberately absent.
-        var preExistingProjectIds = new List<int> { liveProjectId, preExistingDeletedMidRunProjectId };
-
-        var deleted = await TestAuditCleanup.PurgeOrphanedSinceAsync(f, runStart, preExistingProjectIds);
+        // Supply each ID as an ownership candidate so the time, pre-existing and live-project
+        // guards each have to rule out a separate row.
+        var deleted = await TestAuditCleanup.PurgeOrphanedSinceAsync(f, runStart,
+            preExistingProjectIds: [preExistingDeletedMidRunProjectId],
+            fixtureProjectIds: [9001, 9002, liveProjectId, preExistingDeletedMidRunProjectId],
+            fixtureIdeaIds: []);
 
         // Only the single test-runner dropping (A) should have been removed.
         Assert.Equal(1, deleted);
