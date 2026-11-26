@@ -1,10 +1,14 @@
 using System.Data.Common;
+using System.Net;
+using System.Net.Http.Json;
+using System.Text.Json;
 using KanbanFlow.Data;
 using KanbanFlow.Mcp;
 using KanbanFlow.Models;
 using KanbanFlow.Services;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
+using ModelContextProtocol;
 
 namespace KanbanFlow.Tests;
 
@@ -431,13 +435,7 @@ public sealed class TaskServiceMutationTests
         using var f = new SqliteTestFactory();
         var (_, taskId) = SeedFeatureWithTask(f, claimedBy: "alice");
         await using var db = f.CreateDbContext();
-        await db.Database.ExecuteSqlRawAsync("""
-            CREATE TRIGGER ignore_release BEFORE UPDATE OF ClaimedBy ON Tasks
-            WHEN NEW.ClaimedBy IS NULL
-            BEGIN
-                SELECT RAISE(IGNORE);
-            END;
-            """);
+        await IgnoreReleaseUpdateAsync(db);
 
         var error = await Assert.ThrowsAsync<TaskClaimStateChangedException>(
             () => new TaskService(f).ReleaseAsync(taskId, "alice"));
@@ -448,6 +446,50 @@ public sealed class TaskServiceMutationTests
         Assert.NotNull(persisted.ClaimedAt);
         Assert.Empty(await db.ActivityEvents.ToListAsync());
     }
+
+    [Fact]
+    public async Task Release_WhenClaimRemains_RestReturnsRetryableConflict()
+    {
+        using var f = new SqliteTestFactory();
+        var claimedAt = DateTime.UtcNow.AddMinutes(-5);
+        var (_, taskId) = SeedFeatureWithTask(f, claimedBy: "alice", claimedAt: claimedAt);
+        await using var db = f.CreateDbContext();
+        await IgnoreReleaseUpdateAsync(db);
+        await using var host = await TaskDeleteActorEndpointTests.TaskHost.StartAsync(f);
+
+        using var response = await host.Client.PostAsJsonAsync($"/api/tasks/{taskId}/release", new { actor = "alice" });
+
+        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal("alice", body.GetProperty("claimedBy").GetString());
+        Assert.Equal(claimedAt, body.GetProperty("claimedAt").GetDateTime());
+        Assert.Contains("retry", body.GetProperty("message").GetString(), StringComparison.OrdinalIgnoreCase);
+        Assert.Empty(await db.ActivityEvents.ToListAsync());
+    }
+
+    [Fact]
+    public async Task Release_WhenClaimRemains_NativeMcpReturnsRetryableError()
+    {
+        using var f = new SqliteTestFactory();
+        var (_, taskId) = SeedFeatureWithTask(f, claimedBy: "alice");
+        await using var db = f.CreateDbContext();
+        await IgnoreReleaseUpdateAsync(db);
+
+        var error = await Assert.ThrowsAsync<McpException>(
+            () => KanbanMcpTools.ReleaseTask(new TaskService(f), taskId, "alice"));
+
+        Assert.Contains("retry", error.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal("alice", (await db.Tasks.SingleAsync(t => t.Id == taskId)).ClaimedBy);
+        Assert.Empty(await db.ActivityEvents.ToListAsync());
+    }
+
+    private static Task IgnoreReleaseUpdateAsync(AppDbContext db) => db.Database.ExecuteSqlRawAsync("""
+        CREATE TRIGGER ignore_release BEFORE UPDATE OF ClaimedBy ON Tasks
+        WHEN NEW.ClaimedBy IS NULL
+        BEGIN
+            SELECT RAISE(IGNORE);
+        END;
+        """);
 
     [Theory]
     [InlineData(false)]
