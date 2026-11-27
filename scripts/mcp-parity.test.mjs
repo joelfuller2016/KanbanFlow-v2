@@ -329,3 +329,14 @@ test("stdio read_graph description states the real 900 cap, not 1000 (F7)", asyn
     assert.ok(!tool.description.includes("1000"), `read_graph description still claims the wrong cap: ${tool.description}`);
   });
 });
+
+test("stdio claim_task advertises renewal, expiry, and audited takeover", async () => {
+  await withTransport(500, undefined, async (rpc, requests) => {
+    const claim = await toolDescription(rpc, "claim_task");
+    assert.match(claim.description, /renew/i);
+    assert.match(claim.description, /fresh claim/i);
+    assert.match(claim.description, /\bTTL\b/);
+    assert.match(claim.description, /TaskClaimStolen/);
+    assert.deepEqual(requests, []);
+  });
+});

@@ -133,7 +133,7 @@ const tools = [
   },
   {
     name: "claim_task",
-    description: "Claim a task for an AI/human actor. Returns a conflict if another actor already owns the claim.",
+    description: "Claim a task for an AI or human actor, or renew your own claim. Another actor's fresh claim conflicts; after the configured TTL, takeover is audited as TaskClaimStolen.",
     inputSchema: {
       type: "object",
       properties: {
