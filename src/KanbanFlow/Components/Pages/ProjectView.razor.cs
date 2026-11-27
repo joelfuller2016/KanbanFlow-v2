@@ -11,6 +11,8 @@ public partial class ProjectView
     private int outlineRevealRequest;
     private bool outlineFocusSelection;
     private bool outlineSortablesRefreshPending;
+    private bool outlineRevealUnavailable;
+    private bool outlineRevealFocusPending;
 
     private OutlineItem? CurrentOutlineItem => outlineHistoryIndex >= 0 &&
         OutlineItemExists(outlineHistory[outlineHistoryIndex]) ? outlineHistory[outlineHistoryIndex] : null;
@@ -26,6 +28,7 @@ public partial class ProjectView
     private void SelectOutlineItem(OutlineItem item)
     {
         if (!OutlineItemExists(item)) return;
+        outlineRevealUnavailable = false;
         if (CurrentOutlineItem != item)
         {
             outlineHistory.RemoveRange(outlineHistoryIndex + 1, outlineHistory.Count - outlineHistoryIndex - 1);
@@ -81,10 +84,23 @@ public partial class ProjectView
     private async Task ShowInOutline()
     {
         // The panel releases its focus trap before invoking this callback.
+        var selection = CurrentOutlineItem;
+        var projectId = Id;
         await OnDetailClose();
+        if (_cts.IsCancellationRequested || Id != projectId) return;
+        if (selection is not { } item || !OutlineItemExists(item))
+        {
+            outlineOpen = false;
+            outlineRevealUnavailable = true;
+            outlineRevealFocusPending = true;
+            return;
+        }
+        if (CurrentOutlineItem != item) return;
+
+        outlineRevealUnavailable = false;
         pendingDetailFocusReturnTaskId = null;
         outlineOpen = true;
-        if (CurrentOutlineItem is { } item) RevealOutlineItem(item, focus: true);
+        RevealOutlineItem(item, focus: true);
     }
 
     private void OpenOutlineTask(TaskItem task)
