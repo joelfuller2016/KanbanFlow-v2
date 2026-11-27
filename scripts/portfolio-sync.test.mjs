@@ -147,12 +147,16 @@ test("sync mirrors both PR discussions to each linked issue and reports only the
   const prs = [
     { number: 102, url: "https://github.com/octo/board/pull/102", body: "Fixes #42", isDraft: true,
       comments: [{ id: "IC_102", author: { login: "reviewer" }, body, createdAt: date }],
-      reviews: [{ id: "PRR_102", author: { login: "reviewer" }, state: "CHANGES_REQUESTED", body, submittedAt: date }] },
+      reviews: [
+        { id: "PRR_102", author: { login: "reviewer" }, state: "CHANGES_REQUESTED", body, submittedAt: date },
+        { id: "PRR_comment_batch_102", state: "COMMENTED", body: "", submittedAt: date },
+      ] },
     { number: 101, url: "https://github.com/octo/board/pull/101", body: "Closes #42; fixes #42; resolves #43",
       comments: [{ id: "IC_101", author: { login: "octocat" }, body, createdAt: date }],
       reviews: [{ id: "PRR_101", author: { login: "octocat" }, state: "APPROVED", body, submittedAt: date }] },
     { number: 103, url: "https://github.com/octo/board/pull/103", body: "No closing reference",
-      comments: [{ id: "IC_103", author: { login: "octocat" }, body, createdAt: date }], reviews: [] },
+      comments: [{ id: "IC_103", author: { login: "octocat" }, body, createdAt: date }],
+      reviews: [{ id: "PRR_comment_batch_103", state: "COMMENTED", body: "", submittedAt: date }] },
   ];
   const read = async args => {
     if (args[0] === "issue") return args.includes("open")
@@ -225,7 +229,7 @@ test("sync mirrors both PR discussions to each linked issue and reports only the
     assert.match(tasks[0].description, /\*\*Open PRs:\*\* https:\/\/github\.com\/octo\/board\/pull\/101, https:\/\/github\.com\/octo\/board\/pull\/102 \(draft\)/);
     assert.deepEqual(savedComments.get(42).map(comment => comment.type), ["Comment", "Comment", "Verification", "Blocked", "Comment", "Comment"]);
     assert.ok([...savedComments.values()].flat().every(comment => comment.text.endsWith(`\n\n${body}`)));
-    assert.ok(log.some(line => /2 issues with linked PRs.*2 linked PRs/.test(line)));
+    assert.ok(log.some(line => /2 issues with linked PRs.*2 linked PRs.*9 GitHub comment imports/.test(line)));
     assert.ok(log.some(line => /! 1 comment\(s\) on PRs/.test(line)));
     assert.equal(mod.stats.commentsCreated, 9);
     prs.reverse();

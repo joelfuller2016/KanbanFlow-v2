@@ -52,7 +52,9 @@ Every open PR that names an issue with a closing keyword such as `Closes #42` co
 conversation, reviews, and inline comments to that issue's task. If a PR closes several issues,
 each task gets the full discussion. Repeated references do not duplicate a comment. The sync
 reports separate counts for linked issues and linked open PRs, and reports discussion that has
-no linked issue in the selected import.
+no linked issue in the selected import. The comment import count uses the same eligible,
+deduplicated comments as the task import. A comment linked to two tasks counts twice because
+each task receives its own copy. Empty review records with no verdict do not count.
 
 New tasks and repairs of incomplete legacy descriptions list all linked open PRs in ascending
 PR-number order and identify draft PRs. The task editor opens each listed PR and still accepts

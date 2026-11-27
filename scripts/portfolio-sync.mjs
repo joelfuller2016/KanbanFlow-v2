@@ -1542,7 +1542,7 @@ async function ensureFeatures(projectId, names, dryRun) {
 // exist yet cannot have comments, so an empty dedupe set is correct there. Everywhere else a real
 // id is required, and the guard below enforces that rather than trusting the call sites.
 async function syncComments(issue, linkedPrs, taskId, args, request = api) {
-  const incoming = collectComments(issue, linkedPrs);
+  const incoming = args.commentsByIssue?.get(issue.number) ?? collectComments(issue, linkedPrs);
   if (incoming.length === 0) return;
 
   // Dedupe against what is already on the task. This read is gated on whether the task EXISTS
@@ -2320,17 +2320,22 @@ async function syncRepo(repo, args, { header = true, repoIdentity: suppliedRepoI
 
   // A PR without a linked issue in the selected import has no task to receive its comments.
   const { issuesWithLinkedPrs, linkedPrNumbers } = summarizePrLinks(prsByIssue, issues);
-  const countPr = (p) => (p.comments?.length || 0) + (p.reviews?.length || 0) + (p.inlineComments?.length || 0);
-  const orphanedPrComments = args.comments
-    ? prs.filter((p) => !linkedPrNumbers.has(p.number)).reduce((n, p) => n + countPr(p), 0)
-    : 0;
-  const mirrorable = args.comments
-    ? issues.reduce((n, i) => n + (i.comments?.length || 0), 0)
-      + prs.filter((p) => linkedPrNumbers.has(p.number)).reduce((n, p) => n + countPr(p), 0)
-    : 0;
+  const commentsByIssue = new Map();
+  let mirrorable = 0;
+  let orphanedPrComments = 0;
+  if (args.comments) {
+    for (const issue of issues) {
+      const incoming = collectComments(issue, prsByIssue.get(issue.number) || []);
+      commentsByIssue.set(issue.number, incoming);
+      mirrorable += incoming.length;
+    }
+    for (const pr of prs) {
+      if (!linkedPrNumbers.has(pr.number)) orphanedPrComments += collectComments({}, [pr]).length;
+    }
+  }
 
   let line = `  ${openIssues.length} open${args.includeClosed ? ` + ${closed.length} closed` : ""} issues · ${prs.length} open PRs · ${issuesWithLinkedPrs} issues with linked PRs · ${linkedPrNumbers.size} linked PRs`;
-  if (args.comments) line += ` · ${mirrorable} GitHub comments`;
+  if (args.comments) line += ` · ${mirrorable} GitHub comment imports`;
   console.log(line);
   if (orphanedPrComments > 0) {
     console.log(`  ! ${orphanedPrComments} comment(s) on PRs without a linked issue in this sync — no task to attach them to, NOT mirrored.`);
@@ -2351,7 +2356,7 @@ async function syncRepo(repo, args, { header = true, repoIdentity: suppliedRepoI
   projectLinks.push(...reconciliation.finalizedLinks);
   await syncTasks(
     repo, repoIdentity, projectId, issues, closedByNumber, prsByIssue, featureIds,
-    { ...args, completePrList: prs.length < GH_PAGE_LIMIT },
+    { ...args, commentsByIssue, completePrList: prs.length < GH_PAGE_LIMIT },
     existingTasks, projectLinks, reconciliation.operationTasks, reconciliation.blockedIssues,
   );
 }
