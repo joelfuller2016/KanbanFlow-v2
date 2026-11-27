@@ -1,9 +1,10 @@
 #!/usr/bin/env node
 
+import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
-import { verifyNullableTextUpdates } from "./mcp-clear-checks.mjs";
+import { nativeToolCall, verifyNullableTextUpdates } from "./mcp-clear-checks.mjs";
 
 const projectId = Number.parseInt(process.argv[2] || "1", 10);
 if (!Number.isInteger(projectId)) {
@@ -286,6 +287,26 @@ try {
   });
   if (updatedIdea?.status !== "Triaging") {
     throw new Error(`update_idea did not return updated status: ${JSON.stringify(updatedIdea)}`);
+  }
+  const ideaPath = `/api/ideas/${createdIdea.id}`;
+  for (const [transport, update] of [
+    ["stdio", args => callTool("update_idea", args)],
+    ["native", args => nativeToolCall(apiBaseUrl, restTimeoutMs, "update_idea", args)]
+  ]) {
+    const read = await restJson(ideaPath);
+    await update({ ideaId: read.id, expectedWorkflowVersion: read.workflowVersion, priority: "High" });
+    const before = await restJson(ideaPath);
+    assert.equal(before.priority, "High", `${transport} could not set the idea priority`);
+    const args = { ideaId: before.id, expectedWorkflowVersion: before.workflowVersion };
+    await update(args);
+    await update({ ...args, priority: null, clearPriority: false });
+    assert.deepEqual(await restJson(ideaPath), before, `${transport} changed an omitted priority`);
+    await assert.rejects(update({ ...args, priority: "Low", clearPriority: true }),
+      /Specify either priority or clearPriority/);
+    assert.deepEqual(await restJson(ideaPath), before, `${transport} changed a rejected idea update`);
+    await update({ ...args, clearPriority: true });
+    assert.equal((await restJson(ideaPath)).priority, null, `${transport} did not clear priority`);
+    console.log(`Idea priority set, preserve, conflict and clear passed through ${transport} MCP.`);
   }
   const promotedIdea = await callTool("promote_idea", { ideaId: createdIdea.id, actor: "mcp-smoke" });
   if (typeof promotedIdea?.projectId !== "number" || promotedIdea.projectId <= 0) {

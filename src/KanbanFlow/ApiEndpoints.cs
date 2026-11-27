@@ -680,6 +680,7 @@ public static class ApiEndpoints
         // PATCH /api/ideas/{id} — partial update (200). null/absent DTO fields mean
         // "leave unchanged". Status/Priority arrive as strings and are parsed at the
         // edge (a present-but-invalid value is 422), mirroring the GET ?status= filter.
+        // clearPriority lets a caller explicitly unset the priority.
         app.MapPatch("/api/ideas/{id:int}", async (int id, IdeaUpdateDto dto, Services.IIdeaService ideaSvc, CancellationToken ct) =>
         {
             IdeaStatus? status = null;
@@ -709,7 +710,8 @@ public static class ApiEndpoints
                     Status: status,
                     Tags: dto.Tags,
                     Priority: priority,
-                    ExpectedWorkflowVersion: dto.ExpectedWorkflowVersion);
+                    ExpectedWorkflowVersion: dto.ExpectedWorkflowVersion,
+                    ClearPriority: dto.ClearPriority == true);
                 var idea = await ideaSvc.UpdateAsync(id, update, dto.Actor, ct);
 
                 return Results.Ok(MapIdea(idea));
@@ -3676,7 +3678,7 @@ public record TaskDependencyDto(int? TaskItemId, int? BlockedTaskId, int? Depend
 // convention — accept the enum as a string and parse it manually.
 public record IdeaCreateDto(string Title, string? Body, string? Plan, string? Tags, string? Priority, string? Actor);
 
-public record IdeaUpdateDto(string? Title, string? Body, string? Plan, string? Status, string? Tags, string? Priority, string? Actor, int? ExpectedWorkflowVersion = null);
+public record IdeaUpdateDto(string? Title, string? Body, string? Plan, string? Status, string? Tags, string? Priority, string? Actor, int? ExpectedWorkflowVersion = null, bool? ClearPriority = null);
 
 public record IdeaPromoteDto(string? Actor);
 

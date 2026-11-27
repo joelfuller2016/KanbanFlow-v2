@@ -310,7 +310,8 @@
                         Status: SelectedStatus,
                         Tags: tags,
                         Priority: SelectedPriority,
-                        ExpectedWorkflowVersion: expectedWorkflowVersion),
+                        ExpectedWorkflowVersion: expectedWorkflowVersion,
+                        ClearPriority: priorityRaw == ""),
                     actor: "User", ct: ct);
             }
 

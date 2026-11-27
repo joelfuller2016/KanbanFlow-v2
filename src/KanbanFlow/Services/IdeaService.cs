@@ -161,6 +161,9 @@ public sealed class IdeaService(IDbContextFactory<AppDbContext> dbFactory) : IId
         if (idea is null)
             throw new IdeaNotFoundException(ideaId);
 
+        if (dto.ClearPriority && dto.Priority is not null)
+            throw new ValidationException("Specify either priority or clearPriority.");
+
         var before = IdeaActivitySnapshot(idea);
         var originalTitle = idea.Title;
         var originalBody = idea.Body;
@@ -202,11 +205,12 @@ public sealed class IdeaService(IDbContextFactory<AppDbContext> dbFactory) : IId
                 throw new ValidationException(StatusTransitionRefusal(idea, dto.Status.Value));
             if (idea.Status != dto.Status.Value) { idea.Status = dto.Status.Value; changed = true; }
         }
-        if (dto.Priority is not null)
+        if (dto.Priority is { } priority && !Enum.IsDefined(priority))
+            throw new ValidationException($"Invalid priority '{priority}'.");
+        if ((dto.ClearPriority || dto.Priority is not null) && idea.Priority != dto.Priority)
         {
-            if (!Enum.IsDefined(dto.Priority.Value))
-                throw new ValidationException($"Invalid priority '{dto.Priority.Value}'.");
-            if (idea.Priority != dto.Priority.Value) { idea.Priority = dto.Priority.Value; changed = true; }
+            idea.Priority = dto.Priority;
+            changed = true;
         }
 
         if (dto.ExpectedWorkflowVersion is not int expectedVersion || expectedVersion < 0)

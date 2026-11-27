@@ -97,6 +97,20 @@ move an idea *into* `Promoted` (#283) **or back out of it** (#285), returning 42
 to the promote endpoint. Every other status transition is free, and a promoted idea's title,
 body, plan, tags, and priority stay fully editable.
 
+Idea edits in the UI, `PATCH /api/ideas/{id}`, and native and stdio `update_idea` share
+one priority contract. Send the version from the original idea read as `expectedWorkflowVersion`.
+
+| Priority input | Result |
+| --- | --- |
+| Omit `priority` or send `null`, with `clearPriority` omitted or false | Preserve the current priority |
+| Send a priority such as `"High"` | Set that priority |
+| Send `"clearPriority": true` with `priority` omitted or null, or select **None** in the editor | Clear the priority |
+| Send a priority value with `"clearPriority": true` | REST 422 or an MCP validation error. The idea stays as it was. |
+
+A clear that changes the stored value writes one `IdeaUpdated` event with a null after-value.
+If the priority is already unset, repeating the clear leaves the version, timestamp,
+and audit trail intact.
+
 ---
 
 ## The write path & audit boundary
