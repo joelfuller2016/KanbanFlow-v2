@@ -130,6 +130,10 @@ public interface ITaskService
     /// <exception cref="ValidationException">Name is empty/too long or an enum value is undefined.</exception>
     Task<TaskItem> UpdateAsync(int taskId, TaskUpdate dto, string? actor, CancellationToken ct = default);
 
+    /// <summary>Updates only the description if its current UTF-8 SHA-256 matches the expected value.</summary>
+    Task<bool> UpdateDescriptionIfCurrentAsync(int taskId, string? expectedSha256, string? description, string? actor,
+        CancellationToken ct = default);
+
     /// <summary>
     /// Delete a task and cascade-clean its children. Subtasks are removed leaf-first
     /// to satisfy the self-referential <c>Subtask.ChildSubtasks</c> Restrict FK;

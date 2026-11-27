@@ -262,7 +262,7 @@ The single most useful table here. Before you edit a field, know which side wins
 | Task **status** | **Shared** | Verified GitHub closures move cards to `Done` once board completion checks pass. A blocked closure or an open issue linked to a `Done` card is reported as drift |
 | Task **feature** (milestone) | **GitHub** | An issue's milestone change moves the task via `PATCH /api/tasks/{id}/feature` (`syncTasks()`) |
 | Task **description** | **GitHub on import, board after import** | Creation stores the full issue body. Recovery restores recognizable incomplete legacy imports and retains differing board text. |
-| **Comments** | **GitHub, append-only** | Issue comments, PR conversation, PR reviews, and inline `file:line` comments are appended, deduped by node id. Board-authored comments are never pushed |
+| **Comments** | **GitHub, append-only** | Issue comments, plus conversation, reviews, and inline `file:line` comments from every linked open PR, are appended and deduplicated by node ID per task. A PR that closes several issues contributes its discussion to each issue's task. Board-authored comments are never pushed |
 | **`ActivityEvent`** | **Derived** | Written by the service layer as a side effect of task writes. Never read from or sent to GitHub |
 | `TaskDependency` (DAG) | **Board** | No GitHub representation. Authored by you and by agents |
 | `AcceptanceCriterion` | **Board** | No GitHub representation |
@@ -301,7 +301,7 @@ that assumes otherwise will be wrong.
 | **Assignees are not synchronised** | GitHub assignees are read once, only to infer `InProgress` on create (`deriveStatus()`). `TaskItem.Assignee` is never populated from GitHub |
 | **Labels collapse to one priority** | The first matching severity label becomes `TaskItem.Priority`. Every other label survives only as text inside the description block — there is no label entity, and no filtering by label on the board |
 | **Comment edits, deletions, and reactions are never reconciled** | Dedupe is by GitHub node id; an id already seen is skipped forever. An edited GitHub comment keeps its original mirrored text, and a deleted one stays on the board |
-| **PR comments on a PR that closes no issue are dropped** | With no `Closes #n` there is no task to attach them to. They are counted and reported, never silently discarded |
+| **PR discussions require a linked issue in the sync** | Comments from open PRs that close no issue in the selected import are counted and reported. New task descriptions and repairs of incomplete imports list all linked open PRs in PR-number order. Existing complete cards refresh recognized PR links after a complete source read and a match against the saved description, preserving the rest of the text. |
 | **Large discussions require extra reads** | Sync fetches inline review comments through the paginated GitHub API. It also fetches all pages of issue comments, PR conversation comments, or PR reviews when a list result reaches 100 entries. A discussion read failure gives sync a nonzero exit code |
 | **Fetches are capped per list** | `GH_PAGE_LIMIT` defaults to `2000` (`KANBANFLOW_GH_PAGE_LIMIT` overrides it). Hitting the cap is a hard failure, not a warning — a count derived from a partial read is worse than no count |
 | **No general board → GitHub editing** | The only outbound path creates one issue after `--allow-write --task`. Titles/bodies/status/comments of existing issues are never written back; no issue is closed or deleted |

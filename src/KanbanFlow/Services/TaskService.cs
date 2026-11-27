@@ -1,3 +1,5 @@
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using KanbanFlow.Data;
@@ -734,6 +736,28 @@ public sealed class TaskService(
         var result = await UpdateInContextAsync(db, taskId, dto, actor, ct);
         if (tx is not null) await tx.CommitAsync(ct);
         return result;
+    }
+
+    public async Task<bool> UpdateDescriptionIfCurrentAsync(int taskId, string? expectedSha256, string? description,
+        string? actor, CancellationToken ct = default)
+    {
+        if (expectedSha256 is not { Length: 64 } || !expectedSha256.All(Uri.IsHexDigit))
+            throw new ValidationException("ExpectedSha256 must contain 64 hexadecimal characters.");
+        if (description is null)
+            throw new ValidationException("Description is required.");
+
+        await using var db = await dbFactory.CreateDbContextAsync(ct);
+        // SQLite BEGIN IMMEDIATE reserves the writer before reading the description.
+        await using var tx = await db.Database.BeginTransactionAsync(ct);
+        var task = await db.Tasks.Where(t => t.Id == taskId).Select(t => new { t.Description }).SingleOrDefaultAsync(ct)
+            ?? throw new TaskNotFoundException(taskId);
+        var actual = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(task.Description ?? "")));
+        if (!string.Equals(expectedSha256, actual, StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        await UpdateInContextAsync(db, taskId, new TaskUpdate(Description: description), actor, ct);
+        await tx.CommitAsync(ct);
+        return true;
     }
 
     internal static async Task<TaskItem> UpdateInContextAsync(AppDbContext db, int taskId, TaskUpdate dto, string? actor, CancellationToken ct)

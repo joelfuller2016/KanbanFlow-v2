@@ -80,15 +80,18 @@ internal static class ExternalWorkItemPresentation
     }
 
     /// <summary>
-    /// Reads a legacy PR display link through the same bounded, whole-record parser as issues.
+    /// Reads PR display links through the same bounded, whole-record parser as issues.
     /// Structured pull-request identity remains separate work in #237.
     /// </summary>
-    internal static GitHubPullRequestReference? FindSyncBlockPullRequest(string? description)
+    internal static IReadOnlyList<GitHubPullRequestReference> FindSyncBlockPullRequests(string? description)
     {
-        var reference = ReadLegacyReference(MirroredDescription.PullRequestUrl(description), "pull");
-        return reference is { } value
-            ? new GitHubPullRequestReference(value.Owner, value.Repository, value.Number, value.Url)
-            : null;
+        var pullRequests = new List<GitHubPullRequestReference>();
+        foreach (var url in MirroredDescription.PullRequestUrls(description))
+        {
+            if (ReadLegacyReference(url, "pull") is { } value)
+                pullRequests.Add(new GitHubPullRequestReference(value.Owner, value.Repository, value.Number, value.Url));
+        }
+        return pullRequests;
     }
 
     private static (string Owner, string Repository, int Number, string Url)? ReadLegacyReference(string? url, string kind)

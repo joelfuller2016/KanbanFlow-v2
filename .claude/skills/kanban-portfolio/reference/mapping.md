@@ -126,31 +126,34 @@ A PR is linked to an issue when its **body** contains a GitHub closing keyword:
 /\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\b[:\s]*#(\d+)/gi
 ```
 
-matching `Closes #12`, `fixed #34`, `Resolves: #56`. First PR to claim an issue wins. Only
-**open** PRs are considered — a merged PR's issue is closed anyway, which the closed-issue rule
-already covers.
+matching `Closes #12`, `fixed #34`, `Resolves: #56`. An issue can have several linked open PRs,
+and a single open PR can close several issues. Sync mirrors its complete discussion once per
+affected task. Merged and closed PRs are outside this read.
 
 This is body-only. It does **not** read GitHub's native "linked issues" field (the
 `closingIssuesReferences` GraphQL edge), so a PR linked purely through the UI sidebar is missed.
 Acceptable: the convention in these repos is `Closes #N` in the body, enforced by the PR gate.
 
-### Description — a sync block plus an excerpt
+### Description — a sync block and complete source
 
 ```markdown
 <!-- kanbanflow-sync -->
 **Issue:** https://github.com/owner/repo/issues/287
 **State:** OPEN · **Milestone:** M6: AI Memory & Ops Hub · **Labels:** ai-agent, enhancement
-**Open PR:** none
+**Open PRs:** https://github.com/owner/repo/pull/312, https://github.com/owner/repo/pull/316 (draft)
 **Synced:** 2026-07-12T14:02:11.000Z
+**Content:** complete
 <!-- /kanbanflow-sync -->
 
-<first ~29,491 serialized UTF-8 bytes of the issue body>
+<complete issue body>
 ```
 
-The block is machine-readable and human-visible. The body is truncated at `MAX_DESCRIPTION_BYTES`
-(29,491 serialized UTF-8 bytes by default) — 400 tasks × full issue bodies is a lot of payload,
-and the canonical text is one click away. A truncated description refreshes on the next sync run
-only when it still retains both the exact sync header and the truncation footer.
+The block lists the linked open PRs in PR-number order. Zero or one linked PR uses the legacy
+`**Open PR:**` record. New imports and recognized legacy content repairs use the current list and
+retain the complete source body. For complete stored descriptions, sync refreshes only a recognized
+open-PR record in a matching issue header after a complete open-PR read. The board requires the
+stored description to match its original SHA-256 before accepting the audited update. Sync reports
+a concurrent edit or unsupported board version and leaves the existing description intact.
 
 ## Closed issues — fetched even when not mirrored
 
@@ -224,22 +227,19 @@ a `curl`, and an agent pulling the comment over MCP all see the `<!-- gh:… -->
 acceptable (it is a short, self-describing marker) but it is not invisible, and callers that
 display raw comment text should expect it.
 
-### Comments on a PR that closes no issue
+### Comments on PRs without a linked issue in this sync
 
-A PR with no `Closes #N` has no task to attach its comments to (Dependabot PRs are the usual
-case — one had 48 comments). Those are **counted and reported, never silently dropped**:
+When a PR has no closing reference to an issue in the selected import, its discussion is
+counted and reported separately:
 
 ```text
-! 48 comment(s) on PRs that close no issue — no task to attach them to, NOT mirrored.
+! 48 comment(s) on PRs without a linked issue in this sync — no task to attach them to, NOT mirrored.
 ```
 
 ### Size
 
-Bot review bodies are the only real size risk — a single CodeRabbit review measured **110,574
-chars**. Bodies are mirrored whole by default (the board is meant to be the complete record) and
-each is capped to its own scroll box in the UI so one comment can't swallow the timeline. If
-agents start paying for it in context, `--max-comment-chars N` truncates with a pointer back to
-GitHub.
+Comments preserve the complete body, including long bot reviews. The timeline scrolls within
+each large comment. `--max-comment-chars` is no longer accepted because it clipped source text.
 
 ## Drift
 
@@ -256,7 +256,7 @@ GitHub — **not** when it is merely closed (that path converges to `Done`, abov
 Deletion is never automatic. The audit trail is sacred, and a stranded task is evidence of
 something — losing it silently is worse than showing it.
 
-## Truncation is never silent
+## Incomplete source reads
 
 `gh` is called with a fetch limit. If a repo's issue or PR count reaches it, the sync **warns
 loudly** that the mirror may be incomplete. A board that quietly drops issues past the limit

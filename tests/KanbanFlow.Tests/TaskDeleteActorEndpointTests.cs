@@ -86,7 +86,7 @@ public sealed class TaskDeleteActorEndpointTests
     }
 
     /// <summary>A real Kestrel host on an ephemeral loopback port with only the task routes mapped.</summary>
-    private sealed class TaskHost : IAsyncDisposable
+    internal sealed class TaskHost : IAsyncDisposable
     {
         private readonly WebApplication _app;
 

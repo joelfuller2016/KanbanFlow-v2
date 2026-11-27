@@ -73,6 +73,6 @@ public sealed class ExternalWorkItemIntegrationTests
     }
 
     private static string? ResolveUrl(bool pullRequest, string description) => pullRequest
-        ? ExternalWorkItemPresentation.FindSyncBlockPullRequest(description)?.Url
+        ? ExternalWorkItemPresentation.FindSyncBlockPullRequests(description).FirstOrDefault()?.Url
         : ExternalWorkItemPresentation.FindActiveGitHubIssue([], description)?.Url;
 }

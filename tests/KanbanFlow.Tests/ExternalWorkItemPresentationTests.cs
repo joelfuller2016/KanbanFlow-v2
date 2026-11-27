@@ -108,7 +108,7 @@ public sealed class ExternalWorkItemPresentationTests
         };
 
         Assert.Null(ExternalWorkItemPresentation.FindActiveGitHubIssue(task.ExternalLinks));
-        Assert.Null(ExternalWorkItemPresentation.FindSyncBlockPullRequest(task.Description));
+        Assert.Empty(ExternalWorkItemPresentation.FindSyncBlockPullRequests(task.Description));
         // The display-only fallback does not weaken this: the URLs above sit in free prose, not
         // in the machine-written sync block, so the block boundary still refuses them.
         Assert.Null(ExternalWorkItemPresentation.FindActiveGitHubIssue(task.ExternalLinks, task.Description));
@@ -199,7 +199,7 @@ public sealed class ExternalWorkItemPresentationTests
         const string handAuthored =
             "Please review **Open PR:** https://github.com/joelfuller2016/KanbanFlow-v2/pull/487";
 
-        Assert.Null(ExternalWorkItemPresentation.FindSyncBlockPullRequest(handAuthored));
+        Assert.Empty(ExternalWorkItemPresentation.FindSyncBlockPullRequests(handAuthored));
     }
 
     [Fact]
@@ -214,11 +214,45 @@ public sealed class ExternalWorkItemPresentationTests
             **Open PR:** https://github.com/attacker/spoof/pull/999
             """;
 
-        var pullRequest = ExternalWorkItemPresentation.FindSyncBlockPullRequest(description);
-
-        Assert.NotNull(pullRequest);
+        var pullRequest = Assert.Single(ExternalWorkItemPresentation.FindSyncBlockPullRequests(description));
         Assert.Equal(487, pullRequest.Number);
         Assert.Equal("https://github.com/joelfuller2016/KanbanFlow-v2/pull/487", pullRequest.Url);
+    }
+
+    [Fact]
+    public void PullRequestResolver_ReadsEveryLinkedPrInThePluralRecord()
+    {
+        const string description = """
+            <!-- kanbanflow-sync -->
+            **Issue:** https://github.com/octo/board/issues/42
+            **State:** OPEN · **Labels:** **Open PRs:** https://github.com/octo/unrelated/pull/999
+            **Open PRs:** https://github.com/octo/board/pull/101, https://github.com/octo/board/pull/102 (draft)
+            <!-- /kanbanflow-sync -->
+
+            **Open PRs:** https://github.com/octo/unrelated/pull/1000
+            """;
+
+        var pullRequests = ExternalWorkItemPresentation.FindSyncBlockPullRequests(description);
+
+        Assert.Equal([101, 102], pullRequests.Select(pr => pr.Number));
+        Assert.Equal(["https://github.com/octo/board/pull/101", "https://github.com/octo/board/pull/102"],
+            pullRequests.Select(pr => pr.Url));
+    }
+
+    [Theory]
+    [InlineData("**Open PR:** https://github.com/octo/board/pull/103")]
+    [InlineData("**Open PRs:** https://github.com/octo/board/pull/103, https://github.com/octo/board/pull/104")]
+    public void PullRequestResolver_RejectsAmbiguousRecords(string conflictingRecord)
+    {
+        var description = $"""
+            <!-- kanbanflow-sync -->
+            **Issue:** https://github.com/octo/board/issues/42
+            {conflictingRecord}
+            **Open PRs:** https://github.com/octo/board/pull/101, https://github.com/octo/board/pull/102
+            <!-- /kanbanflow-sync -->
+            """;
+
+        Assert.Empty(ExternalWorkItemPresentation.FindSyncBlockPullRequests(description));
     }
 
     [Theory]
@@ -232,7 +266,7 @@ public sealed class ExternalWorkItemPresentationTests
             <!-- /kanbanflow-sync -->
             """;
 
-        Assert.Null(ExternalWorkItemPresentation.FindSyncBlockPullRequest(description));
+        Assert.Empty(ExternalWorkItemPresentation.FindSyncBlockPullRequests(description));
     }
 
     private static ExternalWorkItemLink Link() => new()

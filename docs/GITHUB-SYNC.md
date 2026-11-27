@@ -48,6 +48,23 @@ Newly mirrored and board-originated issues receive structured links. Existing bo
 working because prefix matching remains a fallback — and an ordinary `sync` upgrades that
 fallback by itself.
 
+Every open PR that names an issue with a closing keyword such as `Closes #42` contributes its
+conversation, reviews, and inline comments to that issue's task. If a PR closes several issues,
+each task gets the full discussion. Repeated references do not duplicate a comment. The sync
+reports separate counts for linked issues and linked open PRs, and reports discussion that has
+no linked issue in the selected import. The comment import count uses the same eligible,
+deduplicated comments as the task import. A comment linked to two tasks counts twice because
+each task receives its own copy. Empty review records with no verdict do not count.
+
+New tasks and repairs of incomplete legacy descriptions list all linked open PRs in ascending
+PR-number order and identify draft PRs. The task editor opens each listed PR and still accepts
+older single-link provenance. A complete stored description is eligible for a refresh when its
+sync header clearly belongs to the same issue and contains one recognized open-PR record. Sync
+replaces only that record after a complete open-PR read. The board checks the SHA-256 of the exact
+stored description before writing, so concurrent board edits and all other description text are
+preserved. If the description changed or the board does not support this update, sync reports the
+affected task and leaves its description intact. Discussion import can still proceed.
+
 ### Legacy prefix → durable link
 
 An ordinary `sync` promotes a legacy `#<n> ` prefix match to a durable link, with no operator
@@ -259,6 +276,7 @@ indistinguishable from a human's in the history.
 | `POST /api/projects/{id}/features` | a milestone has no feature | |
 | `POST /api/features/{id}/external-work-item-projections/github` | a verified issue has no task | one task/link/audit transaction; 201 on creation, 200 on same-project replay; no separate create/register/rename window |
 | `PUT /api/tasks/{id}` | title or priority is behind | **`name` is mandatory** — a priority-only body 422s (`ApiEndpoints.cs:1451`), so `name` always goes on the wire even when unchanged. Do **not** generalise from the projects PUT; the two behave differently |
+| `PATCH /api/tasks/{id}/description` | an existing complete card has outdated linked-PR metadata | send the SHA-256 of the current UTF-8 description in `expectedSha256` and the replacement in `description`. Returns HTTP 204 if applied or already identical, or HTTP 409 if the description changed |
 | `PATCH /api/tasks/{id}/status` | an issue closed since the last sync | |
 | `PATCH /api/tasks/{id}/feature` | an issue's milestone changed | feature is not settable through the task PUT; reassignment is its own verb |
 | `POST /api/tasks/{id}/comment-imports/github` | importing a GitHub comment | send `githubCommentId` and the matching complete source marker. Returns `created: true` with HTTP 201 for a new copy or `created: false` with HTTP 200 for an existing complete copy |
