@@ -641,7 +641,7 @@ const tools = [
   },
   {
     name: "update_idea",
-    description: "Update mutable idea fields (title, body, plan, status, tags, priority). For body/plan/tags: omit or null to preserve, empty/whitespace to clear, non-empty text to replace. Other omitted/null fields are left unchanged.",
+    description: "Update mutable idea fields (title, body, plan, status, tags, priority). For body/plan/tags: omit or null to preserve, empty/whitespace to clear, non-empty text to replace. Use clearPriority to unset priority. Other omitted/null fields are left unchanged.",
     inputSchema: {
       type: "object",
       properties: {
@@ -660,10 +660,11 @@ const tools = [
         },
         tags: { type: ["string", "null"], description: "Comma-separated tags: omit or null to preserve, empty/whitespace to clear, non-empty text to replace." },
         priority: {
-          type: "string",
-          enum: ["Low", "Medium", "High", "Critical"],
-          description: "New priority."
+          type: ["string", "null"],
+          enum: ["Low", "Medium", "High", "Critical", null],
+          description: "New priority. Omit or send null to leave it unchanged unless clearPriority is true."
         },
+        clearPriority: { type: "boolean", description: "Set to true to unset the current priority. Omit priority when clearing it." },
         actor: { type: "string", description: "Optional actor label recorded in the audit trail." }
       },
       required: ["ideaId", "expectedWorkflowVersion"]
@@ -1534,6 +1535,7 @@ async function callTool(toolName, args) {
           status: optionalString(args, "status"),
           tags: optionalString(args, "tags"),
           priority: optionalString(args, "priority"),
+          clearPriority: optionalBool(args, "clearPriority"),
           // Actor is optional and defaults to "mcp-agent", mirroring the native tool (F4 parity fix).
           actor: optionalString(args, "actor")?.trim() || "mcp-agent"
         }

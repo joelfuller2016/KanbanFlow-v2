@@ -755,7 +755,7 @@ public static class KanbanMcpTools
     }
 
     [McpServerTool(Name = "update_idea")]
-    [Description("Update mutable idea fields (title, body, plan, status, tags, priority) through the audit-aware service layer (writes an IdeaUpdated activity event; no HTTP hop). Omitted/null fields are left unchanged. Idempotent when nothing changes.")]
+    [Description("Update mutable idea fields (title, body, plan, status, tags, priority) through the audit-aware service layer (writes an IdeaUpdated activity event; no HTTP hop). Omitted/null fields are left unchanged. Use clearPriority to unset priority. Idempotent when nothing changes.")]
     public static async Task<IdeaResult> UpdateIdea(
         IIdeaService ideaService,
         [Description("The idea id to update.")] int ideaId,
@@ -767,6 +767,7 @@ public static class KanbanMcpTools
         [Description("New comma-separated tags, or omit.")] string? tags = null,
         [Description("New priority: Low | Medium | High | Critical (case-insensitive), or omit.")] string? priority = null,
         [Description("Optional actor label recorded in the audit trail (default 'mcp-agent').")] string? actor = null,
+        [Description("Set to true to unset the current priority. Omit priority when clearing it.")] bool clearPriority = false,
         CancellationToken cancellationToken = default)
     {
         var parsedStatus = ParseIdeaStatus(status);
@@ -774,7 +775,7 @@ public static class KanbanMcpTools
         try
         {
             var idea = await ideaService.UpdateAsync(
-                ideaId, new IdeaUpdate(title, body, plan, parsedStatus, tags, parsedPriority, expectedWorkflowVersion),
+                ideaId, new IdeaUpdate(title, body, plan, parsedStatus, tags, parsedPriority, expectedWorkflowVersion, clearPriority),
                 NormalizeActor(actor), cancellationToken);
             return MapIdea(idea);
         }

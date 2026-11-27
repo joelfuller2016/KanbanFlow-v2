@@ -240,6 +240,36 @@ try {
     Assert-Truthy ($health.status -eq "degraded") "GET /api/admin/health said '$($health.status)' for a board this run created; it must not report ok."
     Assert-Truthy ($health.db.reasons -contains "created-at-startup") "GET /api/admin/health did not name created-at-startup as the reason."
 
+    $idea = Invoke-SmokeJson "Post" "/api/ideas" @{ title = "Priority smoke"; priority = "High" }
+    $ideaPath = "/api/ideas/$($idea.id)"
+    $idea = Invoke-SmokeJson "Patch" $ideaPath @{
+        expectedWorkflowVersion = $idea.workflowVersion
+        title = "Priority smoke renamed"
+    }
+    Assert-Truthy ($idea.priority -eq "High") "Omitted idea priority did not preserve High."
+    $idea = Invoke-SmokeJson "Patch" $ideaPath @{
+        expectedWorkflowVersion = $idea.workflowVersion
+        priority = $null
+        clearPriority = $false
+    }
+    Assert-Truthy ($idea.priority -eq "High") "Null idea priority did not preserve High."
+    Assert-SmokePatchFailure $ideaPath @{
+        expectedWorkflowVersion = $idea.workflowVersion
+        priority = "Low"
+        clearPriority = $true
+    } @(422) "Setting and clearing idea priority must conflict."
+    $afterConflict = Invoke-SmokeGet $ideaPath
+    Assert-Truthy (
+        $afterConflict.priority -eq "High" -and $afterConflict.workflowVersion -eq $idea.workflowVersion
+    ) "Conflicting idea priority update changed the idea."
+    Invoke-SmokeJson "Patch" $ideaPath @{
+        expectedWorkflowVersion = $idea.workflowVersion
+        clearPriority = $true
+    } | Out-Null
+    $clearedIdea = Invoke-SmokeGet $ideaPath
+    Assert-Truthy ($null -eq $clearedIdea.priority) "Explicit idea priority clear did not persist."
+    Invoke-SmokeDelete $ideaPath | Out-Null
+
     # The file's own facts must be in the CONTRACT, not merely computed internally (#498 review).
     # They are the caller's half of the diagnosis -- the comparison that catches a launcher which
     # SUCCESSFULLY restored the seed onto a wrong path is "is db.sizeBytes the size of the seed I

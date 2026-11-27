@@ -15,6 +15,7 @@
 
 import { chromium } from "playwright";
 import { projectSkipNavigation } from "./project-skip-navigation.browser.mjs";
+import { verifyIdeaPriorityCanBeCleared } from "./idea-clear-priority.browser.mjs";
 import { spawn, execSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -2288,6 +2289,9 @@ async function main() {
     const ideasAfterCreate = await api("GET", `/api/ideas?q=${encodeURIComponent(ideaTitle)}&limit=500`);
     const createdIdea = ideasAfterCreate.find((i) => i.title === ideaTitle);
     assert(createdIdea, "created idea not found via API");
+
+    await test("Editing an idea and choosing None clears its saved priority", () =>
+      verifyIdeaPriorityCanBeCleared(page, api, clickUntil, createdIdea.id));
 
     const ideaTitleEdited = `${ideaTitle} (edited)`;
     await test("Editing an idea updates its card title", async () => {

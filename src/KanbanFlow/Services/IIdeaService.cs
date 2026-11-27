@@ -92,7 +92,8 @@ public sealed record IdeaCreate(
     string? Tags = null,
     TaskPriority? Priority = null);
 
-/// <summary>Update payload for <see cref="IIdeaService.UpdateAsync"/>. <c>null</c> fields are unchanged.</summary>
+/// <summary>Update payload for <see cref="IIdeaService.UpdateAsync"/>. <c>null</c> fields are unchanged.
+/// Use <see cref="ClearPriority"/> to set the priority to <c>null</c>.</summary>
 public sealed record IdeaUpdate(
     string? Title = null,
     string? Body = null,
@@ -100,7 +101,8 @@ public sealed record IdeaUpdate(
     IdeaStatus? Status = null,
     string? Tags = null,
     TaskPriority? Priority = null,
-    int? ExpectedWorkflowVersion = null);
+    int? ExpectedWorkflowVersion = null,
+    bool ClearPriority = false);
 
 /// <summary>Result of <see cref="IIdeaService.PromoteAsync"/>: the source idea and the created project.</summary>
 public sealed record IdeaPromoteResult(int IdeaId, int ProjectId);

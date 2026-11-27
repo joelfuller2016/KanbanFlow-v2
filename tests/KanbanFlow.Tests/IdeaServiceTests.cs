@@ -1,3 +1,4 @@
+using System.Text.Json;
 using KanbanFlow.Data;
 using KanbanFlow.Models;
 using KanbanFlow.Services;
@@ -222,6 +223,79 @@ public sealed class IdeaServiceTests
         var updatedEvent = Assert.Single(events, e => e.EventType == "IdeaUpdated");
         Assert.NotNull(updatedEvent.BeforeJson);
         Assert.NotNull(updatedEvent.AfterJson);
+    }
+
+    [Fact]
+    public async Task Update_ClearsPriority_AndAuditsTheChangeExactlyOnce()
+    {
+        using var f = new SqliteTestFactory();
+        var svc = new IdeaService(f);
+        var idea = await svc.CreateAsync(new IdeaCreate("Idea", Priority: TaskPriority.High), "creator");
+        using (var db = f.CreateDbContext())
+        {
+            var persisted = await db.Ideas.FindAsync(idea.Id);
+            persisted!.UpdatedAt = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+            await db.SaveChangesAsync();
+        }
+        var before = (await svc.GetByIdAsync(idea.Id))!;
+
+        await svc.UpdateAsync(idea.Id,
+            new IdeaUpdate(ClearPriority: true, ExpectedWorkflowVersion: before.WorkflowVersion), "editor");
+
+        var after = (await svc.GetByIdAsync(idea.Id))!;
+        Assert.Null(after.Priority);
+        Assert.True(after.UpdatedAt > before.UpdatedAt);
+        var updatedEvent = Assert.Single(IdeaEvents(f, idea.Id), e => e.EventType == "IdeaUpdated");
+        Assert.Equal("editor", updatedEvent.Actor);
+        using var snapshotBefore = JsonDocument.Parse(updatedEvent.BeforeJson!);
+        using var snapshotAfter = JsonDocument.Parse(updatedEvent.AfterJson!);
+        Assert.Equal("High", snapshotBefore.RootElement.GetProperty("priority").GetString());
+        Assert.Equal(JsonValueKind.Null, snapshotAfter.RootElement.GetProperty("priority").ValueKind);
+
+        await svc.UpdateAsync(idea.Id,
+            new IdeaUpdate(ClearPriority: true, ExpectedWorkflowVersion: after.WorkflowVersion), "editor");
+        var noOp = (await svc.GetByIdAsync(idea.Id))!;
+        Assert.Equal(after.UpdatedAt, noOp.UpdatedAt);
+        Assert.Equal(after.WorkflowVersion, noOp.WorkflowVersion);
+        Assert.Single(IdeaEvents(f, idea.Id), e => e.EventType == "IdeaUpdated");
+    }
+
+    [Fact]
+    public async Task Update_RejectsSettingAndClearingPriorityTogether_WithoutWriting()
+    {
+        using var f = new SqliteTestFactory();
+        var svc = new IdeaService(f);
+        var before = await svc.CreateAsync(new IdeaCreate("Original", Priority: TaskPriority.High), "creator");
+
+        var ex = await Assert.ThrowsAsync<ValidationException>(() => svc.UpdateAsync(before.Id,
+            new IdeaUpdate(Title: "Changed", Priority: TaskPriority.Low,
+                ClearPriority: true, ExpectedWorkflowVersion: before.WorkflowVersion), "editor"));
+
+        Assert.Contains("clearPriority", ex.Message);
+        var after = (await svc.GetByIdAsync(before.Id))!;
+        Assert.Equal(before.Title, after.Title);
+        Assert.Equal(before.Priority, after.Priority);
+        Assert.Equal(before.UpdatedAt, after.UpdatedAt);
+        Assert.Equal(before.WorkflowVersion, after.WorkflowVersion);
+        Assert.DoesNotContain(IdeaEvents(f, before.Id), e => e.EventType == "IdeaUpdated");
+    }
+
+    [Fact]
+    public async Task Update_OmittedPriorityPreservesIt_AndAnExplicitPrioritySetsIt()
+    {
+        using var f = new SqliteTestFactory();
+        var svc = new IdeaService(f);
+        var idea = await svc.CreateAsync(new IdeaCreate("Original", Priority: TaskPriority.High), "creator");
+
+        var renamed = await svc.UpdateAsync(idea.Id,
+            new IdeaUpdate(Title: "Renamed", ExpectedWorkflowVersion: idea.WorkflowVersion), "editor");
+        var preserved = (await svc.GetByIdAsync(idea.Id))!;
+        Assert.Equal("Renamed", preserved.Title);
+        Assert.Equal(TaskPriority.High, preserved.Priority);
+
+        await svc.UpdateAsync(idea.Id,
+            new IdeaUpdate(Priority: TaskPriority.Low, ExpectedWorkflowVersion: renamed.WorkflowVersion), "editor");
+        Assert.Equal(TaskPriority.Low, (await svc.GetByIdAsync(idea.Id))!.Priority);
     }
 
     [Fact]
