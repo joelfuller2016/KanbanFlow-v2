@@ -10,12 +10,15 @@ const scriptPath = fileURLToPath(new URL("./register-kanbanflow-task.ps1", impor
 const fixtureDirectory = join(dirname(scriptPath), "..", "_sandbox", "task health fixture");
 const expectedDb = join(fixtureDirectory, "expected.db");
 const otherDb = join(fixtureDirectory, "other.db");
+const distinctUnicodeDb = join(fixtureDirectory, "ex\u00adpected.db");
 const equivalentDb = `${fixtureDirectory}${sep}nested${sep}..${sep}expected.db`;
 const cases = [
   { name: "matching-ok", status: "ok", db: { path: expectedDb }, healthy: true },
   { name: "matching-degraded", status: "degraded", db: { path: equivalentDb }, healthy: true },
+  { name: "matching-case", status: "ok", db: { path: join(fixtureDirectory, "EXPECTED.DB") }, healthy: true },
   { name: "wrong-ok", status: "ok", db: { path: otherDb }, healthy: false, mismatch: true },
   { name: "wrong-degraded", status: "degraded", db: { path: otherDb }, healthy: false, mismatch: true },
+  { name: "wrong-unicode", status: "ok", db: { path: distinctUnicodeDb }, healthy: false, mismatch: true },
   { name: "missing-path", status: "ok", db: { status: "ok" }, healthy: false },
   { name: "invalid-path", status: "ok", db: { path: `${expectedDb}\0` }, healthy: false },
   { name: "error", status: "error", db: { path: expectedDb, status: "ok" }, healthy: false },
@@ -27,6 +30,7 @@ const runProbeCalls = `
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
+[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
 $ast = [System.Management.Automation.Language.Parser]::ParseFile($env:REGISTER_TASK_TEST_SCRIPT, [ref]$null, [ref]$null)
 $definition = $ast.Find({ param($node)
     $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Test-KanbanFlowHealthy'
@@ -64,7 +68,7 @@ for (const shell of process.platform === "win32" ? ["powershell.exe", "pwsh"] : 
         response.writeHead(404).end();
         return;
       }
-      response.writeHead(200, { "Content-Type": "application/json", Connection: "close" });
+      response.writeHead(200, { "Content-Type": "application/json; charset=utf-8", Connection: "close" });
       response.end(JSON.stringify({ status: health.status, db: health.db }));
     });
     server.listen(0, "127.0.0.1");
@@ -93,12 +97,12 @@ for (const shell of process.platform === "win32" ? ["powershell.exe", "pwsh"] : 
     assert.deepEqual(requests, cases.flatMap(({ name }) => [`GET ${name}`, `GET ${name}`]));
 
     const results = JSON.parse(stdout);
-    for (const { name, healthy, mismatch } of cases) {
+    for (const { name, healthy, mismatch, db } of cases) {
       const probes = results.filter(probe => probe.name === name);
       assert.deepEqual(probes.map(probe => probe.healthy), [healthy, healthy], name);
       if (mismatch) {
         for (const { warnings } of probes) {
-          assert.ok(warnings.some(warning => warning.includes(expectedDb) && warning.includes(otherDb)),
+          assert.ok(warnings.some(warning => warning.includes(expectedDb) && warning.includes(db.path)),
             `${name}: mismatch warning must name both databases`);
         }
       }

@@ -427,7 +427,9 @@ function Test-KanbanFlowHealthy {
 
         $displayDbPath = $reportedDbPath -replace '[\x00-\x1f\x7f]', '?'
         try {
-            $matchesExpectedDb = [System.IO.Path]::GetFullPath($reportedDbPath) -eq [System.IO.Path]::GetFullPath($ExpectedDbPath)
+            $reportedPath = [System.IO.Path]::GetFullPath($reportedDbPath)
+            $expectedPath = [System.IO.Path]::GetFullPath($ExpectedDbPath)
+            $matchesExpectedDb = [string]::Equals($reportedPath, $expectedPath, [System.StringComparison]::OrdinalIgnoreCase)
         }
         catch {
             Write-Warning "[task] $Uri reports an invalid database path '$displayDbPath'. Expected '$ExpectedDbPath'."
