@@ -14,6 +14,7 @@
 // the done-checkbox path — both re-group the card into the destination column.
 
 import { chromium } from "playwright";
+import { projectOutlineStaleTarget } from "./project-outline-stale-target.browser.mjs";
 import { projectSkipNavigation } from "./project-skip-navigation.browser.mjs";
 import { spawn, execSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
@@ -967,6 +968,9 @@ async function main() {
 
     await test("Project keyboard bypass reaches search and cards without traversing the outline (#482)",
       () => projectSkipNavigation(page, api));
+
+    await test("Show in outline explains when its task was removed (#446)",
+      () => projectOutlineStaleTarget(page, api));
 
     // ── Scenario A: create a project through the Home "New Project" modal ──
     const modalProjectName = `E2E Modal ${stamp}`;
