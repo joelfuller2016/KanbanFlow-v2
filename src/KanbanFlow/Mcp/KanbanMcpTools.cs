@@ -214,12 +214,12 @@ public static class KanbanMcpTools
     /// so a crashed agent cannot park work permanently.
     /// </summary>
     [McpServerTool(Name = "get_next_tasks")]
-    [Description("Recommend what to work on next in a project: not-done tasks, excluding any blocked by incomplete dependencies, priority-sorted (Critical first), de-prioritising tasks claimed by other actors. Each result includes a human-readable reason. This is the project's 'direction' primitive.")]
+    [Description("Recommend unfinished, unblocked project tasks by priority (Critical first), de-prioritising only tasks with fresh claims held by other actors. Claims past their TTL rank as available, and each result includes the reason.")]
     public static async Task<IReadOnlyList<NextTask>> GetNextTasks(
         IDbContextFactory<AppDbContext> dbFactory,
         ClaimTtlSetting claimTtlSetting,
         [Description("The project id.")] int projectId,
-        [Description("Optional actor label; tasks claimed by a different actor are de-prioritised.")] string? actor = null,
+        [Description("Optional actor label. Only fresh claims held by a different actor are de-prioritised.")] string? actor = null,
         [Description("Maximum results (default 5, clamped to 1-50).")] int limit = 5,
         CancellationToken cancellationToken = default)
     {
@@ -466,7 +466,7 @@ public static class KanbanMcpTools
         catch (TaskClaimConflictException ex)
         {
             throw new McpException(
-                $"Task {taskId} is already claimed by {ex.ClaimedBy}. Ask {ex.ClaimedBy} to release it, or work a different task.");
+                $"Task {taskId} has a fresh claim held by {ex.ClaimedBy}. Retry claim_task once the claim has passed its configured TTL.");
         }
         catch (ValidationException ex)
         {
